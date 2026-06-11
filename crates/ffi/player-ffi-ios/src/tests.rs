@@ -1,12 +1,15 @@
-use std::ffi::{CString, c_char};
+use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 
 use super::{
-    PlayerFfiCallStatus, PlayerFfiError, PlayerFfiErrorCategory, PlayerFfiErrorCode,
-    map_player_error, player_error_to_ffi, player_ffi_ios_native_frame_pipeline_advance,
-    player_ffi_ios_native_frame_pipeline_close, player_ffi_ios_native_frame_pipeline_open,
-    player_ffi_ios_native_frame_pipeline_release_frame, player_ffi_ios_native_frame_pipeline_seek,
-    player_ffi_ios_plugin_abi_summary_json, player_ffi_source_normalizer_resource_open,
+    PlayerFfiBufferingPolicy, PlayerFfiCachePolicy, PlayerFfiCallStatus, PlayerFfiError,
+    PlayerFfiErrorCategory, PlayerFfiErrorCode, PlayerFfiResolvedResiliencePolicy,
+    PlayerFfiRetryPolicy, map_player_error, player_error_to_ffi,
+    player_ffi_ios_native_frame_pipeline_advance, player_ffi_ios_native_frame_pipeline_close,
+    player_ffi_ios_native_frame_pipeline_open, player_ffi_ios_native_frame_pipeline_release_frame,
+    player_ffi_ios_native_frame_pipeline_seek, player_ffi_ios_plugin_abi_summary_json,
+    player_ffi_preload_session_fail, player_ffi_resolve_resilience_policy,
+    player_ffi_source_normalizer_resource_open,
 };
 use crate::handles::HandleRegistry;
 use player_plugin::{
@@ -46,6 +49,82 @@ fn ffi_error_code_ordinals_append_new_player_error_codes() {
     assert_eq!(PlayerFfiErrorCode::EventChannelClosed as i32, 12);
     assert_eq!(PlayerFfiErrorCode::Cancelled as i32, 13);
     assert_eq!(PlayerFfiErrorCode::Timeout as i32, 14);
+}
+
+#[test]
+fn resolve_resilience_policy_rejects_invalid_raw_source_kind() {
+    let buffering = PlayerFfiBufferingPolicy::default();
+    let retry = PlayerFfiRetryPolicy::default();
+    let cache = PlayerFfiCachePolicy::default();
+    let mut policy = PlayerFfiResolvedResiliencePolicy::default();
+    let mut error = PlayerFfiError::default();
+
+    let status = unsafe {
+        player_ffi_resolve_resilience_policy(
+            99,
+            0,
+            &buffering,
+            &retry,
+            &cache,
+            &mut policy,
+            &mut error,
+        )
+    };
+
+    assert_eq!(status, PlayerFfiCallStatus::Error);
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&error).contains("source_kind"));
+    unsafe { super::player_ffi_error_free(&mut error) };
+}
+
+#[test]
+fn preload_fail_rejects_invalid_raw_error_code_before_handle_lookup() {
+    let message = CString::new("boom").expect("message");
+    let mut error = PlayerFfiError::default();
+
+    let status = unsafe {
+        player_ffi_preload_session_fail(
+            0xDEAD_BEEF,
+            1,
+            999,
+            PlayerFfiErrorCategory::Playback as u32,
+            true,
+            message.as_ptr(),
+            &mut error,
+        )
+    };
+
+    assert_eq!(status, PlayerFfiCallStatus::Error);
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&error).contains("error code"));
+    unsafe { super::player_ffi_error_free(&mut error) };
+}
+
+#[test]
+fn output_c_strings_replace_embedded_nul_with_space() {
+    let mut value = super::conversions::into_c_string_ptr("hello\0world".to_owned());
+
+    let text = unsafe { CStr::from_ptr(value) }
+        .to_str()
+        .expect("sanitized output should be UTF-8");
+    assert_eq!(text, "hello world");
+
+    super::conversions::free_c_string(&mut value);
+    assert!(value.is_null());
+}
+
+#[test]
+fn read_string_list_rejects_null_elements() {
+    let item = CString::new("one").expect("test string");
+    let mut values = [item.as_ptr() as *mut c_char, ptr::null_mut()];
+
+    let mut error =
+        super::conversions::read_string_list(values.as_mut_ptr(), values.len(), "items")
+            .expect_err("null list elements should be rejected");
+
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&error).contains("items[1]"));
+    unsafe { super::player_ffi_error_free(&mut error) };
 }
 
 #[test]

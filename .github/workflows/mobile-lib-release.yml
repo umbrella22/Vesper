@@ -59,33 +59,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            ffmpeg \
-            pkg-config \
-            clang \
-            libclang-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libavfilter-dev \
-            libswresample-dev \
-            libswscale-dev \
-            libasound2-dev \
-            libudev-dev \
-            libegl1-mesa-dev \
-            libgl1-mesa-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxcb1-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libxcursor-dev \
-            libxinerama-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev \
-            libwayland-dev
+        uses: ./.github/actions/install-linux-desktop-deps
 
       - name: Install cbindgen
         run: cargo install cbindgen --locked
@@ -311,8 +285,6 @@ jobs:
     runs-on: macos-latest
     needs:
       - release-checks
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 
     steps:
       - name: Checkout
@@ -332,8 +304,10 @@ jobs:
       - name: Install iOS build tools
         run: brew install xcodegen pkg-config
 
-      - name: Select Xcode 26.3
-        run: xcodebuild -version
+      - name: Select Xcode
+        uses: ./.github/actions/select-xcode
+        with:
+          minimum-major: "16"
 
       - name: Prepare release version metadata
         run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"

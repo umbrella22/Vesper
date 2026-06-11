@@ -1,16 +1,18 @@
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::{
     IOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, IosAvPlayerBridge, IosAvPlayerBridgeBindings,
     IosAvPlayerBridgeContext, IosAvPlayerSnapshot, IosAvPlayerStateTracker, IosHostBridgeSession,
-    IosHostCommand, IosHostEvent, IosHostSnapshot, IosHostTimelineKind, IosManagedNativeSession,
-    IosNativeCommandSink, IosNativePlayerBridge, IosNativePlayerCommand, IosNativePlayerProbe,
-    IosNativePlayerRuntimeAdapterFactory, IosNativePlayerSession, IosNativePlayerSessionBootstrap,
-    IosOpaqueHandle, IosPlayerItemStatus, IosTimeControlStatus, IosVideoSurfaceKind,
-    host_video_surface_target, resolve_bridge_context,
+    IosHostCommand, IosHostCommandSink, IosHostEvent, IosHostSnapshot, IosHostTimelineKind,
+    IosManagedNativeSession, IosNativeCommandSink, IosNativePlayerBridge, IosNativePlayerCommand,
+    IosNativePlayerProbe, IosNativePlayerRuntimeAdapterFactory, IosNativePlayerSession,
+    IosNativePlayerSessionBootstrap, IosOpaqueHandle, IosPlayerItemStatus, IosTimeControlStatus,
+    IosVideoSurfaceKind, host_video_surface_target, resolve_bridge_context,
 };
 use player_model::MediaSource;
+use player_platform_mobile::MobileCommandQueue;
 use player_runtime::{
     DecodedVideoFrame, FrameProcessorMode, MediaAbrMode, MediaAbrPolicy, MediaTrack,
     MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot,
@@ -83,6 +85,33 @@ fn ios_factory_is_initialize_unsupported_without_bridge() {
         Err(error) => error,
     };
     assert_eq!(error.code(), PlayerErrorCode::Unsupported);
+}
+
+#[test]
+fn ios_command_sink_reports_poisoned_queue() {
+    let queue = Arc::new(Mutex::new(VecDeque::new()));
+    let poison_queue = queue.clone();
+    let _ = std::thread::spawn(move || {
+        let _guard = poison_queue
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        panic!("poison ios command queue");
+    })
+    .join();
+
+    let mut sink = IosHostCommandSink::new(MobileCommandQueue::from_shared_for_tests(
+        "ios native",
+        queue,
+    ));
+    let error = sink
+        .submit_command(IosNativePlayerCommand::Play)
+        .expect_err("poisoned queue should be reported");
+
+    assert_eq!(
+        error.category(),
+        player_runtime::PlayerErrorCategory::Platform
+    );
+    assert!(error.message().contains("command queue lock poisoned"));
 }
 
 #[test]

@@ -5,10 +5,12 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+pub mod diagnostics;
 pub mod download;
 
 use player_audio_cpal::{
-    AudioOutputConfig, AudioOutputDescriptor, AudioSink, AudioSinkController, detect_default_output,
+    AudioBufferWindowWaitResult, AudioOutputConfig, AudioOutputDescriptor, AudioSink,
+    AudioSinkController, detect_default_output,
 };
 use player_backend_ffmpeg::{
     AudioMasterClock, AudioStreamProbe, BufferedFramePoll, BufferedVideoSource,
@@ -44,7 +46,7 @@ const DEFAULT_VIDEO_FRAME_MEMORY_ESTIMATE_BYTES: usize = 1_382_400;
 const DESKTOP_ACTIVE_VIDEO_PREFETCH_MEMORY_SCALE: u64 = 4;
 const MAX_DESKTOP_VIDEO_PREFETCH_CAPACITY: usize = 96;
 const DEFAULT_VIDEO_BUFFER_HEADROOM_DURATION: Duration = Duration::from_millis(500);
-const AUDIO_STREAM_BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const AUDIO_STREAM_BACKPRESSURE_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 const AUDIO_OUTPUT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SOFTWARE_BUFFERING_GRACE_PERIOD: Duration = Duration::from_millis(120);
 
@@ -189,6 +191,24 @@ pub fn probe_platform_desktop_source_with_options(
     }))
 }
 
+pub fn probe_platform_desktop_source_with_options_and_interrupt(
+    adapter_id: &'static str,
+    source: MediaSource,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+    Ok(Box::new(PlatformDesktopRuntimeAdapterInitializer {
+        adapter_id,
+        inner: Box::new(
+            SoftwarePlayerRuntimeInitializer::probe_source_with_options_and_interrupt(
+                source,
+                options,
+                Some(interrupt_flag),
+            )?,
+        ),
+    }))
+}
+
 pub fn open_platform_desktop_source_with_options_and_interrupt(
     adapter_id: &'static str,
     source: MediaSource,
@@ -230,6 +250,28 @@ pub fn probe_platform_desktop_source_with_video_source_factory_and_options(
                 source,
                 options,
                 None,
+                video_source_factory,
+                capabilities,
+            )?,
+        ),
+    }))
+}
+
+pub fn probe_platform_desktop_source_with_video_source_factory_and_options_and_interrupt(
+    adapter_id: &'static str,
+    source: MediaSource,
+    options: PlayerRuntimeOptions,
+    interrupt_flag: Arc<AtomicBool>,
+    video_source_factory: Arc<dyn DesktopVideoSourceFactory>,
+    capabilities: PlayerRuntimeAdapterCapabilities,
+) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+    Ok(Box::new(PlatformDesktopRuntimeAdapterInitializer {
+        adapter_id,
+        inner: Box::new(
+            SoftwarePlayerRuntimeInitializer::probe_source_with_options_and_video_source_factory(
+                source,
+                options,
+                Some(interrupt_flag),
                 video_source_factory,
                 capabilities,
             )?,
@@ -362,6 +404,7 @@ struct PendingAudioStreamWorker {
     generation: u64,
     retry_attempt: u32,
     receiver: Receiver<Result<AudioStreamWorkerEvent, String>>,
+    controller: AudioSinkController,
     interrupt_flag: Option<Arc<AtomicBool>>,
 }
 
@@ -566,35 +609,7 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
             capabilities,
         } = *self;
 
-        let decoded_audio = match audio_output.default_output_config.clone() {
-            Some(output_config)
-                if probe
-                    .as_ref()
-                    .is_some_and(|probe| probe.best_audio.is_some()) =>
-            {
-                if should_defer_audio_decode_for_source(&source) {
-                    None
-                } else {
-                    Some(
-                        backend
-                            .decode_audio_track_with_interrupt(
-                                source.clone(),
-                                output_config.sample_rate,
-                                output_config.channels,
-                                interrupt_flag.clone(),
-                            )
-                            .map_err(|error| {
-                                player_error(
-                                    PlayerErrorCode::DecodeFailure,
-                                    "failed to decode audio track during initialization",
-                                    error,
-                                )
-                            })?,
-                    )
-                }
-            }
-            _ => None,
-        };
+        let decoded_audio = None;
         let startup = PlayerRuntimeStartup {
             ffmpeg_initialized: backend.is_initialized(),
             audio_output: audio_output_info(&audio_output),
@@ -1787,23 +1802,31 @@ impl SoftwarePlayerRuntime {
         let generation = controller.begin_generation(media_start, playback_rate);
         let backend = self.backend;
         let (sender, receiver) = mpsc::channel();
+        let interrupt_flag = Arc::new(AtomicBool::new(false));
+        let worker_interrupt_flag = interrupt_flag.clone();
         let target_buffer_samples = buffered_sample_target(
             source_track.sample_rate,
             source_track.channels,
             self.audio_stream_target_buffer_duration,
         );
+        let worker_controller = controller.clone();
 
         thread::Builder::new()
             .name("player-audio-stream".to_owned())
             .spawn(move || {
                 let range = sample_offset..source_track.samples.len();
+                let chunk_controller = worker_controller.clone();
                 let emit_chunk = |chunk: Vec<f32>| -> anyhow::Result<bool> {
-                    if !wait_for_audio_buffer_window(&controller, generation, target_buffer_samples)
-                    {
+                    if !wait_for_audio_buffer_window(
+                        &chunk_controller,
+                        generation,
+                        target_buffer_samples,
+                        Some(&worker_interrupt_flag),
+                    ) {
                         return Ok(false);
                     }
 
-                    controller.append_samples(generation, chunk)
+                    chunk_controller.append_samples(generation, chunk)
                 };
                 let result: Result<AudioStreamWorkerEvent, String> =
                     if (playback_rate - DEFAULT_PLAYBACK_RATE).abs() < 0.000_001 {
@@ -1817,8 +1840,8 @@ impl SoftwarePlayerRuntime {
                         )
                     }
                     .map(|_| {
-                        if controller.is_generation_active(generation) {
-                            controller.finish_generation(generation);
+                        if worker_controller.is_generation_active(generation) {
+                            worker_controller.finish_generation(generation);
                         }
                     })
                     .map(|_| AudioStreamWorkerEvent::Finished)
@@ -1837,7 +1860,8 @@ impl SoftwarePlayerRuntime {
             generation,
             retry_attempt: 0,
             receiver,
-            interrupt_flag: None,
+            controller,
+            interrupt_flag: Some(interrupt_flag),
         });
         self.pending_audio_stream_retry = None;
         self.audio_buffering_window = AudioBufferingWindow::Startup;
@@ -1879,21 +1903,28 @@ impl SoftwarePlayerRuntime {
             output_config.channels,
             self.audio_stream_target_buffer_duration,
         );
+        let worker_controller = controller.clone();
 
         thread::Builder::new()
             .name("player-remote-audio-stream".to_owned())
             .spawn(move || {
+                let backpressure_interrupt_flag = worker_interrupt_flag.clone();
+                let chunk_controller = worker_controller.clone();
                 let emit_metadata = |probe: MediaProbe| -> anyhow::Result<()> {
                     let _ = sender.send(Ok(AudioStreamWorkerEvent::Metadata(probe)));
                     Ok(())
                 };
                 let emit_chunk = |chunk: Vec<f32>| -> anyhow::Result<bool> {
-                    if !wait_for_audio_buffer_window(&controller, generation, target_buffer_samples)
-                    {
+                    if !wait_for_audio_buffer_window(
+                        &chunk_controller,
+                        generation,
+                        target_buffer_samples,
+                        Some(&backpressure_interrupt_flag),
+                    ) {
                         return Ok(false);
                     }
 
-                    controller.append_samples(generation, chunk)
+                    chunk_controller.append_samples(generation, chunk)
                 };
                 let result = backend
                     .stream_audio_source_with_playback_rate_and_interrupt(
@@ -1907,8 +1938,8 @@ impl SoftwarePlayerRuntime {
                         emit_chunk,
                     )
                     .map(|_| {
-                        if controller.is_generation_active(generation) {
-                            controller.finish_generation(generation);
+                        if worker_controller.is_generation_active(generation) {
+                            worker_controller.finish_generation(generation);
                         }
                     })
                     .map(|_| AudioStreamWorkerEvent::Finished)
@@ -1927,6 +1958,7 @@ impl SoftwarePlayerRuntime {
             generation,
             retry_attempt,
             receiver,
+            controller,
             interrupt_flag: Some(interrupt_flag),
         });
         self.pending_audio_stream_retry = None;
@@ -1936,10 +1968,11 @@ impl SoftwarePlayerRuntime {
     }
 
     fn cancel_pending_audio_stream_worker(&mut self) {
-        if let Some(worker) = self.pending_audio_stream_worker.take()
-            && let Some(interrupt_flag) = worker.interrupt_flag
-        {
-            interrupt_flag.store(true, Ordering::SeqCst);
+        if let Some(worker) = self.pending_audio_stream_worker.take() {
+            if let Some(interrupt_flag) = worker.interrupt_flag {
+                interrupt_flag.store(true, Ordering::SeqCst);
+            }
+            worker.controller.notify_backpressure_waiters();
         }
         self.pending_audio_stream_retry = None;
     }
@@ -2448,19 +2481,25 @@ fn wait_for_audio_buffer_window(
     controller: &AudioSinkController,
     generation: u64,
     target_buffer_samples: usize,
+    interrupt_flag: Option<&AtomicBool>,
 ) -> bool {
-    loop {
-        if !controller.is_generation_active(generation) {
-            return false;
-        }
-
-        let buffered_samples = controller.buffered_samples(generation).unwrap_or(0);
-        if buffered_samples <= target_buffer_samples {
-            return true;
-        }
-
-        thread::sleep(AUDIO_STREAM_BACKPRESSURE_POLL_INTERVAL);
+    let should_cancel = || {
+        interrupt_flag
+            .map(|flag| flag.load(Ordering::Acquire))
+            .unwrap_or(false)
+    };
+    match controller.wait_for_buffered_samples_at_or_below(
+        generation,
+        target_buffer_samples,
+        AUDIO_STREAM_BACKPRESSURE_WAIT_TIMEOUT,
+        should_cancel,
+    ) {
+        result => audio_buffer_window_wait_result_is_ready(result),
     }
+}
+
+fn audio_buffer_window_wait_result_is_ready(result: AudioBufferWindowWaitResult) -> bool {
+    matches!(result, AudioBufferWindowWaitResult::Ready)
 }
 
 fn stream_direct_audio_track_range<F>(
@@ -2569,8 +2608,10 @@ fn audio_output_info(descriptor: &AudioOutputDescriptor) -> Option<PlayerAudioOu
     })
 }
 
+#[cfg(test)]
 fn should_defer_audio_decode_for_source(source: &MediaSource) -> bool {
-    matches!(source.kind(), MediaSourceKind::Remote)
+    let _ = source;
+    true
 }
 
 fn should_defer_media_probe_for_source(source: &MediaSource) -> bool {
@@ -2578,7 +2619,8 @@ fn should_defer_media_probe_for_source(source: &MediaSource) -> bool {
 }
 
 fn should_stream_audio_source_directly(source: &MediaSource) -> bool {
-    source.kind() == MediaSourceKind::Remote && source.protocol() == MediaSourceProtocol::Hls
+    let _ = source;
+    true
 }
 
 fn initial_restart_positions(
@@ -2759,6 +2801,22 @@ mod tests {
     use std::sync::atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering};
 
     #[test]
+    fn audio_buffer_window_wait_result_mapping_keeps_only_ready_running() {
+        assert!(audio_buffer_window_wait_result_is_ready(
+            AudioBufferWindowWaitResult::Ready
+        ));
+        assert!(!audio_buffer_window_wait_result_is_ready(
+            AudioBufferWindowWaitResult::Inactive
+        ));
+        assert!(!audio_buffer_window_wait_result_is_ready(
+            AudioBufferWindowWaitResult::Cancelled
+        ));
+        assert!(!audio_buffer_window_wait_result_is_ready(
+            AudioBufferWindowWaitResult::TimedOut
+        ));
+    }
+
+    #[test]
     fn audio_output_descriptor_change_detects_device_name_switch() {
         let current = AudioOutputDescriptor {
             default_output_device: Some("MacBook Pro Speakers".to_owned()),
@@ -2825,14 +2883,14 @@ mod tests {
     }
 
     #[test]
-    fn remote_sources_defer_audio_decode_to_protect_first_frame() {
+    fn all_sources_defer_audio_decode_to_protect_first_frame_and_memory() {
         assert!(should_defer_audio_decode_for_source(&MediaSource::new(
             "https://example.com/video.m3u8"
         )));
         assert!(should_defer_audio_decode_for_source(&MediaSource::new(
             "https://example.com/video.mp4"
         )));
-        assert!(!should_defer_audio_decode_for_source(&MediaSource::new(
+        assert!(should_defer_audio_decode_for_source(&MediaSource::new(
             "/tmp/video.mp4"
         )));
     }
@@ -3135,14 +3193,14 @@ mod tests {
     }
 
     #[test]
-    fn only_remote_hls_sources_stream_audio_directly() {
+    fn all_sources_stream_audio_directly() {
         assert!(should_stream_audio_source_directly(&MediaSource::new(
             "https://example.com/video.m3u8"
         )));
-        assert!(!should_stream_audio_source_directly(&MediaSource::new(
+        assert!(should_stream_audio_source_directly(&MediaSource::new(
             "https://example.com/video.mp4"
         )));
-        assert!(!should_stream_audio_source_directly(&MediaSource::new(
+        assert!(should_stream_audio_source_directly(&MediaSource::new(
             "/tmp/video.m3u8"
         )));
     }

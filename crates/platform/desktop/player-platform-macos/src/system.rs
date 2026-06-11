@@ -52,11 +52,17 @@ struct MacosNativeCallbackContext {
     controller: MacosManagedNativeSessionController,
 }
 
+// SAFETY: the opaque AVFoundation session and callback context are only used
+// through the command queue callbacks owned by the managed native session. Drop
+// performs best-effort teardown and does not expose the raw pointers to callers.
 unsafe impl Send for MacosSystemNativeCommandSink {}
 
 impl Drop for MacosSystemNativeCommandSink {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
+        // SAFETY: both raw pointers are created together by
+        // `player_macos_avfoundation_create_session`. Destroying the native
+        // session stops future callbacks before reclaiming the boxed context.
         unsafe {
             player_macos_avfoundation_destroy_session(self.session_handle);
             drop(Box::from_raw(self.callback_context));
@@ -68,6 +74,9 @@ pub struct MacosMetalLayerPresenter {
     handle: *mut c_void,
 }
 
+// SAFETY: the presenter handle is an opaque system object whose operations are
+// synchronized by the macOS native-frame presenter path; Rust never dereferences
+// the pointer directly.
 unsafe impl Send for MacosMetalLayerPresenter {}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -83,6 +92,9 @@ pub struct MacosVideoLayerSurface {
     target: PlayerVideoSurfaceTarget,
 }
 
+// SAFETY: the layer surface is an opaque AVFoundation host object. Access stays
+// behind the platform bridge calls, and Rust only moves the handle between
+// owned presenter/session objects.
 unsafe impl Send for MacosVideoLayerSurface {}
 
 impl MacosVideoLayerSurface {
@@ -95,6 +107,8 @@ impl MacosVideoLayerSurface {
             let host_surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(host_surface)?;
             let frame = MacosLayerFrameRepr::from_frame(frame);
             let mut error_message = [0 as c_char; 256];
+            // SAFETY: the bridge writes at most `error_message.len()` bytes into
+            // the caller-owned buffer and returns an opaque surface handle.
             let handle = unsafe {
                 player_macos_video_layer_surface_create(
                     host_surface,
@@ -110,6 +124,8 @@ impl MacosVideoLayerSurface {
                 ));
             }
 
+            // SAFETY: `handle` is a live surface handle returned by the bridge.
+            // The bridge only reads the handle to expose its runtime target.
             let target = unsafe { player_macos_video_layer_surface_target(handle) }
                 .to_runtime_surface()
                 .ok_or_else(|| {
@@ -169,6 +185,8 @@ impl MacosVideoLayerSurface {
 impl Drop for MacosVideoLayerSurface {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
+        // SAFETY: `handle` is an owned opaque surface handle returned by the
+        // bridge and is destroyed exactly once here.
         unsafe {
             player_macos_video_layer_surface_destroy(self.handle);
         }
@@ -181,6 +199,8 @@ impl MacosMetalLayerPresenter {
         {
             let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(video_surface)?;
             let mut error_message = [0 as c_char; 256];
+            // SAFETY: the bridge writes at most `error_message.len()` bytes into
+            // the caller-owned buffer and returns an opaque presenter handle.
             let handle = unsafe {
                 player_macos_metal_presenter_create(
                     surface,
@@ -252,6 +272,8 @@ impl MacosMetalLayerPresenter {
 impl Drop for MacosMetalLayerPresenter {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
+        // SAFETY: `handle` is an owned opaque presenter handle returned by the
+        // bridge and is destroyed exactly once here.
         unsafe {
             player_macos_metal_presenter_destroy(self.handle);
         }
@@ -442,6 +464,9 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
                     "media source contains an interior NUL byte and cannot be passed to AVFoundation",
                 )
             })?;
+            // The native session owns only the raw pointer value; Rust retains
+            // ownership until session creation succeeds or the failure path below
+            // reconstructs the box.
             let callback_context =
                 Box::into_raw(Box::new(MacosNativeCallbackContext { controller }));
             let callbacks = MacosAvFoundationCallbacks {
@@ -455,6 +480,8 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
             let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(surface)?;
             let mut session_handle = std::ptr::null_mut();
             let mut error_message = [0 as c_char; 256];
+            // SAFETY: all pointers are valid for the duration of the call. On
+            // success the native session owns the callback context until sink Drop.
             let created = unsafe {
                 player_macos_avfoundation_create_session(
                     source_c_string.as_ptr(),
@@ -466,6 +493,8 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
                 )
             };
             if !created {
+                // SAFETY: session creation failed, so the native side did not
+                // retain the callback context and Rust must reclaim the box.
                 unsafe {
                     drop(Box::from_raw(callback_context));
                 }
@@ -688,6 +717,8 @@ struct MacosAvFoundationCallbacks {
 #[cfg(target_os = "macos")]
 extern "C" fn macos_on_snapshot(context: *mut c_void, snapshot: MacosAvFoundationSnapshotRepr) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: callbacks receive the context pointer registered during session
+        // creation. The native session keeps it alive until destroy.
         let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
         else {
             return;
@@ -725,6 +756,8 @@ extern "C" fn macos_on_snapshot(context: *mut c_void, snapshot: MacosAvFoundatio
 #[cfg(target_os = "macos")]
 extern "C" fn macos_on_seek_completed(context: *mut c_void, position_ms: u64) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: callbacks receive the context pointer registered during session
+        // creation. The native session keeps it alive until destroy.
         let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
         else {
             return;
@@ -738,6 +771,8 @@ extern "C" fn macos_on_seek_completed(context: *mut c_void, position_ms: u64) {
 #[cfg(target_os = "macos")]
 extern "C" fn macos_on_first_frame_ready(context: *mut c_void, position_ms: u64) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: callbacks receive the context pointer registered during session
+        // creation. The native session keeps it alive until destroy.
         let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
         else {
             return;
@@ -751,6 +786,8 @@ extern "C" fn macos_on_first_frame_ready(context: *mut c_void, position_ms: u64)
 #[cfg(target_os = "macos")]
 extern "C" fn macos_on_interruption_changed(context: *mut c_void, interrupted: c_uchar) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: callbacks receive the context pointer registered during session
+        // creation. The native session keeps it alive until destroy.
         let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
         else {
             return;
@@ -764,6 +801,8 @@ extern "C" fn macos_on_interruption_changed(context: *mut c_void, interrupted: c
 #[cfg(target_os = "macos")]
 extern "C" fn macos_on_error(context: *mut c_void, message: *const c_char) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: callbacks receive the context pointer registered during session
+        // creation. The native session keeps it alive until destroy.
         let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
         else {
             return;
@@ -771,6 +810,8 @@ extern "C" fn macos_on_error(context: *mut c_void, message: *const c_char) {
         let message = if message.is_null() {
             "AVFoundation reported an unknown error".to_owned()
         } else {
+            // SAFETY: non-null error messages are provided as NUL-terminated
+            // strings valid for this callback invocation.
             unsafe { CStr::from_ptr(message) }
                 .to_string_lossy()
                 .into_owned()
@@ -970,7 +1011,11 @@ unsafe extern "C" {
 
 #[cfg(target_os = "macos")]
 fn c_string_buffer_to_string(buffer: &[c_char]) -> String {
-    unsafe { CStr::from_ptr(buffer.as_ptr()) }
+    // SAFETY: the byte slice covers exactly the caller-owned fixed C buffer and
+    // does not outlive `buffer`.
+    let bytes = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), buffer.len()) };
+    CStr::from_bytes_until_nul(bytes)
+        .unwrap_or(c"")
         .to_string_lossy()
         .into_owned()
 }

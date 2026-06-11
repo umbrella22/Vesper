@@ -30,7 +30,7 @@ use super::{
     prepare_source_normalizer_for_open, present_and_release_native_frame_with_presenter,
     present_if_current_epoch_and_release, probe_macos_host_runtime_initializer_with_factories,
     probe_macos_host_runtime_source_with_options, process_macos_native_frame,
-    release_native_frame_with_counter, runtime_status_from_loader, send_macos_native_frame_packet,
+    release_native_frame_with_counter, send_macos_native_frame_packet,
     should_forward_strict_frame_processor_fallback_error,
     should_trigger_runtime_fallback_for_advance, should_trigger_runtime_fallback_for_command,
     source_normalizer_packet_decoder_unavailable_message, source_normalizer_packet_stream_details,
@@ -44,6 +44,7 @@ use player_backend_ffmpeg::{
 };
 use player_model::MediaSource;
 use player_platform_apple::VIDEOTOOLBOX_BACKEND_NAME;
+use player_platform_desktop::diagnostics::runtime_status_from_loader;
 use player_platform_desktop::{DesktopVideoFramePoll, DesktopVideoSource};
 use player_platform_native_frame::{
     NativeFrameProcessorChainCore, NativeFrameProcessorNode, NativeFrameProcessorProcessedFrame,
@@ -1933,7 +1934,7 @@ fn macos_native_frame_decoder_plugin_runtime_probes_with_surface() {
 }
 
 #[test]
-#[ignore = "requires built player-decoder-videotoolbox and player-frame-processor-diagnostic shared libraries plus a local H264/HEVC source"]
+#[ignore = "requires built player-decoder-videotoolbox and player-frame-processor-diagnostic shared library artifacts plus a local H264/HEVC source"]
 #[cfg(target_os = "macos")]
 fn macos_native_frame_runtime_loads_frame_processor_diagnostic_plugin() {
     let Some(decoder_plugin_path) =
@@ -2029,7 +2030,7 @@ fn macos_native_frame_runtime_loads_frame_processor_diagnostic_plugin() {
 }
 
 #[test]
-#[ignore = "requires built player-decoder-videotoolbox and player-frame-processor-diagnostic shared libraries plus a local H264/HEVC source"]
+#[ignore = "requires built player-decoder-videotoolbox and player-frame-processor-diagnostic shared library artifacts plus a local H264/HEVC source"]
 #[cfg(target_os = "macos")]
 fn macos_native_frame_strict_frame_processor_failure_does_not_fallback_to_software() {
     let Some(decoder_plugin_path) =
@@ -2107,7 +2108,7 @@ fn macos_native_frame_strict_frame_processor_failure_does_not_fallback_to_softwa
 }
 
 #[test]
-#[ignore = "requires built player-decoder-videotoolbox and player-frame-processor-diagnostic shared libraries plus a local H264/HEVC source"]
+#[ignore = "requires built player-decoder-videotoolbox and player-frame-processor-diagnostic shared library artifacts plus a local H264/HEVC source"]
 #[cfg(target_os = "macos")]
 fn macos_host_strict_frame_processor_failure_forwards_software_error_message() {
     let Some(decoder_plugin_path) =
@@ -3097,8 +3098,8 @@ fn dropping_native_frame_source_closes_processor_and_decoder_sessions() {
         .map(|events| events.clone())
         .unwrap_or_default();
     assert!(
-        contains_ordered_events(&events, &["processor_flush", "processor_close", "close"]),
-        "drop should flush/close processor before decoder close: {events:?}"
+        contains_ordered_events(&events, &["close", "processor_flush", "processor_close"]),
+        "drop should close decoder before taking shared processor state: {events:?}"
     );
 }
 
@@ -3188,9 +3189,9 @@ fn macos_native_frame_source_switch_releases_old_source_and_decodes_new_source()
     assert!(
         contains_ordered_events(
             &old_events,
-            &["processor_flush", "processor_close", "close"]
+            &["close", "processor_flush", "processor_close"]
         ),
-        "source switch should flush/close old processor before decoder close: {old_events:?}"
+        "source switch should close decoder before taking old shared processor state: {old_events:?}"
     );
 
     let new_events = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -3967,7 +3968,7 @@ fn frame_processor_chain_flushes_sessions() {
         ],
     );
 
-    chain.flush();
+    let _ = chain.flush();
 
     assert_eq!(
         first_state

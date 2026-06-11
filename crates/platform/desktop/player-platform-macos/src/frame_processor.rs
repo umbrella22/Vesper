@@ -122,12 +122,12 @@ impl MacosFrameProcessorChain {
         self.core.drain_events()
     }
 
-    pub(crate) fn flush(&mut self) {
-        let _ = self.core.flush();
+    pub(crate) fn flush(&mut self) -> anyhow::Result<()> {
+        self.core.flush().map_err(macos_frame_processor_error)
     }
 
-    pub(crate) fn close(&mut self) {
-        let _ = self.core.close();
+    pub(crate) fn close(&mut self) -> anyhow::Result<()> {
+        self.core.close().map_err(macos_frame_processor_error)
     }
 
     #[cfg(test)]

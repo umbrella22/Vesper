@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use super::*;
 
 #[derive(Debug)]
@@ -14,7 +16,9 @@ impl Drop for DynamicSourceNormalizerPacketPluginFactoryInner {
         if let Some(destroy) = self.api.destroy {
             // SAFETY: `destroy` and `context` come from the validated plugin ABI
             // table and are only invoked once when this wrapper is dropped.
-            unsafe { destroy(self.api.context) };
+            let _ = catch_source_normalizer_plugin_call(&self.name, "destroy", || unsafe {
+                destroy(self.api.context)
+            });
         }
     }
 }
@@ -33,7 +37,9 @@ impl Drop for DynamicSourceNormalizerResourcePluginFactoryInner {
         if let Some(destroy) = self.api.destroy {
             // SAFETY: `destroy` and `context` come from the validated plugin ABI
             // table and are only invoked once when this wrapper is dropped.
-            unsafe { destroy(self.api.context) };
+            let _ = catch_source_normalizer_plugin_call(&self.name, "destroy", || unsafe {
+                destroy(self.api.context)
+            });
         }
     }
 }
@@ -70,7 +76,10 @@ impl DynamicSourceNormalizerPacketPluginFactory {
         let capabilities = decode_plugin_bytes::<SourceNormalizerPacketCapabilities>(
             // SAFETY: the validated API guarantees `packet_capabilities_json`
             // and `free_bytes` are present.
-            unsafe { (api.packet_capabilities_json)(api.context) },
+            catch_source_normalizer_plugin_call(&name, "packet_capabilities_json", || unsafe {
+                (api.packet_capabilities_json)(api.context)
+            })
+            .map_err(|error| PluginLoadError::CapabilitiesAbiViolation(error.to_string()))?,
             api.free_bytes,
             api.context,
         )
@@ -109,7 +118,10 @@ impl DynamicSourceNormalizerResourcePluginFactory {
         let capabilities = decode_plugin_bytes::<SourceNormalizerResourceCapabilities>(
             // SAFETY: the validated API guarantees `resource_capabilities_json`
             // and `free_bytes` are present.
-            unsafe { (api.resource_capabilities_json)(api.context) },
+            catch_source_normalizer_plugin_call(&name, "resource_capabilities_json", || unsafe {
+                (api.resource_capabilities_json)(api.context)
+            })
+            .map_err(|error| PluginLoadError::CapabilitiesAbiViolation(error.to_string()))?,
             api.free_bytes,
             api.context,
         )
@@ -149,13 +161,17 @@ impl SourceNormalizerPacketPluginFactory for DynamicSourceNormalizerPacketPlugin
         // SAFETY: the validated plugin API guarantees
         // `open_packet_session_json` is present, and `config_json` remains
         // alive for the duration of this synchronous callback.
-        let result = unsafe {
-            (self.inner.api.open_packet_session_json)(
-                self.inner.api.context,
-                config_json.as_ptr(),
-                config_json.len(),
-            )
-        };
+        let result = catch_source_normalizer_plugin_call(
+            &self.inner.name,
+            "open_packet_session",
+            || unsafe {
+                (self.inner.api.open_packet_session_json)(
+                    self.inner.api.context,
+                    config_json.as_ptr(),
+                    config_json.len(),
+                )
+            },
+        )?;
 
         match result.status {
             VesperPluginResultStatus::Success => {
@@ -224,13 +240,17 @@ impl SourceNormalizerResourcePluginFactory for DynamicSourceNormalizerResourcePl
         // SAFETY: the validated plugin API guarantees
         // `open_resource_session_json` is present, and `config_json` remains
         // alive for the duration of this synchronous callback.
-        let result = unsafe {
-            (self.inner.api.open_resource_session_json)(
-                self.inner.api.context,
-                config_json.as_ptr(),
-                config_json.len(),
-            )
-        };
+        let result = catch_source_normalizer_plugin_call(
+            &self.inner.name,
+            "open_resource_session",
+            || unsafe {
+                (self.inner.api.open_resource_session_json)(
+                    self.inner.api.context,
+                    config_json.as_ptr(),
+                    config_json.len(),
+                )
+            },
+        )?;
 
         match result.status {
             VesperPluginResultStatus::Success => {
@@ -349,9 +369,20 @@ impl DynamicSourceNormalizerPacketSession {
 
         // SAFETY: `release_packet` is present in the validated v2 API and the
         // handle was returned by this same session from a successful read.
-        let result = unsafe {
-            (self.factory.api.release_packet)(self.factory.api.context, self.session, packet_handle)
-        };
+        let result =
+            match catch_source_normalizer_plugin_call(&self.factory.name, operation, || unsafe {
+                (self.factory.api.release_packet)(
+                    self.factory.api.context,
+                    self.session,
+                    packet_handle,
+                )
+            }) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.closed = true;
+                    return Err(error);
+                }
+            };
         self.decode_operation_result(result, operation).map(|_| ())
     }
 
@@ -361,8 +392,19 @@ impl DynamicSourceNormalizerPacketSession {
     ) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
         // SAFETY: `release_packet` is present in the validated v2 API and this
         // method is only called for a handle currently tracked by this session.
-        let result = unsafe {
-            (self.factory.api.release_packet)(self.factory.api.context, self.session, packet_handle)
+        let result = match catch_source_normalizer_plugin_call(
+            &self.factory.name,
+            "release_packet",
+            || unsafe {
+                (self.factory.api.release_packet)(
+                    self.factory.api.context,
+                    self.session,
+                    packet_handle,
+                )
+            },
+        ) {
+            Ok(result) => result,
+            Err(error) => return Err(error),
         };
         self.decode_operation_result(result, "release_packet")
     }
@@ -373,8 +415,19 @@ impl DynamicSourceNormalizerPacketSession {
         }
         // SAFETY: this is best-effort cleanup for an ABI-violating result that
         // still returned a plugin-owned handle.
-        let result = unsafe {
-            (self.factory.api.release_packet)(self.factory.api.context, self.session, packet_handle)
+        let result = catch_source_normalizer_plugin_call(
+            &self.factory.name,
+            "release_unexpected_packet",
+            || unsafe {
+                (self.factory.api.release_packet)(
+                    self.factory.api.context,
+                    self.session,
+                    packet_handle,
+                )
+            },
+        );
+        let Ok(result) = result else {
+            return;
         };
         reclaim_plugin_payload(
             result.payload,
@@ -437,8 +490,17 @@ impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
         // SAFETY: the validated plugin API guarantees `read_packet` is present
         // and returns metadata bytes reclaimed below. Packet bytes stay valid
         // until `release_packet` is called for the returned handle.
-        let result =
-            unsafe { (self.factory.api.read_packet)(self.factory.api.context, self.session) };
+        let result = match catch_source_normalizer_plugin_call(
+            &self.factory.name,
+            "read_packet",
+            || unsafe { (self.factory.api.read_packet)(self.factory.api.context, self.session) },
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                return Err(error);
+            }
+        };
 
         match result.status {
             VesperPluginResultStatus::Success => {
@@ -554,13 +616,23 @@ impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
 
         // SAFETY: the optional seek callback comes from the validated v2 API and
         // the JSON buffer remains alive for the synchronous call.
-        let result = unsafe {
-            seek_packet_session_json(
-                self.factory.api.context,
-                self.session,
-                seek_json.as_ptr(),
-                seek_json.len(),
-            )
+        let result = match catch_source_normalizer_plugin_call(
+            &self.factory.name,
+            "seek_packet",
+            || unsafe {
+                seek_packet_session_json(
+                    self.factory.api.context,
+                    self.session,
+                    seek_json.as_ptr(),
+                    seek_json.len(),
+                )
+            },
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                return Err(error);
+            }
         };
         self.decode_operation_result(result, "seek_packet")
     }
@@ -570,8 +642,18 @@ impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
         self.release_outstanding_packet("release_packet_on_flush")?;
         // SAFETY: the validated plugin API guarantees `flush_packet_session` is
         // present for packet v2 sessions.
-        let result = unsafe {
-            (self.factory.api.flush_packet_session)(self.factory.api.context, self.session)
+        let result = match catch_source_normalizer_plugin_call(
+            &self.factory.name,
+            "flush_packet",
+            || unsafe {
+                (self.factory.api.flush_packet_session)(self.factory.api.context, self.session)
+            },
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                return Err(error);
+            }
         };
         self.decode_operation_result(result, "flush_packet")
     }
@@ -584,8 +666,19 @@ impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
         // SAFETY: the validated plugin API guarantees `close_packet_session` is
         // present and consumes or releases the opaque session pointer exactly
         // once.
-        let result = unsafe {
-            (self.factory.api.close_packet_session)(self.factory.api.context, self.session)
+        let result = match catch_source_normalizer_plugin_call(
+            &self.factory.name,
+            "close_packet",
+            || unsafe {
+                (self.factory.api.close_packet_session)(self.factory.api.context, self.session)
+            },
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                self.session = std::ptr::null_mut();
+                return release_result.and(Err(error));
+            }
         };
         self.closed = true;
         self.session = std::ptr::null_mut();
@@ -605,8 +698,18 @@ impl SourceNormalizerResourceSession for DynamicSourceNormalizerResourceSession 
         self.ensure_open()?;
         // SAFETY: the validated plugin API guarantees `poll_resource_session`
         // is present and returns a JSON status payload reclaimed below.
-        let result = unsafe {
-            (self.factory.api.poll_resource_session)(self.factory.api.context, self.session)
+        let result = match catch_source_normalizer_plugin_call(
+            &self.factory.name,
+            "poll_resource",
+            || unsafe {
+                (self.factory.api.poll_resource_session)(self.factory.api.context, self.session)
+            },
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                return Err(error);
+            }
         };
         match result.status {
             VesperPluginResultStatus::Success => {
@@ -629,12 +732,73 @@ impl SourceNormalizerResourceSession for DynamicSourceNormalizerResourceSession 
         }
     }
 
+    fn wait_for_update(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<SourceNormalizerResourceSessionWaitStatus, SourceNormalizerError> {
+        self.ensure_open()?;
+        let timeout_ms = duration_to_plugin_timeout_millis(timeout);
+        // SAFETY: the validated v4 plugin API guarantees
+        // `wait_resource_session_update` is present for resource sessions and
+        // returns a JSON wait-status payload reclaimed below.
+        let result = match catch_source_normalizer_plugin_call(
+            &self.factory.name,
+            "wait_resource_update",
+            || unsafe {
+                (self.factory.api.wait_resource_session_update)(
+                    self.factory.api.context,
+                    self.session,
+                    timeout_ms,
+                )
+            },
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                return Err(error);
+            }
+        };
+        match result.status {
+            VesperPluginResultStatus::Success => {
+                decode_plugin_bytes::<SourceNormalizerResourceSessionWaitStatus>(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                )
+                .map_err(|error| {
+                    map_source_normalizer_payload_error(
+                        &self.factory.name,
+                        "wait_resource_update",
+                        error,
+                    )
+                })
+            }
+            VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+                &self.factory.name,
+                "wait_resource_update",
+            )),
+        }
+    }
+
     fn cancel(&mut self) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
         self.ensure_open()?;
         // SAFETY: the validated plugin API guarantees `cancel_resource_session`
         // is present for resource sessions.
-        let result = unsafe {
-            (self.factory.api.cancel_resource_session)(self.factory.api.context, self.session)
+        let result = match catch_source_normalizer_plugin_call(
+            &self.factory.name,
+            "cancel_resource",
+            || unsafe {
+                (self.factory.api.cancel_resource_session)(self.factory.api.context, self.session)
+            },
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                return Err(error);
+            }
         };
         self.decode_operation_result(result, "cancel_resource")
     }
@@ -646,8 +810,19 @@ impl SourceNormalizerResourceSession for DynamicSourceNormalizerResourceSession 
         // SAFETY: the validated plugin API guarantees `close_resource_session`
         // is present and consumes or releases the opaque session pointer exactly
         // once.
-        let result = unsafe {
-            (self.factory.api.close_resource_session)(self.factory.api.context, self.session)
+        let result = match catch_source_normalizer_plugin_call(
+            &self.factory.name,
+            "close_resource",
+            || unsafe {
+                (self.factory.api.close_resource_session)(self.factory.api.context, self.session)
+            },
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                self.session = std::ptr::null_mut();
+                return Err(error);
+            }
         };
         self.closed = true;
         self.session = std::ptr::null_mut();
@@ -666,6 +841,17 @@ impl Drop for DynamicSourceNormalizerPacketSession {
             );
         }
     }
+}
+
+fn duration_to_plugin_timeout_millis(timeout: Duration) -> u64 {
+    if timeout.is_zero() {
+        return 0;
+    }
+    let millis = timeout.as_millis();
+    if millis == 0 {
+        return 1;
+    }
+    u64::try_from(millis).unwrap_or(u64::MAX)
 }
 
 impl Drop for DynamicSourceNormalizerResourceSession {

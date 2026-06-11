@@ -2848,73 +2848,32 @@ impl ApplicationHandler for DesktopPlayerApp {
         if self.pending_launch_activation.is_some() || self.pending_post_launch_play {
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if self.runtime.is_some() {
-            if let Some(deadline) = runtime_next_deadline {
-                let mut next_deadline = deadline;
-                if let Some(hide_deadline) = self.controls_hide_deadline {
-                    next_deadline = next_deadline.min(hide_deadline);
-                }
-                if let Some(animation_deadline) = controls_animation_deadline {
-                    next_deadline = next_deadline.min(animation_deadline);
-                }
-                if let Some(ui_overlay_deadline) = ui_overlay_deadline {
-                    next_deadline = next_deadline.min(ui_overlay_deadline);
-                }
-                if let Some(smoke_script_deadline) = smoke_script_deadline {
-                    next_deadline = next_deadline.min(smoke_script_deadline);
-                }
+            let native_surface_poll_deadline = (runtime_next_deadline.is_none()
+                && self.uses_external_video_surface)
+                .then(|| Instant::now() + NATIVE_SURFACE_POLL_INTERVAL);
+            let next_deadline = [
+                runtime_next_deadline,
+                native_surface_poll_deadline,
+                self.controls_hide_deadline,
+                controls_animation_deadline,
+                ui_overlay_deadline,
+                smoke_script_deadline,
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            if let Some(next_deadline) = next_deadline {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
-            } else if self.uses_external_video_surface {
-                let mut next_deadline = Instant::now() + NATIVE_SURFACE_POLL_INTERVAL;
-                if let Some(hide_deadline) = self.controls_hide_deadline {
-                    next_deadline = next_deadline.min(hide_deadline);
-                }
-                if let Some(animation_deadline) = controls_animation_deadline {
-                    next_deadline = next_deadline.min(animation_deadline);
-                }
-                if let Some(ui_overlay_deadline) = ui_overlay_deadline {
-                    next_deadline = next_deadline.min(ui_overlay_deadline);
-                }
-                if let Some(smoke_script_deadline) = smoke_script_deadline {
-                    next_deadline = next_deadline.min(smoke_script_deadline);
-                }
-                event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
-            } else if let Some(hide_deadline) = self.controls_hide_deadline {
-                let mut next_deadline = controls_animation_deadline
-                    .map(|animation_deadline| hide_deadline.min(animation_deadline))
-                    .unwrap_or(hide_deadline);
-                if let Some(ui_overlay_deadline) = ui_overlay_deadline {
-                    next_deadline = next_deadline.min(ui_overlay_deadline);
-                }
-                if let Some(smoke_script_deadline) = smoke_script_deadline {
-                    next_deadline = next_deadline.min(smoke_script_deadline);
-                }
-                event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
-            } else if let Some(animation_deadline) = controls_animation_deadline {
-                let mut next_deadline = ui_overlay_deadline
-                    .map(|ui_overlay_deadline| animation_deadline.min(ui_overlay_deadline))
-                    .unwrap_or(animation_deadline);
-                if let Some(smoke_script_deadline) = smoke_script_deadline {
-                    next_deadline = next_deadline.min(smoke_script_deadline);
-                }
-                event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
-            } else if let Some(ui_overlay_deadline) = ui_overlay_deadline {
-                let next_deadline = smoke_script_deadline
-                    .map(|smoke_script_deadline| ui_overlay_deadline.min(smoke_script_deadline))
-                    .unwrap_or(ui_overlay_deadline);
-                event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
-            } else if let Some(smoke_script_deadline) = smoke_script_deadline {
-                event_loop.set_control_flow(ControlFlow::WaitUntil(smoke_script_deadline));
             } else {
                 event_loop.set_control_flow(ControlFlow::Wait);
             }
         } else if self.active_launch_request_id.is_some() {
-            if let Some(hide_deadline) = self.controls_hide_deadline {
-                let next_deadline = controls_animation_deadline
-                    .map(|animation_deadline| hide_deadline.min(animation_deadline))
-                    .unwrap_or(hide_deadline);
+            let next_deadline = [self.controls_hide_deadline, controls_animation_deadline]
+                .into_iter()
+                .flatten()
+                .min();
+            if let Some(next_deadline) = next_deadline {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(next_deadline));
-            } else if let Some(animation_deadline) = controls_animation_deadline {
-                event_loop.set_control_flow(ControlFlow::WaitUntil(animation_deadline));
             } else {
                 event_loop.set_control_flow(ControlFlow::Wait);
             }

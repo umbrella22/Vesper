@@ -192,7 +192,7 @@ where
         }
 
         let segment_seconds = template.duration as f64 / template.timescale.max(1) as f64;
-        let segment_count = (duration_seconds / segment_seconds).ceil().max(1.0) as u64;
+        let segment_count = dash_segment_count(duration_seconds, segment_seconds)?;
         let mut resources = Vec::new();
         let mut segments = Vec::new();
         let mut total_size_bytes = 0_u64;
@@ -208,7 +208,7 @@ where
                 &expand_dash_template(initialization, representation, template.start_number),
             );
             let size = self.probe_required_size(&remote, None)?;
-            total_size_bytes += size;
+            add_total_size(&mut total_size_bytes, size)?;
             resources.push(DownloadResourceRecord {
                 resource_id: "dash-init".to_owned(),
                 uri: remote,
@@ -228,7 +228,7 @@ where
                 &expand_dash_template(&template.media, representation, number),
             );
             let size = self.probe_required_size(&remote, None)?;
-            total_size_bytes += size;
+            add_total_size(&mut total_size_bytes, size)?;
             segments.push(DownloadSegmentRecord {
                 segment_id: format!("dash-segment-{number}"),
                 uri: remote,
@@ -332,7 +332,7 @@ where
         let mut segments = Vec::with_capacity(clip_uris.len());
         for (index, clip_uri) in clip_uris.iter().enumerate() {
             let size = self.probe_required_size(clip_uri, None)?;
-            total_size_bytes += size;
+            add_total_size(&mut total_size_bytes, size)?;
             let sequence = index as u64 + 1;
             let local_path = PathBuf::from(format!(
                 "clips/clip-{sequence:05}.{}",
@@ -454,7 +454,7 @@ where
                 stream_resource_ids.push(resource_id.clone());
             } else {
                 let size = planner.probe_required_size(&map.uri, map.byte_range)?;
-                total_size_bytes += size;
+                add_total_size(&mut total_size_bytes, size)?;
                 let relative_path = PathBuf::from(format!(
                     "segments/{media_id}-init-{map_index}.{}",
                     extension_from_uri(&map.uri, "mp4")
@@ -478,7 +478,7 @@ where
 
         for segment in &playlist.segments {
             let size = planner.probe_required_size(&segment.uri, segment.byte_range)?;
-            total_size_bytes += size;
+            add_total_size(&mut total_size_bytes, size)?;
             let segment_id = format!("hls-{media_id}-{}", segment.sequence);
             segments.push(DownloadSegmentRecord {
                 segment_id: segment_id.clone(),
@@ -547,6 +547,17 @@ where
         streams,
         ..DownloadAssetIndex::default()
     })
+}
+
+fn add_total_size(total_size_bytes: &mut u64, size: u64) -> PlayerResult<()> {
+    *total_size_bytes = total_size_bytes.checked_add(size).ok_or_else(|| {
+        planning_error(
+            PlayerErrorCode::InvalidSource,
+            PlayerErrorCategory::Source,
+            "download asset size exceeds u64 range",
+        )
+    })?;
+    Ok(())
 }
 
 fn hls_stream_kind(media_id: &str, media_count: usize) -> DownloadStreamKind {
@@ -656,7 +667,8 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
     let mut segments = Vec::new();
     let mut pending_duration = None;
     let mut pending_byte_range = None;
-    let mut previous_range_end = 0_u64;
+    let mut previous_map_range_end = 0_u64;
+    let mut previous_segment_range_end = 0_u64;
     let mut sequence = 0_u64;
 
     for line in manifest
@@ -670,6 +682,10 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
         }
         if let Some(value) = line.strip_prefix("#EXT-X-VERSION:") {
             version = Some(value.trim().to_owned());
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
+            sequence = parse_hls_media_sequence(value.trim())?;
             continue;
         }
         if line == "#EXT-X-ENDLIST" {
@@ -691,7 +707,7 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
             };
             let byte_range = attributes
                 .get("BYTERANGE")
-                .and_then(|value| parse_hls_byte_range(value, &mut previous_range_end));
+                .and_then(|value| parse_hls_byte_range(value, &mut previous_map_range_end));
             maps.push(HlsMap {
                 uri: resolve_uri(manifest_uri, uri),
                 byte_range,
@@ -699,7 +715,8 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
             continue;
         }
         if let Some(value) = line.strip_prefix("#EXT-X-BYTERANGE:") {
-            pending_byte_range = parse_hls_byte_range(value.trim(), &mut previous_range_end);
+            pending_byte_range =
+                parse_hls_byte_range(value.trim(), &mut previous_segment_range_end);
             continue;
         }
         if let Some(value) = line.strip_prefix("#EXTINF:") {
@@ -716,13 +733,13 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
         if line.starts_with('#') {
             continue;
         }
-        sequence += 1;
         segments.push(HlsSegment {
             uri: resolve_uri(manifest_uri, line),
             duration: pending_duration.take(),
             byte_range: pending_byte_range.take(),
             sequence,
         });
+        sequence = next_hls_media_sequence(sequence)?;
     }
 
     if !end_list && !playlist_type_vod {
@@ -888,6 +905,26 @@ fn parse_hls_byte_range(value: &str, previous_range_end: &mut u64) -> Option<Dow
     Some(DownloadByteRange { offset, length })
 }
 
+fn parse_hls_media_sequence(value: &str) -> PlayerResult<u64> {
+    value.parse::<u64>().map_err(|_| {
+        planning_error(
+            PlayerErrorCode::InvalidSource,
+            PlayerErrorCategory::Source,
+            "HLS EXT-X-MEDIA-SEQUENCE must be a non-negative integer",
+        )
+    })
+}
+
+fn next_hls_media_sequence(sequence: u64) -> PlayerResult<u64> {
+    sequence.checked_add(1).ok_or_else(|| {
+        planning_error(
+            PlayerErrorCode::InvalidSource,
+            PlayerErrorCategory::Source,
+            "HLS EXT-X-MEDIA-SEQUENCE overflowed u64",
+        )
+    })
+}
+
 #[derive(Debug, Clone)]
 struct DashRepresentation {
     id: String,
@@ -1047,6 +1084,29 @@ fn dash_duration_seconds(manifest: &str) -> Option<f64> {
     parse_iso8601_duration_seconds(&dash_duration_text(manifest)?)
 }
 
+fn dash_segment_count(duration_seconds: f64, segment_seconds: f64) -> PlayerResult<u64> {
+    if !duration_seconds.is_finite()
+        || !segment_seconds.is_finite()
+        || duration_seconds <= 0.0
+        || segment_seconds <= 0.0
+    {
+        return Err(planning_error(
+            PlayerErrorCode::InvalidSource,
+            PlayerErrorCategory::Source,
+            "DASH SegmentTemplate planning requires finite positive duration values",
+        ));
+    }
+    let segment_count = (duration_seconds / segment_seconds).ceil().max(1.0);
+    if segment_count > u64::MAX as f64 {
+        return Err(planning_error(
+            PlayerErrorCode::InvalidSource,
+            PlayerErrorCategory::Source,
+            "DASH SegmentTemplate segment count exceeds u64 range",
+        ));
+    }
+    Ok(segment_count as u64)
+}
+
 fn parse_iso8601_duration_seconds(value: &str) -> Option<f64> {
     let value = value.strip_prefix("PT")?;
     let mut number = String::new();
@@ -1056,7 +1116,13 @@ fn parse_iso8601_duration_seconds(value: &str) -> Option<f64> {
             number.push(character);
             continue;
         }
+        if number.is_empty() {
+            return None;
+        }
         let parsed = number.parse::<f64>().ok()?;
+        if !parsed.is_finite() {
+            return None;
+        }
         number.clear();
         match character {
             'H' => total += parsed * 3600.0,
@@ -1064,6 +1130,9 @@ fn parse_iso8601_duration_seconds(value: &str) -> Option<f64> {
             'S' => total += parsed,
             _ => return None,
         }
+    }
+    if !number.is_empty() || total <= 0.0 || !total.is_finite() {
+        return None;
     }
     Some(total)
 }
@@ -1081,7 +1150,7 @@ fn find_xml_open_tag<'a>(input: &'a str, tag: &str) -> Option<&'a str> {
 
 fn xml_attr_from_tag(tag: &str, attr: &str) -> Option<String> {
     let needle = format!("{attr}=");
-    let start = tag.find(&needle)? + needle.len();
+    let start = find_xml_attr_start(tag, &needle)? + needle.len();
     let quote = tag[start..].chars().next()?;
     if quote != '"' && quote != '\'' {
         return None;
@@ -1089,6 +1158,19 @@ fn xml_attr_from_tag(tag: &str, attr: &str) -> Option<String> {
     let value_start = start + quote.len_utf8();
     let value_end = tag[value_start..].find(quote)? + value_start;
     Some(tag[value_start..value_end].to_owned())
+}
+
+fn find_xml_attr_start(tag: &str, needle: &str) -> Option<usize> {
+    let mut search_from = 0;
+    while let Some(offset) = tag[search_from..].find(needle) {
+        let start = search_from + offset;
+        let before = tag[..start].chars().next_back();
+        if before.is_none_or(|character| character.is_ascii_whitespace()) {
+            return Some(start);
+        }
+        search_from = start + needle.len();
+    }
+    None
 }
 
 fn xml_blocks(input: &str, tag: &str) -> Vec<String> {
@@ -1215,7 +1297,9 @@ fn planning_error(
 
 #[cfg(test)]
 mod tests {
-    use super::{DownloadPlanner, DownloadPlanningClient};
+    use super::{
+        DownloadPlanner, DownloadPlanningClient, parse_iso8601_duration_seconds, xml_attr_from_tag,
+    };
     use crate::{
         DownloadByteRange, DownloadContentFormat, DownloadProfile, DownloadSource,
         DownloadStreamKind, PlayerError, PlayerErrorCategory, PlayerErrorCode,
@@ -1287,7 +1371,7 @@ mod tests {
                 .generated_text
                 .as_ref()
                 .expect("manifest"),
-            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nsegments/media-00001.ts\n#EXTINF:4,\nsegments/media-00002.ts\n#EXT-X-ENDLIST\n"
+            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nsegments/media-00000.ts\n#EXTINF:4,\nsegments/media-00001.ts\n#EXT-X-ENDLIST\n"
         );
         assert_eq!(index.streams.len(), 1);
         assert_eq!(index.streams[0].kind, DownloadStreamKind::Combined);
@@ -1296,6 +1380,62 @@ mod tests {
                 .resource_ids
                 .contains(&"hls-master".to_owned())
         );
+        assert_eq!(index.segments[0].sequence, Some(0));
+        assert_eq!(index.segments[1].sequence, Some(1));
+        assert!(
+            index.resources[0]
+                .generated_text
+                .as_ref()
+                .expect("manifest")
+                .contains("segments/media-00000.ts")
+        );
+    }
+
+    #[test]
+    fn hls_media_sequence_is_preserved_from_playlist() {
+        let client = FakeClient::default()
+            .with_text(
+                "https://cdn.test/video/sequence.m3u8",
+                "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:42\n#EXT-X-ENDLIST\n#EXTINF:4,\nseg42.ts\n#EXTINF:4,\nseg43.ts\n",
+            )
+            .with_size("https://cdn.test/video/seg42.ts", 100)
+            .with_size("https://cdn.test/video/seg43.ts", 150);
+        let planner = DownloadPlanner::new(client);
+
+        let index = planner
+            .plan(
+                &hls_source("https://cdn.test/video/sequence.m3u8"),
+                &DownloadProfile::default(),
+            )
+            .expect("hls plan");
+
+        assert_eq!(index.segments[0].sequence, Some(42));
+        assert_eq!(index.segments[1].sequence, Some(43));
+        assert!(
+            index.resources[0]
+                .generated_text
+                .as_ref()
+                .expect("manifest")
+                .contains("segments/media-00042.ts")
+        );
+    }
+
+    #[test]
+    fn hls_media_sequence_rejects_malformed_values() {
+        let client = FakeClient::default().with_text(
+            "https://cdn.test/video/bad-sequence.m3u8",
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:not-a-number\n#EXT-X-ENDLIST\n#EXTINF:4,\nseg.ts\n",
+        );
+        let planner = DownloadPlanner::new(client);
+
+        let error = planner
+            .plan(
+                &hls_source("https://cdn.test/video/bad-sequence.m3u8"),
+                &DownloadProfile::default(),
+            )
+            .expect_err("malformed media sequence should fail");
+
+        assert_eq!(error.code(), PlayerErrorCode::InvalidSource);
     }
 
     #[test]
@@ -1442,6 +1582,42 @@ mod tests {
     }
 
     #[test]
+    fn hls_map_byterange_does_not_seed_segment_byterange_offset() {
+        let client = FakeClient::default().with_text(
+            "https://cdn.test/map-ranges.m3u8",
+            "#EXTM3U\n#EXT-X-ENDLIST\n#EXT-X-MAP:URI=\"media.mp4\",BYTERANGE=\"100@900\"\n#EXTINF:4,\n#EXT-X-BYTERANGE:10@5\nmedia.mp4\n#EXTINF:4,\n#EXT-X-BYTERANGE:12\nmedia.mp4\n",
+        );
+        let planner = DownloadPlanner::new(client);
+
+        let index = planner
+            .plan(
+                &hls_source("https://cdn.test/map-ranges.m3u8"),
+                &DownloadProfile::default(),
+            )
+            .expect("range hls plan");
+
+        let init = index
+            .resources
+            .iter()
+            .find(|resource| resource.resource_id.contains("-init-"))
+            .expect("init resource");
+        assert_eq!(
+            init.byte_range,
+            Some(DownloadByteRange {
+                offset: 900,
+                length: 100
+            })
+        );
+        assert_eq!(
+            index.segments[1].byte_range,
+            Some(DownloadByteRange {
+                offset: 15,
+                length: 12
+            })
+        );
+    }
+
+    #[test]
     fn hls_live_playlist_is_rejected() {
         let client = FakeClient::default().with_text(
             "https://cdn.test/live.m3u8",
@@ -1482,6 +1658,25 @@ mod tests {
         assert_eq!(index.total_size_bytes, Some(100));
         assert_eq!(index.segments.len(), 3);
         assert_eq!(index.resources[1].size_bytes, Some(10));
+    }
+
+    #[test]
+    fn dash_duration_rejects_malformed_iso8601_values() {
+        for value in ["PT", "PT0S", "PT1H2", "PTMS", "P1D"] {
+            assert_eq!(parse_iso8601_duration_seconds(value), None, "{value}");
+        }
+        assert_eq!(parse_iso8601_duration_seconds("PT1H2M3.5S"), Some(3723.5));
+    }
+
+    #[test]
+    fn dash_xml_attr_requires_attribute_boundary() {
+        let tag = r#"<Representation maxBandwidth="9000" bandwidth="1000" />"#;
+
+        assert_eq!(xml_attr_from_tag(tag, "bandwidth"), Some("1000".to_owned()));
+        assert_eq!(
+            xml_attr_from_tag(r#"<Representation maxBandwidth="9000" />"#, "bandwidth"),
+            None
+        );
     }
 
     #[test]

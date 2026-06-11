@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/flutter-ci.yml"
+      - ".github/actions/select-xcode/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/**"
@@ -28,6 +29,7 @@ on:
       - main
     paths:
       - ".github/workflows/flutter-ci.yml"
+      - ".github/actions/select-xcode/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/**"
@@ -291,8 +293,6 @@ jobs:
   flutter-ios:
     name: Flutter iOS Host arm64
     runs-on: macos-15
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 
     steps:
       - name: Checkout
@@ -313,8 +313,10 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Select Xcode 26.3
-        run: xcodebuild -version
+      - name: Select Xcode
+        uses: ./.github/actions/select-xcode
+        with:
+          minimum-major: "16"
 
       - name: Show Flutter version
         run: flutter --version

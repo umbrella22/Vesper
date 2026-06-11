@@ -502,16 +502,22 @@ impl NativeFrameProcessorChainCore {
             return Ok(());
         }
         self.closed = true;
+        let mut first_error = None;
         for node in &mut self.processors {
-            node.session.close().map_err(|error| {
-                NativeFrameProcessorError::from_plugin(
+            if let Err(error) = node.session.close()
+                && first_error.is_none()
+            {
+                first_error = Some(NativeFrameProcessorError::from_plugin(
                     self.mode,
                     node.processor_index,
                     &node.plugin_name,
                     "close",
                     error,
-                )
-            })?;
+                ));
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
         }
         Ok(())
     }
@@ -2050,6 +2056,7 @@ mod tests {
         flush_count: usize,
         close_count: usize,
         release_error: Option<String>,
+        close_error: Option<String>,
     }
 
     #[derive(Debug)]
@@ -2115,7 +2122,11 @@ mod tests {
         }
 
         fn close(&mut self) -> Result<(), player_plugin::FrameProcessorError> {
-            self.state.lock().expect("state").close_count += 1;
+            let mut state = self.state.lock().expect("state");
+            state.close_count += 1;
+            if let Some(message) = state.close_error.clone() {
+                return Err(player_plugin::FrameProcessorError::internal(message));
+            }
             Ok(())
         }
     }
@@ -2194,6 +2205,40 @@ mod tests {
                 ..FrameProcessorPolicy::default()
             },
         )
+    }
+
+    #[test]
+    fn processor_chain_close_attempts_all_processors_and_returns_first_error() {
+        let first = Arc::new(Mutex::new(TestState {
+            close_error: Some("first close failed".to_owned()),
+            ..TestState::default()
+        }));
+        let second = Arc::new(Mutex::new(TestState::default()));
+        let mut chain = NativeFrameProcessorChainCore::new(
+            vec![
+                NativeFrameProcessorNode::new(
+                    "first-processor",
+                    0,
+                    Box::new(TestSession::new(first.clone())),
+                ),
+                NativeFrameProcessorNode::new(
+                    "second-processor",
+                    1,
+                    Box::new(TestSession::new(second.clone())),
+                ),
+            ],
+            FrameProcessorMode::PreferProcessed,
+            FrameProcessorPolicy::default(),
+        );
+
+        let error = chain
+            .close()
+            .expect_err("first close error should be returned");
+
+        assert_eq!(error.processor_index, 0);
+        assert!(error.message.contains("first close failed"));
+        assert_eq!(first.lock().expect("first state").close_count, 1);
+        assert_eq!(second.lock().expect("second state").close_count, 1);
     }
 
     fn decoder_frame(handle: usize, pts_us: Option<i64>) -> DecoderNativeFrame {

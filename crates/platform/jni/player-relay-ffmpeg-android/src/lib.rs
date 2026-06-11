@@ -1,18 +1,20 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
+use std::any::Any;
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::fs::{self, File};
 use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use ffmpeg::{Rational, codec, encoder, format, media};
 use ffmpeg_next as ffmpeg;
-use jni::errors::Result as JniResult;
+use jni::errors::{Result as JniResult, ThrowRuntimeExAndDefault};
 use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
 use jni::signature::RuntimeMethodSignature;
 use jni::strings::JNIString;
@@ -212,6 +214,178 @@ impl NativeStreamEntry {
     }
 }
 
+#[derive(Debug)]
+struct HandleRegistry<T> {
+    slots: Vec<HandleSlot<T>>,
+    free_slots: Vec<u32>,
+    next_generation_seed: u32,
+}
+
+#[derive(Debug)]
+struct HandleSlot<T> {
+    generation: u32,
+    value: Option<T>,
+}
+
+impl<T> Default for HandleRegistry<T> {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            free_slots: Vec::new(),
+            next_generation_seed: 0,
+        }
+    }
+}
+
+impl<T> HandleRegistry<T> {
+    fn allocate_generation(&mut self) -> u32 {
+        let generation = next_generation(self.next_generation_seed);
+        self.next_generation_seed = generation;
+        generation
+    }
+
+    fn insert(&mut self, value: T) -> i64 {
+        let generation = self.allocate_generation();
+        if let Some(slot_index) = self.free_slots.pop() {
+            let slot = &mut self.slots[slot_index as usize];
+            slot.generation = generation;
+            slot.value = Some(value);
+            return encode_handle(slot_index, generation);
+        }
+
+        debug_assert!(
+            self.slots.len() < u32::MAX as usize,
+            "relay native stream handle registry exhausted u32 slot space"
+        );
+        if self.slots.len() >= u32::MAX as usize {
+            return 0;
+        }
+
+        let slot_index = self.slots.len() as u32;
+        self.slots.push(HandleSlot {
+            generation,
+            value: Some(value),
+        });
+        encode_handle(slot_index, generation)
+    }
+
+    fn get(&self, handle: impl Borrow<i64>) -> Option<&T> {
+        let (slot_index, generation) = decode_handle(*handle.borrow())?;
+        let slot = self.slots.get(slot_index as usize)?;
+        (slot.generation == generation)
+            .then_some(slot.value.as_ref())
+            .flatten()
+    }
+
+    fn remove(&mut self, handle: impl Borrow<i64>) -> Option<T> {
+        let (slot_index, generation) = decode_handle(*handle.borrow())?;
+        let slot = self.slots.get_mut(slot_index as usize)?;
+        if slot.generation != generation {
+            return None;
+        }
+        let value = slot.value.take()?;
+        self.free_slots.push(slot_index);
+        self.compact_tail();
+        Some(value)
+    }
+
+    fn len(&self) -> usize {
+        self.slots
+            .iter()
+            .filter(|slot| slot.value.is_some())
+            .count()
+    }
+
+    fn oldest_handle_by_key<K: Copy + Ord>(&self, f: impl Fn(&T) -> K) -> Option<i64> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(slot_index, slot)| {
+                let value = slot.value.as_ref()?;
+                Some((encode_handle(slot_index as u32, slot.generation), f(value)))
+            })
+            .min_by_key(|(_, key)| *key)
+            .map(|(handle, _)| handle)
+    }
+
+    fn compact_tail(&mut self) {
+        let Some(last_used_index) = self.slots.iter().rposition(|slot| slot.value.is_some()) else {
+            self.slots.clear();
+            self.free_slots.clear();
+            return;
+        };
+
+        let new_len = last_used_index + 1;
+        if new_len == self.slots.len() {
+            return;
+        }
+
+        self.slots.truncate(new_len);
+        self.free_slots
+            .retain(|slot_index| (*slot_index as usize) < new_len);
+    }
+}
+
+fn encode_handle(slot_index: u32, generation: u32) -> i64 {
+    let slot_id = u64::from(slot_index) + 1;
+    let raw = (slot_id << 32) | u64::from(generation.max(1));
+    raw as i64
+}
+
+fn decode_handle(handle: i64) -> Option<(u32, u32)> {
+    if handle == 0 {
+        return None;
+    }
+    let raw = handle as u64;
+    let slot_id = (raw >> 32) as u32;
+    let generation = raw as u32;
+    if slot_id == 0 || generation == 0 {
+        return None;
+    }
+    Some((slot_id - 1, generation))
+}
+
+fn next_generation(generation: u32) -> u32 {
+    generation.wrapping_add(1).max(1)
+}
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return format!("Rust panic crossed JNI boundary: {message}");
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return format!("Rust panic crossed JNI boundary: {message}");
+    }
+    "Rust panic crossed JNI boundary".to_owned()
+}
+
+fn throw_panic_exception(unowned_env: &mut EnvUnowned<'_>, message: &str) {
+    unowned_env
+        .with_env(|env| -> JniResult<()> {
+            env.throw_new(jni_name("java/lang/RuntimeException"), jni_name(message))?;
+            Ok(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>();
+}
+
+fn run_jni_entry<T: Default>(
+    unowned_env: &mut EnvUnowned<'_>,
+    f: impl FnOnce(&mut EnvUnowned<'_>) -> T,
+) -> T {
+    match catch_unwind(AssertUnwindSafe(|| f(unowned_env))) {
+        Ok(value) => value,
+        Err(payload) => {
+            let message = panic_message(payload.as_ref());
+            throw_panic_exception(unowned_env, &message);
+            T::default()
+        }
+    }
+}
+
 impl Read for NativeStreamEntry {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         self.last_access = Instant::now();
@@ -293,19 +467,21 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) -> jstring {
-    let metadata = serde_json::json!({
-        "profileHash": profile_hash(),
-        "configureMetadata": configure_metadata(),
-        "engine": "vesper-relay-ffmpeg",
-        "status": "available",
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        let metadata = serde_json::json!({
+            "profileHash": profile_hash(),
+            "configureMetadata": configure_metadata(),
+            "engine": "vesper-relay-ffmpeg",
+            "status": "available",
+        })
+        .to_string();
+        let mut output = std::ptr::null_mut();
+        let _ = unowned_env.with_env(|env| -> JniResult<()> {
+            output = env.new_string(metadata)?.into_raw();
+            Ok(())
+        });
+        output
     })
-    .to_string();
-    let mut output = std::ptr::null_mut();
-    let _ = unowned_env.with_env(|env| -> JniResult<()> {
-        output = env.new_string(metadata)?.into_raw();
-        Ok(())
-    });
-    output
 }
 
 #[unsafe(no_mangle)]
@@ -314,61 +490,63 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
     _class: JClass<'_>,
     request_json: JString<'_>,
 ) -> jobject {
-    let mut output = std::ptr::null_mut();
-    let _ = unowned_env.with_env(|env| -> JniResult<()> {
-        let request = match decode_request(env, request_json) {
-            Ok(request) => request,
-            Err(error) => {
-                output = open_result_object(
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        let mut output = std::ptr::null_mut();
+        let _ = unowned_env.with_env(|env| -> JniResult<()> {
+            let request = match decode_request(env, request_json) {
+                Ok(request) => request,
+                Err(error) => {
+                    output = open_result_object(
+                        env,
+                        OpenResultFields {
+                            handle: 0,
+                            status: 400,
+                            content_type: "application/octet-stream",
+                            content_length: -1,
+                            headers: Vec::new(),
+                            error_code: Some("ffmpeg_open_failed"),
+                            error_message: Some(&error.message),
+                            error_details: error.details,
+                        },
+                    )?
+                    .into_raw();
+                    return Ok(());
+                }
+            };
+
+            output = match open_stream(&request) {
+                Ok(opened) => open_result_object(
+                    env,
+                    OpenResultFields {
+                        handle: opened.handle,
+                        status: opened.status,
+                        content_type: &opened.content_type,
+                        content_length: opened.content_length,
+                        headers: opened.headers,
+                        error_code: None,
+                        error_message: None,
+                        error_details: Vec::new(),
+                    },
+                )?,
+                Err(error) => open_result_object(
                     env,
                     OpenResultFields {
                         handle: 0,
-                        status: 400,
+                        status: error.status,
                         content_type: "application/octet-stream",
                         content_length: -1,
                         headers: Vec::new(),
-                        error_code: Some("ffmpeg_open_failed"),
+                        error_code: Some(error.code),
                         error_message: Some(&error.message),
                         error_details: error.details,
                     },
-                )?
-                .into_raw();
-                return Ok(());
+                )?,
             }
-        };
-
-        output = match open_stream(&request) {
-            Ok(opened) => open_result_object(
-                env,
-                OpenResultFields {
-                    handle: opened.handle,
-                    status: opened.status,
-                    content_type: &opened.content_type,
-                    content_length: opened.content_length,
-                    headers: opened.headers,
-                    error_code: None,
-                    error_message: None,
-                    error_details: Vec::new(),
-                },
-            )?,
-            Err(error) => open_result_object(
-                env,
-                OpenResultFields {
-                    handle: 0,
-                    status: error.status,
-                    content_type: "application/octet-stream",
-                    content_length: -1,
-                    headers: Vec::new(),
-                    error_code: Some(error.code),
-                    error_message: Some(&error.message),
-                    error_details: error.details,
-                },
-            )?,
-        }
-        .into_raw();
-        Ok(())
-    });
-    output
+            .into_raw();
+            Ok(())
+        });
+        output
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -377,61 +555,63 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
     _class: JClass<'_>,
     request_json: JString<'_>,
 ) -> jobject {
-    let mut output = std::ptr::null_mut();
-    let _ = unowned_env.with_env(|env| -> JniResult<()> {
-        let request = match decode_request(env, request_json) {
-            Ok(request) => request,
-            Err(error) => {
-                output = open_result_object(
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        let mut output = std::ptr::null_mut();
+        let _ = unowned_env.with_env(|env| -> JniResult<()> {
+            let request = match decode_request(env, request_json) {
+                Ok(request) => request,
+                Err(error) => {
+                    output = open_result_object(
+                        env,
+                        OpenResultFields {
+                            handle: 0,
+                            status: 400,
+                            content_type: "application/octet-stream",
+                            content_length: -1,
+                            headers: Vec::new(),
+                            error_code: Some("ffmpeg_open_failed"),
+                            error_message: Some(&error.message),
+                            error_details: error.details,
+                        },
+                    )?
+                    .into_raw();
+                    return Ok(());
+                }
+            };
+
+            output = match prewarm_stream(&request) {
+                Ok(()) => open_result_object(
                     env,
                     OpenResultFields {
                         handle: 0,
-                        status: 400,
+                        status: 202,
                         content_type: "application/octet-stream",
                         content_length: -1,
                         headers: Vec::new(),
-                        error_code: Some("ffmpeg_open_failed"),
+                        error_code: None,
+                        error_message: None,
+                        error_details: Vec::new(),
+                    },
+                )?,
+                Err(error) => open_result_object(
+                    env,
+                    OpenResultFields {
+                        handle: 0,
+                        status: error.status,
+                        content_type: "application/octet-stream",
+                        content_length: -1,
+                        headers: Vec::new(),
+                        error_code: Some(error.code),
                         error_message: Some(&error.message),
                         error_details: error.details,
                     },
-                )?
-                .into_raw();
-                return Ok(());
+                )?,
             }
-        };
-
-        output = match prewarm_stream(&request) {
-            Ok(()) => open_result_object(
-                env,
-                OpenResultFields {
-                    handle: 0,
-                    status: 202,
-                    content_type: "application/octet-stream",
-                    content_length: -1,
-                    headers: Vec::new(),
-                    error_code: None,
-                    error_message: None,
-                    error_details: Vec::new(),
-                },
-            )?,
-            Err(error) => open_result_object(
-                env,
-                OpenResultFields {
-                    handle: 0,
-                    status: error.status,
-                    content_type: "application/octet-stream",
-                    content_length: -1,
-                    headers: Vec::new(),
-                    error_code: Some(error.code),
-                    error_message: Some(&error.message),
-                    error_details: error.details,
-                },
-            )?,
-        }
-        .into_raw();
-        Ok(())
-    });
-    output
+            .into_raw();
+            Ok(())
+        });
+        output
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -481,14 +661,17 @@ pub unsafe extern "system" fn Java_io_github_ikaros_vesper_player_android_extern
         }
 
         let mut bytes = vec![0u8; target_length];
-        let read = {
-            let mut streams = streams().lock().unwrap_or_else(|error| error.into_inner());
-            let Some(stream) = streams.get_mut(&handle) else {
-                output = -1;
+        let stream = {
+            let streams = lock_or_recover(streams());
+            let Some(stream) = streams.get(&handle) else {
+                output = -2;
                 return Ok(());
             };
-            stream.read(&mut bytes).unwrap_or_default()
+            stream.clone()
         };
+        let read = lock_or_recover(&stream)
+            .read(&mut bytes)
+            .unwrap_or_default();
 
         if read == 0 {
             output = -1;
@@ -509,10 +692,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
     _class: JClass<'_>,
     handle: jlong,
 ) {
-    streams()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .remove(&handle);
+    lock_or_recover(streams()).remove(&handle);
 }
 
 #[unsafe(no_mangle)]
@@ -1261,16 +1441,12 @@ fn open_growing_cache_file(
                 .chain([("ioError".to_owned(), error.to_string())]),
         )
     })?;
-    let handle = next_handle();
-    insert_native_stream(
-        handle,
-        NativeStream::GrowingFile {
-            file,
-            cache,
-            position: 0,
-            remaining: None,
-        },
-    );
+    let handle = insert_native_stream(NativeStream::GrowingFile {
+        file,
+        cache,
+        position: 0,
+        remaining: None,
+    })?;
 
     Ok(OpenedStream {
         handle,
@@ -1330,16 +1506,12 @@ fn open_growing_cache_range(
         "bytes {}-{}/{}",
         resolved.range.start, resolved.range.end, total
     );
-    let handle = next_handle();
-    insert_native_stream(
-        handle,
-        NativeStream::GrowingFile {
-            file,
-            cache,
-            position: resolved.range.start,
-            remaining: Some(length),
-        },
-    );
+    let handle = insert_native_stream(NativeStream::GrowingFile {
+        file,
+        cache,
+        position: resolved.range.start,
+        remaining: Some(length),
+    })?;
 
     Ok(OpenedStream {
         handle,
@@ -1656,8 +1828,7 @@ fn open_bytes_stream(
     available_len: u64,
 ) -> Result<OpenedStream, RelayError> {
     let content_length = bytes.len() as i64;
-    let handle = next_handle();
-    insert_native_stream(handle, NativeStream::Bytes(Cursor::new(bytes)));
+    let handle = insert_native_stream(NativeStream::Bytes(Cursor::new(bytes)))?;
     Ok(OpenedStream {
         handle,
         status: 200,
@@ -1793,8 +1964,7 @@ fn open_cached_file(
         (200, total as i64, Vec::new(), NativeStream::File(file))
     };
 
-    let handle = next_handle();
-    insert_native_stream(handle, stream);
+    let handle = insert_native_stream(stream)?;
 
     Ok(OpenedStream {
         handle,
@@ -1913,9 +2083,10 @@ fn sessions() -> &'static Mutex<HashMap<String, SessionCacheEntry>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn streams() -> &'static Mutex<HashMap<i64, NativeStreamEntry>> {
-    static STREAMS: OnceLock<Mutex<HashMap<i64, NativeStreamEntry>>> = OnceLock::new();
-    STREAMS.get_or_init(|| Mutex::new(HashMap::new()))
+fn streams() -> &'static Mutex<HandleRegistry<Arc<Mutex<NativeStreamEntry>>>> {
+    static STREAMS: OnceLock<Mutex<HandleRegistry<Arc<Mutex<NativeStreamEntry>>>>> =
+        OnceLock::new();
+    STREAMS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
 fn insert_session_cache(
@@ -1942,36 +2113,43 @@ fn evict_oldest_session_caches(sessions: &mut HashMap<String, SessionCacheEntry>
     }
 }
 
-fn insert_native_stream(handle: i64, stream: NativeStream) {
-    let mut streams = streams().lock().unwrap_or_else(|error| error.into_inner());
-    insert_native_stream_entry(&mut streams, handle, stream);
+fn insert_native_stream(stream: NativeStream) -> Result<i64, RelayError> {
+    let mut streams = lock_or_recover(streams());
+    let handle = streams.insert(Arc::new(Mutex::new(NativeStreamEntry::new(stream))));
+    if handle == 0 {
+        return Err(relay_error(
+            "ffmpeg_open_failed",
+            503,
+            "Native relay stream registry is exhausted.",
+            Vec::<(String, String)>::new(),
+        ));
+    }
+    evict_oldest_native_streams(&mut streams);
+    Ok(handle)
 }
 
+#[cfg(test)]
 fn insert_native_stream_entry(
-    streams: &mut HashMap<i64, NativeStreamEntry>,
-    handle: i64,
+    streams: &mut HandleRegistry<Arc<Mutex<NativeStreamEntry>>>,
     stream: NativeStream,
-) {
-    streams.insert(handle, NativeStreamEntry::new(stream));
+) -> i64 {
+    let handle = streams.insert(Arc::new(Mutex::new(NativeStreamEntry::new(stream))));
     evict_oldest_native_streams(streams);
+    handle
 }
 
-fn evict_oldest_native_streams(streams: &mut HashMap<i64, NativeStreamEntry>) {
+fn evict_oldest_native_streams(streams: &mut HandleRegistry<Arc<Mutex<NativeStreamEntry>>>) {
     while streams.len() > MAX_NATIVE_STREAMS {
-        let Some(oldest_handle) = streams
-            .iter()
-            .min_by_key(|(_, entry)| entry.last_access)
-            .map(|(handle, _)| *handle)
-        else {
+        let Some(oldest_handle) = streams.oldest_handle_by_key(|entry| {
+            entry
+                .try_lock()
+                .map(|stream| stream.last_access)
+                .unwrap_or_else(|_| Instant::now())
+        }) else {
             return;
         };
-        streams.remove(&oldest_handle);
+        streams.remove(oldest_handle);
     }
-}
-
-fn next_handle() -> i64 {
-    static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
-    NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
 }
 
 fn relay_error<K, V, I>(
@@ -2132,12 +2310,13 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        FallbackFormat, GrowingCache, HOST_PREPARED_DASH_INPUT_MODE, MAX_NATIVE_STREAMS,
-        MAX_SESSION_CACHES, NativeStream, NativeStreamEntry, OpenRequest, PreparedTrack,
+        FallbackFormat, GrowingCache, HOST_PREPARED_DASH_INPUT_MODE, HandleRegistry,
+        MAX_NATIVE_STREAMS, MAX_SESSION_CACHES, NativeStream, OpenRequest, PreparedTrack,
         RangeRequest, SessionCache, SessionCacheEntry, cleanup_stale_caches_in,
         evict_oldest_native_streams, evict_oldest_session_caches, hls_playlist_snapshot,
-        open_growing_cache_file, open_growing_cache_range, packet_sort_timestamp_us,
-        prewarm_stream, resolve_range, safe_file_component, sessions, streams, validate_request,
+        insert_native_stream_entry, lock_or_recover, open_growing_cache_file,
+        open_growing_cache_range, packet_sort_timestamp_us, prewarm_stream, resolve_range,
+        safe_file_component, sessions, streams, validate_request,
     };
 
     #[test]
@@ -2232,23 +2411,38 @@ mod tests {
 
     #[test]
     fn native_stream_eviction_keeps_stream_count_bounded() {
-        let mut streams = HashMap::new();
+        let mut streams = HandleRegistry::default();
+        let mut handles = Vec::new();
         for handle in 0..=MAX_NATIVE_STREAMS {
-            streams.insert(
-                i64::try_from(handle).expect("handle"),
-                NativeStreamEntry {
-                    stream: NativeStream::Bytes(Cursor::new(vec![handle as u8])),
-                    last_access: Instant::now()
-                        + Duration::from_millis(u64::try_from(handle).expect("handle")),
-                },
+            let inserted = insert_native_stream_entry(
+                &mut streams,
+                NativeStream::Bytes(Cursor::new(vec![handle as u8])),
             );
+            handles.push(inserted);
+            let stream = streams.get(&inserted).expect("stream");
+            lock_or_recover(stream).last_access =
+                Instant::now() + Duration::from_millis(u64::try_from(handle).expect("handle"));
         }
 
         evict_oldest_native_streams(&mut streams);
 
         assert_eq!(streams.len(), MAX_NATIVE_STREAMS);
-        assert!(!streams.contains_key(&0));
-        assert!(streams.contains_key(&i64::try_from(MAX_NATIVE_STREAMS).expect("handle")));
+        assert!(streams.get(handles[0]).is_none());
+        assert!(streams.get(handles[MAX_NATIVE_STREAMS]).is_some());
+    }
+
+    #[test]
+    fn native_stream_registry_rejects_stale_reused_handles() {
+        let mut streams = HandleRegistry::default();
+        let first =
+            insert_native_stream_entry(&mut streams, NativeStream::Bytes(Cursor::new(vec![1])));
+        assert!(streams.remove(first).is_some());
+        let second =
+            insert_native_stream_entry(&mut streams, NativeStream::Bytes(Cursor::new(vec![2])));
+
+        assert_ne!(first, second);
+        assert!(streams.get(first).is_none());
+        assert!(streams.get(second).is_some());
     }
 
     #[test]
@@ -2273,19 +2467,14 @@ mod tests {
             Some("active"),
         );
         let mut buffer = [0u8; 4];
-        let read = streams()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .get_mut(&opened.handle)
-            .expect("stream")
-            .read(&mut buffer)
-            .expect("read");
+        let stream = {
+            let streams = lock_or_recover(streams());
+            streams.get(&opened.handle).expect("stream").clone()
+        };
+        let read = lock_or_recover(&stream).read(&mut buffer).expect("read");
         assert_eq!(read, 4);
         assert_eq!(&buffer, b"abcd");
-        streams()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .remove(&opened.handle);
+        lock_or_recover(streams()).remove(opened.handle);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2348,10 +2537,7 @@ mod tests {
                 .headers
                 .contains(&("Content-Range".to_owned(), "bytes 1-2/4".to_owned(),))
         );
-        streams()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .remove(&opened.handle);
+        lock_or_recover(streams()).remove(opened.handle);
         let _ = fs::remove_dir_all(root);
     }
 

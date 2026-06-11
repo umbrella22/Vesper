@@ -74,6 +74,9 @@ impl MacosHostOverlay {
         });
         let callbacks = BasicPlayerMacosOverlayCallbacks {
             on_action: Some(macos_host_overlay_on_action),
+            // The Objective-C overlay never owns this pointer. `MacosHostOverlay`
+            // stores the Box for at least as long as the native overlay handle,
+            // and drops the native overlay before the Box is released.
             context: ((&*callback_context as *const MacosHostOverlayCallbackContext)
                 as *mut MacosHostOverlayCallbackContext)
                 .cast(),

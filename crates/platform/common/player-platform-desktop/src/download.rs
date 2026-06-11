@@ -7,7 +7,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -31,6 +31,7 @@ use vesper_remux_ffmpeg::FfmpegRemuxProcessor;
 const CURL_BIN: &str = "curl";
 const DOWNLOAD_ROOT_DIR: &str = "vesper-desktop-downloads";
 const CURL_POLL_INTERVAL: Duration = Duration::from_millis(100);
+static UNIQUE_SUFFIX_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DesktopDownloadPlanningClient;
@@ -302,7 +303,12 @@ impl DesktopDownloadController {
         self.export_state.remove(&task_id);
         self.exported_paths.remove(&task_id);
         if let Some(target_directory) = target_directory {
-            let _ = fs::remove_dir_all(target_directory);
+            if let Err(error) = fs::remove_dir_all(&target_directory) {
+                tracing::warn!(
+                    "failed to remove desktop download directory `{}`: {error}",
+                    target_directory.display()
+                );
+            }
         }
         Ok(())
     }
@@ -792,7 +798,7 @@ fn download_remote_file(
         206 => {
             let content_range_start = parse_content_range_start(&transfer.headers);
             if requested_start.is_none() || content_range_start != requested_start {
-                let _ = fs::remove_file(&transfer.output_path);
+                remove_file_warn(&transfer.output_path);
                 return Err(source_error(format!(
                     "remote server returned an unexpected Content-Range for `{uri}`"
                 )));
@@ -800,9 +806,9 @@ fn download_remote_file(
         }
         200 => {
             if requested_start.is_some() {
-                let _ = fs::remove_file(&transfer.output_path);
+                remove_file_warn(&transfer.output_path);
                 if byte_range.is_none() && resume_from_bytes > 0 {
-                    let _ = fs::remove_file(output_path);
+                    remove_file_warn(output_path);
                     return download_remote_file(
                         uri,
                         output_path,
@@ -818,9 +824,9 @@ fn download_remote_file(
             }
         }
         416 => {
-            let _ = fs::remove_file(&transfer.output_path);
+            remove_file_warn(&transfer.output_path);
             if resume_from_bytes > 0 {
-                let _ = fs::remove_file(output_path);
+                remove_file_warn(output_path);
                 return download_remote_file(
                     uri,
                     output_path,
@@ -835,7 +841,7 @@ fn download_remote_file(
             )));
         }
         401 | 403 | 404 | 410 => {
-            let _ = fs::remove_file(&transfer.output_path);
+            remove_file_warn(&transfer.output_path);
             return Err(source_error(format!(
                 "offline download resource is stale or expired (HTTP {}) for `{uri}`; refresh the media link and prepare the task again",
                 transfer.status_code
@@ -843,7 +849,7 @@ fn download_remote_file(
         }
         200..=299 => {}
         status => {
-            let _ = fs::remove_file(&transfer.output_path);
+            remove_file_warn(&transfer.output_path);
             return Err(network_error(format!(
                 "remote resource returned HTTP {status} for `{uri}`"
             )));
@@ -852,7 +858,7 @@ fn download_remote_file(
 
     if transfer.append {
         append_file(&transfer.output_path, output_path)?;
-        let _ = fs::remove_file(&transfer.output_path);
+        remove_file_warn(&transfer.output_path);
     } else {
         if output_path.exists() {
             fs::remove_file(output_path).map_err(|error| {
@@ -921,8 +927,8 @@ fn run_curl_download(
     }
 
     if !status.success() {
-        let _ = fs::remove_file(&temp_path);
-        let _ = fs::remove_file(&headers_path);
+        remove_file_warn(&temp_path);
+        remove_file_warn(&headers_path);
         return Err(network_error(format!(
             "curl failed for `{uri}` with status {status}: {}",
             stderr.trim()
@@ -930,7 +936,7 @@ fn run_curl_download(
     }
 
     let headers = fs::read_to_string(&headers_path).unwrap_or_default();
-    let _ = fs::remove_file(&headers_path);
+    remove_file_warn(&headers_path);
     let status_code = stdout.trim().parse::<u16>().unwrap_or(0);
     Ok(CurlDownloadOutput {
         status_code,
@@ -1123,10 +1129,23 @@ fn temporary_sibling_path(output_path: &Path, extension: &str) -> PathBuf {
 }
 
 fn unique_suffix() -> String {
-    SystemTime::now()
+    let counter = UNIQUE_SUFFIX_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos().to_string())
-        .unwrap_or_else(|_| "0".to_owned())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{timestamp}-{counter}")
+}
+
+fn remove_file_warn(path: &Path) {
+    if let Err(error) = fs::remove_file(path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            "failed to remove desktop download file `{}`: {error}",
+            path.display()
+        );
+    }
 }
 
 #[derive(Debug)]
@@ -1237,7 +1256,7 @@ fn probe_remote_range_content_length(uri: &str) -> player_runtime::PlayerResult<
     } else {
         None
     };
-    let _ = fs::remove_file(&transfer.output_path);
+    remove_file_warn(&transfer.output_path);
     Ok(size)
 }
 

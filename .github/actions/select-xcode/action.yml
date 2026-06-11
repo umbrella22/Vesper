@@ -1,0 +1,90 @@
+name: Select Xcode
+description: Select a usable Xcode installation on macOS runners.
+
+inputs:
+  minimum-major:
+    description: Minimum accepted Xcode major version.
+    required: false
+    default: "16"
+
+runs:
+  using: composite
+  steps:
+    - name: Select Xcode
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        minimum_major="${{ inputs.minimum-major }}"
+        if ! [[ "$minimum_major" =~ ^[0-9]+$ ]]; then
+          echo "minimum-major must be numeric: $minimum_major" >&2
+          exit 1
+        fi
+
+        candidates=()
+        while IFS= read -r candidate; do
+          candidates+=("$candidate")
+        done < <(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort)
+        if [[ ${#candidates[@]} -eq 0 ]]; then
+          echo "No Xcode installations found under /Applications." >&2
+          exit 1
+        fi
+
+        chosen=""
+        chosen_version=""
+        best=""
+        best_version=""
+        best_score=-1
+        preferred=""
+        preferred_version=""
+        preferred_score=-1
+        for candidate in "${candidates[@]}"; do
+          candidate_xcodebuild="$candidate/Contents/Developer/usr/bin/xcodebuild"
+          if [[ ! -x "$candidate_xcodebuild" ]]; then
+            continue
+          fi
+
+          candidate_version="$("$candidate_xcodebuild" -version | awk '/^Xcode / { print $2; exit }')"
+          IFS=. read -r major minor patch <<< "$candidate_version"
+          minor="${minor:-0}"
+          patch="${patch:-0}"
+          if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ && "$patch" =~ ^[0-9]+$ ]]; then
+            continue
+          fi
+
+          score=$((major * 10000 + minor * 100 + patch))
+          if (( score > best_score )); then
+            best="$candidate"
+            best_version="$candidate_version"
+            best_score="$score"
+          fi
+          if (( major >= 26 && score > preferred_score )); then
+            preferred="$candidate"
+            preferred_version="$candidate_version"
+            preferred_score="$score"
+          fi
+        done
+
+        if [[ -n "$preferred" ]]; then
+          chosen="$preferred"
+          chosen_version="$preferred_version"
+        else
+          chosen="$best"
+          chosen_version="$best_version"
+        fi
+        if [[ -z "$chosen" ]]; then
+          echo "No usable Xcode installation found under /Applications." >&2
+          exit 1
+        fi
+
+        developer_dir="$chosen/Contents/Developer"
+        version="$chosen_version"
+        major="${version%%.*}"
+        if [[ -z "$version" || -z "$major" || "$major" -lt "$minimum_major" ]]; then
+          echo "Selected Xcode version '$version' is below required major $minimum_major." >&2
+          exit 1
+        fi
+
+        sudo xcode-select -s "$developer_dir"
+        echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
+        xcodebuild -version

@@ -1,53 +1,17 @@
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use player_platform_mobile::MobilePlaylistBridgeSession;
 use player_runtime::{
-    InMemoryPreloadBudgetProvider, PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult,
-    PlaylistActiveItem, PlaylistAdvanceDecision, PlaylistCoordinator, PlaylistCoordinatorConfig,
-    PlaylistEvent, PlaylistQueueItem, PlaylistSnapshot, PlaylistViewportHint, PreloadBudget,
-    PreloadEvent, PreloadExecutor, PreloadTaskId, PreloadTaskSnapshot,
+    PlayerError, PlayerResult, PlaylistActiveItem, PlaylistAdvanceDecision,
+    PlaylistCoordinatorConfig, PlaylistEvent, PlaylistQueueItem, PlaylistSnapshot,
+    PlaylistViewportHint, PreloadBudget, PreloadEvent, PreloadTaskId, PreloadTaskSnapshot,
 };
 
 use crate::IosPreloadCommand;
 
-#[derive(Debug, Clone)]
-struct IosPlaylistExecutor {
-    queue: Arc<Mutex<VecDeque<IosPreloadCommand>>>,
-}
-
-impl IosPlaylistExecutor {
-    fn new(queue: Arc<Mutex<VecDeque<IosPreloadCommand>>>) -> Self {
-        Self { queue }
-    }
-
-    fn push_command(&self, command: IosPreloadCommand) -> PlayerResult<()> {
-        let mut queue = self.queue.lock().map_err(|_| {
-            PlayerError::with_category(
-                PlayerErrorCode::BackendFailure,
-                PlayerErrorCategory::Platform,
-                "ios playlist preload command queue lock poisoned",
-            )
-        })?;
-        queue.push_back(command);
-        Ok(())
-    }
-}
-
-impl PreloadExecutor for IosPlaylistExecutor {
-    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerResult<()> {
-        self.push_command(IosPreloadCommand::Start { task: task.clone() })
-    }
-
-    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<()> {
-        self.push_command(IosPreloadCommand::Cancel { task_id })
-    }
-}
-
 #[derive(Debug)]
 pub struct IosPlaylistBridgeSession {
-    coordinator: PlaylistCoordinator<InMemoryPreloadBudgetProvider, IosPlaylistExecutor>,
-    command_queue: Arc<Mutex<VecDeque<IosPreloadCommand>>>,
+    inner: MobilePlaylistBridgeSession,
 }
 
 impl IosPlaylistBridgeSession {
@@ -56,17 +20,13 @@ impl IosPlaylistBridgeSession {
         config: PlaylistCoordinatorConfig,
         preload_budget: PreloadBudget,
     ) -> Self {
-        let command_queue = Arc::new(Mutex::new(VecDeque::new()));
-        let executor = IosPlaylistExecutor::new(command_queue.clone());
-
         Self {
-            coordinator: PlaylistCoordinator::new(
+            inner: MobilePlaylistBridgeSession::new(
                 playlist_id,
                 config,
-                InMemoryPreloadBudgetProvider::new(preload_budget),
-                executor,
+                preload_budget,
+                "ios playlist preload",
             ),
-            command_queue,
         }
     }
 
@@ -75,7 +35,7 @@ impl IosPlaylistBridgeSession {
         queue: impl IntoIterator<Item = PlaylistQueueItem>,
         now: Instant,
     ) {
-        self.coordinator.replace_queue(queue, now);
+        self.inner.replace_queue(queue, now);
     }
 
     pub fn update_viewport_hints(
@@ -83,34 +43,34 @@ impl IosPlaylistBridgeSession {
         hints: impl IntoIterator<Item = PlaylistViewportHint>,
         now: Instant,
     ) {
-        self.coordinator.update_viewport_hints(hints, now);
+        self.inner.update_viewport_hints(hints, now);
     }
 
     pub fn clear_viewport_hints(&mut self, now: Instant) {
-        self.coordinator.clear_viewport_hints(now);
+        self.inner.clear_viewport_hints(now);
     }
 
     pub fn advance_to_next(&mut self, now: Instant) -> PlaylistAdvanceDecision {
-        self.coordinator.advance_to_next(now)
+        self.inner.advance_to_next(now)
     }
 
     pub fn advance_to_previous(&mut self, now: Instant) -> PlaylistAdvanceDecision {
-        self.coordinator.advance_to_previous(now)
+        self.inner.advance_to_previous(now)
     }
 
     pub fn handle_playback_completed(&mut self, now: Instant) -> PlaylistAdvanceDecision {
-        self.coordinator.handle_playback_completed(now)
+        self.inner.handle_playback_completed(now)
     }
 
     pub fn handle_playback_failed(&mut self, now: Instant) -> PlaylistAdvanceDecision {
-        self.coordinator.handle_playback_failed(now)
+        self.inner.handle_playback_failed(now)
     }
 
     pub fn complete_preload_task(
         &mut self,
         task_id: PreloadTaskId,
     ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
-        self.coordinator.complete_preload_task(task_id)
+        self.inner.complete_preload_task(task_id)
     }
 
     pub fn fail_preload_task(
@@ -118,37 +78,31 @@ impl IosPlaylistBridgeSession {
         task_id: PreloadTaskId,
         error: PlayerError,
     ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
-        self.coordinator.fail_preload_task(task_id, error)
+        self.inner.fail_preload_task(task_id, error)
     }
 
     pub fn active_item(&self) -> Option<PlaylistActiveItem> {
-        self.coordinator.active_item()
+        self.inner.active_item()
     }
 
     pub fn snapshot(&self) -> PlaylistSnapshot {
-        self.coordinator.snapshot()
+        self.inner.snapshot()
     }
 
     pub fn drain_events(&mut self) -> Vec<PlaylistEvent> {
-        self.coordinator.drain_events()
+        self.inner.drain_events()
     }
 
     pub fn drain_preload_events(&mut self) -> Vec<PreloadEvent> {
-        self.coordinator
-            .drain_events()
-            .into_iter()
-            .filter_map(|event| match event {
-                PlaylistEvent::Preload(preload) => Some(preload),
-                _ => None,
-            })
-            .collect()
+        self.inner.drain_preload_events()
     }
 
     pub fn drain_commands(&mut self) -> Vec<IosPreloadCommand> {
-        self.command_queue
-            .lock()
-            .map(|mut queue| queue.drain(..).collect())
-            .unwrap_or_default()
+        self.inner
+            .drain_commands()
+            .into_iter()
+            .map(IosPreloadCommand::from)
+            .collect()
     }
 }
 

@@ -18,8 +18,9 @@ pub use abi::{
     VESPER_PLUGIN_ENTRY_SYMBOL, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
     VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
     VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V3,
-    VesperBenchmarkSinkApi, VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2,
-    VesperDecoderPluginApiV4, VesperDecoderPluginApiV5, VesperDecoderReceiveNativeFrameResult,
+    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V4, VesperBenchmarkSinkApi,
+    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV2, VesperDecoderPluginApiV4,
+    VesperDecoderPluginApiV5, VesperDecoderReceiveNativeFrameResult,
     VesperDecoderReceivePcmFrameResult, VesperFrameProcessorOpenSessionResult,
     VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult,
     VesperPipelineEventHookApi, VesperPluginBytes, VesperPluginDescriptor, VesperPluginEntryPoint,
@@ -27,7 +28,7 @@ pub use abi::{
     VesperPluginResultStatus, VesperPostDownloadProcessorApi,
     VesperSourceNormalizerOpenPacketSessionResult, VesperSourceNormalizerOpenResourceSessionResult,
     VesperSourceNormalizerPluginApiV2, VesperSourceNormalizerPluginApiV3,
-    VesperSourceNormalizerReadPacketResult,
+    VesperSourceNormalizerPluginApiV4, VesperSourceNormalizerReadPacketResult,
 };
 pub use benchmark::{
     BenchmarkEvent, BenchmarkEventBatch, BenchmarkSink, BenchmarkSinkError, BenchmarkSinkReport,
@@ -79,6 +80,6 @@ pub use source_normalizer::{
     SourceNormalizerResourcePluginFactory, SourceNormalizerResourceSession,
     SourceNormalizerResourceSessionConfig, SourceNormalizerResourceSessionInfo,
     SourceNormalizerResourceSessionRequirements, SourceNormalizerResourceSessionState,
-    SourceNormalizerResourceSessionStatus, SourceNormalizerSessionCapabilities,
-    SourceNormalizerSessionRequirements,
+    SourceNormalizerResourceSessionStatus, SourceNormalizerResourceSessionWaitStatus,
+    SourceNormalizerSessionCapabilities, SourceNormalizerSessionRequirements,
 };

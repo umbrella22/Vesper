@@ -17,4 +17,5 @@ mod types;
 
 pub use config::{default_output_config, detect_default_output};
 pub use sink::{AudioSink, AudioSinkController};
+pub use timeline::AudioBufferWindowWaitResult;
 pub use types::{AudioOutputConfig, AudioOutputDescriptor};

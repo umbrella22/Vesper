@@ -223,10 +223,7 @@ fn copy_rgba_bytes(frame: &Video) -> Vec<u8> {
     let data = frame.data(0);
     let mut bytes = Vec::with_capacity(row_bytes * height);
 
-    for row in 0..height {
-        let offset = row * stride;
-        bytes.extend_from_slice(&data[offset..offset + row_bytes]);
-    }
+    copy_plane_bytes(data, stride, row_bytes, height, &mut bytes);
 
     bytes
 }
@@ -269,7 +266,60 @@ fn copy_plane_bytes(
     out: &mut Vec<u8>,
 ) {
     for row in 0..height {
-        let offset = row.saturating_mul(stride);
-        out.extend_from_slice(&data[offset..offset + row_bytes]);
+        let Some(offset) = row.checked_mul(stride) else {
+            break;
+        };
+        let Some(end) = offset.checked_add(row_bytes) else {
+            break;
+        };
+        let Some(row_data) = data.get(offset..end) else {
+            break;
+        };
+        out.extend_from_slice(row_data);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::copy_plane_bytes;
+
+    #[test]
+    fn copy_plane_bytes_copies_tightly_packed_rows() {
+        let data = [1, 2, 3, 4, 5, 6];
+        let mut out = Vec::new();
+
+        copy_plane_bytes(&data, 3, 3, 2, &mut out);
+
+        assert_eq!(out, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn copy_plane_bytes_skips_stride_padding() {
+        let data = [1, 2, 0, 0, 3, 4, 0, 0];
+        let mut out = Vec::new();
+
+        copy_plane_bytes(&data, 4, 2, 2, &mut out);
+
+        assert_eq!(out, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn copy_plane_bytes_truncates_when_row_exceeds_data() {
+        let data = [1, 2, 0, 0, 3];
+        let mut out = Vec::new();
+
+        copy_plane_bytes(&data, 4, 2, 2, &mut out);
+
+        assert_eq!(out, vec![1, 2]);
+    }
+
+    #[test]
+    fn copy_plane_bytes_stops_on_offset_overflow_without_panicking() {
+        let data = [1, 2];
+        let mut out = Vec::new();
+
+        copy_plane_bytes(&data, usize::MAX, 2, 2, &mut out);
+
+        assert_eq!(out, vec![1, 2]);
     }
 }

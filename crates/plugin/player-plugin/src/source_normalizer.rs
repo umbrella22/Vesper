@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -494,6 +496,12 @@ pub struct SourceNormalizerResourceSessionStatus {
     pub disk_bytes_used: Option<u64>,
 }
 
+/// Result returned after waiting for a resource-output session update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceNormalizerResourceSessionWaitStatus {
+    pub updated: bool,
+}
+
 /// Packet read status encoded in source normalizer packet metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SourceNormalizerReadPacketStatus {
@@ -705,6 +713,11 @@ pub trait SourceNormalizerResourceSession: Send {
 
     fn poll(&mut self) -> Result<SourceNormalizerResourceSessionStatus, SourceNormalizerError>;
 
+    fn wait_for_update(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<SourceNormalizerResourceSessionWaitStatus, SourceNormalizerError>;
+
     fn cancel(&mut self) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError>;
 
     fn close(&mut self) -> Result<(), SourceNormalizerError>;
@@ -731,7 +744,17 @@ mod tests {
     fn source_normalizer_abi_constants_are_stable() {
         assert_eq!(VesperPluginKind::SourceNormalizer as u32, 6);
         assert_eq!(VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, 2);
-        assert_eq!(VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT, 3);
+        assert_eq!(VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT, 4);
+    }
+
+    #[test]
+    fn source_normalizer_resource_wait_status_round_trips_through_json() {
+        let status = super::SourceNormalizerResourceSessionWaitStatus { updated: true };
+        let json = serde_json::to_string(&status).expect("serialize wait status");
+        assert_eq!(json, r#"{"updated":true}"#);
+        let decoded: super::SourceNormalizerResourceSessionWaitStatus =
+            serde_json::from_str(&json).expect("decode wait status");
+        assert_eq!(decoded, status);
     }
 
     #[test]

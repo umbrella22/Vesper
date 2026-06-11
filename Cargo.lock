@@ -1615,6 +1615,7 @@ dependencies = [
  "player-plugin",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -1639,6 +1640,7 @@ name = "player-ffi"
 version = "0.3.0"
 dependencies = [
  "player-backend-ffmpeg",
+ "player-ffi-common",
  "player-model",
  "player-platform-linux",
  "player-platform-macos",
@@ -1647,10 +1649,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "player-ffi-common"
+version = "0.3.0"
+
+[[package]]
 name = "player-ffi-ios"
 version = "0.3.0"
 dependencies = [
  "player-dash-hls-bridge",
+ "player-ffi-common",
  "player-model",
  "player-platform-ios",
  "player-platform-mobile",
@@ -1901,7 +1908,6 @@ dependencies = [
  "player-preload",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
 ]
 
@@ -2460,27 +2466,6 @@ dependencies = [
  "arrayref",
  "bytemuck",
  "strict-num",
-]
-
-[[package]]
-name = "tokio"
-version = "1.51.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f66bf9585cda4b724d3e78ab34b73fb2bbaba9011b9bfdf69dc836382ea13b8c"
-dependencies = [
- "pin-project-lite",
- "tokio-macros",
-]
-
-[[package]]
-name = "tokio-macros"
-version = "2.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "385a6cb71ab9ab790c5fe8d67f1645e6c450a7ce006a33de03daa956cf70a496"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]

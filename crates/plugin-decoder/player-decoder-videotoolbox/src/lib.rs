@@ -712,6 +712,7 @@ mod platform {
         format_description: CMFormatDescriptionRef,
         decompression_session: VTDecompressionSessionRef,
         callback_state: Arc<CallbackState>,
+        callback_state_ref_con: *const CallbackState,
         end_of_stream_sent: bool,
         closed: bool,
     }
@@ -745,6 +746,7 @@ mod platform {
                 format_description: ptr::null_mut(),
                 decompression_session: ptr::null_mut(),
                 callback_state: Arc::new(CallbackState::default()),
+                callback_state_ref_con: ptr::null(),
                 end_of_stream_sent: false,
                 closed: false,
             };
@@ -916,6 +918,13 @@ mod platform {
                 }
                 self.decompression_session = ptr::null_mut();
             }
+            if !self.callback_state_ref_con.is_null() {
+                // SAFETY: this raw pointer was created by `Arc::into_raw` when
+                // the VideoToolbox session was created and is reclaimed exactly
+                // once after the session has been invalidated.
+                unsafe { drop(Arc::from_raw(self.callback_state_ref_con)) };
+                self.callback_state_ref_con = ptr::null();
+            }
             if !self.format_description.is_null() {
                 // SAFETY: format_description is retained by creation.
                 unsafe { CFRelease(self.format_description as CFTypeRef) };
@@ -952,9 +961,10 @@ mod platform {
             }
             let format_description =
                 create_format_description(self.codec, self.nal_length_size, &self.parameter_sets)?;
+            let callback_state_ref_con = Arc::into_raw(self.callback_state.clone());
             let callback = VTDecompressionOutputCallbackRecord {
                 decompression_output_callback: Some(decompression_output_callback),
-                decompression_output_ref_con: Arc::as_ptr(&self.callback_state).cast_mut().cast(),
+                decompression_output_ref_con: callback_state_ref_con.cast_mut().cast(),
             };
             let pixel_buffer_attributes =
                 create_pixel_buffer_attributes(&self.requested_output_format)?;
@@ -974,6 +984,9 @@ mod platform {
             // this session creation call.
             unsafe { CFRelease(pixel_buffer_attributes as CFTypeRef) };
             if status != NO_ERR {
+                // SAFETY: the raw callback state was not transferred to a live
+                // VideoToolbox session because creation failed.
+                unsafe { drop(Arc::from_raw(callback_state_ref_con)) };
                 // SAFETY: format_description was created by CoreMedia.
                 unsafe { CFRelease(format_description as CFTypeRef) };
                 return Err(os_status_error("VTDecompressionSessionCreate", status));
@@ -984,6 +997,7 @@ mod platform {
             }
             self.format_description = format_description;
             self.decompression_session = decompression_session;
+            self.callback_state_ref_con = callback_state_ref_con;
             Ok(())
         }
 

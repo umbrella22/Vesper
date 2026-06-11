@@ -153,8 +153,13 @@ fn fetch_text_resource_via_ffmpeg(
     let mut io_context = ptr::null_mut();
     let mut options = ffmpeg::Dictionary::new();
     options.set("rw_timeout", "15000000");
+    // SAFETY: `disown` transfers the dictionary pointer to FFmpeg for mutation;
+    // it is reclaimed with `Dictionary::own` immediately after `avio_open2`.
     let mut raw_options = unsafe { options.disown() };
 
+    // SAFETY: `uri_cstr`, the optional interrupt callback, and the read buffer
+    // remain valid for the synchronous FFmpeg IO calls. `io_context` is closed on
+    // all paths after a successful open.
     unsafe {
         let open_result = ffmpeg::ffi::avio_open2(
             &mut io_context,

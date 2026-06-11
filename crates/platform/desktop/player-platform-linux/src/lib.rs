@@ -9,13 +9,16 @@ use std::sync::atomic::AtomicBool;
 
 use player_model::MediaSource;
 use player_platform_desktop::{
+    diagnostics::{append_plugin_diagnostics, unsupported_plugin_diagnostic},
     open_platform_desktop_source_with_options_and_interrupt,
     probe_platform_desktop_source_with_options,
 };
 use player_runtime::{
-    PlayerError, PlayerErrorCode, PlayerMediaInfo, PlayerResult, PlayerRuntime,
-    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
-    PlayerRuntimeBootstrap, PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup,
+    FrameProcessorMode, PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode,
+    PlayerMediaInfo, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus, PlayerResult,
+    PlayerRuntime, PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities,
+    PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer, PlayerRuntimeBootstrap,
+    PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup, SourceNormalizerMode,
     register_default_runtime_adapter_factory,
 };
 
@@ -78,15 +81,17 @@ pub fn probe_linux_host_runtime_source_with_options(
 
     let initializer = PlayerRuntimeInitializer::probe_source_with_factory(
         source,
-        options,
+        options.clone(),
         linux_runtime_adapter_factory(),
     )?;
+    let startup =
+        linux_startup_with_unsupported_plugin_diagnostics(initializer.startup(), &options);
 
     Ok(LinuxHostRuntimeProbe {
         adapter_id: LINUX_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
         capabilities: initializer.capabilities(),
         media_info: initializer.media_info(),
-        startup: initializer.startup(),
+        startup,
     })
 }
 
@@ -116,12 +121,14 @@ pub fn open_linux_host_runtime_source_with_options_and_interrupt(
         ));
     }
 
-    let bootstrap = open_platform_desktop_source_with_options_and_interrupt(
+    let mut bootstrap = open_platform_desktop_source_with_options_and_interrupt(
         LINUX_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
         source,
-        options,
+        options.clone(),
         interrupt_flag,
     )?;
+    bootstrap.startup =
+        linux_startup_with_unsupported_plugin_diagnostics(bootstrap.startup, &options);
     Ok(PlayerRuntime::from_adapter_bootstrap(
         LINUX_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
         bootstrap,
@@ -148,12 +155,93 @@ impl PlayerRuntimeAdapterFactory for LinuxSoftwarePlayerRuntimeAdapterFactory {
             ));
         }
 
-        probe_platform_desktop_source_with_options(
+        let initializer = probe_platform_desktop_source_with_options(
             LINUX_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
             source,
+            options.clone(),
+        )?;
+        Ok(Box::new(LinuxRuntimeAdapterInitializer {
+            inner: initializer,
             options,
-        )
+        }))
     }
+}
+
+struct LinuxRuntimeAdapterInitializer {
+    inner: Box<dyn PlayerRuntimeAdapterInitializer>,
+    options: PlayerRuntimeOptions,
+}
+
+impl PlayerRuntimeAdapterInitializer for LinuxRuntimeAdapterInitializer {
+    fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn media_info(&self) -> PlayerMediaInfo {
+        self.inner.media_info()
+    }
+
+    fn startup(&self) -> PlayerRuntimeStartup {
+        linux_startup_with_unsupported_plugin_diagnostics(self.inner.startup(), &self.options)
+    }
+
+    fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
+        self.inner.initialize()
+    }
+}
+
+fn linux_startup_with_unsupported_plugin_diagnostics(
+    startup: PlayerRuntimeStartup,
+    options: &PlayerRuntimeOptions,
+) -> PlayerRuntimeStartup {
+    append_plugin_diagnostics(startup, &linux_unsupported_plugin_diagnostics(options))
+}
+
+fn linux_unsupported_plugin_diagnostics(
+    options: &PlayerRuntimeOptions,
+) -> Vec<PlayerPluginDiagnostic> {
+    let mut diagnostics = Vec::new();
+    if !options.decoder_plugin_library_paths.is_empty()
+        || options.decoder_plugin_video_mode == PlayerDecoderPluginVideoMode::PreferNativeFrame
+    {
+        diagnostics.push(linux_unsupported_plugin_diagnostic(
+            "decoder",
+            PlayerPluginDiagnosticStatus::DecoderUnsupported,
+            "Linux desktop runtime does not currently inspect decoder plugins or provide native-frame playback diagnostics",
+        ));
+    }
+    if options.source_normalizer_mode != SourceNormalizerMode::Disabled
+        || !options.source_normalizer_plugin_library_paths.is_empty()
+    {
+        diagnostics.push(linux_unsupported_plugin_diagnostic(
+            "source_normalizer",
+            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+            "Linux desktop runtime does not currently inspect source-normalizer plugins",
+        ));
+    }
+    if options.frame_processor_mode != FrameProcessorMode::Disabled
+        || !options.frame_processor_library_paths.is_empty()
+    {
+        diagnostics.push(linux_unsupported_plugin_diagnostic(
+            "frame_processor",
+            PlayerPluginDiagnosticStatus::FrameProcessorUnsupported,
+            "Linux desktop runtime does not currently inspect frame-processor plugins or provide a native-frame processor chain",
+        ));
+    }
+    diagnostics
+}
+
+fn linux_unsupported_plugin_diagnostic(
+    plugin_kind: &str,
+    status: PlayerPluginDiagnosticStatus,
+    message: &str,
+) -> PlayerPluginDiagnostic {
+    unsupported_plugin_diagnostic(
+        plugin_kind,
+        status,
+        message,
+        "linuxDesktopPluginDiagnostics",
+    )
 }
 
 #[cfg(test)]
@@ -162,12 +250,14 @@ mod tests {
 
     use super::{
         LINUX_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID, LinuxSoftwarePlayerRuntimeAdapterFactory,
-        open_linux_host_runtime_source_with_options, probe_linux_host_runtime_source_with_options,
+        linux_unsupported_plugin_diagnostics, open_linux_host_runtime_source_with_options,
+        probe_linux_host_runtime_source_with_options,
     };
     use player_model::MediaSource;
     use player_runtime::{
-        PlayerErrorCode, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterFactory,
-        PlayerRuntimeOptions,
+        FrameProcessorMode, PlayerDecoderPluginVideoMode, PlayerErrorCode,
+        PlayerPluginDiagnosticStatus, PlayerRuntimeAdapterBackendFamily,
+        PlayerRuntimeAdapterFactory, PlayerRuntimeOptions, SourceNormalizerMode,
     };
 
     #[test]
@@ -267,6 +357,42 @@ mod tests {
             };
             assert_eq!(error.code(), PlayerErrorCode::Unsupported);
         }
+    }
+
+    #[test]
+    fn linux_configured_plugin_paths_emit_unsupported_diagnostics() {
+        let diagnostics = linux_unsupported_plugin_diagnostics(
+            &PlayerRuntimeOptions::default()
+                .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
+                .with_decoder_plugin_library_paths([std::path::PathBuf::from("/tmp/fake-decoder")])
+                .with_source_normalizer_mode(SourceNormalizerMode::PreferNormalized)
+                .with_source_normalizer_plugin_library_paths([std::path::PathBuf::from(
+                    "/tmp/fake-normalizer",
+                )])
+                .with_frame_processor_mode(FrameProcessorMode::RequireProcessed)
+                .with_frame_processor_library_paths([std::path::PathBuf::from(
+                    "/tmp/fake-frame-processor",
+                )]),
+        );
+
+        assert_eq!(diagnostics.len(), 3);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.status == PlayerPluginDiagnosticStatus::DecoderUnsupported
+                && diagnostic.plugin_kind.as_deref() == Some("decoder")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.status == PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
+                && diagnostic.plugin_kind.as_deref() == Some("source_normalizer")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.status == PlayerPluginDiagnosticStatus::FrameProcessorUnsupported
+                && diagnostic.plugin_kind.as_deref() == Some("frame_processor")
+        }));
+        assert!(diagnostics.iter().all(|diagnostic| {
+            diagnostic.details.iter().any(|detail| {
+                detail.key == "linuxDesktopPluginDiagnostics" && detail.value == "unsupported"
+            })
+        }));
     }
 
     fn test_video_path() -> Option<String> {

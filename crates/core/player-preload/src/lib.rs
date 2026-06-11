@@ -16,4 +16,5 @@ pub use preload::{
     PreloadCandidateKind, PreloadConfig, PreloadErrorSummary, PreloadEvent, PreloadExecutor,
     PreloadPlanner, PreloadPriority, PreloadSelectionHint, PreloadSnapshot, PreloadSourceIdentity,
     PreloadTaskId, PreloadTaskSnapshot, PreloadTaskState, PreloadTaskStatus,
+    preload_candidate_precedes_or_equal,
 };

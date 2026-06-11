@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/mobile-hosts-ci.yml"
+      - ".github/actions/select-xcode/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/**"
@@ -28,6 +29,7 @@ on:
       - main
     paths:
       - ".github/workflows/mobile-hosts-ci.yml"
+      - ".github/actions/select-xcode/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/**"
@@ -167,8 +169,6 @@ jobs:
   ios-host:
     name: Vesper iOS Host Demo arm64
     runs-on: macos-latest
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 
     steps:
       - name: Checkout
@@ -185,8 +185,10 @@ jobs:
       - name: Install iOS build tools
         run: brew install xcodegen pkg-config
 
-      - name: Select Xcode 26.3
-        run: xcodebuild -version
+      - name: Select Xcode
+        uses: ./.github/actions/select-xcode
+        with:
+          minimum-major: "16"
 
       - name: Build Apple FFmpeg prebuilts
         run: ./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64

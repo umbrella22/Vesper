@@ -767,7 +767,20 @@ fn blend_pixel(
         return;
     }
 
-    let index = ((y * frame_width + x) * 4) as usize;
+    let Some(index) = (y as usize)
+        .checked_mul(frame_width as usize)
+        .and_then(|row| row.checked_add(x as usize))
+        .and_then(|pixel| pixel.checked_mul(4))
+    else {
+        return;
+    };
+    if match index.checked_add(3) {
+        Some(last) => last >= frame.len(),
+        None => true,
+    } {
+        return;
+    }
+
     let alpha = f32::from(color[3]) / 255.0;
     let inverse = 1.0 - alpha;
     frame[index] = (f32::from(color[0]) * alpha + f32::from(frame[index]) * inverse)

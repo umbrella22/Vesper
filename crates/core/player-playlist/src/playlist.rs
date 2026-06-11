@@ -7,7 +7,7 @@ use player_preload::{
     PreloadBudgetProvider, PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind,
     PreloadConfig, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadPriority,
     PreloadSelectionHint, PreloadSnapshot, PreloadSourceIdentity, PreloadTaskId,
-    PreloadTaskSnapshot, PreloadTaskStatus,
+    PreloadTaskSnapshot, PreloadTaskStatus, preload_candidate_precedes_or_equal,
 };
 
 /// Stable playlist identifier.
@@ -415,7 +415,7 @@ where
 
     /// Drains pending playlist and forwarded preload events.
     pub fn drain_events(&mut self) -> Vec<PlaylistEvent> {
-        self.events.drain(..).collect()
+        std::mem::take(&mut self.events)
     }
 
     /// Replaces the queue and reconciles active item and preloads.
@@ -957,28 +957,7 @@ impl AdvanceResult {
 }
 
 fn candidate_precedes(current: &PreloadCandidate, next: &PreloadCandidate) -> bool {
-    rank_candidate_kind(current.kind) < rank_candidate_kind(next.kind)
-        || (rank_candidate_kind(current.kind) == rank_candidate_kind(next.kind)
-            && rank_priority(current.config.priority) <= rank_priority(next.config.priority))
-}
-
-fn rank_candidate_kind(kind: PreloadCandidateKind) -> u8 {
-    match kind {
-        PreloadCandidateKind::Current => 0,
-        PreloadCandidateKind::Neighbor => 1,
-        PreloadCandidateKind::Recommended => 2,
-        PreloadCandidateKind::Background => 3,
-    }
-}
-
-fn rank_priority(priority: PreloadPriority) -> u8 {
-    match priority {
-        PreloadPriority::Critical => 0,
-        PreloadPriority::High => 1,
-        PreloadPriority::Normal => 2,
-        PreloadPriority::Low => 3,
-        PreloadPriority::Background => 4,
-    }
+    preload_candidate_precedes_or_equal(current, next)
 }
 
 #[cfg(test)]

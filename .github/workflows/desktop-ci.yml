@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/desktop-ci.yml"
+      - ".github/actions/install-linux-desktop-deps/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/**"
@@ -25,6 +26,7 @@ on:
       - "codex-*"
     paths:
       - ".github/workflows/desktop-ci.yml"
+      - ".github/actions/install-linux-desktop-deps/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "scripts/**"
@@ -73,33 +75,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            ffmpeg \
-            pkg-config \
-            clang \
-            libclang-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libavfilter-dev \
-            libswresample-dev \
-            libswscale-dev \
-            libasound2-dev \
-            libudev-dev \
-            libegl1-mesa-dev \
-            libgl1-mesa-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxcb1-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libxcursor-dev \
-            libxinerama-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev \
-            libwayland-dev
+        uses: ./.github/actions/install-linux-desktop-deps
 
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
@@ -123,33 +99,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            ffmpeg \
-            pkg-config \
-            clang \
-            libclang-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libavfilter-dev \
-            libswresample-dev \
-            libswscale-dev \
-            libasound2-dev \
-            libudev-dev \
-            libegl1-mesa-dev \
-            libgl1-mesa-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxcb1-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libxcursor-dev \
-            libxinerama-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev \
-            libwayland-dev
+        uses: ./.github/actions/install-linux-desktop-deps
 
       - name: Workspace check
         run: cargo check --workspace ${{ env.LINUX_WORKSPACE_EXCLUDES }}
@@ -170,33 +120,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            ffmpeg \
-            pkg-config \
-            clang \
-            libclang-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libavfilter-dev \
-            libswresample-dev \
-            libswscale-dev \
-            libasound2-dev \
-            libudev-dev \
-            libegl1-mesa-dev \
-            libgl1-mesa-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxcb1-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libxcursor-dev \
-            libxinerama-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev \
-            libwayland-dev
+        uses: ./.github/actions/install-linux-desktop-deps
 
       - name: Workspace shared tests
         run: cargo test --workspace --no-fail-fast --exclude basic-player ${{ env.LINUX_WORKSPACE_EXCLUDES }} --exclude player-platform-linux
@@ -231,33 +155,7 @@ jobs:
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            ffmpeg \
-            pkg-config \
-            clang \
-            libclang-dev \
-            libavcodec-dev \
-            libavformat-dev \
-            libavutil-dev \
-            libavfilter-dev \
-            libswresample-dev \
-            libswscale-dev \
-            libasound2-dev \
-            libudev-dev \
-            libegl1-mesa-dev \
-            libgl1-mesa-dev \
-            libx11-dev \
-            libx11-xcb-dev \
-            libxcb1-dev \
-            libxrandr-dev \
-            libxi-dev \
-            libxcursor-dev \
-            libxinerama-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev \
-            libwayland-dev
+        uses: ./.github/actions/install-linux-desktop-deps
 
       - name: Install macOS system dependencies
         if: runner.os == 'macOS'

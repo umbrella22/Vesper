@@ -135,7 +135,7 @@ fn dynamic_source_normalizer_packet_plugin_drop_releases_outstanding_packet() {
 
 #[test]
 fn dynamic_source_normalizer_packet_plugin_rejects_missing_release_callback() {
-    let api = VesperSourceNormalizerPluginApiV3 {
+    let api = VesperSourceNormalizerPluginApiV4 {
         release_packet: None,
         ..fixture_source_normalizer_packet_api()
     };
@@ -143,7 +143,7 @@ fn dynamic_source_normalizer_packet_plugin_rejects_missing_release_callback() {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::SourceNormalizer,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperSourceNormalizerPluginApiV3).cast(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
 
     let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
@@ -157,13 +157,68 @@ fn dynamic_source_normalizer_packet_plugin_rejects_missing_release_callback() {
 }
 
 #[test]
+fn dynamic_source_normalizer_resource_plugin_rejects_missing_wait_callback() {
+    let api = VesperSourceNormalizerPluginApiV4 {
+        wait_resource_session_update: None,
+        ..fixture_source_normalizer_dual_api()
+    };
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
+    };
+
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("packet callback group should still load");
+    assert!(
+        plugin.source_normalizer_resource_plugin_factory().is_none(),
+        "resource callback group without wait must not be exposed"
+    );
+}
+
+#[test]
+fn dynamic_source_normalizer_resource_session_wait_for_update_decodes_status() {
+    let api = fixture_source_normalizer_dual_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
+    };
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load source normalizer v4 plugin");
+    let factory = plugin
+        .source_normalizer_resource_plugin_factory()
+        .expect("resource factory");
+    let mut session = factory
+        .open_resource_session(&player_plugin::SourceNormalizerResourceSessionConfig {
+            runtime_profile: "fixture-resource".to_owned(),
+            input: "file:///tmp/input.mp4".to_owned(),
+            headers: Vec::new(),
+            output_root: "/tmp/vesper-source-normalizer-fixture".to_owned(),
+            cache_policy: SourceNormalizerResourceCachePolicy::default(),
+            preferred_route: Some(SourceNormalizerOutputRoute::Fmp4LocalStream),
+            startup_timeout_ms: Some(10),
+            read_idle_timeout_ms: Some(10),
+        })
+        .expect("open resource session");
+
+    let wait = session
+        .wait_for_update(std::time::Duration::from_millis(1))
+        .expect("wait for update");
+    assert!(wait.updated);
+    session.close().expect("close resource session");
+}
+
+#[test]
 fn plugin_registry_reports_source_normalizer_packet_current_support() {
     let api = fixture_source_normalizer_packet_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::SourceNormalizer,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperSourceNormalizerPluginApiV3).cast(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
         .expect("load source normalizer packet plugin");
@@ -247,10 +302,10 @@ fn plugin_registry_reports_current_source_normalizer_packet_and_resource_support
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::SourceNormalizer,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperSourceNormalizerPluginApiV3).cast(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
-        .expect("load source normalizer v3 plugin");
+        .expect("load source normalizer v4 plugin");
     let registry = PluginRegistry::from_records(
         PluginDiagnosticRecord::from_loaded_source_normalizer_plugin_records(
             PathBuf::from("test-source-normalizer-dual"),

@@ -93,7 +93,7 @@ where
     }
 
     pub fn drain_events(&mut self) -> Vec<DownloadEvent> {
-        self.events.drain(..).collect()
+        std::mem::take(&mut self.events)
     }
 
     pub fn task(&self, task_id: DownloadTaskId) -> Option<DownloadTaskSnapshot> {

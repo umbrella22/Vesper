@@ -1,11 +1,9 @@
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use player_platform_mobile::{MobilePreloadBridgeSession, MobilePreloadCommand};
 use player_runtime::{
-    InMemoryPreloadBudgetProvider, PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult,
-    PreloadCandidate, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadSnapshot,
-    PreloadTaskId, PreloadTaskSnapshot,
+    InMemoryPreloadBudgetProvider, PlayerError, PlayerResult, PreloadCandidate, PreloadEvent,
+    PreloadSnapshot, PreloadTaskId, PreloadTaskSnapshot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,53 +12,15 @@ pub enum AndroidPreloadCommand {
     Cancel { task_id: PreloadTaskId },
 }
 
-#[derive(Debug, Clone)]
-struct AndroidPreloadExecutor {
-    queue: Arc<Mutex<VecDeque<AndroidPreloadCommand>>>,
-}
-
-impl AndroidPreloadExecutor {
-    fn new(queue: Arc<Mutex<VecDeque<AndroidPreloadCommand>>>) -> Self {
-        Self { queue }
-    }
-
-    fn push_command(&self, command: AndroidPreloadCommand) -> PlayerResult<()> {
-        let mut queue = self.queue.lock().map_err(|_| {
-            PlayerError::with_category(
-                PlayerErrorCode::BackendFailure,
-                PlayerErrorCategory::Platform,
-                "android preload command queue lock poisoned",
-            )
-        })?;
-        queue.push_back(command);
-        Ok(())
-    }
-}
-
-impl PreloadExecutor for AndroidPreloadExecutor {
-    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerResult<()> {
-        self.push_command(AndroidPreloadCommand::Start { task: task.clone() })
-    }
-
-    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<()> {
-        self.push_command(AndroidPreloadCommand::Cancel { task_id })
-    }
-}
-
 #[derive(Debug)]
 pub struct AndroidPreloadBridgeSession {
-    planner: PreloadPlanner<InMemoryPreloadBudgetProvider, AndroidPreloadExecutor>,
-    command_queue: Arc<Mutex<VecDeque<AndroidPreloadCommand>>>,
+    inner: MobilePreloadBridgeSession,
 }
 
 impl AndroidPreloadBridgeSession {
     pub fn new(budget_provider: InMemoryPreloadBudgetProvider) -> Self {
-        let command_queue = Arc::new(Mutex::new(VecDeque::new()));
-        let executor = AndroidPreloadExecutor::new(command_queue.clone());
-
         Self {
-            planner: PreloadPlanner::new(budget_provider, executor),
-            command_queue,
+            inner: MobilePreloadBridgeSession::new(budget_provider, "android preload"),
         }
     }
 
@@ -69,18 +29,18 @@ impl AndroidPreloadBridgeSession {
         candidates: impl IntoIterator<Item = PreloadCandidate>,
         now: Instant,
     ) -> Vec<PreloadTaskId> {
-        self.planner.plan(candidates, now)
+        self.inner.plan(candidates, now)
     }
 
     pub fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<Option<PreloadTaskSnapshot>> {
-        self.planner.cancel(task_id)
+        self.inner.cancel(task_id)
     }
 
     pub fn complete(
         &mut self,
         task_id: PreloadTaskId,
     ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
-        self.planner.complete(task_id)
+        self.inner.complete(task_id)
     }
 
     pub fn fail(
@@ -88,26 +48,36 @@ impl AndroidPreloadBridgeSession {
         task_id: PreloadTaskId,
         error: PlayerError,
     ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
-        self.planner.fail(task_id, error)
+        self.inner.fail(task_id, error)
     }
 
     pub fn expire_due_tasks(&mut self, now: Instant) {
-        self.planner.expire_due_tasks(now);
+        self.inner.expire_due_tasks(now);
     }
 
     pub fn snapshot(&self) -> PreloadSnapshot {
-        self.planner.snapshot()
+        self.inner.snapshot()
     }
 
     pub fn drain_events(&mut self) -> Vec<PreloadEvent> {
-        self.planner.drain_events()
+        self.inner.drain_events()
     }
 
     pub fn drain_commands(&mut self) -> Vec<AndroidPreloadCommand> {
-        self.command_queue
-            .lock()
-            .map(|mut queue| queue.drain(..).collect())
-            .unwrap_or_default()
+        self.inner
+            .drain_commands()
+            .into_iter()
+            .map(AndroidPreloadCommand::from)
+            .collect()
+    }
+}
+
+impl From<MobilePreloadCommand> for AndroidPreloadCommand {
+    fn from(command: MobilePreloadCommand) -> Self {
+        match command {
+            MobilePreloadCommand::Start { task } => Self::Start { task },
+            MobilePreloadCommand::Cancel { task_id } => Self::Cancel { task_id },
+        }
     }
 }
 

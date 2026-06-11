@@ -98,10 +98,20 @@ impl MediaSource {
         &self.uri
     }
 
+    /// Returns whether this source should be treated as local or remote.
+    ///
+    /// `file://`, `content://`, loopback HTTP(S), absolute paths, relative
+    /// paths, Windows drive paths, and bare strings without a URI scheme are
+    /// classified as local.
     pub fn kind(&self) -> MediaSourceKind {
         classify_media_source_kind(&self.uri)
     }
 
+    /// Returns the coarse protocol family inferred from the URI string.
+    ///
+    /// Bare absolute or relative paths are treated as file sources. Unknown URI
+    /// schemes remain `Unknown` instead of being rewritten to a streaming
+    /// protocol.
     pub fn protocol(&self) -> MediaSourceProtocol {
         classify_media_source_protocol(&self.uri)
     }

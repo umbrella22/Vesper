@@ -18,28 +18,28 @@ use player_backend_ffmpeg::{
 use player_model::MediaSource;
 use player_platform_desktop::{
     DesktopVideoFrame, DesktopVideoFramePoll, DesktopVideoSource, DesktopVideoSourceBootstrap,
-    DesktopVideoSourceFactory, merge_runtime_fallback_reason,
-    open_platform_desktop_source_with_options_and_interrupt,
-    probe_platform_desktop_source_with_options,
+    DesktopVideoSourceFactory,
+    diagnostics::{
+        available_plugin_diagnostic_from_record, plugin_diagnostic_label,
+        unsupported_plugin_diagnostic,
+    },
+    merge_runtime_fallback_reason, probe_platform_desktop_source_with_options,
+    probe_platform_desktop_source_with_options_and_interrupt,
     probe_platform_desktop_source_with_video_source_factory_and_options,
+    probe_platform_desktop_source_with_video_source_factory_and_options_and_interrupt,
 };
 use player_plugin::{
     DecoderBitstreamFormat, DecoderMediaKind, DecoderNativeDeviceContext,
     DecoderNativeDeviceContextKind, DecoderNativeHandleKind, DecoderPacket,
-    DecoderReceiveNativeFrameOutput, DecoderSessionConfig, NativeDecoderSession, NativeHandleKind,
-    VesperPluginKind,
+    DecoderReceiveNativeFrameOutput, DecoderSessionConfig, NativeDecoderSession,
 };
 use player_plugin_loader::{
-    DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
-    FrameProcessorPluginCapabilitySummary, LoadedDynamicPlugin, PluginCapabilitySummary,
-    PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
-    SourceNormalizerPacketPluginCapabilitySummary, SourceNormalizerResourcePluginCapabilitySummary,
+    DecoderPluginMatchRequest, LoadedDynamicPlugin, PluginCapabilitySummary,
+    PluginDiagnosticStatus, PluginRegistry,
 };
 use player_runtime::{
     FrameProcessorMode, PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode,
-    PlayerMediaInfo, PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
-    PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
-    PlayerPluginFrameProcessorCapabilitySummary, PlayerPluginParticipation, PlayerResult,
+    PlayerMediaInfo, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus, PlayerResult,
     PlayerRuntime, PlayerRuntimeAdapter, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
     PlayerRuntimeBootstrap, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
@@ -107,6 +107,7 @@ struct WindowsRuntimeAdapterFallback {
 struct WindowsRuntimeActiveFallback {
     source: MediaSource,
     options: PlayerRuntimeOptions,
+    interrupt_flag: Option<Arc<AtomicBool>>,
     fallback_reason: String,
 }
 
@@ -237,6 +238,8 @@ mod windows_d3d11_presenter {
         D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
         D3D11_VPOV_DIMENSION_TEXTURE2D, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
         ID3D11Resource, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice,
+        ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView,
+        ID3D11VideoProcessorOutputView,
     };
     use windows::Win32::Graphics::Dxgi::Common::{
         DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -260,6 +263,41 @@ mod windows_d3d11_presenter {
         swap_chain: Option<IDXGISwapChain1>,
         attached_hwnd: Option<usize>,
         swap_chain_size: Option<(u32, u32)>,
+        nv12_cache: Option<Nv12VideoProcessorCache>,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Nv12VideoProcessorKey {
+        input_width: u32,
+        input_height: u32,
+        input_format: DXGI_FORMAT,
+        output_width: u32,
+        output_height: u32,
+        output_format: DXGI_FORMAT,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Nv12InputViewKey {
+        texture_ptr: usize,
+        width: u32,
+        height: u32,
+        format: DXGI_FORMAT,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct Nv12OutputViewKey {
+        texture_ptr: usize,
+        width: u32,
+        height: u32,
+        format: DXGI_FORMAT,
+    }
+
+    struct Nv12VideoProcessorCache {
+        key: Nv12VideoProcessorKey,
+        enumerator: ID3D11VideoProcessorEnumerator,
+        processor: ID3D11VideoProcessor,
+        input_view: Option<(Nv12InputViewKey, ID3D11VideoProcessorInputView)>,
+        output_view: Option<(Nv12OutputViewKey, ID3D11VideoProcessorOutputView)>,
     }
 
     #[allow(dead_code)]
@@ -312,6 +350,7 @@ mod windows_d3d11_presenter {
                 swap_chain: None,
                 attached_hwnd: None,
                 swap_chain_size: None,
+                nv12_cache: None,
             })
         }
 
@@ -347,6 +386,7 @@ mod windows_d3d11_presenter {
                 }
                 .map_err(|error| player_error("IDXGISwapChain::ResizeBuffers", error))?;
                 self.swap_chain_size = Some(size);
+                self.nv12_cache = None;
                 return Ok(());
             }
 
@@ -392,6 +432,7 @@ mod windows_d3d11_presenter {
             .map_err(|error| player_error("IDXGIFactory2::CreateSwapChainForHwnd", error))?;
             self.swap_chain = Some(swap_chain);
             self.swap_chain_size = Some(size);
+            self.nv12_cache = None;
             Ok(())
         }
 
@@ -452,94 +493,26 @@ mod windows_d3d11_presenter {
                     "windows D3D11 native-frame presenter has no swapchain size",
                 )
             })?;
-            let content_desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
-                InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
-                InputFrameRate: DXGI_RATIONAL {
-                    Numerator: 60,
-                    Denominator: 1,
-                },
-                InputWidth: desc.Width,
-                InputHeight: desc.Height,
-                OutputFrameRate: DXGI_RATIONAL {
-                    Numerator: 60,
-                    Denominator: 1,
-                },
-                OutputWidth: output_size.0,
-                OutputHeight: output_size.1,
-                Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
-            };
-            // SAFETY: the content description is initialized and lives for the
-            // duration of the call.
-            let enumerator = unsafe { video_device.CreateVideoProcessorEnumerator(&content_desc) }
-                .map_err(|error| {
-                    player_error("ID3D11VideoDevice::CreateVideoProcessorEnumerator", error)
-                })?;
-            // SAFETY: the enumerator belongs to this device and index 0 is the
-            // default rate-conversion processor.
-            let processor = unsafe { video_device.CreateVideoProcessor(&enumerator, 0) }
-                .map_err(|error| player_error("ID3D11VideoDevice::CreateVideoProcessor", error))?;
-            let input_desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
-                FourCC: 0,
-                ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
-                Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 {
-                    Texture2D: D3D11_TEX2D_VPIV {
-                        MipSlice: 0,
-                        ArraySlice: 0,
-                    },
-                },
-            };
-            let output_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
-                ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
-                Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
-                    Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 },
-                },
-            };
+            let mut back_buffer_desc = Default::default();
+            // SAFETY: back_buffer is a valid D3D11 texture returned by the
+            // presenter's swapchain.
+            unsafe { back_buffer.GetDesc(&mut back_buffer_desc) };
             let source: ID3D11Resource = texture
                 .cast()
                 .map_err(|error| player_error("ID3D11Texture2D::cast<ID3D11Resource>", error))?;
             let target: ID3D11Resource = back_buffer
                 .cast()
                 .map_err(|error| player_error("ID3D11Texture2D::cast<ID3D11Resource>", error))?;
-            let mut input_view = None;
-            // SAFETY: texture/enumerator are valid D3D11 objects from the same
-            // device, and input_desc is fully initialized.
-            unsafe {
-                video_device.CreateVideoProcessorInputView(
-                    &source,
-                    &enumerator,
-                    &input_desc,
-                    Some(&mut input_view),
-                )
-            }
-            .map_err(|error| {
-                player_error("ID3D11VideoDevice::CreateVideoProcessorInputView", error)
-            })?;
-            let mut output_view = None;
-            // SAFETY: back_buffer/enumerator are valid D3D11 objects from the
-            // same device, and output_desc is fully initialized.
-            unsafe {
-                video_device.CreateVideoProcessorOutputView(
-                    &target,
-                    &enumerator,
-                    &output_desc,
-                    Some(&mut output_view),
-                )
-            }
-            .map_err(|error| {
-                player_error("ID3D11VideoDevice::CreateVideoProcessorOutputView", error)
-            })?;
-            let input_view = input_view.ok_or_else(|| {
-                PlayerError::new(
-                    PlayerErrorCode::BackendFailure,
-                    "ID3D11VideoDevice::CreateVideoProcessorInputView returned no view",
-                )
-            })?;
-            let output_view = output_view.ok_or_else(|| {
-                PlayerError::new(
-                    PlayerErrorCode::BackendFailure,
-                    "ID3D11VideoDevice::CreateVideoProcessorOutputView returned no view",
-                )
-            })?;
+            let (processor, input_view, output_view) = self.nv12_processor_objects(
+                &video_device,
+                desc,
+                texture,
+                &source,
+                &back_buffer_desc,
+                back_buffer,
+                &target,
+                output_size,
+            )?;
             let mut stream = D3D11_VIDEO_PROCESSOR_STREAM {
                 Enable: true.into(),
                 OutputIndex: 0,
@@ -576,6 +549,186 @@ mod windows_d3d11_presenter {
             unsafe { swap_chain.Present(1, DXGI_PRESENT(0)) }
                 .ok()
                 .map_err(|error| player_error("IDXGISwapChain::Present", error))
+        }
+
+        fn nv12_processor_objects(
+            &mut self,
+            video_device: &ID3D11VideoDevice,
+            input_desc: &windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE2D_DESC,
+            texture: &ID3D11Texture2D,
+            source: &ID3D11Resource,
+            output_desc: &windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE2D_DESC,
+            back_buffer: &ID3D11Texture2D,
+            target: &ID3D11Resource,
+            output_size: (u32, u32),
+        ) -> PlayerResult<(
+            ID3D11VideoProcessor,
+            ID3D11VideoProcessorInputView,
+            ID3D11VideoProcessorOutputView,
+        )> {
+            let processor_key = Nv12VideoProcessorKey {
+                input_width: input_desc.Width,
+                input_height: input_desc.Height,
+                input_format: input_desc.Format,
+                output_width: output_size.0,
+                output_height: output_size.1,
+                output_format: output_desc.Format,
+            };
+            if self
+                .nv12_cache
+                .as_ref()
+                .is_none_or(|cache| cache.key != processor_key)
+            {
+                let content_desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
+                    InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+                    InputFrameRate: DXGI_RATIONAL {
+                        Numerator: 60,
+                        Denominator: 1,
+                    },
+                    InputWidth: input_desc.Width,
+                    InputHeight: input_desc.Height,
+                    OutputFrameRate: DXGI_RATIONAL {
+                        Numerator: 60,
+                        Denominator: 1,
+                    },
+                    OutputWidth: output_size.0,
+                    OutputHeight: output_size.1,
+                    Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
+                };
+                // SAFETY: the content description is initialized and lives for
+                // the duration of the call.
+                let enumerator =
+                    unsafe { video_device.CreateVideoProcessorEnumerator(&content_desc) }.map_err(
+                        |error| {
+                            player_error("ID3D11VideoDevice::CreateVideoProcessorEnumerator", error)
+                        },
+                    )?;
+                // SAFETY: the enumerator belongs to this device and index 0 is
+                // the default rate-conversion processor.
+                let processor = unsafe { video_device.CreateVideoProcessor(&enumerator, 0) }
+                    .map_err(|error| {
+                        player_error("ID3D11VideoDevice::CreateVideoProcessor", error)
+                    })?;
+                self.nv12_cache = Some(Nv12VideoProcessorCache {
+                    key: processor_key,
+                    enumerator,
+                    processor,
+                    input_view: None,
+                    output_view: None,
+                });
+            }
+
+            let cache = self.nv12_cache.as_mut().ok_or_else(|| {
+                PlayerError::new(
+                    PlayerErrorCode::BackendFailure,
+                    "windows D3D11 native-frame presenter has no NV12 video processor cache",
+                )
+            })?;
+            let input_key = Nv12InputViewKey {
+                texture_ptr: texture.as_raw() as usize,
+                width: input_desc.Width,
+                height: input_desc.Height,
+                format: input_desc.Format,
+            };
+            if cache
+                .input_view
+                .as_ref()
+                .is_none_or(|(key, _)| *key != input_key)
+            {
+                let view_desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
+                    FourCC: 0,
+                    ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
+                    Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 {
+                        Texture2D: D3D11_TEX2D_VPIV {
+                            MipSlice: 0,
+                            ArraySlice: 0,
+                        },
+                    },
+                };
+                let mut input_view = None;
+                // SAFETY: texture/enumerator are valid D3D11 objects from the
+                // same device, and view_desc is fully initialized.
+                unsafe {
+                    video_device.CreateVideoProcessorInputView(
+                        source,
+                        &cache.enumerator,
+                        &view_desc,
+                        Some(&mut input_view),
+                    )
+                }
+                .map_err(|error| {
+                    player_error("ID3D11VideoDevice::CreateVideoProcessorInputView", error)
+                })?;
+                let input_view = input_view.ok_or_else(|| {
+                    PlayerError::new(
+                        PlayerErrorCode::BackendFailure,
+                        "ID3D11VideoDevice::CreateVideoProcessorInputView returned no view",
+                    )
+                })?;
+                cache.input_view = Some((input_key, input_view));
+            }
+
+            let output_key = Nv12OutputViewKey {
+                texture_ptr: back_buffer.as_raw() as usize,
+                width: output_desc.Width,
+                height: output_desc.Height,
+                format: output_desc.Format,
+            };
+            if cache
+                .output_view
+                .as_ref()
+                .is_none_or(|(key, _)| *key != output_key)
+            {
+                let view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
+                    ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
+                    Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
+                        Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 },
+                    },
+                };
+                let mut output_view = None;
+                // SAFETY: back_buffer/enumerator are valid D3D11 objects from
+                // the same device, and view_desc is fully initialized.
+                unsafe {
+                    video_device.CreateVideoProcessorOutputView(
+                        target,
+                        &cache.enumerator,
+                        &view_desc,
+                        Some(&mut output_view),
+                    )
+                }
+                .map_err(|error| {
+                    player_error("ID3D11VideoDevice::CreateVideoProcessorOutputView", error)
+                })?;
+                let output_view = output_view.ok_or_else(|| {
+                    PlayerError::new(
+                        PlayerErrorCode::BackendFailure,
+                        "ID3D11VideoDevice::CreateVideoProcessorOutputView returned no view",
+                    )
+                })?;
+                cache.output_view = Some((output_key, output_view));
+            }
+
+            let input_view = cache
+                .input_view
+                .as_ref()
+                .map(|(_, view)| view.clone())
+                .ok_or_else(|| {
+                    PlayerError::new(
+                        PlayerErrorCode::BackendFailure,
+                        "windows D3D11 native-frame presenter has no cached input view",
+                    )
+                })?;
+            let output_view = cache
+                .output_view
+                .as_ref()
+                .map(|(_, view)| view.clone())
+                .ok_or_else(|| {
+                    PlayerError::new(
+                        PlayerErrorCode::BackendFailure,
+                        "windows D3D11 native-frame presenter has no cached output view",
+                    )
+                })?;
+            Ok((cache.processor.clone(), input_view, output_view))
         }
 
         fn swap_chain(&self) -> PlayerResult<&IDXGISwapChain1> {
@@ -623,12 +776,14 @@ mod windows_d3d11_presenter {
             self.attached_hwnd = Some(target.handle);
             self.swap_chain = None;
             self.swap_chain_size = None;
+            self.nv12_cache = None;
             self.ensure_swap_chain()
         }
 
         fn reset(&mut self) -> PlayerResult<()> {
             self.swap_chain = None;
             self.swap_chain_size = None;
+            self.nv12_cache = None;
             Ok(())
         }
 
@@ -786,34 +941,24 @@ pub fn open_windows_host_runtime_source_with_options_and_interrupt(
         ));
     }
 
-    if options.decoder_plugin_video_mode == PlayerDecoderPluginVideoMode::PreferNativeFrame {
-        return open_windows_host_runtime_source_with_options(source, options);
-    }
-
-    let bootstrap = open_platform_desktop_source_with_options_and_interrupt(
-        WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
-        source,
-        options,
-        interrupt_flag,
-    )?;
+    let factory = WindowsSoftwarePlayerRuntimeAdapterFactory;
+    let initializer =
+        factory.probe_source_with_options_and_interrupt(source, options, Some(interrupt_flag))?;
     Ok(PlayerRuntime::from_adapter_bootstrap(
         WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
-        bootstrap,
+        initializer.initialize()?,
     ))
 }
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct WindowsSoftwarePlayerRuntimeAdapterFactory;
 
-impl PlayerRuntimeAdapterFactory for WindowsSoftwarePlayerRuntimeAdapterFactory {
-    fn adapter_id(&self) -> &'static str {
-        WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID
-    }
-
-    fn probe_source_with_options(
+impl WindowsSoftwarePlayerRuntimeAdapterFactory {
+    fn probe_source_with_options_and_interrupt(
         &self,
         source: MediaSource,
         options: PlayerRuntimeOptions,
+        interrupt_flag: Option<Arc<AtomicBool>>,
     ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
         if !cfg!(target_os = "windows") {
             return Err(PlayerError::new(
@@ -822,11 +967,20 @@ impl PlayerRuntimeAdapterFactory for WindowsSoftwarePlayerRuntimeAdapterFactory 
             ));
         }
 
-        let inner = probe_platform_desktop_source_with_options(
-            WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
-            source.clone(),
-            options.clone(),
-        )?;
+        let inner = if let Some(interrupt_flag) = interrupt_flag.clone() {
+            probe_platform_desktop_source_with_options_and_interrupt(
+                WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+                source.clone(),
+                options.clone(),
+                interrupt_flag,
+            )?
+        } else {
+            probe_platform_desktop_source_with_options(
+                WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+                source.clone(),
+                options.clone(),
+            )?
+        };
         let media_info = inner.media_info();
         let selection = select_windows_native_frame_candidate(&media_info, &options);
         if let Some(selection) = selection.clone() {
@@ -839,17 +993,31 @@ impl PlayerRuntimeAdapterFactory for WindowsSoftwarePlayerRuntimeAdapterFactory 
                     "windows native-frame selection requires a video surface",
                 )
             })?;
-            let native_inner = probe_platform_desktop_source_with_video_source_factory_and_options(
-                WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
-                source,
-                options,
-                Arc::new(WindowsNativeFrameVideoSourceFactory {
-                    plugin_path: selection.plugin_path.clone(),
-                    preferred_backend: selection.preferred_backend,
-                    video_surface,
-                }),
-                windows_native_frame_decoder_capabilities(selection.preferred_backend),
-            )?;
+            let video_source_factory = Arc::new(WindowsNativeFrameVideoSourceFactory {
+                plugin_path: selection.plugin_path.clone(),
+                preferred_backend: selection.preferred_backend,
+                video_surface,
+            });
+            let native_capabilities =
+                windows_native_frame_decoder_capabilities(selection.preferred_backend);
+            let native_inner = if let Some(interrupt_flag) = interrupt_flag.clone() {
+                probe_platform_desktop_source_with_video_source_factory_and_options_and_interrupt(
+                    WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+                    source,
+                    options,
+                    interrupt_flag,
+                    video_source_factory,
+                    native_capabilities,
+                )?
+            } else {
+                probe_platform_desktop_source_with_video_source_factory_and_options(
+                    WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
+                    source,
+                    options,
+                    video_source_factory,
+                    native_capabilities,
+                )?
+            };
             let diagnostics = windows_runtime_diagnostics(
                 &native_inner.media_info(),
                 &fallback_options,
@@ -868,6 +1036,7 @@ impl PlayerRuntimeAdapterFactory for WindowsSoftwarePlayerRuntimeAdapterFactory 
                 runtime_fallback: Some(WindowsRuntimeActiveFallback {
                     source: fallback_source,
                     options: fallback_options,
+                    interrupt_flag: interrupt_flag.clone(),
                     fallback_reason:
                         "windows native-frame runtime failed during playback; selected software desktop path"
                             .to_owned(),
@@ -882,6 +1051,20 @@ impl PlayerRuntimeAdapterFactory for WindowsSoftwarePlayerRuntimeAdapterFactory 
             fallback: None,
             runtime_fallback: None,
         }))
+    }
+}
+
+impl PlayerRuntimeAdapterFactory for WindowsSoftwarePlayerRuntimeAdapterFactory {
+    fn adapter_id(&self) -> &'static str {
+        WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID
+    }
+
+    fn probe_source_with_options(
+        &self,
+        source: MediaSource,
+        options: PlayerRuntimeOptions,
+    ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+        self.probe_source_with_options_and_interrupt(source, options, None)
     }
 }
 
@@ -1277,12 +1460,15 @@ impl WindowsRuntimeAdapter {
             return Ok(());
         };
 
+        let interrupt_flag = fallback
+            .interrupt_flag
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let mut bootstrap =
             player_platform_desktop::open_platform_desktop_source_with_options_and_interrupt(
                 WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
                 fallback.source,
                 fallback.options,
-                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                interrupt_flag,
             )?;
         let fallback_reason = merge_runtime_fallback_reason(
             fallback.fallback_reason.as_str(),
@@ -1419,7 +1605,7 @@ fn windows_runtime_diagnostics(
             registry
                 .records()
                 .iter()
-                .map(player_plugin_diagnostic_from_record),
+                .map(available_plugin_diagnostic_from_record),
         );
         if selection.is_none() {
             fallback_reason = apply_windows_decoder_plugin_note(
@@ -1443,13 +1629,11 @@ fn windows_runtime_diagnostics(
             registry
                 .records()
                 .iter()
-                .map(player_plugin_diagnostic_from_record),
+                .map(available_plugin_diagnostic_from_record),
         );
-        if selection.is_none()
-            && options.frame_processor_mode != FrameProcessorMode::Disabled
-            && !options.frame_processor_library_paths.is_empty()
-        {
+        if selection.is_none() && windows_frame_processor_chain_is_configured(options) {
             let note = "frame processor plugins are diagnostic-only on Windows until the D3D11 native-frame presenter path is fully active".to_owned();
+            plugin_diagnostics.push(windows_frame_processor_chain_unsupported_diagnostic(&note));
             fallback_reason = Some(match fallback_reason {
                 Some(existing) if !existing.is_empty() => format!("{existing}; {note}"),
                 _ => note,
@@ -1498,6 +1682,20 @@ fn windows_frame_processor_plugin_registry(
     Some(PluginRegistry::inspect_frame_processor_support(
         &options.frame_processor_library_paths,
     ))
+}
+
+fn windows_frame_processor_chain_is_configured(options: &PlayerRuntimeOptions) -> bool {
+    options.frame_processor_mode != FrameProcessorMode::Disabled
+        && !options.frame_processor_library_paths.is_empty()
+}
+
+fn windows_frame_processor_chain_unsupported_diagnostic(message: &str) -> PlayerPluginDiagnostic {
+    unsupported_plugin_diagnostic(
+        "frame_processor",
+        PlayerPluginDiagnosticStatus::FrameProcessorUnsupported,
+        message,
+        "windowsFrameProcessorChain",
+    )
 }
 
 fn apply_windows_decoder_plugin_note(
@@ -1599,234 +1797,6 @@ fn apply_windows_native_frame_preference_note(
     })
 }
 
-fn plugin_diagnostic_label(record: &PluginDiagnosticRecord) -> String {
-    record
-        .plugin_name
-        .clone()
-        .unwrap_or_else(|| record.path.display().to_string())
-}
-
-fn player_plugin_diagnostic_from_record(record: &PluginDiagnosticRecord) -> PlayerPluginDiagnostic {
-    PlayerPluginDiagnostic {
-        path: record.path.display().to_string(),
-        plugin_name: record.plugin_name.clone(),
-        plugin_kind: record.plugin_kind.map(plugin_kind_label).map(str::to_owned),
-        status: runtime_status_from_loader(record.status),
-        message: record.message.clone(),
-        capability: record
-            .capability_summary
-            .as_ref()
-            .and_then(player_plugin_capability_summary_from_loader),
-        participation: if record.status == PluginDiagnosticStatus::DecoderSupported {
-            PlayerPluginParticipation::Available
-        } else {
-            PlayerPluginParticipation::Unknown
-        },
-        details: Vec::new(),
-    }
-}
-
-fn runtime_status_from_loader(status: PluginDiagnosticStatus) -> PlayerPluginDiagnosticStatus {
-    PlayerPluginDiagnosticStatus::from_wire_name(status.wire_name())
-        .unwrap_or(PlayerPluginDiagnosticStatus::UnsupportedKind)
-}
-
-fn player_plugin_capability_summary_from_loader(
-    summary: &PluginCapabilitySummary,
-) -> Option<PlayerPluginCapabilitySummary> {
-    match summary {
-        PluginCapabilitySummary::Decoder(summary) => Some(PlayerPluginCapabilitySummary::Decoder(
-            player_decoder_capability_summary_from_loader(summary),
-        )),
-        PluginCapabilitySummary::FrameProcessor(summary) => {
-            Some(PlayerPluginCapabilitySummary::FrameProcessor(
-                player_frame_processor_capability_summary_from_loader(summary),
-            ))
-        }
-        PluginCapabilitySummary::SourceNormalizerPacket(summary) => {
-            Some(PlayerPluginCapabilitySummary::SourceNormalizer(
-                player_source_normalizer_capability_summary_from_loader(summary),
-            ))
-        }
-        PluginCapabilitySummary::SourceNormalizerResource(summary) => {
-            Some(PlayerPluginCapabilitySummary::SourceNormalizer(
-                player_source_normalizer_resource_capability_summary_from_loader(summary),
-            ))
-        }
-    }
-}
-
-fn player_source_normalizer_capability_summary_from_loader(
-    summary: &SourceNormalizerPacketPluginCapabilitySummary,
-) -> player_runtime::PlayerPluginSourceNormalizerCapabilitySummary {
-    player_runtime::PlayerPluginSourceNormalizerCapabilitySummary {
-        supported_runtime_profiles: summary.supported_runtime_profiles.clone(),
-        supported_output_routes: vec!["packetStream".to_owned()],
-        max_level: format!("{:?}", summary.max_level),
-        media_kinds: summary
-            .media_kinds
-            .iter()
-            .map(|kind| format!("{kind:?}"))
-            .collect(),
-        codecs: summary.codecs.clone(),
-        bitstream_formats: summary
-            .bitstream_formats
-            .iter()
-            .map(|format| format!("{format:?}"))
-            .collect(),
-        supports_seek: summary.supports_seek,
-        supports_flush: summary.supports_flush,
-        supports_growing_resources: false,
-        supports_range_reads: false,
-        supports_cancel: false,
-        content_types: Vec::new(),
-        required_libraries: summary.required_capabilities.libraries.clone(),
-        required_demuxers: summary.required_capabilities.demuxers.clone(),
-        required_muxers: summary.required_capabilities.muxers.clone(),
-        required_protocols: summary.required_capabilities.protocols.clone(),
-        required_parsers: summary.required_capabilities.parsers.clone(),
-        required_bitstream_filters: summary.required_capabilities.bitstream_filters.clone(),
-        required_tls: summary.required_capabilities.tls.clone(),
-        requires_network: summary.required_capabilities.network,
-        session_read_buffer_bytes: None,
-        manifest_snapshot_bytes: None,
-        session_disk_soft_cap_bytes: None,
-        global_disk_soft_cap_bytes: None,
-        max_sessions: summary.max_sessions,
-    }
-}
-
-fn player_source_normalizer_resource_capability_summary_from_loader(
-    summary: &SourceNormalizerResourcePluginCapabilitySummary,
-) -> player_runtime::PlayerPluginSourceNormalizerCapabilitySummary {
-    player_runtime::PlayerPluginSourceNormalizerCapabilitySummary {
-        supported_runtime_profiles: summary.supported_runtime_profiles.clone(),
-        supported_output_routes: summary.supported_output_routes.clone(),
-        max_level: format!("{:?}", summary.max_level),
-        media_kinds: Vec::new(),
-        codecs: Vec::new(),
-        bitstream_formats: Vec::new(),
-        supports_seek: false,
-        supports_flush: false,
-        supports_growing_resources: summary.supports_growing_resources,
-        supports_range_reads: summary.supports_range_reads,
-        supports_cancel: summary.supports_cancel,
-        content_types: summary.content_types.clone(),
-        required_libraries: summary.required_capabilities.libraries.clone(),
-        required_demuxers: summary.required_capabilities.demuxers.clone(),
-        required_muxers: summary.required_capabilities.muxers.clone(),
-        required_protocols: summary.required_capabilities.protocols.clone(),
-        required_parsers: summary.required_capabilities.parsers.clone(),
-        required_bitstream_filters: summary.required_capabilities.bitstream_filters.clone(),
-        required_tls: summary.required_capabilities.tls.clone(),
-        requires_network: summary.required_capabilities.network,
-        session_read_buffer_bytes: Some(summary.cache_policy.session_read_buffer_bytes),
-        manifest_snapshot_bytes: Some(summary.cache_policy.manifest_snapshot_bytes),
-        session_disk_soft_cap_bytes: Some(summary.cache_policy.session_disk_soft_cap_bytes),
-        global_disk_soft_cap_bytes: Some(summary.cache_policy.global_disk_soft_cap_bytes),
-        max_sessions: summary.max_sessions,
-    }
-}
-
-fn player_decoder_capability_summary_from_loader(
-    summary: &DecoderPluginCapabilitySummary,
-) -> PlayerPluginDecoderCapabilitySummary {
-    PlayerPluginDecoderCapabilitySummary {
-        codecs: summary
-            .typed_codecs
-            .iter()
-            .map(player_decoder_codec_summary_from_loader)
-            .collect(),
-        legacy_codecs: summary.codecs.clone(),
-        supports_native_frame_output: summary.supports_native_frame_output,
-        supports_hardware_decode: summary.supports_hardware_decode,
-        supports_cpu_video_frames: summary.supports_cpu_video_frames,
-        supports_audio_packets: summary.supports_audio_packets,
-        supports_audio_frames: summary.supports_audio_frames,
-        supports_pcm_frames: summary.supports_pcm_frames,
-        supports_gpu_handles: summary.supports_gpu_handles,
-        supports_flush: summary.supports_flush,
-        supports_drain: summary.supports_drain,
-        max_sessions: summary.max_sessions,
-    }
-}
-
-fn player_decoder_codec_summary_from_loader(
-    summary: &DecoderPluginCodecSummary,
-) -> PlayerPluginCodecCapability {
-    PlayerPluginCodecCapability {
-        media_kind: match summary.media_kind {
-            DecoderMediaKind::Video => "video",
-            DecoderMediaKind::Audio => "audio",
-        }
-        .to_owned(),
-        codec: summary.codec.clone(),
-    }
-}
-
-fn player_frame_processor_capability_summary_from_loader(
-    summary: &FrameProcessorPluginCapabilitySummary,
-) -> PlayerPluginFrameProcessorCapabilitySummary {
-    PlayerPluginFrameProcessorCapabilitySummary {
-        accepted_input_handle_kinds: summary
-            .accepted_input_handle_kinds
-            .iter()
-            .map(native_handle_kind_label)
-            .collect(),
-        output_handle_kinds: summary
-            .output_handle_kinds
-            .iter()
-            .map(native_handle_kind_label)
-            .collect(),
-        accepted_input_pipeline_profiles: summary
-            .accepted_input_pipeline_profiles
-            .iter()
-            .map(|profile| profile.label())
-            .collect(),
-        output_pipeline_profiles: summary
-            .output_pipeline_profiles
-            .iter()
-            .map(|profile| profile.label())
-            .collect(),
-        supports_video_frames: summary.supports_video_frames,
-        supports_in_place_passthrough: summary.supports_in_place_passthrough,
-        preserves_dimensions: summary.preserves_dimensions,
-        may_change_dimensions: summary.may_change_dimensions,
-        preserves_color_metadata: summary.preserves_color_metadata,
-        preserves_hdr_metadata: summary.preserves_hdr_metadata,
-        supports_flush: summary.supports_flush,
-        max_sessions: summary.max_sessions,
-        max_in_flight_frames: summary.max_in_flight_frames,
-    }
-}
-
-fn native_handle_kind_label(handle_kind: &NativeHandleKind) -> String {
-    match handle_kind {
-        NativeHandleKind::CvPixelBuffer => "cv_pixel_buffer".to_owned(),
-        NativeHandleKind::IoSurface => "io_surface".to_owned(),
-        NativeHandleKind::MetalTexture => "metal_texture".to_owned(),
-        NativeHandleKind::DmaBuf => "dma_buf".to_owned(),
-        NativeHandleKind::VaapiSurface => "vaapi_surface".to_owned(),
-        NativeHandleKind::D3D11Texture2D => "d3d11_texture_2d".to_owned(),
-        NativeHandleKind::DxgiSurface => "dxgi_surface".to_owned(),
-        NativeHandleKind::VulkanImage => "vulkan_image".to_owned(),
-        NativeHandleKind::MediaCodecHardwareBuffer => "media_codec_hardware_buffer".to_owned(),
-        NativeHandleKind::MediaCodecSurfaceTexture => "media_codec_surface_texture".to_owned(),
-        NativeHandleKind::Unknown(name) => name.clone(),
-    }
-}
-
-fn plugin_kind_label(kind: VesperPluginKind) -> &'static str {
-    match kind {
-        VesperPluginKind::PostDownloadProcessor => "post_download_processor",
-        VesperPluginKind::PipelineEventHook => "pipeline_event_hook",
-        VesperPluginKind::Decoder => "decoder",
-        VesperPluginKind::BenchmarkSink => "benchmark_sink",
-        VesperPluginKind::FrameProcessor => "frame_processor",
-        VesperPluginKind::SourceNormalizer => "source_normalizer",
-    }
-}
-
 fn is_windows_video_surface_target(surface: player_runtime::PlayerVideoSurfaceTarget) -> bool {
     surface.kind == player_runtime::PlayerVideoSurfaceKind::Win32Hwnd && surface.handle != 0
 }
@@ -1921,14 +1891,16 @@ mod tests {
         WindowsNativeFrameBackendKind, WindowsNativeFramePresenter, WindowsRuntimeActiveFallback,
         WindowsRuntimeAdapter, WindowsSoftwarePlayerRuntimeAdapterFactory,
         WindowsSurfaceAttachTarget, open_windows_host_runtime_source_with_options,
-        probe_windows_host_runtime_source_with_options, runtime_status_from_loader,
+        probe_windows_host_runtime_source_with_options,
         select_windows_native_frame_candidate_from_registry, send_windows_native_packet,
         windows_native_frame_poll_with_presenter, windows_native_frame_roadmap,
         windows_runtime_diagnostics,
     };
     use player_backend_ffmpeg::{CompressedVideoPacket, VideoPacketStreamInfo};
     use player_model::MediaSource;
-    use player_platform_desktop::merge_runtime_fallback_reason;
+    use player_platform_desktop::{
+        diagnostics::runtime_status_from_loader, merge_runtime_fallback_reason,
+    };
     use player_plugin::{
         DecoderMediaKind, DecoderNativeDeviceContext, DecoderNativeFrame,
         DecoderNativeFrameMetadata, DecoderNativeHandleKind, DecoderReceiveNativeFrameOutput,
@@ -2266,6 +2238,38 @@ mod tests {
     }
 
     #[test]
+    fn windows_frame_processor_config_reports_unsupported_chain_detail() {
+        let media_info = media_info_with_video_codec("H264");
+        let options = PlayerRuntimeOptions::default()
+            .with_frame_processor_mode(player_runtime::FrameProcessorMode::RequireProcessed)
+            .with_frame_processor_library_paths([std::path::PathBuf::from(
+                "/tmp/fake-frame-processor",
+            )]);
+        let diagnostics = windows_runtime_diagnostics(&media_info, &options, None);
+
+        let diagnostic = diagnostics
+            .plugin_diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.plugin_kind.as_deref() == Some("frame_processor"))
+            .expect("configured frame processor should emit a diagnostic");
+        assert!(
+            diagnostic
+                .details
+                .iter()
+                .any(|detail| detail.key == "windowsFrameProcessorChain"
+                    && detail.value == "unsupported")
+        );
+        assert!(
+            diagnostics
+                .video_decode
+                .fallback_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("diagnostic-only on Windows")
+        );
+    }
+
+    #[test]
     fn windows_candidate_probe_wraps_initializer_with_hardware_diagnostics() {
         if cfg!(target_os = "windows") {
             let Some(test_video_path) = test_video_path() else {
@@ -2388,6 +2392,7 @@ mod tests {
             runtime_fallback: Some(WindowsRuntimeActiveFallback {
                 source: MediaSource::new("file:///tmp/test.mp4"),
                 options: PlayerRuntimeOptions::default(),
+                interrupt_flag: None,
                 fallback_reason:
                     "windows native-frame runtime failed during playback; selected software desktop path"
                         .to_owned(),
@@ -2536,6 +2541,8 @@ mod tests {
                     )),
                     color_space: None,
                     hdr_metadata: None,
+                    color: None,
+                    hdr: None,
                     sync_info: None,
                     transform: None,
                     frame_id: Some(7),
@@ -2589,6 +2596,8 @@ mod tests {
                     ),
                     color_space: None,
                     hdr_metadata: None,
+                    color: None,
+                    hdr: None,
                     sync_info: None,
                     transform: None,
                     frame_id: Some(9),
@@ -2832,6 +2841,7 @@ mod tests {
             supports_audio_frames: false,
             supports_pcm_frames: false,
             supports_gpu_handles: true,
+            supports_presentation_release: false,
             supports_flush: true,
             supports_drain: true,
             max_sessions: Some(1),

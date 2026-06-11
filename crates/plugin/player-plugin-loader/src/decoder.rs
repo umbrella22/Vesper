@@ -15,7 +15,9 @@ impl Drop for DynamicNativeDecoderPluginFactoryInner {
         if let Some(destroy) = self.api.destroy {
             // SAFETY: `destroy` and `context` come from the validated plugin ABI
             // table and are only invoked once when this wrapper is dropped.
-            unsafe { destroy(self.api.context) };
+            let _ = catch_decoder_plugin_call(&self.name, "destroy", || unsafe {
+                destroy(self.api.context)
+            });
         }
     }
 }
@@ -130,13 +132,13 @@ impl NativeDecoderPluginFactory for DynamicNativeDecoderPluginFactory {
         // SAFETY: the validated plugin API guarantees `open_session_json` is
         // present, and `config_json` remains alive for the duration of this
         // synchronous callback.
-        let result = unsafe {
+        let result = catch_decoder_plugin_call(&self.inner.name, "open_native", || unsafe {
             (self.inner.api.open_session_json)(
                 self.inner.api.context,
                 config_json.as_ptr(),
                 config_json.len(),
             )
-        };
+        })?;
 
         match result.status {
             VesperPluginResultStatus::Success => {
@@ -269,7 +271,7 @@ impl DynamicNativeDecoderSession {
             // SAFETY: the current decoder ABI callback follows the same synchronous
             // ownership contract as legacy `release_native_frame` and accepts
             // the render/discard decision as an extra ABI-safe bool.
-            unsafe {
+            catch_decoder_plugin_call(&self.factory.name, operation, || unsafe {
                 release_native_frame_with_presentation(
                     self.factory.api.context,
                     self.session,
@@ -277,18 +279,25 @@ impl DynamicNativeDecoderSession {
                     frame.handle,
                     presented,
                 )
-            }
+            })
         } else {
             // SAFETY: the validated plugin API guarantees `release_native_frame`
             // is present. The frame handle was returned by this same plugin
             // session and tracked by the loader.
-            unsafe {
+            catch_decoder_plugin_call(&self.factory.name, operation, || unsafe {
                 (self.factory.api.release_native_frame)(
                     self.factory.api.context,
                     self.session,
                     handle_kind,
                     frame.handle,
                 )
+            })
+        };
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                return Err(error);
             }
         };
         self.decode_operation_result(result, operation)
@@ -342,7 +351,7 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
 
         // SAFETY: the validated plugin API guarantees `send_packet` is present.
         // The JSON and packet data buffers remain alive for this synchronous call.
-        let result = unsafe {
+        let result = match catch_decoder_plugin_call(&self.factory.name, "send_packet", || unsafe {
             (self.factory.api.send_packet)(
                 self.factory.api.context,
                 self.session,
@@ -351,6 +360,12 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
                 data_ptr,
                 data.len(),
             )
+        }) {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                return Err(error);
+            }
         };
 
         match result.status {
@@ -376,9 +391,16 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
         self.ensure_open()?;
         // SAFETY: the validated plugin API guarantees `receive_native_frame` is
         // present and returns plugin-owned byte buffers reclaimed below.
-        let result = unsafe {
-            (self.factory.api.receive_native_frame)(self.factory.api.context, self.session)
-        };
+        let result =
+            match catch_decoder_plugin_call(&self.factory.name, "receive_native_frame", || unsafe {
+                (self.factory.api.receive_native_frame)(self.factory.api.context, self.session)
+            }) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.closed = true;
+                    return Err(error);
+                }
+            };
 
         match result.status {
             VesperPluginResultStatus::Success => {
@@ -436,7 +458,16 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
         };
         // SAFETY: when present, the optional decoder PCM callback follows the
         // same synchronous ownership contract as `receive_native_frame`.
-        let result = unsafe { receive_pcm_frame(self.factory.api.context, self.session) };
+        let result =
+            match catch_decoder_plugin_call(&self.factory.name, "receive_pcm_frame", || unsafe {
+                receive_pcm_frame(self.factory.api.context, self.session)
+            }) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.closed = true;
+                    return Err(error);
+                }
+            };
 
         match result.status {
             VesperPluginResultStatus::Success => {
@@ -548,8 +579,15 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
     fn flush(&mut self) -> Result<(), DecoderError> {
         self.ensure_open()?;
         // SAFETY: the validated plugin API guarantees `flush_session` is present.
-        let result =
-            unsafe { (self.factory.api.flush_session)(self.factory.api.context, self.session) };
+        let result = match catch_decoder_plugin_call(&self.factory.name, "flush", || unsafe {
+            (self.factory.api.flush_session)(self.factory.api.context, self.session)
+        }) {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                return Err(error);
+            }
+        };
         self.decode_operation_result(result, "flush")
     }
 
@@ -561,8 +599,16 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
             self.release_outstanding_native_frames("release_native_frame_on_close");
         // SAFETY: the validated plugin API guarantees `close_session` is present
         // and consumes or releases the opaque session pointer exactly once.
-        let result =
-            unsafe { (self.factory.api.close_session)(self.factory.api.context, self.session) };
+        let result = match catch_decoder_plugin_call(&self.factory.name, "close", || unsafe {
+            (self.factory.api.close_session)(self.factory.api.context, self.session)
+        }) {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                self.session = std::ptr::null_mut();
+                return release_result.and(Err(error));
+            }
+        };
         self.closed = true;
         self.session = std::ptr::null_mut();
         let close_result = self.decode_operation_result(result, "close");

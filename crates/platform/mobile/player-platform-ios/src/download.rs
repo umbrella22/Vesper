@@ -1,15 +1,14 @@
-use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use player_platform_mobile::{
+    MobileDownloadBridgeSession, MobileDownloadCommand, mobile_download_manager_config,
+};
 use player_plugin::ProcessorProgress;
-use player_plugin_loader::LoadedDynamicPlugin;
 use player_runtime::{
-    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadExecutor, DownloadManager,
-    DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadSnapshot,
-    DownloadSource, DownloadTaskId, DownloadTaskSnapshot, InMemoryDownloadStore, PlayerError,
-    PlayerErrorCategory, PlayerErrorCode, PlayerResult,
+    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadManagerConfig, DownloadProfile,
+    DownloadSnapshot, DownloadSource, DownloadTaskId, DownloadTaskSnapshot, PlayerError,
+    PlayerResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,62 +20,13 @@ pub enum IosDownloadCommand {
     Remove { task_id: DownloadTaskId },
 }
 
-#[derive(Debug, Clone)]
-struct IosDownloadExecutor {
-    queue: Arc<Mutex<VecDeque<IosDownloadCommand>>>,
-}
-
-impl IosDownloadExecutor {
-    fn new(queue: Arc<Mutex<VecDeque<IosDownloadCommand>>>) -> Self {
-        Self { queue }
-    }
-
-    fn push_command(&self, command: IosDownloadCommand) -> PlayerResult<()> {
-        let mut queue = self.queue.lock().map_err(|_| {
-            PlayerError::with_category(
-                PlayerErrorCode::BackendFailure,
-                PlayerErrorCategory::Platform,
-                "ios download command queue lock poisoned",
-            )
-        })?;
-        queue.push_back(command);
-        Ok(())
-    }
-}
-
-impl DownloadExecutor for IosDownloadExecutor {
-    fn prepare(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<DownloadPrepareResult> {
-        self.push_command(IosDownloadCommand::Prepare { task: task.clone() })?;
-        Ok(DownloadPrepareResult::Pending)
-    }
-
-    fn start(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<()> {
-        self.push_command(IosDownloadCommand::Start { task: task.clone() })
-    }
-
-    fn pause(&mut self, task_id: DownloadTaskId) -> PlayerResult<()> {
-        self.push_command(IosDownloadCommand::Pause { task_id })
-    }
-
-    fn resume(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<()> {
-        self.push_command(IosDownloadCommand::Resume { task: task.clone() })
-    }
-
-    fn remove(&mut self, task_id: DownloadTaskId) -> PlayerResult<()> {
-        self.push_command(IosDownloadCommand::Remove { task_id })
-    }
-}
-
 #[derive(Debug)]
 pub struct IosDownloadBridgeSession {
-    manager: DownloadManager<InMemoryDownloadStore, IosDownloadExecutor>,
-    command_queue: Arc<Mutex<VecDeque<IosDownloadCommand>>>,
+    inner: MobileDownloadBridgeSession,
 }
 
 impl IosDownloadBridgeSession {
     pub fn new(auto_start: bool) -> Self {
-        let command_queue = Arc::new(Mutex::new(VecDeque::new()));
-        let executor = IosDownloadExecutor::new(command_queue.clone());
         let config = DownloadManagerConfig {
             auto_start,
             run_post_processors_on_completion: true,
@@ -85,8 +35,7 @@ impl IosDownloadBridgeSession {
         };
 
         Self {
-            manager: DownloadManager::new(config, InMemoryDownloadStore::default(), executor),
-            command_queue,
+            inner: MobileDownloadBridgeSession::new(config, "ios download"),
         }
     }
 
@@ -95,17 +44,15 @@ impl IosDownloadBridgeSession {
         run_post_processors_on_completion: bool,
         plugin_library_paths: impl IntoIterator<Item = PathBuf>,
     ) -> PlayerResult<Self> {
-        let command_queue = Arc::new(Mutex::new(VecDeque::new()));
-        let executor = IosDownloadExecutor::new(command_queue.clone());
-        let config = download_manager_config(
+        let config = mobile_download_manager_config(
+            "ios",
             auto_start,
             run_post_processors_on_completion,
             plugin_library_paths,
         )?;
 
         Ok(Self {
-            manager: DownloadManager::new(config, InMemoryDownloadStore::default(), executor),
-            command_queue,
+            inner: MobileDownloadBridgeSession::new(config, "ios download"),
         })
     }
 
@@ -117,7 +64,7 @@ impl IosDownloadBridgeSession {
         asset_index: DownloadAssetIndex,
         now: Instant,
     ) -> PlayerResult<DownloadTaskId> {
-        self.manager
+        self.inner
             .create_task(asset_id, source, profile, asset_index, now)
     }
 
@@ -126,7 +73,7 @@ impl IosDownloadBridgeSession {
         tasks: impl IntoIterator<Item = DownloadTaskSnapshot>,
         now: Instant,
     ) -> PlayerResult<Vec<DownloadTaskSnapshot>> {
-        self.manager.restore_tasks(tasks, now)
+        self.inner.restore_tasks(tasks, now)
     }
 
     pub fn start_task(
@@ -134,7 +81,7 @@ impl IosDownloadBridgeSession {
         task_id: DownloadTaskId,
         now: Instant,
     ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
-        self.manager.start_task(task_id, now)
+        self.inner.start_task(task_id, now)
     }
 
     pub fn pause_task(
@@ -142,7 +89,7 @@ impl IosDownloadBridgeSession {
         task_id: DownloadTaskId,
         now: Instant,
     ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
-        self.manager.pause_task(task_id, now)
+        self.inner.pause_task(task_id, now)
     }
 
     pub fn resume_task(
@@ -150,7 +97,7 @@ impl IosDownloadBridgeSession {
         task_id: DownloadTaskId,
         now: Instant,
     ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
-        self.manager.resume_task(task_id, now)
+        self.inner.resume_task(task_id, now)
     }
 
     pub fn update_progress(
@@ -160,7 +107,7 @@ impl IosDownloadBridgeSession {
         received_segments: u32,
         now: Instant,
     ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
-        self.manager
+        self.inner
             .update_progress(task_id, received_bytes, received_segments, now)
     }
 
@@ -170,7 +117,7 @@ impl IosDownloadBridgeSession {
         asset_index: DownloadAssetIndex,
         now: Instant,
     ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
-        self.manager.complete_preparation(task_id, asset_index, now)
+        self.inner.complete_preparation(task_id, asset_index, now)
     }
 
     pub fn replace_task_plan(
@@ -181,7 +128,7 @@ impl IosDownloadBridgeSession {
         asset_index: DownloadAssetIndex,
         now: Instant,
     ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
-        self.manager
+        self.inner
             .replace_task_plan(task_id, source, profile, asset_index, now)
     }
 
@@ -191,7 +138,7 @@ impl IosDownloadBridgeSession {
         completed_path: Option<std::path::PathBuf>,
         now: Instant,
     ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
-        self.manager.complete_task(task_id, completed_path, now)
+        self.inner.complete_task(task_id, completed_path, now)
     }
 
     pub fn fail_task(
@@ -200,7 +147,7 @@ impl IosDownloadBridgeSession {
         error: PlayerError,
         now: Instant,
     ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
-        self.manager.fail_task(task_id, error, now)
+        self.inner.fail_task(task_id, error, now)
     }
 
     pub fn remove_task(
@@ -208,19 +155,19 @@ impl IosDownloadBridgeSession {
         task_id: DownloadTaskId,
         now: Instant,
     ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
-        self.manager.remove_task(task_id, now)
+        self.inner.remove_task(task_id, now)
     }
 
     pub fn task(&self, task_id: DownloadTaskId) -> Option<DownloadTaskSnapshot> {
-        self.manager.task(task_id)
+        self.inner.task(task_id)
     }
 
     pub fn tasks_for_asset(&self, asset_id: &DownloadAssetId) -> Vec<DownloadTaskSnapshot> {
-        self.manager.tasks_for_asset(asset_id)
+        self.inner.tasks_for_asset(asset_id)
     }
 
     pub fn snapshot(&self) -> DownloadSnapshot {
-        self.manager.snapshot()
+        self.inner.snapshot()
     }
 
     pub fn export_task_output(
@@ -229,55 +176,33 @@ impl IosDownloadBridgeSession {
         output_path: Option<PathBuf>,
         progress: &dyn ProcessorProgress,
     ) -> PlayerResult<PathBuf> {
-        self.manager
-            .export_task_output(task_id, output_path.as_deref(), progress)
+        self.inner
+            .export_task_output(task_id, output_path, progress)
     }
 
     pub fn drain_events(&mut self) -> Vec<DownloadEvent> {
-        self.manager.drain_events()
+        self.inner.drain_events()
     }
 
     pub fn drain_commands(&mut self) -> Vec<IosDownloadCommand> {
-        self.command_queue
-            .lock()
-            .map(|mut queue| queue.drain(..).collect())
-            .unwrap_or_default()
+        self.inner
+            .drain_commands()
+            .into_iter()
+            .map(IosDownloadCommand::from)
+            .collect()
     }
 }
 
-fn download_manager_config(
-    auto_start: bool,
-    run_post_processors_on_completion: bool,
-    plugin_library_paths: impl IntoIterator<Item = PathBuf>,
-) -> PlayerResult<DownloadManagerConfig> {
-    let mut post_processors = Vec::new();
-    let mut event_hooks = Vec::new();
-
-    for path in plugin_library_paths {
-        let plugin = LoadedDynamicPlugin::load(&path).map_err(|error| {
-            PlayerError::with_category(
-                PlayerErrorCode::InvalidArgument,
-                PlayerErrorCategory::Input,
-                format!(
-                    "failed to load ios download plugin `{}`: {error}",
-                    path.display()
-                ),
-            )
-        })?;
-        if let Some(processor) = plugin.post_download_processor() {
-            post_processors.push(processor);
-        }
-        if let Some(hook) = plugin.pipeline_event_hook() {
-            event_hooks.push(hook);
+impl From<MobileDownloadCommand> for IosDownloadCommand {
+    fn from(command: MobileDownloadCommand) -> Self {
+        match command {
+            MobileDownloadCommand::Prepare { task } => Self::Prepare { task },
+            MobileDownloadCommand::Start { task } => Self::Start { task },
+            MobileDownloadCommand::Pause { task_id } => Self::Pause { task_id },
+            MobileDownloadCommand::Resume { task } => Self::Resume { task },
+            MobileDownloadCommand::Remove { task_id } => Self::Remove { task_id },
         }
     }
-
-    Ok(DownloadManagerConfig {
-        auto_start,
-        run_post_processors_on_completion,
-        post_processors,
-        event_hooks,
-    })
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use std::ptr;
 use std::slice;
 use std::time::{Duration, Instant};
 
+use player_ffi_common::{clear_c_string_output, write_c_string_output};
 use player_model::MediaSource;
 use player_platform_ios::{
     IosDownloadBridgeSession, IosPlaylistBridgeSession, IosPreloadBridgeSession,
@@ -68,9 +69,7 @@ pub unsafe extern "C" fn player_ffi_ios_plugin_abi_summary_json(
             );
             return PlayerFfiCallStatus::Error;
         }
-        unsafe {
-            ptr::write(out_json, ptr::null_mut());
-        }
+        clear_c_string_output(out_json);
 
         let summary = serde_json::json!({
             "decoderAbiVersion": VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
@@ -79,17 +78,15 @@ pub unsafe extern "C" fn player_ffi_ios_plugin_abi_summary_json(
             "abiSemantics": "signature-only",
             "capabilityMatching": "requirements-first",
         });
-        unsafe {
-            ptr::write(out_json, into_c_string_ptr(summary.to_string()));
-        }
+        write_c_string_output(out_json, summary.to_string());
         PlayerFfiCallStatus::Ok
     })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_resolve_resilience_policy(
-    source_kind: PlayerFfiMediaSourceKind,
-    source_protocol: PlayerFfiMediaSourceProtocol,
+    source_kind: u32,
+    source_protocol: u32,
     buffering_policy: *const PlayerFfiBufferingPolicy,
     retry_policy: *const PlayerFfiRetryPolicy,
     cache_policy: *const PlayerFfiCachePolicy,
@@ -126,10 +123,24 @@ pub unsafe extern "C" fn player_ffi_resolve_resilience_policy(
                 return PlayerFfiCallStatus::Error;
             }
         };
+        let source_kind = match media_source_kind_from_u32(source_kind) {
+            Ok(kind) => kind,
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let source_protocol = match media_source_protocol_from_u32(source_protocol) {
+            Ok(protocol) => protocol,
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
 
         let resolved = resolve_resilience_policy_with_runtime(
-            source_kind.into(),
-            source_protocol.into(),
+            source_kind,
+            source_protocol,
             buffering_policy,
             retry_policy,
             cache_policy,
@@ -428,8 +439,8 @@ pub unsafe extern "C" fn player_ffi_preload_session_complete(
 pub unsafe extern "C" fn player_ffi_preload_session_fail(
     handle: u64,
     task_id: u64,
-    code: PlayerFfiErrorCode,
-    category: PlayerFfiErrorCategory,
+    code: u32,
+    category: u32,
     retriable: bool,
     message: *const c_char,
     out_error: *mut PlayerFfiError,
@@ -438,6 +449,20 @@ pub unsafe extern "C" fn player_ffi_preload_session_fail(
         let message = match read_optional_c_string(message, "message") {
             Ok(Some(value)) => value,
             Ok(None) => String::new(),
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let code = match error_code_from_u32(code) {
+            Ok(code) => code,
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let category = match error_category_from_u32(category) {
+            Ok(category) => category,
             Err(error) => {
                 write_error(out_error, error);
                 return PlayerFfiCallStatus::Error;
@@ -1176,8 +1201,8 @@ pub unsafe extern "C" fn player_ffi_download_session_export_task(
 pub unsafe extern "C" fn player_ffi_download_session_fail_task(
     handle: u64,
     task_id: u64,
-    code: PlayerFfiErrorCode,
-    category: PlayerFfiErrorCategory,
+    code: u32,
+    category: u32,
     retriable: bool,
     message: *const c_char,
     out_error: *mut PlayerFfiError,
@@ -1186,6 +1211,20 @@ pub unsafe extern "C" fn player_ffi_download_session_fail_task(
         let message = match read_optional_c_string(message, "message") {
             Ok(Some(value)) => value,
             Ok(None) => String::new(),
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let code = match error_code_from_u32(code) {
+            Ok(code) => code,
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let category = match error_category_from_u32(category) {
+            Ok(category) => category,
             Err(error) => {
                 write_error(out_error, error);
                 return PlayerFfiCallStatus::Error;
@@ -2042,8 +2081,8 @@ pub unsafe extern "C" fn player_ffi_playlist_session_complete_preload_task(
 pub unsafe extern "C" fn player_ffi_playlist_session_fail_preload_task(
     handle: u64,
     task_id: u64,
-    code: PlayerFfiErrorCode,
-    category: PlayerFfiErrorCategory,
+    code: u32,
+    category: u32,
     retriable: bool,
     message: *const c_char,
     out_error: *mut PlayerFfiError,
@@ -2052,6 +2091,20 @@ pub unsafe extern "C" fn player_ffi_playlist_session_fail_preload_task(
         let message = match read_optional_c_string(message, "message") {
             Ok(Some(value)) => value,
             Ok(None) => String::new(),
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let code = match error_code_from_u32(code) {
+            Ok(code) => code,
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let category = match error_category_from_u32(category) {
+            Ok(category) => category,
             Err(error) => {
                 write_error(out_error, error);
                 return PlayerFfiCallStatus::Error;
@@ -2280,9 +2333,7 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_on_event_batch_json(
             }
         };
 
-        unsafe {
-            ptr::write(out_report_json, into_c_string_ptr(report_json));
-        }
+        write_c_string_output(out_report_json, report_json);
         PlayerFfiCallStatus::Ok
     })
 }
@@ -2340,9 +2391,7 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_flush_json(
             }
         };
 
-        unsafe {
-            ptr::write(out_report_json, into_c_string_ptr(report_json));
-        }
+        write_c_string_output(out_report_json, report_json);
         PlayerFfiCallStatus::Ok
     })
 }
@@ -2386,9 +2435,7 @@ pub unsafe extern "C" fn player_ffi_mobile_plugin_diagnostics_json(
             );
             return PlayerFfiCallStatus::Error;
         }
-        unsafe {
-            ptr::write(out_json, ptr::null_mut());
-        }
+        clear_c_string_output(out_json);
 
         let source_uri = match read_optional_c_string(source_uri, "source_uri") {
             Ok(Some(value)) => value,
@@ -2455,9 +2502,7 @@ pub unsafe extern "C" fn player_ffi_mobile_plugin_diagnostics_json(
             }
         };
 
-        unsafe {
-            ptr::write(out_json, into_c_string_ptr(diagnostics_json));
-        }
+        write_c_string_output(out_json, diagnostics_json);
         PlayerFfiCallStatus::Ok
     })
 }

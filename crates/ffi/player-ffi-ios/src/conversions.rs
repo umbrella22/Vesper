@@ -1,6 +1,5 @@
 use std::any::Any;
-use std::ffi::{CStr, CString, c_char};
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::ffi::{CStr, c_char};
 use std::path::PathBuf;
 use std::ptr;
 use std::slice;
@@ -210,9 +209,23 @@ pub(crate) fn read_string_list(
     let values = unsafe { slice::from_raw_parts(values, len) };
     values
         .iter()
-        .map(|value| read_optional_c_string(*value as *const c_char, field_name))
-        .collect::<Result<Vec<_>, _>>()
-        .map(|values| values.into_iter().flatten().collect())
+        .enumerate()
+        .map(|(index, value)| {
+            if value.is_null() {
+                return Err(owned_api_error(
+                    PlayerFfiErrorCode::InvalidArgument,
+                    &format!("{field_name}[{index}] was null"),
+                ));
+            }
+            match read_optional_c_string(*value as *const c_char, field_name)? {
+                Some(value) => Ok(value),
+                None => Err(owned_api_error(
+                    PlayerFfiErrorCode::InvalidArgument,
+                    &format!("{field_name}[{index}] was null"),
+                )),
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn read_download_profile(
@@ -626,6 +639,52 @@ impl From<PlayerFfiErrorCode> for PlayerErrorCode {
     }
 }
 
+pub(crate) fn error_code_from_u32(value: u32) -> Result<PlayerErrorCode, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiErrorCode::InvalidState as u32 => {
+            Ok(PlayerErrorCode::InvalidState)
+        }
+        value if value == PlayerFfiErrorCode::InvalidSource as u32 => {
+            Ok(PlayerErrorCode::InvalidSource)
+        }
+        value if value == PlayerFfiErrorCode::BackendFailure as u32 => {
+            Ok(PlayerErrorCode::BackendFailure)
+        }
+        value if value == PlayerFfiErrorCode::AudioOutputUnavailable as u32 => {
+            Ok(PlayerErrorCode::AudioOutputUnavailable)
+        }
+        value if value == PlayerFfiErrorCode::DecodeFailure as u32 => {
+            Ok(PlayerErrorCode::DecodeFailure)
+        }
+        value if value == PlayerFfiErrorCode::SeekFailure as u32 => {
+            Ok(PlayerErrorCode::SeekFailure)
+        }
+        value if value == PlayerFfiErrorCode::Unsupported as u32 => {
+            Ok(PlayerErrorCode::Unsupported)
+        }
+        value if value == PlayerFfiErrorCode::CommandChannelClosed as u32 => {
+            Ok(PlayerErrorCode::CommandChannelClosed)
+        }
+        value if value == PlayerFfiErrorCode::EventChannelClosed as u32 => {
+            Ok(PlayerErrorCode::EventChannelClosed)
+        }
+        value if value == PlayerFfiErrorCode::Cancelled as u32 => Ok(PlayerErrorCode::Cancelled),
+        value if value == PlayerFfiErrorCode::Timeout as u32 => Ok(PlayerErrorCode::Timeout),
+        value
+            if value == PlayerFfiErrorCode::None as u32
+                || value == PlayerFfiErrorCode::NullPointer as u32
+                || value == PlayerFfiErrorCode::InvalidUtf8 as u32
+                || value == PlayerFfiErrorCode::InvalidArgument as u32 =>
+        {
+            Ok(PlayerErrorCode::InvalidArgument)
+        }
+        _ => Err(owned_api_error(
+            PlayerFfiErrorCode::InvalidArgument,
+            &format!("error code had invalid value {value}"),
+        )),
+    }
+}
+
 impl From<PlayerFfiErrorCategory> for PlayerErrorCategory {
     fn from(value: PlayerFfiErrorCategory) -> Self {
         match value {
@@ -638,6 +697,33 @@ impl From<PlayerFfiErrorCategory> for PlayerErrorCategory {
             PlayerFfiErrorCategory::Platform => PlayerErrorCategory::Platform,
             PlayerFfiErrorCategory::Input => PlayerErrorCategory::Input,
         }
+    }
+}
+
+pub(crate) fn error_category_from_u32(value: u32) -> Result<PlayerErrorCategory, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiErrorCategory::Input as u32 => Ok(PlayerErrorCategory::Input),
+        value if value == PlayerFfiErrorCategory::Source as u32 => Ok(PlayerErrorCategory::Source),
+        value if value == PlayerFfiErrorCategory::Network as u32 => {
+            Ok(PlayerErrorCategory::Network)
+        }
+        value if value == PlayerFfiErrorCategory::Decode as u32 => Ok(PlayerErrorCategory::Decode),
+        value if value == PlayerFfiErrorCategory::AudioOutput as u32 => {
+            Ok(PlayerErrorCategory::AudioOutput)
+        }
+        value if value == PlayerFfiErrorCategory::Playback as u32 => {
+            Ok(PlayerErrorCategory::Playback)
+        }
+        value if value == PlayerFfiErrorCategory::Capability as u32 => {
+            Ok(PlayerErrorCategory::Capability)
+        }
+        value if value == PlayerFfiErrorCategory::Platform as u32 => {
+            Ok(PlayerErrorCategory::Platform)
+        }
+        _ => Err(owned_api_error(
+            PlayerFfiErrorCode::InvalidArgument,
+            &format!("error category had invalid value {value}"),
+        )),
     }
 }
 
@@ -1278,62 +1364,41 @@ pub(crate) fn api_error_category(code: PlayerFfiErrorCode) -> PlayerFfiErrorCate
 }
 
 pub(crate) fn into_c_string_ptr(value: String) -> *mut c_char {
-    CString::new(value).unwrap_or_default().into_raw()
+    player_ffi_common::into_c_string_ptr(value)
 }
 
 pub(crate) fn free_c_string(value: &mut *mut c_char) {
-    if value.is_null() {
-        return;
-    }
-
-    unsafe {
-        let raw = ptr::replace(value, ptr::null_mut());
-        if !raw.is_null() {
-            let _ = CString::from_raw(raw);
-        }
-    }
+    player_ffi_common::free_c_string(value);
 }
 
 pub(crate) fn ffi_call(
     out_error: *mut PlayerFfiError,
     f: impl FnOnce() -> PlayerFfiCallStatus,
 ) -> PlayerFfiCallStatus {
-    match catch_unwind(AssertUnwindSafe(f)) {
-        Ok(status) => {
-            if status == PlayerFfiCallStatus::Ok {
-                write_success(out_error);
-            }
-            status
-        }
-        Err(payload) => {
-            write_error(out_error, owned_panic_error(payload));
+    match player_ffi_common::catch_ffi_call(
+        f,
+        |status| *status == PlayerFfiCallStatus::Ok,
+        || write_success(out_error),
+        owned_panic_error,
+    ) {
+        Ok(status) => status,
+        Err(error) => {
+            write_error(out_error, error);
             PlayerFfiCallStatus::Error
         }
     }
 }
 
 pub(crate) fn ffi_void(f: impl FnOnce()) {
-    let _ = catch_unwind(AssertUnwindSafe(f));
+    player_ffi_common::catch_ffi_void(f);
 }
 
 pub(crate) fn owned_panic_error(payload: Box<dyn Any + Send>) -> PlayerFfiError {
-    let message = panic_payload_message(payload.as_ref());
+    let message = player_ffi_common::panic_payload_message(payload.as_ref());
     owned_api_error(
         PlayerFfiErrorCode::BackendFailure,
         &format!("player_ffi caught Rust panic: {message}"),
     )
-}
-
-pub(crate) fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        return (*message).to_owned();
-    }
-
-    if let Some(message) = payload.downcast_ref::<String>() {
-        return message.clone();
-    }
-
-    "unknown panic payload".to_owned()
 }
 
 pub(crate) fn write_error(out_error: *mut PlayerFfiError, mut error: PlayerFfiError) {
@@ -1366,6 +1431,17 @@ impl From<PlayerFfiMediaSourceKind> for MediaSourceKind {
     }
 }
 
+pub(crate) fn media_source_kind_from_u32(value: u32) -> Result<MediaSourceKind, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiMediaSourceKind::Local as u32 => Ok(MediaSourceKind::Local),
+        value if value == PlayerFfiMediaSourceKind::Remote as u32 => Ok(MediaSourceKind::Remote),
+        _ => Err(owned_api_error(
+            PlayerFfiErrorCode::InvalidArgument,
+            &format!("source_kind had invalid value {value}"),
+        )),
+    }
+}
+
 impl From<PlayerFfiMediaSourceProtocol> for MediaSourceProtocol {
     fn from(value: PlayerFfiMediaSourceProtocol) -> Self {
         match value {
@@ -1376,6 +1452,33 @@ impl From<PlayerFfiMediaSourceProtocol> for MediaSourceProtocol {
             PlayerFfiMediaSourceProtocol::Hls => Self::Hls,
             PlayerFfiMediaSourceProtocol::Dash => Self::Dash,
         }
+    }
+}
+
+pub(crate) fn media_source_protocol_from_u32(
+    value: u32,
+) -> Result<MediaSourceProtocol, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiMediaSourceProtocol::Unknown as u32 => {
+            Ok(MediaSourceProtocol::Unknown)
+        }
+        value if value == PlayerFfiMediaSourceProtocol::File as u32 => {
+            Ok(MediaSourceProtocol::File)
+        }
+        value if value == PlayerFfiMediaSourceProtocol::Content as u32 => {
+            Ok(MediaSourceProtocol::Content)
+        }
+        value if value == PlayerFfiMediaSourceProtocol::Progressive as u32 => {
+            Ok(MediaSourceProtocol::Progressive)
+        }
+        value if value == PlayerFfiMediaSourceProtocol::Hls as u32 => Ok(MediaSourceProtocol::Hls),
+        value if value == PlayerFfiMediaSourceProtocol::Dash as u32 => {
+            Ok(MediaSourceProtocol::Dash)
+        }
+        _ => Err(owned_api_error(
+            PlayerFfiErrorCode::InvalidArgument,
+            &format!("source_protocol had invalid value {value}"),
+        )),
     }
 }
 

@@ -3,11 +3,11 @@
 use std::ffi::{c_char, c_void};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread::{self, JoinHandle};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ffmpeg_next::util::format::Pixel;
 use ffmpeg_next::{self as ffmpeg, codec, encoder, format, media};
@@ -23,10 +23,11 @@ use player_plugin::{
     SourceNormalizerResourceCapabilities, SourceNormalizerResourceInfo,
     SourceNormalizerResourceSessionConfig, SourceNormalizerResourceSessionInfo,
     SourceNormalizerResourceSessionState, SourceNormalizerResourceSessionStatus,
-    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT, VesperPluginBytes, VesperPluginDescriptor,
-    VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
-    VesperSourceNormalizerOpenPacketSessionResult, VesperSourceNormalizerOpenResourceSessionResult,
-    VesperSourceNormalizerPluginApiV3, VesperSourceNormalizerReadPacketResult,
+    SourceNormalizerResourceSessionWaitStatus, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+    VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
+    VesperPluginResultStatus, VesperSourceNormalizerOpenPacketSessionResult,
+    VesperSourceNormalizerOpenResourceSessionResult, VesperSourceNormalizerPluginApiV4,
+    VesperSourceNormalizerReadPacketResult,
 };
 use player_source_normalizer::{
     SourceNormalizerOutputContainer, SourceNormalizerProfile, SourceNormalizerProfileSet,
@@ -49,11 +50,11 @@ struct ResourceWorkerConfig {
     route: SourceNormalizerOutputRoute,
     cache_policy: SourceNormalizerResourceCachePolicy,
     cancel_requested: Arc<AtomicBool>,
-    state: Arc<Mutex<ResourceWorkerState>>,
+    shared: Arc<ResourceWorkerShared>,
 }
 
 struct PluginBundle {
-    api: VesperSourceNormalizerPluginApiV3,
+    api: VesperSourceNormalizerPluginApiV4,
     descriptor: VesperPluginDescriptor,
 }
 
@@ -71,16 +72,24 @@ struct PacketNormalizerSession {
 struct ResourceNormalizerSession {
     info: SourceNormalizerResourceSessionInfo,
     output_dir: PathBuf,
-    state: Arc<Mutex<ResourceWorkerState>>,
+    shared: Arc<ResourceWorkerShared>,
+    observed_sequence: u64,
     cancel_requested: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
     closed: bool,
+}
+
+#[derive(Debug)]
+struct ResourceWorkerShared {
+    state: Mutex<ResourceWorkerState>,
+    changed: Condvar,
 }
 
 #[derive(Debug, Clone)]
 struct ResourceWorkerState {
     state: SourceNormalizerResourceSessionState,
     message: Option<String>,
+    sequence: u64,
 }
 
 impl Drop for PacketNormalizerSession {
@@ -105,7 +114,7 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
 
 fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
     let mut bundle = Box::new(PluginBundle {
-        api: VesperSourceNormalizerPluginApiV3 {
+        api: VesperSourceNormalizerPluginApiV4 {
             context: std::ptr::null_mut(),
             destroy: None,
             name: Some(normalizer_name),
@@ -119,6 +128,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
             resource_capabilities_json: Some(normalizer_resource_capabilities_json),
             open_resource_session_json: Some(normalizer_open_resource_session_json),
             poll_resource_session: Some(normalizer_poll_resource_session),
+            wait_resource_session_update: Some(normalizer_wait_resource_session_update),
             cancel_resource_session: Some(normalizer_cancel_resource_session),
             close_resource_session: Some(normalizer_close_resource_session),
             free_bytes: Some(free_plugin_bytes),
@@ -131,7 +141,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
         },
     });
     bundle.descriptor.api =
-        (&bundle.api as *const VesperSourceNormalizerPluginApiV3).cast::<c_void>();
+        (&bundle.api as *const VesperSourceNormalizerPluginApiV4).cast::<c_void>();
     let bundle = Box::leak(bundle);
     &bundle.descriptor
 }
@@ -249,6 +259,8 @@ unsafe extern "C" fn normalizer_read_packet(
     session: *mut c_void,
 ) -> VesperSourceNormalizerReadPacketResult {
     catch_read_packet(|| {
+        // SAFETY: packet session handles are created by this plugin with
+        // `Box::into_raw` and are exclusively driven by the host until close.
         let Some(session) = (unsafe { session.cast::<PacketNormalizerSession>().as_mut() }) else {
             return read_packet_error(SourceNormalizerError::NotConfigured);
         };
@@ -354,6 +366,8 @@ unsafe extern "C" fn normalizer_release_packet(
     packet_handle: usize,
 ) -> VesperPluginProcessResult {
     catch_process(|| {
+        // SAFETY: packet session handles are created by this plugin with
+        // `Box::into_raw` and remain valid until the host calls close.
         let Some(session) = (unsafe { session.cast::<PacketNormalizerSession>().as_mut() }) else {
             return process_error(SourceNormalizerError::NotConfigured);
         };
@@ -384,6 +398,8 @@ unsafe extern "C" fn normalizer_seek_packet_session_json(
     seek_json_len: usize,
 ) -> VesperPluginProcessResult {
     catch_process(|| {
+        // SAFETY: packet session handles are created by this plugin with
+        // `Box::into_raw` and remain valid until the host calls close.
         let Some(session) = (unsafe { session.cast::<PacketNormalizerSession>().as_mut() }) else {
             return process_error(SourceNormalizerError::NotConfigured);
         };
@@ -416,6 +432,8 @@ unsafe extern "C" fn normalizer_flush_packet_session(
     session: *mut c_void,
 ) -> VesperPluginProcessResult {
     catch_process(|| {
+        // SAFETY: packet session handles are created by this plugin with
+        // `Box::into_raw` and remain valid until the host calls close.
         let Some(session) = (unsafe { session.cast::<PacketNormalizerSession>().as_mut() }) else {
             return process_error(SourceNormalizerError::NotConfigured);
         };
@@ -533,15 +551,19 @@ unsafe extern "C" fn normalizer_open_resource_session_json(
             seekable: profile.seekable,
             disk_bytes_used: Some(0),
         };
-        let state = Arc::new(Mutex::new(ResourceWorkerState {
-            state: SourceNormalizerResourceSessionState::Starting,
-            message: Some(format!(
-                "resource session starting; argv={}",
-                command_plan.argv().join(" ")
-            )),
-        }));
+        let shared = Arc::new(ResourceWorkerShared {
+            state: Mutex::new(ResourceWorkerState {
+                state: SourceNormalizerResourceSessionState::Starting,
+                message: Some(format!(
+                    "resource session starting; argv={}",
+                    command_plan.argv().join(" ")
+                )),
+                sequence: 1,
+            }),
+            changed: Condvar::new(),
+        });
         let cancel_requested = Arc::new(AtomicBool::new(false));
-        let worker_state = state.clone();
+        let worker_shared = shared.clone();
         let worker_cancel = cancel_requested.clone();
         let worker_profile = profile.clone();
         let worker_profile_name = profile_name.clone();
@@ -560,13 +582,14 @@ unsafe extern "C" fn normalizer_open_resource_session_json(
                 route: worker_route,
                 cache_policy: worker_cache_policy,
                 cancel_requested: worker_cancel,
-                state: worker_state,
+                shared: worker_shared,
             });
         });
         let session = Box::into_raw(Box::new(ResourceNormalizerSession {
             info: info.clone(),
             output_dir,
-            state,
+            shared,
+            observed_sequence: 0,
             cancel_requested,
             worker: Some(worker),
             closed: false,
@@ -585,6 +608,8 @@ unsafe extern "C" fn normalizer_poll_resource_session(
     session: *mut c_void,
 ) -> VesperPluginProcessResult {
     catch_process(|| {
+        // SAFETY: resource session handles are created by this plugin with
+        // `Box::into_raw` and are exclusively driven by the host until close.
         let Some(session) = (unsafe { session.cast::<ResourceNormalizerSession>().as_mut() })
         else {
             return process_error(SourceNormalizerError::NotConfigured);
@@ -592,7 +617,8 @@ unsafe extern "C" fn normalizer_poll_resource_session(
         if session.closed {
             return process_error(SourceNormalizerError::NotConfigured);
         }
-        let worker_state = resource_worker_state(&session.state);
+        let worker_state = resource_worker_state(&session.shared);
+        session.observed_sequence = worker_state.sequence;
         let mut info = session.info.clone();
         info.resources = resource_infos_for_route(
             &session.output_dir,
@@ -615,11 +641,37 @@ unsafe extern "C" fn normalizer_poll_resource_session(
     })
 }
 
+unsafe extern "C" fn normalizer_wait_resource_session_update(
+    _context: *mut c_void,
+    session: *mut c_void,
+    timeout_ms: u64,
+) -> VesperPluginProcessResult {
+    catch_process(|| {
+        // SAFETY: resource session handles are created by this plugin with
+        // `Box::into_raw` and remain valid until the host calls close.
+        let Some(session) = (unsafe { session.cast::<ResourceNormalizerSession>().as_mut() })
+        else {
+            return process_error(SourceNormalizerError::NotConfigured);
+        };
+        if session.closed {
+            return process_error(SourceNormalizerError::NotConfigured);
+        }
+        let status = wait_resource_worker_update(
+            &session.shared,
+            &mut session.observed_sequence,
+            timeout_ms,
+        );
+        process_success(&status)
+    })
+}
+
 unsafe extern "C" fn normalizer_cancel_resource_session(
     _context: *mut c_void,
     session: *mut c_void,
 ) -> VesperPluginProcessResult {
     catch_process(|| {
+        // SAFETY: resource session handles are created by this plugin with
+        // `Box::into_raw` and remain valid until the host calls close.
         let Some(session) = (unsafe { session.cast::<ResourceNormalizerSession>().as_mut() })
         else {
             return process_error(SourceNormalizerError::NotConfigured);
@@ -629,7 +681,7 @@ unsafe extern "C" fn normalizer_cancel_resource_session(
         }
         session.cancel_requested.store(true, Ordering::SeqCst);
         set_resource_worker_state(
-            &session.state,
+            &session.shared,
             SourceNormalizerResourceSessionState::Cancelled,
             Some("resource session cancellation requested".to_owned()),
         );
@@ -653,6 +705,7 @@ unsafe extern "C" fn normalizer_close_resource_session(
         let mut session = unsafe { Box::from_raw(session.cast::<ResourceNormalizerSession>()) };
         session.closed = true;
         session.cancel_requested.store(true, Ordering::SeqCst);
+        notify_resource_worker_state(&session.shared);
         let join_message = session
             .worker
             .take()
@@ -954,26 +1007,68 @@ fn disk_usage_bytes(path: &Path) -> Option<u64> {
     Some(total)
 }
 
-fn resource_worker_state(state: &Arc<Mutex<ResourceWorkerState>>) -> ResourceWorkerState {
-    state
+fn resource_worker_state(shared: &Arc<ResourceWorkerShared>) -> ResourceWorkerState {
+    shared
+        .state
         .lock()
         .map(|state| state.clone())
         .unwrap_or_else(|error| error.into_inner().clone())
 }
 
 fn set_resource_worker_state(
-    state: &Arc<Mutex<ResourceWorkerState>>,
+    shared: &Arc<ResourceWorkerShared>,
     new_state: SourceNormalizerResourceSessionState,
     message: Option<String>,
 ) {
-    let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     state.state = new_state;
     state.message = message;
+    state.sequence = state.sequence.wrapping_add(1);
+    shared.changed.notify_all();
+}
+
+fn notify_resource_worker_state(shared: &Arc<ResourceWorkerShared>) {
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    state.sequence = state.sequence.wrapping_add(1);
+    shared.changed.notify_all();
+}
+
+fn wait_resource_worker_update(
+    shared: &Arc<ResourceWorkerShared>,
+    observed_sequence: &mut u64,
+    timeout_ms: u64,
+) -> SourceNormalizerResourceSessionWaitStatus {
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if state.sequence != *observed_sequence {
+        *observed_sequence = state.sequence;
+        return SourceNormalizerResourceSessionWaitStatus { updated: true };
+    }
+    if timeout_ms == 0 {
+        return SourceNormalizerResourceSessionWaitStatus { updated: false };
+    }
+    let timeout = Duration::from_millis(timeout_ms);
+    let (state_after_wait, _wait_result) = shared
+        .changed
+        .wait_timeout(state, timeout)
+        .unwrap_or_else(|error| error.into_inner());
+    state = state_after_wait;
+    let updated = state.sequence != *observed_sequence;
+    *observed_sequence = state.sequence;
+    SourceNormalizerResourceSessionWaitStatus { updated }
 }
 
 fn run_resource_worker(config: ResourceWorkerConfig) {
     set_resource_worker_state(
-        &config.state,
+        &config.shared,
         SourceNormalizerResourceSessionState::Running,
         Some("resource worker remuxing to disk-backed normalized output".to_owned()),
     );
@@ -990,7 +1085,7 @@ fn run_resource_worker(config: ResourceWorkerConfig) {
             } else {
                 "resource worker produced disk-backed normalized output".to_owned()
             };
-            set_resource_worker_state(&config.state, state, Some(message));
+            set_resource_worker_state(&config.shared, state, Some(message));
         }
         Err(error) => {
             let state = if config.cancel_requested.load(Ordering::SeqCst) {
@@ -998,7 +1093,7 @@ fn run_resource_worker(config: ResourceWorkerConfig) {
             } else {
                 SourceNormalizerResourceSessionState::Failed
             };
-            set_resource_worker_state(&config.state, state, Some(error.to_string()));
+            set_resource_worker_state(&config.shared, state, Some(error.to_string()));
         }
     }
 }
@@ -1069,6 +1164,12 @@ fn remux_resource_to_disk(config: &ResourceWorkerConfig) -> Result<(), SourceNor
         &config.profile,
     )?;
     flush_output_context(&mut output_context);
+    let mut primary_resource_ready_notified = false;
+    notify_if_primary_resource_has_bytes(
+        &config.shared,
+        &config.output_path,
+        &mut primary_resource_ready_notified,
+    );
     enforce_session_disk_quota(
         &config.output_dir,
         config.cache_policy.session_disk_soft_cap_bytes,
@@ -1111,6 +1212,11 @@ fn remux_resource_to_disk(config: &ResourceWorkerConfig) -> Result<(), SourceNor
                 ))
             })?;
         flush_output_context(&mut output_context);
+        notify_if_primary_resource_has_bytes(
+            &config.shared,
+            &config.output_path,
+            &mut primary_resource_ready_notified,
+        );
         enforce_session_disk_quota(
             &config.output_dir,
             config.cache_policy.session_disk_soft_cap_bytes,
@@ -1124,8 +1230,30 @@ fn remux_resource_to_disk(config: &ResourceWorkerConfig) -> Result<(), SourceNor
         ))
     })?;
     flush_output_context(&mut output_context);
+    notify_if_primary_resource_has_bytes(
+        &config.shared,
+        &config.output_path,
+        &mut primary_resource_ready_notified,
+    );
     let _ = tracks;
     Ok(())
+}
+
+fn notify_if_primary_resource_has_bytes(
+    shared: &Arc<ResourceWorkerShared>,
+    output_path: &Path,
+    already_notified: &mut bool,
+) {
+    if *already_notified {
+        return;
+    }
+    let has_bytes = std::fs::metadata(output_path)
+        .map(|metadata| metadata.is_file() && metadata.len() > 0)
+        .unwrap_or(false);
+    if has_bytes {
+        *already_notified = true;
+        notify_resource_worker_state(shared);
+    }
 }
 
 fn open_resource_input(
@@ -1477,15 +1605,27 @@ fn pixel_format_component_depth(raw_pixel_format: i32) -> Option<u8> {
 }
 
 fn av_pixel_format_from_raw(raw_pixel_format: i32) -> Option<ffmpeg_next::ffi::AVPixelFormat> {
-    let none = ffmpeg_next::ffi::AVPixelFormat::AV_PIX_FMT_NONE as i32;
-    let upper_bound = ffmpeg_next::ffi::AVPixelFormat::AV_PIX_FMT_NB as i32;
-    if raw_pixel_format == none || raw_pixel_format < 0 || raw_pixel_format >= upper_bound {
+    if raw_pixel_format < 0 {
         return None;
     }
-    // SAFETY: FFmpeg stores AVCodecParameters::format as the integer value of
-    // AVPixelFormat for video tracks. Values in 0..AV_PIX_FMT_NB are valid
-    // AVPixelFormat discriminants in the generated bindings.
-    Some(unsafe { std::mem::transmute::<i32, ffmpeg_next::ffi::AVPixelFormat>(raw_pixel_format) })
+
+    // SAFETY: The FFmpeg descriptor iterator returns process-lifetime
+    // descriptors. `av_pix_fmt_desc_get_id` maps each descriptor back to the
+    // corresponding valid AVPixelFormat, so no raw integer is cast into the C
+    // enum until FFmpeg has confirmed that the descriptor exists.
+    unsafe {
+        let mut descriptor = std::ptr::null();
+        loop {
+            descriptor = ffmpeg_next::ffi::av_pix_fmt_desc_next(descriptor);
+            if descriptor.is_null() {
+                return None;
+            }
+            let pixel_format = ffmpeg_next::ffi::av_pix_fmt_desc_get_id(descriptor);
+            if pixel_format as i32 == raw_pixel_format {
+                return Some(pixel_format);
+            }
+        }
+    }
 }
 
 fn video_hdr_metadata_from_parameters(
@@ -1921,20 +2061,36 @@ fn catch_process(
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_profile_name, free_plugin_bytes, load_profile_set, normalizer_close_packet_session,
-        normalizer_open_packet_session_json, normalizer_packet_capabilities_json,
-        normalizer_read_packet, normalizer_release_packet, normalizer_seek_packet_session_json,
-        packet_capabilities_from_profiles, pixel_format_component_depth, unique_session_suffix,
-        validate_packet_profile, video_dimensions_from_parameters,
+        ResourceWorkerShared, ResourceWorkerState, detect_profile_name, free_plugin_bytes,
+        load_profile_set, normalizer_close_packet_session, normalizer_open_packet_session_json,
+        normalizer_packet_capabilities_json, normalizer_read_packet, normalizer_release_packet,
+        normalizer_seek_packet_session_json, notify_if_primary_resource_has_bytes,
+        packet_capabilities_from_profiles, pixel_format_component_depth, set_resource_worker_state,
+        unique_session_suffix, validate_packet_profile, video_dimensions_from_parameters,
+        wait_resource_worker_update,
     };
     use ffmpeg_next::util::format::Pixel;
     use player_plugin::{
         SourceNormalizerError, SourceNormalizerOperationStatus, SourceNormalizerPacketCapabilities,
         SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
         SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
-        SourceNormalizerReadPacketMetadata, VesperPluginBytes, VesperPluginResultStatus,
+        SourceNormalizerReadPacketMetadata, SourceNormalizerResourceSessionState,
+        VesperPluginBytes, VesperPluginResultStatus,
     };
     use std::path::PathBuf;
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::thread;
+
+    fn test_resource_worker_shared() -> Arc<ResourceWorkerShared> {
+        Arc::new(ResourceWorkerShared {
+            state: Mutex::new(ResourceWorkerState {
+                state: SourceNormalizerResourceSessionState::Starting,
+                message: None,
+                sequence: 0,
+            }),
+            changed: Condvar::new(),
+        })
+    }
 
     #[test]
     fn packet_capabilities_from_default_profiles_are_serializable() {
@@ -2079,6 +2235,7 @@ mod tests {
             pixel_format_component_depth(ffmpeg_next::ffi::AVPixelFormat::from(Pixel::None) as i32),
             None
         );
+        assert_eq!(pixel_format_component_depth(i32::MAX), None);
     }
 
     #[test]
@@ -2089,6 +2246,81 @@ mod tests {
             detect_profile_name(&profile_set, "https://example.test/master.m3u8"),
             "hls-nonstandard"
         );
+    }
+
+    #[test]
+    fn resource_worker_state_change_wakes_waiter() {
+        let shared = test_resource_worker_shared();
+        let waiter_shared = shared.clone();
+        let waiter = thread::spawn(move || {
+            let mut observed_sequence = 0;
+            wait_resource_worker_update(&waiter_shared, &mut observed_sequence, 1_000)
+        });
+
+        set_resource_worker_state(
+            &shared,
+            SourceNormalizerResourceSessionState::Running,
+            Some("running".to_owned()),
+        );
+
+        let status = waiter.join().expect("waiter joins");
+        assert!(status.updated);
+    }
+
+    #[test]
+    fn resource_worker_primary_bytes_wake_waiter_once() {
+        let shared = test_resource_worker_shared();
+        let directory = std::env::temp_dir().join(format!(
+            "vesper-source-normalizer-wait-test-{}",
+            unique_session_suffix()
+        ));
+        std::fs::create_dir_all(&directory).expect("create test directory");
+        let primary = directory.join("primary.mp4");
+        let waiter_shared = shared.clone();
+        let waiter = thread::spawn(move || {
+            let mut observed_sequence = 0;
+            wait_resource_worker_update(&waiter_shared, &mut observed_sequence, 1_000)
+        });
+
+        std::fs::write(&primary, [1u8, 2, 3]).expect("write primary resource");
+        let mut notified = false;
+        notify_if_primary_resource_has_bytes(&shared, &primary, &mut notified);
+        notify_if_primary_resource_has_bytes(&shared, &primary, &mut notified);
+
+        let status = waiter.join().expect("waiter joins");
+        assert!(status.updated);
+        assert!(notified);
+        assert_eq!(super::resource_worker_state(&shared).sequence, 1);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn resource_worker_cancel_wakes_waiter() {
+        let shared = test_resource_worker_shared();
+        let waiter_shared = shared.clone();
+        let waiter = thread::spawn(move || {
+            let mut observed_sequence = 0;
+            wait_resource_worker_update(&waiter_shared, &mut observed_sequence, 1_000)
+        });
+
+        set_resource_worker_state(
+            &shared,
+            SourceNormalizerResourceSessionState::Cancelled,
+            Some("cancelled".to_owned()),
+        );
+
+        let status = waiter.join().expect("waiter joins");
+        assert!(status.updated);
+    }
+
+    #[test]
+    fn resource_worker_wait_timeout_reports_no_update() {
+        let shared = test_resource_worker_shared();
+        let mut observed_sequence = super::resource_worker_state(&shared).sequence;
+
+        let status = wait_resource_worker_update(&shared, &mut observed_sequence, 1);
+
+        assert!(!status.updated);
     }
 
     #[test]

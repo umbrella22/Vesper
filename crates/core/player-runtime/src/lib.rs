@@ -8,7 +8,6 @@
 
 mod adapter;
 mod clock;
-mod controller;
 /// Shared policy resolution helpers.
 pub mod policy;
 
@@ -24,7 +23,6 @@ pub use adapter::{
     PlayerRuntimeAdapterInitializer,
 };
 pub use clock::{MediaClock, PlaybackClock};
-pub use controller::{PlaybackCommand, Player, PlayerConfig, PlayerEvent, PlayerHandle};
 pub use player_download::{
     DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
     DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadExecutor, DownloadManager,

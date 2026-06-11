@@ -4,42 +4,30 @@ pub(crate) fn ffi_call(
     out_error: *mut PlayerFfiError,
     f: impl FnOnce() -> PlayerFfiCallStatus,
 ) -> PlayerFfiCallStatus {
-    match catch_unwind(AssertUnwindSafe(f)) {
-        Ok(status) => {
-            if status == PlayerFfiCallStatus::Ok {
-                write_success(out_error);
-            }
-            status
-        }
-        Err(payload) => {
-            write_error(out_error, owned_panic_error(payload));
+    match player_ffi_common::catch_ffi_call(
+        f,
+        |status| *status == PlayerFfiCallStatus::Ok,
+        || write_success(out_error),
+        owned_panic_error,
+    ) {
+        Ok(status) => status,
+        Err(error) => {
+            write_error(out_error, error);
             PlayerFfiCallStatus::Error
         }
     }
 }
 
 pub(crate) fn ffi_void(f: impl FnOnce()) {
-    let _ = catch_unwind(AssertUnwindSafe(f));
+    player_ffi_common::catch_ffi_void(f);
 }
 
 pub(crate) fn owned_panic_error(payload: Box<dyn Any + Send>) -> PlayerFfiError {
-    let message = panic_payload_message(payload.as_ref());
+    let message = player_ffi_common::panic_payload_message(payload.as_ref());
     owned_api_error(
         PlayerFfiErrorCode::BackendFailure,
         &format!("player_ffi caught Rust panic: {message}"),
     )
-}
-
-pub(crate) fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        return (*message).to_owned();
-    }
-
-    if let Some(message) = payload.downcast_ref::<String>() {
-        return message.clone();
-    }
-
-    "unknown panic payload".to_owned()
 }
 
 pub(crate) fn write_error(out_error: *mut PlayerFfiError, mut error: PlayerFfiError) {

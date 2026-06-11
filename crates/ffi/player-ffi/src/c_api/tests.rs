@@ -1,16 +1,17 @@
 use super::{
-    FfiPlayerInitializer, PlayerFfiAbrMode, PlayerFfiCallStatus, PlayerFfiCommandKind,
-    PlayerFfiError, PlayerFfiErrorCode, PlayerFfiEventKind, PlayerFfiFrameProcessorPolicyAction,
-    PlayerFfiFrameProcessorWarningKind, PlayerFfiHandle, PlayerFfiInitializerHandle,
-    PlayerFfiMediaInfo, PlayerFfiPlaybackState, PlayerFfiPluginCapabilityKind,
-    PlayerFfiPluginDiagnosticStatus, PlayerFfiPluginParticipation, PlayerFfiRuntimeWarningDomain,
+    FfiPlayerInitializer, PlayerFfiAbrMode, PlayerFfiBufferingPolicy, PlayerFfiCachePolicy,
+    PlayerFfiCallStatus, PlayerFfiCommandKind, PlayerFfiError, PlayerFfiErrorCode,
+    PlayerFfiEventKind, PlayerFfiFrameProcessorPolicyAction, PlayerFfiFrameProcessorWarningKind,
+    PlayerFfiHandle, PlayerFfiInitializerHandle, PlayerFfiMediaInfo, PlayerFfiPlaybackState,
+    PlayerFfiPluginCapabilityKind, PlayerFfiPluginDiagnosticStatus, PlayerFfiPluginParticipation,
+    PlayerFfiResolvedResiliencePolicy, PlayerFfiRetryPolicy, PlayerFfiRuntimeWarningDomain,
     PlayerFfiSnapshot, PlayerFfiStartup, PlayerFfiTrackKind, PlayerFfiVideoFrame,
     into_initializer_handle, player_ffi_event_list_free, player_ffi_initializer_destroy,
     player_ffi_initializer_initialize, player_ffi_initializer_media_info,
     player_ffi_initializer_probe_uri, player_ffi_initializer_startup, player_ffi_media_info_free,
     player_ffi_player_destroy, player_ffi_player_dispatch, player_ffi_player_drain_events,
-    player_ffi_player_set_playback_rate, player_ffi_snapshot_free, player_ffi_startup_free,
-    player_ffi_video_frame_free,
+    player_ffi_player_set_playback_rate, player_ffi_resolve_resilience_policy,
+    player_ffi_snapshot_free, player_ffi_startup_free, player_ffi_video_frame_free,
 };
 use crate::{FfiErrorCode, FfiPluginParticipation};
 use player_runtime::{
@@ -42,6 +43,32 @@ fn initializer_probe_uri_rejects_null_output_pointer() {
         assert_eq!(status, PlayerFfiCallStatus::Error);
         assert_eq!(error.code, PlayerFfiErrorCode::NullPointer);
         assert_eq!(copy_c_string(error.message), "out_initializer was null");
+        super::player_ffi_error_free(&mut error);
+    }
+}
+
+#[test]
+fn resolve_resilience_policy_rejects_invalid_raw_source_kind() {
+    unsafe {
+        let buffering = PlayerFfiBufferingPolicy::default();
+        let retry = PlayerFfiRetryPolicy::default();
+        let cache = PlayerFfiCachePolicy::default();
+        let mut policy = PlayerFfiResolvedResiliencePolicy::default();
+        let mut error = PlayerFfiError::default();
+
+        let status = player_ffi_resolve_resilience_policy(
+            99,
+            0,
+            &buffering,
+            &retry,
+            &cache,
+            &mut policy,
+            &mut error,
+        );
+
+        assert_eq!(status, PlayerFfiCallStatus::Error);
+        assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+        assert!(copy_c_string(error.message).contains("source_kind"));
         super::player_ffi_error_free(&mut error);
     }
 }

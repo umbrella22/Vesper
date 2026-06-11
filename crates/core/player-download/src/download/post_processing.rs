@@ -84,7 +84,6 @@ where
         let mut current_input = self.completed_download_info(snapshot)?;
         let mut current_completed_path = snapshot.asset_index.completed_path.clone();
         let mut ran_processor = false;
-        let mut required_assembly = completed_info_requires_assembly(&current_input);
 
         for processor in &self.config.post_processors {
             let input_kind = current_input.content_format.kind();
@@ -128,7 +127,6 @@ where
                         path,
                         current_input.metadata.clone(),
                     );
-                    required_assembly = completed_info_requires_assembly(&current_input);
                 }
                 Ok(ProcessorOutput::Skipped) => {}
                 Err(error) => {
@@ -141,7 +139,7 @@ where
             }
         }
 
-        if required_assembly {
+        if completed_info_requires_assembly(&current_input) {
             return Err(assembly_required_error(
                 snapshot,
                 &current_input,

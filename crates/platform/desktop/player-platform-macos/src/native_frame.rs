@@ -502,14 +502,29 @@ impl Drop for MacosNativeFrameVideoSource {
             let _ = worker.join();
         }
         self.release_queued_prefetch_events();
+        if let Ok(mut session) = self.session.lock() {
+            if let Err(error) = session.close() {
+                tracing::warn!(
+                    error = %error,
+                    "failed to close macOS native-frame decoder session during drop"
+                );
+            }
+        }
         if let Ok(mut shared) = self.shared.lock()
             && let Some(chain) = shared.frame_processor_chain.as_mut()
         {
-            chain.flush();
-            chain.close();
-        }
-        if let Ok(mut session) = self.session.lock() {
-            let _ = session.close();
+            if let Err(error) = chain.flush() {
+                tracing::warn!(
+                    error = %error,
+                    "failed to flush macOS native-frame processor chain during drop"
+                );
+            }
+            if let Err(error) = chain.close() {
+                tracing::warn!(
+                    error = %error,
+                    "failed to close macOS native-frame processor chain during drop"
+                );
+            }
         }
     }
 }
@@ -1397,7 +1412,7 @@ pub(crate) fn flush_and_seek_macos_native_frame_source(
             .lock()
             .map_err(|_| anyhow::anyhow!("native-frame decoder state is poisoned"))?;
         if let Some(chain) = shared.frame_processor_chain.as_mut() {
-            chain.flush();
+            let _ = chain.flush();
         }
     }
     {

@@ -13,7 +13,7 @@ use player_plugin::{
     SourceNormalizerRequiredCapabilities, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
     VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
     VesperPluginResultStatus, VesperSourceNormalizerOpenPacketSessionResult,
-    VesperSourceNormalizerPluginApiV3, VesperSourceNormalizerReadPacketResult,
+    VesperSourceNormalizerPluginApiV4, VesperSourceNormalizerReadPacketResult,
 };
 
 static PLUGIN_NAME: &[u8] = b"player-source-normalizer-diagnostic\0";
@@ -21,7 +21,7 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 static DIAGNOSTIC_PACKET_BYTES: &[u8] = b"vesper-diagnostic-source-normalizer-packet";
 
 struct PluginBundle {
-    api: VesperSourceNormalizerPluginApiV3,
+    api: VesperSourceNormalizerPluginApiV4,
     descriptor: VesperPluginDescriptor,
 }
 
@@ -46,7 +46,7 @@ pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
 
 fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
     let mut bundle = Box::new(PluginBundle {
-        api: VesperSourceNormalizerPluginApiV3 {
+        api: VesperSourceNormalizerPluginApiV4 {
             context: std::ptr::null_mut(),
             destroy: None,
             name: Some(normalizer_name),
@@ -60,6 +60,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
             resource_capabilities_json: None,
             open_resource_session_json: None,
             poll_resource_session: None,
+            wait_resource_session_update: None,
             cancel_resource_session: None,
             close_resource_session: None,
             free_bytes: Some(free_plugin_bytes),
@@ -72,7 +73,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
         },
     });
     bundle.descriptor.api =
-        (&bundle.api as *const VesperSourceNormalizerPluginApiV3).cast::<c_void>();
+        (&bundle.api as *const VesperSourceNormalizerPluginApiV4).cast::<c_void>();
     let bundle = Box::leak(bundle);
     &bundle.descriptor
 }

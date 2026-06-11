@@ -100,6 +100,8 @@ impl D3D11DecoderSession {
                     pipeline_profile: Some(NativeFramePipelineProfile::D3D11Texture2D),
                     color_space: None,
                     hdr_metadata: None,
+                    color: None,
+                    hdr: None,
                     sync_info: None,
                     transform: None,
                     frame_id: Some(frame.frame_id),

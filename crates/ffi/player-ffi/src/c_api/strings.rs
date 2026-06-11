@@ -40,8 +40,7 @@ pub(crate) fn api_error_category(code: PlayerFfiErrorCode) -> PlayerFfiErrorCate
 }
 
 pub(crate) fn into_c_string_ptr(text: String) -> *mut c_char {
-    let sanitized = text.replace('\0', " ");
-    CString::new(sanitized).unwrap_or_default().into_raw()
+    player_ffi_common::into_c_string_ptr(text)
 }
 
 pub(crate) fn into_owned_bytes(bytes: Vec<u8>) -> (*mut u8, usize) {
@@ -77,16 +76,14 @@ pub(crate) fn into_owned_c_string_array(values: Vec<String>) -> (*mut *mut c_cha
 }
 
 pub(crate) fn free_c_string(ptr_ref: &mut *mut c_char) {
-    if !ptr_ref.is_null() && !(*ptr_ref).is_null() {
-        unsafe {
-            drop(CString::from_raw(*ptr_ref));
-        }
-    }
-    *ptr_ref = ptr::null_mut();
+    player_ffi_common::free_c_string(ptr_ref);
 }
 
 pub(crate) fn free_c_string_array(ptr_ref: &mut *mut *mut c_char, len: usize) {
     if !ptr_ref.is_null() && !(*ptr_ref).is_null() {
+        // SAFETY: the array pointer is produced by `into_owned_struct_array` with
+        // len as both length and capacity. Each element is an owned C string or
+        // null and is freed before the boxed slice is dropped.
         unsafe {
             let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(*ptr_ref, len));
             for value in boxed.iter_mut() {

@@ -2,7 +2,8 @@ use super::{
     DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
     LoadedDynamicPlugin, PluginCapabilitySummary, PluginDiagnosticRecord, PluginDiagnosticStatus,
     PluginLoadError, PluginRegistry, SourceNormalizerPacketPluginCapabilitySummary,
-    SourceNormalizerResourcePluginCapabilitySummary,
+    SourceNormalizerResourcePluginCapabilitySummary, catch_decoder_plugin_call,
+    catch_frame_processor_plugin_call, catch_source_normalizer_plugin_call,
 };
 use player_plugin::{
     AssemblyMode, BenchmarkEvent, BenchmarkEventBatch, BenchmarkSinkReport, BenchmarkSinkStatus,
@@ -30,8 +31,9 @@ use player_plugin::{
     SourceNormalizerResourceCachePolicy, SourceNormalizerResourceCapabilities,
     SourceNormalizerResourceInfo, SourceNormalizerResourceSessionInfo,
     SourceNormalizerResourceSessionState, SourceNormalizerResourceSessionStatus,
-    VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-    VESPER_PLUGIN_ABI_VERSION_V2, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
+    SourceNormalizerResourceSessionWaitStatus, VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT, VESPER_PLUGIN_ABI_VERSION_V2,
+    VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
     VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT, VesperBenchmarkSinkApi,
     VesperDecoderOpenSessionResult, VesperDecoderPluginApiV5,
     VesperDecoderReceiveNativeFrameResult, VesperDecoderReceivePcmFrameResult,
@@ -39,7 +41,7 @@ use player_plugin::{
     VesperFrameProcessorReceiveFrameResult, VesperPipelineEventHookApi, VesperPluginBytes,
     VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
     VesperPostDownloadProcessorApi, VesperSourceNormalizerOpenPacketSessionResult,
-    VesperSourceNormalizerOpenResourceSessionResult, VesperSourceNormalizerPluginApiV3,
+    VesperSourceNormalizerOpenResourceSessionResult, VesperSourceNormalizerPluginApiV4,
     VesperSourceNormalizerReadPacketResult,
 };
 use std::collections::BTreeMap;
@@ -109,7 +111,7 @@ fn fixture_source_normalizer_packet_factory() -> Arc<dyn SourceNormalizerPacketP
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
         plugin_kind: VesperPluginKind::SourceNormalizer,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
-        api: (&api as *const VesperSourceNormalizerPluginApiV3).cast(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
     let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
         .expect("load source normalizer packet plugin");
@@ -261,8 +263,8 @@ fn fixture_frame_processor_api() -> VesperFrameProcessorPluginApiV1 {
     }
 }
 
-fn fixture_source_normalizer_packet_api() -> VesperSourceNormalizerPluginApiV3 {
-    VesperSourceNormalizerPluginApiV3 {
+fn fixture_source_normalizer_packet_api() -> VesperSourceNormalizerPluginApiV4 {
+    VesperSourceNormalizerPluginApiV4 {
         context: std::ptr::null_mut(),
         destroy: None,
         name: Some(fixture_source_normalizer_packet_name),
@@ -276,14 +278,15 @@ fn fixture_source_normalizer_packet_api() -> VesperSourceNormalizerPluginApiV3 {
         resource_capabilities_json: None,
         open_resource_session_json: None,
         poll_resource_session: None,
+        wait_resource_session_update: None,
         cancel_resource_session: None,
         close_resource_session: None,
         free_bytes: Some(fixture_free_bytes),
     }
 }
 
-fn fixture_source_normalizer_dual_api() -> VesperSourceNormalizerPluginApiV3 {
-    VesperSourceNormalizerPluginApiV3 {
+fn fixture_source_normalizer_dual_api() -> VesperSourceNormalizerPluginApiV4 {
+    VesperSourceNormalizerPluginApiV4 {
         context: std::ptr::null_mut(),
         destroy: None,
         name: Some(fixture_source_normalizer_packet_name),
@@ -297,6 +300,7 @@ fn fixture_source_normalizer_dual_api() -> VesperSourceNormalizerPluginApiV3 {
         resource_capabilities_json: Some(fixture_source_normalizer_resource_capabilities_json),
         open_resource_session_json: Some(fixture_source_normalizer_open_resource_session_json),
         poll_resource_session: Some(fixture_source_normalizer_poll_resource_session),
+        wait_resource_session_update: Some(fixture_source_normalizer_wait_resource_session_update),
         cancel_resource_session: Some(fixture_source_normalizer_cancel_resource_session),
         close_resource_session: Some(fixture_source_normalizer_close_resource_session),
         free_bytes: Some(fixture_free_bytes),
@@ -1273,6 +1277,17 @@ unsafe extern "C" fn fixture_source_normalizer_poll_resource_session(
     }
 }
 
+unsafe extern "C" fn fixture_source_normalizer_wait_resource_session_update(
+    _context: *mut c_void,
+    session: *mut c_void,
+    _timeout_ms: u64,
+) -> VesperPluginProcessResult {
+    if session.is_null() {
+        return source_normalizer_process_error(SourceNormalizerError::NotConfigured);
+    }
+    source_normalizer_process_success(&SourceNormalizerResourceSessionWaitStatus { updated: true })
+}
+
 unsafe extern "C" fn fixture_source_normalizer_cancel_resource_session(
     _context: *mut c_void,
     session: *mut c_void,
@@ -1991,6 +2006,7 @@ unsafe extern "C" fn fixture_error_process_json(
 mod benchmark_pipeline_tests;
 mod decoder_tests;
 mod frame_processor_tests;
+mod panic_boundary_tests;
 mod post_download_tests;
 mod registry_tests;
 mod source_normalizer_tests;

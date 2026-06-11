@@ -6,19 +6,21 @@ use super::{
     ANDROID_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, AndroidExoPlaybackSnapshot, AndroidExoPlaybackState,
     AndroidExoPlayerBridge, AndroidExoPlayerBridgeBindings, AndroidExoPlayerBridgeContext,
     AndroidExoSeekableRange, AndroidExoStateTracker, AndroidHostBridgeSession, AndroidHostCommand,
-    AndroidHostEvent, AndroidHostSnapshot, AndroidHostTimelineKind, AndroidManagedNativeSession,
-    AndroidNativeCommandSink, AndroidNativeFrameDecoderSink, AndroidNativeFramePipelineFrameStatus,
-    AndroidNativeFramePipelineOpenConfig, AndroidNativeFramePipelinePacketSource,
-    AndroidNativeFramePipelineProcessedFrame, AndroidNativeFramePipelineProfile,
-    AndroidNativeFramePipelineSession, AndroidNativeFramePresenterFrame,
-    AndroidNativeFramePresenterProfile, AndroidNativeFramePresenterSink,
-    AndroidNativeFramePresenterSubmitResult, AndroidNativeFrameProcessorChain,
-    AndroidNativeFrameProcessorOwnedFrame, AndroidNativePlayerBridge, AndroidNativePlayerCommand,
-    AndroidNativePlayerProbe, AndroidNativePlayerRuntimeAdapterFactory, AndroidNativePlayerSession,
+    AndroidHostCommandSink, AndroidHostEvent, AndroidHostSnapshot, AndroidHostTimelineKind,
+    AndroidManagedNativeSession, AndroidNativeCommandSink, AndroidNativeFrameDecoderSink,
+    AndroidNativeFramePipelineFrameStatus, AndroidNativeFramePipelineOpenConfig,
+    AndroidNativeFramePipelinePacketSource, AndroidNativeFramePipelineProcessedFrame,
+    AndroidNativeFramePipelineProfile, AndroidNativeFramePipelineSession,
+    AndroidNativeFramePresenterFrame, AndroidNativeFramePresenterProfile,
+    AndroidNativeFramePresenterSink, AndroidNativeFramePresenterSubmitResult,
+    AndroidNativeFrameProcessorChain, AndroidNativeFrameProcessorOwnedFrame,
+    AndroidNativePlayerBridge, AndroidNativePlayerCommand, AndroidNativePlayerProbe,
+    AndroidNativePlayerRuntimeAdapterFactory, AndroidNativePlayerSession,
     AndroidNativePlayerSessionBootstrap, AndroidOpaqueHandle,
     android_native_frame_pipeline_frame_json, android_native_frame_pipeline_open_json,
 };
 use player_model::MediaSource;
+use player_platform_mobile::MobileCommandQueue;
 use player_platform_mobile::{
     MobileNativeFramePipelineConfiguration, MobileSourceNormalizerConfiguration,
 };
@@ -109,6 +111,33 @@ fn android_factory_is_initialize_unsupported_without_bridge() {
         Err(error) => error,
     };
     assert_eq!(error.code(), PlayerErrorCode::Unsupported);
+}
+
+#[test]
+fn android_command_sink_reports_poisoned_queue() {
+    let queue = Arc::new(Mutex::new(VecDeque::new()));
+    let poison_queue = queue.clone();
+    let _ = std::thread::spawn(move || {
+        let _guard = poison_queue
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        panic!("poison android command queue");
+    })
+    .join();
+
+    let mut sink = AndroidHostCommandSink::new(MobileCommandQueue::from_shared_for_tests(
+        "android native",
+        queue,
+    ));
+    let error = sink
+        .submit_command(AndroidNativePlayerCommand::Play)
+        .expect_err("poisoned queue should be reported");
+
+    assert_eq!(
+        error.category(),
+        player_runtime::PlayerErrorCategory::Platform
+    );
+    assert!(error.message().contains("command queue lock poisoned"));
 }
 
 #[test]

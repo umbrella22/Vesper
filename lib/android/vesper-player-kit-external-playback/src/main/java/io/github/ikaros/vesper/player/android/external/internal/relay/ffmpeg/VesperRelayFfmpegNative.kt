@@ -1,6 +1,7 @@
 package io.github.ikaros.vesper.player.android.external.internal.relay.ffmpeg
 
 import java.io.InputStream
+import java.io.IOException
 
 data class VesperRelayFfmpegOpenResult(
     val handle: Long,
@@ -35,7 +36,11 @@ internal class VesperRelayFfmpegInputStream(
         if (handle == 0L) {
             return -1
         }
-        return native.read(handle, buffer, offset, length)
+        val read = native.read(handle, buffer, offset, length)
+        if (read == -2) {
+            throw IOException("native FFmpeg relay stream handle is invalid")
+        }
+        return read
     }
 
     override fun close() {

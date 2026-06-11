@@ -14,7 +14,9 @@ impl Drop for DynamicFrameProcessorPluginFactoryInner {
         if let Some(destroy) = self.api.destroy {
             // SAFETY: `destroy` and `context` come from the validated plugin ABI
             // table and are only invoked once when this wrapper is dropped.
-            unsafe { destroy(self.api.context) };
+            let _ = catch_frame_processor_plugin_call(&self.name, "destroy", || unsafe {
+                destroy(self.api.context)
+            });
         }
     }
 }
@@ -87,13 +89,14 @@ impl FrameProcessorPluginFactory for DynamicFrameProcessorPluginFactory {
         // SAFETY: the validated plugin API guarantees `open_session_json` is
         // present, and `config_json` remains alive for the duration of this
         // synchronous callback.
-        let result = unsafe {
-            (self.inner.api.open_session_json)(
-                self.inner.api.context,
-                config_json.as_ptr(),
-                config_json.len(),
-            )
-        };
+        let result =
+            catch_frame_processor_plugin_call(&self.inner.name, "open_session", || unsafe {
+                (self.inner.api.open_session_json)(
+                    self.inner.api.context,
+                    config_json.as_ptr(),
+                    config_json.len(),
+                )
+            })?;
 
         match result.status {
             VesperPluginResultStatus::Success => {
@@ -215,14 +218,21 @@ impl DynamicFrameProcessorSession {
         // SAFETY: the validated plugin API guarantees `release_frame` is
         // present. The frame handle was previously returned by this same plugin
         // session and tracked by the loader.
-        let result = unsafe {
-            (self.factory.api.release_frame)(
-                self.factory.api.context,
-                self.session,
-                handle_kind,
-                frame.handle,
-            )
-        };
+        let result =
+            match catch_frame_processor_plugin_call(&self.factory.name, operation, || unsafe {
+                (self.factory.api.release_frame)(
+                    self.factory.api.context,
+                    self.session,
+                    handle_kind,
+                    frame.handle,
+                )
+            }) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.closed = true;
+                    return Err(error);
+                }
+            };
         self.decode_operation_result(result, operation)
     }
 
@@ -270,15 +280,22 @@ impl FrameProcessorSession for DynamicFrameProcessorSession {
         // SAFETY: the validated plugin API guarantees `submit_frame_json` is
         // present. The JSON buffer remains alive for this synchronous call, and
         // the input frame handle is borrowed only for the duration of the call.
-        let result = unsafe {
-            (self.factory.api.submit_frame_json)(
-                self.factory.api.context,
-                self.session,
-                submit_json.as_ptr(),
-                submit_json.len(),
-                frame.handle,
-            )
-        };
+        let result =
+            match catch_frame_processor_plugin_call(&self.factory.name, "submit_frame", || unsafe {
+                (self.factory.api.submit_frame_json)(
+                    self.factory.api.context,
+                    self.session,
+                    submit_json.as_ptr(),
+                    submit_json.len(),
+                    frame.handle,
+                )
+            }) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.closed = true;
+                    return Err(error);
+                }
+            };
 
         match result.status {
             VesperPluginResultStatus::Success => {
@@ -305,8 +322,17 @@ impl FrameProcessorSession for DynamicFrameProcessorSession {
         self.ensure_open()?;
         // SAFETY: the validated plugin API guarantees `receive_frame` is
         // present and returns plugin-owned byte buffers reclaimed below.
-        let result =
-            unsafe { (self.factory.api.receive_frame)(self.factory.api.context, self.session) };
+        let result = match catch_frame_processor_plugin_call(
+            &self.factory.name,
+            "receive_frame",
+            || unsafe { (self.factory.api.receive_frame)(self.factory.api.context, self.session) },
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                self.closed = true;
+                return Err(error);
+            }
+        };
 
         match result.status {
             VesperPluginResultStatus::Success => {
@@ -376,7 +402,15 @@ impl FrameProcessorSession for DynamicFrameProcessorSession {
         let release_result = self.release_outstanding_frames("release_frame_on_flush");
         // SAFETY: the validated plugin API guarantees `flush_session` is present.
         let result =
-            unsafe { (self.factory.api.flush_session)(self.factory.api.context, self.session) };
+            match catch_frame_processor_plugin_call(&self.factory.name, "flush", || unsafe {
+                (self.factory.api.flush_session)(self.factory.api.context, self.session)
+            }) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.closed = true;
+                    return release_result.and(Err(error));
+                }
+            };
         let flush_result = self.decode_operation_result(result, "flush");
         release_result.and(flush_result)
     }
@@ -389,7 +423,16 @@ impl FrameProcessorSession for DynamicFrameProcessorSession {
         // SAFETY: the validated plugin API guarantees `close_session` is present
         // and consumes or releases the opaque session pointer exactly once.
         let result =
-            unsafe { (self.factory.api.close_session)(self.factory.api.context, self.session) };
+            match catch_frame_processor_plugin_call(&self.factory.name, "close", || unsafe {
+                (self.factory.api.close_session)(self.factory.api.context, self.session)
+            }) {
+                Ok(result) => result,
+                Err(error) => {
+                    self.closed = true;
+                    self.session = std::ptr::null_mut();
+                    return release_result.and(Err(error));
+                }
+            };
         self.closed = true;
         self.session = std::ptr::null_mut();
         let close_result = self.decode_operation_result(result, "close");

@@ -3,7 +3,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use player_model::MediaSource;
-use player_platform_mobile::{MobilePluginConfiguration, apply_mobile_plugin_diagnostics};
+use player_platform_mobile::{
+    MobileCommandQueue, MobilePluginConfiguration, apply_mobile_plugin_diagnostics,
+    drain_runtime_events, push_video_surface_event,
+};
 use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaAbrMode,
     MediaAbrPolicy, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
@@ -323,7 +326,7 @@ pub enum IosHostCommand {
 
 pub struct IosHostBridgeSession {
     session: IosManagedNativeSession<IosHostCommandSink>,
-    command_queue: Arc<Mutex<VecDeque<IosNativePlayerCommand>>>,
+    command_queue: MobileCommandQueue<IosNativePlayerCommand>,
     surface_attached: bool,
     extra_events: VecDeque<PlayerRuntimeEvent>,
 }
@@ -364,26 +367,18 @@ pub struct IosNativePlayerRuntime {
 
 #[derive(Debug, Clone)]
 struct IosHostCommandSink {
-    queue: Arc<Mutex<VecDeque<IosNativePlayerCommand>>>,
+    queue: MobileCommandQueue<IosNativePlayerCommand>,
 }
 
 impl IosHostCommandSink {
-    fn new(queue: Arc<Mutex<VecDeque<IosNativePlayerCommand>>>) -> Self {
+    fn new(queue: MobileCommandQueue<IosNativePlayerCommand>) -> Self {
         Self { queue }
     }
 }
 
 impl IosNativeCommandSink for IosHostCommandSink {
     fn submit_command(&mut self, command: IosNativePlayerCommand) -> PlayerResult<()> {
-        match self.queue.lock() {
-            Ok(mut queue) => {
-                queue.push_back(command);
-            }
-            Err(_) => {
-                tracing::error!("ios native command queue mutex was poisoned");
-            }
-        }
-        Ok(())
+        self.queue.push(command)
     }
 }
 
@@ -553,7 +548,7 @@ impl IosHostCommand {
 impl IosHostBridgeSession {
     pub fn new(source_uri: impl Into<String>) -> Self {
         let source_uri = source_uri.into();
-        let command_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let command_queue = MobileCommandQueue::new("ios native");
         let source = MediaSource::new(source_uri.clone());
         let media_info = placeholder_media_info(&source);
         let sink = IosHostCommandSink::new(command_queue.clone());
@@ -572,24 +567,16 @@ impl IosHostBridgeSession {
     }
 
     pub fn drain_events(&mut self) -> Vec<IosHostEvent> {
-        let mut raw_events: Vec<PlayerRuntimeEvent> = self.extra_events.drain(..).collect();
-        raw_events.extend(self.session.drain_events());
-        raw_events
-            .iter()
-            .filter_map(IosHostEvent::from_runtime_event)
-            .collect()
+        drain_runtime_events(
+            &mut self.extra_events,
+            self.session.drain_events(),
+            IosHostEvent::from_runtime_event,
+        )
     }
 
     pub fn drain_native_commands(&mut self) -> Vec<IosHostCommand> {
         self.command_queue
-            .lock()
-            .map(|mut queue| {
-                queue
-                    .drain(..)
-                    .map(|command| IosHostCommand::from_native_command(&command))
-                    .collect()
-            })
-            .unwrap_or_default()
+            .drain_map(|command| IosHostCommand::from_native_command(&command))
     }
 
     pub fn dispatch_command(
@@ -600,14 +587,9 @@ impl IosHostBridgeSession {
     }
 
     pub fn set_surface_attached(&mut self, attached: bool) {
-        if self.surface_attached == attached {
-            return;
+        if push_video_surface_event(&mut self.extra_events, &mut self.surface_attached, attached) {
+            self.session.video_surface = attached.then_some(host_video_surface_target());
         }
-
-        self.surface_attached = attached;
-        self.session.video_surface = attached.then_some(host_video_surface_target());
-        self.extra_events
-            .push_back(PlayerRuntimeEvent::VideoSurfaceChanged { attached });
     }
 
     pub fn apply_avplayer_snapshot(&mut self, snapshot: IosAvPlayerSnapshot) {

@@ -5,9 +5,10 @@ use std::time::{Duration, Instant};
 
 use player_model::MediaSource;
 use player_platform_mobile::{
-    MobileNativeFramePipelineConfiguration, MobilePluginConfiguration,
-    MobileSourceNormalizerConfiguration, apply_mobile_plugin_diagnostics,
+    MobileCommandQueue, MobileNativeFramePipelineConfiguration, MobilePluginConfiguration,
+    MobileSourceNormalizerConfiguration, apply_mobile_plugin_diagnostics, drain_runtime_events,
     hdr_programmable_processing_not_supported_reason, open_mobile_source_normalizer_packet_session,
+    push_video_surface_event,
 };
 use player_platform_native_frame::{
     NativeFrameDecoderAdapter, NativeFramePacketRead, NativeFramePacketSourceAdapter,
@@ -401,7 +402,7 @@ pub struct AndroidNativePlayerSessionBootstrap {
 
 pub struct AndroidHostBridgeSession {
     session: AndroidManagedNativeSession<AndroidHostCommandSink>,
-    command_queue: Arc<Mutex<VecDeque<AndroidNativePlayerCommand>>>,
+    command_queue: MobileCommandQueue<AndroidNativePlayerCommand>,
     surface_attached: bool,
     extra_events: VecDeque<PlayerRuntimeEvent>,
 }
@@ -691,26 +692,18 @@ impl std::fmt::Debug for AndroidExoPlayerBridge {
 
 #[derive(Debug, Clone)]
 struct AndroidHostCommandSink {
-    queue: Arc<Mutex<VecDeque<AndroidNativePlayerCommand>>>,
+    queue: MobileCommandQueue<AndroidNativePlayerCommand>,
 }
 
 impl AndroidHostCommandSink {
-    fn new(queue: Arc<Mutex<VecDeque<AndroidNativePlayerCommand>>>) -> Self {
+    fn new(queue: MobileCommandQueue<AndroidNativePlayerCommand>) -> Self {
         Self { queue }
     }
 }
 
 impl AndroidNativeCommandSink for AndroidHostCommandSink {
     fn submit_command(&mut self, command: AndroidNativePlayerCommand) -> PlayerResult<()> {
-        match self.queue.lock() {
-            Ok(mut queue) => {
-                queue.push_back(command);
-            }
-            Err(_) => {
-                tracing::error!("android native command queue mutex was poisoned");
-            }
-        }
-        Ok(())
+        self.queue.push(command)
     }
 }
 
@@ -846,7 +839,7 @@ impl AndroidHostBridgeSession {
         _plugin_configuration: MobilePluginConfiguration,
     ) -> Self {
         let source_uri = source_uri.into();
-        let command_queue = Arc::new(Mutex::new(VecDeque::new()));
+        let command_queue = MobileCommandQueue::new("android native");
         let source = MediaSource::new(source_uri.clone());
         let media_info = placeholder_media_info(&source);
         let sink = AndroidHostCommandSink::new(command_queue.clone());
@@ -865,24 +858,16 @@ impl AndroidHostBridgeSession {
     }
 
     pub fn drain_events(&mut self) -> Vec<AndroidHostEvent> {
-        let mut raw_events: Vec<PlayerRuntimeEvent> = self.extra_events.drain(..).collect();
-        raw_events.extend(self.session.drain_events());
-        raw_events
-            .iter()
-            .filter_map(AndroidHostEvent::from_runtime_event)
-            .collect()
+        drain_runtime_events(
+            &mut self.extra_events,
+            self.session.drain_events(),
+            AndroidHostEvent::from_runtime_event,
+        )
     }
 
     pub fn drain_native_commands(&mut self) -> Vec<AndroidHostCommand> {
         self.command_queue
-            .lock()
-            .map(|mut queue| {
-                queue
-                    .drain(..)
-                    .map(|command| AndroidHostCommand::from_native_command(&command))
-                    .collect()
-            })
-            .unwrap_or_default()
+            .drain_map(|command| AndroidHostCommand::from_native_command(&command))
     }
 
     pub fn dispatch_command(
@@ -893,11 +878,7 @@ impl AndroidHostBridgeSession {
     }
 
     pub fn set_surface_attached(&mut self, attached: bool) {
-        if self.surface_attached != attached {
-            self.surface_attached = attached;
-            self.extra_events
-                .push_back(PlayerRuntimeEvent::VideoSurfaceChanged { attached });
-        }
+        push_video_surface_event(&mut self.extra_events, &mut self.surface_attached, attached);
     }
 
     pub fn apply_exo_snapshot(&mut self, snapshot: AndroidExoPlaybackSnapshot) {

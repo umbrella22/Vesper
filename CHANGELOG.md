@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 - 2026-06-09
+
+### Breaking Changes
+
+- Rust: `player-runtime` no longer exports the unused lightweight async controller
+  types (`Player`, `PlayerHandle`, `PlayerConfig`, `PlaybackCommand`, and
+  `PlayerEvent`) and no longer depends on Tokio.
+
 ## 0.3.0 - 2026-05-18
 
 ### Breaking Changes

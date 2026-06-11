@@ -271,7 +271,7 @@ fn remux_input_to_mp4(
         if mapped_stream_index < 0 {
             continue;
         }
-        repair_packet_timestamps(&mut packet, &mut timestamp_state[input_stream_index]);
+        repair_packet_timestamps(&mut packet, &mut timestamp_state[input_stream_index])?;
 
         let output_stream = output_context
             .stream(mapped_stream_index as _)
@@ -316,6 +316,14 @@ fn remux_input_to_mp4(
 #[derive(Debug, Clone, Default)]
 struct TimestampRepairState {
     last_dts: Option<i64>,
+    last_duration: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PacketTimestampValues {
+    duration: i64,
+    dts: Option<i64>,
+    pts: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -504,7 +512,7 @@ fn remux_sources_to_output(
                 continue;
             }
 
-            repair_packet_timestamps(&mut packet, &mut state.timestamp_state[input_stream_index]);
+            repair_packet_timestamps(&mut packet, &mut state.timestamp_state[input_stream_index])?;
             let output_stream = output_context
                 .stream(mapped_stream_index as usize)
                 .ok_or_else(|| {
@@ -570,23 +578,57 @@ fn prepare_output_path(output_path: &Path) -> Result<(), ProcessorError> {
     Ok(())
 }
 
-fn repair_packet_timestamps(packet: &mut ffmpeg::Packet, state: &mut TimestampRepairState) {
-    let duration = packet.duration().max(1);
-    if packet.duration() <= 0 {
-        packet.set_duration(duration);
+fn repair_packet_timestamps(
+    packet: &mut ffmpeg::Packet,
+    state: &mut TimestampRepairState,
+) -> Result<(), ProcessorError> {
+    let repaired = repair_timestamp_values(
+        PacketTimestampValues {
+            duration: packet.duration(),
+            dts: packet.dts(),
+            pts: packet.pts(),
+        },
+        state,
+    )?;
+    packet.set_duration(repaired.duration);
+    packet.set_dts(repaired.dts);
+    packet.set_pts(repaired.pts);
+    Ok(())
+}
+
+fn repair_timestamp_values(
+    mut values: PacketTimestampValues,
+    state: &mut TimestampRepairState,
+) -> Result<PacketTimestampValues, ProcessorError> {
+    let duration = if values.duration > 0 {
+        values.duration
+    } else {
+        state.last_duration.unwrap_or(1)
+    };
+    values.duration = duration;
+    state.last_duration = Some(duration);
+
+    if values
+        .dts
+        .is_none_or(|value| state.last_dts.is_some_and(|last| value <= last))
+    {
+        values.dts = Some(match state.last_dts {
+            Some(last) => last.checked_add(duration).ok_or_else(|| {
+                FfmpegProcessorError::Remux(
+                    "timestamp repair overflowed while advancing DTS".to_owned(),
+                )
+                .into_processor_error()
+            })?,
+            None => 0,
+        });
     }
 
-    let mut dts = packet.dts();
-    if dts.is_none_or(|value| state.last_dts.is_some_and(|last| value <= last)) {
-        dts = Some(state.last_dts.map_or(0, |last| last + duration));
-        packet.set_dts(dts);
-    }
-
-    let dts_value = dts.unwrap_or(0);
-    if packet.pts().is_none_or(|pts| pts < dts_value) {
-        packet.set_pts(Some(dts_value));
+    let dts_value = values.dts.unwrap_or(0);
+    if values.pts.is_none_or(|pts| pts < dts_value) {
+        values.pts = Some(dts_value);
     }
     state.last_dts = Some(dts_value);
+    Ok(values)
 }
 
 fn stream_kind_allows_medium(
@@ -651,7 +693,9 @@ impl IntoProcessorError for FfmpegProcessorError {
 
 #[cfg(test)]
 mod tests {
-    use super::FfmpegRemuxProcessor;
+    use super::{
+        FfmpegRemuxProcessor, PacketTimestampValues, TimestampRepairState, repair_timestamp_values,
+    };
     use player_plugin::{
         AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind,
         DownloadMetadata, OutputFormat, PostDownloadProcessor, ProcessorOutput, ProcessorProgress,
@@ -678,6 +722,120 @@ mod tests {
                 ratios.push(ratio);
             }
         }
+    }
+
+    #[test]
+    fn timestamp_repair_preserves_valid_monotonic_values() {
+        let mut state = TimestampRepairState::default();
+        let repaired = repair_timestamp_values(
+            PacketTimestampValues {
+                duration: 1024,
+                dts: Some(2048),
+                pts: Some(2048),
+            },
+            &mut state,
+        )
+        .expect("valid timestamps should repair");
+
+        assert_eq!(
+            repaired,
+            PacketTimestampValues {
+                duration: 1024,
+                dts: Some(2048),
+                pts: Some(2048),
+            }
+        );
+        assert_eq!(state.last_dts, Some(2048));
+        assert_eq!(state.last_duration, Some(1024));
+    }
+
+    #[test]
+    fn timestamp_repair_reuses_last_positive_duration_for_missing_duration() {
+        let mut state = TimestampRepairState::default();
+        repair_timestamp_values(
+            PacketTimestampValues {
+                duration: 1024,
+                dts: Some(0),
+                pts: Some(0),
+            },
+            &mut state,
+        )
+        .expect("first packet should repair");
+
+        let repaired = repair_timestamp_values(
+            PacketTimestampValues {
+                duration: 0,
+                dts: None,
+                pts: None,
+            },
+            &mut state,
+        )
+        .expect("missing duration should repair");
+
+        assert_eq!(repaired.duration, 1024);
+        assert_eq!(repaired.dts, Some(1024));
+        assert_eq!(repaired.pts, Some(1024));
+    }
+
+    #[test]
+    fn timestamp_repair_advances_non_monotonic_dts() {
+        let mut state = TimestampRepairState {
+            last_dts: Some(4096),
+            last_duration: Some(1024),
+        };
+
+        let repaired = repair_timestamp_values(
+            PacketTimestampValues {
+                duration: -1,
+                dts: Some(4096),
+                pts: Some(4000),
+            },
+            &mut state,
+        )
+        .expect("non-monotonic dts should repair");
+
+        assert_eq!(repaired.duration, 1024);
+        assert_eq!(repaired.dts, Some(5120));
+        assert_eq!(repaired.pts, Some(5120));
+        assert_eq!(state.last_dts, Some(5120));
+    }
+
+    #[test]
+    fn timestamp_repair_raises_pts_below_dts() {
+        let mut state = TimestampRepairState::default();
+
+        let repaired = repair_timestamp_values(
+            PacketTimestampValues {
+                duration: 30,
+                dts: Some(90),
+                pts: Some(60),
+            },
+            &mut state,
+        )
+        .expect("pts should repair");
+
+        assert_eq!(repaired.dts, Some(90));
+        assert_eq!(repaired.pts, Some(90));
+    }
+
+    #[test]
+    fn timestamp_repair_reports_dts_overflow() {
+        let mut state = TimestampRepairState {
+            last_dts: Some(i64::MAX),
+            last_duration: Some(1),
+        };
+
+        let error = repair_timestamp_values(
+            PacketTimestampValues {
+                duration: 0,
+                dts: None,
+                pts: None,
+            },
+            &mut state,
+        )
+        .expect_err("overflow should fail");
+
+        assert!(error.to_string().contains("timestamp repair overflowed"));
     }
 
     #[test]

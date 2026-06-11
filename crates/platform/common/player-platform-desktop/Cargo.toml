@@ -12,9 +12,9 @@ player-backend-ffmpeg = { path = "../../../backend/player-backend-ffmpeg" }
 player-download = { path = "../../../core/player-download" }
 player-model = { path = "../../../model/player-model" }
 player-plugin = { path = "../../../plugin/player-plugin" }
+player-plugin-loader = { path = "../../../plugin/player-plugin-loader" }
 player-remux-ffmpeg = { path = "../../../plugin-remux/player-remux-ffmpeg" }
 player-runtime = { path = "../../../core/player-runtime" }
 tracing.workspace = true
 
 [dev-dependencies]
-player-plugin-loader = { path = "../../../plugin/player-plugin-loader" }

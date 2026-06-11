@@ -39,12 +39,6 @@ impl<T> HandleRegistry<T> {
         (slot.generation == generation).then_some(&slot.value)
     }
 
-    fn get_mut(&mut self, handle: u64) -> Option<&mut T> {
-        let (slot_index, generation) = decode_registry_handle(handle)?;
-        let slot = self.slots.get_mut(slot_index as usize)?.as_mut()?;
-        (slot.generation == generation).then_some(&mut slot.value)
-    }
-
     fn remove(&mut self, handle: u64) -> Option<T> {
         let (slot_index, generation) = decode_registry_handle(handle)?;
         let slot = self.slots.get_mut(slot_index as usize)?;
@@ -86,13 +80,14 @@ impl<T> Default for HandleRegistry<T> {
 }
 
 static INITIALIZER_HANDLE_REGISTRY: OnceLock<Mutex<HandleRegistry<usize>>> = OnceLock::new();
-static PLAYER_HANDLE_REGISTRY: OnceLock<Mutex<HandleRegistry<usize>>> = OnceLock::new();
+static PLAYER_HANDLE_REGISTRY: OnceLock<Mutex<HandleRegistry<Arc<Mutex<FfiPlayer>>>>> =
+    OnceLock::new();
 
 fn lock_initializer_registry() -> std::sync::MutexGuard<'static, HandleRegistry<usize>> {
     lock_registry(INITIALIZER_HANDLE_REGISTRY.get_or_init(|| Mutex::new(HandleRegistry::default())))
 }
 
-fn lock_player_registry() -> std::sync::MutexGuard<'static, HandleRegistry<usize>> {
+fn lock_player_registry() -> std::sync::MutexGuard<'static, HandleRegistry<Arc<Mutex<FfiPlayer>>>> {
     lock_registry(PLAYER_HANDLE_REGISTRY.get_or_init(|| Mutex::new(HandleRegistry::default())))
 }
 
@@ -144,15 +139,10 @@ pub(crate) fn into_initializer_handle(
 }
 
 pub(crate) fn into_player_handle(player: FfiPlayer) -> Option<PlayerFfiHandle> {
-    let pointer = Box::into_raw(Box::new(player)) as usize;
-    let raw = match lock_player_registry().insert(pointer) {
+    let player = Arc::new(Mutex::new(player));
+    let raw = match lock_player_registry().insert(player) {
         Ok(raw) => raw,
-        Err(HandleRegistryError::TooManyHandles) => {
-            unsafe {
-                drop(Box::from_raw(pointer as *mut FfiPlayer));
-            }
-            return None;
-        }
+        Err(HandleRegistryError::TooManyHandles) => return None,
     };
     Some(PlayerFfiHandle { raw })
 }
@@ -163,11 +153,15 @@ pub(crate) fn with_initializer_ref<R>(
 ) -> Option<R> {
     let registry = lock_initializer_registry();
     let pointer = registry.get(handle.raw).copied()?;
+    // SAFETY: initializer handles are registry indices created by this FFI layer.
+    // The registry owns the boxed initializer until `take` or `destroy` removes it.
     unsafe { Some(f(&*(pointer as *const FfiPlayerInitializer))) }
 }
 
 pub(crate) fn take_initializer(handle: PlayerFfiInitializerHandle) -> Option<FfiPlayerInitializer> {
     let pointer = lock_initializer_registry().remove(handle.raw)?;
+    // SAFETY: removing the registry entry transfers ownership of the boxed
+    // initializer back to this call, so it can be reconstructed and moved out.
     unsafe { Some(*Box::from_raw(pointer as *mut FfiPlayerInitializer)) }
 }
 
@@ -175,6 +169,8 @@ pub(crate) fn destroy_initializer_handle(handle: PlayerFfiInitializerHandle) -> 
     let Some(pointer) = lock_initializer_registry().remove(handle.raw) else {
         return false;
     };
+    // SAFETY: removing the registry entry guarantees this call owns the boxed
+    // initializer and that later handle lookups cannot free it again.
     unsafe {
         drop(Box::from_raw(pointer as *mut FfiPlayerInitializer));
     }
@@ -185,28 +181,28 @@ pub(crate) fn with_player_ref<R>(
     handle: PlayerFfiHandle,
     f: impl FnOnce(&FfiPlayer) -> R,
 ) -> Option<R> {
-    let registry = lock_player_registry();
-    let pointer = registry.get(handle.raw).copied()?;
-    unsafe { Some(f(&*(pointer as *const FfiPlayer))) }
+    let player = {
+        let registry = lock_player_registry();
+        registry.get(handle.raw).cloned()?
+    };
+    let player = player.lock().unwrap_or_else(|error| error.into_inner());
+    Some(f(&player))
 }
 
 pub(crate) fn with_player_mut<R>(
     handle: PlayerFfiHandle,
     f: impl FnOnce(&mut FfiPlayer) -> R,
 ) -> Option<R> {
-    let mut registry = lock_player_registry();
-    let pointer = registry.get_mut(handle.raw).copied()?;
-    unsafe { Some(f(&mut *(pointer as *mut FfiPlayer))) }
+    let player = {
+        let registry = lock_player_registry();
+        registry.get(handle.raw).cloned()?
+    };
+    let mut player = player.lock().unwrap_or_else(|error| error.into_inner());
+    Some(f(&mut player))
 }
 
 pub(crate) fn destroy_player_handle(handle: PlayerFfiHandle) -> bool {
-    let Some(pointer) = lock_player_registry().remove(handle.raw) else {
-        return false;
-    };
-    unsafe {
-        drop(Box::from_raw(pointer as *mut FfiPlayer));
-    }
-    true
+    lock_player_registry().remove(handle.raw).is_some()
 }
 
 pub(crate) fn invalid_initializer_handle_error() -> PlayerFfiError {
@@ -224,6 +220,8 @@ pub(crate) fn invalid_player_handle_error() -> PlayerFfiError {
 }
 
 pub(crate) fn write_handle<T: Copy>(out_handle: *mut T, handle: T) {
+    // SAFETY: callers validate that `out_handle` points to writable storage for
+    // one handle before calling this helper.
     unsafe {
         ptr::write(out_handle, handle);
     }
@@ -234,6 +232,8 @@ pub(crate) fn write_default_if_non_null<T: Default>(out: *mut T) {
         return;
     }
 
+    // SAFETY: non-null output pointers passed to this helper point to writable
+    // storage for one default value owned by the caller.
     unsafe {
         ptr::write(out, T::default());
     }

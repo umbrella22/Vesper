@@ -931,8 +931,8 @@ enum PlayerFfiCallStatus player_ffi_resolve_preload_budget(const struct PlayerFf
  * matching Vesper FFI API for the duration of the call. Callers must serialize shared
  * handle access according to the host binding contract.
  */
-enum PlayerFfiCallStatus player_ffi_resolve_resilience_policy(enum PlayerFfiMediaSourceKind source_kind,
-                                                              enum PlayerFfiMediaSourceProtocol source_protocol,
+enum PlayerFfiCallStatus player_ffi_resolve_resilience_policy(uint32_t source_kind,
+                                                              uint32_t source_protocol,
                                                               const struct PlayerFfiBufferingPolicy *buffering_policy,
                                                               const struct PlayerFfiRetryPolicy *retry_policy,
                                                               const struct PlayerFfiCachePolicy *cache_policy,

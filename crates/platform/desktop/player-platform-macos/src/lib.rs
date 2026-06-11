@@ -42,24 +42,20 @@ use player_plugin::{
     NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind, SourceNormalizerPacket,
     SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
     SourceNormalizerPacketSessionConfig, SourceNormalizerPacketSessionRequirements,
-    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketStatus, VesperPluginKind,
+    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketStatus,
 };
 use player_plugin_loader::{
-    DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, DecoderPluginMatchRequest,
-    FrameProcessorPluginCapabilitySummary, LoadedDynamicPlugin, PluginCapabilitySummary,
+    DecoderPluginMatchRequest, LoadedDynamicPlugin, PluginCapabilitySummary,
     PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
-    SourceNormalizerPacketPluginCapabilitySummary, SourceNormalizerResourcePluginCapabilitySummary,
 };
 #[cfg(test)]
 use player_runtime::PlayerFrameProcessingMetrics;
 use player_runtime::{
     DecodedVideoFrame, FrameProcessorMode, FrameProcessorPolicy, PlaybackProgress,
     PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode, PlayerMediaInfo,
-    PlayerPlaybackRoute, PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
-    PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticDetail,
-    PlayerPluginDiagnosticStatus, PlayerPluginFrameProcessorCapabilitySummary,
-    PlayerPluginParticipation, PlayerResult, PlayerRuntime, PlayerRuntimeAdapter,
-    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    PlayerPlaybackRoute, PlayerPluginDiagnostic, PlayerPluginDiagnosticDetail,
+    PlayerPluginDiagnosticStatus, PlayerPluginParticipation, PlayerResult, PlayerRuntime,
+    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
     PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent,
     PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoDecodeInfo,

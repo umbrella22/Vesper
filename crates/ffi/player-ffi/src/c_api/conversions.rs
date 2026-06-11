@@ -98,6 +98,23 @@ impl From<PlayerFfiMediaSourceKind> for BridgeMediaSourceKind {
     }
 }
 
+pub(crate) fn media_source_kind_from_u32(
+    value: u32,
+) -> Result<BridgeMediaSourceKind, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiMediaSourceKind::Local as u32 => {
+            Ok(BridgeMediaSourceKind::Local)
+        }
+        value if value == PlayerFfiMediaSourceKind::Remote as u32 => {
+            Ok(BridgeMediaSourceKind::Remote)
+        }
+        _ => Err(owned_api_error(
+            PlayerFfiErrorCode::InvalidArgument,
+            &format!("source_kind had invalid value {value}"),
+        )),
+    }
+}
+
 impl From<PlayerFfiMediaSourceProtocol> for BridgeMediaSourceProtocol {
     fn from(value: PlayerFfiMediaSourceProtocol) -> Self {
         match value {
@@ -108,6 +125,35 @@ impl From<PlayerFfiMediaSourceProtocol> for BridgeMediaSourceProtocol {
             PlayerFfiMediaSourceProtocol::Hls => Self::Hls,
             PlayerFfiMediaSourceProtocol::Dash => Self::Dash,
         }
+    }
+}
+
+pub(crate) fn media_source_protocol_from_u32(
+    value: u32,
+) -> Result<BridgeMediaSourceProtocol, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiMediaSourceProtocol::Unknown as u32 => {
+            Ok(BridgeMediaSourceProtocol::Unknown)
+        }
+        value if value == PlayerFfiMediaSourceProtocol::File as u32 => {
+            Ok(BridgeMediaSourceProtocol::File)
+        }
+        value if value == PlayerFfiMediaSourceProtocol::Content as u32 => {
+            Ok(BridgeMediaSourceProtocol::Content)
+        }
+        value if value == PlayerFfiMediaSourceProtocol::Progressive as u32 => {
+            Ok(BridgeMediaSourceProtocol::Progressive)
+        }
+        value if value == PlayerFfiMediaSourceProtocol::Hls as u32 => {
+            Ok(BridgeMediaSourceProtocol::Hls)
+        }
+        value if value == PlayerFfiMediaSourceProtocol::Dash as u32 => {
+            Ok(BridgeMediaSourceProtocol::Dash)
+        }
+        _ => Err(owned_api_error(
+            PlayerFfiErrorCode::InvalidArgument,
+            &format!("source_protocol had invalid value {value}"),
+        )),
     }
 }
 

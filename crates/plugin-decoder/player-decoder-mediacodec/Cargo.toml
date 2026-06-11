@@ -12,3 +12,4 @@ crate-type = ["cdylib", "rlib"]
 player-plugin = { path = "../../plugin/player-plugin" }
 serde.workspace = true
 serde_json.workspace = true
+tracing.workspace = true

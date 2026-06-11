@@ -21,14 +21,14 @@ Choose the integration path that matches your app. Read the first document for
 the public API and packaging model, then use the example app as a runnable
 reference.
 
-| Target                   | Read first                                                                                                       | Run / inspect next                                                                 | Useful when                                                                         |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Android Kotlin / Compose | [lib/android/README.md](lib/android/README.md)                                                                   | [examples/android-compose-host/README.md](examples/android-compose-host/README.md) | You are integrating the AAR modules directly in an Android app.                     |
-| iOS Swift / SwiftUI      | [lib/ios/VesperPlayerKit/README.md](lib/ios/VesperPlayerKit/README.md)                                           | [examples/ios-swift-host/README.md](examples/ios-swift-host/README.md)             | You are consuming the Swift Package or XCFramework from a UIKit / SwiftUI app.      |
+| Target                   | Read first                                                                                                       | Run / inspect next                                                                 | Useful when                                                                           |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Android Kotlin / Compose | [lib/android/README.md](lib/android/README.md)                                                                   | [examples/android-compose-host/README.md](examples/android-compose-host/README.md) | You are integrating the AAR modules directly in an Android app.                       |
+| iOS Swift / SwiftUI      | [lib/ios/VesperPlayerKit/README.md](lib/ios/VesperPlayerKit/README.md)                                           | [examples/ios-swift-host/README.md](examples/ios-swift-host/README.md)             | You are consuming the Swift Package or XCFramework from a UIKit / SwiftUI app.        |
 | Flutter                  | [lib/flutter/vesper_player/README.md](lib/flutter/vesper_player/README.md)                                       | [examples/flutter-host/README.md](examples/flutter-host/README.md)                 | You want one Dart API over Android and iOS today; desktop Flutter targets are paused. |
-| Flutter platform authors | [lib/flutter/vesper_player_platform_interface/README.md](lib/flutter/vesper_player_platform_interface/README.md) | [lib/flutter/vesper_player_ui/README.md](lib/flutter/vesper_player_ui/README.md)   | You are extending the federated plugin or adopting the optional Flutter UI package. |
-| C / C++ via FFI          | [include/player_ffi.h](include/player_ffi.h)                                                                     | [examples/c-host/README.md](examples/c-host/README.md)                             | You need the generated C ABI from a native host or plugin runtime.                  |
-| Desktop Rust             | [examples/basic-player](examples/basic-player)                                                                   | [Desktop FFmpeg](#desktop-ffmpeg)                                                  | You are trying the desktop demo or working with the Rust playback pipeline.         |
+| Flutter platform authors | [lib/flutter/vesper_player_platform_interface/README.md](lib/flutter/vesper_player_platform_interface/README.md) | [lib/flutter/vesper_player_ui/README.md](lib/flutter/vesper_player_ui/README.md)   | You are extending the federated plugin or adopting the optional Flutter UI package.   |
+| C / C++ via FFI          | [include/player_ffi.h](include/player_ffi.h)                                                                     | [examples/c-host/README.md](examples/c-host/README.md)                             | You need the generated C ABI from a native host or plugin runtime.                    |
+| Desktop Rust             | [examples/basic-player](examples/basic-player)                                                                   | [Desktop FFmpeg](#desktop-ffmpeg)                                                  | You are trying the desktop demo or working with the Rust playback pipeline.           |
 
 ## What You Get
 
@@ -64,21 +64,21 @@ This is a coarse overview of the feature surface. Each platform README explains
 the exact behavior, fallback rules, and capability flags that host apps should
 check before exposing advanced controls.
 
-| Capability               | Android (Media3)             | iOS (AVPlayer)                                | Desktop Rust                              | Flutter mobile                        |
-| ------------------------ | ---------------------------- | --------------------------------------------- | ----------------------------------------- | ------------------------------------- |
-| Local file               | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
-| Progressive HTTP/HTTPS   | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
-| HLS (`.m3u8`)            | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
-| DASH (`.mpd`)            | ✅ native                    | ✅ DASH-to-HLS bridge for VOD / live fMP4     | ⚠️ backend-dependent FFmpeg demuxer       | ✅ Android native / iOS bridge        |
-| Live / DVR               | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
-| Track selection          | ✅ video / audio / subtitles | ✅ audio / subtitles                          | ✅                                        | ✅ per-platform semantics             |
-| ABR `constrained` policy | ✅                           | ✅ HLS + DASH bridge variant catalogs         | ✅                                        | ✅ per-platform semantics             |
-| ABR `fixedTrack` policy  | ✅ exact                     | ✅ best-effort HLS/DASH pinning on iOS 15+    | ✅                                        | ✅ per-platform semantics             |
-| Resilience policy        | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
-| Preload budget           | ✅                           | ✅                                            | ✅                                        | ✅ Android / iOS                      |
-| Download manager         | ✅ VOD prepare + restore + export | ✅ VOD prepare + restore + export       | ✅ public `player-host-desktop::download` service | ✅ Android / iOS                      |
-| Hardware decode probe    | `VesperDecoderBackend`       | `VesperCodecSupport`                          | macOS VideoToolbox native-frame opt-in    | Reflected through mobile capabilities |
-| Plugin startup diagnostics | Internal runtime diagnostics | Internal runtime diagnostics                  | ✅ decoder / frame processor / source normalizer diagnostics | Exposed as create-result diagnostics where supported |
+| Capability                 | Android (Media3)                  | iOS (AVPlayer)                             | Desktop Rust                                                                                                                                        | Flutter mobile                                       |
+| -------------------------- | --------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Local file                 | ✅                                | ✅                                         | ✅                                                                                                                                                  | ✅ Android / iOS                                     |
+| Progressive HTTP/HTTPS     | ✅                                | ✅                                         | ✅                                                                                                                                                  | ✅ Android / iOS                                     |
+| HLS (`.m3u8`)              | ✅                                | ✅                                         | ✅ FFmpeg demuxer, no desktop ABR switching yet                                                                                                     | ✅ Android / iOS                                     |
+| DASH (`.mpd`)              | ✅ native                         | ✅ DASH-to-HLS bridge for VOD / live fMP4  | ⚠️ backend-dependent FFmpeg demuxer                                                                                                                 | ✅ Android native / iOS bridge                       |
+| Live / DVR                 | ✅                                | ✅                                         | ✅                                                                                                                                                  | ✅ Android / iOS                                     |
+| Track selection            | ✅ video / audio / subtitles      | ✅ audio / subtitles                       | ✅                                                                                                                                                  | ✅ per-platform semantics                            |
+| ABR `constrained` policy   | ✅                                | ✅ HLS + DASH bridge variant catalogs      | ⚠️ policy DTO only for desktop FFmpeg HLS                                                                                                           | ✅ per-platform semantics                            |
+| ABR `fixedTrack` policy    | ✅ exact                          | ✅ best-effort HLS/DASH pinning on iOS 15+ | ⚠️ policy DTO only for desktop FFmpeg HLS                                                                                                           | ✅ per-platform semantics                            |
+| Resilience policy          | ✅                                | ✅                                         | ✅                                                                                                                                                  | ✅ Android / iOS                                     |
+| Preload budget             | ✅                                | ✅                                         | ⚠️ shared policy/planner only; `player-host-desktop` uses a noop executor today                                                                      | ✅ Android / iOS                                     |
+| Download manager           | ✅ VOD prepare + restore + export | ✅ VOD prepare + restore + export          | ✅ public `player-host-desktop::download` service                                                                                                   | ✅ Android / iOS                                     |
+| Hardware decode probe      | `VesperDecoderBackend`            | `VesperCodecSupport`                       | macOS VideoToolbox native-frame opt-in; Windows D3D11 roadmap; Linux software-only today                                                            | Reflected through mobile capabilities                |
+| Plugin startup diagnostics | Internal runtime diagnostics      | Internal runtime diagnostics               | macOS / Windows decoder diagnostics; macOS frame processor chain; Linux reports unsupported diagnostics for configured plugin paths                | Exposed as create-result diagnostics where supported |
 
 Flutter support is mobile-only for now. Desktop Flutter targets are intentionally
 not shipped while the Flutter desktop integration model settles. Product UI
@@ -207,6 +207,11 @@ VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libplayer_frame_processor_diagn
 VESPER_FRAME_PROCESSOR_MODE=diagnostics \
 cargo run -p basic-player
 ```
+
+Desktop rendering caveat: the current `wgpu` software-render path uses the
+repository shader path for SDR video and is calibrated around Rec.709 limited
+range. HDR, Dolby Vision, wide-gamut, and desktop shader color-management work
+remain outside the stable desktop surface.
 
 ### C ABI
 
@@ -421,6 +426,15 @@ diagnostics and explicit opt-in workflows. Default mobile playback remains
 platform system-player first. HDR and Dolby Vision sources stay on platform
 system playback; the SDK-managed native-frame route is SDR-only today and is
 not advertised as an HDR-ready path.
+
+Desktop plugin support is asymmetric while native-frame work is experimental:
+macOS owns the active VideoToolbox native-frame and FrameProcessor validation
+path, Windows owns a D3D11 native-frame presenter / decoder roadmap without a
+FrameProcessor chain yet, and Linux currently stays on the FFmpeg software path
+without loader-backed plugin execution, native-frame presentation, or
+FrameProcessor support. When unsupported Windows FrameProcessor or Linux plugin
+paths are configured, startup diagnostics now report the unsupported platform
+capability explicitly instead of implying that the feature is wired.
 
 Release AARs / XCFrameworks are fully packaged binary artifacts. Host apps that
 consume these downloads do not run the repository's local JNI or FFmpeg

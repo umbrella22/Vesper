@@ -19,6 +19,10 @@ use player_plugin::{
 static PLUGIN_NAME: &[u8] = b"player-decoder-mediacodec\0";
 const MEDIACODEC_SUPPORTED: bool = cfg!(target_os = "android");
 const MEDIACODEC_SURFACE_TEXTURE_FORMAT: &str = "mediacodec_surface_texture";
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+type MediaStatus = i32;
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+const AMEDIA_OK: MediaStatus = 0;
 
 struct PluginBundle {
     api: VesperDecoderPluginApiV5,
@@ -885,16 +889,16 @@ mod android_media {
     };
 
     use super::{
-        MediaCodecOutputBufferKind, MediaCodecPendingOutputEosAction, android_color_range_label,
-        android_color_standard_label, android_color_standard_matrix_label,
-        android_color_transfer_label, codec_config_buffers, codec_mime,
+        AMEDIA_OK, MediaCodecOutputBufferKind, MediaCodecPendingOutputEosAction, MediaStatus,
+        android_color_range_label, android_color_standard_label,
+        android_color_standard_matrix_label, android_color_transfer_label, codec_config_buffers,
+        codec_mime, media_codec_close_result, media_status_error,
         mediacodec_hdr_metadata_from_color, mediacodec_output_buffer_kind,
         mediacodec_pending_output_eos_action, mediacodec_surface_texture_format,
         merge_mediacodec_color_metadata, merge_mediacodec_hdr_metadata, nal_length_size_for_config,
         packet_input_data_for_mediacodec,
     };
 
-    const AMEDIA_OK: MediaStatus = 0;
     const AMEDIACODEC_INFO_TRY_AGAIN_LATER: isize = -1;
     const AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED: isize = -2;
     const AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED: isize = -3;
@@ -907,8 +911,6 @@ mod android_media {
     const AMEDIAFORMAT_KEY_COLOR_STANDARD_FALLBACK: &CStr = c"color-standard";
     const AMEDIAFORMAT_KEY_COLOR_TRANSFER_FALLBACK: &CStr = c"color-transfer";
     const AMEDIAFORMAT_KEY_COLOR_RANGE_FALLBACK: &CStr = c"color-range";
-
-    type MediaStatus = i32;
 
     #[repr(C)]
     struct AMediaCodec {
@@ -1349,14 +1351,7 @@ mod android_media {
             // SAFETY: `codec` is valid and deleted exactly once here.
             let delete_status = unsafe { AMediaCodec_delete(self.codec.as_ptr()) };
             self.closed = true;
-            release_result?;
-            if stop_status != AMEDIA_OK {
-                return Err(media_status_error("AMediaCodec_stop", stop_status));
-            }
-            if delete_status != AMEDIA_OK {
-                return Err(media_status_error("AMediaCodec_delete", delete_status));
-            }
-            Ok(())
+            media_codec_close_result(release_result, stop_status, delete_status)
         }
 
         fn dequeue_input(&mut self) -> Result<Option<usize>, DecoderError> {
@@ -1613,6 +1608,30 @@ mod android_media {
     }
 }
 
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn media_codec_close_result(
+    release_result: Result<(), DecoderError>,
+    stop_status: MediaStatus,
+    delete_status: MediaStatus,
+) -> Result<(), DecoderError> {
+    release_result?;
+    if stop_status != AMEDIA_OK {
+        return Err(media_status_error("AMediaCodec_stop", stop_status));
+    }
+    if delete_status != AMEDIA_OK {
+        tracing::warn!(
+            media_status = delete_status,
+            "AMediaCodec_delete failed after destructive MediaCodec teardown"
+        );
+    }
+    Ok(())
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn media_status_error(operation: &str, status: MediaStatus) -> DecoderError {
+    DecoderError::internal(format!("{operation} failed with media_status_t={status}"))
+}
+
 fn decode_json<T>(data: *const u8, len: usize) -> Result<T, DecoderError>
 where
     T: serde::de::DeserializeOwned,
@@ -1737,10 +1756,11 @@ fn plugin_panic_error() -> DecoderError {
 #[cfg(test)]
 mod tests {
     use super::{
-        MediaCodecOutputBufferKind, MediaCodecPendingOutputEosAction, android_color_standard_label,
-        android_color_standard_matrix_label, android_color_transfer_label,
-        android_native_window_ptr, codec_config_buffers, codec_mime, decoder_capabilities,
-        decoder_native_requirements, decoder_open_session_json, length_prefixed_sample_to_annex_b,
+        AMEDIA_OK, MediaCodecOutputBufferKind, MediaCodecPendingOutputEosAction,
+        android_color_standard_label, android_color_standard_matrix_label,
+        android_color_transfer_label, android_native_window_ptr, codec_config_buffers, codec_mime,
+        decoder_capabilities, decoder_native_requirements, decoder_open_session_json,
+        length_prefixed_sample_to_annex_b, media_codec_close_result,
         mediacodec_hdr_metadata_from_color, mediacodec_output_buffer_kind,
         mediacodec_pending_output_eos_action, mediacodec_surface_texture_format,
         merge_mediacodec_color_metadata, merge_mediacodec_hdr_metadata, nal_length_size_for_config,
@@ -1755,6 +1775,32 @@ mod tests {
         NativeFrameMasteringDisplayMetadata, NativeFramePipelineProfile,
         VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VesperPluginKind, VesperPluginResultStatus,
     };
+
+    #[test]
+    fn mediacodec_close_ignores_delete_failure_after_destructive_teardown() {
+        media_codec_close_result(Ok(()), AMEDIA_OK, -100)
+            .expect("delete failure after teardown is not retryable");
+    }
+
+    #[test]
+    fn mediacodec_close_reports_stop_failure() {
+        let error = media_codec_close_result(Ok(()), -22, AMEDIA_OK)
+            .expect_err("stop failure should remain visible");
+
+        assert!(error.to_string().contains("AMediaCodec_stop"));
+    }
+
+    #[test]
+    fn mediacodec_close_reports_release_failure() {
+        let error = media_codec_close_result(
+            Err(DecoderError::internal("release outstanding failed")),
+            AMEDIA_OK,
+            AMEDIA_OK,
+        )
+        .expect_err("release failure should remain visible");
+
+        assert!(error.to_string().contains("release outstanding failed"));
+    }
 
     #[test]
     fn exported_descriptor_matches_decoder_plugin_metadata() {

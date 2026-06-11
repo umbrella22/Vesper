@@ -74,6 +74,16 @@ impl PreloadTaskId {
     }
 }
 
+fn next_non_zero_preload_task_id(current: u64) -> PlayerResult<u64> {
+    current.checked_add(1).ok_or_else(|| {
+        PlayerError::with_category(
+            PlayerErrorCode::InvalidState,
+            PlayerErrorCategory::Playback,
+            "preload task id space is exhausted",
+        )
+    })
+}
+
 /// Normalized source identity used to compare preload candidates.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PreloadSourceIdentity(String);
@@ -543,7 +553,7 @@ where
 
     /// Drains pending planner events.
     pub fn drain_events(&mut self) -> Vec<PreloadEvent> {
-        self.events.drain(..).collect()
+        std::mem::take(&mut self.events)
     }
 
     /// Returns a snapshot for one task id.
@@ -580,7 +590,35 @@ where
             }
 
             let task_id = PreloadTaskId(self.next_task_id);
-            self.next_task_id += 1;
+            let next_task_id = match next_non_zero_preload_task_id(self.next_task_id) {
+                Ok(next_task_id) => next_task_id,
+                Err(error) => {
+                    let failed_record = PreloadTaskRecord {
+                        task_id,
+                        source_identity: PreloadSourceIdentity::from_media_source(
+                            &candidate.source,
+                        ),
+                        cache_key,
+                        source: candidate.source,
+                        scope: candidate.scope,
+                        kind: candidate.kind,
+                        selection_hint: candidate.selection_hint,
+                        warmup_window: candidate
+                            .config
+                            .warmup_window
+                            .unwrap_or(budget.warmup_window),
+                        expires_at: candidate.config.ttl.map(|ttl| now + ttl),
+                        config: candidate.config,
+                        status: PreloadTaskStatus::Failed,
+                        error_summary: Some(error.into()),
+                    };
+                    let failed_snapshot = failed_record.snapshot();
+                    self.tasks.insert(task_id, failed_record);
+                    self.events.push(PreloadEvent::Failed(failed_snapshot));
+                    continue;
+                }
+            };
+            self.next_task_id = next_task_id;
 
             let record = PreloadTaskRecord {
                 task_id,
@@ -848,7 +886,16 @@ fn compare_candidates(left: &PreloadCandidate, right: &PreloadCandidate) -> Orde
         })
 }
 
-fn rank_candidate_kind(kind: PreloadCandidateKind) -> u8 {
+pub fn preload_candidate_precedes_or_equal(
+    current: &PreloadCandidate,
+    next: &PreloadCandidate,
+) -> bool {
+    rank_candidate_kind(current.kind) < rank_candidate_kind(next.kind)
+        || (rank_candidate_kind(current.kind) == rank_candidate_kind(next.kind)
+            && rank_priority(current.config.priority) <= rank_priority(next.config.priority))
+}
+
+pub fn rank_candidate_kind(kind: PreloadCandidateKind) -> u8 {
     match kind {
         PreloadCandidateKind::Current => 0,
         PreloadCandidateKind::Neighbor => 1,
@@ -857,7 +904,7 @@ fn rank_candidate_kind(kind: PreloadCandidateKind) -> u8 {
     }
 }
 
-fn rank_priority(priority: PreloadPriority) -> u8 {
+pub fn rank_priority(priority: PreloadPriority) -> u8 {
     match priority {
         PreloadPriority::Critical => 0,
         PreloadPriority::High => 1,
@@ -876,7 +923,8 @@ mod tests {
     use super::{
         InMemoryPreloadBudgetProvider, InMemoryPreloadExecutor, PreloadBudget, PreloadBudgetScope,
         PreloadCandidate, PreloadCandidateKind, PreloadConfig, PreloadEvent, PreloadPlanner,
-        PreloadPriority, PreloadSelectionHint, PreloadTaskStatus,
+        PreloadPriority, PreloadSelectionHint, PreloadTaskStatus, rank_candidate_kind,
+        rank_priority,
     };
     use player_download::{PlayerError, PlayerErrorCode};
     use player_model::MediaSource;
@@ -962,6 +1010,26 @@ mod tests {
         assert_eq!(snapshot.tasks[0].kind, PreloadCandidateKind::Current);
         assert_eq!(snapshot.tasks[1].kind, PreloadCandidateKind::Neighbor);
         assert_eq!(planner.executor().started().len(), 2);
+    }
+
+    #[test]
+    fn shared_candidate_ranking_preserves_kind_and_priority_order() {
+        assert!(
+            rank_candidate_kind(PreloadCandidateKind::Current)
+                < rank_candidate_kind(PreloadCandidateKind::Neighbor)
+        );
+        assert!(
+            rank_candidate_kind(PreloadCandidateKind::Neighbor)
+                < rank_candidate_kind(PreloadCandidateKind::Recommended)
+        );
+        assert!(
+            rank_candidate_kind(PreloadCandidateKind::Recommended)
+                < rank_candidate_kind(PreloadCandidateKind::Background)
+        );
+        assert!(rank_priority(PreloadPriority::Critical) < rank_priority(PreloadPriority::High));
+        assert!(rank_priority(PreloadPriority::High) < rank_priority(PreloadPriority::Normal));
+        assert!(rank_priority(PreloadPriority::Normal) < rank_priority(PreloadPriority::Low));
+        assert!(rank_priority(PreloadPriority::Low) < rank_priority(PreloadPriority::Background));
     }
 
     #[test]
@@ -1243,5 +1311,37 @@ mod tests {
             now,
         );
         assert_eq!(next_task_ids.len(), 1);
+    }
+
+    #[test]
+    fn planner_reports_task_id_exhaustion_instead_of_wrapping() {
+        let provider = InMemoryPreloadBudgetProvider::new(budget(1, 64, 64));
+        let executor = InMemoryPreloadExecutor::default();
+        let mut planner = PreloadPlanner::new(provider, executor);
+        planner.next_task_id = u64::MAX;
+
+        let task_ids = planner.plan(
+            [candidate(
+                "https://example.com/current.m3u8",
+                PreloadBudgetScope::App,
+                PreloadCandidateKind::Current,
+                PreloadPriority::Critical,
+                1,
+            )],
+            Instant::now(),
+        );
+
+        assert!(task_ids.is_empty());
+        let snapshot = planner.snapshot();
+        assert_eq!(snapshot.tasks.len(), 1);
+        assert_eq!(snapshot.tasks[0].task_id.get(), u64::MAX);
+        assert_eq!(snapshot.tasks[0].status, PreloadTaskStatus::Failed);
+        assert!(
+            snapshot.tasks[0]
+                .error_summary
+                .as_ref()
+                .is_some_and(|error| error.message.contains("preload task id space is exhausted"))
+        );
+        assert!(planner.executor().started().is_empty());
     }
 }

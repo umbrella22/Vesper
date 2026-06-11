@@ -83,6 +83,9 @@ pub(crate) extern "C" fn ffmpeg_interrupt_callback(opaque: *mut c_void) -> c_int
         return 0;
     }
 
+    // SAFETY: `opaque` is set from `Arc::as_ptr` in `FfmpegInputInterrupt::callback`.
+    // The owning `FfmpegInputInterrupt` is stored alongside the FFmpeg input while
+    // callbacks may run, so the atomic flag remains valid for this synchronous load.
     let flag = unsafe { &*(opaque.cast::<AtomicBool>()) };
     i32::from(flag.load(Ordering::SeqCst))
 }
@@ -92,6 +95,8 @@ pub(crate) fn supports_input_format(name: &str) -> bool {
         return false;
     };
 
+    // SAFETY: `name` is a valid NUL-terminated string for the duration of the
+    // call, and FFmpeg only reads it while looking up a registered input format.
     unsafe { !ffmpeg::ffi::av_find_input_format(name.as_ptr()).is_null() }
 }
 
@@ -123,6 +128,9 @@ fn open_media_input_with_profile(
     let interrupt_state = interrupt.as_ref().map(|interrupt| interrupt.flag.clone());
     let options = input_open_dictionary(profile, purpose);
 
+    // SAFETY: all pointers passed to FFmpeg are valid for the duration of the
+    // open/stream-info calls. On success ownership of `format_context` is moved
+    // into `ffmpeg::format::context::Input::wrap`; on failure it is closed here.
     unsafe {
         let mut format_context = if interrupt.is_some() {
             ffmpeg::ffi::avformat_alloc_context()

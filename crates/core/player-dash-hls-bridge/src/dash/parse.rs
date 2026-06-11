@@ -366,7 +366,13 @@ fn parse_iso8601_duration_ms(value: &str) -> Option<u64> {
             continue;
         }
 
+        if number.is_empty() {
+            return None;
+        }
         let value: f64 = number.parse().ok()?;
+        if !value.is_finite() {
+            return None;
+        }
         number.clear();
         match ch {
             'H' => seconds += value * 3600.0,
@@ -376,7 +382,7 @@ fn parse_iso8601_duration_ms(value: &str) -> Option<u64> {
         }
     }
 
-    if !number.is_empty() || !seconds.is_finite() || seconds < 0.0 {
+    if !number.is_empty() || !seconds.is_finite() || seconds <= 0.0 {
         return None;
     }
 
@@ -809,5 +815,13 @@ mod tests {
         assert_eq!(manifest.manifest_type, DashManifestType::Dynamic);
         assert_eq!(manifest.minimum_update_period_ms, Some(2_000));
         assert_eq!(manifest.time_shift_buffer_depth_ms, Some(30_000));
+    }
+
+    #[test]
+    fn rejects_malformed_iso8601_duration_values() {
+        for value in ["PT", "PT0S", "PT1H2", "PTMS", "P1D"] {
+            assert_eq!(parse_iso8601_duration_ms(value), None, "{value}");
+        }
+        assert_eq!(parse_iso8601_duration_ms("PT1H2M3.5S"), Some(3_723_500));
     }
 }

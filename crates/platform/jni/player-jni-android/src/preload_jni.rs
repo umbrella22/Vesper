@@ -14,9 +14,11 @@ use player_runtime::{
 };
 
 use crate::{
-    HandleRegistry, PKG, error_category_from_jni_ordinal, error_code_from_jni_ordinal, field_sig,
-    jni_name, lock_or_recover, method_sig, resolve_preload_budget_with_runtime, run_jni_entry,
-    u64_to_jlong_saturating, u128_to_jlong_saturating,
+    HandleRegistry, PKG, error_category_from_jni_ordinal, error_code_from_jni_ordinal, jni_name,
+    lock_or_recover, method_sig,
+    parsers::{bool_field, int_field, long_field, string_field},
+    resolve_preload_budget_with_runtime, run_jni_entry, u64_to_jlong_saturating,
+    u128_to_jlong_saturating,
 };
 
 type AndroidJniPreloadSession = Arc<Mutex<AndroidPreloadBridgeSession>>;
@@ -74,52 +76,6 @@ fn optional_java_string<'local>(
         Some(value) => Ok(JObject::from(env.new_string(value)?)),
         None => Ok(JObject::null()),
     }
-}
-
-fn bool_field(env: &mut Env<'_>, object: &JObject<'_>, field_name: &str) -> JniResult<bool> {
-    env.get_field(
-        object,
-        jni_name(field_name),
-        field_sig("Z").field_signature(),
-    )?
-    .z()
-}
-
-fn int_field(env: &mut Env<'_>, object: &JObject<'_>, field_name: &str) -> JniResult<jint> {
-    env.get_field(
-        object,
-        jni_name(field_name),
-        field_sig("I").field_signature(),
-    )?
-    .i()
-}
-
-fn long_field(env: &mut Env<'_>, object: &JObject<'_>, field_name: &str) -> JniResult<jlong> {
-    env.get_field(
-        object,
-        jni_name(field_name),
-        field_sig("J").field_signature(),
-    )?
-    .j()
-}
-
-fn string_field(
-    env: &mut Env<'_>,
-    object: &JObject<'_>,
-    field_name: &str,
-) -> JniResult<Option<String>> {
-    let value = env
-        .get_field(
-            object,
-            jni_name(field_name),
-            field_sig("Ljava/lang/String;").field_signature(),
-        )?
-        .l()?;
-    if value.is_null() {
-        return Ok(None);
-    }
-    let value = unsafe { JString::from_raw(env, value.into_raw() as jni::sys::jstring) };
-    Ok(Some(value.try_to_string(env)?))
 }
 
 fn sparse_preload_budget_from_java(

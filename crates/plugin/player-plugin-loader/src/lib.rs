@@ -28,9 +28,9 @@ use player_plugin::{
     SourceNormalizerResourceCapabilities, SourceNormalizerResourcePluginFactory,
     SourceNormalizerResourceSession, SourceNormalizerResourceSessionConfig,
     SourceNormalizerResourceSessionInfo, SourceNormalizerResourceSessionStatus,
-    VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-    VESPER_PLUGIN_ABI_VERSION_V2, VESPER_PLUGIN_ENTRY_SYMBOL,
-    VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
+    SourceNormalizerResourceSessionWaitStatus, VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT, VESPER_PLUGIN_ABI_VERSION_V2,
+    VESPER_PLUGIN_ENTRY_SYMBOL, VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
     VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT, VesperBenchmarkSinkApi,
     VesperDecoderOpenSessionResult, VesperDecoderPluginApiV5,
     VesperDecoderReceiveNativeFrameResult, VesperDecoderReceivePcmFrameResult,
@@ -39,7 +39,7 @@ use player_plugin::{
     VesperPluginDescriptor, VesperPluginEntryPoint, VesperPluginKind, VesperPluginProcessResult,
     VesperPluginProgressCallbacks, VesperPluginResultStatus, VesperPostDownloadProcessorApi,
     VesperSourceNormalizerOpenPacketSessionResult, VesperSourceNormalizerOpenResourceSessionResult,
-    VesperSourceNormalizerPluginApiV3, VesperSourceNormalizerReadPacketResult,
+    VesperSourceNormalizerPluginApiV4, VesperSourceNormalizerReadPacketResult,
 };
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -80,6 +80,69 @@ pub(crate) use post_download::DynamicPostDownloadProcessor;
 pub(crate) use source_normalizer::{
     DynamicSourceNormalizerPacketPluginFactory, DynamicSourceNormalizerResourcePluginFactory,
 };
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_owned();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "unknown panic payload".to_owned()
+}
+
+fn plugin_panic_message(
+    plugin_name: &str,
+    operation: &str,
+    payload: &(dyn std::any::Any + Send),
+) -> String {
+    format!(
+        "plugin `{plugin_name}` panicked during `{operation}`: {}",
+        panic_payload_message(payload)
+    )
+}
+
+pub(crate) fn catch_decoder_plugin_call<T>(
+    plugin_name: &str,
+    operation: &'static str,
+    f: impl FnOnce() -> T,
+) -> Result<T, DecoderError> {
+    catch_unwind(AssertUnwindSafe(f)).map_err(|payload| {
+        DecoderError::abi_violation(plugin_panic_message(
+            plugin_name,
+            operation,
+            payload.as_ref(),
+        ))
+    })
+}
+
+pub(crate) fn catch_source_normalizer_plugin_call<T>(
+    plugin_name: &str,
+    operation: &'static str,
+    f: impl FnOnce() -> T,
+) -> Result<T, SourceNormalizerError> {
+    catch_unwind(AssertUnwindSafe(f)).map_err(|payload| {
+        SourceNormalizerError::abi_violation(plugin_panic_message(
+            plugin_name,
+            operation,
+            payload.as_ref(),
+        ))
+    })
+}
+
+pub(crate) fn catch_frame_processor_plugin_call<T>(
+    plugin_name: &str,
+    operation: &'static str,
+    f: impl FnOnce() -> T,
+) -> Result<T, FrameProcessorError> {
+    catch_unwind(AssertUnwindSafe(f)).map_err(|payload| {
+        FrameProcessorError::abi_violation(plugin_panic_message(
+            plugin_name,
+            operation,
+            payload.as_ref(),
+        ))
+    })
+}
 
 #[cfg(test)]
 mod tests;

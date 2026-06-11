@@ -17,14 +17,14 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
 根据你的接入目标选择阅读路径。先读第一份文档了解公开 API 与打包模型，再用
 示例应用作为可运行参考。
 
-| 目标                     | 先读                                                                                                             | 再运行 / 查看                                                                      | 适用场景                                                          |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Android Kotlin / Compose | [lib/android/README.md](lib/android/README.md)                                                                   | [examples/android-compose-host/README.md](examples/android-compose-host/README.md) | 直接在 Android app 中接入 AAR modules。                           |
-| iOS Swift / SwiftUI      | [lib/ios/VesperPlayerKit/README.md](lib/ios/VesperPlayerKit/README.md)                                           | [examples/ios-swift-host/README.md](examples/ios-swift-host/README.md)             | 在 UIKit / SwiftUI app 中消费 Swift Package 或 XCFramework。      |
-| Flutter                  | [lib/flutter/vesper_player/README.md](lib/flutter/vesper_player/README.md)                                       | [examples/flutter-host/README.md](examples/flutter-host/README.md)                 | 当前用一套 Dart API 覆盖 Android / iOS；Flutter 桌面端暂缓。      |
-| Flutter 平台包作者       | [lib/flutter/vesper_player_platform_interface/README.md](lib/flutter/vesper_player_platform_interface/README.md) | [lib/flutter/vesper_player_ui/README.md](lib/flutter/vesper_player_ui/README.md)   | 需要扩展 federated plugin，或接入可选 Flutter UI package。        |
-| C / C++ via FFI          | [include/player_ffi.h](include/player_ffi.h)                                                                     | [examples/c-host/README.md](examples/c-host/README.md)                             | 需要从原生 host 或 plugin runtime 调用生成的 C ABI。              |
-| Desktop Rust             | [examples/basic-player](examples/basic-player)                                                                   | [Desktop FFmpeg](#desktop-ffmpeg)                                                  | 试用桌面 demo，或接入 Rust 播放管线。                             |
+| 目标                     | 先读                                                                                                             | 再运行 / 查看                                                                      | 适用场景                                                     |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Android Kotlin / Compose | [lib/android/README.md](lib/android/README.md)                                                                   | [examples/android-compose-host/README.md](examples/android-compose-host/README.md) | 直接在 Android app 中接入 AAR modules。                      |
+| iOS Swift / SwiftUI      | [lib/ios/VesperPlayerKit/README.md](lib/ios/VesperPlayerKit/README.md)                                           | [examples/ios-swift-host/README.md](examples/ios-swift-host/README.md)             | 在 UIKit / SwiftUI app 中消费 Swift Package 或 XCFramework。 |
+| Flutter                  | [lib/flutter/vesper_player/README.md](lib/flutter/vesper_player/README.md)                                       | [examples/flutter-host/README.md](examples/flutter-host/README.md)                 | 当前用一套 Dart API 覆盖 Android / iOS；Flutter 桌面端暂缓。 |
+| Flutter 平台包作者       | [lib/flutter/vesper_player_platform_interface/README.md](lib/flutter/vesper_player_platform_interface/README.md) | [lib/flutter/vesper_player_ui/README.md](lib/flutter/vesper_player_ui/README.md)   | 需要扩展 federated plugin，或接入可选 Flutter UI package。   |
+| C / C++ via FFI          | [include/player_ffi.h](include/player_ffi.h)                                                                     | [examples/c-host/README.md](examples/c-host/README.md)                             | 需要从原生 host 或 plugin runtime 调用生成的 C ABI。         |
+| Desktop Rust             | [examples/basic-player](examples/basic-player)                                                                   | [Desktop FFmpeg](#desktop-ffmpeg)                                                  | 试用桌面 demo，或接入 Rust 播放管线。                        |
 
 ## 你会获得什么
 
@@ -50,22 +50,22 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
 下面是粗粒度能力概览。每个平台 README 会说明更精确的行为、fallback 规则和 host app
 在暴露高级控制前应检查的 capability flags。
 
-| 能力                   | Android (Media3)       | iOS (AVPlayer)                                | 桌面 Rust                            | Flutter 移动端                      |
-| ---------------------- | ---------------------- | --------------------------------------------- | ------------------------------------ | ----------------------------------- |
-| 本地文件               | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
-| 渐进式 HTTP/HTTPS      | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
-| HLS (`.m3u8`)          | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
-| DASH (`.mpd`)          | ✅ 原生                | ✅ 面向 VOD / live fMP4 的 DASH-to-HLS bridge | ⚠️ 取决于 backend 的 FFmpeg demuxer  | ✅ Android 原生 / iOS bridge        |
-| 直播 / DVR             | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
-| 轨道选择               | ✅ 视频 / 音频 / 字幕  | ✅ 音频 / 字幕                                | ✅                                   | ✅ 遵循各平台语义                   |
-| ABR `constrained` 策略 | ✅                     | ✅ HLS + DASH bridge 变体目录                 | ✅                                   | ✅ 遵循各平台语义                   |
-| ABR `fixedTrack` 策略  | ✅ 精确                | ✅ iOS 15+ 上尽力进行 HLS/DASH 固定           | ✅                                   | ✅ 遵循各平台语义                   |
-| 韧性策略               | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
-| 预加载预算             | ✅                     | ✅                                            | ✅                                   | ✅ Android / iOS                    |
-| 下载管理器             | ✅ VOD prepare + restore + export | ✅ VOD prepare + restore + export | ✅ public `player-host-desktop::download` service | ✅ Android / iOS                    |
-| 外部播放               | ✅ Cast / DLNA 可选    | ✅ AirPlay route picker                       | ❌                                   | ✅ Android Cast / DLNA、iOS AirPlay |
-| 硬件解码探测           | `VesperDecoderBackend` | `VesperCodecSupport`                          | macOS VideoToolbox native-frame 可选启用 | 通过移动端 capability 上报体现      |
-| Plugin 启动诊断        | 内部 runtime diagnostics | 内部 runtime diagnostics                    | ✅ decoder / frame processor / source normalizer diagnostics | 在支持的平台通过 create-result diagnostics 暴露 |
+| 能力                   | Android (Media3)                  | iOS (AVPlayer)                                | 桌面 Rust                                                                                                                             | Flutter 移动端                                  |
+| ---------------------- | --------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| 本地文件               | ✅                                | ✅                                            | ✅                                                                                                                                    | ✅ Android / iOS                                |
+| 渐进式 HTTP/HTTPS      | ✅                                | ✅                                            | ✅                                                                                                                                    | ✅ Android / iOS                                |
+| HLS (`.m3u8`)          | ✅                                | ✅                                            | ✅ FFmpeg demuxer，暂不支持桌面 ABR 切换                                                                                              | ✅ Android / iOS                                |
+| DASH (`.mpd`)          | ✅ 原生                           | ✅ 面向 VOD / live fMP4 的 DASH-to-HLS bridge | ⚠️ 取决于 backend 的 FFmpeg demuxer                                                                                                   | ✅ Android 原生 / iOS bridge                    |
+| 直播 / DVR             | ✅                                | ✅                                            | ✅                                                                                                                                    | ✅ Android / iOS                                |
+| 轨道选择               | ✅ 视频 / 音频 / 字幕             | ✅ 音频 / 字幕                                | ✅                                                                                                                                    | ✅ 遵循各平台语义                               |
+| ABR `constrained` 策略 | ✅                                | ✅ HLS + DASH bridge 变体目录                 | ⚠️ 桌面 FFmpeg HLS 仅保留 policy DTO，不执行 ABR 切换                                                                                 | ✅ 遵循各平台语义                               |
+| ABR `fixedTrack` 策略  | ✅ 精确                           | ✅ iOS 15+ 上尽力进行 HLS/DASH 固定           | ⚠️ 桌面 FFmpeg HLS 仅保留 policy DTO，不执行 ABR 切换                                                                                 | ✅ 遵循各平台语义                               |
+| 韧性策略               | ✅                                | ✅                                            | ✅                                                                                                                                    | ✅ Android / iOS                                |
+| 预加载预算             | ✅                                | ✅                                            | ⚠️ 仅共享 policy / planner；`player-host-desktop` 当前仍是 noop executor，不做端到端 warmup                                             | ✅ Android / iOS                                |
+| 下载管理器             | ✅ VOD prepare + restore + export | ✅ VOD prepare + restore + export             | ✅ public `player-host-desktop::download` service                                                                                     | ✅ Android / iOS                                |
+| 外部播放               | ✅ Cast / DLNA 可选               | ✅ AirPlay route picker                       | ❌                                                                                                                                    | ✅ Android Cast / DLNA、iOS AirPlay             |
+| 硬件解码探测           | `VesperDecoderBackend`            | `VesperCodecSupport`                          | macOS VideoToolbox native-frame 可选启用；Windows D3D11 roadmap；Linux 当前 software-only                                             | 通过移动端 capability 上报体现                  |
+| Plugin 启动诊断        | 内部 runtime diagnostics          | 内部 runtime diagnostics                      | macOS / Windows decoder diagnostics；macOS FrameProcessor chain；Linux 对已配置 plugin path 报告 unsupported diagnostics              | 在支持的平台通过 create-result diagnostics 暴露 |
 
 Flutter 当前仅覆盖移动端；Flutter 桌面端目标暂不随包发布。产品 UI
 应以运行时能力标记为准，而不是假设上表能力在每个后端上都可用。
@@ -185,6 +185,10 @@ VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libplayer_frame_processor_diagn
 VESPER_FRAME_PROCESSOR_MODE=diagnostics \
 cargo run -p basic-player
 ```
+
+桌面 `wgpu` software-render shader path 当前按 SDR 场景校准，主要覆盖 Rec.709 limited
+range。HDR、Dolby Vision、wide-gamut，以及桌面 shader color-management 仍不是稳定
+对外能力面。
 
 ### C ABI
 
@@ -383,6 +387,13 @@ plugins 与 shared runtime 必须来自同一个 FFmpeg profile，保证
 工作流。移动端默认播放仍以平台系统播放器优先。HDR / Dolby Vision 保持走平台系统播放；
 SDK-managed native-frame 路线当前是 SDR-only，不作为 HDR-ready 路径对外声明。
 
+桌面 plugin 支持目前是非对称的：macOS 路径覆盖 VideoToolbox native-frame 和
+FrameProcessor 验证；Windows 路径以 D3D11 native-frame presenter / decoder 为
+roadmap，当前没有 FrameProcessor chain；Linux 仍走 FFmpeg software path，没有
+loader-backed plugin execution、native-frame presentation 或 FrameProcessor 支持。
+如果配置了尚未接线的 Windows FrameProcessor 或 Linux plugin path，startup
+diagnostics 会明确报告 unsupported platform capability，而不是让它看起来像已经接线。
+
 Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载物的 host app
 在其自身 Gradle / Xcode 构建中不会运行本仓库的 JNI 或 FFmpeg 生成任务。
 
@@ -391,7 +402,9 @@ Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载
 Vesper 仍在演进中，尚未作为稳定的 SDK 发布。Android 和 iOS host kits
 已经有可发布的打包路径；Flutter federated packages 目前仍从本仓库源码分发。
 Flutter 桌面端目标当前暂不随包发布；macOS native VideoToolbox native-frame decoder
-path 仍是可选启用的实验路径；桌面端默认路径仍是 FFmpeg software fallback。
+path 仍是可选启用的实验路径；Windows D3D11 native-frame 仍在 roadmap 中，且当前没有
+FrameProcessor chain；Linux 仍是 software-only，并在配置未接线 plugin path 时仅返回
+unsupported diagnostics。桌面端默认路径仍是 FFmpeg software fallback。
 
 ## 许可
 

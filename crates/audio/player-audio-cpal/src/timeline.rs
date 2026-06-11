@@ -1,11 +1,15 @@
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::time::Duration;
+use std::sync::{Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use rtrb::Producer;
 
 use crate::ring::{AudioRingSample, ring_generation};
+
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
 
 #[derive(Debug)]
 pub(crate) struct PlaybackTimelineState {
@@ -14,9 +18,24 @@ pub(crate) struct PlaybackTimelineState {
     playback_rate: f32,
 }
 
+#[derive(Debug, Default)]
+struct AudioBackpressureState {
+    sequence: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioBufferWindowWaitResult {
+    Ready,
+    Inactive,
+    Cancelled,
+    TimedOut,
+}
+
 pub(crate) struct SharedPlaybackState {
     timeline: Mutex<PlaybackTimelineState>,
     producer: Mutex<Producer<AudioRingSample>>,
+    backpressure: Mutex<AudioBackpressureState>,
+    backpressure_changed: Condvar,
     generation: AtomicU64,
     ring_generation: AtomicU32,
     completed_generation: AtomicU64,
@@ -62,6 +81,8 @@ impl SharedPlaybackState {
                 playback_rate: sanitize_playback_rate(playback_rate),
             }),
             producer: Mutex::new(producer),
+            backpressure: Mutex::new(AudioBackpressureState::default()),
+            backpressure_changed: Condvar::new(),
             generation: AtomicU64::new(0),
             ring_generation: AtomicU32::new(0),
             completed_generation: AtomicU64::new(0),
@@ -78,43 +99,41 @@ impl SharedPlaybackState {
         media_start: Duration,
         playback_rate: f32,
     ) -> u64 {
-        let mut generation = 0u64;
-        if let Ok(mut timeline) = self.timeline.lock() {
-            timeline.generation = timeline.generation.saturating_add(1);
-            timeline.media_start = media_start;
-            timeline.playback_rate = sanitize_playback_rate(playback_rate);
-            generation = timeline.generation;
-            self.generation.store(generation, Ordering::Release);
-            self.ring_generation
-                .store(ring_generation(generation), Ordering::Release);
-            self.completed_generation.store(0, Ordering::Release);
-            self.queued_samples.store(0, Ordering::Release);
-            self.played_samples.store(0, Ordering::Release);
-        }
+        let mut timeline = lock_or_recover(&self.timeline);
+        timeline.generation = timeline.generation.saturating_add(1);
+        timeline.media_start = media_start;
+        timeline.playback_rate = sanitize_playback_rate(playback_rate);
+        let generation = timeline.generation;
+        self.generation.store(generation, Ordering::Release);
+        self.ring_generation
+            .store(ring_generation(generation), Ordering::Release);
+        self.completed_generation.store(0, Ordering::Release);
+        self.queued_samples.store(0, Ordering::Release);
+        self.played_samples.store(0, Ordering::Release);
 
         let _ = channels;
         self.finished.store(false, Ordering::SeqCst);
+        drop(timeline);
+        self.notify_backpressure_waiters();
         generation
     }
 
     pub(crate) fn append_samples(&self, generation: u64, samples: Vec<f32>) -> Result<bool> {
-        let Ok(timeline) = self.timeline.lock() else {
-            anyhow::bail!("audio playback timeline lock is poisoned");
-        };
+        let timeline = lock_or_recover(&self.timeline);
         if timeline.generation != generation {
+            drop(timeline);
+            self.notify_backpressure_waiters();
             return Ok(false);
         }
         let ring_generation = ring_generation(generation);
         drop(timeline);
 
         if self.generation.load(Ordering::Acquire) != generation {
+            self.notify_backpressure_waiters();
             return Ok(false);
         }
 
-        let mut producer = self
-            .producer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("audio output ring producer lock is poisoned"))?;
+        let mut producer = lock_or_recover(&self.producer);
         let available_slots = producer.slots();
         if available_slots < samples.len() {
             anyhow::bail!(
@@ -141,46 +160,49 @@ impl SharedPlaybackState {
         }
 
         if self.generation.load(Ordering::Acquire) != generation {
+            self.notify_backpressure_waiters();
             return Ok(false);
         }
 
         self.queued_samples
             .fetch_add(sample_count, Ordering::AcqRel);
         self.finished.store(false, Ordering::SeqCst);
+        self.notify_backpressure_waiters();
         Ok(true)
     }
 
     pub(crate) fn finish_generation(&self, generation: u64) {
-        if let Ok(timeline) = self.timeline.lock()
-            && timeline.generation == generation
-        {
+        let timeline = lock_or_recover(&self.timeline);
+        if timeline.generation == generation {
             self.completed_generation
                 .store(generation, Ordering::Release);
             if self.is_current_generation_complete_and_drained() {
                 self.finished.store(true, Ordering::SeqCst);
             }
         }
+        drop(timeline);
+        self.notify_backpressure_waiters();
     }
 
     pub(crate) fn is_generation_active(&self, generation: u64) -> bool {
         self.timeline
             .lock()
-            .map(|timeline| timeline.generation == generation)
-            .unwrap_or(false)
+            .unwrap_or_else(|error| error.into_inner())
+            .generation
+            == generation
     }
 
     pub(crate) fn buffered_samples(&self, generation: u64) -> Option<usize> {
-        self.timeline.lock().ok().and_then(|timeline| {
-            if timeline.generation != generation {
-                return None;
-            }
+        let timeline = lock_or_recover(&self.timeline);
+        if timeline.generation != generation {
+            return None;
+        }
 
-            Some(
-                self.queued_samples
-                    .load(Ordering::Acquire)
-                    .saturating_sub(self.played_samples.load(Ordering::Acquire)),
-            )
-        })
+        Some(
+            self.queued_samples
+                .load(Ordering::Acquire)
+                .saturating_sub(self.played_samples.load(Ordering::Acquire)),
+        )
     }
 
     pub(crate) fn playback_rate(&self) -> f32 {
@@ -226,6 +248,7 @@ impl SharedPlaybackState {
 
     pub(crate) fn set_finished(&self, finished: bool) {
         self.finished.store(finished, Ordering::SeqCst);
+        self.notify_backpressure_waiters();
     }
 
     pub(crate) fn ring_generation(&self) -> u32 {
@@ -236,6 +259,58 @@ impl SharedPlaybackState {
         if played > 0 {
             self.played_samples.fetch_add(played, Ordering::AcqRel);
             self.finished.store(false, Ordering::SeqCst);
+            self.notify_backpressure_waiters();
+        }
+    }
+
+    pub(crate) fn notify_backpressure_waiters(&self) {
+        let mut state = lock_or_recover(&self.backpressure);
+        state.sequence = state.sequence.wrapping_add(1);
+        self.backpressure_changed.notify_all();
+    }
+
+    pub(crate) fn wait_for_buffered_samples_at_or_below(
+        &self,
+        generation: u64,
+        target_samples: usize,
+        timeout: Duration,
+        should_cancel: impl Fn() -> bool,
+    ) -> AudioBufferWindowWaitResult {
+        let deadline = Instant::now().checked_add(timeout);
+        let mut backpressure = lock_or_recover(&self.backpressure);
+
+        loop {
+            if should_cancel() {
+                return AudioBufferWindowWaitResult::Cancelled;
+            }
+            if !self.is_generation_active(generation) {
+                return AudioBufferWindowWaitResult::Inactive;
+            }
+            if self
+                .buffered_samples(generation)
+                .is_some_and(|buffered| buffered <= target_samples)
+            {
+                return AudioBufferWindowWaitResult::Ready;
+            }
+
+            let Some(deadline) = deadline else {
+                return AudioBufferWindowWaitResult::TimedOut;
+            };
+            let now = Instant::now();
+            if now >= deadline {
+                return AudioBufferWindowWaitResult::TimedOut;
+            }
+
+            let observed_sequence = backpressure.sequence;
+            let remaining = deadline.saturating_duration_since(now);
+            let (next_backpressure, wait_result) = self
+                .backpressure_changed
+                .wait_timeout(backpressure, remaining)
+                .unwrap_or_else(|error| error.into_inner());
+            backpressure = next_backpressure;
+            if wait_result.timed_out() && backpressure.sequence == observed_sequence {
+                return AudioBufferWindowWaitResult::TimedOut;
+            }
         }
     }
 }
@@ -275,10 +350,11 @@ pub(crate) fn sanitize_playback_rate(playback_rate: f32) -> f32 {
 mod tests {
     use std::sync::Arc;
     use std::time::Duration;
+    use std::time::Instant;
 
     use rtrb::RingBuffer;
 
-    use super::{SharedPlaybackState, sanitize_playback_rate};
+    use super::{AudioBufferWindowWaitResult, SharedPlaybackState, sanitize_playback_rate};
     use crate::ring::AudioRingSample;
 
     fn state_with_capacity(capacity: usize) -> Arc<SharedPlaybackState> {
@@ -364,5 +440,94 @@ mod tests {
         assert_eq!(sanitize_playback_rate(-1.0), 1.0);
         assert_eq!(sanitize_playback_rate(f32::INFINITY), 1.0);
         assert_eq!(sanitize_playback_rate(1.25), 1.25);
+    }
+
+    #[test]
+    fn buffer_window_wait_returns_ready_when_already_below_target() {
+        let state = state_with_capacity(16);
+        let generation = state.begin_generation(2, Duration::ZERO, 1.0);
+
+        let result = state.wait_for_buffered_samples_at_or_below(
+            generation,
+            0,
+            Duration::from_secs(1),
+            || false,
+        );
+
+        assert_eq!(result, AudioBufferWindowWaitResult::Ready);
+    }
+
+    #[test]
+    fn buffer_window_wait_returns_inactive_after_generation_change() {
+        let state = state_with_capacity(16);
+        let first = state.begin_generation(2, Duration::ZERO, 1.0);
+        state.begin_generation(2, Duration::ZERO, 1.0);
+
+        let result =
+            state.wait_for_buffered_samples_at_or_below(first, 0, Duration::from_secs(1), || false);
+
+        assert_eq!(result, AudioBufferWindowWaitResult::Inactive);
+    }
+
+    #[test]
+    fn buffer_window_wait_returns_cancelled_when_requested() {
+        let state = state_with_capacity(16);
+        let generation = state.begin_generation(2, Duration::ZERO, 1.0);
+
+        let result = state.wait_for_buffered_samples_at_or_below(
+            generation,
+            0,
+            Duration::from_secs(1),
+            || true,
+        );
+
+        assert_eq!(result, AudioBufferWindowWaitResult::Cancelled);
+    }
+
+    #[test]
+    fn buffer_window_wait_times_out_without_progress() {
+        let state = state_with_capacity(16);
+        let generation = state.begin_generation(2, Duration::ZERO, 1.0);
+        state
+            .append_samples(generation, vec![0.0, 0.1, 0.2, 0.3])
+            .expect("append should succeed");
+
+        let started = Instant::now();
+        let result = state.wait_for_buffered_samples_at_or_below(
+            generation,
+            0,
+            Duration::from_millis(5),
+            || false,
+        );
+
+        assert_eq!(result, AudioBufferWindowWaitResult::TimedOut);
+        assert!(started.elapsed() < Duration::from_millis(200));
+    }
+
+    #[test]
+    fn buffer_window_wait_wakes_when_samples_are_played() {
+        let state = state_with_capacity(16);
+        let generation = state.begin_generation(2, Duration::ZERO, 1.0);
+        state
+            .append_samples(generation, vec![0.0, 0.1, 0.2, 0.3])
+            .expect("append should succeed");
+
+        let waiter_state = state.clone();
+        let waiter = std::thread::spawn(move || {
+            waiter_state.wait_for_buffered_samples_at_or_below(
+                generation,
+                0,
+                Duration::from_secs(1),
+                || false,
+            )
+        });
+
+        std::thread::sleep(Duration::from_millis(10));
+        state.mark_samples_played(4);
+
+        assert_eq!(
+            waiter.join().expect("waiter should not panic"),
+            AudioBufferWindowWaitResult::Ready
+        );
     }
 }

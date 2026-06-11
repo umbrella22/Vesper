@@ -203,15 +203,15 @@ impl DownloadAssetIndex {
                 if resource.generated_text.is_some() {
                     Some(sum)
                 } else {
-                    resource.size_bytes.map(|size| sum + size)
+                    resource.size_bytes.and_then(|size| sum.checked_add(size))
                 }
             });
             let segment_sum = self.segments.iter().try_fold(0_u64, |sum, segment| {
-                segment.size_bytes.map(|size| sum + size)
+                segment.size_bytes.and_then(|size| sum.checked_add(size))
             });
 
             match (resource_sum, segment_sum) {
-                (Some(resource_sum), Some(segment_sum)) => Some(resource_sum + segment_sum),
+                (Some(resource_sum), Some(segment_sum)) => resource_sum.checked_add(segment_sum),
                 (Some(resource_sum), None) if self.segments.is_empty() => Some(resource_sum),
                 (None, Some(segment_sum)) if self.resources.is_empty() => Some(segment_sum),
                 _ => None,
@@ -223,7 +223,7 @@ impl DownloadAssetIndex {
         if self.segments.is_empty() {
             None
         } else {
-            Some(self.segments.len() as u32)
+            u32::try_from(self.segments.len()).ok()
         }
     }
 

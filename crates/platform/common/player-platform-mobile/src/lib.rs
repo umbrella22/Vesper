@@ -1,11 +1,14 @@
 #![deny(unsafe_code)]
 
+use std::collections::VecDeque;
+use std::io::Read;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use player_model::MediaSource;
 use player_plugin::{
-    DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata,
+    DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata, ProcessorProgress,
     SourceNormalizerNormalizeLevel, SourceNormalizerOutputRoute, SourceNormalizerPacketMediaKind,
     SourceNormalizerPacketSession, SourceNormalizerPacketSessionConfig,
     SourceNormalizerPacketSessionRequirements, SourceNormalizerPacketStreamInfo,
@@ -20,10 +23,18 @@ use player_plugin_loader::{
     SourceNormalizerPacketPluginCapabilitySummary, SourceNormalizerResourcePluginCapabilitySummary,
 };
 use player_runtime::{
-    FrameProcessorMode, NativeFramePipelineMode, PlayerPlaybackRoute,
-    PlayerPluginCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
+    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadExecutor, DownloadManager,
+    DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadSnapshot,
+    DownloadSource, DownloadTaskId, DownloadTaskSnapshot, FrameProcessorMode,
+    InMemoryDownloadStore, InMemoryPreloadBudgetProvider, NativeFramePipelineMode, PlayerError,
+    PlayerErrorCategory, PlayerErrorCode, PlayerPlaybackRoute, PlayerPluginCapabilitySummary,
+    PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
     PlayerPluginFrameProcessorCapabilitySummary, PlayerPluginParticipation,
-    PlayerPluginSourceNormalizerCapabilitySummary, PlayerRuntimeOptions, PlayerRuntimeStartup,
+    PlayerPluginSourceNormalizerCapabilitySummary, PlayerResult, PlayerRuntimeEvent,
+    PlayerRuntimeOptions, PlayerRuntimeStartup, PlaylistActiveItem, PlaylistAdvanceDecision,
+    PlaylistCoordinator, PlaylistCoordinatorConfig, PlaylistEvent, PlaylistQueueItem,
+    PlaylistSnapshot, PlaylistViewportHint, PreloadBudget, PreloadCandidate, PreloadEvent,
+    PreloadExecutor, PreloadPlanner, PreloadSnapshot, PreloadTaskId, PreloadTaskSnapshot,
     SourceNormalizerMode,
 };
 use serde::Serialize;
@@ -32,7 +43,503 @@ use serde::ser::{SerializeMap, Serializer};
 const SOURCE_NORMALIZER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const SOURCE_NORMALIZER_SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 const SOURCE_NORMALIZER_RESOURCE_READY_TIMEOUT: Duration = Duration::from_secs(10);
-const SOURCE_NORMALIZER_RESOURCE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const FMP4_BOX_MARKER_SCAN_LIMIT_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MobilePreloadCommand {
+    Start { task: PreloadTaskSnapshot },
+    Cancel { task_id: PreloadTaskId },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MobileDownloadCommand {
+    Prepare { task: DownloadTaskSnapshot },
+    Start { task: DownloadTaskSnapshot },
+    Pause { task_id: DownloadTaskId },
+    Resume { task: DownloadTaskSnapshot },
+    Remove { task_id: DownloadTaskId },
+}
+
+#[derive(Debug, Clone)]
+pub struct MobileCommandQueue<T> {
+    label: &'static str,
+    queue: Arc<Mutex<VecDeque<T>>>,
+}
+
+impl<T> MobileCommandQueue<T> {
+    pub fn new(label: &'static str) -> Self {
+        Self {
+            label,
+            queue: Arc::new(Mutex::new(VecDeque::new())),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn from_shared_for_tests(label: &'static str, queue: Arc<Mutex<VecDeque<T>>>) -> Self {
+        Self { label, queue }
+    }
+
+    pub fn push(&self, command: T) -> PlayerResult<()> {
+        let mut queue = self.queue.lock().map_err(|_| {
+            PlayerError::with_category(
+                PlayerErrorCode::BackendFailure,
+                PlayerErrorCategory::Platform,
+                format!("{} command queue lock poisoned", self.label),
+            )
+        })?;
+        queue.push_back(command);
+        Ok(())
+    }
+
+    pub fn drain(&self) -> Vec<T> {
+        self.queue
+            .lock()
+            .map(|mut queue| queue.drain(..).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn drain_map<U>(&self, map: impl FnMut(T) -> U) -> Vec<U> {
+        self.queue
+            .lock()
+            .map(|mut queue| queue.drain(..).map(map).collect())
+            .unwrap_or_default()
+    }
+}
+
+pub fn drain_runtime_events<T>(
+    extra_events: &mut VecDeque<PlayerRuntimeEvent>,
+    runtime_events: impl IntoIterator<Item = PlayerRuntimeEvent>,
+    map: impl FnMut(&PlayerRuntimeEvent) -> Option<T>,
+) -> Vec<T> {
+    let mut raw_events: Vec<PlayerRuntimeEvent> = extra_events.drain(..).collect();
+    raw_events.extend(runtime_events);
+    raw_events.iter().filter_map(map).collect()
+}
+
+pub fn push_video_surface_event(
+    extra_events: &mut VecDeque<PlayerRuntimeEvent>,
+    previous: &mut bool,
+    attached: bool,
+) -> bool {
+    if *previous == attached {
+        return false;
+    }
+    *previous = attached;
+    extra_events.push_back(PlayerRuntimeEvent::VideoSurfaceChanged { attached });
+    true
+}
+
+#[derive(Debug, Clone)]
+struct MobilePreloadExecutor {
+    queue: MobileCommandQueue<MobilePreloadCommand>,
+}
+
+impl MobilePreloadExecutor {
+    fn new(queue: MobileCommandQueue<MobilePreloadCommand>) -> Self {
+        Self { queue }
+    }
+}
+
+impl PreloadExecutor for MobilePreloadExecutor {
+    fn warmup(&mut self, task: &PreloadTaskSnapshot) -> PlayerResult<()> {
+        self.queue
+            .push(MobilePreloadCommand::Start { task: task.clone() })
+    }
+
+    fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<()> {
+        self.queue.push(MobilePreloadCommand::Cancel { task_id })
+    }
+}
+
+#[derive(Debug)]
+pub struct MobilePreloadBridgeSession {
+    planner: PreloadPlanner<InMemoryPreloadBudgetProvider, MobilePreloadExecutor>,
+    command_queue: MobileCommandQueue<MobilePreloadCommand>,
+}
+
+impl MobilePreloadBridgeSession {
+    pub fn new(budget_provider: InMemoryPreloadBudgetProvider, label: &'static str) -> Self {
+        let command_queue = MobileCommandQueue::new(label);
+        let executor = MobilePreloadExecutor::new(command_queue.clone());
+
+        Self {
+            planner: PreloadPlanner::new(budget_provider, executor),
+            command_queue,
+        }
+    }
+
+    pub fn plan(
+        &mut self,
+        candidates: impl IntoIterator<Item = PreloadCandidate>,
+        now: Instant,
+    ) -> Vec<PreloadTaskId> {
+        self.planner.plan(candidates, now)
+    }
+
+    pub fn cancel(&mut self, task_id: PreloadTaskId) -> PlayerResult<Option<PreloadTaskSnapshot>> {
+        self.planner.cancel(task_id)
+    }
+
+    pub fn complete(
+        &mut self,
+        task_id: PreloadTaskId,
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
+        self.planner.complete(task_id)
+    }
+
+    pub fn fail(
+        &mut self,
+        task_id: PreloadTaskId,
+        error: PlayerError,
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
+        self.planner.fail(task_id, error)
+    }
+
+    pub fn expire_due_tasks(&mut self, now: Instant) {
+        self.planner.expire_due_tasks(now);
+    }
+
+    pub fn snapshot(&self) -> PreloadSnapshot {
+        self.planner.snapshot()
+    }
+
+    pub fn drain_events(&mut self) -> Vec<PreloadEvent> {
+        self.planner.drain_events()
+    }
+
+    pub fn drain_commands(&mut self) -> Vec<MobilePreloadCommand> {
+        self.command_queue.drain()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MobileDownloadExecutor {
+    queue: MobileCommandQueue<MobileDownloadCommand>,
+}
+
+impl MobileDownloadExecutor {
+    fn new(queue: MobileCommandQueue<MobileDownloadCommand>) -> Self {
+        Self { queue }
+    }
+}
+
+impl DownloadExecutor for MobileDownloadExecutor {
+    fn prepare(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<DownloadPrepareResult> {
+        self.queue
+            .push(MobileDownloadCommand::Prepare { task: task.clone() })?;
+        Ok(DownloadPrepareResult::Pending)
+    }
+
+    fn start(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<()> {
+        self.queue
+            .push(MobileDownloadCommand::Start { task: task.clone() })
+    }
+
+    fn pause(&mut self, task_id: DownloadTaskId) -> PlayerResult<()> {
+        self.queue.push(MobileDownloadCommand::Pause { task_id })
+    }
+
+    fn resume(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<()> {
+        self.queue
+            .push(MobileDownloadCommand::Resume { task: task.clone() })
+    }
+
+    fn remove(&mut self, task_id: DownloadTaskId) -> PlayerResult<()> {
+        self.queue.push(MobileDownloadCommand::Remove { task_id })
+    }
+}
+
+#[derive(Debug)]
+pub struct MobileDownloadBridgeSession {
+    manager: DownloadManager<InMemoryDownloadStore, MobileDownloadExecutor>,
+    command_queue: MobileCommandQueue<MobileDownloadCommand>,
+}
+
+impl MobileDownloadBridgeSession {
+    pub fn new(config: DownloadManagerConfig, label: &'static str) -> Self {
+        let command_queue = MobileCommandQueue::new(label);
+        let executor = MobileDownloadExecutor::new(command_queue.clone());
+
+        Self {
+            manager: DownloadManager::new(config, InMemoryDownloadStore::default(), executor),
+            command_queue,
+        }
+    }
+
+    pub fn create_task(
+        &mut self,
+        asset_id: impl Into<String>,
+        source: DownloadSource,
+        profile: DownloadProfile,
+        asset_index: DownloadAssetIndex,
+        now: Instant,
+    ) -> PlayerResult<DownloadTaskId> {
+        self.manager
+            .create_task(asset_id, source, profile, asset_index, now)
+    }
+
+    pub fn restore_tasks(
+        &mut self,
+        tasks: impl IntoIterator<Item = DownloadTaskSnapshot>,
+        now: Instant,
+    ) -> PlayerResult<Vec<DownloadTaskSnapshot>> {
+        self.manager.restore_tasks(tasks, now)
+    }
+
+    pub fn start_task(
+        &mut self,
+        task_id: DownloadTaskId,
+        now: Instant,
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
+        self.manager.start_task(task_id, now)
+    }
+
+    pub fn pause_task(
+        &mut self,
+        task_id: DownloadTaskId,
+        now: Instant,
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
+        self.manager.pause_task(task_id, now)
+    }
+
+    pub fn resume_task(
+        &mut self,
+        task_id: DownloadTaskId,
+        now: Instant,
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
+        self.manager.resume_task(task_id, now)
+    }
+
+    pub fn update_progress(
+        &mut self,
+        task_id: DownloadTaskId,
+        received_bytes: u64,
+        received_segments: u32,
+        now: Instant,
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
+        self.manager
+            .update_progress(task_id, received_bytes, received_segments, now)
+    }
+
+    pub fn complete_preparation(
+        &mut self,
+        task_id: DownloadTaskId,
+        asset_index: DownloadAssetIndex,
+        now: Instant,
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
+        self.manager.complete_preparation(task_id, asset_index, now)
+    }
+
+    pub fn replace_task_plan(
+        &mut self,
+        task_id: DownloadTaskId,
+        source: DownloadSource,
+        profile: DownloadProfile,
+        asset_index: DownloadAssetIndex,
+        now: Instant,
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
+        self.manager
+            .replace_task_plan(task_id, source, profile, asset_index, now)
+    }
+
+    pub fn complete_task(
+        &mut self,
+        task_id: DownloadTaskId,
+        completed_path: Option<PathBuf>,
+        now: Instant,
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
+        self.manager.complete_task(task_id, completed_path, now)
+    }
+
+    pub fn fail_task(
+        &mut self,
+        task_id: DownloadTaskId,
+        error: PlayerError,
+        now: Instant,
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
+        self.manager.fail_task(task_id, error, now)
+    }
+
+    pub fn remove_task(
+        &mut self,
+        task_id: DownloadTaskId,
+        now: Instant,
+    ) -> PlayerResult<Option<DownloadTaskSnapshot>> {
+        self.manager.remove_task(task_id, now)
+    }
+
+    pub fn task(&self, task_id: DownloadTaskId) -> Option<DownloadTaskSnapshot> {
+        self.manager.task(task_id)
+    }
+
+    pub fn tasks_for_asset(&self, asset_id: &DownloadAssetId) -> Vec<DownloadTaskSnapshot> {
+        self.manager.tasks_for_asset(asset_id)
+    }
+
+    pub fn snapshot(&self) -> DownloadSnapshot {
+        self.manager.snapshot()
+    }
+
+    pub fn export_task_output(
+        &self,
+        task_id: DownloadTaskId,
+        output_path: Option<PathBuf>,
+        progress: &dyn ProcessorProgress,
+    ) -> PlayerResult<PathBuf> {
+        self.manager
+            .export_task_output(task_id, output_path.as_deref(), progress)
+    }
+
+    pub fn drain_events(&mut self) -> Vec<DownloadEvent> {
+        self.manager.drain_events()
+    }
+
+    pub fn drain_commands(&mut self) -> Vec<MobileDownloadCommand> {
+        self.command_queue.drain()
+    }
+}
+
+pub fn mobile_download_manager_config(
+    platform_label: &str,
+    auto_start: bool,
+    run_post_processors_on_completion: bool,
+    plugin_library_paths: impl IntoIterator<Item = PathBuf>,
+) -> PlayerResult<DownloadManagerConfig> {
+    let mut post_processors = Vec::new();
+    let mut event_hooks = Vec::new();
+
+    for path in plugin_library_paths {
+        let plugin = LoadedDynamicPlugin::load(&path).map_err(|error| {
+            PlayerError::with_category(
+                PlayerErrorCode::InvalidArgument,
+                PlayerErrorCategory::Input,
+                format!(
+                    "failed to load {platform_label} download plugin `{}`: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+        if let Some(processor) = plugin.post_download_processor() {
+            post_processors.push(processor);
+        }
+        if let Some(hook) = plugin.pipeline_event_hook() {
+            event_hooks.push(hook);
+        }
+    }
+
+    Ok(DownloadManagerConfig {
+        auto_start,
+        run_post_processors_on_completion,
+        post_processors,
+        event_hooks,
+    })
+}
+
+#[derive(Debug)]
+pub struct MobilePlaylistBridgeSession {
+    coordinator: PlaylistCoordinator<InMemoryPreloadBudgetProvider, MobilePreloadExecutor>,
+    command_queue: MobileCommandQueue<MobilePreloadCommand>,
+}
+
+impl MobilePlaylistBridgeSession {
+    pub fn new(
+        playlist_id: impl Into<String>,
+        config: PlaylistCoordinatorConfig,
+        preload_budget: PreloadBudget,
+        label: &'static str,
+    ) -> Self {
+        let command_queue = MobileCommandQueue::new(label);
+        let executor = MobilePreloadExecutor::new(command_queue.clone());
+
+        Self {
+            coordinator: PlaylistCoordinator::new(
+                playlist_id,
+                config,
+                InMemoryPreloadBudgetProvider::new(preload_budget),
+                executor,
+            ),
+            command_queue,
+        }
+    }
+
+    pub fn replace_queue(
+        &mut self,
+        queue: impl IntoIterator<Item = PlaylistQueueItem>,
+        now: Instant,
+    ) {
+        self.coordinator.replace_queue(queue, now);
+    }
+
+    pub fn update_viewport_hints(
+        &mut self,
+        hints: impl IntoIterator<Item = PlaylistViewportHint>,
+        now: Instant,
+    ) {
+        self.coordinator.update_viewport_hints(hints, now);
+    }
+
+    pub fn clear_viewport_hints(&mut self, now: Instant) {
+        self.coordinator.clear_viewport_hints(now);
+    }
+
+    pub fn advance_to_next(&mut self, now: Instant) -> PlaylistAdvanceDecision {
+        self.coordinator.advance_to_next(now)
+    }
+
+    pub fn advance_to_previous(&mut self, now: Instant) -> PlaylistAdvanceDecision {
+        self.coordinator.advance_to_previous(now)
+    }
+
+    pub fn handle_playback_completed(&mut self, now: Instant) -> PlaylistAdvanceDecision {
+        self.coordinator.handle_playback_completed(now)
+    }
+
+    pub fn handle_playback_failed(&mut self, now: Instant) -> PlaylistAdvanceDecision {
+        self.coordinator.handle_playback_failed(now)
+    }
+
+    pub fn complete_preload_task(
+        &mut self,
+        task_id: PreloadTaskId,
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
+        self.coordinator.complete_preload_task(task_id)
+    }
+
+    pub fn fail_preload_task(
+        &mut self,
+        task_id: PreloadTaskId,
+        error: PlayerError,
+    ) -> PlayerResult<Option<PreloadTaskSnapshot>> {
+        self.coordinator.fail_preload_task(task_id, error)
+    }
+
+    pub fn active_item(&self) -> Option<PlaylistActiveItem> {
+        self.coordinator.active_item()
+    }
+
+    pub fn snapshot(&self) -> PlaylistSnapshot {
+        self.coordinator.snapshot()
+    }
+
+    pub fn drain_events(&mut self) -> Vec<PlaylistEvent> {
+        self.coordinator.drain_events()
+    }
+
+    pub fn drain_preload_events(&mut self) -> Vec<PreloadEvent> {
+        self.coordinator
+            .drain_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                PlaylistEvent::Preload(preload) => Some(preload),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn drain_commands(&mut self) -> Vec<MobilePreloadCommand> {
+        self.command_queue.drain()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MobileSourceNormalizerConfiguration {
@@ -291,6 +798,11 @@ pub fn apply_mobile_plugin_diagnostics(
     startup
 }
 
+/// Opens a normalized-resource source normalizer session.
+///
+/// This helper may synchronously wait for source-normalizer resource readiness
+/// updates. Mobile hosts should call it from a worker thread, or wrap it in
+/// platform async scheduling before returning to UI code.
 pub fn open_mobile_source_normalizer_resource(
     source: &MediaSource,
     configuration: &MobileSourceNormalizerConfiguration,
@@ -306,6 +818,11 @@ pub fn open_mobile_source_normalizer_resource(
     .map(|outcome| outcome.opened)
 }
 
+/// Opens a normalized-resource source normalizer session with diagnostics.
+///
+/// This helper may synchronously wait for source-normalizer resource readiness
+/// updates. Mobile hosts should call it from a worker thread, or wrap it in
+/// platform async scheduling before returning to UI code.
 pub fn open_mobile_source_normalizer_resource_with_diagnostics(
     source: &MediaSource,
     configuration: &MobileSourceNormalizerConfiguration,
@@ -1175,17 +1692,12 @@ fn open_source_normalizer_resource_session(
 fn wait_for_resource_session_ready(
     session: &mut dyn SourceNormalizerResourceSession,
 ) -> Result<SourceNormalizerResourceSessionStatus, String> {
-    wait_for_resource_session_ready_with_policy(
-        session,
-        SOURCE_NORMALIZER_RESOURCE_READY_TIMEOUT,
-        SOURCE_NORMALIZER_RESOURCE_POLL_INTERVAL,
-    )
+    wait_for_resource_session_ready_with_policy(session, SOURCE_NORMALIZER_RESOURCE_READY_TIMEOUT)
 }
 
 fn wait_for_resource_session_ready_with_policy(
     session: &mut dyn SourceNormalizerResourceSession,
     ready_timeout: Duration,
-    poll_interval: Duration,
 ) -> Result<SourceNormalizerResourceSessionStatus, String> {
     let started = Instant::now();
     loop {
@@ -1215,7 +1727,15 @@ fn wait_for_resource_session_ready_with_policy(
                         "source normalizer resource did not produce a readable primary resource before startup timeout".to_owned()
                     }));
                 }
-                std::thread::sleep(poll_interval);
+                let remaining = ready_timeout
+                    .checked_sub(started.elapsed())
+                    .unwrap_or(Duration::ZERO);
+                if remaining.is_zero() {
+                    continue;
+                }
+                session
+                    .wait_for_update(remaining)
+                    .map_err(|error| format!("wait_resource_session_update failed: {error}"))?;
             }
         }
     }
@@ -1292,11 +1812,18 @@ fn hls_short_window_ready(
 }
 
 fn file_contains_box_marker(path: &str, markers: &[&[u8; 4]]) -> bool {
-    let Ok(bytes) = std::fs::read(path) else {
+    let Ok(file) = std::fs::File::open(path) else {
         return false;
     };
-    let max_scan = bytes.len().min(1024 * 1024);
-    bytes[..max_scan]
+    let mut bytes = Vec::new();
+    if file
+        .take(FMP4_BOX_MARKER_SCAN_LIMIT_BYTES)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return false;
+    }
+    bytes
         .windows(4)
         .any(|window| markers.iter().any(|marker| window == marker.as_slice()))
 }
@@ -2130,6 +2657,7 @@ fn participation_wire_name(participation: PlayerPluginParticipation) -> &'static
 mod tests {
     use super::*;
     use player_plugin::SourceNormalizerRequiredCapabilities;
+    use player_plugin::SourceNormalizerResourceSessionWaitStatus;
     use serde_json::Value;
 
     #[test]
@@ -2703,6 +3231,26 @@ mod tests {
     }
 
     #[test]
+    fn fmp4_box_marker_scan_is_bounded() {
+        let directory = std::env::temp_dir().join(format!(
+            "vesper-fmp4-readiness-scan-limit-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("create temp dir");
+        let path = directory.join("late-marker.mp4");
+        let mut bytes = vec![0_u8; FMP4_BOX_MARKER_SCAN_LIMIT_BYTES as usize + 16];
+        bytes[FMP4_BOX_MARKER_SCAN_LIMIT_BYTES as usize + 4..][..4].copy_from_slice(b"ftyp");
+        std::fs::write(&path, bytes).expect("write oversized marker fixture");
+
+        assert!(!file_contains_box_marker(
+            path.to_str().expect("utf8 path"),
+            &[b"ftyp"]
+        ));
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn hls_short_window_readiness_requires_playlist_init_and_media_segment() {
         let directory =
             std::env::temp_dir().join(format!("vesper-hls-readiness-{}", std::process::id()));
@@ -2749,14 +3297,11 @@ mod tests {
     }
 
     #[test]
-    fn resource_readiness_wait_has_total_timeout() {
-        let mut session = NeverReadyResourceSession::default();
+    fn resource_readiness_wait_has_total_timeout_without_sleep_polling() {
+        let mut session = TestResourceSession::running();
         let started = Instant::now();
-        let result = wait_for_resource_session_ready_with_policy(
-            &mut session,
-            Duration::from_millis(5),
-            Duration::from_millis(1),
-        );
+        let result =
+            wait_for_resource_session_ready_with_policy(&mut session, Duration::from_millis(5));
 
         let Err(error) = result else {
             panic!("never-ready session should time out");
@@ -2767,6 +3312,102 @@ mod tests {
             "test timeout path should not wait for the production 10s timeout"
         );
         assert!(session.polls > 0);
+        assert!(session.waits > 0);
+    }
+
+    #[test]
+    fn resource_readiness_wait_returns_after_notified_ready_status() {
+        let mut session = TestResourceSession::running();
+        let signal = session.signal();
+        let updater = std::thread::spawn(move || {
+            signal.wait_until_waiting(Duration::from_secs(1));
+            signal.set_status(test_resource_status(
+                SourceNormalizerResourceSessionState::Ready,
+                Some(resource_info_with_video_track(None)),
+                None,
+            ));
+        });
+
+        let status =
+            wait_for_resource_session_ready_with_policy(&mut session, Duration::from_secs(1))
+                .expect("ready update should return");
+
+        updater.join().expect("updater joins");
+        assert_eq!(status.state, SourceNormalizerResourceSessionState::Ready);
+        assert!(session.waits > 0);
+    }
+
+    #[test]
+    fn resource_readiness_wait_returns_running_status_when_primary_bytes_are_ready() {
+        let mut session = TestResourceSession::running();
+        let directory = std::env::temp_dir().join(format!(
+            "vesper-mobile-resource-ready-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("create resource readiness fixture directory");
+        let primary = directory.join("normalized.mp4");
+        std::fs::write(&primary, fmp4_ready_fixture_bytes()).expect("write fmp4 readiness fixture");
+        let signal = session.signal();
+        let primary_path = primary.display().to_string();
+        let updater = std::thread::spawn(move || {
+            signal.wait_until_waiting(Duration::from_secs(1));
+            signal.set_status(test_resource_status(
+                SourceNormalizerResourceSessionState::Running,
+                Some(resource_info_with_primary_file(&primary_path)),
+                None,
+            ));
+        });
+
+        let status =
+            wait_for_resource_session_ready_with_policy(&mut session, Duration::from_secs(1))
+                .expect("primary bytes should make running status readable");
+
+        updater.join().expect("updater joins");
+        assert_eq!(status.state, SourceNormalizerResourceSessionState::Running);
+        assert!(resource_status_has_primary_bytes(&status));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn resource_readiness_wait_reports_notified_failed_status() {
+        let mut session = TestResourceSession::running();
+        let signal = session.signal();
+        let updater = std::thread::spawn(move || {
+            signal.wait_until_waiting(Duration::from_secs(1));
+            signal.set_status(test_resource_status(
+                SourceNormalizerResourceSessionState::Failed,
+                None,
+                Some("fixture failure".to_owned()),
+            ));
+        });
+
+        let error =
+            wait_for_resource_session_ready_with_policy(&mut session, Duration::from_secs(1))
+                .expect_err("failed status should return error");
+
+        updater.join().expect("updater joins");
+        assert_eq!(error, "fixture failure");
+    }
+
+    #[test]
+    fn resource_readiness_wait_reports_notified_cancelled_status() {
+        let mut session = TestResourceSession::running();
+        let signal = session.signal();
+        let updater = std::thread::spawn(move || {
+            signal.wait_until_waiting(Duration::from_secs(1));
+            signal.set_status(test_resource_status(
+                SourceNormalizerResourceSessionState::Cancelled,
+                None,
+                Some("fixture cancelled".to_owned()),
+            ));
+        });
+
+        let error =
+            wait_for_resource_session_ready_with_policy(&mut session, Duration::from_secs(1))
+                .expect_err("cancelled status should return error");
+
+        updater.join().expect("updater joins");
+        assert_eq!(error, "fixture cancelled");
     }
 
     #[test]
@@ -2961,28 +3602,90 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct NeverReadyResourceSession {
-        polls: usize,
+    #[derive(Clone)]
+    struct TestResourceSessionSignal {
+        shared: Arc<TestResourceSessionShared>,
     }
 
-    impl SourceNormalizerResourceSession for NeverReadyResourceSession {
-        fn session_info(&self) -> SourceNormalizerResourceSessionInfo {
-            SourceNormalizerResourceSessionInfo {
-                session_id: Some("never-ready".to_owned()),
-                normalizer_name: Some("test".to_owned()),
-                runtime_profile: Some("test".to_owned()),
-                selected_backend: None,
-                output_route: SourceNormalizerOutputRoute::Fmp4LocalStream,
-                container: "mp4".to_owned(),
-                primary_resource_path: None,
-                primary_content_type: Some("video/mp4".to_owned()),
-                resources: Vec::new(),
-                tracks: Vec::new(),
-                duration_millis: None,
-                seekable: false,
-                disk_bytes_used: None,
+    struct TestResourceSession {
+        shared: Arc<TestResourceSessionShared>,
+        polls: usize,
+        waits: usize,
+    }
+
+    struct TestResourceSessionShared {
+        state: Mutex<TestResourceSessionState>,
+        changed: std::sync::Condvar,
+        wait_entered: Mutex<bool>,
+        wait_entered_changed: std::sync::Condvar,
+    }
+
+    struct TestResourceSessionState {
+        status: SourceNormalizerResourceSessionStatus,
+        sequence: u64,
+    }
+
+    impl TestResourceSession {
+        fn running() -> Self {
+            Self {
+                shared: Arc::new(TestResourceSessionShared {
+                    state: Mutex::new(TestResourceSessionState {
+                        status: test_resource_status(
+                            SourceNormalizerResourceSessionState::Running,
+                            Some(resource_info_with_video_track(None)),
+                            None,
+                        ),
+                        sequence: 0,
+                    }),
+                    changed: std::sync::Condvar::new(),
+                    wait_entered: Mutex::new(false),
+                    wait_entered_changed: std::sync::Condvar::new(),
+                }),
+                polls: 0,
+                waits: 0,
             }
+        }
+
+        fn signal(&self) -> TestResourceSessionSignal {
+            TestResourceSessionSignal {
+                shared: self.shared.clone(),
+            }
+        }
+    }
+
+    impl TestResourceSessionSignal {
+        fn set_status(&self, status: SourceNormalizerResourceSessionStatus) {
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            state.status = status;
+            state.sequence = state.sequence.wrapping_add(1);
+            self.shared.changed.notify_all();
+        }
+
+        fn wait_until_waiting(&self, timeout: Duration) {
+            let waiting = self
+                .shared
+                .wait_entered
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if *waiting {
+                return;
+            }
+            let (waiting, _result) = self
+                .shared
+                .wait_entered_changed
+                .wait_timeout(waiting, timeout)
+                .unwrap_or_else(|error| error.into_inner());
+            assert!(*waiting, "resource readiness wait was not entered");
+        }
+    }
+
+    impl SourceNormalizerResourceSession for TestResourceSession {
+        fn session_info(&self) -> SourceNormalizerResourceSessionInfo {
+            resource_info_with_video_track(None)
         }
 
         fn poll(
@@ -2990,11 +3693,46 @@ mod tests {
         ) -> Result<SourceNormalizerResourceSessionStatus, player_plugin::SourceNormalizerError>
         {
             self.polls += 1;
-            Ok(SourceNormalizerResourceSessionStatus {
-                state: SourceNormalizerResourceSessionState::Running,
-                info: Some(self.session_info()),
-                message: None,
-                disk_bytes_used: None,
+            Ok(self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .status
+                .clone())
+        }
+
+        fn wait_for_update(
+            &mut self,
+            timeout: Duration,
+        ) -> Result<SourceNormalizerResourceSessionWaitStatus, player_plugin::SourceNormalizerError>
+        {
+            self.waits += 1;
+            let state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let observed = state.sequence;
+            if timeout.is_zero() {
+                return Ok(SourceNormalizerResourceSessionWaitStatus { updated: false });
+            }
+            {
+                let mut wait_entered = self
+                    .shared
+                    .wait_entered
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                *wait_entered = true;
+                self.shared.wait_entered_changed.notify_all();
+            }
+            let (state, _result) = self
+                .shared
+                .changed
+                .wait_timeout(state, timeout)
+                .unwrap_or_else(|error| error.into_inner());
+            Ok(SourceNormalizerResourceSessionWaitStatus {
+                updated: state.sequence != observed,
             })
         }
 
@@ -3013,5 +3751,40 @@ mod tests {
         fn close(&mut self) -> Result<(), player_plugin::SourceNormalizerError> {
             Ok(())
         }
+    }
+
+    fn test_resource_status(
+        state: SourceNormalizerResourceSessionState,
+        info: Option<SourceNormalizerResourceSessionInfo>,
+        message: Option<String>,
+    ) -> SourceNormalizerResourceSessionStatus {
+        SourceNormalizerResourceSessionStatus {
+            state,
+            info,
+            message,
+            disk_bytes_used: Some(0),
+        }
+    }
+
+    fn resource_info_with_primary_file(primary_path: &str) -> SourceNormalizerResourceSessionInfo {
+        let mut info = resource_info_with_video_track(None);
+        info.primary_resource_path = Some(primary_path.to_owned());
+        info.resources = vec![player_plugin::SourceNormalizerResourceInfo {
+            role: "media".to_owned(),
+            path: primary_path.to_owned(),
+            content_type: Some("video/mp4".to_owned()),
+            byte_length: Some(48),
+            growing: true,
+        }];
+        info
+    }
+
+    fn fmp4_ready_fixture_bytes() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"\0\0\0\x18ftypisom\0\0\0\0isomiso2");
+        bytes.extend_from_slice(b"\0\0\0\x08moov");
+        bytes.extend_from_slice(b"\0\0\0\x08moof");
+        bytes.extend_from_slice(b"\0\0\0\x08mdat");
+        bytes
     }
 }

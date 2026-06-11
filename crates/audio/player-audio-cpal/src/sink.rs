@@ -8,7 +8,7 @@ use rtrb::RingBuffer;
 
 use crate::ring::{AudioRingSample, audio_ring_capacity_samples};
 use crate::stream::build_output_stream;
-use crate::timeline::{SharedPlaybackState, sanitize_playback_rate};
+use crate::timeline::{AudioBufferWindowWaitResult, SharedPlaybackState, sanitize_playback_rate};
 use crate::types::AudioOutputConfig;
 
 pub struct AudioSink {
@@ -140,5 +140,24 @@ impl AudioSinkController {
 
     pub fn buffered_samples(&self, generation: u64) -> Option<usize> {
         self.state.buffered_samples(generation)
+    }
+
+    pub fn wait_for_buffered_samples_at_or_below(
+        &self,
+        generation: u64,
+        target_samples: usize,
+        timeout: Duration,
+        should_cancel: impl Fn() -> bool,
+    ) -> AudioBufferWindowWaitResult {
+        self.state.wait_for_buffered_samples_at_or_below(
+            generation,
+            target_samples,
+            timeout,
+            should_cancel,
+        )
+    }
+
+    pub fn notify_backpressure_waiters(&self) {
+        self.state.notify_backpressure_waiters();
     }
 }

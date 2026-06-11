@@ -801,6 +801,11 @@ pub fn template_segments(
             "SegmentTemplate requires mediaPresentationDuration".to_owned(),
         )
     })?;
+    if segment_template.timescale == 0 {
+        return Err(DashHlsError::InvalidMpd(
+            "SegmentTemplate timescale must be positive".to_owned(),
+        ));
+    }
     let total_duration = duration_ms as f64 / 1_000.0;
     let segment_duration = normalized_fixed_template_duration(
         declared_duration as f64 / segment_template.timescale as f64,
@@ -1544,6 +1549,26 @@ mod tests {
                     time: Some(11_000)
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn rejects_fixed_segment_template_with_zero_timescale() {
+        let template = DashSegmentTemplate {
+            timescale: 0,
+            duration: Some(2_000),
+            start_number: 1,
+            presentation_time_offset: 0,
+            initialization: Some("init.mp4".to_owned()),
+            media: "chunk-$Number$.m4s".to_owned(),
+            timeline: Vec::new(),
+        };
+
+        let error = template_segments(Some(DashManifestType::Static), Some(7_000), &template)
+            .expect_err("zero timescale should fail");
+
+        assert!(
+            matches!(error, DashHlsError::InvalidMpd(message) if message.contains("timescale"))
         );
     }
 

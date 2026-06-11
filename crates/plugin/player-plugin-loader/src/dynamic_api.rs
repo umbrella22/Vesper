@@ -280,7 +280,7 @@ impl LoadedDynamicPlugin {
                 })
             }
             VesperPluginKind::SourceNormalizer => {
-                let api_ptr = descriptor.api.cast::<VesperSourceNormalizerPluginApiV3>();
+                let api_ptr = descriptor.api.cast::<VesperSourceNormalizerPluginApiV4>();
                 let api =
                     // SAFETY: `descriptor.api` must point at the current source normalizer
                     // ABI table when the plugin exports a valid current descriptor.
@@ -440,6 +440,12 @@ pub(crate) type SourceNormalizerSeekSessionJsonFn =
     ) -> VesperPluginProcessResult;
 pub(crate) type SourceNormalizerSessionOperationFn =
     unsafe extern "C" fn(context: *mut c_void, session: *mut c_void) -> VesperPluginProcessResult;
+pub(crate) type SourceNormalizerWaitSessionUpdateFn =
+    unsafe extern "C" fn(
+        context: *mut c_void,
+        session: *mut c_void,
+        timeout_ms: u64,
+    ) -> VesperPluginProcessResult;
 pub(crate) type SourceNormalizerOpenPacketSessionJsonFn =
     unsafe extern "C" fn(
         context: *mut c_void,
@@ -738,7 +744,7 @@ unsafe impl Send for CheckedSourceNormalizerPacketPluginApi {}
 // `Arc` and relies on the plugin to make the context safe for concurrent use.
 unsafe impl Sync for CheckedSourceNormalizerPacketPluginApi {}
 
-fn source_normalizer_packet_callbacks_present(api: &VesperSourceNormalizerPluginApiV3) -> bool {
+fn source_normalizer_packet_callbacks_present(api: &VesperSourceNormalizerPluginApiV4) -> bool {
     api.packet_capabilities_json.is_some()
         && api.open_packet_session_json.is_some()
         && api.read_packet.is_some()
@@ -748,19 +754,20 @@ fn source_normalizer_packet_callbacks_present(api: &VesperSourceNormalizerPlugin
         && api.free_bytes.is_some()
 }
 
-fn source_normalizer_resource_callbacks_present(api: &VesperSourceNormalizerPluginApiV3) -> bool {
+fn source_normalizer_resource_callbacks_present(api: &VesperSourceNormalizerPluginApiV4) -> bool {
     api.resource_capabilities_json.is_some()
         && api.open_resource_session_json.is_some()
         && api.poll_resource_session.is_some()
+        && api.wait_resource_session_update.is_some()
         && api.cancel_resource_session.is_some()
         && api.close_resource_session.is_some()
         && api.free_bytes.is_some()
 }
 
-impl TryFrom<VesperSourceNormalizerPluginApiV3> for CheckedSourceNormalizerPacketPluginApi {
+impl TryFrom<VesperSourceNormalizerPluginApiV4> for CheckedSourceNormalizerPacketPluginApi {
     type Error = PluginLoadError;
 
-    fn try_from(api: VesperSourceNormalizerPluginApiV3) -> Result<Self, Self::Error> {
+    fn try_from(api: VesperSourceNormalizerPluginApiV4) -> Result<Self, Self::Error> {
         Ok(Self {
             context: api.context,
             destroy: api.destroy,
@@ -808,6 +815,7 @@ pub(crate) struct CheckedSourceNormalizerResourcePluginApi {
     pub(crate) free_bytes: FreeBytesFn,
     pub(crate) open_resource_session_json: SourceNormalizerOpenResourceSessionJsonFn,
     pub(crate) poll_resource_session: SourceNormalizerSessionOperationFn,
+    pub(crate) wait_resource_session_update: SourceNormalizerWaitSessionUpdateFn,
     pub(crate) cancel_resource_session: SourceNormalizerSessionOperationFn,
     pub(crate) close_resource_session: SourceNormalizerSessionOperationFn,
 }
@@ -821,10 +829,10 @@ unsafe impl Send for CheckedSourceNormalizerResourcePluginApi {}
 // `Arc` and relies on the plugin to make the context safe for concurrent use.
 unsafe impl Sync for CheckedSourceNormalizerResourcePluginApi {}
 
-impl TryFrom<VesperSourceNormalizerPluginApiV3> for CheckedSourceNormalizerResourcePluginApi {
+impl TryFrom<VesperSourceNormalizerPluginApiV4> for CheckedSourceNormalizerResourcePluginApi {
     type Error = PluginLoadError;
 
-    fn try_from(api: VesperSourceNormalizerPluginApiV3) -> Result<Self, Self::Error> {
+    fn try_from(api: VesperSourceNormalizerPluginApiV4) -> Result<Self, Self::Error> {
         Ok(Self {
             context: api.context,
             destroy: api.destroy,
@@ -845,6 +853,11 @@ impl TryFrom<VesperSourceNormalizerPluginApiV3> for CheckedSourceNormalizerResou
             poll_resource_session: api.poll_resource_session.ok_or(
                 PluginLoadError::MissingField {
                     field: "source_normalizer_plugin_api_current.poll_resource_session",
+                },
+            )?,
+            wait_resource_session_update: api.wait_resource_session_update.ok_or(
+                PluginLoadError::MissingField {
+                    field: "source_normalizer_plugin_api_current.wait_resource_session_update",
                 },
             )?,
             cancel_resource_session: api.cancel_resource_session.ok_or(

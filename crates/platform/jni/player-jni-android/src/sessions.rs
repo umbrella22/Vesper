@@ -28,7 +28,7 @@ static SOURCE_NORMALIZER_RESOURCE_SESSIONS: OnceLock<
     Mutex<HandleRegistry<MobileSourceNormalizerResourceOpen>>,
 > = OnceLock::new();
 static NATIVE_FRAME_PIPELINE_SESSIONS: OnceLock<
-    Mutex<HandleRegistry<AndroidNativeFramePipelineSession>>,
+    Mutex<HandleRegistry<Arc<Mutex<AndroidNativeFramePipelineSession>>>>,
 > = OnceLock::new();
 
 pub(crate) fn sessions() -> &'static Mutex<HandleRegistry<AndroidJniSession>> {
@@ -45,7 +45,7 @@ fn source_normalizer_resource_sessions()
 }
 
 fn native_frame_pipeline_sessions()
--> &'static Mutex<HandleRegistry<AndroidNativeFramePipelineSession>> {
+-> &'static Mutex<HandleRegistry<Arc<Mutex<AndroidNativeFramePipelineSession>>>> {
     NATIVE_FRAME_PIPELINE_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
@@ -134,7 +134,7 @@ pub(crate) fn new_native_frame_pipeline_session(
     session: AndroidNativeFramePipelineSession,
 ) -> Result<jlong, String> {
     let mut guard = lock_or_recover(native_frame_pipeline_sessions());
-    let handle = guard.insert(session);
+    let handle = guard.insert(Arc::new(Mutex::new(session)));
     if handle == 0 {
         return Err("android native-frame pipeline session registry overflow".to_owned());
     }
@@ -151,16 +151,20 @@ pub(crate) fn with_native_frame_pipeline_session_mut<R>(
     handle: jlong,
     f: impl FnOnce(&mut AndroidNativeFramePipelineSession) -> Result<R, String>,
 ) -> Option<R> {
-    let mut guard = lock_or_recover(native_frame_pipeline_sessions());
-    let Some(session) = guard.get_mut(handle) else {
-        let _ = env.throw_new(
-            jni_name("java/lang/IllegalArgumentException"),
-            jni_name(invalid_native_frame_pipeline_handle_error()),
-        );
-        return None;
+    let session = {
+        let guard = lock_or_recover(native_frame_pipeline_sessions());
+        let Some(session) = guard.get(handle).cloned() else {
+            let _ = env.throw_new(
+                jni_name("java/lang/IllegalArgumentException"),
+                jni_name(invalid_native_frame_pipeline_handle_error()),
+            );
+            return None;
+        };
+        session
     };
 
-    match f(session) {
+    let mut session = lock_or_recover(session.as_ref());
+    match f(&mut session) {
         Ok(value) => Some(value),
         Err(message) => {
             let _ = env.throw_new(

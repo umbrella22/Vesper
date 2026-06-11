@@ -1,9 +1,8 @@
 use std::any::Any;
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CStr, c_char};
 use std::mem;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::{
     FfiAbrMode as BridgeAbrMode, FfiAbrPolicy as BridgeAbrPolicy, FfiAudioInfo, FfiAudioOutputInfo,
@@ -49,6 +48,7 @@ pub(crate) use strings::*;
 mod commands;
 pub(crate) use commands::*;
 mod conversions;
+use conversions::{media_source_kind_from_u32, media_source_protocol_from_u32};
 mod free;
 pub(crate) use free::*;
 mod handles;
@@ -119,8 +119,8 @@ pub unsafe extern "C" fn player_ffi_initializer_probe_uri(
 /// handle access according to the host binding contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_resolve_resilience_policy(
-    source_kind: PlayerFfiMediaSourceKind,
-    source_protocol: PlayerFfiMediaSourceProtocol,
+    source_kind: u32,
+    source_protocol: u32,
     buffering_policy: *const PlayerFfiBufferingPolicy,
     retry_policy: *const PlayerFfiRetryPolicy,
     cache_policy: *const PlayerFfiCachePolicy,
@@ -157,10 +157,24 @@ pub unsafe extern "C" fn player_ffi_resolve_resilience_policy(
                 return PlayerFfiCallStatus::Error;
             }
         };
+        let source_kind = match media_source_kind_from_u32(source_kind) {
+            Ok(kind) => kind,
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let source_protocol = match media_source_protocol_from_u32(source_protocol) {
+            Ok(protocol) => protocol,
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
 
         let resolved = resolve_resilience_policy(
-            source_kind.into(),
-            source_protocol.into(),
+            source_kind,
+            source_protocol,
             buffering_policy,
             retry_policy,
             cache_policy,
@@ -1043,6 +1057,9 @@ pub unsafe extern "C" fn player_ffi_event_list_free(events: *mut PlayerFfiEventL
     ffi_void(|| {
         let _ = with_event_list_mut(events, |events| {
             if !events.ptr.is_null() {
+                // SAFETY: event lists are returned as boxed slices by this FFI
+                // layer with len as both length and capacity. Each event owns its
+                // nested allocations and is freed before dropping the slice.
                 unsafe {
                     let mut boxed =
                         Box::from_raw(ptr::slice_from_raw_parts_mut(events.ptr, events.len));
