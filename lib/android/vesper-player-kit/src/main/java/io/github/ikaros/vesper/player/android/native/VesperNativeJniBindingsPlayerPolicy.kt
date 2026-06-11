@@ -1,0 +1,201 @@
+package io.github.ikaros.vesper.player.android
+
+import android.content.Context
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
+import android.view.Surface
+import android.view.ViewGroup
+import androidx.media3.common.C
+import androidx.media3.common.ColorInfo
+import androidx.media3.common.Format
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
+import androidx.media3.common.Player
+import androidx.media3.common.Timeline
+import androidx.media3.common.TrackGroup
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.TrackSelectionParameters
+import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.DecoderReuseEvaluation
+import androidx.media3.exoplayer.ExoPlaybackException
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
+import java.io.File
+import java.net.URI
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.absoluteValue
+import kotlin.math.pow
+import kotlin.math.roundToLong
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
+import org.json.JSONObject
+
+internal val NativeVideoSurfaceKind.nativeFramePresenterProfileWireName: String
+    get() =
+        when (this) {
+            NativeVideoSurfaceKind.SurfaceView -> "SurfaceView"
+            NativeVideoSurfaceKind.TextureView -> "SurfaceTexture"
+        }
+
+internal fun buildLoadControl(
+    bufferingPolicy: NativeBufferingPolicy,
+): DefaultLoadControl {
+    val builder = DefaultLoadControl.Builder()
+    val resolved = resolveBufferingPolicy(bufferingPolicy) ?: return builder.build()
+    return builder
+        .setBufferDurationsMs(
+            resolved.minBufferMs,
+            resolved.maxBufferMs,
+            resolved.bufferForPlaybackMs,
+            resolved.bufferForPlaybackAfterRebufferMs,
+        )
+        .build()
+}
+
+internal fun buildLoadErrorHandlingPolicy(
+    source: VesperPlayerSource,
+    retryPolicy: NativeRetryPolicy,
+    onRetryScheduled: (attempt: Int, delayMs: Long) -> Unit,
+): DefaultLoadErrorHandlingPolicy =
+    when (source.kind) {
+        VesperPlayerSourceKind.Local -> DefaultLoadErrorHandlingPolicy(0)
+        VesperPlayerSourceKind.Remote -> VesperLoadErrorHandlingPolicy(retryPolicy, onRetryScheduled)
+    }
+
+internal fun resolveBufferingPolicy(
+    bufferingPolicy: NativeBufferingPolicy,
+): ResolvedBufferingPolicy? {
+    val minBufferMs = bufferingPolicy.minBufferMs.takeIf { bufferingPolicy.hasMinBufferMs }
+    val maxBufferMs = bufferingPolicy.maxBufferMs.takeIf { bufferingPolicy.hasMaxBufferMs }
+    val bufferForPlaybackMs =
+        bufferingPolicy.bufferForPlaybackMs.takeIf { bufferingPolicy.hasBufferForPlaybackMs }
+    val bufferForPlaybackAfterRebufferMs =
+        bufferingPolicy.bufferForPlaybackAfterRebufferMs.takeIf {
+            bufferingPolicy.hasBufferForPlaybackAfterRebufferMs
+        }
+
+    if (
+        minBufferMs == null ||
+        maxBufferMs == null ||
+        bufferForPlaybackMs == null ||
+        bufferForPlaybackAfterRebufferMs == null
+    ) {
+        return null
+    }
+
+    return ResolvedBufferingPolicy(
+        minBufferMs = minBufferMs.coerceAtLeast(0),
+        maxBufferMs = maxBufferMs.coerceAtLeast(minBufferMs),
+        bufferForPlaybackMs = bufferForPlaybackMs.coerceAtLeast(0),
+        bufferForPlaybackAfterRebufferMs = bufferForPlaybackAfterRebufferMs.coerceAtLeast(0),
+    )
+}
+
+internal data class ResolvedBufferingPolicy(
+    val minBufferMs: Int,
+    val maxBufferMs: Int,
+    val bufferForPlaybackMs: Int,
+    val bufferForPlaybackAfterRebufferMs: Int,
+)
+
+internal fun media3MinimumRetryCount(retryPolicy: NativeRetryPolicy): Int {
+    val maxAttempts = retryPolicy.maxAttempts.takeIf { retryPolicy.hasMaxAttempts }
+    return when {
+        maxAttempts == null -> Int.MAX_VALUE
+        maxAttempts <= 0 -> 0
+        else -> maxAttempts
+    }
+}
+
+internal class VesperLoadErrorHandlingPolicy(
+    private val retryPolicy: NativeRetryPolicy,
+    private val onRetryScheduled: (attempt: Int, delayMs: Long) -> Unit,
+) : DefaultLoadErrorHandlingPolicy(media3MinimumRetryCount(retryPolicy)) {
+    override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorInfo): Long {
+        val superDelayMs = super.getRetryDelayMsFor(loadErrorInfo)
+        if (superDelayMs == C.TIME_UNSET) {
+            return C.TIME_UNSET
+        }
+
+        val maxAttempts = retryPolicy.maxAttempts.takeIf { retryPolicy.hasMaxAttempts }
+        if (maxAttempts != null && loadErrorInfo.errorCount > maxAttempts) {
+            return C.TIME_UNSET
+        }
+
+        val backoff =
+            if (retryPolicy.hasBackoff) {
+                VesperRetryBackoff.entries.getOrElse(retryPolicy.backoffOrdinal) {
+                    VesperRetryBackoff.Linear
+                }
+            } else {
+                VesperRetryBackoff.Linear
+            }
+        val step = when (backoff) {
+            VesperRetryBackoff.Fixed -> 1.0
+            VesperRetryBackoff.Linear -> loadErrorInfo.errorCount.toDouble()
+            VesperRetryBackoff.Exponential ->
+                2.0.pow((loadErrorInfo.errorCount - 1).coerceAtLeast(0).toDouble())
+        }
+        val baseDelayMs = retryPolicy.baseDelayMs.takeIf { retryPolicy.hasBaseDelayMs } ?: 1_000L
+        val maxDelayMs = retryPolicy.maxDelayMs.takeIf { retryPolicy.hasMaxDelayMs } ?: 5_000L
+        val computedDelay = (baseDelayMs.toDouble() * step).roundToLong()
+        val resolvedDelay = computedDelay.coerceAtMost(maxDelayMs).coerceAtLeast(0L)
+        onRetryScheduled(loadErrorInfo.errorCount, resolvedDelay)
+        return resolvedDelay
+    }
+}
+
+internal fun VideoSize.toNativeVideoLayoutInfo(): NativeVideoLayoutInfo? {
+    if (width <= 0 || height <= 0) {
+        return null
+    }
+
+    return NativeVideoLayoutInfo(
+        width = width,
+        height = height,
+        pixelWidthHeightRatio = pixelWidthHeightRatio.takeIf { it > 0f } ?: 1.0f,
+    )
+}
+
+internal fun exoPlaybackStateOrdinal(playbackState: Int): Int =
+    when (playbackState) {
+        Player.STATE_BUFFERING -> 1
+        Player.STATE_READY -> 2
+        Player.STATE_ENDED -> 3
+        else -> 0
+    }
+
+internal fun buildMediaItem(source: VesperPlayerSource): MediaItem {
+    val builder = MediaItem.Builder()
+        .setUri(source.uri)
+
+    when (source.protocol) {
+        VesperPlayerSourceProtocol.Hls -> builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+        VesperPlayerSourceProtocol.Dash -> builder.setMimeType(MimeTypes.APPLICATION_MPD)
+        else -> Unit
+    }
+
+    return builder.build()
+}

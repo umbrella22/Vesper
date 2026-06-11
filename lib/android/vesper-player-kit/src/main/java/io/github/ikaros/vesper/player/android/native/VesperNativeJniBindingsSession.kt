@@ -1,0 +1,664 @@
+package io.github.ikaros.vesper.player.android
+
+import android.content.Context
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
+import android.view.Surface
+import android.view.ViewGroup
+import androidx.media3.common.C
+import androidx.media3.common.ColorInfo
+import androidx.media3.common.Format
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
+import androidx.media3.common.Player
+import androidx.media3.common.Timeline
+import androidx.media3.common.TrackGroup
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.TrackSelectionParameters
+import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.DecoderReuseEvaluation
+import androidx.media3.exoplayer.ExoPlaybackException
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
+import java.io.File
+import java.net.URI
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.absoluteValue
+import kotlin.math.pow
+import kotlin.math.roundToLong
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
+import org.json.JSONObject
+
+internal fun VesperNativeJniBindings.dispatchRustCommand(action: (Long) -> Unit) {
+    if (isDisposed.get()) {
+        return
+    }
+    val handle = sessionHandle ?: return
+    action(handle)
+    drainAndApplyNativeCommands()
+    pushSnapshotToRust()
+    pushTrackStateToRust()
+    notifyNativeUpdate()
+}
+
+internal fun VesperNativeJniBindings.drainAndApplyNativeCommands() {
+    if (isDisposed.get()) {
+        return
+    }
+    val handle = sessionHandle ?: return
+    val exoPlayer = player ?: return
+
+    VesperNativeJni.drainNativeCommands(handle).forEach { command ->
+        when (command) {
+            NativePlayerCommand.Play -> {
+                Log.d(NATIVE_JNI_BINDINGS_TAG, "apply native command: Play")
+                exoPlayer.play()
+            }
+            NativePlayerCommand.Pause -> {
+                Log.d(NATIVE_JNI_BINDINGS_TAG, "apply native command: Pause")
+                exoPlayer.pause()
+            }
+            is NativePlayerCommand.SeekTo -> {
+                val windowPositionMs =
+                    exoPlayer.windowPositionForTimelinePosition(command.positionMs)
+                Log.d(
+                    NATIVE_JNI_BINDINGS_TAG,
+                    "apply native command: SeekTo timelinePositionMs=${command.positionMs} windowPositionMs=$windowPositionMs",
+                )
+                exoPlayer.seekTo(windowPositionMs)
+            }
+            NativePlayerCommand.Stop -> {
+                Log.d(NATIVE_JNI_BINDINGS_TAG, "apply native command: Stop")
+                exoPlayer.pause()
+                exoPlayer.seekTo(0L)
+            }
+            is NativePlayerCommand.SetPlaybackRate -> {
+                Log.d(NATIVE_JNI_BINDINGS_TAG, "apply native command: SetPlaybackRate rate=${command.rate}")
+                exoPlayer.setPlaybackParameters(PlaybackParameters(command.rate))
+            }
+            is NativePlayerCommand.SetVideoTrackSelection -> {
+                Log.d(
+                    NATIVE_JNI_BINDINGS_TAG,
+                    "apply native command: SetVideoTrackSelection mode=${command.selection.modeOrdinal} trackId=${command.selection.trackId}",
+                )
+                if (nativeFramePipelineOwnsSurface) {
+                    return@forEach
+                }
+                applyTrackSelectionCommand(
+                    exoPlayer = exoPlayer,
+                    kind = NativeTrackKind.Video,
+                    selection = command.selection,
+                )
+            }
+            is NativePlayerCommand.SetAudioTrackSelection -> {
+                Log.d(
+                    NATIVE_JNI_BINDINGS_TAG,
+                    "apply native command: SetAudioTrackSelection mode=${command.selection.modeOrdinal} trackId=${command.selection.trackId}",
+                )
+                applyTrackSelectionCommand(
+                    exoPlayer = exoPlayer,
+                    kind = NativeTrackKind.Audio,
+                    selection = command.selection,
+                )
+            }
+            is NativePlayerCommand.SetSubtitleTrackSelection -> {
+                Log.d(
+                    NATIVE_JNI_BINDINGS_TAG,
+                    "apply native command: SetSubtitleTrackSelection mode=${command.selection.modeOrdinal} trackId=${command.selection.trackId}",
+                )
+                applyTrackSelectionCommand(
+                    exoPlayer = exoPlayer,
+                    kind = NativeTrackKind.Subtitle,
+                    selection = command.selection,
+                )
+            }
+            is NativePlayerCommand.SetAbrPolicy -> {
+                Log.d(
+                    NATIVE_JNI_BINDINGS_TAG,
+                    "apply native command: SetAbrPolicy mode=${command.policy.modeOrdinal} trackId=${command.policy.trackId}",
+                )
+                if (nativeFramePipelineOwnsSurface) {
+                    return@forEach
+                }
+                applyAbrPolicyCommand(exoPlayer, command.policy)
+            }
+        }
+    }
+}
+
+internal fun VesperNativeJniBindings.buildPlayerListener(
+    trackPreferencePolicy: VesperTrackPreferencePolicy,
+): Player.Listener =
+    object : Player.Listener {
+        private var pendingTrackOverrides =
+            trackPreferencePolicy.takeIf(::hasTrackBasedPreferenceOverrides)
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            Log.d(
+                NATIVE_JNI_BINDINGS_TAG,
+                "onPlaybackStateChanged state=${exoPlaybackStateName(playbackState)} playWhenReady=${player?.playWhenReady}",
+            )
+            recordBenchmark(
+                "playback_state_changed",
+                mapOf("state" to exoPlaybackStateName(playbackState)),
+            )
+            pushSnapshotToRust()
+            notifyNativeUpdate()
+        }
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            Log.d(NATIVE_JNI_BINDINGS_TAG, "onPlayWhenReadyChanged playWhenReady=$playWhenReady reason=$reason")
+            recordBenchmark(
+                "play_when_ready_changed",
+                mapOf(
+                    "playWhenReady" to playWhenReady.toString(),
+                    "reason" to reason.toString(),
+                ),
+            )
+            pushSnapshotToRust()
+            notifyNativeUpdate()
+        }
+
+        override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+            Log.d(NATIVE_JNI_BINDINGS_TAG, "onPlaybackParametersChanged speed=${playbackParameters.speed}")
+            recordBenchmark(
+                "playback_parameters_changed",
+                mapOf("speed" to playbackParameters.speed.toString()),
+            )
+            pushSnapshotToRust()
+            pushTrackStateToRust()
+            notifyNativeUpdate()
+        }
+
+        override fun onTracksChanged(tracks: Tracks) {
+            Log.d(NATIVE_JNI_BINDINGS_TAG, "onTracksChanged groups=${tracks.groups.size}")
+            recordBenchmark("tracks_changed", mapOf("groups" to tracks.groups.size.toString()))
+            player?.let { exoPlayer ->
+                pendingTrackOverrides
+                    ?.takeIf { !nativeFramePipelineOwnsSurface }
+                    ?.let { defaults ->
+                    applyTrackPreferenceTrackOverrides(exoPlayer, defaults)
+                    pendingTrackOverrides = null
+                }
+            }
+            pushTrackStateToRust()
+            notifyNativeUpdate()
+        }
+
+        override fun onTrackSelectionParametersChanged(parameters: TrackSelectionParameters) {
+            Log.d(NATIVE_JNI_BINDINGS_TAG, "onTrackSelectionParametersChanged overrides=${parameters.overrides.size}")
+            recordBenchmark(
+                "track_selection_parameters_changed",
+                mapOf("overrides" to parameters.overrides.size.toString()),
+            )
+            pushTrackStateToRust()
+            notifyNativeUpdate()
+        }
+
+        override fun onVideoSizeChanged(videoSize: VideoSize) {
+            Log.d(
+                NATIVE_JNI_BINDINGS_TAG,
+                "onVideoSizeChanged width=${videoSize.width} height=${videoSize.height} pixelRatio=${videoSize.pixelWidthHeightRatio}",
+            )
+            val layoutInfo = videoSize.toNativeVideoLayoutInfo()
+            if (layoutInfo == null) {
+                Log.d(NATIVE_JNI_BINDINGS_TAG, "ignoring transient empty video size during renderer switch")
+                return
+            }
+            recordBenchmark(
+                "video_size_changed",
+                mapOf(
+                    "width" to videoSize.width.toString(),
+                    "height" to videoSize.height.toString(),
+                ),
+            )
+            currentVideoLayoutState = layoutInfo
+            notifyNativeUpdate()
+        }
+
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) {
+            if (reason == Player.DISCONTINUITY_REASON_SEEK) {
+                sessionHandle?.let { handle ->
+                    val completedPositionMs =
+                        player?.timelinePositionForWindowPosition(newPosition.positionMs)
+                            ?: newPosition.positionMs
+                    recordBenchmark(
+                        "seek_completed",
+                        mapOf("positionMs" to completedPositionMs.toString()),
+                    )
+                    VesperNativeJni.reportSeekCompleted(handle, completedPositionMs)
+                }
+            }
+            Log.d(
+                NATIVE_JNI_BINDINGS_TAG,
+                "onPositionDiscontinuity reason=$reason positionMs=${newPosition.positionMs}",
+            )
+            pushSnapshotToRust()
+            notifyNativeUpdate()
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            Log.e(NATIVE_JNI_BINDINGS_TAG, "onPlayerError ${error.errorCodeName}: ${error.message}", error)
+            recordBenchmark(
+                "playback_error",
+                mapOf(
+                    "code" to error.errorCodeName,
+                    "message" to (error.message ?: ""),
+                ),
+            )
+            val classified = classifyPlaybackException(error)
+            enqueueHdrFailureHintIfNeeded(error, classified)
+            sessionHandle?.let { handle ->
+                VesperNativeJni.reportError(
+                    handle,
+                    classified.codeOrdinal,
+                    classified.categoryOrdinal,
+                    classified.retriable,
+                    error.message ?: error.errorCodeName,
+                )
+            }
+            pushSnapshotToRust()
+            notifyNativeUpdate()
+        }
+    }
+
+internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener =
+    object : AnalyticsListener {
+        override fun onVideoDecoderInitialized(
+            eventTime: AnalyticsListener.EventTime,
+            decoderName: String,
+            initializedTimestampMs: Long,
+            initializationDurationMs: Long,
+        ) {
+            currentVideoDecoderName = decoderName
+            recordBenchmark(
+                "video_decoder_initialized",
+                mapOf(
+                    "decoderName" to decoderName,
+                    "initializationDurationMs" to initializationDurationMs.toString(),
+                    "selectionReason" to "hardware_decode_required",
+                ),
+            )
+        }
+
+        override fun onVideoInputFormatChanged(
+            eventTime: AnalyticsListener.EventTime,
+            format: Format,
+            decoderReuseEvaluation: DecoderReuseEvaluation?,
+        ) {
+            val codec = nativeTrackCodec(format) ?: ""
+            val mimeType = videoMimeType(format)
+            val hardwareDecodeSupported =
+                VesperHardwareMediaCodecSelector.hasHardwareDecoder(mimeType)
+            Log.d(
+                NATIVE_JNI_BINDINGS_TAG,
+                "onVideoInputFormatChanged formatId=${format.id} bitrate=${format.bitrate} width=${format.width} height=${format.height}",
+            )
+            recordBenchmark(
+                "video_input_format_changed",
+                mapOf(
+                    "formatId" to (format.id ?: ""),
+                    "codecFamily" to vesperAndroidVideoCodecFamily(codec).toBenchmarkValue(),
+                    "hardwareDecodeSupported" to hardwareDecodeSupported.toString(),
+                    "selectionReason" to "hardware_decode_source_selection",
+                    "bitrate" to format.bitrate.toString(),
+                    "width" to format.width.toString(),
+                    "height" to format.height.toString(),
+                ) + (currentVideoDecoderName?.let { mapOf("decoderName" to it) } ?: emptyMap()),
+            )
+            currentRuntimeHdrEvidence = format.androidRuntimeHdrEvidence()
+            currentRuntimeSessionProbe = buildRuntimeSessionProbeSnapshot(format)
+            enqueueHdrCapabilityWarningIfNeeded(format)
+            pushTrackStateToRust()
+            notifyNativeUpdate()
+        }
+
+        override fun onRenderedFirstFrame(
+            eventTime: AnalyticsListener.EventTime,
+            output: Any,
+            renderTimeMs: Long,
+        ) {
+            val firstFrameMark = firstFrameGate.markFirstFrameRendered()
+            if (!firstFrameMark.isFirstForEpoch) {
+                return
+            }
+            recordBenchmark(
+                "first_frame_rendered",
+                mapOf(
+                    "renderTimeMs" to renderTimeMs.toString(),
+                    "isFirstForEpoch" to firstFrameMark.isFirstForEpoch.toString(),
+                ),
+            )
+        }
+    }
+
+internal fun VesperNativeJniBindings.pushSnapshotToRust() {
+    val handle = sessionHandle ?: return
+    val exoPlayer = player ?: return
+    val isLive = exoPlayer.isCurrentMediaItemLive
+    val isSeekable = exoPlayer.isCurrentMediaItemSeekable
+    val liveWindow = if (isLive) exoPlayer.currentLiveTimelineWindow() else null
+    val rawDurationMs = exoPlayer.duration.normalizedDurationMs()
+    val liveWindowStartMs = liveWindow?.startMs ?: 0L
+    val liveWindowDurationMs = liveWindow?.durationMs ?: rawDurationMs.normalizedOptionalMs()
+    val timelinePositionMs =
+        if (isLive) {
+            timelinePositionFromWindowPosition(liveWindowStartMs, exoPlayer.currentPosition)
+        } else {
+            exoPlayer.currentPosition.coerceAtLeast(0L)
+        }
+    val durationMs = liveWindowDurationMs ?: rawDurationMs
+    val seekableStartMs = if (isLive && isSeekable && liveWindowDurationMs != null) {
+        liveWindowStartMs
+    } else {
+        C.TIME_UNSET
+    }
+    val seekableEndMs =
+        if (seekableStartMs >= 0L && liveWindowDurationMs != null) {
+            seekableStartMs + liveWindowDurationMs
+        } else {
+            C.TIME_UNSET
+        }
+    val liveEdgeMs = when {
+        !isLive -> C.TIME_UNSET
+        seekableEndMs >= 0L -> seekableEndMs
+        else -> exoPlayer.currentLiveOffset.normalizedOptionalMs()?.let {
+            (timelinePositionMs + it).coerceAtLeast(0L)
+        } ?: C.TIME_UNSET
+    }
+    Log.d(
+        NATIVE_JNI_BINDINGS_TAG,
+        "pushSnapshotToRust state=${exoPlaybackStateName(exoPlayer.playbackState)} live=$isLive seekable=$isSeekable windowPositionMs=${exoPlayer.currentPosition} timelinePositionMs=$timelinePositionMs durationMs=$durationMs seekableStartMs=$seekableStartMs seekableEndMs=$seekableEndMs liveEdgeMs=$liveEdgeMs",
+    )
+    VesperNativeJni.applyExoSnapshot(
+        handle,
+        exoPlaybackStateOrdinal(exoPlayer.playbackState),
+        exoPlayer.playWhenReady,
+        exoPlayer.playbackParameters.speed,
+        timelinePositionMs,
+        durationMs,
+        isLive,
+        isSeekable,
+        seekableStartMs,
+        seekableEndMs,
+        liveEdgeMs,
+    )
+}
+
+internal fun VesperNativeJniBindings.pushTrackStateToRust() {
+    val handle = sessionHandle ?: return
+    val exoPlayer = player ?: return
+    val trackCatalog = collectTrackCatalog(exoPlayer.currentTracks)
+    val trackSelection =
+        collectTrackSelection(exoPlayer.currentTracks, exoPlayer.trackSelectionParameters)
+    val publicTrackCatalog = trackCatalog.toPublicTrackCatalog()
+    val videoVariantObservation = resolveVideoVariantObservation(exoPlayer.videoFormat)
+    val effectiveVideoTrackId = resolveEffectiveVideoTrackId(
+        publicTrackCatalog.videoTracks,
+        exoPlayer.videoFormat,
+    )
+    currentTrackCatalogState = publicTrackCatalog
+    currentTrackSelectionState = trackSelection.toPublicTrackSelectionSnapshot()
+    currentEffectiveVideoTrackIdState = effectiveVideoTrackId
+    currentVideoVariantObservationState = videoVariantObservation
+    Log.d(
+        NATIVE_JNI_BINDINGS_TAG,
+        "pushTrackStateToRust tracks=${trackCatalog.tracks.size} adaptiveVideo=${trackCatalog.adaptiveVideo} adaptiveAudio=${trackCatalog.adaptiveAudio} videoMode=${trackSelection.video.modeOrdinal} audioMode=${trackSelection.audio.modeOrdinal} subtitleMode=${trackSelection.subtitle.modeOrdinal} abrMode=${trackSelection.abrPolicy.modeOrdinal} effectiveVideoTrackId=$effectiveVideoTrackId observation=$videoVariantObservation",
+    )
+    VesperNativeJni.applyTrackState(handle, trackCatalog, trackSelection)
+}
+
+internal fun VesperNativeJniBindings.executePreloadWarmupCommands(source: VesperPlayerSource) {
+    preloadCoordinator.planCurrentSource(source).forEach { command ->
+        when (command) {
+            is NativePreloadCommand.Start -> runWarmup(command.task, source)
+            is NativePreloadCommand.Cancel -> Unit
+        }
+    }
+}
+
+internal fun VesperNativeJniBindings.runWarmup(task: NativePreloadTask, currentSource: VesperPlayerSource) {
+    val source =
+        currentSource.takeIf { it.uri == task.sourceUri }
+            ?: currentSourceOrFallback(task.sourceUri)
+    val resolvedResiliencePolicy = resolveResiliencePolicy(source, VesperPlaybackResiliencePolicy())
+    val dataSourceFactory = buildDataSourceFactory(
+        appContext,
+        resolvedResiliencePolicy.cache,
+        source.headers,
+    )
+    val dataSource = dataSourceFactory.createDataSource()
+
+    val readLength =
+        task.expectedMemoryBytes.coerceAtLeast(1L).coerceAtMost(DEFAULT_PRELOAD_WARMUP_READ_BYTES.toLong())
+    val dataSpec =
+        DataSpec.Builder()
+            .setUri(task.sourceUri)
+            .setLength(readLength)
+            .build()
+
+    runCatching {
+        dataSource.open(dataSpec)
+        val buffer = ByteArray(DEFAULT_PRELOAD_WARMUP_READ_BYTES)
+        dataSource.read(buffer, 0, buffer.size)
+    }.onSuccess {
+        preloadCoordinator.complete(task.taskId)
+    }.onFailure { error ->
+        preloadCoordinator.fail(
+            task.taskId,
+            NativeBridgeEvent.Error(
+                message = error.message ?: "android preload warmup failed",
+                codeOrdinal = BACKEND_FAILURE_ORDINAL,
+                categoryOrdinal = PLATFORM_CATEGORY_ORDINAL,
+                retriable = false,
+            ),
+        )
+    }
+
+    runCatching { dataSource.close() }
+}
+
+internal fun VesperNativeJniBindings.currentSourceOrFallback(uri: String): VesperPlayerSource {
+    return VesperPlayerSource(
+        uri = uri,
+        label = URI(uri).path.substringAfterLast('/').ifBlank { uri },
+        kind = inferSourceKind(uri),
+        protocol = inferSourceProtocol(uri),
+    )
+}
+
+internal fun VesperNativeJniBindings.enqueueHdrCapabilityWarningIfNeeded(format: Format) {
+    val evidence = format.androidRuntimeHdrEvidence() ?: return
+    localBridgeEvents +=
+        NativeBridgeEvent.Warning(
+            VesperRuntimeWarning(
+                domain = "capability",
+                payload = evidence.capabilityWarningPayload(),
+            )
+        )
+}
+
+internal fun VesperNativeJniBindings.enqueueHdrFailureHintIfNeeded(
+    error: PlaybackException,
+    classified: NativePlaybackError,
+) {
+    val evidence = currentRuntimeHdrEvidence ?: return
+    if (!classified.likelyCapabilityIssue) {
+        return
+    }
+    localBridgeEvents +=
+        NativeBridgeEvent.Warning(
+            VesperRuntimeWarning(
+                domain = "capability",
+                payload =
+                    evidence.failureHintPayload(
+                        error.errorCodeName,
+                        classified,
+                        currentRuntimeSessionProbe,
+                    ),
+            )
+        )
+}
+
+internal fun VesperNativeJniBindings.buildRuntimeSessionProbeSnapshot(format: Format): AndroidRuntimeSessionProbeSnapshot? {
+    val codec = nativeTrackCodec(format)?.takeIf(String::isNotBlank) ?: return null
+    val result =
+        VesperPlaybackCapabilityProbe.probe(
+            request =
+                VesperPlaybackCapabilityProbeRequest(
+                    source = player?.currentMediaItem?.localConfiguration?.uri?.toString()?.let(::currentSourceOrFallback),
+                    codec = codec,
+                    width = format.width.takeIf { it != Format.NO_VALUE && it > 0 },
+                    height = format.height.takeIf { it != Format.NO_VALUE && it > 0 },
+                    frameRate = format.frameRate.takeIf { it.isFinite() && it > 0f },
+                ),
+            sessionProbeProvider = VesperAndroidDisplaySessionProbeProvider.fromContext(appContext),
+        )
+    return AndroidRuntimeSessionProbeSnapshot(result)
+}
+
+internal fun VesperNativeJniBindings.notifyNativeUpdate() {
+    systemPlaybackCoordinator.refreshFromPlayer()
+    val listener = updateListener ?: return
+    if (Looper.myLooper() == Looper.getMainLooper()) {
+        listener.invoke()
+    } else {
+        mainHandler.post { listener.invoke() }
+    }
+}
+
+internal fun VesperNativeJniBindings.openSourceNormalizerResourceForPlayback(
+    source: VesperPlayerSource,
+    enabled: Boolean,
+): NativeSourceNormalizerResourceOpenOutcome {
+    closeCurrentSourceNormalizerResource()
+    if (!enabled) {
+        Log.i(NATIVE_JNI_BINDINGS_TAG, "source normalizer resource playback skipped for SDK-managed native-frame route")
+        return NativeSourceNormalizerResourceOpenOutcome()
+    }
+    if (!sourceNormalizerConfiguration.shouldOpenNormalizedResourceForPlayback(source)) {
+        return NativeSourceNormalizerResourceOpenOutcome()
+    }
+    VesperNativeLibrary.ensureLoaded()
+    val outputRoot = File(appContext.cacheDir, "vesper-source-normalizer").absolutePath
+    val json =
+        try {
+            VesperNativeJni.openSourceNormalizerResource(
+                source.uri,
+                sourceNormalizerConfiguration.modeOrdinal,
+                sourceNormalizerConfiguration.pluginLibraryPaths.toTypedArray(),
+                sourceNormalizerConfiguration.runtimeProfile,
+                outputRoot,
+                sourceNormalizerConfiguration.mode == VesperSourceNormalizerMode.RequireNormalized,
+            )
+        } catch (error: Throwable) {
+            if (sourceNormalizerConfiguration.mode == VesperSourceNormalizerMode.RequireNormalized) {
+                throw error
+            }
+            Log.w(NATIVE_JNI_BINDINGS_TAG, "source normalizer normalized resource open failed; using original source", error)
+            null
+        } ?: return NativeSourceNormalizerResourceOpenOutcome()
+
+    parseSourceNormalizerBypassDiagnostics(json)?.let { diagnostics ->
+        val bypassReason = sourceNormalizerBypassReason(diagnostics)
+        Log.i(NATIVE_JNI_BINDINGS_TAG, "source normalizer resource bypassed; route=native fallbackReason=$bypassReason")
+        return NativeSourceNormalizerResourceOpenOutcome(diagnostics = diagnostics)
+    }
+    val resource =
+        parseSourceNormalizerResource(json, source, sourceNormalizerLoopbackServer)
+            ?: return NativeSourceNormalizerResourceOpenOutcome()
+    currentSourceNormalizerResource = resource
+    Log.i(
+        NATIVE_JNI_BINDINGS_TAG,
+        "source normalizer resource selected route=${resource.outputRoute} playbackUri=${resource.playbackSource.uri}",
+    )
+    return NativeSourceNormalizerResourceOpenOutcome(resource = resource)
+}
+
+internal fun VesperNativeJniBindings.closeCurrentSourceNormalizerResource() {
+    val resource = currentSourceNormalizerResource ?: return
+    currentSourceNormalizerResource = null
+    detachPlayerFromSourceNormalizerResource(resource, player)
+    resource.loopbackToken?.let(sourceNormalizerLoopbackServer::invalidate)
+    runCatching { VesperNativeJni.disposeSourceNormalizerResource(resource.handle) }
+        .onFailure { error ->
+            Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose source normalizer resource session", error)
+        }
+}
+
+internal fun VesperNativeJniBindings.detachPlayerFromSourceNormalizerResource(
+    resource: NativeSourceNormalizerResource,
+    exoPlayer: ExoPlayer?,
+) {
+    if (exoPlayer == null) {
+        return
+    }
+    val currentUri = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString()
+    if (currentUri != resource.playbackSource.uri) {
+        return
+    }
+    runCatching {
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
+    }.onFailure { error ->
+        Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to detach ExoPlayer from normalized resource playback", error)
+    }
+}
+
+internal fun VesperNativeJniBindings.openNativeFramePacketSource(source: VesperPlayerSource): NativeFramePacketSource {
+    if (
+        source.protocol != VesperPlayerSourceProtocol.Content &&
+        !source.uri.startsWith("content://", ignoreCase = true)
+    ) {
+        return NativeFramePacketSource(source = source)
+    }
+    error(
+        "Android native-frame packet input requires a file:// or app-private file path. " +
+            "Copy content:// media with ContentResolver before enabling SDK-managed native-frame playback.",
+    )
+}
+
+internal fun VesperNativeJniBindings.closeCurrentNativeFramePacketSource() {
+    currentNativeFramePacketSource?.close()
+    currentNativeFramePacketSource = null
+}
+
+internal fun VesperNativeJniBindings.recordBenchmark(
+    eventName: String,
+    attributes: Map<String, String> = emptyMap(),
+) {
+    val enrichedAttributes =
+        if (firstFrameGate.currentEpoch > 0L) {
+            attributes + ("playbackEpoch" to firstFrameGate.currentEpoch.toString())
+        } else {
+            attributes
+        }
+    benchmarkRecorder.record(eventName, currentBenchmarkSourceProtocol, enrichedAttributes)
+}

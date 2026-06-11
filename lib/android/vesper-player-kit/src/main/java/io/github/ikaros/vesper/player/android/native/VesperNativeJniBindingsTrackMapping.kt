@@ -1,0 +1,118 @@
+package io.github.ikaros.vesper.player.android
+
+internal fun VesperTrackSelection.toNativePayload(): NativeTrackSelectionPayload =
+    NativeTrackSelectionPayload(
+        modeOrdinal =
+            when (mode) {
+                VesperTrackSelectionMode.Auto -> NativeTrackSelectionMode.Auto.ordinal
+                VesperTrackSelectionMode.Disabled -> NativeTrackSelectionMode.Disabled.ordinal
+                VesperTrackSelectionMode.Track -> NativeTrackSelectionMode.Track.ordinal
+            },
+        trackId = trackId,
+    )
+
+internal fun NativeTrackKind.toPublicKind(): VesperMediaTrackKind =
+    when (this) {
+        NativeTrackKind.Video -> VesperMediaTrackKind.Video
+        NativeTrackKind.Audio -> VesperMediaTrackKind.Audio
+        NativeTrackKind.Subtitle -> VesperMediaTrackKind.Subtitle
+    }
+
+internal fun NativeTrackInfo.toPublicTrack(): VesperMediaTrack? {
+    val kind = NativeTrackKind.entries.getOrNull(kindOrdinal)?.toPublicKind() ?: return null
+    return VesperMediaTrack(
+        id = id,
+        kind = kind,
+        label = label,
+        language = language,
+        codec = codec,
+        bitRate = bitRate.takeIf { hasBitRate },
+        width = width.takeIf { hasWidth },
+        height = height.takeIf { hasHeight },
+        frameRate = frameRate.takeIf { hasFrameRate },
+        channels = channels.takeIf { hasChannels },
+        sampleRate = sampleRate.takeIf { hasSampleRate },
+        isDefault = isDefault,
+        isForced = isForced,
+    )
+}
+
+internal fun NativeTrackCatalog.toPublicTrackCatalog(): VesperTrackCatalog =
+    VesperTrackCatalog(
+        tracks = tracks.mapNotNull { it.toPublicTrack() },
+        adaptiveVideo = adaptiveVideo,
+        adaptiveAudio = adaptiveAudio,
+    )
+
+internal fun NativeTrackSelectionPayload.toPublicTrackSelection(): VesperTrackSelection {
+    val mode = NativeTrackSelectionMode.entries.getOrNull(modeOrdinal) ?: NativeTrackSelectionMode.Auto
+    return when (mode) {
+        NativeTrackSelectionMode.Auto -> VesperTrackSelection.auto()
+        NativeTrackSelectionMode.Disabled -> VesperTrackSelection.disabled()
+        NativeTrackSelectionMode.Track -> trackId?.let(VesperTrackSelection::track) ?: VesperTrackSelection.auto()
+    }
+}
+
+internal fun NativeAbrPolicyPayload.toPublicAbrPolicy(): VesperAbrPolicy {
+    val mode = NativeAbrMode.entries.getOrNull(modeOrdinal) ?: NativeAbrMode.Auto
+    return when (mode) {
+        NativeAbrMode.Auto -> VesperAbrPolicy.auto()
+        NativeAbrMode.Constrained ->
+            VesperAbrPolicy.constrained(
+                maxBitRate = maxBitRate.takeIf { hasMaxBitRate },
+                maxWidth = maxWidth.takeIf { hasMaxWidth },
+                maxHeight = maxHeight.takeIf { hasMaxHeight },
+            )
+        NativeAbrMode.FixedTrack ->
+            trackId?.let(VesperAbrPolicy::fixedTrack) ?: VesperAbrPolicy.auto()
+    }
+}
+
+internal fun NativeTrackSelectionSnapshotPayload.toPublicTrackSelectionSnapshot():
+    VesperTrackSelectionSnapshot =
+    VesperTrackSelectionSnapshot(
+        video = video.toPublicTrackSelection(),
+        audio = audio.toPublicTrackSelection(),
+        subtitle = subtitle.toPublicTrackSelection(),
+        abrPolicy = abrPolicy.toPublicAbrPolicy(),
+    )
+
+internal fun NativeTrackPreferencePolicy.toPublicTrackPreferencePolicy():
+    VesperTrackPreferencePolicy =
+    VesperTrackPreferencePolicy(
+        preferredAudioLanguage = preferredAudioLanguage,
+        preferredSubtitleLanguage = preferredSubtitleLanguage,
+        selectSubtitlesByDefault = selectSubtitlesByDefault,
+        selectUndeterminedSubtitleLanguage = selectUndeterminedSubtitleLanguage,
+        audioSelection = audioSelection.toPublicTrackSelection(),
+        subtitleSelection = subtitleSelection.toPublicTrackSelection(),
+        abrPolicy = abrPolicy.toPublicAbrPolicy(),
+    )
+
+internal fun VesperAbrPolicy.toNativePayload(): NativeAbrPolicyPayload =
+    NativeAbrPolicyPayload(
+        modeOrdinal =
+            when (mode) {
+                VesperAbrMode.Auto -> NativeAbrMode.Auto.ordinal
+                VesperAbrMode.Constrained -> NativeAbrMode.Constrained.ordinal
+                VesperAbrMode.FixedTrack -> NativeAbrMode.FixedTrack.ordinal
+            },
+        trackId = trackId,
+        hasMaxBitRate = maxBitRate != null,
+        maxBitRate = maxBitRate ?: 0L,
+        hasMaxWidth = maxWidth != null,
+        maxWidth = maxWidth ?: 0,
+        hasMaxHeight = maxHeight != null,
+        maxHeight = maxHeight ?: 0,
+    )
+
+internal fun VesperTrackPreferencePolicy.toNativePayload(): NativeTrackPreferencePolicy =
+    NativeTrackPreferencePolicy(
+        preferredAudioLanguage = preferredAudioLanguage,
+        preferredSubtitleLanguage = preferredSubtitleLanguage,
+        selectSubtitlesByDefault = selectSubtitlesByDefault,
+        selectUndeterminedSubtitleLanguage = selectUndeterminedSubtitleLanguage,
+        audioSelection = audioSelection.toNativePayload(),
+        subtitleSelection = subtitleSelection.toNativePayload(),
+        abrPolicy = abrPolicy.toNativePayload(),
+    )

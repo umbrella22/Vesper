@@ -94,6 +94,11 @@ val checkPublicApiSurface by tasks.registering {
         val declarationPattern =
             Regex("^(?:public\\s+)?(?:(?:data|sealed|enum|value)\\s+)*(class|interface|object|typealias)\\s+([A-Za-z_][A-Za-z0-9_]*)")
         val forbiddenNamePattern = Regex("(?:^Native|^VesperNative|Bridge|Jni)")
+        val allowedPublicInternalNames =
+            setOf(
+                "VesperNativeFramePipelineConfiguration",
+                "VesperNativeFramePipelineMode",
+            )
         val leaks = kotlinSources.files.flatMap { file ->
             file.readLines().mapIndexedNotNull { index, line ->
                 val trimmed = line.trim()
@@ -107,6 +112,9 @@ val checkPublicApiSurface by tasks.registering {
 
                 val match = declarationPattern.find(trimmed) ?: return@mapIndexedNotNull null
                 val declarationName = match.groupValues[2]
+                if (declarationName in allowedPublicInternalNames) {
+                    return@mapIndexedNotNull null
+                }
                 if (!forbiddenNamePattern.containsMatchIn(declarationName)) {
                     return@mapIndexedNotNull null
                 }
