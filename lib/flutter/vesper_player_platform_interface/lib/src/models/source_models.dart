@@ -141,4 +141,3 @@ final class VesperPlayerSource {
     return VesperPlayerSourceProtocol.unknown;
   }
 }
-

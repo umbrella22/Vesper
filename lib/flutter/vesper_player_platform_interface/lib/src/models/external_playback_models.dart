@@ -129,4 +129,3 @@ const Set<String> _defaultRemoteDashMediaRequestHeaders = <String>{
   'Accept',
   'Accept-Language',
 };
-

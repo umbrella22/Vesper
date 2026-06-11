@@ -227,4 +227,3 @@ final class VesperPlayerSnapshot {
     };
   }
 }
-

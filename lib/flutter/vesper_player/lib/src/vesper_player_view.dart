@@ -7,6 +7,9 @@ import 'package:vesper_player_platform_interface/vesper_player_platform_interfac
 
 import 'vesper_player_controller.dart';
 
+part 'view/viewport_binding_observer.dart';
+part 'view/platform_view_constants.dart';
+
 class VesperPlayerView extends StatefulWidget {
   const VesperPlayerView({
     super.key,
@@ -245,25 +248,3 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
     );
   }
 }
-
-final class _ViewportBindingObserver with WidgetsBindingObserver {
-  _ViewportBindingObserver({
-    required this.onMetricsChanged,
-    required this.onLifecycleChanged,
-  });
-
-  final VoidCallback onMetricsChanged;
-  final ValueChanged<AppLifecycleState> onLifecycleChanged;
-
-  @override
-  void didChangeMetrics() {
-    onMetricsChanged();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    onLifecycleChanged(state);
-  }
-}
-
-const String _platformViewType = 'io.github.ikaros.vesper_player/platform_view';

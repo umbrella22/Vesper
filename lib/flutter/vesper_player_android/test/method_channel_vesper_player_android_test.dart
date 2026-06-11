@@ -350,10 +350,10 @@ void main() {
     expect(events.single, isA<VesperPlayerSnapshotEvent>());
     final snapshot = (events.single as VesperPlayerSnapshotEvent).snapshot;
     expect(
-      snapshot?.lastError?.details['capabilityFailureCause'],
+      snapshot.lastError?.details['capabilityFailureCause'],
       'decoderInit',
     );
-    final evidence = snapshot?.lastError?.hdrCapabilityEvidence;
+    final evidence = snapshot.lastError?.hdrCapabilityEvidence;
     expect(evidence?.likelyHdrCapabilityIssue, isTrue);
     expect(evidence?.hdrKind, VesperPlaybackCapabilityHdrKind.dolbyVision);
     expect(evidence?.confidence, 'sessionProbe');

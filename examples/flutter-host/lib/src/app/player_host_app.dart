@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import 'example_player_models.dart';
-import 'example_player_theme.dart';
-import 'player_host_page.dart';
+import '../player/example_player_models.dart';
+import '../theme/example_player_theme.dart';
+import '../player/player_host_page.dart';
 
 class VesperFlutterHostApp extends StatefulWidget {
   const VesperFlutterHostApp({super.key});

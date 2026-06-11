@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:vesper_player/vesper_player.dart';
 
-import 'example_player_helpers.dart';
-import 'example_player_models.dart';
-import 'example_player_sections.dart';
+import '../player/example_player_helpers.dart';
+import '../player/example_player_models.dart';
+import '../player/example_player_sections.dart';
 
 final class ExamplePendingDownloadTask {
   const ExamplePendingDownloadTask({

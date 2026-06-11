@@ -1,9 +1,9 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_host/src/example_player_models.dart';
-import 'package:flutter_host/src/example_player_sections.dart';
-import 'package:flutter_host/src/hdr_evidence_capture.dart';
+import 'package:flutter_host/src/player/example_player_models.dart';
+import 'package:flutter_host/src/player/example_player_sections.dart';
+import 'package:flutter_host/src/hdr_evidence/hdr_evidence_capture.dart';
 import 'package:vesper_player/vesper_player.dart';
 
 import 'package:flutter_host/main.dart';

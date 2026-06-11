@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'example_player_models.dart';
+import '../player/example_player_models.dart';
 
 ThemeData buildExampleHostTheme({required bool useDarkTheme}) {
   final palette = exampleHostPalette(useDarkTheme);

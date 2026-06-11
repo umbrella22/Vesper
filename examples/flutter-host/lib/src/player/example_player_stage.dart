@@ -2,7 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:vesper_player/vesper_player.dart';
 import 'package:vesper_player_ui/vesper_player_ui.dart' as ui;
 
-import 'example_device_controls.dart';
+import '../device/example_device_controls.dart';
 import 'example_player_models.dart';
 
 class ExamplePlayerStage extends StatelessWidget {

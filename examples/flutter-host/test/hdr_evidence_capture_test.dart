@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_host/src/hdr_evidence_capture.dart';
+import 'package:flutter_host/src/hdr_evidence/hdr_evidence_capture.dart';
 import 'package:vesper_player/vesper_player.dart';
 
 void main() {

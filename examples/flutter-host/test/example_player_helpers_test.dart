@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_host/src/example_player_helpers.dart';
-import 'package:flutter_host/src/example_player_models.dart';
+import 'package:flutter_host/src/player/example_player_helpers.dart';
+import 'package:flutter_host/src/player/example_player_models.dart';
 import 'package:vesper_player/vesper_player.dart';
 
 void main() {

@@ -157,4 +157,3 @@ final class VesperSystemPlaybackControls {
     };
   }
 }
-

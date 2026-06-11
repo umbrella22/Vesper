@@ -151,8 +151,8 @@ internal fun VesperNativePlayerBridge.nativeFramePipelineDiagnostics(): List<Map
     )
 }
 
-internal fun VesperNativePlayerBridge.evaluateNativeFramePipelineRoute(): NativeFramePipelineRoute =
-    when (nativeFramePipelineConfiguration.mode) {
+internal fun VesperNativePlayerBridge.evaluateNativeFramePipelineRoute(): NativeFramePipelineRoute {
+    return when (nativeFramePipelineConfiguration.mode) {
         VesperNativeFramePipelineMode.Disabled,
         VesperNativeFramePipelineMode.DiagnosticsOnly -> {
             nativeFramePipelineFallbackReason = null
@@ -181,6 +181,7 @@ internal fun VesperNativePlayerBridge.evaluateNativeFramePipelineRoute(): Native
             }
         }
     }
+}
 
 internal fun VesperNativePlayerBridge.nativeFramePipelineUnavailableReason(): String? {
     if (nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty()) {

@@ -37,4 +37,3 @@ enum VesperPlayerErrorCode {
   cancelled,
   timeout,
 }
-

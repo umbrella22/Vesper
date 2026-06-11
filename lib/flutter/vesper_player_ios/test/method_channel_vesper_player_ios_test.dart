@@ -549,18 +549,18 @@ void main() {
 
     expect(events.single, isA<VesperPlayerSnapshotEvent>());
     final snapshot = (events.single as VesperPlayerSnapshotEvent).snapshot;
-    expect(snapshot?.lastError?.details['likelyHdrCapabilityIssue'], 'true');
-    expect(snapshot?.lastError?.details['hdrKind'], 'dolbyVision');
-    expect(snapshot?.lastError?.details['hdrMetadata'],
+    expect(snapshot.lastError?.details['likelyHdrCapabilityIssue'], 'true');
+    expect(snapshot.lastError?.details['hdrKind'], 'dolbyVision');
+    expect(snapshot.lastError?.details['hdrMetadata'],
         isA<Map<Object?, Object?>>());
     expect(
-      snapshot?.lastError?.details['recommendedPlaybackPath'],
+      snapshot.lastError?.details['recommendedPlaybackPath'],
       'systemPlayer',
     );
-    expect(snapshot?.lastError?.details['assetVideoWidth'], '3840');
-    expect(snapshot?.lastError?.details['assetVideoFrameRate'], '59.94');
-    expect(snapshot?.lastError?.details['dolbyVisionProfile'], '8');
-    final evidence = snapshot?.lastError?.hdrCapabilityEvidence;
+    expect(snapshot.lastError?.details['assetVideoWidth'], '3840');
+    expect(snapshot.lastError?.details['assetVideoFrameRate'], '59.94');
+    expect(snapshot.lastError?.details['dolbyVisionProfile'], '8');
+    final evidence = snapshot.lastError?.hdrCapabilityEvidence;
     expect(evidence?.likelyHdrCapabilityIssue, isTrue);
     expect(evidence?.hdrKind, VesperPlaybackCapabilityHdrKind.dolbyVision);
     expect(

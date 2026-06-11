@@ -1,0 +1,323 @@
+part of 'player_host_page.dart';
+
+extension _PlayerHostLayout on _PlayerHostPageState {
+  Widget _buildPlayerFutureContent(
+    BuildContext context, {
+    required bool immersivePlayer,
+    required ExampleHostPalette palette,
+  }) {
+    return FutureBuilder<VesperPlayerController>(
+      future: _controllerFuture,
+      builder: (context, asyncSnapshot) {
+        if (asyncSnapshot.hasError && !asyncSnapshot.hasData) {
+          return ExampleErrorState(error: asyncSnapshot.error);
+        }
+
+        final controller = asyncSnapshot.data ?? _controller;
+        if (controller == null) {
+          return const ExampleLoadingState();
+        }
+        final playlistItems = _buildPlaylistItems();
+
+        return ValueListenableBuilder<VesperPlayerSnapshot>(
+          valueListenable: controller.snapshotListenable,
+          builder: (context, snapshot, _) {
+            final content = immersivePlayer
+                ? _buildLandscapeLayout(controller, snapshot, asyncSnapshot)
+                : _buildPortraitLayout(
+                    context,
+                    controller,
+                    snapshot,
+                    playlistItems,
+                    palette,
+                    asyncSnapshot,
+                  );
+
+            return Stack(
+              children: <Widget>[
+                Positioned.fill(child: content),
+                if (_isApplyingResilienceProfile)
+                  const Positioned(
+                    top: 18,
+                    right: 18,
+                    child: ExampleBusyPill(label: '正在应用策略'),
+                  ),
+                if (_isRebuildingController)
+                  const Positioned(
+                    top: 18,
+                    left: 18,
+                    child: ExampleBusyPill(label: '正在切换插件'),
+                  ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildPortraitLayout(
+    BuildContext context,
+    VesperPlayerController controller,
+    VesperPlayerSnapshot snapshot,
+    List<ExamplePlaylistItemViewData> playlistItems,
+    ExampleHostPalette palette,
+    AsyncSnapshot<VesperPlayerController> asyncSnapshot,
+  ) {
+    final transientError = asyncSnapshot.hasError ? asyncSnapshot.error : null;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          ExamplePlayerHeader(
+            sourceLabel: snapshot.sourceLabel.isEmpty
+                ? snapshot.title
+                : snapshot.sourceLabel,
+            subtitle: snapshot.subtitle,
+            palette: palette,
+          ),
+          if (transientError != null) ...<Widget>[
+            const SizedBox(height: 18),
+            ExampleInlineControllerError(error: transientError),
+          ],
+          const SizedBox(height: 18),
+          SizedBox(
+            width: double.infinity,
+            height: 248,
+            child: ExamplePlayerStage(
+              controller: controller,
+              snapshot: snapshot,
+              isPortrait: true,
+              sheetOpen: _sheetOpen,
+              deviceControls: _deviceControls,
+              topBarPrimaryAction: _buildStageRouteAction(controller),
+              onOpenSheet: (sheet) =>
+                  unawaited(_openToolSheet(controller, sheet)),
+              onToggleFullscreen: () =>
+                  unawaited(_toggleFullscreen(Orientation.portrait)),
+            ),
+          ),
+          const SizedBox(height: 18),
+          ExampleSourceSection(
+            palette: palette,
+            themeMode: widget.themeMode,
+            remoteUrlController: _remoteUrlController,
+            localFilesEnabled: snapshot.capabilities.supportsLocalFiles,
+            dashEnabled: snapshot.capabilities.supportsDash,
+            dashUnavailableMessage: snapshot.capabilities.supportsDash
+                ? null
+                : '当前平台宿主暂不支持 DASH 演示。',
+            onThemeModeChange: widget.onThemeModeChange,
+            onPickVideo: () => unawaited(_pickLocalVideo(controller)),
+            onUseHlsDemo: () => unawaited(
+              _activatePlaylistSource(
+                controller,
+                itemId: flutterHlsPlaylistItemId,
+                source: flutterHlsDemoSource(),
+              ),
+            ),
+            onUseDashDemo: () => unawaited(
+              _activatePlaylistSource(
+                controller,
+                itemId: flutterDashPlaylistItemId,
+                source: flutterDashDemoSource(),
+              ),
+            ),
+            onUseLiveDvrAcceptance: () => unawaited(
+              _activatePlaylistSource(
+                controller,
+                itemId: flutterLiveDvrPlaylistItemId,
+                source: flutterLiveDvrAcceptanceSource(),
+              ),
+            ),
+            onOpenRemote: () => unawaited(_playCustomUrl(controller)),
+          ),
+          const SizedBox(height: 18),
+          ExamplePlaylistSection(
+            palette: palette,
+            playlistItems: playlistItems,
+            onSelectItem: (itemId) =>
+                unawaited(_focusPlaylistItem(controller, itemId)),
+          ),
+          const SizedBox(height: 18),
+          ExamplePluginDiagnosticsSection(
+            palette: palette,
+            sourceNormalizerSetting: _sourceNormalizerSetting,
+            sourceNormalizerPluginLibraryPaths:
+                _sourceNormalizerPluginLibraryPaths,
+            frameProcessorPluginLibraryPaths: _frameProcessorPluginLibraryPaths,
+            pluginDiagnostics: controller.pluginDiagnostics,
+            isCapturingHdrEvidence: _isCapturingHdrEvidence,
+            hdrEvidenceActiveSourceAvailable:
+                _selectedHdrEvidencePresetUsesNetworkControl ||
+                _activePlaylistItemId != null,
+            hdrEvidencePresets: exampleHdrEvidenceP0Presets,
+            selectedHdrEvidencePreset: _selectedHdrEvidencePreset,
+            onSourceNormalizerSettingChange: (setting) =>
+                unawaited(_applySourceNormalizerSetting(setting)),
+            onHdrEvidencePresetChange: (preset) {
+              _updateState(() {
+                _selectedHdrEvidencePreset = preset;
+              });
+            },
+            onCaptureHdrEvidence: () =>
+                unawaited(_captureHdrEvidenceBundle(controller)),
+          ),
+          const SizedBox(height: 18),
+          ExampleSystemPlaybackSection(
+            palette: palette,
+            controller: controller,
+            permissionStatus: _systemPlaybackPermissionStatus,
+            onRefreshExternalRoutes: () => unawaited(_refreshExternalRoutes()),
+            externalRoutes: _externalRoutes
+                .where(
+                  (route) => route.kind == VesperExternalPlaybackRouteKind.dlna,
+                )
+                .toList(growable: false),
+            externalPlaybackMessage: _externalPlaybackMessage,
+            onExternalRouteSelected: (route) =>
+                unawaited(_loadExternalRoute(route)),
+            onRequestPermission: () =>
+                unawaited(_requestSystemPlaybackPermissions(controller)),
+          ),
+          const SizedBox(height: 18),
+          ExampleResilienceSection(
+            palette: palette,
+            activePolicy: snapshot.resiliencePolicy,
+            selectedProfile: _selectedResilienceProfile,
+            onApplyProfile: _applyResilienceProfile,
+          ),
+          if (snapshot.lastError != null) ...<Widget>[
+            const SizedBox(height: 18),
+            ExampleRecentErrorSection(
+              palette: palette,
+              error: snapshot.lastError!,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLandscapeLayout(
+    VesperPlayerController controller,
+    VesperPlayerSnapshot snapshot,
+    AsyncSnapshot<VesperPlayerController> asyncSnapshot,
+  ) {
+    return Stack(
+      children: <Widget>[
+        Positioned.fill(
+          child: ExamplePlayerStage(
+            controller: controller,
+            snapshot: snapshot,
+            isPortrait: false,
+            sheetOpen: _sheetOpen,
+            deviceControls: _deviceControls,
+            topBarPrimaryAction: _buildStageRouteAction(controller),
+            onOpenSheet: (sheet) =>
+                unawaited(_openToolSheet(controller, sheet)),
+            onToggleFullscreen: () =>
+                unawaited(_toggleFullscreen(Orientation.landscape)),
+          ),
+        ),
+        if (asyncSnapshot.hasError)
+          Positioned(
+            top: 18,
+            left: 18,
+            right: 96,
+            child: ExampleInlineControllerError(error: asyncSnapshot.error),
+          ),
+      ],
+    );
+  }
+
+  Widget? _buildStageRouteAction(VesperPlayerController controller) {
+    if (Platform.isAndroid) {
+      return const VesperExternalRouteIconButton(size: 38);
+    }
+    if (Platform.isIOS) {
+      return ui.VesperAirPlayRouteIconButton(controller: controller, size: 38);
+    }
+    return null;
+  }
+
+  Widget _buildDownloadFutureContent(ExampleHostPalette palette) {
+    final downloadManagerFuture = _ensureDownloadManagerFuture();
+    return FutureBuilder<VesperDownloadManager>(
+      future: downloadManagerFuture,
+      builder: (context, asyncSnapshot) {
+        if (asyncSnapshot.hasError && !asyncSnapshot.hasData) {
+          return ExampleErrorState(error: asyncSnapshot.error);
+        }
+
+        final manager = asyncSnapshot.data ?? _downloadManager;
+        if (manager == null) {
+          return const ExampleLoadingState();
+        }
+
+        return ValueListenableBuilder<VesperDownloadSnapshot>(
+          valueListenable: manager.snapshotListenable,
+          builder: (context, snapshot, _) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  ExampleDownloadHeader(
+                    palette: palette,
+                    isDownloadExportPluginInstalled:
+                        _isDownloadExportPluginInstalled,
+                  ),
+                  if (asyncSnapshot.hasError) ...<Widget>[
+                    const SizedBox(height: 18),
+                    ExampleInlineControllerError(error: asyncSnapshot.error),
+                  ],
+                  const SizedBox(height: 18),
+                  ExampleDownloadCreateSection(
+                    palette: palette,
+                    remoteUrlController: _downloadUrlController,
+                    message: _downloadMessage,
+                    onUseHlsDemo: () => unawaited(
+                      _createDownloadTask(
+                        manager,
+                        assetIdPrefix: flutterHlsPlaylistItemId,
+                        source: flutterHlsDemoSource(),
+                      ),
+                    ),
+                    onUseDashDemo: () => unawaited(
+                      _createDownloadTask(
+                        manager,
+                        assetIdPrefix: flutterDashPlaylistItemId,
+                        source: flutterDashDemoSource(),
+                      ),
+                    ),
+                    onCreateRemote: () =>
+                        unawaited(_createRemoteDownloadTask(manager)),
+                  ),
+                  const SizedBox(height: 18),
+                  ExampleDownloadTasksSection(
+                    palette: palette,
+                    tasks: snapshot.tasks,
+                    pendingTasks: _pendingDownloadTasks,
+                    isDownloadExportPluginInstalled:
+                        _isDownloadExportPluginInstalled,
+                    savingTaskIds: _savingTaskIds,
+                    exportProgressByTaskId: _exportProgressByTaskId,
+                    onPrimaryAction: (task) =>
+                        unawaited(_handleDownloadPrimaryAction(manager, task)),
+                    onSaveToGallery: (task) =>
+                        unawaited(_saveDownloadToGallery(manager, task)),
+                    onRemoveTask: (task) =>
+                        unawaited(manager.removeTask(task.taskId)),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}

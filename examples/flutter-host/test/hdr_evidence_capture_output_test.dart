@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_host/src/hdr_evidence_capture_output.dart';
+import 'package:flutter_host/src/hdr_evidence/hdr_evidence_capture_output.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
