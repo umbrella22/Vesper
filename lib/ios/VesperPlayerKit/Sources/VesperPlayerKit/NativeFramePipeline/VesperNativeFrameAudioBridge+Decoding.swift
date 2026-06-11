@@ -5,7 +5,7 @@ import VesperPlayerKitBridgeShim
 
 extension VesperNativeFrameAudioOutput {
     nonisolated static func preflightAudioFormat(asset: AVURLAsset) throws -> AVAudioFormat {
-        let tracks = asset.tracks(withMediaType: .audio)
+        let tracks = try audioTracks(for: asset)
         guard let track = tracks.first else {
             throw VesperNativeFrameAudioOutputError.noAudioTrack
         }
@@ -31,6 +31,40 @@ extension VesperNativeFrameAudioOutput {
             throw reader.error ?? VesperNativeFrameAudioOutputError.readerFailed
         }
         throw VesperNativeFrameAudioOutputError.readerProducedNoAudio
+    }
+
+    nonisolated static func audioTracks(for asset: AVURLAsset) throws -> [AVAssetTrack] {
+        if #available(iOS 16.0, *) {
+            return try loadAudioTracksSynchronously(asset: asset)
+        } else {
+            return legacyAudioTracks(for: asset)
+        }
+    }
+
+    @available(iOS, introduced: 4.0, deprecated: 16.0)
+    nonisolated static func legacyAudioTracks(for asset: AVURLAsset) -> [AVAssetTrack] {
+        asset.tracks(withMediaType: .audio)
+    }
+
+    @available(iOS 16.0, *)
+    nonisolated static func loadAudioTracksSynchronously(asset: AVURLAsset) throws -> [AVAssetTrack] {
+        let semaphore = DispatchSemaphore(value: 0)
+        let resultBox = VesperNativeFrameAudioTrackLoadResultBox()
+        Task.detached(priority: .userInitiated) {
+            do {
+                resultBox.store(
+                    .success(try await asset.loadTracks(withMediaType: .audio))
+                )
+            } catch {
+                resultBox.store(.failure(error))
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        guard let result = resultBox.takeResult() else {
+            throw VesperNativeFrameAudioOutputError.readerStartFailed
+        }
+        return try result.get()
     }
 
     nonisolated static func streamPcmBuffers(
@@ -201,5 +235,24 @@ extension VesperNativeFrameAudioOutput {
             }
         }
         return buffer
+    }
+}
+
+private final class VesperNativeFrameAudioTrackLoadResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<[AVAssetTrack], Error>?
+
+    func store(_ result: Result<[AVAssetTrack], Error>) {
+        lock.lock()
+        self.result = result
+        lock.unlock()
+    }
+
+    func takeResult() -> Result<[AVAssetTrack], Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        let value = result
+        result = nil
+        return value
     }
 }
