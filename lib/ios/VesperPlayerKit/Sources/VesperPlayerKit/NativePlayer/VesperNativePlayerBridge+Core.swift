@@ -60,6 +60,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var pendingResilienceRestore: PendingResilienceRestore?
     var retryTask: Task<Void, Never>?
     var stopSeekTimeoutTask: Task<Void, Never>?
+    var sourceLoadTask: Task<Void, Never>?
     var retryAttemptCount = 0
     let cachePolicyToken = UUID()
     let preloadCoordinator: VesperNativePreloadCoordinator

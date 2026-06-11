@@ -59,38 +59,9 @@ extension VesperNativePlayerBridge {
             "initialize source=\(currentSource.uri) label=\(currentSource.label) kind=\(currentSource.kind.rawValue) protocol=\(currentSource.protocol.rawValue) autoPlay=\(shouldAutoPlay)"
         )
         currentPluginDiagnostics = probePlugins(for: currentSource)
-        do {
-            configureAudioSessionIfNeeded()
-            pendingAutoPlay = shouldAutoPlay
-            try loadCurrentSource()
-            pendingAutoPlay = false
-            pendingNativeFrameSurfaceLoad = false
-            if shouldAutoPlay {
-                iosHostLog("auto-playing source=\(currentSource.uri)")
-                startPlayback()
-            }
-            refreshPlaybackState()
-            recordBenchmark("initialize_completed")
-        } catch {
-            if !pendingNativeFrameSurfaceLoad {
-                pendingAutoPlay = false
-            }
-            if pendingNativeFrameSurfaceLoad {
-                iosHostLog("initialize deferred: \(error.localizedDescription)")
-                recordBenchmark(
-                    "initialize_deferred",
-                    attributes: ["reason": error.localizedDescription]
-                )
-                return
-            }
-            iosHostLog("initialize failed: \(error.localizedDescription)")
-            closeCurrentSourceNormalizerResource()
-            recordBenchmark(
-                "initialize_failed",
-                attributes: ["error": error.localizedDescription]
-            )
-            handlePlaybackFailure(error: error, fallbackMessage: error.localizedDescription)
-        }
+        configureAudioSessionIfNeeded()
+        pendingAutoPlay = shouldAutoPlay
+        startSourceLoadTask(source: currentSource, shouldAutoPlay: shouldAutoPlay)
     }
 
     func dispose() {
@@ -99,6 +70,7 @@ extension VesperNativePlayerBridge {
         iosHostLog("dispose")
         cancelPendingRetry(resetAttempts: true)
         cancelStopSeekTimeout()
+        cancelSourceLoadTask()
         pendingResilienceRestore = nil
         currentSource = nil
         currentHdrFailureEvidence = nil
@@ -130,6 +102,7 @@ extension VesperNativePlayerBridge {
         pendingResilienceRestore = nil
         pendingAutoPlay = true
         pendingNativeFrameSeek = nil
+        cancelSourceLoadTask()
         tearDownActivePlayback()
         updateState {
             PlayerHostUiState(
@@ -151,6 +124,58 @@ extension VesperNativePlayerBridge {
             )
         }
         initialize()
+    }
+
+    func startSourceLoadTask(source: VesperPlayerSource, shouldAutoPlay: Bool) {
+        cancelSourceLoadTask()
+        sourceLoadTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await self.loadCurrentSource(source)
+                guard !Task.isCancelled, self.currentSource == source else { return }
+                self.sourceLoadTask = nil
+                self.pendingNativeFrameSurfaceLoad = false
+                let shouldStartAfterLoad = shouldAutoPlay && self.pendingAutoPlay
+                self.pendingAutoPlay = false
+                if shouldStartAfterLoad {
+                    iosHostLog("auto-playing source=\(source.uri)")
+                    self.startPlayback()
+                }
+                self.refreshPlaybackState()
+                self.recordBenchmark("initialize_completed")
+            } catch {
+                guard !Task.isCancelled, self.currentSource == source else { return }
+                self.sourceLoadTask = nil
+                self.finishSourceLoadFailure(error)
+            }
+        }
+    }
+
+    func cancelSourceLoadTask() {
+        sourceLoadTask?.cancel()
+        sourceLoadTask = nil
+    }
+
+    func finishSourceLoadFailure(_ error: Error) {
+        if !pendingNativeFrameSurfaceLoad {
+            pendingAutoPlay = false
+        }
+        if pendingNativeFrameSurfaceLoad {
+            iosHostLog("initialize deferred: \(error.localizedDescription)")
+            recordBenchmark(
+                "initialize_deferred",
+                attributes: ["reason": error.localizedDescription]
+            )
+            resumePendingNativeFrameSurfaceLoadIfNeeded()
+            return
+        }
+        iosHostLog("initialize failed: \(error.localizedDescription)")
+        closeCurrentSourceNormalizerResource()
+        recordBenchmark(
+            "initialize_failed",
+            attributes: ["error": error.localizedDescription]
+        )
+        handlePlaybackFailure(error: error, fallbackMessage: error.localizedDescription)
     }
 
     func probePlugins(for source: VesperPlayerSource) -> [[String: Any]] {
@@ -230,7 +255,14 @@ extension VesperNativePlayerBridge {
     }
 
     func resumePendingNativeFrameSurfaceLoadIfNeeded() {
-        guard pendingNativeFrameSurfaceLoad, player == nil, currentSource != nil else {
+        guard pendingNativeFrameSurfaceLoad,
+              surfaceHost != nil,
+              player == nil,
+              currentSource != nil
+        else {
+            return
+        }
+        guard nativeFramePipelineCoordinator.activeSession == nil else {
             return
         }
         pendingNativeFrameSurfaceLoad = false
@@ -238,6 +270,7 @@ extension VesperNativePlayerBridge {
     }
 
     func tearDownActivePlayback() {
+        cancelSourceLoadTask()
         releaseDashStartupAbrLimitIfNeeded(reason: "tearDown", item: player?.currentItem)
         _ = advancePlaybackEpoch()
         cancelStopSeekTimeout()

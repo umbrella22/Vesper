@@ -4,8 +4,8 @@ import Foundation
 import VesperPlayerKitBridgeShim
 
 extension VesperNativeFrameAudioOutput {
-    nonisolated static func preflightAudioFormat(asset: AVURLAsset) throws -> AVAudioFormat {
-        let tracks = try audioTracks(for: asset)
+    nonisolated static func preflightAudioFormat(asset: AVURLAsset) async throws -> AVAudioFormat {
+        let tracks = try await audioTracks(for: asset)
         guard let track = tracks.first else {
             throw VesperNativeFrameAudioOutputError.noAudioTrack
         }
@@ -33,9 +33,9 @@ extension VesperNativeFrameAudioOutput {
         throw VesperNativeFrameAudioOutputError.readerProducedNoAudio
     }
 
-    nonisolated static func audioTracks(for asset: AVURLAsset) throws -> [AVAssetTrack] {
+    nonisolated static func audioTracks(for asset: AVURLAsset) async throws -> [AVAssetTrack] {
         if #available(iOS 16.0, *) {
-            return try loadAudioTracksSynchronously(asset: asset)
+            return try await asset.loadTracks(withMediaType: .audio)
         } else {
             return legacyAudioTracks(for: asset)
         }
@@ -44,27 +44,6 @@ extension VesperNativeFrameAudioOutput {
     @available(iOS, introduced: 4.0, deprecated: 16.0)
     nonisolated static func legacyAudioTracks(for asset: AVURLAsset) -> [AVAssetTrack] {
         asset.tracks(withMediaType: .audio)
-    }
-
-    @available(iOS 16.0, *)
-    nonisolated static func loadAudioTracksSynchronously(asset: AVURLAsset) throws -> [AVAssetTrack] {
-        let semaphore = DispatchSemaphore(value: 0)
-        let resultBox = VesperNativeFrameAudioTrackLoadResultBox()
-        Task.detached(priority: .userInitiated) {
-            do {
-                resultBox.store(
-                    .success(try await asset.loadTracks(withMediaType: .audio))
-                )
-            } catch {
-                resultBox.store(.failure(error))
-            }
-            semaphore.signal()
-        }
-        semaphore.wait()
-        guard let result = resultBox.takeResult() else {
-            throw VesperNativeFrameAudioOutputError.readerStartFailed
-        }
-        return try result.get()
     }
 
     nonisolated static func streamPcmBuffers(

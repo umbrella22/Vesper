@@ -11,7 +11,7 @@ protocol VesperNativeFrameAudioOutputing: AnyObject {
     func prepare(
         source: VesperPlayerSource,
         hasAudioTrack: Bool
-    ) -> VesperNativeFrameAudioBridgeState
+    ) async -> VesperNativeFrameAudioBridgeState
     func play(rate: Float)
     func pause()
     func stop()

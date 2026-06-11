@@ -1,5 +1,10 @@
 package io.github.ikaros.vesper.player.android
 
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -110,6 +115,40 @@ class VesperNativePreloadCoordinatorTest {
 
         assertFalse(coordinator.complete(1L))
     }
+
+    @Test
+    fun concurrentEnsureSessionCreatesOnlyOneNativeSession() {
+        val bindings = FakePreloadBindings(createDelayMillis = 25L)
+        val coordinator =
+            VesperNativePreloadCoordinator(
+                bindings = bindings,
+                preloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+            )
+        val threads = 12
+        val ready = CountDownLatch(threads)
+        val start = CountDownLatch(1)
+        val pool = Executors.newFixedThreadPool(threads)
+        val handles = Collections.synchronizedList(mutableListOf<Long>())
+
+        try {
+            repeat(threads) {
+                pool.execute {
+                    ready.countDown()
+                    assertTrue(start.await(1, TimeUnit.SECONDS))
+                    handles += coordinator.ensureSession()
+                }
+            }
+            assertTrue(ready.await(1, TimeUnit.SECONDS))
+            start.countDown()
+            pool.shutdown()
+            assertTrue(pool.awaitTermination(2, TimeUnit.SECONDS))
+        } finally {
+            pool.shutdownNow()
+        }
+
+        assertEquals(List(threads) { 17L }, handles.sorted())
+        assertEquals(1, bindings.createCount.get())
+    }
 }
 
 private class FakePreloadBindings(
@@ -121,14 +160,22 @@ private class FakePreloadBindings(
             warmupWindowMs = 30_000L,
         ),
     private val drainCommands: Array<NativePreloadCommand> = emptyArray(),
+    private val createDelayMillis: Long = 0L,
 ) : VesperNativePreloadCoordinator.PreloadBindings {
     var lastBudget: NativeResolvedPreloadBudgetPolicy? = null
     var plannedCandidates: List<NativePreloadCandidate> = emptyList()
     val completedTaskIds = mutableListOf<Long>()
     val failedTaskIds = mutableListOf<Long>()
     var lastFailureMessage: String? = null
+    val createCount = AtomicInteger(0)
 
-    override fun createPreloadSession(preloadBudget: NativeResolvedPreloadBudgetPolicy): Long = 17L
+    override fun createPreloadSession(preloadBudget: NativeResolvedPreloadBudgetPolicy): Long {
+        createCount.incrementAndGet()
+        if (createDelayMillis > 0L) {
+            Thread.sleep(createDelayMillis)
+        }
+        return 17L
+    }
 
     override fun resolvePreloadBudget(
         preloadBudget: NativePreloadBudget,

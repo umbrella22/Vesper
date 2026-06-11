@@ -4,6 +4,26 @@ import UIKit
 import VesperPlayerKitBridgeShim
 
 extension VesperNativePlayerBridge {
+    var isNativeFrameLoadPending: Bool {
+        guard player == nil else { return false }
+        if pendingNativeFrameSurfaceLoad {
+            return true
+        }
+        if let activeSession = nativeFramePipelineCoordinator.activeSession,
+           !activeSession.didStart {
+            return true
+        }
+        guard sourceLoadTask != nil else {
+            return false
+        }
+        switch nativeFramePipelineConfiguration.mode {
+        case .preferNativeFrame, .requireNativeFrame:
+            return true
+        case .disabled, .diagnosticsOnly:
+            return false
+        }
+    }
+
     func attachSurfaceHost(_ host: UIView) {
         guard let host = host as? PlayerSurfaceView else {
             return
@@ -29,7 +49,7 @@ extension VesperNativePlayerBridge {
         iosHostLog("attachSurfaceHost")
         surfaceHost?.onReadyForDisplay = nil
         let shouldRebindNativeSession =
-            activeNativeSession?.didStart == true &&
+            activeNativeSession != nil &&
             activeNativeSession?.surfaceHost !== host
         if shouldRebindNativeSession {
             iosHostLog("native-frame pipeline rebinding after surface host change")
@@ -69,11 +89,11 @@ extension VesperNativePlayerBridge {
         }
         iosHostLog("detachSurfaceHost")
         recordBenchmark("detach_surface_host")
-        if let nativeSession = nativeFramePipelineCoordinator.activeSession,
-           nativeSession.didStart {
+        if let nativeSession = nativeFramePipelineCoordinator.activeSession {
             iosHostLog("native-frame pipeline suspending until surface host reattaches")
-            pendingAutoPlay = pendingAutoPlay || publishedUiState.playbackState == .playing
+            pendingAutoPlay = pendingAutoPlay || nativeSession.isPlaying || publishedUiState.playbackState == .playing
             pendingNativeFrameSurfaceLoad = currentSource != nil
+            cancelSourceLoadTask()
             nativeFramePipelineCoordinator.closeActiveSession()
         }
         surfaceHost?.onReadyForDisplay = nil
@@ -102,8 +122,8 @@ extension VesperNativePlayerBridge {
             }
             return
         }
-        if pendingNativeFrameSurfaceLoad, player == nil {
-            iosHostLog("play deferred until native-frame surface attaches")
+        if isNativeFrameLoadPending {
+            iosHostLog("play deferred until native-frame load completes")
             pendingAutoPlay = true
             return
         }
@@ -152,6 +172,7 @@ extension VesperNativePlayerBridge {
     func pause() {
         clearLastError()
         recordBenchmark("pause_command")
+        pendingAutoPlay = false
         if let nativeSession = nativeFramePipelineCoordinator.activeSession,
            nativeSession.didStart {
             iosHostLog("pause native-frame")
@@ -187,6 +208,7 @@ extension VesperNativePlayerBridge {
     func stop() {
         clearLastError()
         recordBenchmark("stop_command")
+        pendingAutoPlay = false
         if let nativeSession = nativeFramePipelineCoordinator.activeSession,
            nativeSession.didStart {
             iosHostLog("stop native-frame")
@@ -202,6 +224,24 @@ extension VesperNativePlayerBridge {
                     isBuffering: false,
                     isInterrupted: $0.isInterrupted,
                     timeline: nativeFrameTimelineState(positionMs: 0, durationMs: durationMs)
+                )
+            }
+            return
+        }
+        if isNativeFrameLoadPending {
+            iosHostLog("stop deferred until native-frame load completes")
+            pendingNativeFrameSeek = .position(0)
+            updateNativeFramePendingSeekTimeline(positionMs: 0)
+            updateState {
+                PlayerHostUiState(
+                    title: $0.title,
+                    subtitle: $0.subtitle,
+                    sourceLabel: $0.sourceLabel,
+                    playbackState: .ready,
+                    playbackRate: $0.playbackRate,
+                    isBuffering: false,
+                    isInterrupted: $0.isInterrupted,
+                    timeline: $0.timeline
                 )
             }
             return
@@ -243,7 +283,7 @@ extension VesperNativePlayerBridge {
             _ = nativeSession.seek(toMs: target)
             return
         }
-        if pendingNativeFrameSurfaceLoad, player == nil {
+        if isNativeFrameLoadPending {
             let target = nativeFramePendingRelativeSeekTarget(deltaMs: deltaMs)
             pendingNativeFrameSeek = .position(target)
             updateNativeFramePendingSeekTimeline(positionMs: target)
@@ -266,7 +306,7 @@ extension VesperNativePlayerBridge {
             _ = nativeSession.seek(toMs: target)
             return
         }
-        if pendingNativeFrameSurfaceLoad, player == nil {
+        if isNativeFrameLoadPending {
             pendingNativeFrameSeek = .ratio(ratio)
             let target = publishedUiState.timeline.position(forRatio: ratio)
             updateNativeFramePendingSeekTimeline(positionMs: target)
@@ -290,7 +330,7 @@ extension VesperNativePlayerBridge {
             )
             return
         }
-        if pendingNativeFrameSurfaceLoad, player == nil {
+        if isNativeFrameLoadPending {
             iosHostLog("seekToLiveEdge ignored while native-frame pipeline waits for surface")
             return
         }

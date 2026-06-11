@@ -3,6 +3,10 @@ package io.github.ikaros.vesper.player.android
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.createTempDirectory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -298,6 +302,52 @@ class VesperSourceNormalizerLoopbackServerTest {
             assertTrue(connection.contentType.startsWith("video/mp4"))
             assertEquals("segment", connection.inputStream.bufferedReader().readText())
         } finally {
+            server.stop()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun concurrentRegistrationsShareOneLoopbackServer() {
+        val directory = createTempDirectory(prefix = "vesper-normalized-loopback").toFile()
+        val file = File(directory, "normalized.mp4")
+        file.writeText("media")
+        val server = VesperSourceNormalizerLoopbackServer()
+        val threads = 8
+        val ready = CountDownLatch(threads)
+        val start = CountDownLatch(1)
+        val pool = Executors.newFixedThreadPool(threads)
+        val handles = Collections.synchronizedList(mutableListOf<VesperNormalizedResourceHandle>())
+
+        try {
+            repeat(threads) {
+                pool.execute {
+                    ready.countDown()
+                    assertTrue(start.await(1, TimeUnit.SECONDS))
+                    handles +=
+                        server.register(
+                            VesperNormalizedResourceRegistration(
+                                outputRoute = "fmp4LocalStream",
+                                primaryResourcePath = file.absolutePath,
+                                primaryContentType = "video/mp4",
+                                sessionReadBufferBytes = 4096,
+                            )
+                        )
+                }
+            }
+            assertTrue(ready.await(1, TimeUnit.SECONDS))
+            start.countDown()
+            pool.shutdown()
+            assertTrue(pool.awaitTermination(2, TimeUnit.SECONDS))
+
+            assertEquals(threads, handles.size)
+            val ports = handles.map { URL(it.playbackUri).port }.toSet()
+            assertEquals(1, ports.size)
+            val connection = URL(handles.first().playbackUri).openConnection() as HttpURLConnection
+            assertEquals(200, connection.responseCode)
+            assertEquals("media", connection.inputStream.bufferedReader().readText())
+        } finally {
+            pool.shutdownNow()
             server.stop()
             directory.deleteRecursively()
         }

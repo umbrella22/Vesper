@@ -39,7 +39,7 @@ final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputing, @unch
     func prepare(
         source: VesperPlayerSource,
         hasAudioTrack: Bool
-    ) -> VesperNativeFrameAudioBridgeState {
+    ) async -> VesperNativeFrameAudioBridgeState {
         close()
         guard hasAudioTrack else {
             return VesperNativeFrameAudioBridgeState.resolved(
@@ -60,7 +60,7 @@ final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputing, @unch
         sourceURL = url
         let asset = AVURLAsset(url: url)
         do {
-            preparedAudioFormat = try Self.preflightAudioFormat(asset: asset)
+            preparedAudioFormat = try await Self.preflightAudioFormat(asset: asset)
         } catch {
             return VesperNativeFrameAudioBridgeState.resolved(
                 hasAudioTrack: true,

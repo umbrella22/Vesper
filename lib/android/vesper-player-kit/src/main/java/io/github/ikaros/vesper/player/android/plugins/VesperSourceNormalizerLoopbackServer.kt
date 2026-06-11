@@ -39,6 +39,7 @@ internal class VesperSourceNormalizerLoopbackServer(
     private val random = SecureRandom()
     private val running = AtomicBoolean(false)
     private val entries = ConcurrentHashMap<String, Entry>()
+    private val stateLock = Any()
 
     @Volatile
     private var serverSocket: ServerSocket? = null
@@ -49,20 +50,29 @@ internal class VesperSourceNormalizerLoopbackServer(
     @Volatile
     private var requestExecutor: ExecutorService? = null
 
-    @Synchronized
+    @Volatile
+    private var starting = false
+
+    private var startEpoch = 0L
+
     fun register(registration: VesperNormalizedResourceRegistration): VesperNormalizedResourceHandle {
-        pruneExpiredEntries()
-        start()
-        val socket = serverSocket ?: throw IllegalStateException("normalized loopback server is not running")
+        ensureStarted()
         val token = nextToken()
-        entries[token] = Entry(registration, nowMillisProvider().saturatingAdd(tokenTtlMillis))
         val path = when (registration.outputRoute) {
             "hlsShortWindow" -> "/normalized/$token/index.m3u8"
             else -> "/normalized/$token/primary"
         }
+        val port =
+            synchronized(stateLock) {
+                pruneExpiredEntries()
+                val socket = serverSocket
+                    ?: throw IllegalStateException("normalized loopback server is not running")
+                entries[token] = Entry(registration, nowMillisProvider().saturatingAdd(tokenTtlMillis))
+                socket.localPort
+            }
         return VesperNormalizedResourceHandle(
             token = token,
-            playbackUri = "http://$LOOPBACK_HOST:${socket.localPort}$path",
+            playbackUri = "http://$LOOPBACK_HOST:$port$path",
         )
     }
 
@@ -72,37 +82,106 @@ internal class VesperSourceNormalizerLoopbackServer(
 
     internal fun entryCountForTest(): Int = entries.size
 
-    @Synchronized
     fun stop() {
-        running.set(false)
-        entries.clear()
-        runCatching { serverSocket?.close() }
-        serverSocket = null
-        acceptExecutor?.shutdownNow()
-        requestExecutor?.shutdownNow()
-        acceptExecutor = null
-        requestExecutor = null
+        val resources =
+            synchronized(stateLock) {
+                startEpoch += 1
+                running.set(false)
+                entries.clear()
+                val socket = serverSocket
+                val accept = acceptExecutor
+                val request = requestExecutor
+                serverSocket = null
+                acceptExecutor = null
+                requestExecutor = null
+                Triple(socket, accept, request)
+            }
+        runCatching { resources.first?.close() }
+        resources.second?.shutdownNow()
+        resources.third?.shutdownNow()
     }
 
-    @Synchronized
-    private fun start() {
-        if (running.get()) {
-            return
-        }
-        val socket = ServerSocket(0, 50, InetAddress.getByName(LOOPBACK_HOST))
-        serverSocket = socket
-        requestExecutor = Executors.newFixedThreadPool(DEFAULT_MAX_REQUEST_THREADS) { runnable ->
-            Thread(runnable, "vesper-source-normalizer-loopback-request").apply {
-                isDaemon = true
+    private fun ensureStarted(): ServerSocket {
+        var shouldStart = false
+        var claimedEpoch = 0L
+        while (!shouldStart) {
+            synchronized(stateLock) {
+                val socket = serverSocket
+                if (running.get() && socket != null) {
+                    return socket
+                }
+                if (!starting) {
+                    starting = true
+                    startEpoch += 1
+                    claimedEpoch = startEpoch
+                    shouldStart = true
+                }
+            }
+            if (!shouldStart) {
+                try {
+                    Thread.sleep(1)
+                } catch (error: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw IllegalStateException("interrupted while starting normalized loopback server", error)
+                }
             }
         }
-        acceptExecutor = Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, "vesper-source-normalizer-loopback-accept").apply {
-                isDaemon = true
+        return startAfterClaim(claimedEpoch)
+    }
+
+    private fun startAfterClaim(claimedEpoch: Long): ServerSocket {
+        var socket: ServerSocket? = null
+        var accept: ExecutorService? = null
+        var request: ExecutorService? = null
+        try {
+            val startedSocket = ServerSocket(0, 50, InetAddress.getByName(LOOPBACK_HOST))
+            socket = startedSocket
+            val startedRequest = Executors.newFixedThreadPool(DEFAULT_MAX_REQUEST_THREADS) { runnable ->
+                Thread(runnable, "vesper-source-normalizer-loopback-request").apply {
+                    isDaemon = true
+                }
             }
+            request = startedRequest
+            val startedAccept = Executors.newSingleThreadExecutor { runnable ->
+                Thread(runnable, "vesper-source-normalizer-loopback-accept").apply {
+                    isDaemon = true
+                }
+            }
+            accept = startedAccept
+            var shouldPublish = false
+            synchronized(stateLock) {
+                shouldPublish = claimedEpoch == startEpoch
+                if (shouldPublish) {
+                    serverSocket = startedSocket
+                    requestExecutor = startedRequest
+                    acceptExecutor = startedAccept
+                    running.set(true)
+                }
+                starting = false
+            }
+            if (!shouldPublish) {
+                runCatching { startedSocket.close() }
+                startedAccept.shutdownNow()
+                startedRequest.shutdownNow()
+                return ensureStarted()
+            }
+            startedAccept.execute { acceptLoop(startedSocket) }
+            return startedSocket
+        } catch (error: Exception) {
+            synchronized(stateLock) {
+                if (serverSocket === socket) {
+                    serverSocket = null
+                    requestExecutor = null
+                    acceptExecutor = null
+                    running.set(false)
+                }
+                starting = false
+            }
+            runCatching { socket?.close() }
+            accept?.shutdownNow()
+            request?.shutdownNow()
+            throw error
         }
-        running.set(true)
-        acceptExecutor?.execute { acceptLoop(socket) }
     }
 
     private fun acceptLoop(socket: ServerSocket) {

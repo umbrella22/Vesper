@@ -226,7 +226,7 @@ final class VesperNativeFramePipelineCoordinator {
         return .nativeFrame
     }
 
-    func startActiveSession() -> Result<VesperNativeFramePipelineSession, VesperNativeFramePipelineStartupError> {
+    func startActiveSession() async -> Result<VesperNativeFramePipelineSession, VesperNativeFramePipelineStartupError> {
         guard let activeSession else {
             let issue = VesperNativeFramePipelineIssue(
                 kind: .sessionNotPrepared,
@@ -237,7 +237,7 @@ final class VesperNativeFramePipelineCoordinator {
                 VesperNativeFramePipelineStartupError(issue: issue)
             )
         }
-        let result = activeSession.start()
+        let result = await activeSession.start()
         switch result {
         case .success:
             startupIssue = nil

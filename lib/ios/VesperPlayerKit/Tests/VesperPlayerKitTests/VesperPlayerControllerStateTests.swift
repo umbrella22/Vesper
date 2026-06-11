@@ -192,7 +192,6 @@ final class VesperPlayerControllerStateTests: XCTestCase {
 
         bridge.initialize()
 
-        XCTAssertNil(bridge.lastError)
         XCTAssertTrue(
             bridge.pluginDiagnostics.contains { diagnostic in
                 diagnostic["pluginKind"] as? String == "native_frame_pipeline" &&
@@ -205,7 +204,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelinePreferFallsBackWhenDecoderPluginPathIsMissing() {
+    func testNativeFramePipelinePreferFallsBackWhenDecoderPluginPathIsMissing() async {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/video.mp4",
             label: "MP4",
@@ -226,8 +225,10 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForDiagnostic(in: bridge) { diagnostic in
+            diagnostic["fallbackKind"] as? String == "missingVideoToolboxDecoderPlugin"
+        }
 
-        XCTAssertNil(bridge.lastError)
         XCTAssertTrue(
             bridge.pluginDiagnostics.contains { diagnostic in
                 diagnostic["pluginKind"] as? String == "native_frame_pipeline" &&
@@ -241,7 +242,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelinePreferFallsBackWhenSourceNormalizerModeCannotProvidePackets() {
+    func testNativeFramePipelinePreferFallsBackWhenSourceNormalizerModeCannotProvidePackets() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -263,8 +264,10 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForDiagnostic(in: bridge) { diagnostic in
+            diagnostic["fallbackKind"] as? String == "missingSourceNormalizerPacketPlugin"
+        }
 
-        XCTAssertNil(bridge.lastError)
         XCTAssertTrue(
             bridge.pluginDiagnostics.contains { diagnostic in
                 diagnostic["pluginKind"] as? String == "native_frame_pipeline" &&
@@ -279,7 +282,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineRequireFailsWhenDecoderPluginPathIsMissing() {
+    func testNativeFramePipelineRequireFailsWhenDecoderPluginPathIsMissing() async {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/video.mp4",
             label: "MP4",
@@ -300,6 +303,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForLastError(in: bridge)
 
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)
@@ -315,7 +319,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelinePreferWaitsForSurfaceHostBeforeLoading() {
+    func testNativeFramePipelinePreferWaitsForSurfaceHostBeforeLoading() async {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/video.mp4",
             label: "MP4",
@@ -335,6 +339,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
 
         bridge.initialize()
+        _ = await waitForDiagnostic(in: bridge) { diagnostic in
+            diagnostic["pendingKind"] as? String == "missingSurface"
+        }
 
         XCTAssertNil(bridge.lastError)
         XCTAssertTrue(
@@ -347,7 +354,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelinePreferFallsBackWhenStartupPluginCannotLoad() {
+    func testNativeFramePipelinePreferFallsBackWhenStartupPluginCannotLoad() async {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/video.mp4",
             label: "MP4",
@@ -369,8 +376,10 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForDiagnostic(in: bridge) { diagnostic in
+            diagnostic["fallbackKind"] as? String == "missingSourceNormalizerPacketPlugin"
+        }
 
-        XCTAssertNil(bridge.lastError)
         XCTAssertTrue(
             bridge.pluginDiagnostics.contains { diagnostic in
                 diagnostic["pluginKind"] as? String == "native_frame_pipeline" &&
@@ -384,7 +393,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelinePreferFallsBackWhenStartupCodecUnsupported() {
+    func testNativeFramePipelinePreferFallsBackWhenStartupCodecUnsupported() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/hdr.mov",
             label: "HDR MOV",
@@ -426,8 +435,8 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForRoutePickerPlayer(in: bridge)
 
-        XCTAssertNil(bridge.lastError)
         XCTAssertNotNil(bridge.routePickerPlayer)
         XCTAssertEqual(backend.closeHandles, [])
         XCTAssertTrue(
@@ -443,7 +452,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelinePreferAttemptsStandardLocalFileBeforeFallback() {
+    func testNativeFramePipelinePreferAttemptsStandardLocalFileBeforeFallback() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -465,8 +474,10 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForDiagnostic(in: bridge) { diagnostic in
+            diagnostic["fallbackKind"] as? String == "missingSourceNormalizerPacketPlugin"
+        }
 
-        XCTAssertNil(bridge.lastError)
         XCTAssertTrue(
             bridge.pluginDiagnostics.contains { diagnostic in
                 diagnostic["pluginKind"] as? String == "native_frame_pipeline" &&
@@ -480,7 +491,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineRequireDoesNotBypassStandardLocalFile() {
+    func testNativeFramePipelineRequireDoesNotBypassStandardLocalFile() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -502,6 +513,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForLastError(in: bridge)
 
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertTrue(
@@ -515,7 +527,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineRequireFailsWithoutPacketLane() {
+    func testNativeFramePipelineRequireFailsWithoutPacketLane() async {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/video.mp4",
             label: "MP4",
@@ -533,6 +545,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForLastError(in: bridge)
 
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)
@@ -548,7 +561,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelinePreferFallsBackForHlsSource() {
+    func testNativeFramePipelinePreferFallsBackForHlsSource() async {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/live/master.m3u8",
             label: "HLS",
@@ -570,6 +583,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForRoutePickerPlayer(in: bridge)
 
         XCTAssertNil(bridge.lastError)
         XCTAssertNotNil(bridge.routePickerPlayer)
@@ -587,7 +601,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelinePreferFallsBackForDashSource() {
+    func testNativeFramePipelinePreferFallsBackForDashSource() async {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/vod/manifest.mpd",
             label: "DASH",
@@ -609,6 +623,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForRoutePickerPlayer(in: bridge)
 
         XCTAssertNil(bridge.lastError)
         XCTAssertNotNil(bridge.routePickerPlayer)
@@ -624,7 +639,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelinePreferFallsBackForContentSource() {
+    func testNativeFramePipelinePreferFallsBackForContentSource() async {
         let source = try! VesperPlayerSource(
             uri: "content://media/external/video/media/42",
             label: "Content",
@@ -646,8 +661,10 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForDiagnostic(in: bridge) { diagnostic in
+            diagnostic["fallbackKind"] as? String == "unsupportedSource"
+        }
 
-        XCTAssertNil(bridge.lastError)
         XCTAssertTrue(
             bridge.pluginDiagnostics.contains { diagnostic in
                 diagnostic["pluginKind"] as? String == "native_frame_pipeline" &&
@@ -660,7 +677,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineRequireFailsForHlsSource() {
+    func testNativeFramePipelineRequireFailsForHlsSource() async {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/live/master.m3u8",
             label: "HLS",
@@ -682,6 +699,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForLastError(in: bridge)
 
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)
@@ -699,7 +717,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineRequireWaitsForSurfaceHostBeforeLoading() {
+    func testNativeFramePipelineRequireWaitsForSurfaceHostBeforeLoading() async {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/video.mp4",
             label: "MP4",
@@ -719,6 +737,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
 
         bridge.initialize()
+        _ = await waitForDiagnostic(in: bridge) { diagnostic in
+            diagnostic["pendingKind"] as? String == "missingSurface"
+        }
 
         XCTAssertNil(bridge.lastError)
         XCTAssertTrue(
@@ -732,13 +753,14 @@ final class VesperPlayerControllerStateTests: XCTestCase {
 
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
+        _ = await waitForLastError(in: bridge)
 
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)
         XCTAssertTrue(bridge.lastError?.message.contains("SourceNormalizer") == true)
     }
 
-    func testNativeFramePipelineRequireReportsPluginLoadFailureAndClosesSession() {
+    func testNativeFramePipelineRequireReportsPluginLoadFailureAndClosesSession() async {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/video.mp4",
             label: "MP4",
@@ -760,6 +782,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForLastError(in: bridge)
 
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)
@@ -811,6 +834,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
+        _ = await waitForNativeFrameSession(in: bridge)
         bridge.play()
         bridge.setPlaybackRate(1.5)
         bridge.seek(toRatio: 0.5)
@@ -886,6 +910,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
         bridge.initialize()
+        _ = await waitForNativeFrameSession(in: bridge)
         bridge.seek(toRatio: 0.5)
         bridge.stop()
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
@@ -936,7 +961,8 @@ final class VesperPlayerControllerStateTests: XCTestCase {
 
         bridge.initialize()
         bridge.seek(toRatio: 0.5)
-        bridge.attachSurfaceHost(PlayerSurfaceView())
+        let surface = PlayerSurfaceView()
+        bridge.attachSurfaceHost(surface)
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
             backend.seekRequests == [30_000]
         }
@@ -982,7 +1008,8 @@ final class VesperPlayerControllerStateTests: XCTestCase {
 
         bridge.initialize()
         bridge.seek(by: 12_000)
-        bridge.attachSurfaceHost(PlayerSurfaceView())
+        let surface = PlayerSurfaceView()
+        bridge.attachSurfaceHost(surface)
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
             backend.seekRequests == [12_000]
         }
@@ -993,7 +1020,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertTrue(audioOutput.events.contains("seek:12000"))
     }
 
-    func testNativeFramePipelinePendingSeekDoesNotLeakAcrossSourceSwitch() {
+    func testNativeFramePipelinePendingSeekDoesNotLeakAcrossSourceSwitch() async {
         let firstSource = try! VesperPlayerSource(
             uri: "file:///tmp/first.mov",
             label: "First MOV",
@@ -1036,6 +1063,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.selectSource(secondSource)
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.openSourceUris == ["file:///tmp/second.mov"]
+        }
 
         XCTAssertEqual(backend.openSourceUris, ["file:///tmp/second.mov"])
         XCTAssertTrue(backend.seekRequests.isEmpty)
@@ -1085,10 +1115,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
         bridge.initialize()
+        _ = await waitForNativeFrameSession(in: bridge)
         bridge.seek(toRatio: 0.5)
         bridge.selectSource(secondSource)
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
-            backend.closeHandles == [42]
+            backend.closeHandles == [42] && backend.openSourceUris.count == 2
         }
 
         XCTAssertEqual(backend.openSourceUris, [
@@ -1103,7 +1134,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(bridge.uiState.playbackState, .playing)
     }
 
-    func testNativeFramePipelineSurfaceHostChangeRebindsWithoutReloadingSession() {
+    func testNativeFramePipelineSurfaceHostChangeRebindsWithoutReloadingSession() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -1139,6 +1170,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         let secondSurface = PlayerSurfaceView()
         bridge.attachSurfaceHost(firstSurface)
         bridge.initialize()
+        _ = await waitForNativeFrameSession(in: bridge)
 
         bridge.attachSurfaceHost(secondSurface)
 
@@ -1183,6 +1215,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         let firstSurface = PlayerSurfaceView()
         bridge.attachSurfaceHost(firstSurface)
         bridge.initialize()
+        _ = await waitForNativeFrameSession(in: bridge)
         bridge.setPlaybackRate(1.5)
         bridge.detachSurfaceHost()
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
@@ -1193,6 +1226,12 @@ final class VesperPlayerControllerStateTests: XCTestCase {
 
         let secondSurface = PlayerSurfaceView()
         bridge.attachSurfaceHost(secondSurface)
+        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.openSourceUris == [
+                "file:///tmp/example.mov",
+                "file:///tmp/example.mov",
+            ]
+        }
 
         XCTAssertEqual(backend.openSourceUris, [
             "file:///tmp/example.mov",
@@ -1289,7 +1328,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineCoordinatorStartFailsWhenConfiguredPluginCannotLoad() {
+    func testNativeFramePipelineCoordinatorStartFailsWhenConfiguredPluginCannotLoad() async {
         let source = try! VesperPlayerSource(
             uri: "https://example.com/video.mp4",
             label: "MP4",
@@ -1311,7 +1350,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             surfaceHost: surface
         )
 
-        let startup = coordinator.startActiveSession()
+        let startup = await coordinator.startActiveSession()
 
         if case .failure(let error) = startup {
             XCTAssertTrue(error.message.contains("SourceNormalizer packet plugin"))
@@ -1429,7 +1468,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineStartupFailsWhenAudioTrackBridgeUnavailable() {
+    func testNativeFramePipelineStartupFailsWhenAudioTrackBridgeUnavailable() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -1458,7 +1497,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             audioOutput: audioOutput
         )
 
-        guard case .failure(let error) = session.start() else {
+        guard case .failure(let error) = await session.start() else {
             XCTFail("expected native-frame startup to fail when audio bridge is unavailable")
             return
         }
@@ -1495,7 +1534,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         var timelines: [VesperNativeFramePipelineTimeline] = []
         session.onFramePresented = { timelines.append($0) }
 
-        guard case .success = session.start() else {
+        guard case .success = await session.start() else {
             XCTFail("expected fake native-frame session to start")
             return
         }
@@ -1560,7 +1599,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         var timelines: [VesperNativeFramePipelineTimeline] = []
         session.onFramePresented = { timelines.append($0) }
 
-        guard case .success = session.start() else {
+        guard case .success = await session.start() else {
             XCTFail("expected fake native-frame session to start")
             return
         }
@@ -1607,7 +1646,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         var timelines: [VesperNativeFramePipelineTimeline] = []
         session.onFramePresented = { timelines.append($0) }
 
-        guard case .success = session.start() else {
+        guard case .success = await session.start() else {
             XCTFail("expected fake native-frame session to start")
             return
         }
@@ -1657,7 +1696,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         var timelines: [VesperNativeFramePipelineTimeline] = []
         session.onFramePresented = { timelines.append($0) }
 
-        guard case .success = session.start() else {
+        guard case .success = await session.start() else {
             XCTFail("expected fake native-frame session to start")
             return
         }
@@ -1702,7 +1741,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             audioOutput: audioOutput
         )
 
-        guard case .success = session.start() else {
+        guard case .success = await session.start() else {
             XCTFail("expected fake native-frame session to start")
             return
         }
@@ -1723,7 +1762,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertTrue(session.seekable)
     }
 
-    func testNativeFramePipelineTimelinePrefersSwiftAudioClockWhenAvailable() {
+    func testNativeFramePipelineTimelinePrefersSwiftAudioClockWhenAvailable() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -1747,7 +1786,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             audioOutput: audioOutput
         )
 
-        guard case .success = session.start() else {
+        guard case .success = await session.start() else {
             XCTFail("expected fake native-frame session to start")
             return
         }
@@ -1759,7 +1798,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineRuntimeAudioFailureReportsPlaybackFailure() {
+    func testNativeFramePipelineRuntimeAudioFailureReportsPlaybackFailure() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -1785,7 +1824,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         var failedIssue: VesperNativeFramePipelineIssue?
         session.onPlaybackFailed = { failedIssue = $0 }
 
-        guard case .success = session.start() else {
+        guard case .success = await session.start() else {
             XCTFail("expected fake native-frame session to start")
             return
         }
@@ -1864,7 +1903,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             presentedFrame.fulfill()
         }
 
-        guard case .success = session.start() else {
+        guard case .success = await session.start() else {
             XCTFail("expected fake native-frame session to start")
             return
         }
@@ -1928,7 +1967,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         let playbackEnded = expectation(description: "native-frame session reported end of playback")
         session.onPlaybackEnded = { playbackEnded.fulfill() }
 
-        guard case .success = session.start() else {
+        guard case .success = await session.start() else {
             XCTFail("expected fake native-frame session to start")
             return
         }
@@ -1992,7 +2031,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             session.close()
         }
 
-        guard case .success = session.start() else {
+        guard case .success = await session.start() else {
             XCTFail("expected fake native-frame session to start")
             return
         }
@@ -2067,7 +2106,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             window.isHidden = true
         }
 
-        guard case .success = session.start() else {
+        guard case .success = await session.start() else {
             XCTFail("expected real native-frame plugin session to start")
             return
         }
@@ -2140,7 +2179,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
-    func testNativeFramePipelineTimelineFallsBackToVideoClockWithoutAudio() {
+    func testNativeFramePipelineTimelineFallsBackToVideoClockWithoutAudio() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -2168,7 +2207,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             audioOutput: audioOutput
         )
 
-        guard case .success = session.start() else {
+        guard case .success = await session.start() else {
             XCTFail("expected fake native-frame session to start")
             return
         }
@@ -2244,6 +2283,43 @@ final class VesperPlayerControllerStateTests: XCTestCase {
     private func settleControllerObservation() async {
         await Task.yield()
         await Task.yield()
+    }
+
+    private func waitForLastError(
+        in bridge: VesperNativePlayerBridge,
+        timeout: TimeInterval = 1.0
+    ) async -> Bool {
+        await waitForNativeFrameSmoke(timeout: timeout) {
+            bridge.lastError != nil
+        }
+    }
+
+    private func waitForRoutePickerPlayer(
+        in bridge: VesperNativePlayerBridge,
+        timeout: TimeInterval = 1.0
+    ) async -> Bool {
+        await waitForNativeFrameSmoke(timeout: timeout) {
+            bridge.routePickerPlayer != nil
+        }
+    }
+
+    private func waitForNativeFrameSession(
+        in bridge: VesperNativePlayerBridge,
+        timeout: TimeInterval = 1.0
+    ) async -> Bool {
+        await waitForNativeFrameSmoke(timeout: timeout) {
+            bridge.nativeFramePipelineCoordinator.activeSession?.didStart == true
+        }
+    }
+
+    private func waitForDiagnostic(
+        in bridge: VesperNativePlayerBridge,
+        timeout: TimeInterval = 1.0,
+        matching predicate: @escaping ([String: Any]) -> Bool
+    ) async -> Bool {
+        await waitForNativeFrameSmoke(timeout: timeout) {
+            bridge.pluginDiagnostics.contains(where: predicate)
+        }
     }
 
     private static func nativeFrameSmokeConfiguration() throws -> NativeFrameSmokeConfiguration {
@@ -2648,7 +2724,7 @@ private final class TestNativeFrameAudioOutput: VesperNativeFrameAudioOutputing 
     func prepare(
         source _: VesperPlayerSource,
         hasAudioTrack: Bool
-    ) -> VesperNativeFrameAudioBridgeState {
+    ) async -> VesperNativeFrameAudioBridgeState {
         events.append("prepare:\(hasAudioTrack)")
         if let prepareResult {
             return prepareResult

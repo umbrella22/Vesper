@@ -7,25 +7,39 @@ internal class VesperNativePreloadCoordinator(
     preloadBudgetPolicy: VesperPreloadBudgetPolicy,
 ) {
     private val resolvedBudget = resolvePreloadBudget(preloadBudgetPolicy)
+    private val sessionLock = Any()
     @Volatile
     private var sessionHandle: Long = 0L
 
     fun ensureSession(): Long {
-        if (sessionHandle != 0L) {
-            return sessionHandle
+        synchronized(sessionLock) {
+            if (sessionHandle != 0L) {
+                return sessionHandle
+            }
+            val handle = bindings.createPreloadSession(resolvedBudget)
+            check(handle != 0L) { "native preload session handle must not be zero" }
+            sessionHandle = handle
+            return handle
         }
-        sessionHandle = bindings.createPreloadSession(resolvedBudget)
-        check(sessionHandle != 0L) { "native preload session handle must not be zero" }
-        return sessionHandle
     }
 
     fun dispose() {
-        if (sessionHandle == 0L) {
-            return
-        }
-        bindings.disposePreloadSession(sessionHandle)
-        sessionHandle = 0L
+        val handle =
+            synchronized(sessionLock) {
+                val handle = sessionHandle
+                if (handle == 0L) {
+                    return
+                }
+                sessionHandle = 0L
+                handle
+            }
+        bindings.disposePreloadSession(handle)
     }
+
+    private fun currentSessionHandle(): Long =
+        synchronized(sessionLock) {
+            sessionHandle
+        }
 
     fun planCurrentSource(source: VesperPlayerSource): List<NativePreloadCommand> {
         val handle = ensureSession()
@@ -44,7 +58,7 @@ internal class VesperNativePreloadCoordinator(
     }
 
     fun complete(taskId: Long): Boolean {
-        val handle = sessionHandle
+        val handle = currentSessionHandle()
         if (handle == 0L) {
             return false
         }
@@ -52,7 +66,7 @@ internal class VesperNativePreloadCoordinator(
     }
 
     fun fail(taskId: Long, error: NativeBridgeEvent.Error): Boolean {
-        val handle = sessionHandle
+        val handle = currentSessionHandle()
         if (handle == 0L) {
             return false
         }

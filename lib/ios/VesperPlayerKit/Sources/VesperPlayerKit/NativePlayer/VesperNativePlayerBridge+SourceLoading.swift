@@ -4,42 +4,51 @@ import UIKit
 import VesperPlayerKitBridgeShim
 
 extension VesperNativePlayerBridge {
-    func loadCurrentSource() throws {
-        guard let currentSource else {
+    func loadCurrentSource(_ source: VesperPlayerSource) async throws {
+        guard currentSource == source else {
             throw NSError(
                 domain: "io.github.ikaros.vesper.host.ios",
                 code: -1,
-                userInfo: [NSLocalizedDescriptionKey: VesperPlayerI18n.noSourceSelected]
+                userInfo: [NSLocalizedDescriptionKey: "Selected source changed before loading started."]
             )
         }
 
         recordBenchmark("source_load_start")
-        switch evaluateNativeFramePipelineRoute(for: currentSource) {
+        switch evaluateNativeFramePipelineRoute(for: source) {
         case .systemPlayer, .fallback:
             break
         case .waitForSurface(let issue):
             pendingNativeFrameSurfaceLoad = true
             pendingAutoPlay = pendingAutoPlay || player == nil
-            currentPluginDiagnostics = probePlugins(for: currentSource)
+            currentPluginDiagnostics = probePlugins(for: source)
             throw NSError(
                 domain: "io.github.ikaros.vesper.host.ios",
                 code: -5,
                 userInfo: [NSLocalizedDescriptionKey: issue.message]
             )
         case .nativeFrame:
-            switch nativeFramePipelineCoordinator.startActiveSession() {
+            switch await nativeFramePipelineCoordinator.startActiveSession() {
             case .success(let session):
-                configureNativeFramePlayback(source: currentSource, session: session)
+                try Task.checkCancellation()
+                guard currentSource == source else {
+                    nativeFramePipelineCoordinator.closeActiveSession()
+                    throw NSError(
+                        domain: "io.github.ikaros.vesper.host.ios",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "Selected source changed before native-frame startup completed."]
+                    )
+                }
+                configureNativeFramePlayback(source: source, session: session)
                 return
             case .failure(let error):
                 if nativeFramePipelineConfiguration.mode == .preferNativeFrame {
                     nativeFramePipelineFallbackIssue = error.issue
                     nativeFramePipelineCoordinator.closeActiveSession()
-                    currentPluginDiagnostics = probePlugins(for: currentSource)
+                    currentPluginDiagnostics = probePlugins(for: source)
                     iosHostLog("native-frame pipeline fallback: \(error.message)")
                     break
                 }
-                currentPluginDiagnostics = probePlugins(for: currentSource)
+                currentPluginDiagnostics = probePlugins(for: source)
                 nativeFramePipelineCoordinator.closeActiveSession()
                 throw NSError(
                     domain: "io.github.ikaros.vesper.host.ios",
@@ -54,7 +63,7 @@ extension VesperNativePlayerBridge {
                 userInfo: [NSLocalizedDescriptionKey: issue.message]
             )
         }
-        let normalizedResource = openSourceNormalizerResourceIfNeeded(for: currentSource)
+        let normalizedResource = openSourceNormalizerResourceIfNeeded(for: source)
         if normalizedResource == nil && sourceNormalizerConfiguration.mode == .requireNormalized {
             throw NSError(
                 domain: "io.github.ikaros.vesper.host.ios",
@@ -67,7 +76,7 @@ extension VesperNativePlayerBridge {
         }
         let normalizedSession = makeSourceNormalizerResourceSession(for: normalizedResource)
         let playbackSource = normalizedPlaybackSource(
-            original: currentSource,
+            original: source,
             resource: normalizedResource
         )
         let url: URL
@@ -83,12 +92,21 @@ extension VesperNativePlayerBridge {
                 ]
             )
         } else {
-            url = try resolvedUrl(for: currentSource)
+            url = try resolvedUrl(for: source)
         }
         iosHostLog(
             "loadCurrentSource url=\(url.absoluteString) sourceNormalizerRoute=\(normalizedResource?.outputRoute ?? "native")"
         )
-        let resolvedResiliencePolicy = currentResiliencePolicy.resolvedForRuntimeSource(currentSource)
+        try Task.checkCancellation()
+        guard currentSource == source else {
+            closeCurrentSourceNormalizerResource()
+            throw NSError(
+                domain: "io.github.ikaros.vesper.host.ios",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Selected source changed before player item configuration."]
+            )
+        }
+        let resolvedResiliencePolicy = currentResiliencePolicy.resolvedForRuntimeSource(source)
         resolvedTrackPreferencePolicy = trackPreferencePolicy.resolvedForRuntime()
         let cachePolicy = resolvedCachePolicy(resolvedResiliencePolicy.cache)
         VesperSharedUrlCacheCoordinator.shared.apply(
@@ -96,7 +114,7 @@ extension VesperNativePlayerBridge {
             token: cachePolicyToken
         )
         preloadCoordinator.configure(cachePolicy: cachePolicy)
-        preloadCoordinator.warmCurrentSource(source: currentSource, url: url)
+        preloadCoordinator.warmCurrentSource(source: source, url: url)
         releaseDashStartupAbrLimitIfNeeded(reason: "sourceReload", item: player?.currentItem)
         let item = makePlayerItem(for: playbackSource, url: url)
         refreshCurrentHdrFailureEvidence(for: playbackSource, item: item)
@@ -124,8 +142,8 @@ extension VesperNativePlayerBridge {
             PlayerHostUiState(
                 title: $0.title,
                 subtitle: normalizedResource.map { "SourceNormalizer \($0.outputRoute)" }
-                    ?? sourceSubtitle(for: currentSource),
-                sourceLabel: currentSource.label,
+                    ?? sourceSubtitle(for: source),
+                sourceLabel: source.label,
                 playbackState: .ready,
                 playbackRate: $0.playbackRate,
                 isBuffering: false,

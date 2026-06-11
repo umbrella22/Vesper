@@ -87,7 +87,7 @@ final class VesperNativeFramePipelineSession {
         didStart ? "participated" : "selected"
     }
 
-    func start() -> Result<VesperNativeFramePipelineSession, VesperNativeFramePipelineStartupError> {
+    func start() async -> Result<VesperNativeFramePipelineSession, VesperNativeFramePipelineStartupError> {
         guard !isClosed else {
             let issue = VesperNativeFramePipelineIssue(
                 kind: .sessionClosed,
@@ -127,7 +127,13 @@ final class VesperNativeFramePipelineSession {
             openedHandle: opened.handle
         )
         mergeStatus(from: opened.status)
-        let audioState = audioOutput.prepare(source: source, hasAudioTrack: hasAudioTrack)
+        let audioState = await audioOutput.prepare(source: source, hasAudioTrack: hasAudioTrack)
+        guard !Task.isCancelled, !isClosed else {
+            runtime = nil
+            backend.close(handle: opened.handle)
+            didStart = false
+            return .failure(Self.closedStartupError())
+        }
         applyAudioBridgeState(audioState)
         if audioState.outputKind == "swiftNativeAudioBridge" {
             iosHostLog("native audio pipeline configured audioPipeline=\(audioPipelineKind) source=\(source.uri)")
@@ -151,5 +157,14 @@ final class VesperNativeFramePipelineSession {
             )
         }
         return .success(self)
+    }
+
+    private static func closedStartupError() -> VesperNativeFramePipelineStartupError {
+        VesperNativeFramePipelineStartupError(
+            issue: VesperNativeFramePipelineIssue(
+                kind: .sessionClosed,
+                message: "iOS native-frame pipeline session closed before startup completed."
+            )
+        )
     }
 }
