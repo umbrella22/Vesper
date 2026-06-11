@@ -1502,8 +1502,20 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         session.play(rate: 1.5)
 
         XCTAssertTrue(session.seek(toMs: 12_345))
+        let expectedTimeline = VesperNativeFramePipelineTimeline(
+            positionMs: 12_345,
+            durationMs: 60_000
+        )
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
             backend.seekRequests == [12_345]
+                && audioOutput.events == [
+                    "prepare:true",
+                    "play:1.5",
+                    "pause",
+                    "seek:12345",
+                    "play:1.5",
+                ]
+                && timelines.last == expectedTimeline
         }
 
         XCTAssertEqual(backend.seekRequests, [12_345])
@@ -1514,10 +1526,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             "seek:12345",
             "play:1.5",
         ])
-        XCTAssertEqual(
-            timelines.last,
-            VesperNativeFramePipelineTimeline(positionMs: 12_345, durationMs: 60_000)
-        )
+        XCTAssertEqual(timelines.last, expectedTimeline)
         XCTAssertEqual(session.durationMs, 60_000)
         XCTAssertTrue(session.seekable)
         XCTAssertEqual(session.clockSource, "swiftNativeAudioBridge")
@@ -1557,16 +1566,19 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         }
 
         XCTAssertTrue(session.seek(toMs: -1_000))
+        let expectedTimeline = VesperNativeFramePipelineTimeline(
+            positionMs: 0,
+            durationMs: 60_000
+        )
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
             backend.seekRequests == [0]
+                && audioOutput.events.contains("seek:0")
+                && timelines.last == expectedTimeline
         }
 
         XCTAssertEqual(backend.seekRequests, [0])
         XCTAssertTrue(audioOutput.events.contains("seek:0"))
-        XCTAssertEqual(
-            timelines.last,
-            VesperNativeFramePipelineTimeline(positionMs: 0, durationMs: 60_000)
-        )
+        XCTAssertEqual(timelines.last, expectedTimeline)
     }
 
     func testNativeFramePipelineSeekClampsPastDurationToEnd() async {
@@ -1601,16 +1613,19 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         }
 
         XCTAssertTrue(session.seek(toMs: 90_000))
+        let expectedTimeline = VesperNativeFramePipelineTimeline(
+            positionMs: 60_000,
+            durationMs: 60_000
+        )
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
             backend.seekRequests == [60_000]
+                && audioOutput.events.contains("seek:60000")
+                && timelines.last == expectedTimeline
         }
 
         XCTAssertEqual(backend.seekRequests, [60_000])
         XCTAssertTrue(audioOutput.events.contains("seek:60000"))
-        XCTAssertEqual(
-            timelines.last,
-            VesperNativeFramePipelineTimeline(positionMs: 60_000, durationMs: 60_000)
-        )
+        XCTAssertEqual(timelines.last, expectedTimeline)
     }
 
     func testNativeFramePipelineSeekFailureRestoresPlaybackWithoutTimelineMutation() async {
