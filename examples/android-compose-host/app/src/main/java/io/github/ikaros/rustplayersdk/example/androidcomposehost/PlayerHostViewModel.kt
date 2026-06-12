@@ -45,11 +45,11 @@ internal class PlayerHostViewModel(
         )
 
     val sourceNormalizerPluginLibraryPaths: List<String> =
-        bundledPluginLibraryPaths(application, "player_source_normalizer_ffmpeg")
+        bundledPluginLibraryPaths(application, "vesper_source_normalizer_ffmpeg")
     val decoderMediaCodecPluginLibraryPaths: List<String> =
-        bundledPluginLibraryPaths(application, "player_decoder_mediacodec")
+        bundledPluginLibraryPaths(application, "vesper_decoder_mediacodec")
     val frameProcessorPluginLibraryPaths: List<String> =
-        bundledPluginLibraryPaths(application, "player_frame_processor_diagnostic")
+        bundledPluginLibraryPaths(application, "vesper_frame_processor_diagnostic")
 
     private val _controller =
         MutableStateFlow(

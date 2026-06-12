@@ -195,7 +195,7 @@ create_framework() {
   rm -rf "$framework_dir"
   mkdir -p "$framework_dir/Headers" "$framework_dir/Modules" "$framework_dir/Resources"
 
-  cp "$source_dir/libplayer_source_normalizer_ffmpeg.dylib" "$binary_path"
+  cp "$source_dir/libvesper_source_normalizer_ffmpeg.dylib" "$binary_path"
   install_name_tool -id "@rpath/$FRAMEWORK_BUNDLE/$FRAMEWORK_NAME" "$binary_path"
   ensure_rpath "$binary_path" "@loader_path/../VesperPlayerFfmpegRuntime.framework/Frameworks"
   ensure_rpath "$binary_path" "@loader_path/Frameworks"
@@ -360,8 +360,8 @@ for slice in "${SELECTED_SLICES[@]}"; do
       ;;
   esac
 
-  if [[ ! -f "$source_dir/libplayer_source_normalizer_ffmpeg.dylib" ]]; then
-    echo "Missing source normalizer plugin binary for $slice: $source_dir/libplayer_source_normalizer_ffmpeg.dylib" >&2
+  if [[ ! -f "$source_dir/libvesper_source_normalizer_ffmpeg.dylib" ]]; then
+    echo "Missing source normalizer plugin binary for $slice: $source_dir/libvesper_source_normalizer_ffmpeg.dylib" >&2
     exit 1
   fi
 

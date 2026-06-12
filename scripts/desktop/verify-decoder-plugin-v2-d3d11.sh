@@ -37,7 +37,7 @@ done
 resolve_d3d11_library_name() {
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
-      vesper_desktop_shared_library_name player_decoder_d3d11
+      vesper_desktop_shared_library_name vesper_decoder_d3d11
       ;;
     *)
       echo "D3D11 decoder verification only runs on Windows." >&2

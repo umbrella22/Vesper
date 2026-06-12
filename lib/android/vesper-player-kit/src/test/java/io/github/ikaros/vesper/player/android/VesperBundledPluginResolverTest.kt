@@ -10,7 +10,7 @@ class VesperBundledPluginResolverTest {
         val resolved =
             VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
                 configuration = VesperSourceNormalizerConfiguration(),
-                libraryPathLookup = lookupReturning("/tmp/libplayer_source_normalizer_ffmpeg.so"),
+                libraryPathLookup = lookupReturning("/tmp/libvesper_source_normalizer_ffmpeg.so"),
             )
 
         assertEquals(VesperSourceNormalizerMode.Disabled, resolved.mode)
@@ -19,7 +19,7 @@ class VesperBundledPluginResolverTest {
 
     @Test
     fun explicitSourceNormalizerPluginPathsOverrideBundledDiscovery() {
-        val explicitPath = "/custom/libplayer_source_normalizer_ffmpeg.so"
+        val explicitPath = "/custom/libvesper_source_normalizer_ffmpeg.so"
         val resolved =
             VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
                 configuration =
@@ -27,7 +27,7 @@ class VesperBundledPluginResolverTest {
                         mode = VesperSourceNormalizerMode.PreferNormalized,
                         pluginLibraryPaths = listOf(explicitPath),
                     ),
-                libraryPathLookup = lookupReturning("/bundled/libplayer_source_normalizer_ffmpeg.so"),
+                libraryPathLookup = lookupReturning("/bundled/libvesper_source_normalizer_ffmpeg.so"),
             )
 
         assertEquals(listOf(explicitPath), resolved.pluginLibraryPaths)
@@ -35,7 +35,7 @@ class VesperBundledPluginResolverTest {
 
     @Test
     fun enabledSourceNormalizerUsesBundledPluginWhenAvailable() {
-        val bundledPath = "/bundled/libplayer_source_normalizer_ffmpeg.so"
+        val bundledPath = "/bundled/libvesper_source_normalizer_ffmpeg.so"
         val resolved =
             VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
                 configuration =
@@ -81,7 +81,7 @@ class VesperBundledPluginResolverTest {
 
     private fun lookupReturning(path: String?): VesperBundledPluginResolver.LibraryPathLookup =
         VesperBundledPluginResolver.LibraryPathLookup { libraryName ->
-            assertEquals("player_source_normalizer_ffmpeg", libraryName)
+            assertEquals("vesper_source_normalizer_ffmpeg", libraryName)
             path
         }
 }

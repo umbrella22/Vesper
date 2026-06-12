@@ -75,7 +75,7 @@ main() {
   local target_dir
   local plugin_path
 
-  library_name="$(vesper_desktop_shared_library_name player_decoder_fixture)"
+  library_name="$(vesper_desktop_shared_library_name vesper_decoder_fixture)"
   target_dir="$(vesper_desktop_target_dir)"
 
   build_plugin

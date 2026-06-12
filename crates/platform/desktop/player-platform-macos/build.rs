@@ -18,7 +18,7 @@ fn main() {
 
     let source = manifest_dir.join("src/avfoundation_probe.m");
     let object = out_dir.join("avfoundation_probe.o");
-    let library = out_dir.join("libplayer_platform_macos_avfoundation_probe.a");
+    let library = out_dir.join("libvesper_platform_macos_avfoundation_probe.a");
 
     run_command(
         "xcrun",
@@ -49,7 +49,7 @@ fn main() {
     );
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static=player_platform_macos_avfoundation_probe");
+    println!("cargo:rustc-link-lib=static=vesper_platform_macos_avfoundation_probe");
     println!("cargo:rustc-link-lib=framework=AVFoundation");
     println!("cargo:rustc-link-lib=framework=Foundation");
     println!("cargo:rustc-link-lib=framework=CoreMedia");

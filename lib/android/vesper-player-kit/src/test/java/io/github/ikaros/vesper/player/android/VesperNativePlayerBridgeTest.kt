@@ -614,13 +614,13 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libplayer_source_normalizer_ffmpeg.so"),
+                        pluginLibraryPaths = listOf("/tmp/libvesper_source_normalizer_ffmpeg.so"),
                         runtimeProfile = "default",
                     ),
                 frameProcessorConfiguration =
                     VesperFrameProcessorConfiguration(
                         mode = VesperFrameProcessorMode.DiagnosticsOnly,
-                        pluginLibraryPaths = listOf("/tmp/libplayer_frame_processor_diagnostic.so"),
+                        pluginLibraryPaths = listOf("/tmp/libvesper_frame_processor_diagnostic.so"),
                     ),
             )
 

@@ -15,9 +15,9 @@ SOURCE_NORMALIZER_FRAMEWORK_NAME="VesperPlayerSourceNormalizerFfmpegPlugin.frame
 DECODER_FRAMEWORK_NAME="VesperPlayerDecoderVideoToolboxPlugin.framework"
 FRAME_PROCESSOR_FRAMEWORK_NAME="VesperPlayerFrameProcessorDiagnosticPlugin.framework"
 PLUGIN_DYLIB_NAME="libvesper_remux_ffmpeg.dylib"
-SOURCE_NORMALIZER_DYLIB_NAME="libplayer_source_normalizer_ffmpeg.dylib"
-DECODER_DYLIB_NAME="libplayer_decoder_videotoolbox.dylib"
-FRAME_PROCESSOR_DYLIB_NAME="libplayer_frame_processor_diagnostic.dylib"
+SOURCE_NORMALIZER_DYLIB_NAME="libvesper_source_normalizer_ffmpeg.dylib"
+DECODER_DYLIB_NAME="libvesper_decoder_videotoolbox.dylib"
+FRAME_PROCESSOR_DYLIB_NAME="libvesper_frame_processor_diagnostic.dylib"
 FFMPEG_PROFILE="${VESPER_IOS_FFMPEG_PROFILE:-${VESPER_APPLE_FFMPEG_PROFILE:-${VESPER_FFMPEG_PROFILE:-default}}}"
 
 if [[ -z "$FRAMEWORK_BUNDLE_NAME" ]]; then
@@ -271,16 +271,16 @@ if [[ ! -f "$source_dir/libvesper_remux_ffmpeg.dylib" ]]; then
   echo "Expected player-remux-ffmpeg output was not found: $source_dir/libvesper_remux_ffmpeg.dylib" >&2
   exit 1
 fi
-if [[ ! -f "$source_normalizer_source_dir/libplayer_source_normalizer_ffmpeg.dylib" ]]; then
-  echo "Expected player-source-normalizer-ffmpeg output was not found: $source_normalizer_source_dir/libplayer_source_normalizer_ffmpeg.dylib" >&2
+if [[ ! -f "$source_normalizer_source_dir/libvesper_source_normalizer_ffmpeg.dylib" ]]; then
+  echo "Expected player-source-normalizer-ffmpeg output was not found: $source_normalizer_source_dir/libvesper_source_normalizer_ffmpeg.dylib" >&2
   exit 1
 fi
-if [[ ! -f "$decoder_source_dir/libplayer_decoder_videotoolbox.dylib" ]]; then
-  echo "Expected player-decoder-videotoolbox output was not found: $decoder_source_dir/libplayer_decoder_videotoolbox.dylib" >&2
+if [[ ! -f "$decoder_source_dir/libvesper_decoder_videotoolbox.dylib" ]]; then
+  echo "Expected player-decoder-videotoolbox output was not found: $decoder_source_dir/libvesper_decoder_videotoolbox.dylib" >&2
   exit 1
 fi
-if [[ ! -f "$frame_processor_source_dir/libplayer_frame_processor_diagnostic.dylib" ]]; then
-  echo "Expected player-frame-processor-diagnostic output was not found: $frame_processor_source_dir/libplayer_frame_processor_diagnostic.dylib" >&2
+if [[ ! -f "$frame_processor_source_dir/libvesper_frame_processor_diagnostic.dylib" ]]; then
+  echo "Expected player-frame-processor-diagnostic output was not found: $frame_processor_source_dir/libvesper_frame_processor_diagnostic.dylib" >&2
   exit 1
 fi
 

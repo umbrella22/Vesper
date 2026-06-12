@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [lib]
+name = "vesper_source_normalizer_diagnostic"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [lib]
+name = "vesper_player_ffi"
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]

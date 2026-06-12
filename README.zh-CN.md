@@ -155,7 +155,7 @@ Android / iOS 公开 host kit API。
 推荐的 SourceNormalizer smoke command：
 
 ```sh
-VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libplayer_source_normalizer_ffmpeg.dylib \
+VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libvesper_source_normalizer_ffmpeg.dylib \
 VESPER_SOURCE_NORMALIZER_MODE=prefer-normalized \
 cargo run -p basic-player
 ```
@@ -163,11 +163,11 @@ cargo run -p basic-player
 推荐的 macOS native-frame closed-loop smoke command：
 
 ```sh
-VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libplayer_source_normalizer_ffmpeg.dylib \
+VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libvesper_source_normalizer_ffmpeg.dylib \
 VESPER_SOURCE_NORMALIZER_MODE=prefer-normalized \
-VESPER_DECODER_PLUGIN_PATHS=target/debug/libplayer_decoder_videotoolbox.dylib \
+VESPER_DECODER_PLUGIN_PATHS=target/debug/libvesper_decoder_videotoolbox.dylib \
 VESPER_DECODER_PLUGIN_VIDEO_MODE=native-frame \
-VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libplayer_frame_processor_diagnostic.dylib \
+VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libvesper_frame_processor_diagnostic.dylib \
 VESPER_FRAME_PROCESSOR_MODE=prefer-processed \
 VESPER_FRAME_PROCESSOR_DEBUG=1 \
 cargo run -p basic-player
@@ -181,7 +181,7 @@ FrameProcessor 默认仍建议作为 diagnostics / debug 路径使用，除非�
 更严格的处理模式：
 
 ```sh
-VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libplayer_frame_processor_diagnostic.dylib \
+VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libvesper_frame_processor_diagnostic.dylib \
 VESPER_FRAME_PROCESSOR_MODE=diagnostics \
 cargo run -p basic-player
 ```
@@ -304,10 +304,8 @@ FFmpeg packaging profiles。
 3. 如果两者都不存在，则构建匹配 workspace major/minor 版本的 FFmpeg，并安装到
    `third_party/ffmpeg/desktop`。
 
-本地源码压缩包缓存沿用仓库既有约定：
-
-- 如果仓库根目录已经存在 `ffmpeg-<major>.<minor>.tar.xz`，则直接复用。
-- 否则构建 helper 会从 `https://ffmpeg.org/releases/` 下载匹配的压缩包。
+本地源码压缩包默认缓存到 `third_party/_cache`。FFmpeg、OpenSSL 和 libxml2
+源码压缩包会先从该目录复用；缺失时，构建 helper 会从上游 release URL 下载到该目录。
 
 可用覆盖变量：
 
@@ -317,6 +315,7 @@ FFmpeg packaging profiles。
 | `VESPER_DESKTOP_FFMPEG_VERSION`        | 覆盖自动解析的 FFmpeg major/minor 版本。      |
 | `VESPER_DESKTOP_FFMPEG_SOURCE_ARCHIVE` | 指向已经预下载的 FFmpeg source archive。      |
 | `VESPER_DESKTOP_FFMPEG_SOURCE_URL`     | 覆盖源码下载 URL。                            |
+| `VESPER_THIRD_PARTY_SOURCE_CACHE_DIR`  | 覆盖共享源码压缩包缓存目录。                  |
 | `VESPER_REAL_PKG_CONFIG`               | 强制 wrapper 使用指定的 `pkg-config` binary。 |
 
 ### FFmpeg 许可合规

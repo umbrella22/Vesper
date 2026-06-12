@@ -177,7 +177,7 @@ host-kit APIs.
 Recommended SourceNormalizer smoke command:
 
 ```sh
-VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libplayer_source_normalizer_ffmpeg.dylib \
+VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libvesper_source_normalizer_ffmpeg.dylib \
 VESPER_SOURCE_NORMALIZER_MODE=prefer-normalized \
 cargo run -p basic-player
 ```
@@ -185,11 +185,11 @@ cargo run -p basic-player
 Recommended macOS native-frame closed-loop smoke command:
 
 ```sh
-VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libplayer_source_normalizer_ffmpeg.dylib \
+VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libvesper_source_normalizer_ffmpeg.dylib \
 VESPER_SOURCE_NORMALIZER_MODE=prefer-normalized \
-VESPER_DECODER_PLUGIN_PATHS=target/debug/libplayer_decoder_videotoolbox.dylib \
+VESPER_DECODER_PLUGIN_PATHS=target/debug/libvesper_decoder_videotoolbox.dylib \
 VESPER_DECODER_PLUGIN_VIDEO_MODE=native-frame \
-VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libplayer_frame_processor_diagnostic.dylib \
+VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libvesper_frame_processor_diagnostic.dylib \
 VESPER_FRAME_PROCESSOR_MODE=prefer-processed \
 VESPER_FRAME_PROCESSOR_DEBUG=1 \
 cargo run -p basic-player
@@ -203,7 +203,7 @@ FrameProcessor remains a diagnostics / debug route unless you explicitly choose
 a stricter desktop processing mode:
 
 ```sh
-VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libplayer_frame_processor_diagnostic.dylib \
+VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libvesper_frame_processor_diagnostic.dylib \
 VESPER_FRAME_PROCESSOR_MODE=diagnostics \
 cargo run -p basic-player
 ```
@@ -335,12 +335,10 @@ Desktop Rust builds that link FFmpeg resolve libraries in this order:
 3. If neither exists, build and install the matching workspace FFmpeg
    major/minor release into `third_party/ffmpeg/desktop`.
 
-The local source archive cache follows the existing repository convention:
-
-- If `ffmpeg-<major>.<minor>.tar.xz` already exists at the repository root, it
-  is reused.
-- Otherwise the build helper downloads the matching archive from
-  `https://ffmpeg.org/releases/`.
+The local source archive cache is `third_party/_cache` by default. FFmpeg,
+OpenSSL, and libxml2 source archives are reused from that directory before any
+download is attempted; missing archives are downloaded there from their upstream
+release URLs.
 
 Useful overrides:
 
@@ -350,6 +348,7 @@ Useful overrides:
 | `VESPER_DESKTOP_FFMPEG_VERSION`        | Override the auto-resolved FFmpeg major/minor version.          |
 | `VESPER_DESKTOP_FFMPEG_SOURCE_ARCHIVE` | Point to a pre-downloaded FFmpeg source archive.                |
 | `VESPER_DESKTOP_FFMPEG_SOURCE_URL`     | Override the source download URL.                               |
+| `VESPER_THIRD_PARTY_SOURCE_CACHE_DIR`  | Override the shared source archive cache directory.             |
 | `VESPER_REAL_PKG_CONFIG`               | Force the wrapper to use a specific `pkg-config` binary.        |
 
 ### FFmpeg License Compliance

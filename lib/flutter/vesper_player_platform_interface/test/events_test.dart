@@ -720,7 +720,7 @@ void main() {
   test('mobile plugin configurations round-trip through maps', () {
     const sourceNormalizer = VesperSourceNormalizerConfiguration(
       mode: VesperSourceNormalizerMode.requireNormalized,
-      pluginLibraryPaths: <String>['/tmp/libplayer_source_normalizer.dylib'],
+      pluginLibraryPaths: <String>['/tmp/libvesper_source_normalizer.dylib'],
       runtimeProfile: 'generic-fallback',
     );
     const preferBundled = VesperSourceNormalizerConfiguration.preferBundled();
@@ -729,13 +729,13 @@ void main() {
     );
     const frameProcessor = VesperFrameProcessorConfiguration(
       mode: VesperFrameProcessorMode.diagnosticsOnly,
-      pluginLibraryPaths: <String>['/tmp/libplayer_frame_processor.dylib'],
+      pluginLibraryPaths: <String>['/tmp/libvesper_frame_processor.dylib'],
     );
     const nativeFramePipeline = VesperNativeFramePipelineConfiguration(
       mode: VesperNativeFramePipelineMode.preferNativeFrame,
-      decoderPluginLibraryPaths: <String>['/tmp/libplayer_decoder.dylib'],
+      decoderPluginLibraryPaths: <String>['/tmp/libvesper_decoder.dylib'],
       frameProcessorPluginLibraryPaths: <String>[
-        '/tmp/libplayer_frame_processor.dylib'
+        '/tmp/libvesper_frame_processor.dylib'
       ],
       maxInFlightFrames: 2,
     );

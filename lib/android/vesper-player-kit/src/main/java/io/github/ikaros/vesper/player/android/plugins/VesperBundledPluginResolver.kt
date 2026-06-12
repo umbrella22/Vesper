@@ -5,7 +5,7 @@ import dalvik.system.BaseDexClassLoader
 import java.io.File
 
 internal object VesperBundledPluginResolver {
-    private const val SOURCE_NORMALIZER_FFMPEG_LIBRARY_NAME = "player_source_normalizer_ffmpeg"
+    private const val SOURCE_NORMALIZER_FFMPEG_LIBRARY_NAME = "vesper_source_normalizer_ffmpeg"
 
     fun resolveSourceNormalizerConfiguration(
         context: Context,

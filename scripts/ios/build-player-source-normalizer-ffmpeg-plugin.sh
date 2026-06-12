@@ -29,10 +29,10 @@ FFMPEG_APPLE_DIR="${VESPER_APPLE_FFMPEG_OUTPUT_DIR:-${VESPER_FFMPEG_OUTPUT_DIR:-
 slice_output_path() {
   case "$1" in
     ios-arm64)
-      echo "$OUTPUT_DIR/iphoneos/libplayer_source_normalizer_ffmpeg.dylib"
+      echo "$OUTPUT_DIR/iphoneos/libvesper_source_normalizer_ffmpeg.dylib"
       ;;
     ios-simulator-arm64)
-      echo "$OUTPUT_DIR/iphonesimulator/$(vesper_ios_slice_rust_target "$1")/libplayer_source_normalizer_ffmpeg.dylib"
+      echo "$OUTPUT_DIR/iphonesimulator/$(vesper_ios_slice_rust_target "$1")/libvesper_source_normalizer_ffmpeg.dylib"
       ;;
     *)
       return 1
@@ -50,7 +50,7 @@ ensure_loader_rpath() {
 
 prepare_plugin_binary() {
   local binary_path="$1"
-  install_name_tool -id "@rpath/libplayer_source_normalizer_ffmpeg.dylib" "$binary_path"
+  install_name_tool -id "@rpath/libvesper_source_normalizer_ffmpeg.dylib" "$binary_path"
   ensure_loader_rpath "$binary_path"
   if ! otool -l "$binary_path" | grep -Fq "@loader_path/VesperPlayerFfmpegRuntime.framework/Frameworks"; then
     install_name_tool -add_rpath "@loader_path/VesperPlayerFfmpegRuntime.framework/Frameworks" "$binary_path"
@@ -109,7 +109,7 @@ for slice in "${selected_slices[@]}"; do
     CARGO_TARGET_DIR="$cargo_target_dir" \
     "${cargo_command[@]}"
 
-  cp "$cargo_target_dir/$rust_target/$PROFILE_DIR/libplayer_source_normalizer_ffmpeg.dylib" "$output_path"
+  cp "$cargo_target_dir/$rust_target/$PROFILE_DIR/libvesper_source_normalizer_ffmpeg.dylib" "$output_path"
   prepare_plugin_binary "$output_path"
 done
 
@@ -126,8 +126,8 @@ if [[ ${#simulator_slices[@]} -gt 0 ]]; then
   mkdir -p "$OUTPUT_DIR/iphonesimulator"
   cp \
     "$(slice_output_path "${simulator_slices[0]}")" \
-    "$OUTPUT_DIR/iphonesimulator/libplayer_source_normalizer_ffmpeg.dylib"
-  prepare_plugin_binary "$OUTPUT_DIR/iphonesimulator/libplayer_source_normalizer_ffmpeg.dylib"
+    "$OUTPUT_DIR/iphonesimulator/libvesper_source_normalizer_ffmpeg.dylib"
+  prepare_plugin_binary "$OUTPUT_DIR/iphonesimulator/libvesper_source_normalizer_ffmpeg.dylib"
 fi
 
 unexpected_runtime="$(

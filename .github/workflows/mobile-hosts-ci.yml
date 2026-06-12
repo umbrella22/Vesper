@@ -115,6 +115,9 @@ jobs:
       - name: Verify current version metadata
         run: ./scripts/vesper release verify-current
 
+      - name: Verify native binary library names
+        run: ./scripts/vesper mobile verify-binary-names
+
       - name: Build Android FFmpeg runtime AAR
         run: ./scripts/vesper ffmpeg --platform android --profile default --abi ${{ matrix.abi }}
 
@@ -196,6 +199,9 @@ jobs:
       - name: Build optional iOS FFmpeg runtime and remux plugin XCFrameworks
         run: ./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-player-remux-ffmpeg-release --profile default ios-arm64 ios-simulator-arm64
 
+      - name: Verify native binary library names
+        run: ./scripts/vesper mobile verify-binary-names
+
       - name: Check iOS Rust adapter crate
         run: cargo check -p player-platform-ios -p player-ffi-ios
 
@@ -210,7 +216,7 @@ jobs:
 
       - name: Verify iOS bridge symbols in resolver bundle
         run: |
-          VESPER_IOS_FFI_ARCHIVE=lib/ios/VesperPlayerKit/Artifacts/rust-player-ffi/iphonesimulator/libplayer_ffi_ios.a \
+          VESPER_IOS_FFI_ARCHIVE=lib/ios/VesperPlayerKit/Artifacts/rust-player-ffi/iphonesimulator/libvesper_player_ffi_ios.a \
             ./scripts/vesper ios verify-bridge-shim
 
       - name: Verify iOS host kit does not bundle player-remux-ffmpeg by default

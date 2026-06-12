@@ -251,16 +251,16 @@ Optional Vesper FFmpeg features use a split runtime:
   relay FFmpeg adaptation APIs/JNI, but it must not carry its own `libav*`
   copies.
 - `vesper-player-kit-decoder-mediacodec` contains only
-  `libplayer_decoder_mediacodec.so`. It provides the Android hardware decoder
+  `libvesper_decoder_mediacodec.so`. It provides the Android hardware decoder
   plugin for the explicit SDK-managed native-frame route and must not carry
   `libav*`, `libsw*`, `libxml2*`, `libssl*`, or `libcrypto*` copies.
 - `player-remux-ffmpeg` contains only the download remux plugin `.so`.
 - `vesper-player-kit-source-normalizer-ffmpeg` contains only
-  `libplayer_source_normalizer_ffmpeg.so` plus profile metadata; it depends on
+  `libvesper_source_normalizer_ffmpeg.so` plus profile metadata; it depends on
   the shared runtime AAR and must not carry `libav*`, `libsw*`, `libxml2*`,
   `libssl*`, or `libcrypto*` copies.
 - `vesper-player-kit-frame-processor-diagnostic` contains only
-  `libplayer_frame_processor_diagnostic.so` and does not depend on FFmpeg.
+  `libvesper_frame_processor_diagnostic.so` and does not depend on FFmpeg.
 
 The mobile SourceNormalizer configuration is opt-in through
 `VesperSourceNormalizerConfiguration`. `DiagnosticsOnly` loads the plugin and

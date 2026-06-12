@@ -342,7 +342,7 @@ main() {
     exit 1
   fi
 
-  library_name="$(vesper_desktop_shared_library_name player_decoder_videotoolbox)"
+  library_name="$(vesper_desktop_shared_library_name vesper_decoder_videotoolbox)"
   target_dir="$(vesper_desktop_target_dir)"
 
   build_decoder_plugin
@@ -356,7 +356,7 @@ main() {
   echo "Using VideoToolbox smoke source: $VESPER_DECODER_VIDEOTOOLBOX_SOURCE"
 
   if needs_frame_processor_verification; then
-    frame_processor_library_name="$(vesper_desktop_shared_library_name player_frame_processor_diagnostic)"
+    frame_processor_library_name="$(vesper_desktop_shared_library_name vesper_frame_processor_diagnostic)"
     build_frame_processor_plugin
     frame_processor_plugin_path="$(vesper_desktop_resolve_plugin_path "$frame_processor_library_name" "$target_dir" "$PROFILE" "$FRAME_PROCESSOR_LIBRARY_PATH_OVERRIDE" VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH player-frame-processor-diagnostic)"
     export VESPER_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH="$frame_processor_plugin_path"

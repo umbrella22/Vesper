@@ -34,7 +34,7 @@ echo "[c-host] compiling examples/c-host/main.c"
   -Iinclude \
   -Ltarget/debug \
   -Wl,-rpath,@executable_path \
-  -lplayer_ffi \
+  -lvesper_player_ffi \
   -o target/debug/c-host-smoke
 
 if [[ "$BUILD_ONLY" -eq 1 ]]; then

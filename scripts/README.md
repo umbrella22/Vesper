@@ -54,6 +54,7 @@ VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper ios stage-release
 
 ./scripts/vesper mobile verify-no-remux android
 ./scripts/vesper mobile verify-no-remux ios
+./scripts/vesper mobile verify-binary-names
 ./scripts/vesper flutter stage-pub /tmp/vesper-flutter-pub
 ./scripts/vesper flutter pub-dry-run /tmp/vesper-flutter-pub
 VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper flutter pub-dry-run /tmp/vesper-flutter-pub
@@ -201,6 +202,9 @@ Resolved profile outputs are written under
 `vesper-ffmpeg-build-metadata.txt` with the declared profile, profile hash,
 external dependencies, license-sensitive flags, source archive, and full
 configure line.
+Source archives are cached under `third_party/_cache` by default; override this
+with `VESPER_THIRD_PARTY_SOURCE_CACHE_DIR` when local automation keeps third-party
+tarballs somewhere else.
 
 ## Conventions
 

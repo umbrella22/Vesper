@@ -13,7 +13,7 @@ Groups:
   android  jni | aar | remux-plugin | source-normalizer-plugin | decoder-mediacodec-plugin | frame-processor-plugin | stage-release | sample-apks
   ios      ffi | remux-plugin | source-normalizer-plugin | frame-processor-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | stage-source-normalizer-plugin-release | stage-frame-processor-plugin-release | kit-xcframework | embed-remux-plugin | stage-release | sync-bridge-shim | verify-bridge-shim | verify-native-frame
   desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
-  mobile   verify-no-remux
+  mobile   verify-no-remux | verify-binary-names
   flutter  stage-pub | pub-dry-run | pub-publish | local-overrides | verify-android-plugin
   release  notes | set-version | prepare-from-tag | metadata-from-tag | verify-version | verify-current
   contract verify
@@ -130,6 +130,9 @@ case "$group:$command" in
     ;;
   mobile:verify-no-remux)
     exec "$SCRIPT_DIR/mobile/verify-host-kit-without-player-remux-ffmpeg.sh" "$@"
+    ;;
+  mobile:verify-binary-names)
+    exec "$SCRIPT_DIR/mobile/verify-binary-library-names.sh" "$@"
     ;;
   flutter:stage-pub)
     exec "$SCRIPT_DIR/flutter/stage-pub-packages.sh" "$@"

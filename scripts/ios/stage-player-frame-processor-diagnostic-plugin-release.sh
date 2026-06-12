@@ -122,7 +122,7 @@ create_framework() {
   rm -rf "$framework_dir"
   mkdir -p "$framework_dir/Headers" "$framework_dir/Modules" "$framework_dir/Resources"
 
-  cp "$source_dir/libplayer_frame_processor_diagnostic.dylib" "$binary_path"
+  cp "$source_dir/libvesper_frame_processor_diagnostic.dylib" "$binary_path"
   install_name_tool -id "@rpath/$FRAMEWORK_BUNDLE/$FRAMEWORK_NAME" "$binary_path"
 
   printf '%s\n' \
@@ -184,8 +184,8 @@ for slice in "${SELECTED_SLICES[@]}"; do
       ;;
   esac
 
-  if [[ ! -f "$source_dir/libplayer_frame_processor_diagnostic.dylib" ]]; then
-    echo "Missing frame processor plugin binary for $slice: $source_dir/libplayer_frame_processor_diagnostic.dylib" >&2
+  if [[ ! -f "$source_dir/libvesper_frame_processor_diagnostic.dylib" ]]; then
+    echo "Missing frame processor plugin binary for $slice: $source_dir/libvesper_frame_processor_diagnostic.dylib" >&2
     exit 1
   fi
 

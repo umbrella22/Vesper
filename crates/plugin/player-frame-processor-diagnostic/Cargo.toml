@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [lib]
+name = "vesper_frame_processor_diagnostic"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

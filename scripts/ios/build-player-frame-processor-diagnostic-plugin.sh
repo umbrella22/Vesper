@@ -24,10 +24,10 @@ fi
 slice_output_path() {
   case "$1" in
     ios-arm64)
-      echo "$OUTPUT_DIR/iphoneos/libplayer_frame_processor_diagnostic.dylib"
+      echo "$OUTPUT_DIR/iphoneos/libvesper_frame_processor_diagnostic.dylib"
       ;;
     ios-simulator-arm64)
-      echo "$OUTPUT_DIR/iphonesimulator/$(vesper_ios_slice_rust_target "$1")/libplayer_frame_processor_diagnostic.dylib"
+      echo "$OUTPUT_DIR/iphonesimulator/$(vesper_ios_slice_rust_target "$1")/libvesper_frame_processor_diagnostic.dylib"
       ;;
     *)
       return 1
@@ -37,7 +37,7 @@ slice_output_path() {
 
 prepare_plugin_binary() {
   local binary_path="$1"
-  install_name_tool -id "@rpath/libplayer_frame_processor_diagnostic.dylib" "$binary_path"
+  install_name_tool -id "@rpath/libvesper_frame_processor_diagnostic.dylib" "$binary_path"
 }
 
 selected_slices=()
@@ -83,7 +83,7 @@ for slice in "${selected_slices[@]}"; do
     CARGO_TARGET_DIR="$cargo_target_dir" \
     "${cargo_command[@]}"
 
-  cp "$cargo_target_dir/$rust_target/$PROFILE_DIR/libplayer_frame_processor_diagnostic.dylib" "$output_path"
+  cp "$cargo_target_dir/$rust_target/$PROFILE_DIR/libvesper_frame_processor_diagnostic.dylib" "$output_path"
   prepare_plugin_binary "$output_path"
 done
 
@@ -100,8 +100,8 @@ if [[ ${#simulator_slices[@]} -gt 0 ]]; then
   mkdir -p "$OUTPUT_DIR/iphonesimulator"
   cp \
     "$(slice_output_path "${simulator_slices[0]}")" \
-    "$OUTPUT_DIR/iphonesimulator/libplayer_frame_processor_diagnostic.dylib"
-  prepare_plugin_binary "$OUTPUT_DIR/iphonesimulator/libplayer_frame_processor_diagnostic.dylib"
+    "$OUTPUT_DIR/iphonesimulator/libvesper_frame_processor_diagnostic.dylib"
+  prepare_plugin_binary "$OUTPUT_DIR/iphonesimulator/libvesper_frame_processor_diagnostic.dylib"
 fi
 
 unexpected_runtime="$(

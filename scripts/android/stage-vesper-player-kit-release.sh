@@ -151,8 +151,8 @@ for abi in "${selected_abis[@]}"; do
     DECODER_MEDIACODEC_OUTPUT_AAR="$OUTPUT_DIR/VesperPlayerKitDecoderMediaCodec-android-$abi.aar"
     cp "$DECODER_MEDIACODEC_INPUT_AAR" "$DECODER_MEDIACODEC_OUTPUT_AAR"
     decoder_mediacodec_entries="$(unzip -Z1 "$DECODER_MEDIACODEC_OUTPUT_AAR")"
-    if ! grep -q '^jni/'"$abi"'/libplayer_decoder_mediacodec\.so$' <<<"$decoder_mediacodec_entries"; then
-      echo "Android MediaCodec decoder AAR is missing libplayer_decoder_mediacodec.so:" >&2
+    if ! grep -q '^jni/'"$abi"'/libvesper_decoder_mediacodec\.so$' <<<"$decoder_mediacodec_entries"; then
+      echo "Android MediaCodec decoder AAR is missing libvesper_decoder_mediacodec.so:" >&2
       echo "  $DECODER_MEDIACODEC_OUTPUT_AAR" >&2
       exit 1
     fi

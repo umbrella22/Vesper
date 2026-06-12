@@ -18,10 +18,8 @@ has_ffmpeg_payload() {
   local search_root="$1"
   find "$search_root" -type f \
     \( \
-      -name 'libplayer_remux_ffmpeg*.so' -o \
-      -name 'libplayer_remux_ffmpeg*.dylib' -o \
-      -name 'libvesper_remux_ffmpeg*.so' -o \
-      -name 'libvesper_remux_ffmpeg*.dylib' -o \
+      -name 'lib*remux_ffmpeg*.so' -o \
+      -name 'lib*remux_ffmpeg*.dylib' -o \
       -name 'libvesper_player_relay_ffmpeg*.so' -o \
       -name 'libavcodec*.so' -o \
       -name 'libavcodec*.dylib' -o \

@@ -598,7 +598,7 @@ func bundledDownloadPluginLibraryPaths() -> [String] {
 
 func bundledSourceNormalizerPluginLibraryPaths() -> [String] {
     bundledPluginLibraryPaths(
-        dylibName: "libplayer_source_normalizer_ffmpeg.dylib",
+        dylibName: "libvesper_source_normalizer_ffmpeg.dylib",
         frameworkName: "VesperPlayerSourceNormalizerFfmpegPlugin",
         binaryName: "VesperPlayerSourceNormalizerFfmpegPlugin"
     )
@@ -606,7 +606,7 @@ func bundledSourceNormalizerPluginLibraryPaths() -> [String] {
 
 func bundledDecoderPluginLibraryPaths() -> [String] {
     bundledPluginLibraryPaths(
-        dylibName: "libplayer_decoder_videotoolbox.dylib",
+        dylibName: "libvesper_decoder_videotoolbox.dylib",
         frameworkName: "VesperPlayerDecoderVideoToolboxPlugin",
         binaryName: "VesperPlayerDecoderVideoToolboxPlugin"
     )
@@ -614,7 +614,7 @@ func bundledDecoderPluginLibraryPaths() -> [String] {
 
 func bundledFrameProcessorPluginLibraryPaths() -> [String] {
     bundledPluginLibraryPaths(
-        dylibName: "libplayer_frame_processor_diagnostic.dylib",
+        dylibName: "libvesper_frame_processor_diagnostic.dylib",
         frameworkName: "VesperPlayerFrameProcessorDiagnosticPlugin",
         binaryName: "VesperPlayerFrameProcessorDiagnosticPlugin"
     )

@@ -21,8 +21,18 @@ tasks=(
 case "${VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS:-0}" in
   1|true|TRUE|yes|YES)
     DECODER_MEDIACODEC_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-decoder-mediacodec"
+    SOURCE_NORMALIZER_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-source-normalizer-ffmpeg"
+    FRAME_PROCESSOR_MODULE_DIR="$PROJECT_DIR/vesper-player-kit-frame-processor-diagnostic"
     "$ROOT_DIR/scripts/android/build-player-decoder-mediacodec-plugin.sh" \
         "$DECODER_MEDIACODEC_MODULE_DIR/src/main/jniLibs" \
+        release
+    "$ROOT_DIR/scripts/android/build-player-source-normalizer-ffmpeg-plugin.sh" \
+        "$SOURCE_NORMALIZER_MODULE_DIR/src/main/jniLibs" \
+        release \
+        --profile default \
+        --metadata-dir "$SOURCE_NORMALIZER_MODULE_DIR/src/main/assets/vesper-source-normalizer-ffmpeg"
+    "$ROOT_DIR/scripts/android/build-player-frame-processor-diagnostic-plugin.sh" \
+        "$FRAME_PROCESSOR_MODULE_DIR/src/main/jniLibs" \
         release
     tasks+=(
         ":vesper-player-kit-ffmpeg-runtime:$MODULE_TASK"

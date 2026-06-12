@@ -8,7 +8,7 @@ ROOT_DIR="$VESPER_REPO_ROOT"
 FFMPEG_VERSION="${VESPER_APPLE_FFMPEG_VERSION:-8.1}"
 FFMPEG_ARCHIVE_NAME="$(vesper_ffmpeg_archive_name "$FFMPEG_VERSION")"
 FFMPEG_SOURCE_URL="${VESPER_APPLE_FFMPEG_SOURCE_URL:-$(vesper_ffmpeg_release_url "$FFMPEG_ARCHIVE_NAME")}"
-FFMPEG_SOURCE_ARCHIVE="${VESPER_APPLE_FFMPEG_SOURCE_ARCHIVE:-$ROOT_DIR/${FFMPEG_ARCHIVE_NAME}}"
+FFMPEG_SOURCE_ARCHIVE="${VESPER_APPLE_FFMPEG_SOURCE_ARCHIVE:-$(vesper_ffmpeg_source_cache_path "$FFMPEG_ARCHIVE_NAME")}"
 FFMPEG_BASE_OUTPUT_DIR="$ROOT_DIR/third_party/ffmpeg/apple"
 IOS_DEPLOYMENT_TARGET="$(vesper_apple_ios_deployment_target)"
 
@@ -60,6 +60,7 @@ vesper_require_command tar
 vesper_require_command make
 vesper_require_command xcrun
 
+mkdir -p "$(vesper_ffmpeg_source_cache_dir)"
 vesper_download_if_missing "$FFMPEG_SOURCE_ARCHIVE" "$FFMPEG_SOURCE_URL"
 
 MAKE_JOBS="$(vesper_make_jobs)"

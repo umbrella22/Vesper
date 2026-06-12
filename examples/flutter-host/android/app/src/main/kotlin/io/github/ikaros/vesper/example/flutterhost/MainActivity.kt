@@ -31,7 +31,7 @@ class MainActivity : FlutterActivity() {
         "bundledDownloadPluginLibraryPaths" ->
           result.success(bundledPluginLibraryPaths("vesper_remux_ffmpeg"))
         "bundledFrameProcessorPluginLibraryPaths" ->
-          result.success(bundledPluginLibraryPaths("player_frame_processor_diagnostic"))
+          result.success(bundledPluginLibraryPaths("vesper_frame_processor_diagnostic"))
         "saveVideoToGallery" -> saveVideoToGallery(call, result)
         "hdrEvidenceOutputRoot" -> result.success(hdrEvidenceOutputRoot().absolutePath)
         "hdrEvidenceDevice" -> result.success(hdrEvidenceDevice())

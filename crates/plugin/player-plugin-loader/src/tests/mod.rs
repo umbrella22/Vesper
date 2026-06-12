@@ -1874,7 +1874,7 @@ fn resolve_decoder_fixture_plugin_path() -> Result<PathBuf, String> {
         ));
     }
 
-    resolve_plugin_path("player_decoder_fixture")
+    resolve_plugin_path("vesper_decoder_fixture")
 }
 
 fn resolve_decoder_videotoolbox_plugin_path() -> Result<PathBuf, String> {
@@ -1889,7 +1889,7 @@ fn resolve_decoder_videotoolbox_plugin_path() -> Result<PathBuf, String> {
         ));
     }
 
-    resolve_plugin_path("player_decoder_videotoolbox")
+    resolve_plugin_path("vesper_decoder_videotoolbox")
 }
 
 fn resolve_decoder_d3d11_plugin_path() -> Result<PathBuf, String> {
@@ -1904,7 +1904,7 @@ fn resolve_decoder_d3d11_plugin_path() -> Result<PathBuf, String> {
         ));
     }
 
-    resolve_plugin_path("player_decoder_d3d11")
+    resolve_plugin_path("vesper_decoder_d3d11")
 }
 
 fn resolve_frame_processor_diagnostic_plugin_path() -> Result<PathBuf, String> {
@@ -1930,7 +1930,7 @@ fn resolve_frame_processor_diagnostic_plugin_path() -> Result<PathBuf, String> {
         ));
     }
 
-    resolve_plugin_path("player_frame_processor_diagnostic")
+    resolve_plugin_path("vesper_frame_processor_diagnostic")
 }
 
 fn resolve_plugin_path(stem: &str) -> Result<PathBuf, String> {

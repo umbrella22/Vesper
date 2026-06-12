@@ -164,14 +164,14 @@ build_ios_plugins() {
 
   copy_ffmpeg_runtime_dylibs "$ffmpeg_dir/lib/$ffmpeg_libdir" "$staging_dir"
   prepare_staged_dylib \
-    "$source_output_dir/iphonesimulator/libplayer_source_normalizer_ffmpeg.dylib" \
-    "$staging_dir/libplayer_source_normalizer_ffmpeg.dylib"
+    "$source_output_dir/iphonesimulator/libvesper_source_normalizer_ffmpeg.dylib" \
+    "$staging_dir/libvesper_source_normalizer_ffmpeg.dylib"
   prepare_staged_dylib \
-    "$decoder_output_dir/iphonesimulator/libplayer_decoder_videotoolbox.dylib" \
-    "$staging_dir/libplayer_decoder_videotoolbox.dylib"
+    "$decoder_output_dir/iphonesimulator/libvesper_decoder_videotoolbox.dylib" \
+    "$staging_dir/libvesper_decoder_videotoolbox.dylib"
   prepare_staged_dylib \
-    "$frame_processor_output_dir/iphonesimulator/libplayer_frame_processor_diagnostic.dylib" \
-    "$staging_dir/libplayer_frame_processor_diagnostic.dylib"
+    "$frame_processor_output_dir/iphonesimulator/libvesper_frame_processor_diagnostic.dylib" \
+    "$staging_dir/libvesper_frame_processor_diagnostic.dylib"
 }
 
 run_swift_smoke_test() {
@@ -185,9 +185,9 @@ run_swift_smoke_test() {
   /usr/bin/plutil -create xml1 "$config_path"
   /usr/libexec/PlistBuddy -c "Add :VESPER_IOS_NATIVE_FRAME_SMOKE_ENABLED string 1" "$config_path"
   /usr/libexec/PlistBuddy -c "Add :VESPER_IOS_NATIVE_FRAME_SMOKE_SOURCE string $source_path" "$config_path"
-  /usr/libexec/PlistBuddy -c "Add :VESPER_IOS_SOURCE_NORMALIZER_PLUGIN_PATH string $staging_dir/libplayer_source_normalizer_ffmpeg.dylib" "$config_path"
-  /usr/libexec/PlistBuddy -c "Add :VESPER_IOS_DECODER_VIDEOTOOLBOX_PLUGIN_PATH string $staging_dir/libplayer_decoder_videotoolbox.dylib" "$config_path"
-  /usr/libexec/PlistBuddy -c "Add :VESPER_IOS_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH string $staging_dir/libplayer_frame_processor_diagnostic.dylib" "$config_path"
+  /usr/libexec/PlistBuddy -c "Add :VESPER_IOS_SOURCE_NORMALIZER_PLUGIN_PATH string $staging_dir/libvesper_source_normalizer_ffmpeg.dylib" "$config_path"
+  /usr/libexec/PlistBuddy -c "Add :VESPER_IOS_DECODER_VIDEOTOOLBOX_PLUGIN_PATH string $staging_dir/libvesper_decoder_videotoolbox.dylib" "$config_path"
+  /usr/libexec/PlistBuddy -c "Add :VESPER_IOS_FRAME_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH string $staging_dir/libvesper_frame_processor_diagnostic.dylib" "$config_path"
   /usr/libexec/PlistBuddy -c "Add :VESPER_IOS_SOURCE_NORMALIZER_RUNTIME_PROFILE string $RUNTIME_PROFILE" "$config_path"
 
   log_file="$(mktemp "${TMPDIR:-/tmp}/vesper-ios-native-frame-smoke.XXXXXX").log"

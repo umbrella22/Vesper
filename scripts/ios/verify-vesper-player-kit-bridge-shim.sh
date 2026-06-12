@@ -109,7 +109,7 @@ else
     archive_paths+=("$archive")
   done < <(
     find "$repo_root/lib/ios/VesperPlayerKit/Artifacts/rust-player-ffi" \
-      -name libplayer_ffi_ios.a \
+      -name libvesper_player_ffi_ios.a \
       -type f \
       -print 2>/dev/null | sort
   )

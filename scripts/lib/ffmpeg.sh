@@ -17,6 +17,16 @@ vesper_ffmpeg_release_url() {
   printf 'https://ffmpeg.org/releases/%s\n' "$archive_name"
 }
 
+vesper_ffmpeg_source_cache_dir() {
+  printf '%s\n' "${VESPER_THIRD_PARTY_SOURCE_CACHE_DIR:-$VESPER_REPO_ROOT/third_party/_cache}"
+}
+
+vesper_ffmpeg_source_cache_path() {
+  local archive_name="$1"
+
+  printf '%s/%s\n' "$(vesper_ffmpeg_source_cache_dir)" "$archive_name"
+}
+
 vesper_ffmpeg_shell_quote() {
   local value="$1"
 

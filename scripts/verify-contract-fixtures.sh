@@ -50,6 +50,8 @@ done
 PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -Ev '^/opt/homebrew/(bin|sbin)$' | paste -sd ':' -)" \
   ruby "$SCRIPT_DIR/contract/verify-dto-drift.rb"
 
+"$SCRIPT_DIR/vesper" mobile verify-binary-names
+
 require_flutter_models_text "unsupported"
 require_text lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/VesperPlayerError.kt "unsupported"
 require_text lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/PlayerBridge.swift "case unsupported"

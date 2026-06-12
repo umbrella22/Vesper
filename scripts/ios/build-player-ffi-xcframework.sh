@@ -8,6 +8,7 @@ PROJECT_DIR="$ROOT_DIR/lib/ios/VesperPlayerKit"
 OUTPUT_DIR="$PROJECT_DIR/Artifacts/rust-player-ffi"
 XCFRAMEWORK_PATH="$OUTPUT_DIR/VesperPlayerFFI.xcframework"
 HEADERS_DIR="$PROJECT_DIR/Sources/VesperPlayerFFIResolver/include"
+STATIC_LIBRARY_NAME="libvesper_player_ffi_ios.a"
 PROFILE="${1:-release}"
 BUILD_MODE="${VESPER_BUILD_IOS_PLAYER_FFI_MODE:-full}"
 PLATFORM_FILTER="${PLATFORM_NAME:-}"
@@ -100,9 +101,9 @@ finalize_static_archive() {
 build_device_archive() {
   build_target "$DEVICE_TARGET"
   copy_built_library \
-    "$ROOT_DIR/target/$DEVICE_TARGET/$PROFILE_DIR/libplayer_ffi_ios.a" \
-    "$OUTPUT_DIR/iphoneos/libplayer_ffi_ios.a"
-  finalize_static_archive "$OUTPUT_DIR/iphoneos/libplayer_ffi_ios.a"
+    "$ROOT_DIR/target/$DEVICE_TARGET/$PROFILE_DIR/$STATIC_LIBRARY_NAME" \
+    "$OUTPUT_DIR/iphoneos/$STATIC_LIBRARY_NAME"
+  finalize_static_archive "$OUTPUT_DIR/iphoneos/$STATIC_LIBRARY_NAME"
 }
 
 build_simulator_archive() {
@@ -112,9 +113,9 @@ build_simulator_archive() {
     build_target "$target"
 
     local simulator_output_dir="$OUTPUT_DIR/$target"
-    local simulator_output_path="$simulator_output_dir/libplayer_ffi_ios.a"
+    local simulator_output_path="$simulator_output_dir/$STATIC_LIBRARY_NAME"
     copy_built_library \
-      "$ROOT_DIR/target/$target/$PROFILE_DIR/libplayer_ffi_ios.a" \
+      "$ROOT_DIR/target/$target/$PROFILE_DIR/$STATIC_LIBRARY_NAME" \
       "$simulator_output_path"
     finalize_static_archive "$simulator_output_path"
     simulator_archives+=("$simulator_output_path")
@@ -122,12 +123,12 @@ build_simulator_archive() {
 
   mkdir -p "$OUTPUT_DIR/iphonesimulator"
   if [[ ${#simulator_archives[@]} -eq 1 ]]; then
-    cp "${simulator_archives[0]}" "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_ios.a"
+    cp "${simulator_archives[0]}" "$OUTPUT_DIR/iphonesimulator/$STATIC_LIBRARY_NAME"
   else
     lipo -create "${simulator_archives[@]}" \
-      -output "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_ios.a"
+      -output "$OUTPUT_DIR/iphonesimulator/$STATIC_LIBRARY_NAME"
   fi
-  finalize_static_archive "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_ios.a"
+  finalize_static_archive "$OUTPUT_DIR/iphonesimulator/$STATIC_LIBRARY_NAME"
 }
 
 build_catalyst_archive() {
@@ -150,9 +151,9 @@ build_catalyst_archive() {
     build_target "$target"
 
     local catalyst_output_dir="$OUTPUT_DIR/$target"
-    local catalyst_output_path="$catalyst_output_dir/libplayer_ffi_ios.a"
+    local catalyst_output_path="$catalyst_output_dir/$STATIC_LIBRARY_NAME"
     copy_built_library \
-      "$ROOT_DIR/target/$target/$PROFILE_DIR/libplayer_ffi_ios.a" \
+      "$ROOT_DIR/target/$target/$PROFILE_DIR/$STATIC_LIBRARY_NAME" \
       "$catalyst_output_path"
     finalize_static_archive "$catalyst_output_path"
     catalyst_archives+=("$catalyst_output_path")
@@ -160,12 +161,12 @@ build_catalyst_archive() {
 
   mkdir -p "$OUTPUT_DIR/macosx"
   if [[ ${#catalyst_archives[@]} -eq 1 ]]; then
-    cp "${catalyst_archives[0]}" "$OUTPUT_DIR/macosx/libplayer_ffi_ios.a"
+    cp "${catalyst_archives[0]}" "$OUTPUT_DIR/macosx/$STATIC_LIBRARY_NAME"
   else
     lipo -create "${catalyst_archives[@]}" \
-      -output "$OUTPUT_DIR/macosx/libplayer_ffi_ios.a"
+      -output "$OUTPUT_DIR/macosx/$STATIC_LIBRARY_NAME"
   fi
-  finalize_static_archive "$OUTPUT_DIR/macosx/libplayer_ffi_ios.a"
+  finalize_static_archive "$OUTPUT_DIR/macosx/$STATIC_LIBRARY_NAME"
 }
 
 if [[ "$BUILD_MODE" == "platform" ]]; then
@@ -235,15 +236,15 @@ fi
 rm -rf "$XCFRAMEWORK_PATH"
 xcframework_command=(
   xcodebuild -create-xcframework
-  -library "$OUTPUT_DIR/iphoneos/libplayer_ffi_ios.a"
+  -library "$OUTPUT_DIR/iphoneos/$STATIC_LIBRARY_NAME"
   -headers "$HEADERS_DIR"
-  -library "$OUTPUT_DIR/iphonesimulator/libplayer_ffi_ios.a"
+  -library "$OUTPUT_DIR/iphonesimulator/$STATIC_LIBRARY_NAME"
   -headers "$HEADERS_DIR"
 )
 
 if [[ "$should_build_catalyst" == "true" ]]; then
   xcframework_command+=(
-    -library "$OUTPUT_DIR/macosx/libplayer_ffi_ios.a"
+    -library "$OUTPUT_DIR/macosx/$STATIC_LIBRARY_NAME"
     -headers "$HEADERS_DIR"
   )
 fi

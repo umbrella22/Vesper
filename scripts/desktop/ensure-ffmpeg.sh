@@ -36,7 +36,7 @@ resolve_ffmpeg_version() {
 
 FFMPEG_VERSION="$(resolve_ffmpeg_version)"
 FFMPEG_ARCHIVE_NAME="$(vesper_ffmpeg_archive_name "$FFMPEG_VERSION")"
-FFMPEG_SOURCE_ARCHIVE="${VESPER_DESKTOP_FFMPEG_SOURCE_ARCHIVE:-$ROOT_DIR/$FFMPEG_ARCHIVE_NAME}"
+FFMPEG_SOURCE_ARCHIVE="${VESPER_DESKTOP_FFMPEG_SOURCE_ARCHIVE:-$(vesper_ffmpeg_source_cache_path "$FFMPEG_ARCHIVE_NAME")}"
 FFMPEG_SOURCE_URL="${VESPER_DESKTOP_FFMPEG_SOURCE_URL:-$(vesper_ffmpeg_release_url "$FFMPEG_ARCHIVE_NAME")}"
 
 build_ffmpeg() {
@@ -85,6 +85,7 @@ build_ffmpeg() {
   )
 }
 
+mkdir -p "$(vesper_ffmpeg_source_cache_dir)"
 vesper_download_if_missing "$FFMPEG_SOURCE_ARCHIVE" "$FFMPEG_SOURCE_URL"
 build_ffmpeg "$FFMPEG_SOURCE_ARCHIVE" "$INSTALL_DIR"
 

@@ -72,6 +72,38 @@ val vesperAndroidPublications =
         }
 
 subprojects {
+    val verifyVesperNativeBinaryNames = tasks.register("verifyVesperNativeBinaryNames") {
+        group = "verification"
+        description = "Fails if Android packaging inputs contain Vesper-owned native libraries using libplayer_* names."
+        val nativeLibraries = fileTree("src/main/jniLibs") {
+            include("**/*.so")
+        }
+        inputs.files(nativeLibraries)
+
+        doLast {
+            val stalePlayerLibraries =
+                nativeLibraries.files
+                    .filter { file -> file.name.startsWith("libplayer_") }
+                    .map { file -> file.relativeTo(projectDir).path }
+                    .sorted()
+            if (stalePlayerLibraries.isNotEmpty()) {
+                throw GradleException(
+                    "Vesper-owned Android native libraries must use libvesper_* names:\n" +
+                        stalePlayerLibraries.joinToString(separator = "\n"),
+                )
+            }
+        }
+    }
+
+    plugins.withId("com.android.library") {
+        tasks.named("preBuild").configure {
+            dependsOn(verifyVesperNativeBinaryNames)
+        }
+        tasks.named("check").configure {
+            dependsOn(verifyVesperNativeBinaryNames)
+        }
+    }
+
     val metadata = vesperAndroidPublications[name] ?: return@subprojects
 
     pluginManager.apply("maven-publish")
