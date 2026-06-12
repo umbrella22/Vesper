@@ -14,28 +14,27 @@ use player_audio_cpal::{
 };
 use player_backend_ffmpeg::{
     AudioMasterClock, AudioStreamProbe, BufferedFramePoll, BufferedVideoSource,
-    BufferedVideoSourceBootstrap, DecodedAudioTrack, FfmpegBackend, MasterClock, MediaProbe,
+    BufferedVideoSourceBootstrap, FfmpegBackend, MasterClock, MediaProbe,
     VideoDecodeInfo as BackendVideoDecodeInfo, VideoDecoderMode as BackendVideoDecoderMode,
     VideoStreamProbe,
 };
 use player_model::{MediaSource, MediaSourceKind, MediaSourceProtocol, PlaybackSessionModel};
 
 use player_runtime::{
-    DEFAULT_PLAYBACK_RATE, DecodedAudioSummary, DecodedVideoFrame, FirstFrameReady,
-    MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, MediaClock, NATURAL_PLAYBACK_RATE_MAX, PlaybackClock,
-    PlaybackProgress, PlayerAudioInfo, PlayerAudioOutputInfo, PlayerBufferingPolicy,
-    PlayerCachePolicy, PlayerError, PlayerErrorCode, PlayerMediaInfo,
-    PlayerResilienceMetricsTracker, PlayerResult, PlayerRetryBackoff, PlayerRetryPolicy,
-    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
-    PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
-    PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
-    PlayerRuntimeStartup, PlayerVideoInfo, PresentationState,
+    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FirstFrameReady, MAX_PLAYBACK_RATE,
+    MIN_PLAYBACK_RATE, MediaClock, NATURAL_PLAYBACK_RATE_MAX, PlaybackClock, PlaybackProgress,
+    PlayerAudioInfo, PlayerAudioOutputInfo, PlayerBufferingPolicy, PlayerCachePolicy, PlayerError,
+    PlayerErrorCode, PlayerMediaInfo, PlayerResilienceMetricsTracker, PlayerResult,
+    PlayerRetryBackoff, PlayerRetryPolicy, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
+    PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
+    PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+    PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoInfo,
+    PresentationState,
     register_default_runtime_adapter_factory,
 };
 use tracing::info;
 
 pub const SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID: &str = "software_desktop";
-const AUDIO_STREAM_CHUNK_FRAMES: usize = 2_048;
 const DEFAULT_AUDIO_STREAM_TARGET_BUFFER_DURATION: Duration = Duration::from_secs(2);
 const DEFAULT_AUDIO_PLAYBACK_START_BUFFER_DURATION: Duration = Duration::from_millis(500);
 const DEFAULT_AUDIO_REBUFFER_DURATION: Duration = Duration::from_millis(250);
@@ -337,7 +336,6 @@ struct SoftwareRuntimeConfig {
     audio_output_descriptor: AudioOutputDescriptor,
     audio_output_config: Option<AudioOutputConfig>,
     audio_output_enabled: bool,
-    source_audio_track: Option<DecodedAudioTrack>,
     interrupt_flag: Option<Arc<AtomicBool>>,
     video_source_factory: Arc<dyn DesktopVideoSourceFactory>,
     capabilities: PlayerRuntimeAdapterCapabilities,
@@ -358,7 +356,6 @@ pub struct SoftwarePlayerRuntime {
     audio_output_descriptor: AudioOutputDescriptor,
     audio_output_config: Option<AudioOutputConfig>,
     audio_output_enabled: bool,
-    source_audio_track: Option<DecodedAudioTrack>,
     video_source: Box<dyn DesktopVideoSource>,
     video_end_of_stream: bool,
     next_frame: Option<DesktopVideoFrame>,
@@ -380,7 +377,6 @@ pub struct SoftwarePlayerRuntime {
     cache_policy: PlayerCachePolicy,
     base_video_prefetch_capacity: usize,
     pending_audio_metadata_worker: Option<PendingAudioMetadataWorker>,
-    pending_audio_decode_worker: Option<PendingAudioDecodeWorker>,
     pending_audio_stream_worker: Option<PendingAudioStreamWorker>,
     pending_audio_metadata_retry: Option<ScheduledRetry>,
     pending_audio_stream_retry: Option<ScheduledAudioStreamRetry>,
@@ -411,10 +407,6 @@ struct PendingAudioStreamWorker {
 enum AudioStreamWorkerEvent {
     Metadata(MediaProbe),
     Finished,
-}
-
-struct PendingAudioDecodeWorker {
-    receiver: Receiver<Result<DecodedAudioTrack, String>>,
 }
 
 struct PendingAudioMetadataWorker {
@@ -609,11 +601,10 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
             capabilities,
         } = *self;
 
-        let decoded_audio = None;
         let startup = PlayerRuntimeStartup {
             ffmpeg_initialized: backend.is_initialized(),
             audio_output: audio_output_info(&audio_output),
-            decoded_audio: decoded_audio.as_ref().map(decoded_audio_summary),
+            decoded_audio: None,
             video_decode: None,
             plugin_diagnostics: Vec::new(),
         };
@@ -632,7 +623,6 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
             audio_output_descriptor: audio_output.clone(),
             audio_output_config: audio_output.default_output_config,
             audio_output_enabled,
-            source_audio_track: decoded_audio.clone(),
             interrupt_flag,
             video_source_factory,
             capabilities,
@@ -777,7 +767,6 @@ impl PlayerRuntimeAdapter for SoftwarePlayerRuntime {
         self.poll_scheduled_retries();
         self.poll_audio_output_device();
         self.poll_audio_metadata_worker();
-        self.poll_audio_decode_worker();
         self.poll_audio_stream_worker();
         self.events.extend(self.video_source.drain_events());
         self.events.drain(..).collect()
@@ -1002,7 +991,6 @@ impl SoftwarePlayerRuntime {
             audio_output_descriptor: config.audio_output_descriptor,
             audio_output_config: config.audio_output_config,
             audio_output_enabled: config.audio_output_enabled,
-            source_audio_track: config.source_audio_track,
             video_source,
             video_end_of_stream: false,
             next_frame: None,
@@ -1024,7 +1012,6 @@ impl SoftwarePlayerRuntime {
             cache_policy: config.cache_policy,
             base_video_prefetch_capacity: config.video_prefetch_capacity,
             pending_audio_metadata_worker: None,
-            pending_audio_decode_worker: None,
             pending_audio_stream_worker: None,
             pending_audio_metadata_retry: None,
             pending_audio_stream_retry: None,
@@ -1036,10 +1023,8 @@ impl SoftwarePlayerRuntime {
             events: VecDeque::new(),
         };
 
-        let (initial_media_position, initial_video_position) = initial_restart_positions(
-            runtime.source_audio_track.as_ref(),
-            initial_frame.presentation_time,
-        );
+        let initial_media_position = initial_frame.presentation_time;
+        let initial_video_position = initial_frame.presentation_time;
         let initial_presentation_time = initial_frame.presentation_time;
         let initial_width = initial_frame.width;
         let initial_height = initial_frame.height;
@@ -1054,7 +1039,6 @@ impl SoftwarePlayerRuntime {
         runtime.initial_video_position = initial_video_position;
         runtime.set_playback_clock(initial_presentation_time);
         runtime.maybe_start_audio_metadata_probe_worker()?;
-        runtime.maybe_start_audio_decode_worker()?;
         runtime.ensure_audio_output(initial_media_position, runtime.playback_rate)?;
         startup.audio_output = audio_output_info(&runtime.audio_output_descriptor);
         runtime.fill_next_frame()?;
@@ -1086,7 +1070,6 @@ impl SoftwarePlayerRuntime {
         self.poll_scheduled_retries();
         self.poll_audio_output_device();
         self.poll_audio_metadata_worker();
-        self.poll_audio_decode_worker();
         self.poll_audio_stream_worker();
 
         match command {
@@ -1170,7 +1153,6 @@ impl SoftwarePlayerRuntime {
         self.poll_scheduled_retries();
         self.poll_audio_output_device();
         self.poll_audio_metadata_worker();
-        self.poll_audio_decode_worker();
         self.poll_audio_stream_worker();
 
         if !self.session.is_started() || self.session.is_paused() || self.session.is_finished() {
@@ -1304,24 +1286,10 @@ impl SoftwarePlayerRuntime {
             self.disable_audio_output_path();
             return Ok(());
         };
-        let has_source_audio_track = self.source_audio_track.is_some();
-        if !has_source_audio_track && !should_stream_audio_source_directly(&self.source) {
-            self.disable_audio_output_path();
-            return Ok(());
-        }
-
         if self.audio_sink.is_none() {
-            let media_start = self
-                .source_audio_track
-                .as_ref()
-                .map(|track| {
-                    let sample_offset = track.sample_offset_for_position(position);
-                    track.media_time_for_sample_offset(sample_offset)
-                })
-                .unwrap_or(position);
             let sink = match AudioSink::new_default(
                 output_config,
-                media_start,
+                position,
                 playback_rate,
                 self.session.should_hold_output(),
             ) {
@@ -1342,69 +1310,13 @@ impl SoftwarePlayerRuntime {
             self.audio_sink = Some(sink);
         }
 
-        if has_source_audio_track {
-            self.start_audio_stream(position, playback_rate)?;
-        } else if should_stream_audio_source_directly(&self.source) {
-            self.start_remote_audio_stream(position, playback_rate)?;
-        }
+        self.start_remote_audio_stream(position, playback_rate)?;
         self.sync_audio_output_state();
         Ok(())
     }
 
-    fn maybe_start_audio_decode_worker(&mut self) -> PlayerResult<()> {
-        if !self.audio_output_enabled {
-            return Ok(());
-        }
-
-        if should_stream_audio_source_directly(&self.source) {
-            return Ok(());
-        }
-
-        if self.source_audio_track.is_some()
-            || self.pending_audio_decode_worker.is_some()
-            || self.audio_output_config.is_none()
-            || self.media_info.best_audio.is_none()
-        {
-            return Ok(());
-        }
-
-        let Some(output_config) = self.audio_output_config.clone() else {
-            return Ok(());
-        };
-        let backend = self.backend;
-        let source = self.source.clone();
-        let (sender, receiver) = mpsc::channel();
-
-        thread::Builder::new()
-            .name("player-audio-decode".to_owned())
-            .spawn(move || {
-                let result = backend
-                    .decode_audio_track(source, output_config.sample_rate, output_config.channels)
-                    .map_err(|error| error.to_string());
-                let _ = sender.send(result);
-            })
-            .map_err(|error| {
-                player_error(
-                    PlayerErrorCode::BackendFailure,
-                    "failed to spawn deferred audio decode worker",
-                    error,
-                )
-            })?;
-
-        self.pending_audio_decode_worker = Some(PendingAudioDecodeWorker { receiver });
-        Ok(())
-    }
-
     fn maybe_start_audio_metadata_probe_worker(&mut self) -> PlayerResult<()> {
-        if !should_defer_media_probe_for_source(&self.source)
-            || should_stream_audio_source_directly(&self.source)
-            || self.pending_audio_metadata_worker.is_some()
-            || self.media_info.best_audio.is_some()
-        {
-            return Ok(());
-        }
-
-        self.start_audio_metadata_probe_worker(0)
+        Ok(())
     }
 
     fn start_audio_metadata_probe_worker(&mut self, retry_attempt: u32) -> PlayerResult<()> {
@@ -1749,126 +1661,6 @@ impl SoftwarePlayerRuntime {
         }
     }
 
-    fn poll_audio_decode_worker(&mut self) {
-        let Some(worker) = self.pending_audio_decode_worker.take() else {
-            return;
-        };
-
-        match worker.receiver.try_recv() {
-            Ok(Ok(track)) => {
-                self.source_audio_track = Some(track);
-                let current_position = self
-                    .playback_position()
-                    .unwrap_or_else(|| self.progress().position());
-                if let Err(error) = self.ensure_audio_output(current_position, self.playback_rate) {
-                    self.emit_event(PlayerRuntimeEvent::Error(error));
-                }
-                self.refresh_playback_finished();
-            }
-            Ok(Err(error)) => {
-                self.emit_event(PlayerRuntimeEvent::Error(PlayerError::new(
-                    PlayerErrorCode::DecodeFailure,
-                    format!("failed to decode audio track for playback: {error}"),
-                )));
-                self.refresh_playback_finished();
-            }
-            Err(TryRecvError::Empty) => {
-                self.pending_audio_decode_worker = Some(worker);
-            }
-            Err(TryRecvError::Disconnected) => {
-                self.emit_event(PlayerRuntimeEvent::Error(PlayerError::new(
-                    PlayerErrorCode::BackendFailure,
-                    "audio decode worker disconnected before producing playback data",
-                )));
-                self.refresh_playback_finished();
-            }
-        }
-
-        self.update_buffering_state();
-    }
-
-    fn start_audio_stream(&mut self, position: Duration, playback_rate: f32) -> PlayerResult<()> {
-        self.cancel_pending_audio_stream_worker();
-
-        let Some(source_track) = self.source_audio_track.clone() else {
-            return Ok(());
-        };
-        let Some(controller) = self.audio_sink_controller.clone() else {
-            return Ok(());
-        };
-
-        let sample_offset = source_track.sample_offset_for_position(position);
-        let media_start = source_track.media_time_for_sample_offset(sample_offset);
-        let generation = controller.begin_generation(media_start, playback_rate);
-        let backend = self.backend;
-        let (sender, receiver) = mpsc::channel();
-        let interrupt_flag = Arc::new(AtomicBool::new(false));
-        let worker_interrupt_flag = interrupt_flag.clone();
-        let target_buffer_samples = buffered_sample_target(
-            source_track.sample_rate,
-            source_track.channels,
-            self.audio_stream_target_buffer_duration,
-        );
-        let worker_controller = controller.clone();
-
-        thread::Builder::new()
-            .name("player-audio-stream".to_owned())
-            .spawn(move || {
-                let range = sample_offset..source_track.samples.len();
-                let chunk_controller = worker_controller.clone();
-                let emit_chunk = |chunk: Vec<f32>| -> anyhow::Result<bool> {
-                    if !wait_for_audio_buffer_window(
-                        &chunk_controller,
-                        generation,
-                        target_buffer_samples,
-                        Some(&worker_interrupt_flag),
-                    ) {
-                        return Ok(false);
-                    }
-
-                    chunk_controller.append_samples(generation, chunk)
-                };
-                let result: Result<AudioStreamWorkerEvent, String> =
-                    if (playback_rate - DEFAULT_PLAYBACK_RATE).abs() < 0.000_001 {
-                        stream_direct_audio_track_range(&source_track, range, emit_chunk)
-                    } else {
-                        backend.stream_retime_audio_track_range(
-                            &source_track,
-                            playback_rate,
-                            range,
-                            emit_chunk,
-                        )
-                    }
-                    .map(|_| {
-                        if worker_controller.is_generation_active(generation) {
-                            worker_controller.finish_generation(generation);
-                        }
-                    })
-                    .map(|_| AudioStreamWorkerEvent::Finished)
-                    .map_err(|error| error.to_string());
-                let _ = sender.send(result);
-            })
-            .map_err(|error| {
-                player_error(
-                    PlayerErrorCode::BackendFailure,
-                    "failed to spawn streaming audio worker",
-                    error,
-                )
-            })?;
-
-        self.pending_audio_stream_worker = Some(PendingAudioStreamWorker {
-            generation,
-            retry_attempt: 0,
-            receiver,
-            controller,
-            interrupt_flag: Some(interrupt_flag),
-        });
-        self.pending_audio_stream_retry = None;
-        self.audio_buffering_window = AudioBufferingWindow::Startup;
-        self.update_buffering_state();
-        Ok(())
-    }
-
     fn start_remote_audio_stream(
         &mut self,
         position: Duration,
@@ -1999,10 +1791,6 @@ impl SoftwarePlayerRuntime {
         }
         self.last_audio_output_poll = Instant::now();
 
-        if self.source_audio_track.is_none() && !should_stream_audio_source_directly(&self.source) {
-            return;
-        }
-
         let descriptor = detect_default_output();
         if !audio_output_descriptor_changed(&self.audio_output_descriptor, &descriptor) {
             return;
@@ -2024,12 +1812,6 @@ impl SoftwarePlayerRuntime {
         self.audio_sink_controller = None;
         self.cancel_pending_audio_stream_worker();
         self.set_playback_clock(current_position);
-
-        if self.audio_output_config.is_some()
-            && let Err(error) = self.maybe_start_audio_decode_worker()
-        {
-            self.emit_event(PlayerRuntimeEvent::Error(error));
-        }
 
         match self.ensure_audio_output(current_position, current_rate) {
             Ok(()) => {
@@ -2098,8 +1880,7 @@ impl SoftwarePlayerRuntime {
                 })
             })
             .unwrap_or(false);
-        let waiting_for_audio_retry = should_stream_audio_source_directly(&self.source)
-            && self.pending_audio_stream_retry.is_some();
+        let waiting_for_audio_retry = self.pending_audio_stream_retry.is_some();
 
         waiting_for_video || waiting_for_audio || waiting_for_audio_retry
     }
@@ -2182,7 +1963,6 @@ impl SoftwarePlayerRuntime {
                     self.current_audio_buffer_requirement(),
                 )),
             audio_buffering_window = ?self.audio_buffering_window,
-            pending_audio_decode = self.pending_audio_decode_worker.is_some(),
             pending_audio_metadata = self.pending_audio_metadata_worker.is_some(),
             pending_audio_stream = self.pending_audio_stream_worker.is_some(),
             pending_audio_retry = self.pending_audio_stream_retry.is_some(),
@@ -2230,7 +2010,6 @@ impl SoftwarePlayerRuntime {
         if let Some(retry) = self.pending_audio_stream_retry
             && now >= retry.due_at
             && self.pending_audio_stream_worker.is_none()
-            && should_stream_audio_source_directly(&self.source)
             && self.audio_output_config.is_some()
             && self.audio_sink_controller.is_some()
         {
@@ -2266,9 +2045,6 @@ impl SoftwarePlayerRuntime {
         position: Duration,
         playback_rate: f32,
     ) -> bool {
-        if !should_stream_audio_source_directly(&self.source) {
-            return false;
-        }
         let Some(delay) = retry_delay_for_attempt(&self.retry_policy, attempt) else {
             return false;
         };
@@ -2502,37 +2278,6 @@ fn audio_buffer_window_wait_result_is_ready(result: AudioBufferWindowWaitResult)
     matches!(result, AudioBufferWindowWaitResult::Ready)
 }
 
-fn stream_direct_audio_track_range<F>(
-    source_track: &DecodedAudioTrack,
-    sample_range: std::ops::Range<usize>,
-    mut emit_chunk: F,
-) -> anyhow::Result<()>
-where
-    F: FnMut(Vec<f32>) -> anyhow::Result<bool>,
-{
-    let channels = usize::from(source_track.channels.max(1));
-    let start_sample =
-        (sample_range.start - (sample_range.start % channels)).min(source_track.samples.len());
-    let end_sample =
-        (sample_range.end - (sample_range.end % channels)).min(source_track.samples.len());
-
-    if end_sample <= start_sample {
-        return Ok(());
-    }
-
-    let chunk_samples = AUDIO_STREAM_CHUNK_FRAMES.saturating_mul(channels.max(1));
-    let mut chunk_start = start_sample;
-    while chunk_start < end_sample {
-        let chunk_end = chunk_start.saturating_add(chunk_samples).min(end_sample);
-        if !emit_chunk(source_track.samples[chunk_start..chunk_end].to_vec())? {
-            return Ok(());
-        }
-        chunk_start = chunk_end;
-    }
-
-    Ok(())
-}
-
 fn validate_playback_rate(rate: f32) -> PlayerResult<f32> {
     if !rate.is_finite() {
         return Err(PlayerError::new(
@@ -2608,37 +2353,8 @@ fn audio_output_info(descriptor: &AudioOutputDescriptor) -> Option<PlayerAudioOu
     })
 }
 
-#[cfg(test)]
-fn should_defer_audio_decode_for_source(source: &MediaSource) -> bool {
-    let _ = source;
-    true
-}
-
 fn should_defer_media_probe_for_source(source: &MediaSource) -> bool {
     source.kind() == MediaSourceKind::Remote && source.protocol() == MediaSourceProtocol::Hls
-}
-
-fn should_stream_audio_source_directly(source: &MediaSource) -> bool {
-    let _ = source;
-    true
-}
-
-fn initial_restart_positions(
-    source_audio_track: Option<&DecodedAudioTrack>,
-    initial_video_position: Duration,
-) -> (Duration, Duration) {
-    let initial_media_position = source_audio_track
-        .map(|track| track.presentation_time.min(initial_video_position))
-        .unwrap_or(initial_video_position);
-    (initial_media_position, initial_video_position)
-}
-
-fn decoded_audio_summary(track: &DecodedAudioTrack) -> DecodedAudioSummary {
-    DecodedAudioSummary {
-        channels: track.channels,
-        sample_rate: track.sample_rate,
-        duration: track.duration(),
-    }
 }
 
 fn player_video_info(video: &VideoStreamProbe) -> PlayerVideoInfo {
@@ -2880,19 +2596,6 @@ mod tests {
 
         assert_eq!(error.code(), PlayerErrorCode::Unsupported);
         assert!(error.message().contains("'dash' demuxer"));
-    }
-
-    #[test]
-    fn all_sources_defer_audio_decode_to_protect_first_frame_and_memory() {
-        assert!(should_defer_audio_decode_for_source(&MediaSource::new(
-            "https://example.com/video.m3u8"
-        )));
-        assert!(should_defer_audio_decode_for_source(&MediaSource::new(
-            "https://example.com/video.mp4"
-        )));
-        assert!(should_defer_audio_decode_for_source(&MediaSource::new(
-            "/tmp/video.mp4"
-        )));
     }
 
     #[test]
@@ -3193,39 +2896,6 @@ mod tests {
     }
 
     #[test]
-    fn all_sources_stream_audio_directly() {
-        assert!(should_stream_audio_source_directly(&MediaSource::new(
-            "https://example.com/video.m3u8"
-        )));
-        assert!(should_stream_audio_source_directly(&MediaSource::new(
-            "https://example.com/video.mp4"
-        )));
-        assert!(should_stream_audio_source_directly(&MediaSource::new(
-            "/tmp/video.m3u8"
-        )));
-    }
-
-    #[test]
-    fn initial_restart_positions_preserve_non_zero_video_start() {
-        let audio_track = DecodedAudioTrack {
-            presentation_time: Duration::from_secs(10),
-            sample_rate: 48_000,
-            channels: 2,
-            playback_rate: 1.0,
-            samples: Arc::from(Vec::<f32>::new()),
-        };
-
-        assert_eq!(
-            initial_restart_positions(Some(&audio_track), Duration::from_millis(10_016)),
-            (Duration::from_secs(10), Duration::from_millis(10_016))
-        );
-        assert_eq!(
-            initial_restart_positions(None, Duration::from_millis(10_016)),
-            (Duration::from_millis(10_016), Duration::from_millis(10_016))
-        );
-    }
-
-    #[test]
     fn seek_drops_pending_deferred_frame_before_video_source_seek() {
         let dropped_before_seek = Arc::new(StdAtomicBool::new(false));
         let seek_observed_drop = Arc::new(StdAtomicBool::new(false));
@@ -3484,7 +3154,6 @@ mod tests {
             },
             audio_output_config: None,
             audio_output_enabled: false,
-            source_audio_track: None,
             video_source,
             video_end_of_stream: false,
             next_frame: None,
@@ -3506,7 +3175,6 @@ mod tests {
             cache_policy: PlayerCachePolicy::default(),
             base_video_prefetch_capacity: 1,
             pending_audio_metadata_worker: None,
-            pending_audio_decode_worker: None,
             pending_audio_stream_worker: None,
             pending_audio_metadata_retry: None,
             pending_audio_stream_retry: None,
