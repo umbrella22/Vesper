@@ -2,11 +2,25 @@
 import PackageDescription
 import Foundation
 
+private let packageDirectory = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .standardizedFileURL
+
+private func relativePath(from base: URL, to target: URL) -> String {
+    let baseComponents = base.standardizedFileURL.pathComponents
+    let targetComponents = target.standardizedFileURL.pathComponents
+    let commonCount = zip(baseComponents, targetComponents)
+        .prefix { $0 == $1 }
+        .count
+    let upComponents = Array(repeating: "..", count: baseComponents.count - commonCount)
+    let remainingComponents = targetComponents.dropFirst(commonCount)
+    let relativeComponents = upComponents + remainingComponents
+    return relativeComponents.isEmpty ? "." : relativeComponents.joined(separator: "/")
+}
+
 private func resolveLocalArtifactPath(_ candidates: [[String]]) -> String? {
     let fileManager = FileManager.default
-    var searchDirectory = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .standardizedFileURL
+    var searchDirectory = packageDirectory
 
     while true {
         for pathComponents in candidates {
@@ -14,7 +28,7 @@ private func resolveLocalArtifactPath(_ candidates: [[String]]) -> String? {
                 partial.appendingPathComponent(component, isDirectory: false)
             }
             if fileManager.fileExists(atPath: candidate.path) {
-                return candidate.path
+                return relativePath(from: packageDirectory, to: candidate)
             }
         }
 

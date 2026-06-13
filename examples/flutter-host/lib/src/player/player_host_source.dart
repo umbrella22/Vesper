@@ -34,6 +34,7 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
       );
       await nextController.initialize();
       await _configureSystemPlayback(nextController, selectedSource);
+      await _bindPictureInPicture(nextController);
       if (!preservePlaylistState) {
         _playlistItemIds = <String>[flutterHlsPlaylistItemId];
         _activePlaylistItemId = flutterHlsPlaylistItemId;

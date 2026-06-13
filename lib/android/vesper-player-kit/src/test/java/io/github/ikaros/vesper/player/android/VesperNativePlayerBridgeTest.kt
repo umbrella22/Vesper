@@ -77,6 +77,88 @@ class VesperNativePlayerBridgeTest {
     }
 
     @Test
+    fun pictureInPictureReadinessAllowsInitializedSystemVideoRoute() {
+        val bindings =
+            FakeBindings(
+                trackCatalog =
+                    VesperTrackCatalog(
+                        tracks =
+                            listOf(
+                                VesperMediaTrack(
+                                    id = "video:0",
+                                    kind = VesperMediaTrackKind.Video,
+                                    width = 1920,
+                                    height = 1080,
+                                ),
+                            ),
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource =
+                    VesperPlayerSource.remote(
+                        uri = "https://example.com/video.mp4",
+                        label = "Video",
+                    ),
+            )
+
+        bridge.initialize()
+
+        val readiness = bridge.pictureInPictureReadiness()
+        assertTrue(readiness.isAvailable)
+        assertNull(readiness.error)
+        assertEquals(1, readiness.diagnostics["videoTrackCount"])
+    }
+
+    @Test
+    fun pictureInPictureReadinessRejectsActiveNativeFrameRoute() {
+        val bindings =
+            FakeBindings(
+                trackCatalog =
+                    VesperTrackCatalog(
+                        tracks =
+                            listOf(
+                                VesperMediaTrack(
+                                    id = "video:0",
+                                    kind = VesperMediaTrackKind.Video,
+                                ),
+                            ),
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource =
+                    VesperPlayerSource.remote(
+                        uri = "https://example.com/video.mp4",
+                        label = "Video",
+                    ),
+                sourceNormalizerConfiguration =
+                    VesperSourceNormalizerConfiguration(
+                        mode = VesperSourceNormalizerMode.PreferNormalized,
+                        pluginLibraryPaths = listOf("/tmp/libsource.so"),
+                    ),
+                nativeFramePipelineConfiguration =
+                    VesperNativeFramePipelineConfiguration(
+                        mode = VesperNativeFramePipelineMode.PreferNativeFrame,
+                        decoderPluginLibraryPaths = listOf("/tmp/libdecoder.so"),
+                    ),
+                nativeFramePipelinePumpScheduler = ManualNativeFramePipelinePumpScheduler(),
+            )
+
+        bridge.initialize()
+
+        val readiness = bridge.pictureInPictureReadiness()
+        assertFalse(readiness.isAvailable)
+        assertEquals(
+            VesperPictureInPictureErrorCode.PictureInPictureNativeFrameRouteCannotHandOff,
+            readiness.error?.code,
+        )
+        assertEquals(true, readiness.diagnostics["nativeFramePipelineActive"])
+    }
+
+    @Test
     fun runtimeHdrEvidenceIncludesFormatColorMetadataAndStaticInfo() {
         val hdrStaticInfo =
             ByteArray(25).apply {

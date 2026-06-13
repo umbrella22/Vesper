@@ -31,6 +31,13 @@
 "example.playlist.status_near_visible" = "Near Visible";
 "example.playlist.status_prefetch" = "Prefetch";
 "example.playlist.status_hidden" = "Hidden";
+"example.picture_in_picture.title" = "Picture in Picture";
+"example.picture_in_picture.subtitle" = "The host only starts system Picture in Picture after this switch is enabled.";
+"example.picture_in_picture.enable" = "Enable Picture in Picture";
+"example.picture_in_picture.enable_subtitle" = "Keep this off when background playback should stay audio-only.";
+"example.picture_in_picture.enter" = "Enter Picture in Picture";
+"example.picture_in_picture.disabled" = "Picture in Picture off";
+"example.picture_in_picture.unavailable" = "Current playback cannot enter Picture in Picture.";
 "example.download.header_subtitle" = "This page is dedicated to download-session regression. It validates the shared download state machine and host bridge without pretending to be a full offline product flow.";
 "example.download.create_title" = "Create Download Task";
 "example.download.create_subtitle" = "Use HLS and DASH demo buttons for quick regression, or paste a remote URL to create a single foreground task.";

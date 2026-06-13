@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 part 'models/system_models.dart';
+part 'models/picture_in_picture_models.dart';
 part 'models/external_playback_models.dart';
 part 'models/playback_models.dart';
 part 'models/playback/external_playback_models.dart';

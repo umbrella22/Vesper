@@ -9,6 +9,8 @@
 ### Changed
 
 - Material widgets are imported through the official `material_ui` package.
+- `VesperPlayerStage` now accepts `pictureInPicturePresentation` so hosts can
+  hide custom chrome while system Picture in Picture owns playback controls.
 
 ## 0.3.0 - 2026-05-18
 

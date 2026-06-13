@@ -204,6 +204,41 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
     throw UnimplementedError('clearSystemPlayback() has not been implemented.');
   }
 
+  Future<VesperPictureInPictureAvailability> isPictureInPictureAvailable(
+    String playerId,
+  ) async {
+    return const VesperPictureInPictureAvailability(
+      isAvailable: false,
+      error: VesperPictureInPictureError(
+        code: VesperPictureInPictureErrorCode.pictureInPictureNotSupported,
+      ),
+    );
+  }
+
+  Future<void> requestPictureInPicture(
+    String playerId, {
+    VesperPictureInPictureConfiguration? configuration,
+  }) async {
+    throw UnimplementedError(
+      'requestPictureInPicture() has not been implemented.',
+    );
+  }
+
+  Future<void> exitPictureInPicture(String playerId) async {
+    throw UnimplementedError(
+      'exitPictureInPicture() has not been implemented.',
+    );
+  }
+
+  Future<void> setPictureInPictureConfiguration(
+    String playerId,
+    VesperPictureInPictureConfiguration configuration,
+  ) async {
+    throw UnimplementedError(
+      'setPictureInPictureConfiguration() has not been implemented.',
+    );
+  }
+
   Future<VesperSystemPlaybackPermissionStatus>
       requestSystemPlaybackPermissions() async {
     return VesperSystemPlaybackPermissionStatus.notRequired;

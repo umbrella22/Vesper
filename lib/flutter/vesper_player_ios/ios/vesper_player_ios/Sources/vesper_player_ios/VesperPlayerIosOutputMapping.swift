@@ -763,6 +763,9 @@ func flutterValue(_ value: Any?) -> Any {
 }
 
 func errorMap(from error: Error) -> [String: Any] {
+    if let pictureInPictureError = error as? VesperIosPictureInPictureError {
+        return pictureInPictureError.toMap()
+    }
     let code: String
     let category: String
     if let pluginError = error as? PluginError {

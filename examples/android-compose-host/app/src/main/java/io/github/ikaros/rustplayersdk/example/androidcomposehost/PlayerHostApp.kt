@@ -2,6 +2,7 @@ package io.github.ikaros.vesper.example.androidcomposehost
 
 import android.Manifest
 import android.app.Activity
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -11,6 +12,7 @@ import android.media.AudioManager
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import android.util.Rational
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -55,6 +57,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.withFrameNanos
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -97,6 +100,8 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun PlayerHostApp(
     controller: VesperPlayerController,
+    isInPictureInPictureMode: Boolean = false,
+    userLeaveHintGeneration: Long = 0L,
     onRebuildController: (
         ExampleSourceNormalizerSetting,
         ExampleNativeFramePipelineSetting,
@@ -187,6 +192,10 @@ internal fun PlayerHostApp(
     var savingTaskIds by remember { mutableStateOf(setOf<Long>()) }
     var exportProgressByTaskId by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
     var externalSession by remember { mutableStateOf<ExampleExternalPlaybackSession?>(null) }
+    var pictureInPictureEnabled by rememberSaveable { mutableStateOf(false) }
+    var pictureInPicturePresentationState by remember {
+        mutableStateOf(ExamplePictureInPicturePresentationState())
+    }
     var isExternalDiscoveryRunning by rememberSaveable { mutableStateOf(false) }
     var isCastRoutePickerOpening by remember { mutableStateOf(false) }
     var castRoutePickerRequestId by remember { mutableStateOf(0L) }
@@ -235,6 +244,43 @@ internal fun PlayerHostApp(
             )
         } ?: uiState
 
+    val pictureInPicturePresentation = pictureInPicturePresentationState.presentation
+
+    LaunchedEffect(isInPictureInPictureMode) {
+        pictureInPicturePresentationState =
+            pictureInPicturePresentationState.onPictureInPictureModeChanged(
+                isInPictureInPictureMode,
+            )
+    }
+
+    LaunchedEffect(userLeaveHintGeneration) {
+        if (userLeaveHintGeneration == 0L) {
+            return@LaunchedEffect
+        }
+        pictureInPicturePresentationState =
+            pictureInPicturePresentationState.onPictureInPictureUserLeaveHint(
+                pictureInPictureEnabled,
+            )
+        if (!pictureInPictureEnabled) {
+            return@LaunchedEffect
+        }
+        delay(900)
+        pictureInPicturePresentationState =
+            pictureInPicturePresentationState.onPictureInPictureAutoEnterTimeout()
+    }
+
+    LaunchedEffect(activity, pictureInPictureEnabled) {
+        val hostActivity = activity ?: return@LaunchedEffect
+        if (!hostActivity.supportsExamplePictureInPicture()) {
+            return@LaunchedEffect
+        }
+        runCatching {
+            hostActivity.setPictureInPictureParams(
+                buildExamplePictureInPictureParams(autoEnter = pictureInPictureEnabled),
+            )
+        }
+    }
+
     fun createDownloadTask(
         assetIdPrefix: String,
         source: VesperPlayerSource,
@@ -276,6 +322,51 @@ internal fun PlayerHostApp(
                             error.localizedMessage
                                 ?: context.getString(R.string.example_download_save_to_gallery_failed_unknown),
                         ),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+            }
+        }
+    }
+
+    fun requestExamplePictureInPicture() {
+        val hostActivity = activity
+        if (!pictureInPictureEnabled || hostActivity == null) {
+            Toast
+                .makeText(
+                    context,
+                    context.getString(R.string.example_pip_unavailable),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            Toast
+                .makeText(
+                    context,
+                    context.getString(R.string.example_pip_unavailable),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            return
+        }
+        pictureInPicturePresentationState =
+            pictureInPicturePresentationState.onPictureInPictureRequestStarted()
+        activeSheet = null
+        controlsVisible = false
+        pendingSeekRatio = null
+        scope.launch {
+            withFrameNanos { }
+            val params =
+                buildExamplePictureInPictureParams(autoEnter = pictureInPictureEnabled)
+            val entered =
+                runCatching { hostActivity.enterPictureInPictureMode(params) }
+                    .getOrDefault(false)
+            if (!entered && !hostActivity.isInPictureInPictureMode) {
+                pictureInPicturePresentationState =
+                    pictureInPicturePresentationState.onPictureInPictureRequestRejected()
+                Toast
+                    .makeText(
+                        context,
+                        context.getString(R.string.example_pip_unavailable),
                         Toast.LENGTH_SHORT,
                     ).show()
             }
@@ -1121,7 +1212,34 @@ internal fun PlayerHostApp(
         }
 
     MaterialTheme(colorScheme = colorScheme) {
-        Scaffold(
+        if (pictureInPicturePresentation) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = palette.pageBottom,
+            ) {
+                ExamplePlayerStage(
+                    controller = controller,
+                    uiState = displayedUiState,
+                    controlsVisible = false,
+                    pendingSeekRatio = null,
+                    isPortrait = false,
+                    trackCatalog = trackCatalog,
+                    trackSelection = trackSelection,
+                    modifier = Modifier.fillMaxSize(),
+                    pictureInPicturePresentation = true,
+                    onControlsVisibilityChange = { _ -> },
+                    onPendingSeekRatioChange = { _ -> },
+                    onOpenSheet = { _ -> },
+                    onToggleFullscreen = {},
+                    onTogglePlayback = {},
+                    onSeekToRatio = { _ -> },
+                    onSeekToLiveEdge = {},
+                    onSetPlaybackRate = { _ -> },
+                    playbackRateControlsEnabled = false,
+                )
+            }
+        } else {
+            Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = palette.pageBottom,
             bottomBar = {
@@ -1185,6 +1303,7 @@ internal fun PlayerHostApp(
                                 trackCatalog = trackCatalog,
                                 trackSelection = trackSelection,
                                 modifier = Modifier.fillMaxSize(),
+                                pictureInPicturePresentation = pictureInPicturePresentation,
                                 onControlsVisibilityChange = { controlsVisible = it },
                                 onPendingSeekRatioChange = { pendingSeekRatio = it },
                                 onOpenSheet = { activeSheet = it },
@@ -1243,6 +1362,7 @@ internal fun PlayerHostApp(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(248.dp),
+                                    pictureInPicturePresentation = pictureInPicturePresentation,
                                     onControlsVisibilityChange = { controlsVisible = it },
                                     onPendingSeekRatioChange = { pendingSeekRatio = it },
                                     onOpenSheet = { activeSheet = it },
@@ -1384,6 +1504,16 @@ internal fun PlayerHostApp(
                                             onConnectRoute = ::connectExternalRoute,
                                             onLoadCurrent = ::loadCurrentExternalSession,
                                             onDisconnect = ::disconnectExternalPlayback,
+                                        )
+                                    }
+
+                                    item {
+                                        ExamplePictureInPictureSection(
+                                            palette = palette,
+                                            enabled = pictureInPictureEnabled,
+                                            onEnabledChange = { pictureInPictureEnabled = it },
+                                            onRequestPictureInPicture =
+                                                ::requestExamplePictureInPicture,
                                         )
                                     }
 
@@ -1556,7 +1686,25 @@ internal fun PlayerHostApp(
                 }
             }
         }
+        }
     }
+}
+
+private fun Activity.supportsExamplePictureInPicture(): Boolean =
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+        packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+private fun buildExamplePictureInPictureParams(autoEnter: Boolean): PictureInPictureParams {
+    check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        "Picture in Picture params require Android O or newer."
+    }
+    val builder =
+        PictureInPictureParams.Builder()
+            .setAspectRatio(Rational(16, 9))
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        builder.setAutoEnterEnabled(autoEnter)
+    }
+    return builder.build()
 }
 
 private class ExampleAndroidDeviceControls(

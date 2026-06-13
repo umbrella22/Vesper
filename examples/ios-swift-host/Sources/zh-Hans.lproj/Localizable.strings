@@ -31,6 +31,13 @@
 "example.playlist.status_near_visible" = "临近可见";
 "example.playlist.status_prefetch" = "仅预取";
 "example.playlist.status_hidden" = "隐藏";
+"example.picture_in_picture.title" = "小窗播放";
+"example.picture_in_picture.subtitle" = "宿主只会在开启这个开关后启动系统小窗播放。";
+"example.picture_in_picture.enable" = "启用小窗播放";
+"example.picture_in_picture.enable_subtitle" = "关闭时，后台播放只保留音频/系统控制，不主动进入小窗。";
+"example.picture_in_picture.enter" = "进入小窗播放";
+"example.picture_in_picture.disabled" = "小窗未开启";
+"example.picture_in_picture.unavailable" = "当前播放无法启用小窗";
 "example.download.header_subtitle" = "这个页面专门用于下载会话回归，重点验证共享下载状态机和宿主桥接，不把它包装成完整离线产品流程。";
 "example.download.create_title" = "创建下载任务";
 "example.download.create_subtitle" = "用 HLS 和 DASH 演示按钮快速回归，或者粘贴远程 URL 创建一个前台下载任务。";

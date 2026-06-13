@@ -42,7 +42,9 @@ final class ExampleHdrEvidenceCaptureRecorder {
         case VesperPlayerErrorEvent():
           playbackError = event.error;
         case VesperPlayerSnapshotEvent():
+        case VesperPlayerPictureInPictureEvent():
         case VesperPlayerDisposedEvent():
+        case VesperPlayerUnknownEvent():
           break;
       }
     });

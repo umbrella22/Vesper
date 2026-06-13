@@ -44,6 +44,17 @@ enum ExampleI18n {
     static var playlistStatusNearVisible: String { string("example.playlist.status_near_visible") }
     static var playlistStatusPrefetch: String { string("example.playlist.status_prefetch") }
     static var playlistStatusHidden: String { string("example.playlist.status_hidden") }
+    static var pictureInPictureTitle: String { string("example.picture_in_picture.title") }
+    static var pictureInPictureSubtitle: String { string("example.picture_in_picture.subtitle") }
+    static var pictureInPictureEnable: String { string("example.picture_in_picture.enable") }
+    static var pictureInPictureEnableSubtitle: String {
+        string("example.picture_in_picture.enable_subtitle")
+    }
+    static var pictureInPictureEnter: String { string("example.picture_in_picture.enter") }
+    static var pictureInPictureDisabled: String { string("example.picture_in_picture.disabled") }
+    static var pictureInPictureUnavailable: String {
+        string("example.picture_in_picture.unavailable")
+    }
     static var downloadHeaderSubtitle: String { string("example.download.header_subtitle") }
     static var downloadCreateTitle: String { string("example.download.create_title") }
     static var downloadCreateSubtitle: String { string("example.download.create_subtitle") }

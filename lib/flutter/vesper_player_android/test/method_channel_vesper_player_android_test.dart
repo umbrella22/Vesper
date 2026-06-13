@@ -665,6 +665,71 @@ void main() {
     );
   });
 
+  test('picture-in-picture calls forward payloads', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'isPictureInPictureAvailable') {
+        return <String, Object?>{
+          'isAvailable': true,
+          'isActive': false,
+          'canAutoEnter': false,
+          'source': 'system',
+        };
+      }
+      return null;
+    });
+    final platform = MethodChannelVesperPlayerAndroid();
+    const configuration = VesperPictureInPictureConfiguration(
+      autoEnter: true,
+      preferredAspectRatio: 16 / 9,
+    );
+
+    final availability =
+        await platform.isPictureInPictureAvailable('android-player');
+    await platform.setPictureInPictureConfiguration(
+      'android-player',
+      configuration,
+    );
+    await platform.requestPictureInPicture(
+      'android-player',
+      configuration: configuration,
+    );
+    await platform.requestPictureInPicture('android-player');
+    await platform.exitPictureInPicture('android-player');
+
+    expect(availability.isAvailable, isTrue);
+    expect(calls.map((call) => call.method), <String>[
+      'isPictureInPictureAvailable',
+      'setPictureInPictureConfiguration',
+      'requestPictureInPicture',
+      'requestPictureInPicture',
+      'exitPictureInPicture',
+    ]);
+    expect(
+      Map<Object?, Object?>.from(calls[1].arguments as Map),
+      <Object?, Object?>{
+        'playerId': 'android-player',
+        'configuration': configuration.toMap(),
+      },
+    );
+    expect(
+      Map<Object?, Object?>.from(calls[2].arguments as Map),
+      <Object?, Object?>{
+        'playerId': 'android-player',
+        'configuration': configuration.toMap(),
+      },
+    );
+    expect(
+      Map<Object?, Object?>.from(calls[3].arguments as Map),
+      <Object?, Object?>{'playerId': 'android-player'},
+    );
+    expect(
+      Map<Object?, Object?>.from(calls[4].arguments as Map),
+      <Object?, Object?>{'playerId': 'android-player'},
+    );
+  });
+
   test('requestSystemPlaybackPermissions decodes platform status', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {

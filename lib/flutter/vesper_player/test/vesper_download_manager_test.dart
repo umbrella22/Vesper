@@ -180,6 +180,78 @@ void main() {
     expect(error?.details['nativeDetail'], 'surface-missing');
     expect(reportedErrors.single.exception, isA<VesperUnsupportedError>());
   });
+
+  test('player controller forwards picture-in-picture APIs and events',
+      () async {
+    platform.pictureInPictureAvailability =
+        const VesperPictureInPictureAvailability(
+      isAvailable: true,
+      source: 'system',
+      diagnostics: <String, Object?>{'route': 'systemPlayer'},
+    );
+    const configuration = VesperPictureInPictureConfiguration(
+      autoEnter: true,
+      preferredAspectRatio: 16 / 9,
+    );
+
+    final controller = await VesperPlayerController.create();
+    addTearDown(controller.dispose);
+    final pipEvents = <VesperPlayerPictureInPictureEvent>[];
+    final subscription = controller.pictureInPictureEvents.listen(
+      pipEvents.add,
+    );
+    addTearDown(subscription.cancel);
+
+    final availability = await controller.isPictureInPictureAvailable();
+    await controller.setPictureInPictureConfiguration(configuration);
+    await controller.requestPictureInPicture(configuration: configuration);
+    expect(platform.requestedPictureInPictureConfiguration, configuration);
+    platform.requestedPictureInPictureConfiguration = configuration;
+    await controller.requestPictureInPicture();
+    await controller.exitPictureInPicture();
+    platform.emitPlayer(
+      const VesperPlayerPictureInPictureEvent(
+        playerId: 'test-player',
+        state: VesperPictureInPictureStatus.active,
+        isActive: true,
+        canAutoEnter: true,
+      ),
+    );
+    await _flushEvents();
+
+    expect(availability.isAvailable, isTrue);
+    expect(platform.pictureInPictureAvailabilityPlayerId, 'test-player');
+    expect(platform.pictureInPictureConfiguration, configuration);
+    expect(platform.requestedPictureInPictureConfiguration, isNull);
+    expect(platform.exitedPictureInPicturePlayerId, 'test-player');
+    expect(pipEvents.single.state, VesperPictureInPictureStatus.active);
+  });
+
+  test('player controller keeps PiP platform failures out of snapshot errors',
+      () async {
+    final controller = await VesperPlayerController.create();
+    addTearDown(controller.dispose);
+    final initialSnapshot = controller.snapshot;
+    final reportedErrors = <FlutterErrorDetails>[];
+    final previousOnError = FlutterError.onError;
+    FlutterError.onError = reportedErrors.add;
+    addTearDown(() {
+      FlutterError.onError = previousOnError;
+    });
+
+    platform.pictureInPictureFailure = Exception(
+      'Picture in Picture is disabled by host configuration.',
+    );
+
+    await expectLater(
+      controller.requestPictureInPicture(),
+      throwsA(isA<Exception>()),
+    );
+
+    expect(controller.snapshot, same(initialSnapshot));
+    expect(controller.snapshot.lastError, isNull);
+    expect(reportedErrors, isEmpty);
+  });
 }
 
 Future<void> _flushEvents() async {
@@ -238,12 +310,21 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
 
   final StreamController<VesperDownloadManagerEvent> _downloadEvents =
       StreamController<VesperDownloadManagerEvent>.broadcast();
+  final StreamController<VesperPlayerEvent> _playerEvents =
+      StreamController<VesperPlayerEvent>.broadcast();
 
   VesperDownloadSnapshot initialSnapshot =
       const VesperDownloadSnapshot.initial();
   List<VesperPluginDiagnostic> playerPluginDiagnostics =
       const <VesperPluginDiagnostic>[];
   Object? playError;
+  VesperPictureInPictureAvailability pictureInPictureAvailability =
+      const VesperPictureInPictureAvailability(isAvailable: false);
+  Object? pictureInPictureFailure;
+  String? pictureInPictureAvailabilityPlayerId;
+  VesperPictureInPictureConfiguration? pictureInPictureConfiguration;
+  VesperPictureInPictureConfiguration? requestedPictureInPictureConfiguration;
+  String? exitedPictureInPicturePlayerId;
   int? sharedTaskId;
   String? sharedFileName;
   String? sharedMimeType;
@@ -255,8 +336,13 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
     _downloadEvents.add(event);
   }
 
+  void emitPlayer(VesperPlayerEvent event) {
+    _playerEvents.add(event);
+  }
+
   Future<void> close() async {
     await _downloadEvents.close();
+    await _playerEvents.close();
   }
 
   @override
@@ -369,7 +455,40 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
 
   @override
   Stream<VesperPlayerEvent> eventsFor(String playerId) {
-    return const Stream<VesperPlayerEvent>.empty();
+    return _playerEvents.stream.where((event) => event.playerId == playerId);
+  }
+
+  @override
+  Future<VesperPictureInPictureAvailability> isPictureInPictureAvailable(
+    String playerId,
+  ) async {
+    pictureInPictureAvailabilityPlayerId = playerId;
+    return pictureInPictureAvailability;
+  }
+
+  @override
+  Future<void> requestPictureInPicture(
+    String playerId, {
+    VesperPictureInPictureConfiguration? configuration,
+  }) async {
+    final failure = pictureInPictureFailure;
+    if (failure != null) {
+      throw failure;
+    }
+    requestedPictureInPictureConfiguration = configuration;
+  }
+
+  @override
+  Future<void> exitPictureInPicture(String playerId) async {
+    exitedPictureInPicturePlayerId = playerId;
+  }
+
+  @override
+  Future<void> setPictureInPictureConfiguration(
+    String playerId,
+    VesperPictureInPictureConfiguration configuration,
+  ) async {
+    pictureInPictureConfiguration = configuration;
   }
 
   @override

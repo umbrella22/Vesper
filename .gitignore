@@ -1,5 +1,6 @@
 /target
 *.mp4
+*.mov
 .gradle/*
 flutter_aliplayer-7.12.0/*
 flutter_tencent/*

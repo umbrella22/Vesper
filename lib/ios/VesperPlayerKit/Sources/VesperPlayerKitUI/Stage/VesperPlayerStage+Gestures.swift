@@ -5,6 +5,9 @@ extension VesperPlayerStage {
     func stageDragGesture(stageSize: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { value in
+                guard !pictureInPicturePresentation else {
+                    return
+                }
                 guard speedGestureRestoreRate == nil else {
                     return
                 }
@@ -97,6 +100,9 @@ extension VesperPlayerStage {
                 )
             }
             .onEnded { _ in
+                guard !pictureInPicturePresentation else {
+                    return
+                }
                 if stageGestureKind == .seek {
                     onSeekToRatio(seekGestureRatio)
                     pendingSeekRatio = nil
@@ -110,6 +116,9 @@ extension VesperPlayerStage {
         LongPressGesture(minimumDuration: 0.45)
             .sequenced(before: DragGesture(minimumDistance: 0))
             .onChanged { value in
+                guard !pictureInPicturePresentation else {
+                    return
+                }
                 guard case .second(true, _) = value else {
                     return
                 }
@@ -121,6 +130,9 @@ extension VesperPlayerStage {
     }
 
     func startTemporarySpeedGesture() {
+        guard !pictureInPicturePresentation else {
+            return
+        }
         if speedGestureRestoreRate == nil {
             speedGestureRestoreRate = uiState.playbackRate
             onSetPlaybackRate(2.0)
@@ -141,6 +153,9 @@ extension VesperPlayerStage {
     }
 
     func showGestureFeedback(_ feedback: StageGestureFeedback) {
+        guard !pictureInPicturePresentation else {
+            return
+        }
         gestureFeedback = feedback
         gestureFeedbackTask?.cancel()
         gestureFeedbackTask = Task { @MainActor in
@@ -150,6 +165,16 @@ extension VesperPlayerStage {
             }
             gestureFeedback = nil
         }
+    }
+
+    func enterPictureInPicturePresentation() {
+        endTemporarySpeedGesture()
+        gestureFeedbackTask?.cancel()
+        gestureFeedbackTask = nil
+        stageGestureKind = nil
+        pendingSeekRatio = nil
+        gestureFeedback = nil
+        controlsVisible = false
     }
 }
 

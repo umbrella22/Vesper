@@ -7,6 +7,7 @@ import android.util.Log
 import android.view.Surface
 import androidx.annotation.OptIn
 import androidx.media3.common.C
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.ColorInfo
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
@@ -164,6 +165,13 @@ internal class VesperNativeJniBindings(
                 .setLoadControl(buildLoadControl(resolvedResiliencePolicy.buffering))
                 .setMediaSourceFactory(mediaSourceFactory)
                 .build()
+        exoPlayer.setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                .build(),
+            false,
+        )
         applyTrackPreferenceDefaults(
             exoPlayer = exoPlayer,
             policy = resolvedTrackPreferences,

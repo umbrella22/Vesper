@@ -10,6 +10,11 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
     required this.onRefreshExternalRoutes,
     required this.externalRoutes,
     required this.onExternalRouteSelected,
+    required this.pictureInPictureStatus,
+    required this.pictureInPictureEnabled,
+    required this.onPictureInPictureEnabledChanged,
+    required this.onRequestPictureInPicture,
+    this.pictureInPictureAvailability,
     this.externalPlaybackMessage,
   });
 
@@ -20,6 +25,11 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
   final VoidCallback onRefreshExternalRoutes;
   final List<VesperExternalPlaybackRoute> externalRoutes;
   final ValueChanged<VesperExternalPlaybackRoute> onExternalRouteSelected;
+  final VesperPictureInPictureAvailability? pictureInPictureAvailability;
+  final VesperPictureInPictureStatus pictureInPictureStatus;
+  final bool pictureInPictureEnabled;
+  final ValueChanged<bool> onPictureInPictureEnabledChanged;
+  final VoidCallback onRequestPictureInPicture;
   final String? externalPlaybackMessage;
 
   @override
@@ -36,6 +46,25 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
             runSpacing: 12,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: <Widget>[
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 220),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    value: pictureInPictureEnabled,
+                    onChanged: onPictureInPictureEnabledChanged,
+                    title: Text(
+                      '启用小窗播放',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: palette.title,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
               _RouteButtonFrame(
                 palette: palette,
                 child: ui.VesperAirPlayRouteButton(
@@ -56,6 +85,16 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
                 onPressed: onRefreshExternalRoutes,
                 icon: const Icon(Icons.refresh, size: 18),
                 label: const Text('重新扫描 DLNA'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _canRequestPictureInPicture
+                    ? onRequestPictureInPicture
+                    : null,
+                icon: const Icon(
+                  Icons.picture_in_picture_alt_rounded,
+                  size: 18,
+                ),
+                label: Text(_pictureInPictureLabel),
               ),
             ],
           ),
@@ -89,6 +128,31 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  bool get _canRequestPictureInPicture {
+    final availability = pictureInPictureAvailability;
+    return pictureInPictureEnabled &&
+        availability?.isAvailable == true &&
+        pictureInPictureStatus != VesperPictureInPictureStatus.entering &&
+        pictureInPictureStatus != VesperPictureInPictureStatus.active &&
+        pictureInPictureStatus != VesperPictureInPictureStatus.exiting;
+  }
+
+  String get _pictureInPictureLabel {
+    if (pictureInPictureStatus == VesperPictureInPictureStatus.active) {
+      return '小窗已启用';
+    }
+    if (pictureInPictureStatus == VesperPictureInPictureStatus.entering) {
+      return '正在启用小窗';
+    }
+    if (!pictureInPictureEnabled) {
+      return '小窗未开启';
+    }
+    if (pictureInPictureAvailability?.isAvailable == false) {
+      return '当前播放无法启用小窗';
+    }
+    return '小窗播放';
   }
 }
 

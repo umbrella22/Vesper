@@ -54,6 +54,13 @@
     <string name="example_external_relay_enabled">此路由正在使用本地 relay。</string>
     <string name="example_external_no_active_source">请先选择媒体源，再加载外部路由。</string>
     <string name="example_external_route_error">外部播放失败：%1$s</string>
+    <string name="example_pip_title">小窗播放</string>
+    <string name="example_pip_subtitle">宿主只会在开启这个开关后请求系统小窗播放。</string>
+    <string name="example_pip_enable">启用小窗播放</string>
+    <string name="example_pip_enable_subtitle">关闭时，后台播放只保留音频/系统控制，不主动进入小窗。</string>
+    <string name="example_pip_enter">进入小窗播放</string>
+    <string name="example_pip_disabled">小窗未开启</string>
+    <string name="example_pip_unavailable">当前播放无法启用小窗</string>
     <string name="example_playlist_title">播放列表</string>
     <string name="example_playlist_subtitle">点击演示流、本地视频或自定义远程 URL 后，媒体源会按加入顺序出现在这里。</string>
     <string name="example_playlist_empty">播放列表里还没有媒体源。</string>

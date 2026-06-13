@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import Combine
 import CoreTransferable
 import MediaPlayer
@@ -99,6 +100,53 @@ private final class ExamplePlayerControllerStore: ObservableObject {
     }
 }
 
+private final class ExamplePictureInPictureDelegate: NSObject, AVPictureInPictureControllerDelegate {
+    var onWillStart: (() -> Void)?
+    var onDidStart: (() -> Void)?
+    var onWillStop: (() -> Void)?
+    var onStop: (() -> Void)?
+    var onFailure: ((Error) -> Void)?
+
+    func pictureInPictureControllerWillStartPictureInPicture(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        onWillStart?()
+    }
+
+    func pictureInPictureControllerDidStartPictureInPicture(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        onDidStart?()
+    }
+
+    func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        failedToStartPictureInPictureWithError error: Error
+    ) {
+        onFailure?(error)
+    }
+
+    func pictureInPictureControllerWillStopPictureInPicture(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        onWillStop?()
+    }
+
+    func pictureInPictureControllerDidStopPictureInPicture(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) {
+        onStop?()
+    }
+
+    func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler
+            completionHandler: @escaping (Bool) -> Void
+    ) {
+        completionHandler(true)
+    }
+}
+
 struct PlayerHostView: View {
     @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -119,6 +167,11 @@ struct PlayerHostView: View {
     @State private var controlsVisible = true
     @State private var activeSheet: ExamplePlayerSheet?
     @State private var isFullscreen = false
+    @State private var pictureInPictureEnabled = false
+    @State private var pictureInPicturePresentation = false
+    @State private var pictureInPictureController: AVPictureInPictureController?
+    @State private var pictureInPictureDelegate = ExamplePictureInPictureDelegate()
+    @State private var currentSurfaceView: PlayerSurfaceView?
     @State private var selectedTab: ExampleHostTab = .player
     @State private var selectedResilienceProfile: ExampleResilienceProfile = .balanced
     @State private var sourceNormalizerSetting: ExampleSourceNormalizerSetting = .preflightOnly
@@ -320,6 +373,12 @@ struct PlayerHostView: View {
         .onChange(of: pendingSeekRatio) { _, _ in
             scheduleControlsAutoHide(for: controller.uiState)
         }
+        .onChange(of: pictureInPictureEnabled) { _, enabled in
+            pictureInPictureController?.canStartPictureInPictureAutomaticallyFromInline = enabled
+            if !enabled {
+                setPictureInPicturePresentation(false)
+            }
+        }
         .photosPicker(
             isPresented: $isVideoPickerPresented,
             selection: $selectedVideoItem,
@@ -464,6 +523,12 @@ struct PlayerHostView: View {
                     onFocusPlaylistItem: focusPlaylistItem
                 )
 
+                ExamplePictureInPictureSection(
+                    palette: palette,
+                    enabled: $pictureInPictureEnabled,
+                    onRequestPictureInPicture: requestPictureInPicture
+                )
+
                 ExamplePluginDiagnosticsSection(
                     palette: palette,
                     sourceNormalizerSetting: sourceNormalizerSetting,
@@ -550,7 +615,27 @@ struct PlayerHostView: View {
     @ViewBuilder
     private func playerStage(uiState: PlayerHostUiState) -> some View {
         ExamplePlayerStage(
-            surface: AnyView(PlayerSurfaceContainer(controller: controller)),
+            surface: AnyView(
+                PlayerSurfaceContainer(
+                    controller: controller,
+                    onSurfaceReady: { view in
+                        guard currentSurfaceView !== view else { return }
+                        Task { @MainActor in
+                            if currentSurfaceView !== view {
+                                currentSurfaceView = view
+                            }
+                        }
+                    },
+                    onSurfaceRemoved: { view in
+                        guard currentSurfaceView === view else { return }
+                        Task { @MainActor in
+                            if currentSurfaceView === view {
+                                currentSurfaceView = nil
+                            }
+                        }
+                    }
+                )
+            ),
             uiState: uiState,
             trackCatalog: controller.trackCatalog,
             trackSelection: controller.trackSelection,
@@ -560,6 +645,7 @@ struct PlayerHostView: View {
             pendingSeekRatio: $pendingSeekRatio,
             isCompactLayout: isCompactLayout,
             isFullscreen: isFullscreen,
+            pictureInPicturePresentation: pictureInPicturePresentation,
             onSeekBy: { controller.seek(by: $0) },
             onTogglePause: { controller.togglePause() },
             onSeekToRatio: { controller.seek(toRatio: $0) },
@@ -804,6 +890,66 @@ struct PlayerHostView: View {
         return source.uri
     }
 
+    private func requestPictureInPicture() {
+        guard pictureInPictureEnabled else {
+            hostMessage = ExampleI18n.pictureInPictureUnavailable
+            return
+        }
+        guard AVPictureInPictureController.isPictureInPictureSupported() else {
+            hostMessage = ExampleI18n.pictureInPictureUnavailable
+            return
+        }
+        guard let surfaceView = currentSurfaceView,
+              !surfaceView.isNativeFramePresentationActive,
+              let playerLayer = surfaceView.pictureInPicturePlayerLayer else {
+            hostMessage = ExampleI18n.pictureInPictureUnavailable
+            return
+        }
+
+        if pictureInPictureController?.playerLayer !== playerLayer {
+            guard let nextController = AVPictureInPictureController(playerLayer: playerLayer) else {
+                setPictureInPicturePresentation(false)
+                hostMessage = ExampleI18n.pictureInPictureUnavailable
+                pictureInPictureController = nil
+                return
+            }
+            nextController.canStartPictureInPictureAutomaticallyFromInline =
+                pictureInPictureEnabled
+            pictureInPictureDelegate.onWillStart = {
+                Task { @MainActor in
+                    setPictureInPicturePresentation(true)
+                }
+            }
+            pictureInPictureDelegate.onDidStart = {
+                Task { @MainActor in
+                    setPictureInPicturePresentation(true)
+                }
+            }
+            pictureInPictureDelegate.onWillStop = {
+                Task { @MainActor in
+                    setPictureInPicturePresentation(true)
+                }
+            }
+            pictureInPictureDelegate.onStop = {
+                Task { @MainActor in
+                    setPictureInPicturePresentation(false)
+                    pictureInPictureController = nil
+                }
+            }
+            pictureInPictureDelegate.onFailure = { _ in
+                Task { @MainActor in
+                    setPictureInPicturePresentation(false)
+                    hostMessage = ExampleI18n.pictureInPictureUnavailable
+                    pictureInPictureController = nil
+                }
+            }
+            nextController.delegate = pictureInPictureDelegate
+            pictureInPictureController = nextController
+        }
+        setPictureInPicturePresentation(true)
+        pictureInPictureController?.startPictureInPicture()
+    }
+
     private func activePlaylistSource() -> VesperPlayerSource? {
         guard let activeItemId = playlistCoordinator.snapshot.activeItem?.itemId else {
             return nil
@@ -1023,6 +1169,9 @@ struct PlayerHostView: View {
 
     private func scheduleControlsAutoHide(for uiState: PlayerHostUiState) {
         controlsHideTask?.cancel()
+        guard !pictureInPicturePresentation else {
+            return
+        }
         guard
             uiState.playbackState == .playing,
             !uiState.isBuffering,
@@ -1045,6 +1194,22 @@ struct PlayerHostView: View {
                 return
             }
             controlsVisible = false
+        }
+    }
+
+    private func setPictureInPicturePresentation(_ enabled: Bool) {
+        guard pictureInPicturePresentation != enabled else {
+            return
+        }
+        pictureInPicturePresentation = enabled
+        if enabled {
+            controlsHideTask?.cancel()
+            activeSheet = nil
+            pendingSeekRatio = nil
+            controlsVisible = false
+        } else {
+            controlsVisible = true
+            scheduleControlsAutoHide(for: controller.uiState)
         }
     }
 

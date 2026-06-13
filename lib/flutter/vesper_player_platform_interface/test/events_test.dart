@@ -771,4 +771,58 @@ void main() {
       2,
     );
   });
+
+  test('picture-in-picture event decodes structured failure', () {
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'android-player',
+      'type': 'pictureInPicture',
+      'state': 'failed',
+      'isActive': false,
+      'source': 'system',
+      'canAutoEnter': true,
+      'error': <Object?, Object?>{
+        'code': 'pictureInPictureNativeFrameRouteCannotHandOff',
+        'message': 'Native-frame route cannot hand off to system player.',
+        'userMessage': 'Current playback cannot enter Picture in Picture.',
+        'diagnostics': <Object?, Object?>{
+          'route': 'nativeFramePipeline',
+        },
+      },
+      'diagnostics': <Object?, Object?>{
+        'platform': 'android',
+      },
+    });
+
+    expect(event, isA<VesperPlayerPictureInPictureEvent>());
+    final pip = event as VesperPlayerPictureInPictureEvent;
+    expect(pip.playerId, 'android-player');
+    expect(pip.state, VesperPictureInPictureStatus.failed);
+    expect(pip.isActive, isFalse);
+    expect(pip.canAutoEnter, isTrue);
+    expect(
+      pip.error?.code,
+      VesperPictureInPictureErrorCode
+          .pictureInPictureNativeFrameRouteCannotHandOff,
+    );
+    expect(
+      pip.error?.userMessage,
+      'Current playback cannot enter Picture in Picture.',
+    );
+    expect(pip.error?.diagnostics['route'], 'nativeFramePipeline');
+    expect(pip.diagnostics['platform'], 'android');
+  });
+
+  test('unknown player event does not decode as snapshot', () {
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'ios-player',
+      'type': 'futureEvent',
+      'value': 7,
+    });
+
+    expect(event, isA<VesperPlayerUnknownEvent>());
+    final unknown = event as VesperPlayerUnknownEvent;
+    expect(unknown.playerId, 'ios-player');
+    expect(unknown.type, 'futureEvent');
+    expect(unknown.payload['value'], 7);
+  });
 }

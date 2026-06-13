@@ -56,6 +56,37 @@ extension _PlayerHostLayout on _PlayerHostPageState {
     );
   }
 
+  Widget _buildPictureInPicturePresentationContent() {
+    return FutureBuilder<VesperPlayerController>(
+      future: _controllerFuture,
+      builder: (context, asyncSnapshot) {
+        final controller = asyncSnapshot.data ?? _controller;
+        if (controller == null) {
+          return const ColoredBox(color: Colors.black);
+        }
+        return ValueListenableBuilder<VesperPlayerSnapshot>(
+          valueListenable: controller.snapshotListenable,
+          builder: (context, snapshot, _) {
+            return ColoredBox(
+              color: Colors.black,
+              child: SizedBox.expand(
+                child: ExamplePlayerStage(
+                  controller: controller,
+                  snapshot: snapshot,
+                  isPortrait: false,
+                  sheetOpen: false,
+                  pictureInPicturePresentation: true,
+                  onOpenSheet: (_) {},
+                  onToggleFullscreen: () {},
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _buildPortraitLayout(
     BuildContext context,
     VesperPlayerController controller,
@@ -97,6 +128,7 @@ extension _PlayerHostLayout on _PlayerHostPageState {
                   unawaited(_openToolSheet(controller, sheet)),
               onToggleFullscreen: () =>
                   unawaited(_toggleFullscreen(Orientation.portrait)),
+              pictureInPicturePresentation: _pictureInPicturePresentation,
             ),
           ),
           const SizedBox(height: 18),
@@ -181,6 +213,13 @@ extension _PlayerHostLayout on _PlayerHostPageState {
                 unawaited(_loadExternalRoute(route)),
             onRequestPermission: () =>
                 unawaited(_requestSystemPlaybackPermissions(controller)),
+            pictureInPictureAvailability: _pictureInPictureAvailability,
+            pictureInPictureStatus: _pictureInPictureStatus,
+            pictureInPictureEnabled: _pictureInPictureEnabled,
+            onPictureInPictureEnabledChanged: (enabled) =>
+                unawaited(_setPictureInPictureEnabled(controller, enabled)),
+            onRequestPictureInPicture: () =>
+                unawaited(_requestPictureInPicture(controller)),
           ),
           const SizedBox(height: 18),
           ExampleResilienceSection(
@@ -220,6 +259,7 @@ extension _PlayerHostLayout on _PlayerHostPageState {
                 unawaited(_openToolSheet(controller, sheet)),
             onToggleFullscreen: () =>
                 unawaited(_toggleFullscreen(Orientation.landscape)),
+            pictureInPicturePresentation: _pictureInPicturePresentation,
           ),
         ),
         if (asyncSnapshot.hasError)

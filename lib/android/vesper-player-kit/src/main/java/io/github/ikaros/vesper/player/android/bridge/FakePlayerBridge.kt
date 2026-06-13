@@ -256,6 +256,12 @@ internal class FakePlayerBridge(
 
     override fun clearSystemPlayback() = Unit
 
+    override fun pictureInPictureReadiness(): VesperPictureInPictureReadiness =
+        VesperPictureInPictureReadiness(
+            isAvailable = currentSource != null,
+            diagnostics = mapOf("backend" to "fakeDemo"),
+        )
+
     override fun drainRuntimeWarnings(): List<VesperRuntimeWarning> = emptyList()
 
     override fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> =

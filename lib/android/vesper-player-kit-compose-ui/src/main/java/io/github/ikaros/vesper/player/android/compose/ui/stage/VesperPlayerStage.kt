@@ -82,6 +82,7 @@ fun VesperPlayerStage(
     trackCatalog: VesperTrackCatalog = VesperTrackCatalog.Empty,
     trackSelection: VesperTrackSelectionSnapshot = VesperTrackSelectionSnapshot(),
     modifier: Modifier = Modifier,
+    pictureInPicturePresentation: Boolean = false,
     onControlsVisibilityChange: (Boolean) -> Unit,
     onPendingSeekRatioChange: (Float?) -> Unit,
     onOpenSheet: (VesperPlayerStageSheet) -> Unit,
@@ -122,6 +123,16 @@ fun VesperPlayerStage(
         gestureFeedback = null
     }
 
+    LaunchedEffect(pictureInPicturePresentation) {
+        if (!pictureInPicturePresentation) {
+            return@LaunchedEffect
+        }
+        endTemporarySpeedGesture()
+        gestureFeedback = null
+        onPendingSeekRatioChange(null)
+        onControlsVisibilityChange(false)
+    }
+
     Box(
         modifier = modifier
             .clip(shape)
@@ -148,195 +159,199 @@ fun VesperPlayerStage(
             manageControllerLifecycle = false,
         )
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(controller) {
-                    detectTapGestures(
-                        onTap = {
-                            onControlsVisibilityChange(!latestControlsVisible)
-                        },
-                        onDoubleTap = { _ ->
-                            onTogglePlayback()
-                            onControlsVisibilityChange(true)
-                        },
-                        onLongPress = {
-                            if (!playbackRateControlsEnabled) {
-                                return@detectTapGestures
-                            }
-                            if (speedGestureRestoreRate == null) {
-                                speedGestureRestoreRate = latestPlaybackRate
-                                onSetPlaybackRate(2f)
-                            }
-                            gestureFeedback =
-                                StageGestureFeedback(
-                                    kind = StageGestureKind.Speed,
-                                    progress = null,
-                                    label = temporarySpeedLabel,
-                                )
-                            onControlsVisibilityChange(true)
-                        },
-                        onPress = {
-                            try {
-                                tryAwaitRelease()
-                            } finally {
-                                endTemporarySpeedGesture()
-                            }
-                        },
-                    )
-                }
-                .pointerInput(currentBrightnessRatio, currentVolumeRatio, uiState.timeline.isSeekable) {
-                    var gestureKind: StageAreaGestureKind? = null
-                    var deviceGestureStartRatio = 0f
-                    var seekGestureRatio = 0f
-                    var dragStartX = 0f
-                    var totalDragX = 0f
-                    var totalDragY = 0f
-
-                    fun resetGesture() {
-                        gestureKind = null
-                        deviceGestureStartRatio = 0f
-                        seekGestureRatio = 0f
-                        dragStartX = 0f
-                        totalDragX = 0f
-                        totalDragY = 0f
+        if (!pictureInPicturePresentation) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(controller) {
+                        detectTapGestures(
+                            onTap = {
+                                onControlsVisibilityChange(!latestControlsVisible)
+                            },
+                            onDoubleTap = { _ ->
+                                onTogglePlayback()
+                                onControlsVisibilityChange(true)
+                            },
+                            onLongPress = {
+                                if (!playbackRateControlsEnabled) {
+                                    return@detectTapGestures
+                                }
+                                if (speedGestureRestoreRate == null) {
+                                    speedGestureRestoreRate = latestPlaybackRate
+                                    onSetPlaybackRate(2f)
+                                }
+                                gestureFeedback =
+                                    StageGestureFeedback(
+                                        kind = StageGestureKind.Speed,
+                                        progress = null,
+                                        label = temporarySpeedLabel,
+                                    )
+                                onControlsVisibilityChange(true)
+                            },
+                            onPress = {
+                                try {
+                                    tryAwaitRelease()
+                                } finally {
+                                    endTemporarySpeedGesture()
+                                }
+                            },
+                        )
                     }
+                    .pointerInput(currentBrightnessRatio, currentVolumeRatio, uiState.timeline.isSeekable) {
+                        var gestureKind: StageAreaGestureKind? = null
+                        var deviceGestureStartRatio = 0f
+                        var seekGestureRatio = 0f
+                        var dragStartX = 0f
+                        var totalDragX = 0f
+                        var totalDragY = 0f
 
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            resetGesture()
-                            dragStartX = offset.x
-                        },
-                        onDrag = { change, dragAmount ->
-                            if (speedGestureRestoreRate != null) {
-                                return@detectDragGestures
-                            }
-                            totalDragX += dragAmount.x
-                            totalDragY += dragAmount.y
-                            if (gestureKind == null) {
-                                val horizontalDistance = abs(totalDragX)
-                                val verticalDistance = abs(totalDragY)
-                                if (verticalDistance < 8f && horizontalDistance < 8f) {
+                        fun resetGesture() {
+                            gestureKind = null
+                            deviceGestureStartRatio = 0f
+                            seekGestureRatio = 0f
+                            dragStartX = 0f
+                            totalDragX = 0f
+                            totalDragY = 0f
+                        }
+
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                resetGesture()
+                                dragStartX = offset.x
+                            },
+                            onDrag = { change, dragAmount ->
+                                if (speedGestureRestoreRate != null) {
+                                    return@detectDragGestures
+                                }
+                                totalDragX += dragAmount.x
+                                totalDragY += dragAmount.y
+                                if (gestureKind == null) {
+                                    val horizontalDistance = abs(totalDragX)
+                                    val verticalDistance = abs(totalDragY)
+                                    if (verticalDistance < 8f && horizontalDistance < 8f) {
+                                        return@detectDragGestures
+                                    }
+
+                                    if (horizontalDistance >= verticalDistance * 1.15f) {
+                                        if (!uiState.timeline.isSeekable) {
+                                            gestureKind = StageAreaGestureKind.Ignored
+                                            return@detectDragGestures
+                                        }
+                                        gestureKind = StageAreaGestureKind.Seek
+                                    } else if (verticalDistance >= horizontalDistance * 1.15f) {
+                                        val nextKind =
+                                            if (dragStartX < size.width / 2f) {
+                                                StageAreaGestureKind.Brightness
+                                            } else {
+                                                StageAreaGestureKind.Volume
+                                            }
+                                        val startRatio =
+                                            when (nextKind) {
+                                                StageAreaGestureKind.Brightness -> currentBrightnessRatio()
+                                                StageAreaGestureKind.Volume -> currentVolumeRatio()
+                                                StageAreaGestureKind.Seek,
+                                                StageAreaGestureKind.Ignored,
+                                                -> null
+                                            }
+                                        if (startRatio == null) {
+                                            gestureKind = StageAreaGestureKind.Ignored
+                                            return@detectDragGestures
+                                        }
+                                        gestureKind = nextKind
+                                        deviceGestureStartRatio = startRatio.coerceIn(0f, 1f)
+                                    } else {
+                                        return@detectDragGestures
+                                    }
+                                }
+
+                                val kind = gestureKind ?: return@detectDragGestures
+                                if (kind == StageAreaGestureKind.Ignored) {
+                                    return@detectDragGestures
+                                }
+                                if (kind == StageAreaGestureKind.Seek) {
+                                    val stageWidth = size.width.toFloat().coerceAtLeast(1f)
+                                    seekGestureRatio = (change.position.x / stageWidth).coerceIn(0f, 1f)
+                                    onPendingSeekRatioChange(seekGestureRatio)
+                                    onControlsVisibilityChange(true)
+                                    change.consume()
                                     return@detectDragGestures
                                 }
 
-                                if (horizontalDistance >= verticalDistance * 1.15f) {
-                                    if (!uiState.timeline.isSeekable) {
-                                        gestureKind = StageAreaGestureKind.Ignored
-                                        return@detectDragGestures
-                                    }
-                                    gestureKind = StageAreaGestureKind.Seek
-                                } else if (verticalDistance >= horizontalDistance * 1.15f) {
-                                    val nextKind =
-                                        if (dragStartX < size.width / 2f) {
-                                            StageAreaGestureKind.Brightness
-                                        } else {
-                                            StageAreaGestureKind.Volume
-                                        }
-                                    val startRatio =
-                                        when (nextKind) {
-                                            StageAreaGestureKind.Brightness -> currentBrightnessRatio()
-                                            StageAreaGestureKind.Volume -> currentVolumeRatio()
+                                val stageHeight = size.height.toFloat().coerceAtLeast(1f)
+                                val requestedRatio =
+                                    (deviceGestureStartRatio - totalDragY / stageHeight * 1.15f)
+                                        .coerceIn(0f, 1f)
+                                val actualRatio =
+                                    when (kind) {
+                                        StageAreaGestureKind.Brightness -> onSetBrightnessRatio(requestedRatio)
+                                        StageAreaGestureKind.Volume -> onSetVolumeRatio(requestedRatio)
+                                        StageAreaGestureKind.Seek,
+                                        StageAreaGestureKind.Ignored,
+                                        -> null
+                                    }?.coerceIn(0f, 1f)
+                                if (actualRatio != null) {
+                                    val feedbackKind =
+                                        when (kind) {
+                                            StageAreaGestureKind.Brightness -> StageGestureKind.Brightness
+                                            StageAreaGestureKind.Volume -> StageGestureKind.Volume
                                             StageAreaGestureKind.Seek,
                                             StageAreaGestureKind.Ignored,
                                             -> null
                                         }
-                                    if (startRatio == null) {
-                                        gestureKind = StageAreaGestureKind.Ignored
-                                        return@detectDragGestures
+                                    if (feedbackKind != null) {
+                                        val value = actualRatio.coerceIn(0f, 1f)
+                                        gestureFeedback =
+                                            StageGestureFeedback(
+                                                kind = feedbackKind,
+                                                progress = value,
+                                                label = percentLabel(value),
+                                            )
                                     }
-                                    gestureKind = nextKind
-                                    deviceGestureStartRatio = startRatio.coerceIn(0f, 1f)
-                                } else {
-                                    return@detectDragGestures
+                                    onControlsVisibilityChange(true)
+                                    change.consume()
                                 }
-                            }
-
-                            val kind = gestureKind ?: return@detectDragGestures
-                            if (kind == StageAreaGestureKind.Ignored) {
-                                return@detectDragGestures
-                            }
-                            if (kind == StageAreaGestureKind.Seek) {
-                                val stageWidth = size.width.toFloat().coerceAtLeast(1f)
-                                seekGestureRatio = (change.position.x / stageWidth).coerceIn(0f, 1f)
-                                onPendingSeekRatioChange(seekGestureRatio)
-                                onControlsVisibilityChange(true)
-                                change.consume()
-                                return@detectDragGestures
-                            }
-
-                            val stageHeight = size.height.toFloat().coerceAtLeast(1f)
-                            val requestedRatio =
-                                (deviceGestureStartRatio - totalDragY / stageHeight * 1.15f)
-                                    .coerceIn(0f, 1f)
-                            val actualRatio =
-                                when (kind) {
-                                    StageAreaGestureKind.Brightness -> onSetBrightnessRatio(requestedRatio)
-                                    StageAreaGestureKind.Volume -> onSetVolumeRatio(requestedRatio)
-                                    StageAreaGestureKind.Seek,
-                                    StageAreaGestureKind.Ignored,
-                                    -> null
-                                }?.coerceIn(0f, 1f)
-                            if (actualRatio != null) {
-                                val feedbackKind =
-                                    when (kind) {
-                                        StageAreaGestureKind.Brightness -> StageGestureKind.Brightness
-                                        StageAreaGestureKind.Volume -> StageGestureKind.Volume
-                                        StageAreaGestureKind.Seek,
-                                        StageAreaGestureKind.Ignored,
-                                        -> null
-                                    }
-                                if (feedbackKind != null) {
-                                    val value = actualRatio.coerceIn(0f, 1f)
-                                    gestureFeedback =
-                                        StageGestureFeedback(
-                                            kind = feedbackKind,
-                                            progress = value,
-                                            label = percentLabel(value),
-                                        )
+                            },
+                            onDragEnd = {
+                                if (gestureKind == StageAreaGestureKind.Seek) {
+                                    onSeekToRatio(seekGestureRatio)
+                                    onPendingSeekRatioChange(null)
+                                    onControlsVisibilityChange(true)
                                 }
-                                onControlsVisibilityChange(true)
-                                change.consume()
-                            }
-                        },
-                        onDragEnd = {
-                            if (gestureKind == StageAreaGestureKind.Seek) {
-                                onSeekToRatio(seekGestureRatio)
-                                onPendingSeekRatioChange(null)
-                                onControlsVisibilityChange(true)
-                            }
-                            resetGesture()
-                        },
-                        onDragCancel = {
-                            if (gestureKind == StageAreaGestureKind.Seek) {
-                                onPendingSeekRatioChange(null)
-                            }
-                            resetGesture()
-                        },
-                    )
-                },
-        )
+                                resetGesture()
+                            },
+                            onDragCancel = {
+                                if (gestureKind == StageAreaGestureKind.Seek) {
+                                    onPendingSeekRatioChange(null)
+                                }
+                                resetGesture()
+                            },
+                        )
+                    },
+            )
+        }
 
-        StageControlsOverlay(
-            controlsVisible = controlsVisible,
-            uiState = uiState,
-            isPortrait = isPortrait,
-            isPlaying = isPlaying,
-            displayedRatio = displayedRatio,
-            pendingSeekRatio = pendingSeekRatio,
-            speedLabel = speedLabel,
-            qualityLabel = qualityLabel,
-            playbackRateControlsEnabled = playbackRateControlsEnabled,
-            onOpenSheet = onOpenSheet,
-            onTogglePlayback = onTogglePlayback,
-            onControlsVisibilityChange = onControlsVisibilityChange,
-            onPendingSeekRatioChange = onPendingSeekRatioChange,
-            onSeekToRatio = onSeekToRatio,
-            onSeekToLiveEdge = onSeekToLiveEdge,
-            onToggleFullscreen = onToggleFullscreen,
-        )
+        if (!pictureInPicturePresentation) {
+            StageControlsOverlay(
+                controlsVisible = controlsVisible,
+                uiState = uiState,
+                isPortrait = isPortrait,
+                isPlaying = isPlaying,
+                displayedRatio = displayedRatio,
+                pendingSeekRatio = pendingSeekRatio,
+                speedLabel = speedLabel,
+                qualityLabel = qualityLabel,
+                playbackRateControlsEnabled = playbackRateControlsEnabled,
+                onOpenSheet = onOpenSheet,
+                onTogglePlayback = onTogglePlayback,
+                onControlsVisibilityChange = onControlsVisibilityChange,
+                onPendingSeekRatioChange = onPendingSeekRatioChange,
+                onSeekToRatio = onSeekToRatio,
+                onSeekToLiveEdge = onSeekToLiveEdge,
+                onToggleFullscreen = onToggleFullscreen,
+            )
+        }
         AnimatedVisibility(
-            visible = gestureFeedback != null,
+            visible = !pictureInPicturePresentation && gestureFeedback != null,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.Center),

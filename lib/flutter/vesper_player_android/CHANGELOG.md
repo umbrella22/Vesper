@@ -9,6 +9,13 @@
   explicitly for overlay-heavy, scrolling, clipping, rounded-corner, or
   animation-heavy screens that need the previous composition behavior.
 
+### Changed
+
+- Picture in Picture failures now emit PiP-specific events and method errors
+  without publishing generic player errors.
+- Android PiP state now follows Activity mode-change callbacks, with
+  best-effort foreground restore for `exitPictureInPicture`.
+
 ## 0.3.0 - 2026-05-18
 
 ### Changed

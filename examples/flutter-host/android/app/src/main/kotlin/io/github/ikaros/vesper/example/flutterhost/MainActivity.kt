@@ -2,6 +2,7 @@ package io.github.ikaros.vesper.example.flutterhost
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.media.AudioManager
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
@@ -11,17 +12,24 @@ import android.provider.Settings
 import android.provider.OpenableColumns
 import android.view.Display
 import dalvik.system.BaseDexClassLoader
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import io.github.ikaros.vesper.player.flutter.android.VesperPlayerAndroidPlugin
 import java.io.File
 import kotlin.math.roundToInt
 
-class MainActivity : FlutterActivity() {
+class MainActivity : FlutterFragmentActivity() {
   private var pendingPickerResult: MethodChannel.Result? = null
+  private var pictureInPictureHostChannel: MethodChannel? = null
 
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine)
+    pictureInPictureHostChannel =
+      MethodChannel(
+        flutterEngine.dartExecutor.binaryMessenger,
+        PICTURE_IN_PICTURE_CHANNEL,
+      )
     MethodChannel(
       flutterEngine.dartExecutor.binaryMessenger,
       MEDIA_PICKER_CHANNEL,
@@ -50,6 +58,23 @@ class MainActivity : FlutterActivity() {
         else -> result.notImplemented()
       }
     }
+  }
+
+  override fun onPictureInPictureModeChanged(
+    isInPictureInPictureMode: Boolean,
+    newConfig: Configuration,
+  ) {
+    super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+    VesperPlayerAndroidPlugin.dispatchPictureInPictureModeChanged(
+      this,
+      isInPictureInPictureMode,
+    )
+  }
+
+  override fun onUserLeaveHint() {
+    VesperPlayerAndroidPlugin.dispatchPictureInPictureUserLeaveHint(this)
+    pictureInPictureHostChannel?.invokeMethod("onUserLeaveHint", null)
+    super.onUserLeaveHint()
   }
 
   private fun launchVideoPicker(result: MethodChannel.Result) {
@@ -304,5 +329,7 @@ class MainActivity : FlutterActivity() {
       "io.github.ikaros.vesper.example.flutter_host/media_picker"
     private const val DEVICE_CONTROLS_CHANNEL =
       "io.github.ikaros.vesper.example.flutter_host/device_controls"
+    private const val PICTURE_IN_PICTURE_CHANNEL =
+      "io.github.ikaros.vesper.example.flutter_host/picture_in_picture"
   }
 }

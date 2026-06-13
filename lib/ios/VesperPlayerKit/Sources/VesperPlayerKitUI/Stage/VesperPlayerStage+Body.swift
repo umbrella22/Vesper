@@ -7,27 +7,30 @@ extension VesperPlayerStage {
             surface
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            GeometryReader { proxy in
-                Color.clear
-                    .contentShape(Rectangle())
-                    .gesture(
-                        TapGesture(count: 2)
-                            .onEnded {
-                                onTogglePause()
-                                controlsVisible = true
-                            }
-                            .exclusively(
-                                before: TapGesture()
-                                    .onEnded {
-                                        controlsVisible.toggle()
-                                    }
-                            )
-                    )
-                    .simultaneousGesture(stageDragGesture(stageSize: proxy.size))
-                    .simultaneousGesture(temporarySpeedGesture())
+            if !pictureInPicturePresentation {
+                GeometryReader { proxy in
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(
+                            TapGesture(count: 2)
+                                .onEnded {
+                                    onTogglePause()
+                                    controlsVisible = true
+                                }
+                                .exclusively(
+                                    before: TapGesture()
+                                        .onEnded {
+                                            controlsVisible.toggle()
+                                        }
+                                )
+                        )
+                        .simultaneousGesture(stageDragGesture(stageSize: proxy.size))
+                        .simultaneousGesture(temporarySpeedGesture())
+                }
             }
 
-            if controlsVisible || uiState.playbackState != .playing {
+            if !pictureInPicturePresentation &&
+                (controlsVisible || uiState.playbackState != .playing) {
                 ZStack {
                     VStack(spacing: 0) {
                         LinearGradient(
@@ -96,7 +99,7 @@ extension VesperPlayerStage {
                 .transition(.opacity)
             }
 
-            if let gestureFeedback {
+            if !pictureInPicturePresentation, let gestureFeedback {
                 StageGestureFeedbackPanel(feedback: gestureFeedback)
                     .transition(.opacity)
             }
@@ -111,6 +114,12 @@ extension VesperPlayerStage {
         }
         .onDisappear {
             endTemporarySpeedGesture()
+        }
+        .onChange(of: pictureInPicturePresentation) { _, enabled in
+            guard enabled else {
+                return
+            }
+            enterPictureInPicturePresentation()
         }
     }
 }

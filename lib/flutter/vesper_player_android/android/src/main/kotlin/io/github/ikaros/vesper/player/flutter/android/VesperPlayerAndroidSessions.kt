@@ -34,6 +34,10 @@ internal data class PlayerSession(
     var viewport: FlutterViewport? = null,
     var viewportHint: FlutterViewportHint = FlutterViewportHint.hidden(),
     var recentCapabilityProbe: SourceBoundCapabilityProbe? = null,
+    var pictureInPictureConfiguration: FlutterPictureInPictureConfiguration =
+        FlutterPictureInPictureConfiguration(),
+    var pictureInPictureState: String = "inactive",
+    var pictureInPictureActive: Boolean = false,
 ) {
     fun hasAttachedHost(): Boolean = hostView != null
 

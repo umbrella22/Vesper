@@ -1274,6 +1274,45 @@ void main() {
         VesperBufferingPreset.streaming);
     expect(snapshot.resiliencePolicy.cache.preset, VesperCachePreset.streaming);
   });
+
+  test('picture-in-picture models round-trip through maps', () {
+    const configuration = VesperPictureInPictureConfiguration(
+      autoEnter: true,
+      preferredAspectRatio: 16 / 9,
+    );
+    expect(
+      VesperPictureInPictureConfiguration.fromMap(configuration.toMap())
+          .preferredAspectRatio,
+      16 / 9,
+    );
+
+    const error = VesperPictureInPictureError(
+      code: VesperPictureInPictureErrorCode
+          .pictureInPictureNativeFrameRouteCannotHandOff,
+      diagnostics: <String, Object?>{'route': 'nativeFramePipeline'},
+    );
+    final availability = VesperPictureInPictureAvailability.fromMap(
+      const VesperPictureInPictureAvailability(
+        isAvailable: false,
+        canAutoEnter: true,
+        error: error,
+      ).toMap(),
+    );
+
+    expect(availability.isAvailable, isFalse);
+    expect(availability.canAutoEnter, isTrue);
+    expect(availability.source, 'system');
+    expect(
+      availability.error?.code,
+      VesperPictureInPictureErrorCode
+          .pictureInPictureNativeFrameRouteCannotHandOff,
+    );
+    expect(
+      availability.error?.userMessage,
+      'Current playback cannot enter Picture in Picture.',
+    );
+    expect(availability.error?.diagnostics['route'], 'nativeFramePipeline');
+  });
 }
 
 Map<Object?, Object?> _readContractMap(String name) {

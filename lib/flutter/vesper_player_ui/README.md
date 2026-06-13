@@ -55,6 +55,11 @@ on non-iOS platforms so shared control rows can keep a stable layout.
 Use `VesperAirPlayRouteIconButton` inside a stage top-bar action slot when the
 AirPlay picker should hide and show with the player controls.
 
+Set `VesperPlayerStage.pictureInPicturePresentation` while handing playback to
+system Picture in Picture. In that mode the stage renders only the video
+surface and disables custom overlay gestures so the platform PiP UI owns all
+visible playback controls.
+
 `VesperPlayerStage` uses English labels by default. Apps can replace only the
 stage copy without rebuilding the stage controls:
 

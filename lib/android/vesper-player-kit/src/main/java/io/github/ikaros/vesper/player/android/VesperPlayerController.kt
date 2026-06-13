@@ -87,6 +87,9 @@ class VesperPlayerController internal constructor(
 
     fun clearSystemPlayback() = bridge.clearSystemPlayback()
 
+    fun pictureInPictureReadiness(): VesperPictureInPictureReadiness =
+        bridge.pictureInPictureReadiness()
+
     fun drainRuntimeWarnings(): List<VesperRuntimeWarning> = bridge.drainRuntimeWarnings()
 
     fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> = bridge.drainBenchmarkEvents()

@@ -30,12 +30,25 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
     final bufferingChanged =
         oldWidget.snapshot.isBuffering != widget.snapshot.isBuffering;
     final sheetChanged = oldWidget.sheetOpen != widget.sheetOpen;
+    final pictureInPicturePresentationChanged =
+        oldWidget.pictureInPicturePresentation !=
+            widget.pictureInPicturePresentation;
 
-    if (sheetChanged && widget.sheetOpen) {
+    if (pictureInPicturePresentationChanged &&
+        widget.pictureInPicturePresentation) {
+      _enterPictureInPicturePresentation();
+    }
+
+    if (!widget.pictureInPicturePresentation &&
+        sheetChanged &&
+        widget.sheetOpen) {
       _showControls();
     }
 
-    if (playbackChanged || bufferingChanged || sheetChanged) {
+    if (playbackChanged ||
+        bufferingChanged ||
+        sheetChanged ||
+        pictureInPicturePresentationChanged) {
       _syncAutoHide();
     }
   }
@@ -52,11 +65,13 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   Widget build(BuildContext context) {
     final snapshot = widget.snapshot;
     final timeline = snapshot.timeline;
+    final pictureInPicturePresentation = widget.pictureInPicturePresentation;
     final displayedRatio =
         (_pendingSeekRatio ?? timeline.displayedRatio ?? 0.0).clamp(0.0, 1.0);
-    final showControls = _controlsVisible ||
-        snapshot.playbackState != VesperPlaybackState.playing ||
-        widget.sheetOpen;
+    final showControls = !pictureInPicturePresentation &&
+        (_controlsVisible ||
+            snapshot.playbackState != VesperPlaybackState.playing ||
+            widget.sheetOpen);
     final stageRadius = BorderRadius.circular(widget.isPortrait ? 20 : 0);
     final title =
         snapshot.sourceLabel.isEmpty ? snapshot.title : snapshot.sourceLabel;
@@ -76,76 +91,79 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
             Positioned.fill(
               child: VesperPlayerView(controller: widget.controller),
             ),
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: _handleTap,
-                onDoubleTap: _togglePause,
-                onLongPressStart: (_) => _startTemporarySpeedGesture(),
-                onLongPressEnd: (_) => _endTemporarySpeedGesture(),
-                onLongPressCancel: _endTemporarySpeedGesture,
-                onPanStart: _handleStagePanStart,
-                onPanUpdate: _handleStagePanUpdate,
-                onPanEnd: _handleStagePanEnd,
-                onPanCancel: _handleStagePanCancel,
+            if (!pictureInPicturePresentation)
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _handleTap,
+                  onDoubleTap: _togglePause,
+                  onLongPressStart: (_) => _startTemporarySpeedGesture(),
+                  onLongPressEnd: (_) => _endTemporarySpeedGesture(),
+                  onLongPressCancel: _endTemporarySpeedGesture,
+                  onPanStart: _handleStagePanStart,
+                  onPanUpdate: _handleStagePanUpdate,
+                  onPanEnd: _handleStagePanEnd,
+                  onPanCancel: _handleStagePanCancel,
+                ),
               ),
-            ),
-            IgnorePointer(
-              ignoring: true,
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 180),
-                opacity: showControls ? 1 : 0,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: <Color>[
-                        Colors.black.withValues(alpha: 0.68),
-                        Colors.transparent,
-                        Colors.transparent,
-                        Colors.black.withValues(alpha: 0.82),
-                      ],
+            if (!pictureInPicturePresentation)
+              IgnorePointer(
+                ignoring: true,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 180),
+                  opacity: showControls ? 1 : 0,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: <Color>[
+                          Colors.black.withValues(alpha: 0.68),
+                          Colors.transparent,
+                          Colors.transparent,
+                          Colors.black.withValues(alpha: 0.82),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-            IgnorePointer(
-              ignoring: !showControls,
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 180),
-                opacity: showControls ? 1 : 0,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: <Widget>[
-                    Positioned(
-                      top: 16,
-                      left: 18,
-                      right: 18,
-                      child: _buildTopBar(context, snapshot, title),
-                    ),
-                    Positioned(
-                      left: widget.isPortrait ? 18 : 12,
-                      right: widget.isPortrait ? 18 : 12,
-                      bottom: widget.isPortrait ? 18 : 14,
-                      child: widget.isPortrait
-                          ? _buildPortraitTimeline(
-                              context,
-                              snapshot,
-                              displayedRatio,
-                            )
-                          : _buildLandscapeTimeline(
-                              context,
-                              snapshot,
-                              displayedRatio,
-                            ),
-                    ),
-                  ],
+            if (!pictureInPicturePresentation)
+              IgnorePointer(
+                ignoring: !showControls,
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 180),
+                  opacity: showControls ? 1 : 0,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: <Widget>[
+                      Positioned(
+                        top: 16,
+                        left: 18,
+                        right: 18,
+                        child: _buildTopBar(context, snapshot, title),
+                      ),
+                      Positioned(
+                        left: widget.isPortrait ? 18 : 12,
+                        right: widget.isPortrait ? 18 : 12,
+                        bottom: widget.isPortrait ? 18 : 14,
+                        child: widget.isPortrait
+                            ? _buildPortraitTimeline(
+                                context,
+                                snapshot,
+                                displayedRatio,
+                              )
+                            : _buildLandscapeTimeline(
+                                context,
+                                snapshot,
+                                displayedRatio,
+                              ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            if (_gestureFeedback != null)
+            if (!pictureInPicturePresentation && _gestureFeedback != null)
               Positioned.fill(
                 child: IgnorePointer(
                   child: Center(
@@ -385,6 +403,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _handleSeekPreview(double ratio) {
+    if (widget.pictureInPicturePresentation) {
+      return;
+    }
     setState(() {
       _pendingSeekRatio = ratio;
     });
@@ -392,7 +413,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _handleSeekCommit(double ratio) {
-    if (!mounted) {
+    if (!mounted || widget.pictureInPicturePresentation) {
       return;
     }
     setState(() {
@@ -404,7 +425,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _handleSeekCancel() {
-    if (!mounted) {
+    if (!mounted || widget.pictureInPicturePresentation) {
       return;
     }
     setState(() {
@@ -414,7 +435,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _handleTap() {
-    if (!mounted) {
+    if (!mounted || widget.pictureInPicturePresentation) {
       return;
     }
     setState(() {
@@ -424,17 +445,26 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _togglePause() {
+    if (widget.pictureInPicturePresentation) {
+      return;
+    }
     _reportControllerCall(widget.controller.togglePause(), 'toggle pause');
     _showControls();
   }
 
   void _seekToLiveEdge() {
+    if (widget.pictureInPicturePresentation) {
+      return;
+    }
     _reportControllerCall(
         widget.controller.seekToLiveEdge(), 'seek to live edge');
     _showControls();
   }
 
   void _handleStagePanStart(DragStartDetails details) {
+    if (widget.pictureInPicturePresentation) {
+      return;
+    }
     _stageGestureKind = null;
     _deviceGestureBaseRatio = null;
     _stageGestureStartX = details.localPosition.dx;
@@ -444,6 +474,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _handleStagePanUpdate(DragUpdateDetails details) {
+    if (widget.pictureInPicturePresentation) {
+      return;
+    }
     _stageGestureDragDx += details.delta.dx;
     _deviceGestureDragDy += details.delta.dy;
 
@@ -495,6 +528,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _handleStagePanEnd(DragEndDetails _) {
+    if (widget.pictureInPicturePresentation) {
+      return;
+    }
     final targetRatio = _stageSeekRatio;
     if (_stageGestureKind == _StageAreaGestureKind.seek &&
         targetRatio != null) {
@@ -507,6 +543,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _handleStagePanCancel() {
+    if (widget.pictureInPicturePresentation) {
+      return;
+    }
     if (_stageGestureKind == _StageAreaGestureKind.seek) {
       _handleSeekCancel();
     }
@@ -514,6 +553,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   Future<void> _loadDeviceGestureBaseRatio(_StageAreaGestureKind kind) async {
+    if (widget.pictureInPicturePresentation) {
+      return;
+    }
     final controls = widget.deviceControls;
     if (controls == null) {
       return;
@@ -536,6 +578,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _scheduleDeviceGestureSet() {
+    if (widget.pictureInPicturePresentation) {
+      return;
+    }
     if (_deviceGestureBaseRatio == null ||
         _stageGestureKind == null ||
         _stageGestureKind == _StageAreaGestureKind.seek ||
@@ -550,7 +595,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   Future<void> _applyDeviceGestureRatio() async {
-    if (!mounted || _deviceGestureSetInFlight) {
+    if (!mounted ||
+        _deviceGestureSetInFlight ||
+        widget.pictureInPicturePresentation) {
       return;
     }
     _deviceGestureSetInFlight = true;
@@ -615,7 +662,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _startTemporarySpeedGesture() {
-    if (!mounted) {
+    if (!mounted || widget.pictureInPicturePresentation) {
       return;
     }
     _resetStageGesture();
@@ -647,7 +694,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _showGestureFeedback(_StageGestureFeedback feedback) {
-    if (!mounted) {
+    if (!mounted || widget.pictureInPicturePresentation) {
       return;
     }
     setState(() {
@@ -684,6 +731,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _updateStageSeekRatio(double dx) {
+    if (widget.pictureInPicturePresentation) {
+      return;
+    }
     final width =
         (context.size?.width ?? 1.0).clamp(1.0, double.infinity).toDouble();
     final targetRatio = (dx / width).clamp(0.0, 1.0).toDouble();
@@ -695,7 +745,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _showControls() {
-    if (!mounted) {
+    if (!mounted || widget.pictureInPicturePresentation) {
       return;
     }
     if (!_controlsVisible) {
@@ -709,6 +759,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   void _syncAutoHide() {
     _controlsTimer?.cancel();
     if (!mounted) {
+      return;
+    }
+    if (widget.pictureInPicturePresentation) {
       return;
     }
     final snapshot = widget.snapshot;
@@ -752,5 +805,21 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         );
       }),
     );
+  }
+
+  void _enterPictureInPicturePresentation() {
+    _controlsTimer?.cancel();
+    _gestureFeedbackTimer?.cancel();
+    _endTemporarySpeedGesture();
+    _resetStageGesture();
+    _deviceGestureSetQueued = false;
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _controlsVisible = false;
+      _pendingSeekRatio = null;
+      _gestureFeedback = null;
+    });
   }
 }

@@ -710,6 +710,79 @@ void main() {
     );
   });
 
+  test('picture-in-picture calls forward payloads', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'isPictureInPictureAvailable') {
+        return <String, Object?>{
+          'isAvailable': false,
+          'isActive': false,
+          'source': 'system',
+          'error': const VesperPictureInPictureError(
+            code: VesperPictureInPictureErrorCode
+                .pictureInPictureDisabledByHost,
+          ).toMap(),
+        };
+      }
+      return null;
+    });
+    final platform = MethodChannelVesperPlayerIos();
+    const configuration = VesperPictureInPictureConfiguration(
+      autoEnter: true,
+      preferredAspectRatio: 4 / 3,
+    );
+
+    final availability = await platform.isPictureInPictureAvailable(
+      'ios-player',
+    );
+    await platform.setPictureInPictureConfiguration(
+      'ios-player',
+      configuration,
+    );
+    await platform.requestPictureInPicture(
+      'ios-player',
+      configuration: configuration,
+    );
+    await platform.requestPictureInPicture('ios-player');
+    await platform.exitPictureInPicture('ios-player');
+
+    expect(availability.isAvailable, isFalse);
+    expect(
+      availability.error?.code,
+      VesperPictureInPictureErrorCode.pictureInPictureDisabledByHost,
+    );
+    expect(calls.map((call) => call.method), <String>[
+      'isPictureInPictureAvailable',
+      'setPictureInPictureConfiguration',
+      'requestPictureInPicture',
+      'requestPictureInPicture',
+      'exitPictureInPicture',
+    ]);
+    expect(
+      Map<Object?, Object?>.from(calls[1].arguments as Map),
+      <Object?, Object?>{
+        'playerId': 'ios-player',
+        'configuration': configuration.toMap(),
+      },
+    );
+    expect(
+      Map<Object?, Object?>.from(calls[2].arguments as Map),
+      <Object?, Object?>{
+        'playerId': 'ios-player',
+        'configuration': configuration.toMap(),
+      },
+    );
+    expect(
+      Map<Object?, Object?>.from(calls[3].arguments as Map),
+      <Object?, Object?>{'playerId': 'ios-player'},
+    );
+    expect(
+      Map<Object?, Object?>.from(calls[4].arguments as Map),
+      <Object?, Object?>{'playerId': 'ios-player'},
+    );
+  });
+
   test('requestSystemPlaybackPermissions decodes notRequired status', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {

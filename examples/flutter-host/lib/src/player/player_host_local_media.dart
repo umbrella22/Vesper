@@ -142,6 +142,9 @@ extension _PlayerHostLocalMediaActions on _PlayerHostPageState {
     if (!mounted) {
       return;
     }
+    if (_pictureInPicturePresentation) {
+      return;
+    }
 
     _updateState(() {
       _sheetOpen = true;

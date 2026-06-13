@@ -204,6 +204,49 @@ private struct PlaylistQueueRow: View {
     }
 }
 
+struct ExamplePictureInPictureSection: View {
+    let palette: ExampleHostPalette
+    @Binding var enabled: Bool
+    let onRequestPictureInPicture: () -> Void
+
+    var body: some View {
+        ExampleSectionShell(
+            palette: palette,
+            title: ExampleI18n.pictureInPictureTitle,
+            subtitle: ExampleI18n.pictureInPictureSubtitle
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(ExampleI18n.pictureInPictureEnable)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(palette.title)
+                        Text(ExampleI18n.pictureInPictureEnableSubtitle)
+                            .font(.footnote)
+                            .foregroundStyle(palette.body)
+                            .lineSpacing(3)
+                    }
+                    Spacer(minLength: 12)
+                    Toggle("", isOn: $enabled)
+                        .labelsHidden()
+                }
+
+                Button(action: onRequestPictureInPicture) {
+                    Label(
+                        enabled
+                            ? ExampleI18n.pictureInPictureEnter
+                            : ExampleI18n.pictureInPictureDisabled,
+                        systemImage: "pip.enter"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(palette.primaryAction)
+                .disabled(!enabled)
+            }
+        }
+    }
+}
+
 struct ExampleResilienceSection: View {
     let palette: ExampleHostPalette
     let selectedProfile: ExampleResilienceProfile

@@ -13,6 +13,7 @@ public struct VesperPlayerStage: View {
     @Binding var pendingSeekRatio: Double?
     let isCompactLayout: Bool
     let isFullscreen: Bool
+    let pictureInPicturePresentation: Bool
     let onSeekBy: (Int64) -> Void
     let onTogglePause: () -> Void
     let onSeekToRatio: (Double) -> Void
@@ -42,6 +43,7 @@ public struct VesperPlayerStage: View {
         pendingSeekRatio: Binding<Double?>,
         isCompactLayout: Bool,
         isFullscreen: Bool,
+        pictureInPicturePresentation: Bool = false,
         onSeekBy: @escaping (Int64) -> Void,
         onTogglePause: @escaping () -> Void,
         onSeekToRatio: @escaping (Double) -> Void,
@@ -64,6 +66,7 @@ public struct VesperPlayerStage: View {
         _pendingSeekRatio = pendingSeekRatio
         self.isCompactLayout = isCompactLayout
         self.isFullscreen = isFullscreen
+        self.pictureInPicturePresentation = pictureInPicturePresentation
         self.onSeekBy = onSeekBy
         self.onTogglePause = onTogglePause
         self.onSeekToRatio = onSeekToRatio
@@ -76,4 +79,4 @@ public struct VesperPlayerStage: View {
         self.currentVolumeRatio = currentVolumeRatio
         self.onSetVolumeRatio = onSetVolumeRatio
     }
-
+}

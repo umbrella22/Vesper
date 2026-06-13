@@ -28,6 +28,7 @@ void main() {
     Widget? topBarSecondaryAction,
     VesperPlayerSnapshot snapshot = _playingSnapshot,
     VesperPlayerStageStrings strings = const VesperPlayerStageStrings(),
+    bool pictureInPicturePresentation = false,
   }) async {
     addTearDown(() async {
       await tester.pumpWidget(const SizedBox.shrink());
@@ -48,6 +49,7 @@ void main() {
                 deviceControls: deviceControls,
                 topBarPrimaryAction: topBarPrimaryAction,
                 topBarSecondaryAction: topBarSecondaryAction,
+                pictureInPicturePresentation: pictureInPicturePresentation,
                 strings: strings,
                 onOpenSheet: openedSheets.add,
                 onToggleFullscreen: () {
@@ -172,6 +174,29 @@ void main() {
     await tester.tap(find.byIcon(Icons.fullscreen_rounded));
     await tester.pump();
     expect(fullscreenToggleCount, 1);
+  });
+
+  testWidgets('picture in picture presentation hides custom chrome and gestures',
+      (tester) async {
+    await pumpStage(
+      tester,
+      pictureInPicturePresentation: true,
+      snapshot: _playingSnapshot.copyWith(isBuffering: true),
+    );
+
+    expect(find.text('Sample'), findsNothing);
+    expect(find.text('Loading media'), findsNothing);
+    expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
+    expect(find.byIcon(Icons.pause_rounded), findsNothing);
+    expect(find.byType(VesperTimelineScrubber), findsNothing);
+
+    await tester.tapAt(const Offset(400, 300));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tapAt(const Offset(400, 300));
+    await tester.pump();
+
+    expect(platform.togglePauseCount, 0);
+    expect(openedSheets, isEmpty);
   });
 }
 

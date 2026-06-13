@@ -158,6 +158,9 @@ internal class VesperNativePlayerBridge(
 
     override fun clearSystemPlayback() = clearNativeSystemPlayback()
 
+    override fun pictureInPictureReadiness(): VesperPictureInPictureReadiness =
+        pictureInPictureReadinessForNativeBridge()
+
     override fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> =
         benchmarkRecorder.drainEvents()
 

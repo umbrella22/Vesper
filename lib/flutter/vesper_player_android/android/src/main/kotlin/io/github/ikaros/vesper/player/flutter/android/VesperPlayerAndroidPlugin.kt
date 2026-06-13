@@ -10,8 +10,11 @@ import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.activity.ComponentActivity
 import androidx.core.app.ActivityCompat
+import androidx.core.app.PictureInPictureModeChangedInfo
 import androidx.core.content.ContextCompat
+import androidx.core.util.Consumer
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -59,6 +62,8 @@ import io.github.ikaros.vesper.player.android.VesperDownloadStaleResourcePlanRec
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskProgressPatch
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskStatePatch
 import io.github.ikaros.vesper.player.android.VesperDownloadTaskSnapshot
+import io.github.ikaros.vesper.player.android.VesperPictureInPictureError
+import io.github.ikaros.vesper.player.android.VesperPictureInPictureErrorCode
 import io.github.ikaros.vesper.player.android.VesperMediaTrack
 import io.github.ikaros.vesper.player.android.VesperMediaTrackKind
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityConfidence
@@ -88,6 +93,7 @@ import io.github.ikaros.vesper.player.android.VesperTrackSelectionSnapshot
 import io.github.ikaros.vesper.player.android.VesperVideoSurfaceKind
 import java.io.File
 import java.util.UUID
+import java.util.WeakHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -119,6 +125,8 @@ class VesperPlayerAndroidPlugin :
     private var downloadEventSink: EventChannel.EventSink? = null
     private var activityBinding: ActivityPluginBinding? = null
     private var activity: Activity? = null
+    private var pictureInPictureModeChangedListener:
+        Consumer<PictureInPictureModeChangedInfo>? = null
     private var pendingSystemPlaybackPermissionResult: MethodChannel.Result? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -185,11 +193,16 @@ class VesperPlayerAndroidPlugin :
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
         activityBinding = binding
         activity = binding.activity
+        registeredPlugins[binding.activity] = this
         binding.addRequestPermissionsResultListener(this)
+        registerPictureInPictureModeChangedListener(binding.activity)
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
+        unregisterPictureInPictureModeChangedListener()
+        emitPictureInPictureInactiveForDetachedActivity()
         activityBinding?.removeRequestPermissionsResultListener(this)
+        activity?.let(registeredPlugins::remove)
         activityBinding = null
         activity = null
         pendingSystemPlaybackPermissionResult?.success("denied")
@@ -201,7 +214,10 @@ class VesperPlayerAndroidPlugin :
     }
 
     override fun onDetachedFromActivity() {
+        unregisterPictureInPictureModeChangedListener()
+        emitPictureInPictureInactiveForDetachedActivity()
         activityBinding?.removeRequestPermissionsResultListener(this)
+        activity?.let(registeredPlugins::remove)
         activityBinding = null
         activity = null
         pendingSystemPlaybackPermissionResult?.success("denied")
@@ -404,6 +420,29 @@ class VesperPlayerAndroidPlugin :
             "requestSystemPlaybackPermissions" -> handleRequestSystemPlaybackPermissions(result)
             "getSystemPlaybackPermissionStatus" ->
                 result.success(currentSystemPlaybackPermissionStatus())
+            "isPictureInPictureAvailable" -> handleSessionCommand(call, result) { session ->
+                buildPictureInPictureAvailabilityMap(session)
+            }
+            "setPictureInPictureConfiguration" -> handleSessionCommand(call, result) { session ->
+                val configurationMap =
+                    (call.argumentMap()["configuration"] as? Map<*, *>)?.stringMap()
+                session.pictureInPictureConfiguration =
+                    configurationMap.toPictureInPictureConfiguration()
+                applyPictureInPictureConfiguration(session)
+                null
+            }
+            "requestPictureInPicture" -> handlePictureInPictureCommand(call, result) { session ->
+                (call.argumentMap()["configuration"] as? Map<*, *>)
+                    ?.stringMap()
+                    ?.let { configurationMap ->
+                        session.pictureInPictureConfiguration =
+                            configurationMap.toPictureInPictureConfiguration()
+                    }
+                requestPictureInPicture(session)
+            }
+            "exitPictureInPicture" -> handlePictureInPictureCommand(call, result) { session ->
+                exitPictureInPicture(session)
+            }
             "createDownloadTask" -> handleDownloadSessionCommand(call, result) { session ->
                 val arguments = call.argumentMap()
                 val assetId = arguments["assetId"] as? String
@@ -528,6 +567,214 @@ class VesperPlayerAndroidPlugin :
         } else {
             "denied"
         }
+    }
+
+    private fun buildPictureInPictureAvailabilityMap(session: PlayerSession): Map<String, Any?> {
+        val currentActivity = activity
+        if (!session.pictureInPictureConfiguration.enabled) {
+            val diagnostics =
+                mapOf(
+                    "platform" to "android",
+                    "configurationEnabled" to false,
+                    "sdkInt" to Build.VERSION.SDK_INT,
+                )
+            return mapOf(
+                "isAvailable" to false,
+                "isActive" to
+                    (currentActivity?.isInPictureInPictureMode == true ||
+                        session.pictureInPictureActive),
+                "canAutoEnter" to false,
+                "source" to "system",
+                "error" to
+                    VesperPictureInPictureError(
+                        code =
+                            VesperPictureInPictureErrorCode
+                                .PictureInPictureDisabledByHost,
+                        message = "Picture in Picture is disabled by host configuration.",
+                        diagnostics = diagnostics,
+                    ).toFlutterMap(),
+                "diagnostics" to diagnostics,
+            )
+        }
+        return session.controller.pictureInPictureReadiness().toFlutterMap(
+            activity = currentActivity,
+            platformSupportsPictureInPicture =
+                currentActivity?.platformSupportsPictureInPicture()
+                    ?: (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O),
+            hostSupportsPictureInPicture =
+                currentActivity?.runCatching { supportsPictureInPicture() }?.getOrDefault(false)
+                    ?: false,
+            isActive = currentActivity?.isInPictureInPictureMode == true ||
+                session.pictureInPictureActive,
+            canAutoEnter =
+                session.pictureInPictureConfiguration.enabled &&
+                    session.pictureInPictureConfiguration.autoEnter,
+        )
+    }
+
+    private fun applyPictureInPictureConfiguration(session: PlayerSession) {
+        val currentActivity = activity ?: return
+        if (!currentActivity.platformSupportsPictureInPicture()) {
+            return
+        }
+        if (!currentActivity.runCatching { supportsPictureInPicture() }.getOrDefault(false)) {
+            return
+        }
+        runCatching {
+            currentActivity.setPictureInPictureParams(session.buildPictureInPictureParams())
+        }
+    }
+
+    private fun requestPictureInPicture(session: PlayerSession) {
+        val currentActivity = activity
+        val availability = buildPictureInPictureAvailabilityMap(session)
+        if (availability["isAvailable"] != true || currentActivity == null) {
+            val error =
+                (availability["error"] as? Map<*, *>)
+                    ?.stringMap()
+                    ?.toPictureInPictureError()
+                    ?: VesperPictureInPictureError(
+                        code =
+                            VesperPictureInPictureErrorCode
+                                .PictureInPictureUnavailableForCurrentRoute,
+                    )
+            failPictureInPicture(
+                session,
+                error,
+                (availability["diagnostics"] as? Map<*, *>)?.stringMap() ?: emptyMap(),
+            )
+            throw PictureInPictureRequestException(error)
+        }
+
+        session.pictureInPictureState = "entering"
+        session.pictureInPictureActive = false
+        emitPictureInPictureEvent(session)
+        val entered =
+            runCatching {
+                currentActivity.enterPictureInPictureMode(session.buildPictureInPictureParams())
+            }.getOrElse { error ->
+                val pipError = error.toPictureInPictureRequestError()
+                failPictureInPicture(session, pipError)
+                throw PictureInPictureRequestException(pipError)
+            }
+        if (!entered && currentActivity.isInPictureInPictureMode != true) {
+            val error =
+                VesperPictureInPictureError(
+                    code =
+                        VesperPictureInPictureErrorCode
+                            .PictureInPicturePlatformRequestRejected,
+                    message = "Android rejected Picture in Picture request.",
+            )
+            failPictureInPicture(session, error)
+            throw PictureInPictureRequestException(error)
+        }
+        if (currentActivity.isInPictureInPictureMode == true) {
+            handlePictureInPictureModeChanged(true)
+        }
+    }
+
+    private fun exitPictureInPicture(session: PlayerSession) {
+        val currentActivity = activity
+        if (currentActivity == null) {
+            val error =
+                VesperPictureInPictureError(
+                    code =
+                        VesperPictureInPictureErrorCode
+                            .PictureInPicturePlatformRequestRejected,
+                    message = "No Activity is attached for Picture in Picture restore.",
+                )
+            failPictureInPicture(session, error)
+            throw PictureInPictureRequestException(error)
+        }
+        if (currentActivity.isInPictureInPictureMode != true && !session.pictureInPictureActive) {
+            session.pictureInPictureState = "inactive"
+            session.pictureInPictureActive = false
+            emitPictureInPictureEvent(session)
+            return
+        }
+        session.pictureInPictureState = "exiting"
+        session.pictureInPictureActive = true
+        emitPictureInPictureEvent(session)
+        val restored =
+            runCatching { currentActivity.requestPictureInPictureForegroundRestore() }
+                .getOrElse { error ->
+                    val pipError = error.toPictureInPictureRequestError()
+                    failPictureInPicture(session, pipError)
+                    throw PictureInPictureRequestException(pipError)
+                }
+        if (!restored) {
+            val error =
+                VesperPictureInPictureError(
+                    code =
+                        VesperPictureInPictureErrorCode
+                            .PictureInPicturePlatformRequestRejected,
+                    message = "Android rejected Picture in Picture foreground restore.",
+                )
+            failPictureInPicture(session, error)
+            throw PictureInPictureRequestException(error)
+        }
+    }
+
+    private fun failPictureInPicture(
+        session: PlayerSession,
+        error: VesperPictureInPictureError,
+        diagnostics: Map<String, Any?> = emptyMap(),
+    ) {
+        session.pictureInPictureState = "failed"
+        session.pictureInPictureActive = false
+        emitPictureInPictureEvent(session, error, diagnostics)
+    }
+
+    private fun emitPictureInPictureInactiveForDetachedActivity() {
+        sessions.values.forEach { session ->
+            if (session.pictureInPictureActive || session.pictureInPictureState == "entering") {
+                session.pictureInPictureActive = false
+                session.pictureInPictureState = "inactive"
+                emitPictureInPictureEvent(
+                    session,
+                    diagnostics = mapOf("reason" to "activityDetached"),
+                )
+            }
+        }
+    }
+
+    private fun registerPictureInPictureModeChangedListener(currentActivity: Activity) {
+        unregisterPictureInPictureModeChangedListener()
+        val componentActivity = currentActivity as? ComponentActivity ?: return
+        val listener =
+            Consumer<PictureInPictureModeChangedInfo> { info ->
+                handlePictureInPictureModeChanged(info.isInPictureInPictureMode)
+            }
+        componentActivity.addOnPictureInPictureModeChangedListener(listener)
+        pictureInPictureModeChangedListener = listener
+    }
+
+    private fun unregisterPictureInPictureModeChangedListener() {
+        val listener = pictureInPictureModeChangedListener ?: return
+        (activity as? ComponentActivity)
+            ?.removeOnPictureInPictureModeChangedListener(listener)
+        pictureInPictureModeChangedListener = null
+    }
+
+    private fun handlePictureInPictureModeChanged(isInPictureInPictureMode: Boolean) {
+        val targetSession =
+            sessions.values.firstOrNull { session ->
+                session.pictureInPictureState == "entering" ||
+                    session.pictureInPictureState == "active" ||
+                    session.pictureInPictureState == "exiting" ||
+                    session.pictureInPictureActive
+            } ?: return
+        targetSession.pictureInPictureActive = isInPictureInPictureMode
+        targetSession.pictureInPictureState =
+            if (isInPictureInPictureMode) {
+                "active"
+            } else {
+                "inactive"
+            }
+        emitPictureInPictureEvent(
+            targetSession,
+            diagnostics = mapOf("reason" to "activityModeChanged"),
+        )
     }
 
     private fun handleCreatePlayer(call: MethodCall, result: MethodChannel.Result) {
@@ -748,6 +995,98 @@ class VesperPlayerAndroidPlugin :
                     session.lastError,
                 )
             }
+    }
+
+    private fun handlePictureInPictureCommand(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        action: (PlayerSession) -> Unit,
+    ) {
+        val sessionId = call.argumentMap()["playerId"] as? String
+        if (sessionId.isNullOrBlank()) {
+            result.error(
+                "vesper_missing_player_id",
+                "Missing playerId.",
+                mapOf(
+                    "message" to "Missing playerId.",
+                    "code" to "pictureInPictureUnavailableForCurrentRoute",
+                    "userMessage" to "Current playback cannot enter Picture in Picture.",
+                ),
+            )
+            return
+        }
+
+        val session = sessions[sessionId]
+        if (session == null) {
+            result.error(
+                "vesper_unknown_player",
+                "Unknown playerId: $sessionId",
+                mapOf(
+                    "message" to "Unknown playerId: $sessionId",
+                    "code" to "pictureInPictureUnavailableForCurrentRoute",
+                    "userMessage" to "Current playback cannot enter Picture in Picture.",
+                ),
+            )
+            return
+        }
+
+        runCatching {
+            action(session)
+        }.onSuccess {
+            result.success(null)
+        }.onFailure { error ->
+            val details = error.toPictureInPictureErrorMap()
+            result.error(
+                "vesper_picture_in_picture_failed",
+                error.message,
+                details,
+            )
+        }
+    }
+
+    companion object {
+        private val registeredPlugins =
+            WeakHashMap<Activity, VesperPlayerAndroidPlugin>()
+
+        @JvmStatic
+        fun dispatchPictureInPictureModeChanged(
+            activity: Activity,
+            isInPictureInPictureMode: Boolean,
+        ) {
+            registeredPlugins[activity]
+                ?.handlePictureInPictureModeChanged(isInPictureInPictureMode)
+        }
+
+        @JvmStatic
+        fun dispatchPictureInPictureUserLeaveHint(activity: Activity) {
+            registeredPlugins[activity]
+                ?.handlePictureInPictureUserLeaveHint()
+        }
+    }
+
+    private fun handlePictureInPictureUserLeaveHint() {
+        val currentActivity = activity ?: return
+        if (!currentActivity.platformSupportsPictureInPicture()) {
+            return
+        }
+        val targetSession =
+            sessions.values.firstOrNull { session ->
+                session.pictureInPictureConfiguration.enabled &&
+                    session.pictureInPictureConfiguration.autoEnter
+            } ?: return
+        if (targetSession.pictureInPictureActive ||
+            targetSession.pictureInPictureState == "entering" ||
+            targetSession.pictureInPictureState == "active" ||
+            targetSession.pictureInPictureState == "exiting"
+        ) {
+            return
+        }
+        targetSession.pictureInPictureState = "entering"
+        targetSession.pictureInPictureActive = false
+        emitPictureInPictureEvent(
+            targetSession,
+            diagnostics = mapOf("reason" to "userLeaveHint"),
+        )
     }
 
     private fun handleDownloadSessionCommand(
@@ -1076,6 +1415,14 @@ class VesperPlayerAndroidPlugin :
             ),
         )
         emitBenchmarkConsoleLog(session, force = true)
+    }
+
+    private fun emitPictureInPictureEvent(
+        session: PlayerSession,
+        error: VesperPictureInPictureError? = null,
+        diagnostics: Map<String, Any?> = emptyMap(),
+    ) {
+        emitEvent(session.pictureInPictureEventMap(error = error, diagnostics = diagnostics))
     }
 
     private fun emitCapabilityWarningIfNeeded(

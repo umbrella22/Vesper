@@ -116,6 +116,33 @@ enum class VesperSystemPlaybackControlKind {
     SeekForward,
 }
 
+enum class VesperPictureInPictureErrorCode {
+    PictureInPictureNotSupported,
+    PictureInPictureDisabledByHost,
+    PictureInPictureSystemPlayerUnavailable,
+    PictureInPictureSourceUnsupportedBySystemPlayer,
+    PictureInPictureNativeFrameRouteCannotHandOff,
+    PictureInPictureSurfaceUnavailable,
+    PictureInPicturePlatformRequestRejected,
+    PictureInPictureUnavailableForCurrentRoute,
+}
+
+data class VesperPictureInPictureError(
+    val code: VesperPictureInPictureErrorCode,
+    val message: String = "Current playback cannot enter Picture in Picture.",
+    val userMessage: String = "Current playback cannot enter Picture in Picture.",
+    val diagnostics: Map<String, Any?> = emptyMap(),
+)
+
+data class VesperPictureInPictureReadiness(
+    val isAvailable: Boolean,
+    val isActive: Boolean = false,
+    val canAutoEnter: Boolean = false,
+    val source: String = "system",
+    val error: VesperPictureInPictureError? = null,
+    val diagnostics: Map<String, Any?> = emptyMap(),
+)
+
 data class PlayerHostUiState(
     val title: String,
     val subtitle: String,
@@ -283,6 +310,7 @@ internal interface PlayerBridge {
     fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration)
     fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata)
     fun clearSystemPlayback()
+    fun pictureInPictureReadiness(): VesperPictureInPictureReadiness
     fun drainRuntimeWarnings(): List<VesperRuntimeWarning>
     fun drainBenchmarkEvents(): List<VesperBenchmarkEvent>
     fun benchmarkSummary(): VesperBenchmarkSummary

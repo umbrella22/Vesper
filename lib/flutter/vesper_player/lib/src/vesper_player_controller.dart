@@ -76,6 +76,9 @@ class VesperPlayerController {
       StreamController<VesperPlayerEvent>.broadcast();
   final StreamController<VesperPlayerSnapshot> _snapshotsController =
       StreamController<VesperPlayerSnapshot>.broadcast();
+  final StreamController<VesperPlayerPictureInPictureEvent>
+      _pictureInPictureController =
+      StreamController<VesperPlayerPictureInPictureEvent>.broadcast();
 
   StreamSubscription<VesperPlayerEvent>? _platformSubscription;
   Timer? _progressRefreshTimer;
@@ -89,6 +92,9 @@ class VesperPlayerController {
   Stream<VesperPlayerEvent> get events => _eventsController.stream;
 
   Stream<VesperPlayerSnapshot> get snapshots => _snapshotsController.stream;
+
+  Stream<VesperPlayerPictureInPictureEvent> get pictureInPictureEvents =>
+      _pictureInPictureController.stream;
 
   Future<void> initialize() =>
       _runVoidOperation(() => _platform.initialize(playerId));
@@ -123,6 +129,10 @@ class VesperPlayerController {
     await _guardDisposeCleanup(
       _snapshotsController.close,
       context: 'close player snapshot stream',
+    );
+    await _guardDisposeCleanup(
+      _pictureInPictureController.close,
+      context: 'close player picture-in-picture stream',
     );
     _guardDisposeSyncCleanup(
       snapshotListenable.dispose,
@@ -214,6 +224,37 @@ class VesperPlayerController {
   Future<void> clearSystemPlayback() =>
       _runVoidOperation(() => _platform.clearSystemPlayback(playerId));
 
+  Future<VesperPictureInPictureAvailability>
+      isPictureInPictureAvailable() async {
+    _ensureActive();
+    return _platform.isPictureInPictureAvailable(playerId);
+  }
+
+  Future<void> requestPictureInPicture({
+    VesperPictureInPictureConfiguration? configuration,
+  }) =>
+      _runPictureInPictureOperation(
+        () => _platform.requestPictureInPicture(
+          playerId,
+          configuration: configuration,
+        ),
+      );
+
+  Future<void> exitPictureInPicture() =>
+      _runPictureInPictureOperation(
+        () => _platform.exitPictureInPicture(playerId),
+      );
+
+  Future<void> setPictureInPictureConfiguration(
+    VesperPictureInPictureConfiguration configuration,
+  ) =>
+      _runVoidOperation(
+        () => _platform.setPictureInPictureConfiguration(
+          playerId,
+          configuration,
+        ),
+      );
+
   Future<VesperSystemPlaybackPermissionStatus>
       requestSystemPlaybackPermissions() async {
     _ensureActive();
@@ -246,7 +287,12 @@ class VesperPlayerController {
             _applyPlatformError(event);
           case VesperPlayerWarningEvent():
             _eventsController.add(event);
+          case VesperPlayerPictureInPictureEvent():
+            _pictureInPictureController.add(event);
+            _eventsController.add(event);
           case VesperPlayerDisposedEvent():
+            _eventsController.add(event);
+          case VesperPlayerUnknownEvent():
             _eventsController.add(event);
         }
       },
@@ -334,6 +380,13 @@ class VesperPlayerController {
       _publishSyntheticError(error, stackTrace);
       rethrow;
     }
+  }
+
+  Future<void> _runPictureInPictureOperation(
+    Future<void> Function() operation,
+  ) async {
+    _ensureActive();
+    await operation();
   }
 
   void _publishSyntheticError(Object error, StackTrace stackTrace) {

@@ -314,6 +314,33 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             result(VesperPlayerController.requestSystemPlaybackPermissions().toWireName())
         case "getSystemPlaybackPermissionStatus":
             result(VesperPlayerController.getSystemPlaybackPermissionStatus().toWireName())
+        case "isPictureInPictureAvailable":
+            handleSessionCommand(call, result: result) { session in
+                pictureInPictureAvailabilityMap(for: session)
+            }
+        case "setPictureInPictureConfiguration":
+            handleSessionCommand(call, result: result) { session in
+                let configuration =
+                    (try nestedMap(arguments(of: call)["configuration"]))?
+                    .toPictureInPictureConfiguration()
+                    ?? FlutterPictureInPictureConfiguration()
+                session.pictureInPictureConfiguration = configuration
+                return nil
+            }
+        case "requestPictureInPicture":
+            handlePictureInPictureCommand(call, result: result) { session in
+                if let configuration =
+                    (try nestedMap(arguments(of: call)["configuration"]))?
+                    .toPictureInPictureConfiguration()
+                {
+                    session.pictureInPictureConfiguration = configuration
+                }
+                try requestPictureInPicture(for: session)
+            }
+        case "exitPictureInPicture":
+            handlePictureInPictureCommand(call, result: result) { session in
+                exitPictureInPicture(for: session)
+            }
         case "createDownloadTask":
             handleDownloadSessionCommand(call, result: result) { session in
                 let arguments = arguments(of: call)
@@ -633,6 +660,34 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     }
 
     @MainActor
+    private func handlePictureInPictureCommand(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult,
+        action: (PlayerSession) throws -> Void
+    ) {
+        do {
+            let arguments = arguments(of: call)
+            guard let playerId = arguments["playerId"] as? String, !playerId.isEmpty else {
+                throw VesperIosPictureInPictureError(
+                    code: "pictureInPictureUnavailableForCurrentRoute",
+                    message: "Missing playerId."
+                )
+            }
+            guard let session = sessions[playerId] else {
+                throw VesperIosPictureInPictureError(
+                    code: "pictureInPictureUnavailableForCurrentRoute",
+                    message: "Unknown playerId: \(playerId)"
+                )
+            }
+
+            try action(session)
+            result(nil)
+        } catch {
+            result(asFlutterError(error, code: "vesper_picture_in_picture_failed"))
+        }
+    }
+
+    @MainActor
     private func handleDownloadSessionCommand(
         _ call: FlutterMethodCall,
         result: @escaping FlutterResult,
@@ -840,6 +895,153 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         ])
         emitRuntimeHdrCapabilityWarningIfNeeded(for: session, errorMap: resolvedErrorMap)
         emitBenchmarkConsoleLog(for: session, force: true)
+    }
+
+    @MainActor
+    private func pictureInPictureAvailabilityMap(for session: PlayerSession) -> [String: Any] {
+        let error = pictureInPicturePreflightError(for: session)
+        return [
+            "isAvailable": error == nil,
+            "isActive": session.pictureInPictureActive,
+            "canAutoEnter": session.pictureInPictureConfiguration.enabled
+                && session.pictureInPictureConfiguration.autoEnter,
+            "source": "system",
+            "error": flutterValue(error?.toMap()),
+            "diagnostics": pictureInPictureDiagnostics(for: session),
+        ]
+    }
+
+    @MainActor
+    private func requestPictureInPicture(for session: PlayerSession) throws {
+        if let error = pictureInPicturePreflightError(for: session) {
+            failPictureInPicture(for: session, error: error)
+            throw error
+        }
+        guard let layer = session.hostView?.pictureInPicturePlayerLayer else {
+            let error = VesperIosPictureInPictureError(
+                code: "pictureInPictureSurfaceUnavailable",
+                message: "AVPlayerLayer is unavailable for Picture in Picture.",
+                diagnostics: pictureInPictureDiagnostics(for: session)
+            )
+            failPictureInPicture(for: session, error: error)
+            throw error
+        }
+        let coordinator =
+            session.pictureInPictureCoordinator
+            ?? VesperIosPictureInPictureCoordinator(plugin: self, session: session)
+        session.pictureInPictureCoordinator = coordinator
+        guard coordinator.configure(with: layer) else {
+            let error = VesperIosPictureInPictureError(
+                code: "pictureInPictureNotSupported",
+                message: "AVPictureInPictureController is not supported.",
+                diagnostics: pictureInPictureDiagnostics(for: session)
+            )
+            failPictureInPicture(for: session, error: error)
+            throw error
+        }
+        session.pictureInPictureState = "entering"
+        session.pictureInPictureActive = false
+        emitPictureInPictureEvent(for: session)
+        coordinator.start()
+    }
+
+    @MainActor
+    private func exitPictureInPicture(for session: PlayerSession) {
+        if session.pictureInPictureCoordinator?.isActive != true && !session.pictureInPictureActive {
+            session.pictureInPictureState = "inactive"
+            session.pictureInPictureActive = false
+            emitPictureInPictureEvent(for: session)
+            return
+        }
+        session.pictureInPictureState = "exiting"
+        session.pictureInPictureActive = true
+        emitPictureInPictureEvent(for: session)
+        session.pictureInPictureCoordinator?.stop()
+    }
+
+    @MainActor
+    private func pictureInPicturePreflightError(
+        for session: PlayerSession
+    ) -> VesperIosPictureInPictureError? {
+        var diagnostics = pictureInPictureDiagnostics(for: session)
+        guard session.pictureInPictureConfiguration.enabled else {
+            return VesperIosPictureInPictureError(
+                code: "pictureInPictureDisabledByHost",
+                message: "Picture in Picture is disabled by host configuration.",
+                diagnostics: diagnostics
+            )
+        }
+        guard AVPictureInPictureController.isPictureInPictureSupported() else {
+            return VesperIosPictureInPictureError(
+                code: "pictureInPictureNotSupported",
+                message: "AVPictureInPictureController is not supported.",
+                diagnostics: diagnostics
+            )
+        }
+        guard let hostView = session.hostView else {
+            return VesperIosPictureInPictureError(
+                code: "pictureInPictureSurfaceUnavailable",
+                message: "No PlayerSurfaceView is attached for Picture in Picture.",
+                diagnostics: diagnostics
+            )
+        }
+        diagnostics["hasHostView"] = true
+        if hostView.isNativeFramePresentationActive {
+            return VesperIosPictureInPictureError(
+                code: "pictureInPictureNativeFrameRouteCannotHandOff",
+                message: "Native-frame route cannot hand off to AVPlayerLayer.",
+                diagnostics: diagnostics
+            )
+        }
+        guard hostView.pictureInPicturePlayerLayer != nil else {
+            return VesperIosPictureInPictureError(
+                code: "pictureInPictureSystemPlayerUnavailable",
+                message: "AVPlayerLayer is not ready for Picture in Picture.",
+                diagnostics: diagnostics
+            )
+        }
+        return nil
+    }
+
+    @MainActor
+    private func failPictureInPicture(
+        for session: PlayerSession,
+        error: VesperIosPictureInPictureError
+    ) {
+        session.pictureInPictureState = "failed"
+        session.pictureInPictureActive = false
+        emitPictureInPictureEvent(for: session, error: error)
+    }
+
+    @MainActor
+    func emitPictureInPictureEvent(
+        for session: PlayerSession,
+        error: VesperIosPictureInPictureError? = nil
+    ) {
+        emitEvent([
+            "playerId": session.id,
+            "type": "pictureInPicture",
+            "state": session.pictureInPictureState,
+            "isActive": session.pictureInPictureActive,
+            "source": "system",
+            "canAutoEnter": session.pictureInPictureConfiguration.enabled
+                && session.pictureInPictureConfiguration.autoEnter,
+            "error": flutterValue(error?.toMap()),
+            "diagnostics": pictureInPictureDiagnostics(for: session),
+        ])
+    }
+
+    @MainActor
+    private func pictureInPictureDiagnostics(for session: PlayerSession) -> [String: Any] {
+        [
+            "platform": "ios",
+            "configurationEnabled": session.pictureInPictureConfiguration.enabled,
+            "isSupported": AVPictureInPictureController.isPictureInPictureSupported(),
+            "hasHostView": session.hostView != nil,
+            "hasPlayerLayer": session.hostView?.pictureInPicturePlayerLayer != nil,
+            "nativeFramePresentationActive":
+                session.hostView?.isNativeFramePresentationActive == true,
+        ]
     }
 
     @MainActor
@@ -1397,6 +1599,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         session.cancelPendingHostDetach()
         _ = session.advanceHostDetachGeneration()
         session.observation?.cancel()
+        session.pictureInPictureCoordinator?.stop()
+        session.pictureInPictureCoordinator = nil
         session.controller.detachSurfaceHost()
         session.hostView = nil
         session.controller.dispose()

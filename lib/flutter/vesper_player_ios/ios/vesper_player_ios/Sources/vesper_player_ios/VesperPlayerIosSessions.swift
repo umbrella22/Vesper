@@ -15,6 +15,10 @@ final class PlayerSession {
     var viewportHint: FlutterViewportHint = .hidden
     var currentSourceFingerprint: VesperSourceFingerprint?
     var recentHdrProbeEvidence: VesperHdrProbeEvidence?
+    var pictureInPictureConfiguration = FlutterPictureInPictureConfiguration()
+    var pictureInPictureCoordinator: VesperIosPictureInPictureCoordinator?
+    var pictureInPictureState = "inactive"
+    var pictureInPictureActive = false
 
     init(
         id: String,

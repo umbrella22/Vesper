@@ -24,6 +24,7 @@ class VesperPlayerStage extends StatefulWidget {
     this.deviceControls,
     this.topBarPrimaryAction,
     this.topBarSecondaryAction,
+    this.pictureInPicturePresentation = false,
     this.strings = const VesperPlayerStageStrings(),
   });
 
@@ -34,6 +35,7 @@ class VesperPlayerStage extends StatefulWidget {
   final VesperPlayerDeviceControls? deviceControls;
   final Widget? topBarPrimaryAction;
   final Widget? topBarSecondaryAction;
+  final bool pictureInPicturePresentation;
   final VesperPlayerStageStrings strings;
   final ValueChanged<VesperPlayerStageSheet> onOpenSheet;
   final VoidCallback onToggleFullscreen;

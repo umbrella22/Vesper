@@ -8,35 +8,52 @@ import UIKit
 
 public struct PlayerSurfaceContainer: UIViewRepresentable {
     @ObservedObject public var controller: VesperPlayerController
+    private let onSurfaceReady: ((PlayerSurfaceView) -> Void)?
+    private let onSurfaceRemoved: ((PlayerSurfaceView) -> Void)?
 
-    public init(controller: VesperPlayerController) {
+    public init(
+        controller: VesperPlayerController,
+        onSurfaceReady: ((PlayerSurfaceView) -> Void)? = nil,
+        onSurfaceRemoved: ((PlayerSurfaceView) -> Void)? = nil
+    ) {
         self.controller = controller
+        self.onSurfaceReady = onSurfaceReady
+        self.onSurfaceRemoved = onSurfaceRemoved
     }
 
     public func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(onSurfaceRemoved: onSurfaceRemoved)
     }
 
     public func makeUIView(context: Context) -> PlayerSurfaceView {
         let view = PlayerSurfaceView()
         context.coordinator.attach(controller: controller, view: view)
+        onSurfaceReady?(view)
         return view
     }
 
     public func updateUIView(_ uiView: PlayerSurfaceView, context: Context) {
         guard !context.coordinator.isAttached(controller: controller, view: uiView) else {
+            onSurfaceReady?(uiView)
             return
         }
         context.coordinator.attach(controller: controller, view: uiView)
+        onSurfaceReady?(uiView)
     }
 
     public static func dismantleUIView(_ uiView: PlayerSurfaceView, coordinator: Coordinator) {
+        coordinator.surfaceRemoved(uiView)
         coordinator.detach(view: uiView)
     }
 
     public final class Coordinator {
         private weak var attachedController: VesperPlayerController?
         private weak var attachedView: PlayerSurfaceView?
+        private let onSurfaceRemoved: ((PlayerSurfaceView) -> Void)?
+
+        init(onSurfaceRemoved: ((PlayerSurfaceView) -> Void)? = nil) {
+            self.onSurfaceRemoved = onSurfaceRemoved
+        }
 
         @MainActor
         func isAttached(controller: VesperPlayerController, view: PlayerSurfaceView) -> Bool {
@@ -65,6 +82,11 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
             }
             attachedController = nil
             attachedView = nil
+        }
+
+        @MainActor
+        func surfaceRemoved(_ view: PlayerSurfaceView) {
+            onSurfaceRemoved?(view)
         }
     }
 }
@@ -110,6 +132,19 @@ public final class PlayerSurfaceView: UIView {
 
     var isReadyForDisplay: Bool {
         playerLayer.isReadyForDisplay
+    }
+
+    /// Returns the AVPlayerLayer that can be handed to system Picture in Picture.
+    public var pictureInPicturePlayerLayer: AVPlayerLayer? {
+        guard !playerLayer.isHidden, playerLayer.player != nil else {
+            return nil
+        }
+        return playerLayer
+    }
+
+    /// Indicates whether the SDK-managed native-frame presenter owns the surface.
+    public var isNativeFramePresentationActive: Bool {
+        metalLayer?.isHidden == false || playerLayer.isHidden
     }
 
     func clearReadyCallback() {

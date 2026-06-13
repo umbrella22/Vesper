@@ -13,6 +13,7 @@ struct ExamplePlayerStage: View {
     @Binding var pendingSeekRatio: Double?
     let isCompactLayout: Bool
     let isFullscreen: Bool
+    let pictureInPicturePresentation: Bool
     let onSeekBy: (Int64) -> Void
     let onTogglePause: () -> Void
     let onSeekToRatio: (Double) -> Void
@@ -37,6 +38,7 @@ struct ExamplePlayerStage: View {
         pendingSeekRatio: Binding<Double?>,
         isCompactLayout: Bool,
         isFullscreen: Bool,
+        pictureInPicturePresentation: Bool = false,
         onSeekBy: @escaping (Int64) -> Void,
         onTogglePause: @escaping () -> Void,
         onSeekToRatio: @escaping (Double) -> Void,
@@ -60,6 +62,7 @@ struct ExamplePlayerStage: View {
         _pendingSeekRatio = pendingSeekRatio
         self.isCompactLayout = isCompactLayout
         self.isFullscreen = isFullscreen
+        self.pictureInPicturePresentation = pictureInPicturePresentation
         self.onSeekBy = onSeekBy
         self.onTogglePause = onTogglePause
         self.onSeekToRatio = onSeekToRatio
@@ -87,6 +90,7 @@ struct ExamplePlayerStage: View {
                 pendingSeekRatio: $pendingSeekRatio,
                 isCompactLayout: isCompactLayout,
                 isFullscreen: isFullscreen,
+                pictureInPicturePresentation: pictureInPicturePresentation,
                 onSeekBy: onSeekBy,
                 onTogglePause: onTogglePause,
                 onSeekToRatio: onSeekToRatio,
@@ -100,7 +104,8 @@ struct ExamplePlayerStage: View {
                 onSetVolumeRatio: onSetVolumeRatio
             )
 
-            if (controlsVisible || uiState.playbackState != .playing),
+            if !pictureInPicturePresentation,
+               (controlsVisible || uiState.playbackState != .playing),
                let airPlayRouteButton {
                 airPlayRouteButton
                     .frame(width: 38, height: 38)

@@ -31,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -439,6 +440,65 @@ private fun ExternalRouteRow(
             ),
         ) {
             Text(stringResource(R.string.example_external_connect))
+        }
+    }
+}
+
+@Composable
+internal fun ExamplePictureInPictureSection(
+    palette: ExampleHostPalette,
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    onRequestPictureInPicture: () -> Unit,
+) {
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_pip_title),
+        subtitle = stringResource(R.string.example_pip_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.example_pip_enable),
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = palette.title,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
+                    Text(
+                        text = stringResource(R.string.example_pip_enable_subtitle),
+                        style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                    )
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = onEnabledChange,
+                )
+            }
+
+            Button(
+                onClick = onRequestPictureInPicture,
+                enabled = enabled,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = palette.primaryAction,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(
+                    if (enabled) {
+                        stringResource(R.string.example_pip_enter)
+                    } else {
+                        stringResource(R.string.example_pip_disabled)
+                    },
+                )
+            }
         }
     }
 }

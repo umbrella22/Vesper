@@ -25,6 +25,7 @@ part 'player_host_playlist.dart';
 part 'player_host_hdr_evidence.dart';
 part 'player_host_local_media.dart';
 part 'player_host_downloads.dart';
+part 'player_host_picture_in_picture.dart';
 part 'player_host_layout.dart';
 
 class PlayerHostPage extends StatefulWidget {
@@ -41,7 +42,8 @@ class PlayerHostPage extends StatefulWidget {
   State<PlayerHostPage> createState() => _PlayerHostPageState();
 }
 
-class _PlayerHostPageState extends State<PlayerHostPage> {
+class _PlayerHostPageState extends State<PlayerHostPage>
+    with WidgetsBindingObserver {
   late final TextEditingController _remoteUrlController;
   late final TextEditingController _downloadUrlController;
   final ExampleDeviceControls _deviceControls = ExampleDeviceControls();
@@ -53,6 +55,8 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
   VesperPlayerController? _controller;
   VesperDownloadManager? _downloadManager;
   StreamSubscription<VesperDownloadManagerEvent>? _downloadEventsSubscription;
+  StreamSubscription<VesperPlayerPictureInPictureEvent>?
+  _pictureInPictureSubscription;
   StreamSubscription<List<VesperExternalPlaybackRoute>>?
   _externalRoutesSubscription;
   StreamSubscription<VesperExternalPlaybackSessionEvent>?
@@ -79,6 +83,14 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
   bool _externalPlaybackPausedLocalPlayback = false;
   VesperSystemPlaybackPermissionStatus _systemPlaybackPermissionStatus =
       VesperSystemPlaybackPermissionStatus.notRequired;
+  bool _pictureInPictureEnabled = false;
+  bool _pictureInPicturePresentation = false;
+  VesperPictureInPictureAvailability? _pictureInPictureAvailability;
+  VesperPictureInPictureStatus _pictureInPictureStatus =
+      VesperPictureInPictureStatus.inactive;
+  static const MethodChannel _pictureInPictureHostChannel = MethodChannel(
+    'io.github.ikaros.vesper.example.flutter_host/picture_in_picture',
+  );
   VesperPlayerSource? _queuedRemoteSource;
   VesperPlayerSource? _queuedLocalSource;
   Set<int> _savingTaskIds = <int>{};
@@ -99,6 +111,10 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _pictureInPictureHostChannel.setMethodCallHandler(
+      _handlePictureInPictureHostCall,
+    );
     _remoteUrlController = TextEditingController(text: flutterHlsDemoUrl);
     _downloadUrlController = TextEditingController(text: flutterHlsDemoUrl);
     if (Platform.isAndroid) {
@@ -115,7 +131,10 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _pictureInPictureHostChannel.setMethodCallHandler(null);
     unawaited(_downloadEventsSubscription?.cancel() ?? Future<void>.value());
+    unawaited(_pictureInPictureSubscription?.cancel() ?? Future<void>.value());
     unawaited(_externalRoutesSubscription?.cancel() ?? Future<void>.value());
     unawaited(_externalEventsSubscription?.cancel() ?? Future<void>.value());
     if (Platform.isAndroid) {
@@ -168,6 +187,13 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
     final useDarkTheme = Theme.of(context).brightness == Brightness.dark;
     final palette = exampleHostPalette(useDarkTheme);
 
+    if (_pictureInPicturePresentation && Platform.isAndroid) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: _buildPictureInPicturePresentationContent(),
+      );
+    }
+
     final body = switch (_selectedTab) {
       ExampleHostTab.player => _buildPlayerFutureContent(
         context,
@@ -209,6 +235,18 @@ class _PlayerHostPageState extends State<PlayerHostPage> {
               ],
             ),
     );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (!Platform.isAndroid) {
+      return;
+    }
+    if (state == AppLifecycleState.resumed &&
+        _pictureInPictureStatus != VesperPictureInPictureStatus.active) {
+      _setPictureInPicturePresentation(false);
+    }
   }
 }
 

@@ -313,6 +313,50 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
   }
 
   @override
+  Future<VesperPictureInPictureAvailability> isPictureInPictureAvailable(
+    String playerId,
+  ) async {
+    final result = await _invokeMethod<Object?>(
+      'isPictureInPictureAvailable',
+      <String, Object?>{'playerId': playerId},
+    );
+    final decoded = result is Map
+        ? Map<Object?, Object?>.from(result)
+        : <Object?, Object?>{};
+    return VesperPictureInPictureAvailability.fromMap(decoded);
+  }
+
+  @override
+  Future<void> requestPictureInPicture(
+    String playerId, {
+    VesperPictureInPictureConfiguration? configuration,
+  }) {
+    final arguments = <String, Object?>{
+      'playerId': playerId,
+      if (configuration != null) 'configuration': configuration.toMap(),
+    };
+    return _invokeVoid('requestPictureInPicture', arguments);
+  }
+
+  @override
+  Future<void> exitPictureInPicture(String playerId) {
+    return _invokeVoid('exitPictureInPicture', <String, Object?>{
+      'playerId': playerId,
+    });
+  }
+
+  @override
+  Future<void> setPictureInPictureConfiguration(
+    String playerId,
+    VesperPictureInPictureConfiguration configuration,
+  ) {
+    return _invokeVoid('setPictureInPictureConfiguration', <String, Object?>{
+      'playerId': playerId,
+      'configuration': configuration.toMap(),
+    });
+  }
+
+  @override
   Future<VesperPlatformDownloadCreateResult> createDownloadManager({
     VesperDownloadConfiguration configuration =
         const VesperDownloadConfiguration(),

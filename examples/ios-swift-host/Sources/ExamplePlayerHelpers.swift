@@ -1642,15 +1642,43 @@ private func exampleHdrEvidenceRuntimeErrorJson(
     let controlledNetworkFailureEvidence = bundle.controlledNetworkFailureEvidence
     let error = bundle.runtimeError
     let details = controlledNetworkFailureEvidence?.details ?? error?.details ?? [:]
+    let errorCode: Any
+    if controlledNetworkFailureEvidence?.observed == true {
+        errorCode = VesperPlayerErrorCode.backendFailure.rawValue
+    } else if let code = error?.code.rawValue {
+        errorCode = code
+    } else {
+        errorCode = NSNull()
+    }
+    let errorCategory: Any
+    if controlledNetworkFailureEvidence?.observed == true {
+        errorCategory = VesperPlayerErrorCategory.network.rawValue
+    } else if let category = error?.category.rawValue {
+        errorCategory = category
+    } else {
+        errorCategory = NSNull()
+    }
+    let errorMessage: Any
+    if let controlledMessage = controlledNetworkFailureEvidence?.errorDescription {
+        errorMessage = controlledMessage
+    } else if let runtimeMessage = error?.message {
+        errorMessage = runtimeMessage
+    } else {
+        errorMessage = NSNull()
+    }
+    let errorRetriable: Any
+    if controlledNetworkFailureEvidence?.observed == true {
+        errorRetriable = true
+    } else if let retriable = error?.retriable {
+        errorRetriable = retriable
+    } else {
+        errorRetriable = NSNull()
+    }
     let errorJson: [String: Any] = [
-        "code": controlledNetworkFailureEvidence?.observed == true
-            ? VesperPlayerErrorCode.backendFailure.rawValue
-            : error?.code.rawValue as Any,
-        "category": controlledNetworkFailureEvidence?.observed == true
-            ? VesperPlayerErrorCategory.network.rawValue
-            : error?.category.rawValue as Any,
-        "message": controlledNetworkFailureEvidence?.errorDescription as Any ?? error?.message as Any,
-        "retriable": controlledNetworkFailureEvidence?.observed == true ? true : error?.retriable as Any,
+        "code": errorCode,
+        "category": errorCategory,
+        "message": errorMessage,
+        "retriable": errorRetriable,
         "details": details,
     ]
     let iosJson: [String: Any] = [

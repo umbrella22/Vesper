@@ -54,6 +54,13 @@
     <string name="example_external_relay_enabled">Local relay active for this route.</string>
     <string name="example_external_no_active_source">Select a source before loading an external route.</string>
     <string name="example_external_route_error">External playback failed: %1$s</string>
+    <string name="example_pip_title">Picture in Picture</string>
+    <string name="example_pip_subtitle">The host only requests system Picture in Picture after this switch is enabled.</string>
+    <string name="example_pip_enable">Enable Picture in Picture</string>
+    <string name="example_pip_enable_subtitle">Keep this off when background playback should stay audio-only.</string>
+    <string name="example_pip_enter">Enter Picture in Picture</string>
+    <string name="example_pip_disabled">Picture in Picture off</string>
+    <string name="example_pip_unavailable">Current playback cannot enter Picture in Picture.</string>
     <string name="example_playlist_title">Playlist</string>
     <string name="example_playlist_subtitle">Media sources appear here after you open a demo stream, a local video, or a custom remote URL.</string>
     <string name="example_playlist_empty">No media has been added to the playlist yet.</string>
