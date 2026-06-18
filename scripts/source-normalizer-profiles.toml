@@ -74,6 +74,31 @@ bsfs = ["aac_adtstoasc"]
 tls = "native-or-openssl"
 network = true
 
+[runtime.source-normalizer.mpeg-ts]
+extends = "base"
+priority = 25
+input_demuxer = "mpegts"
+output_container = "fmp4"
+bitstream_filters = ["aac_adtstoasc"]
+timestamp_repair = true
+
+[runtime.source-normalizer.mpeg-ts.match]
+url_patterns = ["*.ts", "*.m2ts"]
+mime = ["video/mp2t", "video/MP2T"]
+byte_magic = ["47"]
+min_confidence = 0.75
+
+[runtime.source-normalizer.mpeg-ts.output_options]
+movflags = "+frag_keyframe+empty_moov+default_base_moof"
+
+[runtime.source-normalizer.mpeg-ts.required_capabilities]
+demuxers = ["mpegts"]
+muxers = ["mp4", "mov"]
+protocols = ["file", "pipe", "http", "https"]
+bsfs = ["aac_adtstoasc"]
+tls = "native-or-openssl"
+network = true
+
 [runtime.source-normalizer.bilibili-hevc-flv]
 extends = "flv"
 priority = 40

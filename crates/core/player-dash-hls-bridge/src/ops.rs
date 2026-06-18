@@ -134,6 +134,7 @@ pub struct TemplateSegment {
     pub duration: f64,
     pub number: u64,
     pub time: Option<u64>,
+    pub presentation_time: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -840,6 +841,7 @@ pub fn template_segments(
             duration,
             number,
             time: None,
+            presentation_time: index as u64 * declared_duration,
         });
     }
     Ok(segments)
@@ -859,6 +861,13 @@ fn timeline_template_segments(
         let next_explicit_start = segment_template.timeline[entry_index + 1..]
             .iter()
             .find_map(|entry| entry.start_time);
+        if let Some(next_explicit_start) = next_explicit_start
+            && next_explicit_start <= entry_start
+        {
+            return Err(DashHlsError::InvalidMpd(
+                "SegmentTimeline next S@t must be greater than current time".to_owned(),
+            ));
+        }
         let repeat_count =
             expanded_timeline_repeat_count(entry, entry_start, next_explicit_start, timeline_end)?;
         if repeat_count == 0 {
@@ -894,6 +903,8 @@ fn timeline_template_segments(
                 duration,
                 number,
                 time: Some(current_start),
+                presentation_time: current_start
+                    .saturating_sub(segment_template.presentation_time_offset),
             });
             segment_index = checked_add(segment_index, 1, "SegmentTimeline segment index")?;
             current_start = unclipped_end;
@@ -1068,7 +1079,8 @@ fn build_external_media_playlist(
     Ok(lines.join("\n"))
 }
 
-fn expand_template(
+/// Expands a DASH SegmentTemplate URI against a representation and optional segment markers.
+pub fn expand_template(
     template: &str,
     representation: &DashRepresentation,
     number: Option<u64>,
@@ -1531,25 +1543,172 @@ mod tests {
                 TemplateSegment {
                     duration: 2.0,
                     number: 7,
-                    time: Some(5_000)
+                    time: Some(5_000),
+                    presentation_time: 0
                 },
                 TemplateSegment {
                     duration: 2.0,
                     number: 8,
-                    time: Some(7_000)
+                    time: Some(7_000),
+                    presentation_time: 2_000
                 },
                 TemplateSegment {
                     duration: 2.0,
                     number: 9,
-                    time: Some(9_000)
+                    time: Some(9_000),
+                    presentation_time: 4_000
                 },
                 TemplateSegment {
                     duration: 1.0,
                     number: 10,
-                    time: Some(11_000)
+                    time: Some(11_000),
+                    presentation_time: 6_000
                 },
             ]
         );
+    }
+
+    #[test]
+    fn clips_segment_timeline_overlap_at_next_explicit_start() {
+        let template = DashSegmentTemplate {
+            timescale: 1_000,
+            duration: None,
+            start_number: 1,
+            presentation_time_offset: 0,
+            initialization: Some("init.mp4".to_owned()),
+            media: "chunk-$Time$.m4s".to_owned(),
+            timeline: vec![
+                crate::dash::DashSegmentTimelineEntry {
+                    start_time: Some(0),
+                    duration: 2_000,
+                    repeat_count: 2,
+                },
+                crate::dash::DashSegmentTimelineEntry {
+                    start_time: Some(4_500),
+                    duration: 500,
+                    repeat_count: 0,
+                },
+            ],
+        };
+
+        let segments = template_segments(Some(DashManifestType::Static), Some(5_000), &template)
+            .expect("segments");
+
+        assert_eq!(
+            segments,
+            vec![
+                TemplateSegment {
+                    duration: 2.0,
+                    number: 1,
+                    time: Some(0),
+                    presentation_time: 0
+                },
+                TemplateSegment {
+                    duration: 2.0,
+                    number: 2,
+                    time: Some(2_000),
+                    presentation_time: 2_000
+                },
+                TemplateSegment {
+                    duration: 0.5,
+                    number: 3,
+                    time: Some(4_000),
+                    presentation_time: 4_000
+                },
+                TemplateSegment {
+                    duration: 0.5,
+                    number: 4,
+                    time: Some(4_500),
+                    presentation_time: 4_500
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn expands_dynamic_segment_timeline_repeat_until_next_explicit_start() {
+        let template = DashSegmentTemplate {
+            timescale: 1_000,
+            duration: None,
+            start_number: 20,
+            presentation_time_offset: 1_000,
+            initialization: Some("init.mp4".to_owned()),
+            media: "chunk-$Time$.m4s".to_owned(),
+            timeline: vec![
+                crate::dash::DashSegmentTimelineEntry {
+                    start_time: Some(1_000),
+                    duration: 1_000,
+                    repeat_count: -1,
+                },
+                crate::dash::DashSegmentTimelineEntry {
+                    start_time: Some(4_000),
+                    duration: 500,
+                    repeat_count: 0,
+                },
+            ],
+        };
+
+        let segments =
+            template_segments(Some(DashManifestType::Dynamic), None, &template).expect("segments");
+
+        assert_eq!(
+            segments,
+            vec![
+                TemplateSegment {
+                    duration: 1.0,
+                    number: 20,
+                    time: Some(1_000),
+                    presentation_time: 0
+                },
+                TemplateSegment {
+                    duration: 1.0,
+                    number: 21,
+                    time: Some(2_000),
+                    presentation_time: 1_000
+                },
+                TemplateSegment {
+                    duration: 1.0,
+                    number: 22,
+                    time: Some(3_000),
+                    presentation_time: 2_000
+                },
+                TemplateSegment {
+                    duration: 0.5,
+                    number: 23,
+                    time: Some(4_000),
+                    presentation_time: 3_000
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_segment_timeline_next_explicit_start_that_moves_backwards() {
+        let template = DashSegmentTemplate {
+            timescale: 1_000,
+            duration: None,
+            start_number: 1,
+            presentation_time_offset: 0,
+            initialization: Some("init.mp4".to_owned()),
+            media: "chunk-$Time$.m4s".to_owned(),
+            timeline: vec![
+                crate::dash::DashSegmentTimelineEntry {
+                    start_time: Some(2_000),
+                    duration: 1_000,
+                    repeat_count: 0,
+                },
+                crate::dash::DashSegmentTimelineEntry {
+                    start_time: Some(1_000),
+                    duration: 1_000,
+                    repeat_count: 0,
+                },
+            ],
+        };
+
+        let error = template_segments(Some(DashManifestType::Static), Some(4_000), &template)
+            .expect_err("backward explicit start should fail");
+
+        assert!(matches!(error, DashHlsError::InvalidMpd(message) if message.contains("next S@t")));
     }
 
     #[test]

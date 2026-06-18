@@ -80,22 +80,22 @@ vesper_ffmpeg_validate_metadata_file() {
   local forbid_openssl="${3:-false}"
 
   if [[ "$forbid_network" == "true" ]]; then
-    if ! grep -q -- '--disable-network' "$metadata_file"; then
+    if ! LC_ALL=C grep -q -- '--disable-network' "$metadata_file"; then
       echo "FFmpeg metadata does not include --disable-network: $metadata_file" >&2
       exit 1
     fi
-    if grep -Eq -- '--enable-network|protocols=.*(http|https|tcp|tls|rtmp|rtmps|rtmpt|rtmpts)' "$metadata_file"; then
+    if LC_ALL=C grep -Eq -- '--enable-network|protocols=.*(http|https|tcp|tls|rtmp|rtmps|rtmpt|rtmpts)' "$metadata_file"; then
       echo "FFmpeg metadata includes forbidden network capability: $metadata_file" >&2
       exit 1
     fi
   fi
 
   if [[ "$forbid_openssl" == "true" ]]; then
-    if ! grep -q -- '--disable-openssl' "$metadata_file"; then
+    if ! LC_ALL=C grep -q -- '--disable-openssl' "$metadata_file"; then
       echo "FFmpeg metadata does not include --disable-openssl: $metadata_file" >&2
       exit 1
     fi
-    if grep -Eq -- '--enable-openssl|external_dependencies=.*openssl|license_flags=.*openssl' "$metadata_file"; then
+    if LC_ALL=C grep -Eq -- '--enable-openssl|external_dependencies=.*openssl|license_flags=.*openssl' "$metadata_file"; then
       echo "FFmpeg metadata includes forbidden OpenSSL capability: $metadata_file" >&2
       exit 1
     fi

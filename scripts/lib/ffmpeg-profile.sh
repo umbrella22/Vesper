@@ -176,6 +176,7 @@ vesper_ffmpeg_profile_reset_resolved() {
   VESPER_PROFILE_RESOLVED_DEMUXERS=()
   VESPER_PROFILE_RESOLVED_MUXERS=()
   VESPER_PROFILE_RESOLVED_PROTOCOLS=()
+  VESPER_PROFILE_RESOLVED_DECODERS=()
   VESPER_PROFILE_RESOLVED_PARSERS=()
   VESPER_PROFILE_RESOLVED_BSFS=()
   VESPER_PROFILE_RESOLVED_EXTRA_CONFIGURE_ARGS=()
@@ -197,6 +198,8 @@ vesper_ffmpeg_profile_apply_table() {
   [[ -z "$value" ]] || vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_MUXERS "$value"
   value="$(vesper_ffmpeg_profile_get "$section" protocols)"
   [[ -z "$value" ]] || vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_PROTOCOLS "$value"
+  value="$(vesper_ffmpeg_profile_get "$section" decoders)"
+  [[ -z "$value" ]] || vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_DECODERS "$value"
   value="$(vesper_ffmpeg_profile_get "$section" parsers)"
   [[ -z "$value" ]] || vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_PARSERS "$value"
   value="$(vesper_ffmpeg_profile_get "$section" bsfs)"
@@ -303,6 +306,8 @@ vesper_ffmpeg_profile_emit_legacy_args() {
   [[ -z "$csv" ]] || printf '%s\n' --enable-muxers "$csv"
   csv="$(vesper_ffmpeg_profile_join_csv ${VESPER_PROFILE_RESOLVED_PROTOCOLS[@]+"${VESPER_PROFILE_RESOLVED_PROTOCOLS[@]}"})"
   [[ -z "$csv" ]] || printf '%s\n' --enable-protocols "$csv"
+  csv="$(vesper_ffmpeg_profile_join_csv ${VESPER_PROFILE_RESOLVED_DECODERS[@]+"${VESPER_PROFILE_RESOLVED_DECODERS[@]}"})"
+  [[ -z "$csv" ]] || printf '%s\n' --enable-decoders "$csv"
   csv="$(vesper_ffmpeg_profile_join_csv ${VESPER_PROFILE_RESOLVED_PARSERS[@]+"${VESPER_PROFILE_RESOLVED_PARSERS[@]}"})"
   [[ -z "$csv" ]] || printf '%s\n' --enable-parsers "$csv"
   csv="$(vesper_ffmpeg_profile_join_csv ${VESPER_PROFILE_RESOLVED_BSFS[@]+"${VESPER_PROFILE_RESOLVED_BSFS[@]}"})"
@@ -335,6 +340,7 @@ vesper_ffmpeg_profile_print_resolved() {
   printf 'demuxers=%s\n' "$(vesper_ffmpeg_profile_join_csv ${VESPER_PROFILE_RESOLVED_DEMUXERS[@]+"${VESPER_PROFILE_RESOLVED_DEMUXERS[@]}"})"
   printf 'muxers=%s\n' "$(vesper_ffmpeg_profile_join_csv ${VESPER_PROFILE_RESOLVED_MUXERS[@]+"${VESPER_PROFILE_RESOLVED_MUXERS[@]}"})"
   printf 'protocols=%s\n' "$(vesper_ffmpeg_profile_join_csv ${VESPER_PROFILE_RESOLVED_PROTOCOLS[@]+"${VESPER_PROFILE_RESOLVED_PROTOCOLS[@]}"})"
+  printf 'decoders=%s\n' "$(vesper_ffmpeg_profile_join_csv ${VESPER_PROFILE_RESOLVED_DECODERS[@]+"${VESPER_PROFILE_RESOLVED_DECODERS[@]}"})"
   printf 'parsers=%s\n' "$(vesper_ffmpeg_profile_join_csv ${VESPER_PROFILE_RESOLVED_PARSERS[@]+"${VESPER_PROFILE_RESOLVED_PARSERS[@]}"})"
   printf 'bsfs=%s\n' "$(vesper_ffmpeg_profile_join_csv ${VESPER_PROFILE_RESOLVED_BSFS[@]+"${VESPER_PROFILE_RESOLVED_BSFS[@]}"})"
   printf 'tls=%s\n' "$VESPER_PROFILE_RESOLVED_TLS_BACKEND"

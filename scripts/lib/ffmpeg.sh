@@ -153,6 +153,7 @@ vesper_ffmpeg_reset_options() {
   VESPER_FFMPEG_ENABLE_DEMUXERS=()
   VESPER_FFMPEG_ENABLE_MUXERS=()
   VESPER_FFMPEG_ENABLE_PROTOCOLS=()
+  VESPER_FFMPEG_ENABLE_DECODERS=()
   VESPER_FFMPEG_ENABLE_PARSERS=()
   VESPER_FFMPEG_ENABLE_BSFS=()
   VESPER_FFMPEG_EXTRA_CONFIGURE_ARGS=()
@@ -162,6 +163,7 @@ vesper_ffmpeg_reset_options() {
   VESPER_FFMPEG_FINAL_DEMUXERS=()
   VESPER_FFMPEG_FINAL_MUXERS=()
   VESPER_FFMPEG_FINAL_PROTOCOLS=()
+  VESPER_FFMPEG_FINAL_DECODERS=()
   VESPER_FFMPEG_FINAL_PARSERS=()
   VESPER_FFMPEG_FINAL_BSFS=()
   VESPER_FFMPEG_USE_OPENSSL=0
@@ -183,6 +185,7 @@ vesper_ffmpeg_reset_options() {
   vesper_ffmpeg_append_env_list "$platform_key" ENABLE_DEMUXERS VESPER_FFMPEG_ENABLE_DEMUXERS
   vesper_ffmpeg_append_env_list "$platform_key" ENABLE_MUXERS VESPER_FFMPEG_ENABLE_MUXERS
   vesper_ffmpeg_append_env_list "$platform_key" ENABLE_PROTOCOLS VESPER_FFMPEG_ENABLE_PROTOCOLS
+  vesper_ffmpeg_append_env_list "$platform_key" ENABLE_DECODERS VESPER_FFMPEG_ENABLE_DECODERS
   vesper_ffmpeg_append_env_list "$platform_key" ENABLE_PARSERS VESPER_FFMPEG_ENABLE_PARSERS
   vesper_ffmpeg_append_env_list "$platform_key" ENABLE_BSFS VESPER_FFMPEG_ENABLE_BSFS
   vesper_ffmpeg_append_env_words "$platform_key" EXTRA_CONFIGURE_ARGS VESPER_FFMPEG_EXTRA_CONFIGURE_ARGS
@@ -258,6 +261,17 @@ vesper_ffmpeg_parse_common_args() {
         ;;
       --enable-protocols=*)
         vesper_ffmpeg_append_list VESPER_FFMPEG_ENABLE_PROTOCOLS "${1#*=}"
+        VESPER_FFMPEG_OVERLAY_COUNT=$((VESPER_FFMPEG_OVERLAY_COUNT + 1))
+        shift
+        ;;
+      --enable-decoders)
+        vesper_ffmpeg_require_arg "$1" "${2:-}"
+        vesper_ffmpeg_append_list VESPER_FFMPEG_ENABLE_DECODERS "$2"
+        VESPER_FFMPEG_OVERLAY_COUNT=$((VESPER_FFMPEG_OVERLAY_COUNT + 1))
+        shift 2
+        ;;
+      --enable-decoders=*)
+        vesper_ffmpeg_append_list VESPER_FFMPEG_ENABLE_DECODERS "${1#*=}"
         VESPER_FFMPEG_OVERLAY_COUNT=$((VESPER_FFMPEG_OVERLAY_COUNT + 1))
         shift
         ;;
@@ -495,6 +509,7 @@ vesper_ffmpeg_validate_profile() {
   vesper_ffmpeg_validate_name_list demuxer ${VESPER_FFMPEG_ENABLE_DEMUXERS[@]+"${VESPER_FFMPEG_ENABLE_DEMUXERS[@]}"}
   vesper_ffmpeg_validate_name_list muxer ${VESPER_FFMPEG_ENABLE_MUXERS[@]+"${VESPER_FFMPEG_ENABLE_MUXERS[@]}"}
   vesper_ffmpeg_validate_name_list protocol ${VESPER_FFMPEG_ENABLE_PROTOCOLS[@]+"${VESPER_FFMPEG_ENABLE_PROTOCOLS[@]}"}
+  vesper_ffmpeg_validate_name_list decoder ${VESPER_FFMPEG_ENABLE_DECODERS[@]+"${VESPER_FFMPEG_ENABLE_DECODERS[@]}"}
   vesper_ffmpeg_validate_name_list parser ${VESPER_FFMPEG_ENABLE_PARSERS[@]+"${VESPER_FFMPEG_ENABLE_PARSERS[@]}"}
   vesper_ffmpeg_validate_name_list bitstream-filter ${VESPER_FFMPEG_ENABLE_BSFS[@]+"${VESPER_FFMPEG_ENABLE_BSFS[@]}"}
 }
@@ -536,6 +551,7 @@ vesper_ffmpeg_prepare_component_args() {
   VESPER_FFMPEG_FINAL_DEMUXERS=()
   VESPER_FFMPEG_FINAL_MUXERS=()
   VESPER_FFMPEG_FINAL_PROTOCOLS=()
+  VESPER_FFMPEG_FINAL_DECODERS=()
   VESPER_FFMPEG_FINAL_PARSERS=()
   VESPER_FFMPEG_FINAL_BSFS=()
   VESPER_FFMPEG_LICENSE_FLAGS=()
@@ -549,6 +565,7 @@ vesper_ffmpeg_prepare_component_args() {
       vesper_ffmpeg_merge_unique VESPER_FFMPEG_FINAL_DEMUXERS hls dash concat flv mov matroska mpegts aac
       vesper_ffmpeg_merge_unique VESPER_FFMPEG_FINAL_MUXERS mp4 mov matroska
       vesper_ffmpeg_merge_unique VESPER_FFMPEG_FINAL_PROTOCOLS file pipe
+      vesper_ffmpeg_merge_unique VESPER_FFMPEG_FINAL_DECODERS aac h264
       vesper_ffmpeg_merge_unique VESPER_FFMPEG_FINAL_PARSERS aac ac3 av1 flac h264 hevc mpeg4video opus vp8 vp9
       vesper_ffmpeg_merge_unique VESPER_FFMPEG_FINAL_BSFS aac_adtstoasc extract_extradata h264_metadata hevc_metadata
       ;;
@@ -560,6 +577,7 @@ vesper_ffmpeg_prepare_component_args() {
   vesper_ffmpeg_merge_unique VESPER_FFMPEG_FINAL_DEMUXERS ${VESPER_FFMPEG_ENABLE_DEMUXERS[@]+"${VESPER_FFMPEG_ENABLE_DEMUXERS[@]}"}
   vesper_ffmpeg_merge_unique VESPER_FFMPEG_FINAL_MUXERS ${VESPER_FFMPEG_ENABLE_MUXERS[@]+"${VESPER_FFMPEG_ENABLE_MUXERS[@]}"}
   vesper_ffmpeg_merge_unique VESPER_FFMPEG_FINAL_PROTOCOLS ${VESPER_FFMPEG_ENABLE_PROTOCOLS[@]+"${VESPER_FFMPEG_ENABLE_PROTOCOLS[@]}"}
+  vesper_ffmpeg_merge_unique VESPER_FFMPEG_FINAL_DECODERS ${VESPER_FFMPEG_ENABLE_DECODERS[@]+"${VESPER_FFMPEG_ENABLE_DECODERS[@]}"}
   vesper_ffmpeg_merge_unique VESPER_FFMPEG_FINAL_PARSERS ${VESPER_FFMPEG_ENABLE_PARSERS[@]+"${VESPER_FFMPEG_ENABLE_PARSERS[@]}"}
   vesper_ffmpeg_merge_unique VESPER_FFMPEG_FINAL_BSFS ${VESPER_FFMPEG_ENABLE_BSFS[@]+"${VESPER_FFMPEG_ENABLE_BSFS[@]}"}
 
@@ -655,6 +673,9 @@ vesper_ffmpeg_prepare_component_args() {
   for protocol in ${VESPER_FFMPEG_FINAL_PROTOCOLS[@]+"${VESPER_FFMPEG_FINAL_PROTOCOLS[@]}"}; do
     VESPER_FFMPEG_CONFIGURE_ARGS+=("--enable-protocol=$protocol")
   done
+  for decoder in ${VESPER_FFMPEG_FINAL_DECODERS[@]+"${VESPER_FFMPEG_FINAL_DECODERS[@]}"}; do
+    VESPER_FFMPEG_CONFIGURE_ARGS+=("--enable-decoder=$decoder")
+  done
   for parser in ${VESPER_FFMPEG_FINAL_PARSERS[@]+"${VESPER_FFMPEG_FINAL_PARSERS[@]}"}; do
     VESPER_FFMPEG_CONFIGURE_ARGS+=("--enable-parser=$parser")
   done
@@ -701,6 +722,7 @@ vesper_ffmpeg_configuration_seed() {
   printf 'demuxers=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_DEMUXERS[@]+"${VESPER_FFMPEG_FINAL_DEMUXERS[@]}"})"
   printf 'muxers=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_MUXERS[@]+"${VESPER_FFMPEG_FINAL_MUXERS[@]}"})"
   printf 'protocols=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_PROTOCOLS[@]+"${VESPER_FFMPEG_FINAL_PROTOCOLS[@]}"})"
+  printf 'decoders=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_DECODERS[@]+"${VESPER_FFMPEG_FINAL_DECODERS[@]}"})"
   printf 'parsers=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_PARSERS[@]+"${VESPER_FFMPEG_FINAL_PARSERS[@]}"})"
   printf 'bsfs=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_BSFS[@]+"${VESPER_FFMPEG_FINAL_BSFS[@]}"})"
   printf 'extra_configure_args=%s\n' "$(vesper_ffmpeg_join_quoted ${VESPER_FFMPEG_EXTRA_CONFIGURE_ARGS[@]+"${VESPER_FFMPEG_EXTRA_CONFIGURE_ARGS[@]}"})"
@@ -753,6 +775,7 @@ vesper_ffmpeg_metadata_text() {
   printf 'demuxers=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_DEMUXERS[@]+"${VESPER_FFMPEG_FINAL_DEMUXERS[@]}"})"
   printf 'muxers=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_MUXERS[@]+"${VESPER_FFMPEG_FINAL_MUXERS[@]}"})"
   printf 'protocols=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_PROTOCOLS[@]+"${VESPER_FFMPEG_FINAL_PROTOCOLS[@]}"})"
+  printf 'decoders=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_DECODERS[@]+"${VESPER_FFMPEG_FINAL_DECODERS[@]}"})"
   printf 'parsers=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_PARSERS[@]+"${VESPER_FFMPEG_FINAL_PARSERS[@]}"})"
   printf 'bsfs=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_FINAL_BSFS[@]+"${VESPER_FFMPEG_FINAL_BSFS[@]}"})"
   printf 'external_dependencies=%s\n' "$(vesper_ffmpeg_join_csv ${VESPER_FFMPEG_EXTERNAL_DEPS[@]+"${VESPER_FFMPEG_EXTERNAL_DEPS[@]}"})"

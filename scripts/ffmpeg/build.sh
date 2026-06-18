@@ -25,6 +25,7 @@ Options:
   --extra-demuxers <csv>           Add FFmpeg demuxers
   --extra-muxers <csv>             Add FFmpeg muxers
   --extra-protocols <csv>          Add FFmpeg protocols
+  --extra-decoders <csv>           Add FFmpeg decoders
   --extra-parsers <csv>            Add FFmpeg parsers
   --extra-bsfs <csv>               Add FFmpeg bitstream filters
   --extra-configure-arg <arg>      Add raw FFmpeg configure argument
@@ -61,6 +62,7 @@ OVERLAY_LIBRARIES=()
 OVERLAY_DEMUXERS=()
 OVERLAY_MUXERS=()
 OVERLAY_PROTOCOLS=()
+OVERLAY_DECODERS=()
 OVERLAY_PARSERS=()
 OVERLAY_BSFS=()
 OVERLAY_EXTRA_CONFIGURE_ARGS=()
@@ -170,6 +172,15 @@ while [[ $# -gt 0 ]]; do
       append_csv_to_array OVERLAY_PROTOCOLS "${1#*=}"
       shift
       ;;
+    --extra-decoders|--enable-decoders)
+      [[ -n "${2:-}" ]] || { echo "$1 requires a value." >&2; exit 1; }
+      append_csv_to_array OVERLAY_DECODERS "$2"
+      shift 2
+      ;;
+    --extra-decoders=*|--enable-decoders=*)
+      append_csv_to_array OVERLAY_DECODERS "${1#*=}"
+      shift
+      ;;
     --extra-parsers|--enable-parsers)
       [[ -n "${2:-}" ]] || { echo "$1 requires a value." >&2; exit 1; }
       append_csv_to_array OVERLAY_PARSERS "$2"
@@ -268,6 +279,7 @@ resolve_platform_args() {
   vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_DEMUXERS "$(vesper_ffmpeg_profile_join_csv ${OVERLAY_DEMUXERS[@]+"${OVERLAY_DEMUXERS[@]}"})"
   vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_MUXERS "$(vesper_ffmpeg_profile_join_csv ${OVERLAY_MUXERS[@]+"${OVERLAY_MUXERS[@]}"})"
   vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_PROTOCOLS "$(vesper_ffmpeg_profile_join_csv ${OVERLAY_PROTOCOLS[@]+"${OVERLAY_PROTOCOLS[@]}"})"
+  vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_DECODERS "$(vesper_ffmpeg_profile_join_csv ${OVERLAY_DECODERS[@]+"${OVERLAY_DECODERS[@]}"})"
   vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_PARSERS "$(vesper_ffmpeg_profile_join_csv ${OVERLAY_PARSERS[@]+"${OVERLAY_PARSERS[@]}"})"
   vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_BSFS "$(vesper_ffmpeg_profile_join_csv ${OVERLAY_BSFS[@]+"${OVERLAY_BSFS[@]}"})"
   if [[ "$-" == *u* ]]; then
