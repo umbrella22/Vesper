@@ -64,8 +64,15 @@ static NATIVE_FRAME_RELEASES: LazyLock<Mutex<Vec<(ThreadId, usize)>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 static NATIVE_FRAME_PRESENTATION_RELEASES: LazyLock<Mutex<Vec<(ThreadId, usize, bool)>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
+static NATIVE_FRAME_RELEASE_FAILURES: LazyLock<Mutex<Vec<(ThreadId, usize)>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+static NATIVE_DECODER_CLOSES: LazyLock<Mutex<Vec<ThreadId>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
 static FRAME_PROCESSOR_RELEASES: LazyLock<Mutex<Vec<usize>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
+static FRAME_PROCESSOR_RELEASE_FAILURES: LazyLock<Mutex<Vec<usize>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+static FRAME_PROCESSOR_CLOSES: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 static SOURCE_NORMALIZER_PACKET_RELEASES: LazyLock<Mutex<Vec<usize>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 static FRAME_PROCESSOR_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -247,6 +254,15 @@ fn fixture_native_decoder_presentation_api() -> VesperDecoderPluginApiV5 {
     }
 }
 
+fn fixture_failing_release_native_decoder_api() -> VesperDecoderPluginApiV5 {
+    VesperDecoderPluginApiV5 {
+        receive_native_frame: Some(fixture_decoder_receive_static_native_frame),
+        release_native_frame: Some(fixture_decoder_release_native_frame_error),
+        close_session: Some(fixture_decoder_recording_close_session),
+        ..fixture_native_decoder_api()
+    }
+}
+
 fn fixture_frame_processor_api() -> VesperFrameProcessorPluginApiV1 {
     VesperFrameProcessorPluginApiV1 {
         context: std::ptr::null_mut(),
@@ -260,6 +276,15 @@ fn fixture_frame_processor_api() -> VesperFrameProcessorPluginApiV1 {
         release_frame: Some(fixture_frame_processor_release_frame),
         flush_session: Some(fixture_frame_processor_flush_session),
         close_session: Some(fixture_frame_processor_close_session),
+    }
+}
+
+fn fixture_failing_release_frame_processor_api() -> VesperFrameProcessorPluginApiV1 {
+    VesperFrameProcessorPluginApiV1 {
+        submit_frame_json: Some(fixture_frame_processor_submit_static_output_frame_json),
+        release_frame: Some(fixture_frame_processor_release_frame_error),
+        close_session: Some(fixture_frame_processor_recording_close_session),
+        ..fixture_frame_processor_api()
     }
 }
 
@@ -780,6 +805,50 @@ unsafe extern "C" fn fixture_decoder_receive_null_native_frame(
     decoder_native_frame_success(&DecoderReceiveNativeFrameMetadata::frame(metadata), 0)
 }
 
+unsafe extern "C" fn fixture_decoder_receive_static_native_frame(
+    _context: *mut c_void,
+    session: *mut c_void,
+) -> VesperDecoderReceiveNativeFrameResult {
+    // SAFETY: fixture tests pass the session pointer allocated by the
+    // matching open-session callback for this ABI table.
+    let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
+        return decoder_native_frame_error(DecoderError::NotConfigured);
+    };
+    if session.pending_frame.take().is_none() {
+        return decoder_native_frame_success(
+            &DecoderReceiveNativeFrameMetadata::need_more_input(),
+            0,
+        );
+    };
+    let handle = 0xdec0_deusize;
+    let metadata = DecoderNativeFrameMetadata {
+        media_kind: DecoderMediaKind::Video,
+        format: DecoderFrameFormat::Nv12,
+        codec: "fixture-video".to_owned(),
+        pts_us: session.last_pts_us,
+        duration_us: Some(33_333),
+        width: 2,
+        height: 2,
+        coded_width: Some(2),
+        coded_height: Some(2),
+        visible_rect: None,
+        handle_kind: DecoderNativeHandleKind::IoSurface,
+        pipeline_profile: Some(NativeFramePipelineProfile::Unknown("io_surface".to_owned())),
+        color_space: None,
+        hdr_metadata: None,
+        color: None,
+        hdr: None,
+        sync_info: None,
+        transform: None,
+        frame_id: Some(handle as u64),
+        release_tracking: Some(DecoderNativeFrameReleaseTracking {
+            frame_id: Some(handle as u64),
+            requires_release: true,
+        }),
+    };
+    decoder_native_frame_success(&DecoderReceiveNativeFrameMetadata::frame(metadata), handle)
+}
+
 unsafe extern "C" fn fixture_decoder_receive_pcm_frame(
     _context: *mut c_void,
     session: *mut c_void,
@@ -867,6 +936,25 @@ unsafe extern "C" fn fixture_decoder_release_native_frame_with_presentation(
     decoder_process_success(&DecoderOperationStatus { completed: true })
 }
 
+unsafe extern "C" fn fixture_decoder_release_native_frame_error(
+    _context: *mut c_void,
+    _session: *mut c_void,
+    handle_kind: u32,
+    handle: usize,
+) -> VesperPluginProcessResult {
+    if let Ok(mut failures) = NATIVE_FRAME_RELEASE_FAILURES.lock() {
+        failures.push((std::thread::current().id(), handle));
+    }
+    if handle_kind != 2 || handle == 0 {
+        return decoder_process_error(DecoderError::abi_violation(
+            "fixture native frame release received an invalid handle",
+        ));
+    }
+    decoder_process_error(DecoderError::abi_violation(
+        "fixture native frame release failed",
+    ))
+}
+
 unsafe extern "C" fn fixture_decoder_flush_session(
     _context: *mut c_void,
     session: *mut c_void,
@@ -891,6 +979,18 @@ unsafe extern "C" fn fixture_decoder_close_session(
     // the matching open-session callback and close is called once.
     let _ = unsafe { Box::from_raw(session.cast::<FixtureDecoderSession>()) };
     decoder_process_success(&DecoderOperationStatus { completed: true })
+}
+
+unsafe extern "C" fn fixture_decoder_recording_close_session(
+    context: *mut c_void,
+    session: *mut c_void,
+) -> VesperPluginProcessResult {
+    if let Ok(mut closes) = NATIVE_DECODER_CLOSES.lock() {
+        closes.push(std::thread::current().id());
+    }
+    // SAFETY: this recording fixture preserves the base close-session
+    // ownership contract for the same session pointer.
+    unsafe { fixture_decoder_close_session(context, session) }
 }
 
 unsafe extern "C" fn fixture_frame_processor_capabilities_json(
@@ -1020,6 +1120,57 @@ unsafe extern "C" fn fixture_frame_processor_submit_frame_json(
     })
 }
 
+unsafe extern "C" fn fixture_frame_processor_submit_static_output_frame_json(
+    _context: *mut c_void,
+    session: *mut c_void,
+    submit_json: *const u8,
+    submit_json_len: usize,
+    handle: usize,
+) -> VesperPluginProcessResult {
+    let Some(session) = (unsafe { session.cast::<FixtureFrameProcessorSession>().as_mut() }) else {
+        return frame_processor_process_error(FrameProcessorError::NotConfigured);
+    };
+    let submit = match decode_frame_processor_fixture_json::<FrameProcessorSubmitFrame>(
+        submit_json,
+        submit_json_len,
+    ) {
+        Ok(submit) => submit,
+        Err(error) => return frame_processor_process_error(error),
+    };
+    if handle == 0 {
+        return frame_processor_process_error(FrameProcessorError::abi_violation(
+            "fixture frame processor received a null input handle",
+        ));
+    }
+    if session.pending_output.is_some() {
+        return frame_processor_process_success(&FrameProcessorSubmitResult {
+            status: FrameProcessorSubmitStatus::Backpressure,
+            queue_depth: Some(1),
+            in_flight_frames: Some(1),
+            message: Some("fixture output is still pending".to_owned()),
+        });
+    }
+
+    let output_handle = 0xf00d_usize;
+    let mut output_metadata = submit.metadata.clone();
+    output_metadata.frame_id = Some(output_handle as u64);
+    output_metadata.release_tracking = Some(NativeFrameReleaseTracking {
+        frame_id: output_metadata.frame_id,
+        requires_release: true,
+    });
+    session.pending_source_frame_id = submit.metadata.frame_id;
+    session.pending_output = Some(NativeFrame {
+        metadata: output_metadata,
+        handle: output_handle,
+    });
+    frame_processor_process_success(&FrameProcessorSubmitResult {
+        status: FrameProcessorSubmitStatus::Accepted,
+        queue_depth: Some(1),
+        in_flight_frames: Some(1),
+        message: None,
+    })
+}
+
 unsafe extern "C" fn fixture_frame_processor_receive_frame(
     _context: *mut c_void,
     session: *mut c_void,
@@ -1060,6 +1211,25 @@ unsafe extern "C" fn fixture_frame_processor_release_frame(
     frame_processor_process_success(&FrameProcessorOperationStatus { completed: true })
 }
 
+unsafe extern "C" fn fixture_frame_processor_release_frame_error(
+    _context: *mut c_void,
+    _session: *mut c_void,
+    handle_kind: u32,
+    handle: usize,
+) -> VesperPluginProcessResult {
+    if let Ok(mut failures) = FRAME_PROCESSOR_RELEASE_FAILURES.lock() {
+        failures.push(handle);
+    }
+    if handle_kind != 2 || handle == 0 {
+        return frame_processor_process_error(FrameProcessorError::abi_violation(
+            "fixture frame processor release received an invalid handle",
+        ));
+    }
+    frame_processor_process_error(FrameProcessorError::abi_violation(
+        "fixture frame processor release failed",
+    ))
+}
+
 unsafe extern "C" fn fixture_frame_processor_flush_session(
     _context: *mut c_void,
     session: *mut c_void,
@@ -1091,6 +1261,18 @@ unsafe extern "C" fn fixture_frame_processor_close_session(
         let _ = unsafe { Box::from_raw(output.handle as *mut Vec<u8>) };
     }
     frame_processor_process_success(&FrameProcessorOperationStatus { completed: true })
+}
+
+unsafe extern "C" fn fixture_frame_processor_recording_close_session(
+    context: *mut c_void,
+    session: *mut c_void,
+) -> VesperPluginProcessResult {
+    if let Ok(mut closes) = FRAME_PROCESSOR_CLOSES.lock() {
+        *closes += 1;
+    }
+    // SAFETY: this recording fixture preserves the base close-session
+    // ownership contract for the same session pointer.
+    unsafe { fixture_frame_processor_close_session(context, session) }
 }
 
 unsafe extern "C" fn fixture_source_normalizer_packet_capabilities_json(

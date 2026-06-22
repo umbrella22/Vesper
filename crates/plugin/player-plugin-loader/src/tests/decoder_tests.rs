@@ -553,6 +553,78 @@ fn dynamic_native_decoder_plugin_close_releases_unreturned_native_frames() {
 }
 
 #[test]
+fn dynamic_native_decoder_plugin_close_stops_drain_when_native_frame_release_fails() {
+    let _guard = decoder_native_frame_release_test_guard();
+    if let Ok(mut failures) = NATIVE_FRAME_RELEASE_FAILURES.lock() {
+        failures.clear();
+    }
+    if let Ok(mut closes) = NATIVE_DECODER_CLOSES.lock() {
+        closes.clear();
+    }
+    let api = fixture_failing_release_native_decoder_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::Decoder,
+        plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
+    };
+
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load native decoder plugin");
+    let factory = plugin
+        .native_decoder_plugin_factory()
+        .expect("native decoder factory should be available");
+    let mut session = factory
+        .open_native_session(&DecoderSessionConfig {
+            codec: "fixture-video".to_owned(),
+            media_kind: DecoderMediaKind::Video,
+            prefer_hardware: true,
+            require_cpu_output: false,
+            ..DecoderSessionConfig::default()
+        })
+        .expect("open native decoder session");
+
+    session
+        .send_packet(
+            &DecoderPacket {
+                pts_us: Some(3_000),
+                key_frame: true,
+                ..DecoderPacket::default()
+            },
+            &[1, 2, 3, 4],
+        )
+        .expect("send native packet");
+    let frame = match session
+        .receive_native_frame()
+        .expect("receive native frame")
+    {
+        DecoderReceiveNativeFrameOutput::Frame(frame) => frame,
+        other => panic!("expected native frame, got {other:?}"),
+    };
+    let handle = frame.handle;
+
+    let error = session
+        .close()
+        .expect_err("close should surface the failed release");
+
+    assert!(matches!(error, DecoderError::AbiViolation { .. }));
+    assert_eq!(
+        NATIVE_FRAME_RELEASE_FAILURES
+            .lock()
+            .map(|failures| failures.clone())
+            .unwrap_or_default(),
+        vec![(std::thread::current().id(), handle)]
+    );
+    assert_eq!(
+        NATIVE_DECODER_CLOSES
+            .lock()
+            .map(|closes| closes.len())
+            .unwrap_or_default(),
+        1
+    );
+}
+
+#[test]
 fn dynamic_native_decoder_plugin_rejects_duplicate_native_frame_release() {
     let api = fixture_native_decoder_api();
     let descriptor = VesperPluginDescriptor {

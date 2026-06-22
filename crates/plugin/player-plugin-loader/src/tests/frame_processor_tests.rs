@@ -122,6 +122,68 @@ fn dynamic_frame_processor_plugin_close_releases_unreturned_outputs() {
 }
 
 #[test]
+fn dynamic_frame_processor_plugin_close_stops_drain_when_output_release_fails() {
+    let _guard = frame_processor_test_guard();
+    if let Ok(mut failures) = FRAME_PROCESSOR_RELEASE_FAILURES.lock() {
+        failures.clear();
+    }
+    if let Ok(mut closes) = FRAME_PROCESSOR_CLOSES.lock() {
+        *closes = 0;
+    }
+    let api = fixture_failing_release_frame_processor_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
+    };
+    let plugin =
+        LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load frame processor");
+    let factory = plugin
+        .frame_processor_plugin_factory()
+        .expect("frame processor factory should be available");
+    let input = fixture_native_frame();
+    let mut session = factory
+        .open_session(&FrameProcessorSessionConfig {
+            processor_index: 0,
+            input_metadata: input.metadata.clone(),
+            max_in_flight_frames: Some(1),
+        })
+        .expect("open frame processor session");
+    session
+        .submit_frame(
+            &input,
+            &FrameProcessorSubmitFrame::new(input.metadata.clone()),
+        )
+        .expect("submit frame");
+    let output = match session.receive_frame().expect("receive output") {
+        FrameProcessorReceiveOutput::Frame(output) => output,
+        other => panic!("expected processed frame, got {other:?}"),
+    };
+    let handle = output.frame.handle;
+
+    let error = session
+        .close()
+        .expect_err("close should surface the failed release");
+
+    assert!(matches!(error, FrameProcessorError::AbiViolation { .. }));
+    assert_eq!(
+        FRAME_PROCESSOR_RELEASE_FAILURES
+            .lock()
+            .map(|failures| failures.clone())
+            .unwrap_or_default(),
+        vec![handle]
+    );
+    assert_eq!(
+        FRAME_PROCESSOR_CLOSES
+            .lock()
+            .map(|closes| *closes)
+            .unwrap_or_default(),
+        1
+    );
+}
+
+#[test]
 fn dynamic_frame_processor_plugin_does_not_release_passthrough_outputs() {
     let _guard = frame_processor_test_guard();
     if let Ok(mut releases) = FRAME_PROCESSOR_RELEASES.lock() {

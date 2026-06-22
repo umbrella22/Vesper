@@ -309,14 +309,10 @@ impl DynamicNativeDecoderSession {
     ) -> Result<(), DecoderError> {
         let mut first_error = None;
         while let Some(frame) = self.outstanding_frames.pop() {
-            let release_result = self.release_tracked_native_frame(frame.clone(), operation, false);
-            if release_result.is_err() {
-                self.outstanding_frames.push(frame);
-            }
-            if let Err(error) = release_result
-                && first_error.is_none()
-            {
+            let release_result = self.release_tracked_native_frame(frame, operation, false);
+            if let Err(error) = release_result {
                 first_error = Some(error);
+                break;
             }
         }
         match first_error {
