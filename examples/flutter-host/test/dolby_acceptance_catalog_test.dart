@@ -57,6 +57,59 @@ void main() {
     expect(fairPlay?.isPlayable, isFalse);
   });
 
+  test('host platform routing keeps iOS Dolby acceptance on HLS direct', () {
+    final dashClear = exampleDolbyAcceptancePresetById(
+      'DOLBY-DV-P5-24-DASH-CLEAR',
+    )!;
+    final hlsClear = exampleDolbyAcceptancePresetById(
+      'DOLBY-DV-P5-24-HLS-CLEAR',
+    )!;
+    final widevine = exampleDolbyAcceptancePresetById(
+      'DOLBY-DV-P84-50-DASH-WIDEVINE',
+    )!;
+
+    expect(
+      exampleDolbyAcceptancePresetIsPlayableOnHost(
+        dashClear,
+        isAndroid: false,
+        isIOS: true,
+      ),
+      isFalse,
+    );
+    expect(
+      exampleDolbyAcceptancePresetUnavailableReasonOnHost(
+        dashClear,
+        isAndroid: false,
+        isIOS: true,
+      ),
+      contains('HLS direct'),
+    );
+    expect(
+      exampleDolbyAcceptancePresetIsPlayableOnHost(
+        hlsClear,
+        isAndroid: false,
+        isIOS: true,
+      ),
+      isTrue,
+    );
+    expect(
+      exampleDolbyAcceptancePresetUnavailableReasonOnHost(
+        widevine,
+        isAndroid: false,
+        isIOS: true,
+      ),
+      contains('Android-only'),
+    );
+    expect(
+      exampleDolbyAcceptancePresetIsPlayableOnHost(
+        widevine,
+        isAndroid: true,
+        isIOS: false,
+      ),
+      isTrue,
+    );
+  });
+
   test(
     'metadata preserves profile, fps, drm, expected HDR, and manual gate',
     () {

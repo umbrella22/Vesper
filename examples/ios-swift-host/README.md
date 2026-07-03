@@ -24,10 +24,32 @@ Use this example as a reference for:
   `preflightOnly`, `preferNormalized`, and `requireNormalized` at runtime.
 - FrameProcessor diagnostic plugin logging. The example embeds the diagnostic
   plugin when available, but does not open frame sessions or alter rendering.
+- Dolby Browser Test Kit HLS presets, including locally configured FairPlay
+  CBCS validation rows for real devices.
 
 Demo URLs are owned by the example. The reusable package under
 [`lib/ios/VesperPlayerKit`](../../lib/ios/VesperPlayerKit/) only exposes
 generic `VesperPlayerSource` APIs.
+
+## Local FairPlay Configuration
+
+FairPlay credentials are never committed to this repository. The Dolby
+FairPlay rows stay disabled until the app sees a local license URI plus either
+a certificate URI or a base64 certificate. Set these values in the Xcode scheme
+environment for real-device validation:
+
+- `VESPER_IOS_FAIRPLAY_LICENSE_URI`
+- `VESPER_IOS_FAIRPLAY_CERTIFICATE_URI`
+- `VESPER_IOS_FAIRPLAY_CERTIFICATE_BASE64`
+- `VESPER_IOS_FAIRPLAY_LICENSE_HEADERS_JSON`
+- `VESPER_IOS_FAIRPLAY_AUTHORIZATION`
+
+`VESPER_IOS_FAIRPLAY_CERTIFICATE_BASE64` takes precedence over the certificate
+URI. Header JSON must be a flat object with string values; the authorization
+variable is merged as the `Authorization` request header. The UI and logs only
+show license host, certificate host, and header count, not full URLs, headers,
+tokens, or certificate data. Simulator builds can validate unsupported/error
+mapping, but real FairPlay decryption requires an iOS device.
 
 ## AirPlay
 

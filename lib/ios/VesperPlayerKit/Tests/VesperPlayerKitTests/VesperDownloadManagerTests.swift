@@ -62,7 +62,7 @@ final class VesperDownloadManagerTests: XCTestCase {
         )
     }
 
-    func testCreateTaskAutoStartRefreshesSnapshotAndStartsExecutor() {
+    func testCreateTaskAutoStartRefreshesSnapshotAndStartsExecutor() throws {
         let bindings = FakeDownloadBindings(autoStart: true)
         let executor = RecordingDownloadExecutor()
         let manager = VesperDownloadManager(
@@ -72,7 +72,7 @@ final class VesperDownloadManagerTests: XCTestCase {
         )
         defer { manager.dispose() }
 
-        let taskId = manager.createTask(
+        let taskId = try manager.createTask(
             assetId: "asset-a",
             source: VesperDownloadSource(
                 source: .remoteUrl(URL(string: "https://example.com/video.mp4")!, label: "Video")
@@ -93,7 +93,7 @@ final class VesperDownloadManagerTests: XCTestCase {
         )
     }
 
-    func testSourceHeadersSurviveNativeDownloadCommandRoundTrip() {
+    func testSourceHeadersSurviveNativeDownloadCommandRoundTrip() throws {
         let bindings = FakeDownloadBindings(autoStart: true)
         let executor = RecordingDownloadExecutor()
         let manager = VesperDownloadManager(
@@ -103,7 +103,7 @@ final class VesperDownloadManagerTests: XCTestCase {
         )
         defer { manager.dispose() }
 
-        _ = manager.createTask(
+        _ = try manager.createTask(
             assetId: "asset-a",
             source: VesperDownloadSource(
                 source: .hls(
@@ -127,7 +127,68 @@ final class VesperDownloadManagerTests: XCTestCase {
         XCTAssertEqual(manager.task(1)?.source.source.headers, expected)
     }
 
-    func testPauseResumeAndRemoveDelegateToExecutorWithoutForkingStateMachine() {
+    func testCreateTaskRejectsDrmSourceWithTypedUnsupportedError() {
+        let manager = VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: false),
+            executor: RecordingDownloadExecutor(),
+            bindings: FakeDownloadBindings(autoStart: false)
+        )
+        defer { manager.dispose() }
+
+        XCTAssertThrowsError(
+            try manager.createTask(
+                assetId: "asset-drm",
+                source: VesperDownloadSource(
+                    source: .hls(
+                        url: URL(string: "https://example.com/drm.m3u8")!,
+                        label: "DRM",
+                        drmConfiguration: VesperPlayerDrmConfiguration(
+                            keySystem: "fairPlay",
+                            licenseUri: "https://license.example.com/fairplay"
+                        )
+                    )
+                )
+            )
+        ) { error in
+            let drmError = error as? VesperPlayerDrmUnsupportedError
+            XCTAssertEqual(drmError?.route, "download")
+            XCTAssertEqual(drmError?.keySystem, "fairPlay")
+            XCTAssertEqual(drmError?.reason, "drmUnsupportedRoute")
+        }
+    }
+
+    func testRestoreTasksRejectsDrmSourceWithTypedUnsupportedError() {
+        let manager = VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: false),
+            executor: RecordingDownloadExecutor(),
+            bindings: FakeDownloadBindings(autoStart: false)
+        )
+        defer { manager.dispose() }
+        let task =
+            VesperDownloadTaskSnapshot(
+                taskId: 7,
+                assetId: "asset-drm",
+                source: VesperDownloadSource(
+                    source: .hls(
+                        url: URL(string: "https://example.com/drm.m3u8")!,
+                        label: "DRM",
+                        drmConfiguration: VesperPlayerDrmConfiguration(
+                            keySystem: "fairPlay",
+                            licenseUri: "https://license.example.com/fairplay"
+                        )
+                    )
+                )
+            )
+
+        XCTAssertThrowsError(try manager.restoreTasks([task])) { error in
+            let drmError = error as? VesperPlayerDrmUnsupportedError
+            XCTAssertEqual(drmError?.route, "download")
+            XCTAssertEqual(drmError?.keySystem, "fairPlay")
+            XCTAssertEqual(drmError?.reason, "drmUnsupportedRoute")
+        }
+    }
+
+    func testPauseResumeAndRemoveDelegateToExecutorWithoutForkingStateMachine() throws {
         let bindings = FakeDownloadBindings(autoStart: true)
         let executor = RecordingDownloadExecutor()
         let manager = VesperDownloadManager(
@@ -137,7 +198,7 @@ final class VesperDownloadManagerTests: XCTestCase {
         )
         defer { manager.dispose() }
 
-        _ = manager.createTask(
+        _ = try manager.createTask(
             assetId: "asset-a",
             source: VesperDownloadSource(
                 source: .remoteUrl(URL(string: "https://example.com/video.mp4")!, label: "Video")
@@ -157,7 +218,7 @@ final class VesperDownloadManagerTests: XCTestCase {
         XCTAssertNil(manager.task(1))
     }
 
-    func testExecutorReporterUpdatesSharedSnapshotProgressAndCompletion() {
+    func testExecutorReporterUpdatesSharedSnapshotProgressAndCompletion() throws {
         let bindings = FakeDownloadBindings(autoStart: true)
         let executor = RecordingDownloadExecutor(autoComplete: true)
         let manager = VesperDownloadManager(
@@ -167,7 +228,7 @@ final class VesperDownloadManagerTests: XCTestCase {
         )
         defer { manager.dispose() }
 
-        _ = manager.createTask(
+        _ = try manager.createTask(
             assetId: "asset-a",
             source: VesperDownloadSource(
                 source: .remoteUrl(URL(string: "https://example.com/video.mp4")!, label: "Video")
@@ -423,7 +484,7 @@ final class VesperDownloadManagerTests: XCTestCase {
         )
         defer { manager.dispose() }
 
-        let taskId = manager.createTask(
+        let taskId = try manager.createTask(
             assetId: "asset-a",
             source: VesperDownloadSource(
                 source: .remoteUrl(URL(string: "https://example.com/video.m3u8")!, label: "Video")

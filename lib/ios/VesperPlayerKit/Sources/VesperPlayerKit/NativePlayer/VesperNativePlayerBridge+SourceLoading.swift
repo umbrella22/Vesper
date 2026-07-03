@@ -14,6 +14,13 @@ extension VesperNativePlayerBridge {
         }
 
         recordBenchmark("source_load_start")
+        if let drmFailure = vesperDrmPhase0Failure(
+            for: source,
+            sourceNormalizerConfiguration: sourceNormalizerConfiguration,
+            nativeFramePipelineConfiguration: nativeFramePipelineConfiguration
+        ) {
+            throw drmFailure
+        }
         switch evaluateNativeFramePipelineRoute(for: source) {
         case .systemPlayer, .fallback:
             break
@@ -116,7 +123,7 @@ extension VesperNativePlayerBridge {
         preloadCoordinator.configure(cachePolicy: cachePolicy)
         preloadCoordinator.warmCurrentSource(source: source, url: url)
         releaseDashStartupAbrLimitIfNeeded(reason: "sourceReload", item: player?.currentItem)
-        let item = makePlayerItem(for: playbackSource, url: url)
+        let item = try makePlayerItem(for: playbackSource, url: url)
         refreshCurrentHdrFailureEvidence(for: playbackSource, item: item)
         let bufferingPolicy = resolvedBufferingPolicy(resolvedResiliencePolicy.buffering)
         item.preferredForwardBufferDuration = bufferingPolicy.preferredForwardBufferDuration

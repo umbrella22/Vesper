@@ -70,6 +70,7 @@ builds, or any other working directory.
 - `VesperPlayerController` — playback control surface (`@MainActor`); exposes `@Published` `uiState`, `trackCatalog`, `trackSelection`, `effectiveVideoTrackId`, `videoVariantObservation`, `fixedTrackStatus`, `resiliencePolicy`, `lastError`
 - `VesperPlayerControllerFactory` — controller construction with policy presets
 - `VesperPlayerSource` — media source DTO with `localFile(url:)`, `remoteUrl(_:)`, `hls(url:)`, `dash(url:)` factories
+- `VesperPlayerDrmConfiguration` — FairPlay license metadata for direct AVPlayer playback
 - `PlayerSurfaceContainer` — `UIViewRepresentable` SwiftUI surface
 - `PlayerHostUiState` — published UI state DTO
 - `VesperTrackSelection` — `.auto` / `.disabled` / `.track(id:)`
@@ -197,6 +198,40 @@ ABR behavior:
 - Startup prefetch targets a single variant; oversized media segments are
   skipped
 - `VesperAbrPolicy` applies to both HLS and the DASH bridge
+
+## DRM Boundary
+
+iOS DRM support is native-only. Set `VesperPlayerSource.drmConfiguration` with
+`keySystem = "fairPlay"` to let the direct AVPlayer route manage FairPlay
+through `AVContentKeySession`. `fairPlayCertificateBase64` takes precedence over
+`fairPlayCertificateUri`; one of them must be present for FairPlay playback.
+License requests use `licenseUri` and `licenseHeaders`, and media headers are
+not mixed into license requests.
+
+FairPlay certificate, SPC, and CKC request failures are surfaced as retriable
+runtime/network playback errors. Unsupported key systems, missing certificates,
+and simulator FairPlay restrictions remain unsupported capability errors. The
+default FairPlay content identifier preserves the full `skd://` identifier
+string, including path and query, instead of truncating it to the host.
+
+Retryable FairPlay runtime failures follow the active
+`VesperPlaybackResiliencePolicy`. While retries remain, the controller only
+updates the retry subtitle. After the retry budget is exhausted, the controller
+pauses playback, clears buffering, and publishes `lastError` with sanitized
+diagnostics such as `reason`, `keySystem`, `route`, `licenseUriHost`,
+`certificateUriHost`, `httpStatusCode`, `attemptsExhausted`, and
+`maxAttempts`. Full license URLs, headers, tokens, and certificate payloads are
+not included in diagnostics.
+
+DRM sources do not enter Rust, FFI, optional plugins, download, preload, remux,
+SourceNormalizer, SDK-managed native-frame playback, the DASH bridge, or
+external playback routes. Those paths fail with an unsupported capability error
+instead of silently stripping DRM. Non-FairPlay key systems on iOS also fail as
+unsupported.
+
+Private encryption that is not FairPlay should be handled by a separate
+host-owned or future SDK pre-decryption adapter before a normal source is handed
+to AVPlayer. That is outside the current DRM contract.
 
 ## Download Manager
 

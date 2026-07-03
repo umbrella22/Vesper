@@ -23,6 +23,16 @@
 "example.sources.theme_title" = "Theme";
 "example.sources.remote_url_placeholder" = "Remote URL (HLS / progressive)";
 "example.sources.open_remote_url" = "Open Remote URL";
+"example.dolby_acceptance.title" = "Dolby Acceptance";
+"example.dolby_acceptance.subtitle" = "Dolby Browser Test Kit public signals. Enabled presets play through AVPlayer direct HLS only; they do not enter download, preload, external playback, DASH bridge, or plugin processing.";
+"example.dolby_acceptance.all_profiles" = "All profiles";
+"example.dolby_acceptance.all_fps" = "All fps";
+"example.dolby_acceptance.fairplay_config_required" = "FairPlay config required. Set the local license URI and certificate URI or base64 certificate in the Xcode scheme before playback.";
+"example.dolby_acceptance.fairplay_configured" = "%@";
+"example.dolby_acceptance.widevine_pending" = "Widevine is Android-only in this SDK round; these iOS rows are metadata-only.";
+"example.dolby_acceptance.empty" = "No Dolby presets match this filter.";
+"example.dolby_acceptance.pending_message" = "This Dolby preset is pending and cannot be played yet.";
+"example.dolby_acceptance.direct_route_message" = "Switched to AVPlayer direct HLS for Dolby acceptance.";
 "example.playlist.title" = "Playlist";
 "example.playlist.subtitle" = "Media sources appear here after you open a demo stream, a local video, or a custom remote URL.";
 "example.playlist.empty" = "No media has been added to the playlist yet.";

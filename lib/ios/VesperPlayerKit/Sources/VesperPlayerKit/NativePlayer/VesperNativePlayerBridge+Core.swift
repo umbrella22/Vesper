@@ -26,6 +26,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var currentSourceNormalizerResource: VesperSourceNormalizerResourceOpenResult?
     var sourceNormalizerResourceSession: VesperSourceNormalizerResourceSession?
     var sourceNormalizerResourceLoaderDelegate: VesperSourceNormalizerResourceLoaderDelegate?
+    var fairPlayDrmCoordinator: VesperFairPlayDrmCoordinator?
+    var fairPlayDrmCoordinatorId: UUID?
     weak var surfaceHost: PlayerSurfaceView?
     var timeObserverToken: Any?
     var endObserver: NSObjectProtocol?

@@ -100,6 +100,10 @@ String _exampleRecentErrorMessage(VesperPlayerError error) {
     final attempts = error.details['maxAttempts']?.toString();
     return 'Widevine license 或 provisioning 请求失败，已重试 ${attempts?.isNotEmpty == true ? attempts : '3'} 次。';
   }
+  if (_isFairPlayNetworkExhausted(error)) {
+    final attempts = error.details['maxAttempts']?.toString();
+    return 'FairPlay license 或 certificate 请求失败，已重试 ${attempts?.isNotEmpty == true ? attempts : '3'} 次。';
+  }
   return error.message;
 }
 
@@ -108,6 +112,14 @@ Iterable<String> _exampleRecentErrorDiagnostics(VesperPlayerError error) sync* {
   final licenseHost = details['licenseUriHost']?.toString();
   if (licenseHost != null && licenseHost.isNotEmpty) {
     yield 'license host：$licenseHost';
+  }
+  final certificateHost = details['certificateUriHost']?.toString();
+  if (certificateHost != null && certificateHost.isNotEmpty) {
+    yield 'certificate host：$certificateHost';
+  }
+  final httpStatusCode = details['httpStatusCode']?.toString();
+  if (httpStatusCode != null && httpStatusCode.isNotEmpty) {
+    yield 'HTTP status：$httpStatusCode';
   }
   final errorCode = details['errorCodeName']?.toString();
   if (errorCode != null && errorCode.isNotEmpty) {
@@ -126,6 +138,12 @@ Iterable<String> _exampleRecentErrorDiagnostics(VesperPlayerError error) sync* {
 bool _isWidevineNetworkExhausted(VesperPlayerError error) {
   return error.category == VesperPlayerErrorCategory.network &&
       error.details['keySystem']?.toString().toLowerCase() == 'widevine' &&
+      error.details['attemptsExhausted']?.toString().toLowerCase() == 'true';
+}
+
+bool _isFairPlayNetworkExhausted(VesperPlayerError error) {
+  return error.category == VesperPlayerErrorCategory.network &&
+      error.details['keySystem']?.toString().toLowerCase() == 'fairplay' &&
       error.details['attemptsExhausted']?.toString().toLowerCase() == 'true';
 }
 

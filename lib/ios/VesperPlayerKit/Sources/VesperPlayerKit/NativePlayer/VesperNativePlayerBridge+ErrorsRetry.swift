@@ -91,13 +91,19 @@ extension VesperNativePlayerBridge {
             ]
         )
         fixedTrackIssueActive = false
-        publishedLastError = enrichedError.toPlayerError()
 
         if scheduleRetryIfPossible(for: enrichedError) {
             return
         }
 
-        updateErrorState(message: enrichedError.message)
+        let terminalError = enrichedError.enrichedWithDetails(
+            retryExhaustionDetails(for: enrichedError)
+        )
+        pendingAutoPlay = false
+        pendingPlaybackStart = false
+        player?.pause()
+        publishedLastError = terminalError.toPlayerError()
+        updateErrorState(message: terminalError.message)
     }
 
     func updateErrorState(message: String) {
@@ -106,13 +112,33 @@ extension VesperNativePlayerBridge {
                 title: $0.title,
                 subtitle: VesperPlayerI18n.nativeBridgeError(message),
                 sourceLabel: $0.sourceLabel,
-                playbackState: .ready,
+                playbackState: .paused,
                 playbackRate: $0.playbackRate,
                 isBuffering: false,
-                isInterrupted: $0.isInterrupted,
+                isInterrupted: false,
                 timeline: $0.timeline
             )
         }
+    }
+
+    func retryExhaustionDetails(for error: ResolvedBridgeError) -> [String: String] {
+        guard error.retriable,
+              let currentSource,
+              currentSource.kind == .remote
+        else {
+            return [:]
+        }
+        let retryPolicy = currentResiliencePolicy.resolvedForRuntimeSource(currentSource).retry
+        guard let maxAttempts = retryPolicy.maxAttempts,
+              retryAttemptCount >= maxAttempts
+        else {
+            return [:]
+        }
+        return [
+            "attemptsExhausted": "true",
+            "maxAttempts": "\(maxAttempts)",
+            "retryAttempts": "\(retryAttemptCount)",
+        ]
     }
 
     func scheduleRetryIfPossible(for error: ResolvedBridgeError) -> Bool {
@@ -223,6 +249,33 @@ extension VesperNativePlayerBridge {
                 category: .platform,
                 retriable: false,
                 message: fallbackMessage
+            )
+        }
+
+        if let drmError = error as? VesperPlayerDrmUnsupportedError {
+            return ResolvedBridgeError(
+                code: .unsupported,
+                category: .capability,
+                retriable: false,
+                message: drmError.localizedDescription,
+                details: drmError.details
+            )
+        }
+        if let drmError = error as? VesperPlayerDrmRuntimeError {
+            if drmError.retriable {
+                return ResolvedBridgeError(
+                    category: .network,
+                    retriable: true,
+                    message: drmError.localizedDescription,
+                    details: drmError.details
+                )
+            }
+            return ResolvedBridgeError(
+                code: .unsupported,
+                category: .capability,
+                retriable: false,
+                message: drmError.localizedDescription,
+                details: drmError.details
             )
         }
 

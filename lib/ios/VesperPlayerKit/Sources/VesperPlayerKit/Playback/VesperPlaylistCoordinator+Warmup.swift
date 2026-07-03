@@ -10,6 +10,20 @@ extension VesperPlaylistCoordinator {
             return
         }
 
+        if source.source.drmConfiguration != nil {
+            drmUnsupportedRouteMessage("playlistPreload").withCString { message in
+                _ = vesper_runtime_playlist_session_fail_preload_task(
+                    sessionHandle,
+                    task.taskId,
+                    PlayerFfiErrorCodeUnsupported,
+                    PlayerFfiErrorCategoryCapability,
+                    false,
+                    message
+                )
+            }
+            return
+        }
+
         let resolvedResiliencePolicy = resiliencePolicy.resolvedForRuntimeSource(source.source)
         let cachePolicy = playlistResolvedCachePolicy(resolvedResiliencePolicy.cache)
         VesperPlaylistSharedUrlCacheCoordinator.shared.apply(

@@ -26,12 +26,15 @@ extension Dictionary where Key == String, Value == Any {
             `protocol` = .unknown
         }
         let headers = stringMap(self["headers"])
+        let drmConfiguration = try nestedMap(self["drmConfiguration"])?
+            .toVesperPlayerDrmConfiguration()
         return try VesperPlayerSource(
             uri: uri,
             label: label,
             kind: kind,
             protocol: `protocol`,
-            headers: headers
+            headers: headers,
+            drmConfiguration: drmConfiguration
         )
         .validatedForIosBackend()
     }
@@ -60,12 +63,26 @@ extension Dictionary where Key == String, Value == Any {
             `protocol` = .unknown
         }
         let headers = stringMap(self["headers"])
+        let drmConfiguration = try nestedMap(self["drmConfiguration"])?
+            .toVesperPlayerDrmConfiguration()
         return try VesperPlayerSource(
             uri: uri,
             label: label,
             kind: kind,
             protocol: `protocol`,
-            headers: headers
+            headers: headers,
+            drmConfiguration: drmConfiguration
+        )
+    }
+
+    func toVesperPlayerDrmConfiguration() -> VesperPlayerDrmConfiguration {
+        VesperPlayerDrmConfiguration(
+            keySystem: self["keySystem"] as? String ?? "",
+            licenseUri: self["licenseUri"] as? String ?? "",
+            licenseHeaders: stringMap(self["licenseHeaders"]),
+            fairPlayCertificateUri: self["fairPlayCertificateUri"] as? String,
+            fairPlayCertificateBase64: self["fairPlayCertificateBase64"] as? String,
+            multiSession: self["multiSession"] as? Bool ?? false
         )
     }
 

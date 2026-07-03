@@ -13,6 +13,10 @@ extension VesperNativePlayerBridge {
         else {
             return nil
         }
+        guard source.drmConfiguration == nil else {
+            iosHostLog("source normalizer resource bypassed for DRM source; route=direct")
+            return nil
+        }
 
         let outputRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("vesper-source-normalizer", isDirectory: true)

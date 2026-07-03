@@ -13,7 +13,14 @@ extension VesperDownloadManager {
         let queuedTaskIds = restorable
             .filter { $0.state == .queued }
             .map(\.taskId)
-        guard restoreTasks(restorable), configuration.autoStart else {
+        let restored: Bool
+        do {
+            restored = try restoreTasks(restorable)
+        } catch {
+            iosHostLog("download state restore rejected persisted tasks: \(error.localizedDescription)")
+            return
+        }
+        guard restored, configuration.autoStart else {
             return
         }
         activeTaskIds.forEach { _ = resumeTask($0) }

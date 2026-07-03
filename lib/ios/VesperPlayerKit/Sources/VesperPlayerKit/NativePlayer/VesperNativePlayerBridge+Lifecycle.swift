@@ -154,6 +154,7 @@ extension VesperNativePlayerBridge {
     func cancelSourceLoadTask() {
         sourceLoadTask?.cancel()
         sourceLoadTask = nil
+        fairPlayDrmCoordinator?.cancelPendingRequests()
     }
 
     func finishSourceLoadFailure(_ error: Error) {
@@ -288,6 +289,9 @@ extension VesperNativePlayerBridge {
         player = nil
         currentDashSession = nil
         dashResourceLoaderDelegate = nil
+        fairPlayDrmCoordinator?.close()
+        fairPlayDrmCoordinator = nil
+        fairPlayDrmCoordinatorId = nil
         closeCurrentSourceNormalizerResource()
         resetTrackState()
     }

@@ -180,6 +180,8 @@ extension _PlayerHostLayout on _PlayerHostPageState {
             selectedDrmKind: _selectedDolbyDrmKind,
             selectedProfile: _selectedDolbyProfile,
             selectedFps: _selectedDolbyFps,
+            isPresetPlayable: _isDolbyAcceptancePresetPlayableOnCurrentPlatform,
+            disabledReasonForPreset: _dolbyAcceptancePresetUnavailableReason,
             onDrmKindChanged: (value) {
               _updateState(() {
                 _selectedDolbyDrmKind = value;

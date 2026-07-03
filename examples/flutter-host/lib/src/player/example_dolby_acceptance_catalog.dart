@@ -245,6 +245,39 @@ ExampleDolbyAcceptancePreset? exampleDolbyAcceptancePresetById(String id) {
   return null;
 }
 
+bool exampleDolbyAcceptancePresetIsPlayableOnHost(
+  ExampleDolbyAcceptancePreset preset, {
+  required bool isAndroid,
+  required bool isIOS,
+}) {
+  return exampleDolbyAcceptancePresetUnavailableReasonOnHost(
+        preset,
+        isAndroid: isAndroid,
+        isIOS: isIOS,
+      ) ==
+      null;
+}
+
+String? exampleDolbyAcceptancePresetUnavailableReasonOnHost(
+  ExampleDolbyAcceptancePreset preset, {
+  required bool isAndroid,
+  required bool isIOS,
+}) {
+  if (!preset.isPlayable) {
+    if (preset.drmKind == ExampleDolbyAcceptanceDrmKind.fairPlayPending) {
+      return 'FairPlay certificate is not configured yet.';
+    }
+    return 'This Dolby acceptance preset is disabled.';
+  }
+  if (preset.drmKind == ExampleDolbyAcceptanceDrmKind.widevine && !isAndroid) {
+    return 'Widevine Dolby acceptance is Android-only; use HLS Clear on iOS or configure FairPlay.';
+  }
+  if (isIOS && preset.protocol == VesperPlayerSourceProtocol.dash) {
+    return 'iOS Dolby acceptance uses HLS direct playback; DASH presets exercise the bridge and are not used here.';
+  }
+  return null;
+}
+
 List<ExampleHdrEvidenceSamplePreset>
 exampleDolbyAcceptanceHdrEvidencePresets() {
   return exampleDolbyAcceptanceCatalog

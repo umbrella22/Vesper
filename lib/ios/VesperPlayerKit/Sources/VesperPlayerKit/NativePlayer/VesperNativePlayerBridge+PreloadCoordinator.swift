@@ -18,6 +18,9 @@ final class VesperNativePreloadCoordinator {
 
     func warmCurrentSource(source: VesperPlayerSource, url: URL) {
         cancelWarmupOnly()
+        guard source.drmConfiguration == nil else {
+            return
+        }
         guard max(cachePolicy.memoryCapacity, cachePolicy.diskCapacity) > 0 else {
             return
         }

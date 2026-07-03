@@ -55,6 +55,23 @@ does not need to depend on it directly.
 > and automatically degrades the restored request into constrained ABR with the
 > requested variant limits when possible, otherwise back to automatic ABR.
 
+## FairPlay DRM
+
+The Flutter iOS implementation delegates DRM to `VesperPlayerKit` and AVPlayer.
+Use `VesperPlayerDrmConfiguration` with `keySystem: 'fairPlay'`,
+`licenseUri`, and either `fairPlayCertificateUri` or
+`fairPlayCertificateBase64`. FairPlay is accepted only on the direct HLS
+AVPlayer route; DASH, download, preload, SourceNormalizer normalized output,
+external playback handoff, and SDK-managed native-frame routes report typed
+unsupported capability errors.
+
+Retryable FairPlay certificate or license failures surface through the existing
+`VesperPlayerSnapshot.lastError` and `VesperPlayerErrorEvent` APIs after the
+retry budget is exhausted. Error details include sanitized fields such as
+`reason`, `keySystem`, `route`, `licenseUriHost`, `certificateUriHost`,
+`httpStatusCode`, `attemptsExhausted`, and `maxAttempts`; full URLs, headers,
+tokens, and certificate data are not emitted.
+
 ## Recommended Download Planning Flow
 
 For remote VOD HLS, static DASH, and FLV downloads, the iOS host kit runs a

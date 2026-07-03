@@ -351,9 +351,17 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 let profileMap = try requireNestedMap(arguments: arguments, key: "profile")
                 let assetIndexMap = try requireNestedMap(arguments: arguments, key: "assetIndex")
                 session.lastError = nil
-                return session.manager.createTask(
+                let source = try sourceMap.toDownloadSource()
+                if let drmConfiguration = source.source.drmConfiguration {
+                    throw VesperPlayerDrmUnsupportedError(
+                        route: "download",
+                        keySystem: drmConfiguration.keySystem,
+                        reason: "drmUnsupportedRoute"
+                    )
+                }
+                return try session.manager.createTask(
                     assetId: assetId,
-                    source: try sourceMap.toDownloadSource(),
+                    source: source,
                     profile: profileMap.toDownloadProfile(),
                     assetIndex: assetIndexMap.toDownloadAssetIndex()
                 )
@@ -876,12 +884,39 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
 
     @MainActor
     private func emitSnapshot(for session: PlayerSession) {
+        let snapshot = buildSnapshotMap(for: session)
+        emitHostTerminalErrorIfNeeded(for: session, snapshot: snapshot)
         emitEvent([
             "playerId": session.id,
             "type": "snapshot",
-            "snapshot": buildSnapshotMap(for: session),
+            "snapshot": snapshot,
         ])
         emitBenchmarkConsoleLog(for: session)
+    }
+
+    @MainActor
+    private func emitHostTerminalErrorIfNeeded(
+        for session: PlayerSession,
+        snapshot: [String: Any]
+    ) {
+        guard let hostError = session.controller.lastError?.toMap else {
+            session.lastEmittedTerminalError = nil
+            return
+        }
+        session.lastError = hostError
+        if let previous = session.lastEmittedTerminalError,
+           NSDictionary(dictionary: previous).isEqual(to: hostError) {
+            return
+        }
+        session.lastEmittedTerminalError = hostError
+        emitEvent([
+            "playerId": session.id,
+            "type": "error",
+            "error": hostError,
+            "snapshot": snapshot,
+        ])
+        emitRuntimeHdrCapabilityWarningIfNeeded(for: session, errorMap: hostError)
+        emitBenchmarkConsoleLog(for: session, force: true)
     }
 
     @MainActor

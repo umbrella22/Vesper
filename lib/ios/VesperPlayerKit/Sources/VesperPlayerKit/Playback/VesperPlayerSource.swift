@@ -14,12 +14,38 @@ public enum VesperPlayerSourceProtocol: String, Equatable, Codable {
     case dash
 }
 
+public struct VesperPlayerDrmConfiguration: Equatable, Codable {
+    public let keySystem: String
+    public let licenseUri: String
+    public let licenseHeaders: [String: String]
+    public let fairPlayCertificateUri: String?
+    public let fairPlayCertificateBase64: String?
+    public let multiSession: Bool
+
+    public init(
+        keySystem: String,
+        licenseUri: String,
+        licenseHeaders: [String: String] = [:],
+        fairPlayCertificateUri: String? = nil,
+        fairPlayCertificateBase64: String? = nil,
+        multiSession: Bool = false
+    ) {
+        self.keySystem = keySystem
+        self.licenseUri = licenseUri
+        self.licenseHeaders = licenseHeaders
+        self.fairPlayCertificateUri = fairPlayCertificateUri
+        self.fairPlayCertificateBase64 = fairPlayCertificateBase64
+        self.multiSession = multiSession
+    }
+}
+
 public struct VesperPlayerSource: Equatable, Codable {
     public let uri: String
     public let label: String
     public let kind: VesperPlayerSourceKind
     public let `protocol`: VesperPlayerSourceProtocol
     public let headers: [String: String]
+    public let drmConfiguration: VesperPlayerDrmConfiguration?
 
     public init(
         uri: String,
@@ -27,12 +53,14 @@ public struct VesperPlayerSource: Equatable, Codable {
         kind: VesperPlayerSourceKind,
         protocol: VesperPlayerSourceProtocol,
         headers: [String: String] = [:],
+        drmConfiguration: VesperPlayerDrmConfiguration? = nil,
     ) {
         self.uri = uri
         self.label = label
         self.kind = kind
         self.protocol = `protocol`
         self.headers = headers
+        self.drmConfiguration = drmConfiguration
     }
 
     public static func localFile(url: URL, label: String? = nil) -> VesperPlayerSource {
@@ -49,30 +77,46 @@ public struct VesperPlayerSource: Equatable, Codable {
         label: String? = nil,
         protocol: VesperPlayerSourceProtocol? = nil,
         headers: [String: String] = [:],
+        drmConfiguration: VesperPlayerDrmConfiguration? = nil,
     ) -> VesperPlayerSource {
         VesperPlayerSource(
             uri: url.absoluteString,
             label: label ?? url.absoluteString,
             kind: .remote,
             protocol: `protocol` ?? inferRemoteProtocol(for: url),
-            headers: headers
+            headers: headers,
+            drmConfiguration: drmConfiguration
         )
     }
 
     public static func hls(
         url: URL,
         label: String? = nil,
-        headers: [String: String] = [:]
+        headers: [String: String] = [:],
+        drmConfiguration: VesperPlayerDrmConfiguration? = nil
     ) -> VesperPlayerSource {
-        remoteUrl(url, label: label, protocol: .hls, headers: headers)
+        remoteUrl(
+            url,
+            label: label,
+            protocol: .hls,
+            headers: headers,
+            drmConfiguration: drmConfiguration
+        )
     }
 
     public static func dash(
         url: URL,
         label: String? = nil,
-        headers: [String: String] = [:]
+        headers: [String: String] = [:],
+        drmConfiguration: VesperPlayerDrmConfiguration? = nil
     ) -> VesperPlayerSource {
-        remoteUrl(url, label: label, protocol: .dash, headers: headers)
+        remoteUrl(
+            url,
+            label: label,
+            protocol: .dash,
+            headers: headers,
+            drmConfiguration: drmConfiguration
+        )
     }
 
     private static func inferLocalProtocol(for url: URL) -> VesperPlayerSourceProtocol {

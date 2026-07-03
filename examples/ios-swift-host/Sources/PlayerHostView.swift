@@ -178,9 +178,13 @@ struct PlayerHostView: View {
     @State private var nativeFramePipelineSetting: ExampleNativeFramePipelineSetting = .disabled
     @State private var isApplyingResilienceProfile = false
     @State private var selectedHdrEvidencePreset = exampleHdrEvidenceP0Presets[1]
+    @State private var selectedDolbyDrmKind: ExampleDolbyAcceptanceDrmKind = .clear
+    @State private var selectedDolbyProfile: ExampleDolbyAcceptanceProfile?
+    @State private var selectedDolbyFps: Int?
     @State private var isCapturingHdrEvidence = false
     @State private var hasHandledFinishedPlayback = false
     @State private var controlsHideTask: Task<Void, Never>?
+    @State private var activeDirectSource: VesperPlayerSource?
     @State private var queuedRemoteSource: VesperPlayerSource?
     @State private var queuedLocalSource: VesperPlayerSource?
     @State private var playlistItemIds: [String] = [IOS_HLS_PLAYLIST_ITEM_ID]
@@ -523,6 +527,18 @@ struct PlayerHostView: View {
                     onFocusPlaylistItem: focusPlaylistItem
                 )
 
+                ExampleDolbyAcceptanceSection(
+                    palette: palette,
+                    presets: exampleDolbyAcceptanceCatalog,
+                    selectedDrmKind: selectedDolbyDrmKind,
+                    selectedProfile: selectedDolbyProfile,
+                    selectedFps: selectedDolbyFps,
+                    onDrmKindChange: { selectedDolbyDrmKind = $0 },
+                    onProfileChange: { selectedDolbyProfile = $0 },
+                    onFpsChange: { selectedDolbyFps = $0 },
+                    onPresetSelected: activateDolbyAcceptancePreset
+                )
+
                 ExamplePictureInPictureSection(
                     palette: palette,
                     enabled: $pictureInPictureEnabled,
@@ -537,10 +553,10 @@ struct PlayerHostView: View {
                     decoderPluginLibraryPaths: decoderPluginLibraryPaths,
                     frameProcessorPluginLibraryPaths: frameProcessorPluginLibraryPaths,
                     pluginDiagnostics: controller.pluginDiagnostics,
-                    hdrEvidencePresets: exampleHdrEvidenceP0Presets,
+                    hdrEvidencePresets: exampleHdrEvidenceP0Presets + exampleDolbyAcceptanceHdrEvidencePresets(),
                     selectedHdrEvidencePreset: selectedHdrEvidencePreset,
                     isCapturingHdrEvidence: isCapturingHdrEvidence,
-                    hdrEvidenceActiveSourceAvailable: activePlaylistSource() != nil,
+                    hdrEvidenceActiveSourceAvailable: activePlaybackSource() != nil,
                     onSourceNormalizerSettingChange: applySourceNormalizerSetting,
                     onNativeFramePipelineSettingChange: applyNativeFramePipelineSetting,
                     onHdrEvidencePresetChange: { preset in
@@ -768,7 +784,9 @@ struct PlayerHostView: View {
                 label: ExampleI18n.hdrEvidenceNetworkControlLabel,
                 protocol: .progressive
             )
-        } else if let activeSource = activePlaylistSource() {
+        } else if let dolbyPreset = exampleDolbyAcceptancePreset(id: preset.sampleId) {
+            source = dolbyPreset.source
+        } else if let activeSource = activePlaybackSource() {
             source = activeSource
         } else {
             hostMessage = ExampleI18n.hdrEvidenceSelectSource
@@ -798,6 +816,59 @@ struct PlayerHostView: View {
             }
             isCapturingHdrEvidence = false
         }
+    }
+
+    private func activateDolbyAcceptancePreset(_ preset: ExampleDolbyAcceptancePreset) {
+        guard preset.isPlayable else {
+            hostMessage = preset.drmKind == .fairPlay
+                ? ExampleI18n.dolbyAcceptanceFairPlayConfigRequired
+                : ExampleI18n.dolbyAcceptancePendingMessage
+            return
+        }
+
+        var nextSourceNormalizerSetting = sourceNormalizerSetting
+        var nextNativeFramePipelineSetting = nativeFramePipelineSetting
+        var needsControllerRebuild = false
+        if sourceNormalizerSetting == .requireNormalized {
+            nextSourceNormalizerSetting = .disabled
+            needsControllerRebuild = true
+        }
+        if nativeFramePipelineSetting == .requireNativeFrame {
+            nextNativeFramePipelineSetting = .disabled
+            needsControllerRebuild = true
+        }
+
+        if needsControllerRebuild {
+            let previousController = controller
+            let previousUiState = previousController.uiState
+            activeDirectSource = preset.source
+            sourceNormalizerSetting = nextSourceNormalizerSetting
+            nativeFramePipelineSetting = nextNativeFramePipelineSetting
+            let nextController = makeExampleController(
+                sourceNormalizerSetting: nextSourceNormalizerSetting,
+                nativeFramePipelineSetting: nextNativeFramePipelineSetting,
+                initialSource: preset.source,
+                resiliencePolicy: selectedResilienceProfile.policy
+            )
+            _ = controllerStore.replace(with: nextController)
+            previousController.dispose()
+            configureSystemPlayback(for: preset.source, controller: nextController)
+            initializeReplacementController(
+                nextController,
+                activeSource: preset.source,
+                previousUiState: previousUiState,
+                nativeFramePipelineSetting: nextNativeFramePipelineSetting
+            )
+            hostMessage = ExampleI18n.dolbyAcceptanceDirectRouteMessage
+        } else {
+            selectSourceForPlayback(preset.source)
+            hostMessage = nil
+        }
+        selectedHdrEvidencePreset = preset.toHdrEvidencePreset()
+        controlsVisible = true
+        exampleIosHostLog(
+            "dolby acceptance preset=\(preset.id) route=directNative sourceNormalizer=\(sourceNormalizerSetting.rawValue) nativeFrame=\(nativeFramePipelineSetting.rawValue)"
+        )
     }
 
     private func initializeReplacementController(
@@ -849,6 +920,7 @@ struct PlayerHostView: View {
 
     private func selectSourceForPlayback(_ source: VesperPlayerSource) {
         ensurePlaybackSafeNativeFrameSetting()
+        activeDirectSource = source
         controller.selectSource(source)
         configureSystemPlayback(for: source)
     }
@@ -960,6 +1032,10 @@ struct PlayerHostView: View {
             .source
     }
 
+    private func activePlaybackSource() -> VesperPlayerSource? {
+        activeDirectSource ?? activePlaylistSource()
+    }
+
     private func openRemoteSource() {
         let trimmed = remoteStreamUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), !trimmed.isEmpty else {
@@ -1010,8 +1086,8 @@ struct PlayerHostView: View {
         Task {
             do {
                 let preparedTask = try await prepareExampleDownloadTask(assetId: assetId, source: source)
-                await MainActor.run {
-                    let taskId = downloadManager.createTask(
+                try await MainActor.run {
+                    let taskId = try downloadManager.createTask(
                         assetId: assetId,
                         source: preparedTask.source,
                         profile: preparedTask.profile,

@@ -36,6 +36,28 @@ enum ExampleI18n {
     static var themeTitle: String { string("example.sources.theme_title") }
     static var remoteUrlPlaceholder: String { string("example.sources.remote_url_placeholder") }
     static var openRemoteUrl: String { string("example.sources.open_remote_url") }
+    static var dolbyAcceptanceTitle: String { string("example.dolby_acceptance.title") }
+    static var dolbyAcceptanceSubtitle: String { string("example.dolby_acceptance.subtitle") }
+    static var dolbyAcceptanceAllProfiles: String {
+        string("example.dolby_acceptance.all_profiles")
+    }
+    static var dolbyAcceptanceAllFps: String { string("example.dolby_acceptance.all_fps") }
+    static var dolbyAcceptanceFairPlayConfigRequired: String {
+        string("example.dolby_acceptance.fairplay_config_required")
+    }
+    static func dolbyAcceptanceFairPlayConfigured(_ summary: String) -> String {
+        string("example.dolby_acceptance.fairplay_configured", summary)
+    }
+    static var dolbyAcceptanceWidevinePending: String {
+        string("example.dolby_acceptance.widevine_pending")
+    }
+    static var dolbyAcceptanceEmpty: String { string("example.dolby_acceptance.empty") }
+    static var dolbyAcceptancePendingMessage: String {
+        string("example.dolby_acceptance.pending_message")
+    }
+    static var dolbyAcceptanceDirectRouteMessage: String {
+        string("example.dolby_acceptance.direct_route_message")
+    }
     static var playlistTitle: String { string("example.playlist.title") }
     static var playlistSubtitle: String { string("example.playlist.subtitle") }
     static var playlistEmpty: String { string("example.playlist.empty") }

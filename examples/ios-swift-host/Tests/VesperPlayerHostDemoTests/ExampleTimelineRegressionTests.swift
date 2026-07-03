@@ -13,6 +13,132 @@ final class ExampleTimelineRegressionTests: XCTestCase {
         XCTAssertEqual(queue.first?.source.uri, IOS_LIVE_DVR_ACCEPTANCE_URL)
     }
 
+    func testDolbyAcceptanceUrlsFollowBrowserTestKitPatterns() {
+        XCTAssertEqual(
+            exampleDolbyAcceptanceUrl(
+                profile: .p5,
+                fps: 24,
+                protocol: .hls,
+                drmKind: .clear
+            ),
+            "https://ott.dolby.com/browser_test_kit/clear/p5/24/master.m3u8"
+        )
+        XCTAssertEqual(
+            exampleDolbyAcceptanceUrl(
+                profile: .p81,
+                fps: 50,
+                protocol: .dash,
+                drmKind: .clear
+            ),
+            "https://ott.dolby.com/browser_test_kit/clear/p81/50/dash.mpd"
+        )
+        XCTAssertEqual(
+            exampleDolbyAcceptanceUrl(
+                profile: .p84,
+                fps: 120,
+                protocol: .hls,
+                drmKind: .fairPlay
+            ),
+            "https://ott.dolby.com/browser_test_kit/cbcs/p84/120/master.m3u8"
+        )
+    }
+
+    func testDolbyAcceptanceEnablesOnlyClearHlsForIosDirectPlayback() {
+        let catalog = buildExampleDolbyAcceptanceCatalog(fairPlayConfiguration: nil)
+        let playable = catalog.filter(\.isPlayable)
+        XCTAssertFalse(playable.isEmpty)
+        XCTAssertTrue(playable.allSatisfy { $0.drmKind == .clear })
+        XCTAssertTrue(playable.allSatisfy { $0.sourceProtocol == .hls })
+        XCTAssertTrue(playable.allSatisfy { $0.source.drmConfiguration == nil })
+    }
+
+    func testDolbyWidevineRemainsPendingAndFairPlayRequiresLocalConfigOnIos() {
+        let catalog = buildExampleDolbyAcceptanceCatalog(fairPlayConfiguration: nil)
+        let widevine = catalog.first {
+            $0.profile == .p5 &&
+                $0.fps == 24 &&
+                $0.sourceProtocol == .dash &&
+                $0.drmKind == .widevinePending
+        }
+        let fairPlay = catalog.first {
+            $0.profile == .p81 &&
+                $0.fps == 30 &&
+                $0.sourceProtocol == .hls &&
+                $0.drmKind == .fairPlay
+        }
+
+        XCTAssertEqual(widevine?.isPlayable, false)
+        XCTAssertEqual(fairPlay?.isPlayable, false)
+        XCTAssertEqual(widevine?.source.uri, "https://ott.dolby.com/browser_test_kit/cenc/p5/24/dash.mpd")
+        XCTAssertEqual(fairPlay?.source.uri, "https://ott.dolby.com/browser_test_kit/cbcs/p81/30/master.m3u8")
+        XCTAssertNil(fairPlay?.source.drmConfiguration)
+        XCTAssertEqual(fairPlay?.notes.first, "FairPlay config required.")
+    }
+
+    func testDolbyFairPlayLocalConfigEnablesHlsPresetsWithDrmConfig() {
+        let config = ExampleFairPlayLocalConfiguration(
+            licenseUri: "https://license.example.com/fps",
+            certificateUri: "https://license.example.com/fps.cer",
+            certificateBase64: nil,
+            licenseHeaders: ["Authorization": "Bearer fake", "X-Asset": "demo"]
+        )
+        let catalog = buildExampleDolbyAcceptanceCatalog(fairPlayConfiguration: config)
+        let fairPlay = catalog.first {
+            $0.profile == .p5 &&
+                $0.fps == 24 &&
+                $0.sourceProtocol == .hls &&
+                $0.drmKind == .fairPlay
+        }
+
+        XCTAssertEqual(fairPlay?.isPlayable, true)
+        XCTAssertEqual(fairPlay?.source.uri, "https://ott.dolby.com/browser_test_kit/cbcs/p5/24/master.m3u8")
+        XCTAssertEqual(fairPlay?.source.drmConfiguration?.keySystem, "fairPlay")
+        XCTAssertEqual(fairPlay?.source.drmConfiguration?.licenseUri, "https://license.example.com/fps")
+        XCTAssertEqual(fairPlay?.source.drmConfiguration?.fairPlayCertificateUri, "https://license.example.com/fps.cer")
+        XCTAssertEqual(fairPlay?.source.drmConfiguration?.licenseHeaders.count, 2)
+        XCTAssertEqual(fairPlay?.notes.first?.contains("license host: license.example.com"), true)
+        XCTAssertEqual(fairPlay?.notes.first?.contains("header count: 2"), true)
+        XCTAssertEqual(fairPlay?.notes.first?.contains("Bearer fake"), false)
+    }
+
+    func testFairPlayLocalConfigReadsEnvironmentWithoutLeakingSecretsIntoSummary() {
+        let config = exampleFairPlayLocalConfiguration(
+            environment: [
+                EXAMPLE_FAIRPLAY_LICENSE_URI_ENV: " https://license.example.com/fps ",
+                EXAMPLE_FAIRPLAY_CERTIFICATE_BASE64_ENV: "ZmFrZS1jZXJ0",
+                EXAMPLE_FAIRPLAY_LICENSE_HEADERS_JSON_ENV: """
+                {"X-Asset":"demo","Ignored":7}
+                """,
+                EXAMPLE_FAIRPLAY_AUTHORIZATION_ENV: "Bearer fake",
+            ]
+        )
+
+        XCTAssertEqual(config?.licenseUri, "https://license.example.com/fps")
+        XCTAssertEqual(config?.certificateBase64, "ZmFrZS1jZXJ0")
+        XCTAssertNil(config?.certificateUri)
+        XCTAssertEqual(config?.licenseHeaders.count, 2)
+        XCTAssertEqual(config?.summary.contains("license host: license.example.com"), true)
+        XCTAssertEqual(config?.summary.contains("header count: 2"), true)
+        XCTAssertEqual(config?.summary.contains("Bearer fake"), false)
+    }
+
+    func testDolbyHdrEvidencePresetsPreserveProfileFpsProtocolAndDrmMetadata() {
+        let preset = buildExampleDolbyAcceptanceCatalog(fairPlayConfiguration: nil).first {
+            $0.profile == .p84 &&
+                $0.fps == 50 &&
+                $0.sourceProtocol == .hls &&
+                $0.drmKind == .clear
+        }?.toHdrEvidencePreset()
+
+        XCTAssertEqual(preset?.sourceMetadata["hdrKind"] as? String, "dolbyVision")
+        XCTAssertEqual(preset?.sourceMetadata["manifestKind"] as? String, "hls")
+        XCTAssertEqual(preset?.sourceMetadata["frameRate"] as? Double, 50.0)
+        XCTAssertEqual(preset?.sourceMetadata["drmKind"] as? String, "none")
+        XCTAssertEqual(preset?.sourceMetadata["manualGate"] as? String, "requiresDolbyVisionDisplay")
+        let dolbyVision = preset?.sourceMetadata["dolbyVision"] as? [String: Any]
+        XCTAssertEqual(dolbyVision?["profileFamily"] as? String, "profile8.4")
+    }
+
     func testGoLiveFallsBackToSeekableEndForLiveDvr() {
         let timeline = TimelineUiState(
             kind: .liveDvr,
@@ -278,7 +404,9 @@ final class ExampleTimelineRegressionTests: XCTestCase {
 
         XCTAssertTrue(preferSubtitle.contains("VideoToolbox hardware decode"))
         XCTAssertTrue(preferSubtitle.contains("fall back to AVPlayer"))
-        XCTAssertTrue(requireSubtitle.contains("surface an error on failure"))
+        XCTAssertTrue(requireSubtitle.contains("Strict diagnostic mode"))
+        XCTAssertTrue(requireSubtitle.contains("downgrade to Prefer"))
+        XCTAssertTrue(requireSubtitle.contains("fall back to AVPlayer"))
 
         XCTAssertTrue(localizedSubtitle.contains("AVPlayer"))
         XCTAssertTrue(localizedSubtitle.contains("SourceNormalizer"))
@@ -288,6 +416,8 @@ final class ExampleTimelineRegressionTests: XCTestCase {
         XCTAssertFalse(localizedSubtitle.localizedCaseInsensitiveContains("software decoder"))
         XCTAssertTrue(localizedPreferSubtitle.contains("VideoToolbox"))
         XCTAssertTrue(localizedPreferSubtitle.contains("AVPlayer"))
-        XCTAssertTrue(localizedRequireSubtitle.contains("VideoToolbox"))
+        XCTAssertTrue(localizedRequireSubtitle.contains("native frame"))
+        XCTAssertTrue(localizedRequireSubtitle.contains("Prefer"))
+        XCTAssertTrue(localizedRequireSubtitle.contains("AVPlayer"))
     }
 }

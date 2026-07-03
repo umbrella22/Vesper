@@ -133,6 +133,20 @@ extension VesperPlayerSource {
             "kind": kind.rawValue,
             "protocol": `protocol`.rawValue,
             "headers": headers,
+            "drmConfiguration": flutterValue(drmConfiguration?.toMap()),
+        ]
+    }
+}
+
+extension VesperPlayerDrmConfiguration {
+    func toMap() -> [String: Any] {
+        [
+            "keySystem": keySystem,
+            "licenseUri": licenseUri,
+            "licenseHeaders": licenseHeaders,
+            "fairPlayCertificateUri": flutterValue(fairPlayCertificateUri),
+            "fairPlayCertificateBase64": flutterValue(fairPlayCertificateBase64),
+            "multiSession": multiSession,
         ]
     }
 }
@@ -766,6 +780,17 @@ func errorMap(from error: Error) -> [String: Any] {
     if let pictureInPictureError = error as? VesperIosPictureInPictureError {
         return pictureInPictureError.toMap()
     }
+    if let drmError = error as? VesperPlayerDrmUnsupportedError {
+        return [
+            "message": drmError.localizedDescription,
+            "code": "unsupported",
+            "category": "capability",
+            "retriable": false,
+            "details": drmError.details.merging(
+                ["exception": String(describing: type(of: error))]
+            ) { current, _ in current },
+        ]
+    }
     let code: String
     let category: String
     if let pluginError = error as? PluginError {
@@ -799,7 +824,18 @@ func errorMap(from error: Error) -> [String: Any] {
 }
 
 func downloadErrorMap(from error: Error) -> [String: Any] {
-    [
+    if let drmError = error as? VesperPlayerDrmUnsupportedError {
+        return [
+            "message": drmError.localizedDescription,
+            "code": "unsupported",
+            "category": "capability",
+            "retriable": false,
+            "details": drmError.details.merging(
+                ["exception": String(describing: type(of: error))]
+            ) { current, _ in current },
+        ]
+    }
+    return [
         "code": "backendFailure",
         "category": "platform",
         "retriable": false,

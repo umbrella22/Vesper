@@ -109,6 +109,12 @@ void main() {
     final source = VesperPlayerSource.hls(
       uri: 'https://example.com/live.m3u8',
       label: 'Live',
+      drmConfiguration: const VesperPlayerDrmConfiguration(
+        keySystem: 'fairPlay',
+        licenseUri: 'https://license.example.com/fairplay',
+        licenseHeaders: <String, String>{'Authorization': 'Bearer token'},
+        fairPlayCertificateUri: 'https://license.example.com/fairplay.cer',
+      ),
     );
     const policy = VesperPlaybackResiliencePolicy.resilient();
     const trackPreferencePolicy = VesperTrackPreferencePolicy(
@@ -436,6 +442,11 @@ void main() {
           'category': 'capability',
           'retriable': false,
           'message': 'unsupported operation',
+          'details': <String, Object?>{
+            'reason': 'drmUnsupportedRoute',
+            'route': 'dash',
+            'keySystem': 'fairPlay',
+          },
         },
       );
     });
@@ -454,6 +465,11 @@ void main() {
               (error) => error.platformDetails['code'],
               'details.code',
               'unsupported',
+            )
+            .having(
+              (error) => (error.platformDetails['details'] as Map?)?['reason'],
+              'details.details.reason',
+              'drmUnsupportedRoute',
             ),
       ),
     );
@@ -477,6 +493,52 @@ void main() {
     expect(
       () => platform.refreshPlayer('ios-player'),
       throwsA(isA<PlatformException>()),
+    );
+  });
+
+  test('download DRM unsupported platform error maps to unsupported exception',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) async {
+      throw PlatformException(
+        code: 'vesper_download_operation_failed',
+        message: 'DRM is not supported on the download playback route.',
+        details: <String, Object?>{
+          'code': 'unsupported',
+          'category': 'capability',
+          'retriable': false,
+          'message': 'DRM is not supported on the download playback route.',
+          'details': <String, Object?>{
+            'reason': 'drmUnsupportedRoute',
+            'route': 'download',
+            'keySystem': 'fairPlay',
+          },
+        },
+      );
+    });
+    final platform = MethodChannelVesperPlayerIos();
+
+    await expectLater(
+      platform.createDownloadTask(
+        'downloads',
+        assetId: 'movie',
+        source: VesperDownloadSource.fromSource(
+          source: VesperPlayerSource.hls(
+            uri: 'https://example.com/movie.m3u8',
+            drmConfiguration: const VesperPlayerDrmConfiguration(
+              keySystem: 'fairPlay',
+              licenseUri: 'https://license.example.com/fairplay',
+            ),
+          ),
+        ),
+      ),
+      throwsA(
+        isA<VesperUnsupportedError>().having(
+          (error) => (error.platformDetails['details'] as Map?)?['route'],
+          'details.details.route',
+          'download',
+        ),
+      ),
     );
   });
 
@@ -592,6 +654,70 @@ void main() {
     expect(evidence?.diagnostics['assetVideoHeight'], '2160');
     expect(evidence?.diagnostics['assetVideoFrameRate'], '59.94');
     expect(evidence?.diagnostics['assetVideoEstimatedDataRate'], '25000000');
+  });
+
+  test('event stream decodes FairPlay terminal error and snapshot details',
+      () async {
+    const eventChannel = EventChannel('io.github.ikaros.vesper_player/events');
+    final platform = MethodChannelVesperPlayerIos();
+    final events = <VesperPlayerEvent>[];
+    final terminalError = <String, Object?>{
+      'message': 'FairPlay license request failed.',
+      'code': 'backendFailure',
+      'category': 'network',
+      'retriable': true,
+      'details': <String, Object?>{
+        'reason': 'fairPlayLicenseRequestFailed',
+        'keySystem': 'fairPlay',
+        'route': 'direct',
+        'licenseUriHost': 'license.example.com',
+        'certificateUriHost': 'cert.example.com',
+        'httpStatusCode': '503',
+        'attemptsExhausted': true,
+        'maxAttempts': 3,
+      },
+    };
+
+    final subscription = platform.eventsFor('ios-player').listen(events.add);
+    addTearDown(subscription.cancel);
+    await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .handlePlatformMessage(
+      eventChannel.name,
+      const StandardMethodCodec().encodeSuccessEnvelope(<String, Object?>{
+        'playerId': 'ios-player',
+        'type': 'error',
+        'error': terminalError,
+        'snapshot': <String, Object?>{
+          'title': 'Demo',
+          'subtitle': 'FairPlay failed',
+          'sourceLabel': 'P8.1 FairPlay',
+          'playbackState': 'paused',
+          'playbackRate': 1.0,
+          'isBuffering': false,
+          'isInterrupted': false,
+          'hasVideoSurface': true,
+          'timeline': const VesperTimeline.initial().toMap(),
+          'lastError': terminalError,
+        },
+      }),
+      (_) {},
+    );
+
+    expect(events.single, isA<VesperPlayerErrorEvent>());
+    final event = events.single as VesperPlayerErrorEvent;
+    expect(event.error.category, VesperPlayerErrorCategory.network);
+    expect(event.error.retriable, isTrue);
+    expect(event.error.details['keySystem'], 'fairPlay');
+    expect(event.error.details['licenseUriHost'], 'license.example.com');
+    expect(event.error.details['certificateUriHost'], 'cert.example.com');
+    expect(event.error.details['attemptsExhausted'], isTrue);
+    expect(event.snapshot?.playbackState, VesperPlaybackState.paused);
+    expect(event.snapshot?.isBuffering, isFalse);
+    expect(
+      event.snapshot?.lastError?.details['reason'],
+      'fairPlayLicenseRequestFailed',
+    );
+    expect(event.snapshot?.lastError?.details['maxAttempts'], 3);
   });
 
   test('download output helpers forward payloads', () async {
@@ -720,8 +846,8 @@ void main() {
           'isActive': false,
           'source': 'system',
           'error': const VesperPictureInPictureError(
-            code: VesperPictureInPictureErrorCode
-                .pictureInPictureDisabledByHost,
+            code:
+                VesperPictureInPictureErrorCode.pictureInPictureDisabledByHost,
           ).toMap(),
         };
       }

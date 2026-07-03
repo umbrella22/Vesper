@@ -204,6 +204,170 @@ private struct PlaylistQueueRow: View {
     }
 }
 
+struct ExampleDolbyAcceptanceSection: View {
+    let palette: ExampleHostPalette
+    let presets: [ExampleDolbyAcceptancePreset]
+    let selectedDrmKind: ExampleDolbyAcceptanceDrmKind
+    let selectedProfile: ExampleDolbyAcceptanceProfile?
+    let selectedFps: Int?
+    let onDrmKindChange: (ExampleDolbyAcceptanceDrmKind) -> Void
+    let onProfileChange: (ExampleDolbyAcceptanceProfile?) -> Void
+    let onFpsChange: (Int?) -> Void
+    let onPresetSelected: (ExampleDolbyAcceptancePreset) -> Void
+
+    private var filteredPresets: [ExampleDolbyAcceptancePreset] {
+        presets.filter { preset in
+            preset.drmKind == selectedDrmKind &&
+                (selectedProfile == nil || preset.profile == selectedProfile) &&
+                (selectedFps == nil || preset.fps == selectedFps)
+        }
+    }
+
+    var body: some View {
+        ExampleSectionShell(
+            palette: palette,
+            title: ExampleI18n.dolbyAcceptanceTitle,
+            subtitle: ExampleI18n.dolbyAcceptanceSubtitle
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(ExampleDolbyAcceptanceDrmKind.allCases) { drmKind in
+                            ExampleTextChip(
+                                title: drmKind.title,
+                                selected: drmKind == selectedDrmKind,
+                                palette: palette,
+                                onClick: { onDrmKindChange(drmKind) }
+                            )
+                        }
+                    }
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ExampleTextChip(
+                            title: ExampleI18n.dolbyAcceptanceAllProfiles,
+                            selected: selectedProfile == nil,
+                            palette: palette,
+                            onClick: { onProfileChange(nil) }
+                        )
+                        ForEach(ExampleDolbyAcceptanceProfile.allCases) { profile in
+                            ExampleTextChip(
+                                title: profile.title,
+                                selected: profile == selectedProfile,
+                                palette: palette,
+                                onClick: { onProfileChange(profile) }
+                            )
+                        }
+                    }
+                }
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ExampleTextChip(
+                            title: ExampleI18n.dolbyAcceptanceAllFps,
+                            selected: selectedFps == nil,
+                            palette: palette,
+                            onClick: { onFpsChange(nil) }
+                        )
+                        ForEach(exampleDolbyAcceptanceFpsValues, id: \.self) { fps in
+                            ExampleTextChip(
+                                title: "\(fps)fps",
+                                selected: fps == selectedFps,
+                                palette: palette,
+                                onClick: { onFpsChange(fps) }
+                            )
+                        }
+                    }
+                }
+
+                if selectedDrmKind == .fairPlay {
+                    Text(fairPlayStatusMessage(filteredPresets))
+                        .font(.footnote)
+                        .foregroundStyle(palette.body)
+                        .lineSpacing(4)
+                } else if selectedDrmKind == .widevinePending {
+                    Text(ExampleI18n.dolbyAcceptanceWidevinePending)
+                        .font(.footnote)
+                        .foregroundStyle(palette.body)
+                        .lineSpacing(4)
+                }
+
+                if filteredPresets.isEmpty {
+                    Text(ExampleI18n.dolbyAcceptanceEmpty)
+                        .font(.footnote)
+                        .foregroundStyle(palette.body)
+                } else {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(filteredPresets) { preset in
+                            DolbyAcceptancePresetRow(
+                                preset: preset,
+                                palette: palette,
+                                onClick: { onPresetSelected(preset) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func fairPlayStatusMessage(_ presets: [ExampleDolbyAcceptancePreset]) -> String {
+        guard let note = presets.first?.notes.first,
+              note != "FairPlay config required."
+        else {
+            return ExampleI18n.dolbyAcceptanceFairPlayConfigRequired
+        }
+        return ExampleI18n.dolbyAcceptanceFairPlayConfigured(note)
+    }
+}
+
+private struct DolbyAcceptancePresetRow: View {
+    let preset: ExampleDolbyAcceptancePreset
+    let palette: ExampleHostPalette
+    let onClick: () -> Void
+
+    var body: some View {
+        Button(action: onClick) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(preset.label)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                Text(
+                    [
+                        preset.profile.title,
+                        "\(preset.fps)fps",
+                        preset.protocolLabel,
+                        preset.drmKind.title,
+                        preset.manualGate,
+                    ].joined(separator: " · ")
+                )
+                .font(.footnote)
+                .foregroundStyle(palette.body)
+                .lineLimit(2)
+                if let note = preset.notes.first {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(palette.body)
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .foregroundStyle(preset.isPlayable ? palette.title : palette.body)
+            .background(palette.fieldBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(palette.sectionStroke, lineWidth: 1)
+            )
+            .opacity(preset.isPlayable ? 1.0 : 0.58)
+        }
+        .buttonStyle(.plain)
+        .disabled(!preset.isPlayable)
+    }
+}
+
 struct ExamplePictureInPictureSection: View {
     let palette: ExampleHostPalette
     @Binding var enabled: Bool
@@ -732,6 +896,35 @@ struct ExampleThemeModeChip: View {
                 Capsule()
                     .stroke(selected ? Color.clear : palette.sectionStroke, lineWidth: 1)
             )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct ExampleTextChip: View {
+    let title: String
+    let selected: Bool
+    let palette: ExampleHostPalette
+    let onClick: () -> Void
+
+    var body: some View {
+        Button(action: onClick) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(selected ? Color.white : palette.title)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    selected
+                        ? AnyShapeStyle(palette.primaryAction)
+                        : AnyShapeStyle(palette.fieldBackground),
+                    in: Capsule()
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(selected ? Color.clear : palette.sectionStroke, lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
     }

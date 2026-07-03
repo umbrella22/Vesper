@@ -11,6 +11,7 @@ final class PlayerSession {
     var hostDetachGeneration: UInt64 = 0
     var observation: AnyCancellable?
     var lastError: [String: Any]?
+    var lastEmittedTerminalError: [String: Any]?
     var viewport: FlutterViewport?
     var viewportHint: FlutterViewportHint = .hidden
     var currentSourceFingerprint: VesperSourceFingerprint?

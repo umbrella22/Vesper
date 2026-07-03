@@ -48,6 +48,182 @@ final class PlayerErrorStateTests: XCTestCase {
         )
     }
 
+    func testNativeBridgeReportsFairPlayCertificateMissingBeforePlayback() async throws {
+        let bridge = VesperNativePlayerBridge()
+        let source = VesperPlayerSource.hls(
+            url: URL(string: "https://example.com/drm.m3u8")!,
+            label: "DRM",
+            drmConfiguration: VesperPlayerDrmConfiguration(
+                keySystem: "fairPlay",
+                licenseUri: "https://license.example.com/fairplay"
+            )
+        )
+
+        bridge.selectSource(source)
+        try await settleTrackCatalogRefresh()
+
+        XCTAssertEqual(bridge.lastError?.code, .unsupported)
+        XCTAssertEqual(bridge.lastError?.category, .capability)
+        XCTAssertEqual(bridge.lastError?.retriable, false)
+        XCTAssertEqual(bridge.lastError?.details["reason"], "fairPlayCertificateMissing")
+        XCTAssertEqual(bridge.lastError?.details["route"], "direct")
+        XCTAssertEqual(bridge.lastError?.details["keySystem"], "fairPlay")
+    }
+
+    func testNativeBridgeReportsUnsupportedDirectDrmKeySystemBeforePlayback() async throws {
+        let bridge = VesperNativePlayerBridge()
+        let source = VesperPlayerSource.hls(
+            url: URL(string: "https://example.com/drm.m3u8")!,
+            label: "DRM",
+            drmConfiguration: VesperPlayerDrmConfiguration(
+                keySystem: "widevine",
+                licenseUri: "https://license.example.com/widevine"
+            )
+        )
+
+        bridge.selectSource(source)
+        try await settleTrackCatalogRefresh()
+
+        XCTAssertEqual(bridge.lastError?.code, .unsupported)
+        XCTAssertEqual(bridge.lastError?.category, .capability)
+        XCTAssertEqual(bridge.lastError?.retriable, false)
+        XCTAssertEqual(bridge.lastError?.details["reason"], "drmUnsupportedKeySystem")
+        XCTAssertEqual(bridge.lastError?.details["route"], "direct")
+        XCTAssertEqual(bridge.lastError?.details["keySystem"], "widevine")
+    }
+
+    func testNativeBridgeReportsFairPlayLicenseUriInvalidBeforePlayback() async throws {
+        let bridge = VesperNativePlayerBridge()
+        let source = VesperPlayerSource.hls(
+            url: URL(string: "https://example.com/drm.m3u8")!,
+            label: "FairPlay",
+            drmConfiguration: VesperPlayerDrmConfiguration(
+                keySystem: "fairPlay",
+                licenseUri: "  ",
+                fairPlayCertificateBase64: Data("certificate".utf8).base64EncodedString()
+            )
+        )
+
+        bridge.selectSource(source)
+        try await settleTrackCatalogRefresh()
+
+        XCTAssertEqual(bridge.lastError?.code, .unsupported)
+        XCTAssertEqual(bridge.lastError?.category, .capability)
+        XCTAssertEqual(bridge.lastError?.retriable, false)
+        XCTAssertEqual(bridge.lastError?.details["reason"], "fairPlayLicenseUriInvalid")
+        XCTAssertEqual(bridge.lastError?.details["route"], "direct")
+        XCTAssertEqual(bridge.lastError?.details["keySystem"], "fairPlay")
+    }
+
+    func testNativeBridgeReportsFairPlaySimulatorUnsupportedBeforePlayback() async throws {
+        let bridge = VesperNativePlayerBridge()
+        let source = VesperPlayerSource.hls(
+            url: URL(string: "https://example.com/drm.m3u8")!,
+            label: "FairPlay",
+            drmConfiguration: VesperPlayerDrmConfiguration(
+                keySystem: "fairPlay",
+                licenseUri: "https://license.example.com/fairplay",
+                fairPlayCertificateBase64: Data("certificate".utf8).base64EncodedString()
+            )
+        )
+
+        bridge.selectSource(source)
+        try await settleTrackCatalogRefresh()
+
+        XCTAssertEqual(bridge.lastError?.code, .unsupported)
+        XCTAssertEqual(bridge.lastError?.category, .capability)
+        XCTAssertEqual(bridge.lastError?.retriable, false)
+        XCTAssertEqual(bridge.lastError?.details["reason"], "fairPlaySimulatorUnsupported")
+        XCTAssertEqual(bridge.lastError?.details["route"], "direct")
+        XCTAssertEqual(bridge.lastError?.details["keySystem"], "fairPlay")
+        XCTAssertNil(bridge.fairPlayDrmCoordinator)
+        XCTAssertNil(bridge.fairPlayDrmCoordinatorId)
+    }
+
+    func testFairPlayDrmGuardAllowsDirectDiagnosticsAndPreferFallbackRoutes() throws {
+        let source = fairPlayHlsSourceForTesting()
+
+        let diagnosticsFailure = vesperDrmPhase0Failure(
+            for: source,
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(mode: .diagnosticsOnly),
+            nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(mode: .diagnosticsOnly)
+        )
+        XCTAssertNotEqual(diagnosticsFailure?.details["reason"], "drmUnsupportedRoute")
+
+        let preflightFailure = vesperDrmPhase0Failure(
+            for: source,
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(mode: .preflightOnly),
+            nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(mode: .preferNativeFrame)
+        )
+        XCTAssertNotEqual(preflightFailure?.details["reason"], "drmUnsupportedRoute")
+
+        let preferNormalizedFailure = vesperDrmPhase0Failure(
+            for: source,
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(mode: .preferNormalized),
+            nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(mode: .disabled)
+        )
+        XCTAssertNotEqual(preferNormalizedFailure?.details["reason"], "drmUnsupportedRoute")
+    }
+
+    func testFairPlayDrmGuardRejectsProtectedMediaRoutesBeforePlayback() {
+        let source = fairPlayHlsSourceForTesting()
+        let dashSource = VesperPlayerSource.dash(
+            url: URL(string: "https://example.com/drm.mpd")!,
+            label: "FairPlay DASH",
+            drmConfiguration: source.drmConfiguration
+        )
+
+        let dashFailure = vesperDrmPhase0Failure(
+            for: dashSource,
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(mode: .disabled),
+            nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(mode: .disabled)
+        )
+        XCTAssertEqual(dashFailure?.details["reason"], "drmUnsupportedRoute")
+        XCTAssertEqual(dashFailure?.details["route"], "dash")
+
+        let normalizedFailure = vesperDrmPhase0Failure(
+            for: source,
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(mode: .requireNormalized),
+            nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(mode: .disabled)
+        )
+        XCTAssertEqual(normalizedFailure?.details["reason"], "drmUnsupportedRoute")
+        XCTAssertEqual(normalizedFailure?.details["route"], "sourceNormalizer")
+
+        let nativeFrameFailure = vesperDrmPhase0Failure(
+            for: source,
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(mode: .preflightOnly),
+            nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(mode: .requireNativeFrame)
+        )
+        XCTAssertEqual(nativeFrameFailure?.details["reason"], "drmUnsupportedRoute")
+        XCTAssertEqual(nativeFrameFailure?.details["route"], "nativeFrame")
+    }
+
+    func testNativeBridgeClearsFairPlayCoordinatorWhenSelectingClearSource() throws {
+        let mediaUrl = try makeLocalHlsFixture()
+        defer { try? FileManager.default.removeItem(at: mediaUrl.deletingLastPathComponent()) }
+        let bridge = VesperNativePlayerBridge()
+        let drmSource = VesperPlayerSource.hls(
+            url: mediaUrl,
+            label: "FairPlay",
+            drmConfiguration: VesperPlayerDrmConfiguration(
+                keySystem: "fairPlay",
+                licenseUri: "https://license.example.com/fairplay",
+                fairPlayCertificateBase64: Data("certificate".utf8).base64EncodedString()
+            )
+        )
+        let clearSource = VesperPlayerSource.hls(url: mediaUrl, label: "Clear")
+
+        XCTAssertThrowsError(try bridge.makePlayerItem(for: drmSource, url: mediaUrl)) { error in
+            XCTAssertEqual((error as? VesperPlayerDrmRuntimeError)?.reason, "fairPlaySimulatorUnsupported")
+        }
+        XCTAssertNil(bridge.fairPlayDrmCoordinator)
+
+        _ = try bridge.makePlayerItem(for: clearSource, url: mediaUrl)
+
+        XCTAssertNil(bridge.fairPlayDrmCoordinator)
+        XCTAssertNil(bridge.fairPlayDrmCoordinatorId)
+    }
+
     func testMislabeledLocalHlsFileDoesNotExposeAdaptiveVideoWithoutLoadedVariants() async throws {
         let tempUrl = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
@@ -558,6 +734,66 @@ final class PlayerErrorStateTests: XCTestCase {
         XCTAssertNil(bridge.lastError?.details["likelyHdrCapabilityIssue"])
         XCTAssertNil(bridge.lastError?.details["capabilityFailureCause"])
     }
+
+    func testFairPlayRuntimeRequestFailureMapsToRetriableNetworkError() {
+        let bridge = VesperNativePlayerBridge()
+
+        bridge.handlePlaybackFailureForTesting(
+            error: VesperPlayerDrmRuntimeError(
+                reason: "fairPlayLicenseRequestFailed",
+                route: "direct",
+                keySystem: "fairPlay",
+                message: "license server unavailable",
+                retriable: true
+            ),
+            fallbackMessage: "license server unavailable"
+        )
+
+        XCTAssertEqual(bridge.lastError?.code, .backendFailure)
+        XCTAssertEqual(bridge.lastError?.category, .network)
+        XCTAssertEqual(bridge.lastError?.retriable, true)
+        XCTAssertEqual(bridge.lastError?.details["reason"], "fairPlayLicenseRequestFailed")
+        XCTAssertEqual(bridge.lastError?.details["route"], "direct")
+        XCTAssertEqual(bridge.lastError?.details["keySystem"], "fairPlay")
+    }
+
+    func testFairPlayRuntimeFailureOnlyPublishesLastErrorAfterRetryAttemptsExhausted() {
+        let bridge = VesperNativePlayerBridge(initialSource: fairPlayHlsSourceForTesting())
+        let error = VesperPlayerDrmRuntimeError(
+            reason: "fairPlayLicenseRequestFailed",
+            route: "direct",
+            keySystem: "fairPlay",
+            message: "license server unavailable",
+            retriable: true,
+            details: ["licenseUriHost": "license.example.com"]
+        )
+
+        for _ in 0..<3 {
+            bridge.handlePlaybackFailureForTesting(
+                error: error,
+                fallbackMessage: "license server unavailable"
+            )
+            XCTAssertNil(bridge.lastError)
+            XCTAssertEqual(bridge.uiState.isBuffering, false)
+            bridge.cancelPendingRetry(resetAttempts: false)
+        }
+
+        bridge.handlePlaybackFailureForTesting(
+            error: error,
+            fallbackMessage: "license server unavailable"
+        )
+
+        XCTAssertEqual(bridge.lastError?.code, .backendFailure)
+        XCTAssertEqual(bridge.lastError?.category, .network)
+        XCTAssertEqual(bridge.lastError?.retriable, true)
+        XCTAssertEqual(bridge.lastError?.details["reason"], "fairPlayLicenseRequestFailed")
+        XCTAssertEqual(bridge.lastError?.details["licenseUriHost"], "license.example.com")
+        XCTAssertEqual(bridge.lastError?.details["attemptsExhausted"], "true")
+        XCTAssertEqual(bridge.lastError?.details["maxAttempts"], "3")
+        XCTAssertEqual(bridge.lastError?.details["retryAttempts"], "3")
+        XCTAssertEqual(bridge.uiState.isBuffering, false)
+        XCTAssertEqual(bridge.uiState.playbackState, .paused)
+    }
 }
 
 @MainActor
@@ -573,4 +809,34 @@ private func settleTrackCatalogRefresh() async throws {
         await Task.yield()
     }
     try await Task.sleep(nanoseconds: 100_000_000)
+}
+
+private func makeLocalHlsFixture() throws -> URL {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true
+    )
+    let playlistURL = directory.appendingPathComponent("playlist.m3u8")
+    let playlist = """
+    #EXTM3U
+    #EXT-X-VERSION:3
+    #EXT-X-TARGETDURATION:1
+    #EXT-X-ENDLIST
+    """
+    try playlist.write(to: playlistURL, atomically: true, encoding: .utf8)
+    return playlistURL
+}
+
+private func fairPlayHlsSourceForTesting() -> VesperPlayerSource {
+    VesperPlayerSource.hls(
+        url: URL(string: "https://example.com/drm.m3u8")!,
+        label: "FairPlay",
+        drmConfiguration: VesperPlayerDrmConfiguration(
+            keySystem: "fairPlay",
+            licenseUri: "https://license.example.com/fairplay",
+            fairPlayCertificateBase64: Data("certificate".utf8).base64EncodedString()
+        )
+    )
 }

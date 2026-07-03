@@ -23,6 +23,16 @@
 "example.sources.theme_title" = "主题";
 "example.sources.remote_url_placeholder" = "远程 URL（HLS / progressive）";
 "example.sources.open_remote_url" = "打开远程 URL";
+"example.dolby_acceptance.title" = "Dolby 验收";
+"example.dolby_acceptance.subtitle" = "使用 Dolby Browser Test Kit 公开信号。可用预设只走 AVPlayer direct HLS；不进入下载、预加载、外部投放、DASH bridge 或插件处理。";
+"example.dolby_acceptance.all_profiles" = "全部 profile";
+"example.dolby_acceptance.all_fps" = "全部 fps";
+"example.dolby_acceptance.fairplay_config_required" = "FairPlay config required。请先在 Xcode scheme 中配置本地 license URI 和证书 URI 或 base64 证书。";
+"example.dolby_acceptance.fairplay_configured" = "%@";
+"example.dolby_acceptance.widevine_pending" = "本轮 SDK 中 Widevine 仅 Android 使用；这些 iOS 行只作为 metadata 展示。";
+"example.dolby_acceptance.empty" = "当前筛选下没有 Dolby 预设。";
+"example.dolby_acceptance.pending_message" = "这个 Dolby 预设仍是 pending，暂不能播放。";
+"example.dolby_acceptance.direct_route_message" = "已切到 AVPlayer direct HLS 用于 Dolby 验收。";
 "example.playlist.title" = "播放列表";
 "example.playlist.subtitle" = "点击演示流、本地视频或自定义远程 URL 后，媒体源会按加入顺序出现在这里。";
 "example.playlist.empty" = "播放列表里还没有媒体源。";

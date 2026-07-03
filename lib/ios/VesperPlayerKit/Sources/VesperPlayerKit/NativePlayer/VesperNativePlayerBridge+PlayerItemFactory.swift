@@ -4,10 +4,13 @@ import UIKit
 import VesperPlayerKitBridgeShim
 
 extension VesperNativePlayerBridge {
-    func makePlayerItem(for source: VesperPlayerSource, url: URL) -> AVPlayerItem {
+    func makePlayerItem(for source: VesperPlayerSource, url: URL) throws -> AVPlayerItem {
         if isVesperSourceNormalizerURL(url) {
             currentDashSession = nil
             dashResourceLoaderDelegate = nil
+            fairPlayDrmCoordinator?.close()
+            fairPlayDrmCoordinator = nil
+            fairPlayDrmCoordinatorId = nil
             guard let session = sourceNormalizerResourceSession else {
                 return AVPlayerItem(url: url)
             }
@@ -27,16 +30,17 @@ extension VesperNativePlayerBridge {
             currentDashSession = nil
             dashResourceLoaderDelegate = nil
             sourceNormalizerResourceLoaderDelegate = nil
-            guard !source.headers.isEmpty else {
-                return AVPlayerItem(url: url)
-            }
-            let asset = AVURLAsset(
-                url: url,
-                options: [vesperAVURLAssetHTTPHeaderFieldsKey: source.headers]
-            )
+            let assetOptions = source.headers.isEmpty
+                ? nil
+                : [vesperAVURLAssetHTTPHeaderFieldsKey: source.headers]
+            let asset = AVURLAsset(url: url, options: assetOptions)
+            try configureFairPlayIfNeeded(for: source, asset: asset)
             return AVPlayerItem(asset: asset)
         }
 
+        fairPlayDrmCoordinator?.close()
+        fairPlayDrmCoordinator = nil
+        fairPlayDrmCoordinatorId = nil
         let dashBenchmarkEventRecorder: VesperDashSession.BenchmarkEventRecorder?
         if benchmarkRecorder.isEnabled {
             dashBenchmarkEventRecorder = { [weak self] eventName, attributes in
@@ -67,5 +71,38 @@ extension VesperNativePlayerBridge {
         iosHostLog("configured DASH bridge master=\(session.masterPlaylistURL.absoluteString)")
         recordBenchmark("dash_bridge_configured")
         return AVPlayerItem(asset: asset)
+    }
+
+    func configureFairPlayIfNeeded(for source: VesperPlayerSource, asset: AVURLAsset) throws {
+        guard let drmConfiguration = source.drmConfiguration,
+              drmConfiguration.keySystem.caseInsensitiveCompare("fairPlay") == .orderedSame
+        else {
+            fairPlayDrmCoordinator?.close()
+            fairPlayDrmCoordinator = nil
+            fairPlayDrmCoordinatorId = nil
+            return
+        }
+
+        let coordinatorId = UUID()
+        let coordinator = try VesperFairPlayDrmCoordinator.make(source: source) { [weak self] error in
+            Task { @MainActor in
+                guard let self,
+                      self.currentSource == source,
+                      self.fairPlayDrmCoordinatorId == coordinatorId
+                else {
+                    return
+                }
+                self.handlePlaybackFailure(
+                    error: error,
+                    fallbackMessage: error.localizedDescription
+                )
+            }
+        }
+        fairPlayDrmCoordinator?.close()
+        fairPlayDrmCoordinator = coordinator
+        fairPlayDrmCoordinatorId = coordinatorId
+        coordinator.attach(to: asset)
+        iosHostLog("configured FairPlay DRM content key session source=\(source.uri)")
+        recordBenchmark("fairplay_drm_configured")
     }
 }

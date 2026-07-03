@@ -113,8 +113,9 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
     VesperPlayerController controller,
     ExampleDolbyAcceptancePreset preset,
   ) async {
-    if (!preset.isPlayable) {
-      _showMessage('FairPlay certificate is not configured yet.');
+    final unavailableReason = _dolbyAcceptancePresetUnavailableReason(preset);
+    if (unavailableReason != null) {
+      _showMessage(unavailableReason);
       return;
     }
     if (preset.protocol == VesperPlayerSourceProtocol.dash &&
@@ -148,5 +149,21 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
     _updateState(() {
       _selectedHdrEvidencePreset = preset.toHdrEvidencePreset();
     });
+  }
+
+  bool _isDolbyAcceptancePresetPlayableOnCurrentPlatform(
+    ExampleDolbyAcceptancePreset preset,
+  ) {
+    return _dolbyAcceptancePresetUnavailableReason(preset) == null;
+  }
+
+  String? _dolbyAcceptancePresetUnavailableReason(
+    ExampleDolbyAcceptancePreset preset,
+  ) {
+    return exampleDolbyAcceptancePresetUnavailableReasonOnHost(
+      preset,
+      isAndroid: Platform.isAndroid,
+      isIOS: Platform.isIOS,
+    );
   }
 }

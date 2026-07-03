@@ -27,7 +27,10 @@ targets:
       path: Sources/Info.plist
       properties:
         NSPhotoLibraryUsageDescription: This demo needs Photo Library access so you can pick videos for playback.
+        NSPhotoLibraryAddUsageDescription: This demo needs Photo Library add access so you can save completed downloads.
         UIRequiresFullScreen: true
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft

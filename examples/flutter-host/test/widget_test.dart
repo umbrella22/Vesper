@@ -179,6 +179,54 @@ void main() {
     expect(find.widgetWithText(OutlinedButton, '外部投放'), findsNothing);
   });
 
+  testWidgets(
+    'Dolby acceptance section can disable host-incompatible presets',
+    (WidgetTester tester) async {
+      ExampleDolbyAcceptancePreset? selected;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: ExampleDolbyAcceptanceSection(
+                palette: exampleHostPalette(false),
+                presets: exampleDolbyAcceptanceCatalog,
+                selectedDrmKind: ExampleDolbyAcceptanceDrmKind.clear,
+                selectedProfile: ExampleDolbyAcceptanceProfile.p5,
+                selectedFps: 24,
+                isPresetPlayable: (preset) =>
+                    preset.protocol != VesperPlayerSourceProtocol.dash,
+                disabledReasonForPreset: (_) =>
+                    'iOS Dolby acceptance uses HLS direct playback.',
+                onDrmKindChanged: (_) {},
+                onProfileChanged: (_) {},
+                onFpsChanged: (_) {},
+                onPresetSelected: (preset) {
+                  selected = preset;
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(
+        find.text('iOS Dolby acceptance uses HLS direct playback.'),
+        findsOneWidget,
+      );
+      final dashButton = tester.widget<OutlinedButton>(
+        find.ancestor(
+          of: find.text('P5 24fps DASH Clear'),
+          matching: find.byType(OutlinedButton),
+        ),
+      );
+      expect(dashButton.onPressed, isNull);
+
+      await tester.tap(find.text('P5 24fps DASH Clear'));
+      expect(selected, isNull);
+    },
+  );
+
   testWidgets('Dolby FairPlay pending presets are disabled', (
     WidgetTester tester,
   ) async {
@@ -288,6 +336,43 @@ void main() {
         find.text('错误码：ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED'),
         findsOneWidget,
       );
+    },
+  );
+
+  testWidgets(
+    'recent error section explains exhausted FairPlay retry failure',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ExampleRecentErrorSection(
+              palette: exampleHostPalette(false),
+              error: const VesperPlayerError(
+                message: 'FairPlay license failed.',
+                code: VesperPlayerErrorCode.backendFailure,
+                category: VesperPlayerErrorCategory.network,
+                retriable: true,
+                details: <String, Object?>{
+                  'keySystem': 'fairPlay',
+                  'licenseUriHost': 'license.example.com',
+                  'certificateUriHost': 'cert.example.com',
+                  'attemptsExhausted': true,
+                  'maxAttempts': 3,
+                  'httpStatusCode': '503',
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(
+        find.text('FairPlay license 或 certificate 请求失败，已重试 3 次。'),
+        findsOneWidget,
+      );
+      expect(find.text('license host：license.example.com'), findsOneWidget);
+      expect(find.text('certificate host：cert.example.com'), findsOneWidget);
+      expect(find.text('HTTP status：503'), findsOneWidget);
     },
   );
 }

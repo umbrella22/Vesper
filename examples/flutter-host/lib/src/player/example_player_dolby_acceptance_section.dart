@@ -12,6 +12,8 @@ class ExampleDolbyAcceptanceSection extends StatelessWidget {
     required this.onProfileChanged,
     required this.onFpsChanged,
     required this.onPresetSelected,
+    this.isPresetPlayable,
+    this.disabledReasonForPreset,
   });
 
   final ExampleHostPalette palette;
@@ -23,6 +25,9 @@ class ExampleDolbyAcceptanceSection extends StatelessWidget {
   final ValueChanged<ExampleDolbyAcceptanceProfile?> onProfileChanged;
   final ValueChanged<int?> onFpsChanged;
   final ValueChanged<ExampleDolbyAcceptancePreset> onPresetSelected;
+  final bool Function(ExampleDolbyAcceptancePreset preset)? isPresetPlayable;
+  final String? Function(ExampleDolbyAcceptancePreset preset)?
+  disabledReasonForPreset;
 
   List<ExampleDolbyAcceptancePreset> get _filteredPresets {
     return presets
@@ -88,18 +93,23 @@ class ExampleDolbyAcceptanceSection extends StatelessWidget {
               ).textTheme.bodySmall?.copyWith(color: palette.body),
             )
           else
-            ...filteredPresets.map(
-              (preset) => Padding(
+            ...filteredPresets.map((preset) {
+              final playable =
+                  isPresetPlayable?.call(preset) ?? preset.isPlayable;
+              final disabledReason = playable
+                  ? null
+                  : disabledReasonForPreset?.call(preset);
+              return Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: ExampleDolbyAcceptancePresetRow(
                   preset: preset,
                   palette: palette,
-                  onSelected: preset.isPlayable
-                      ? () => onPresetSelected(preset)
-                      : null,
+                  playable: playable,
+                  disabledReason: disabledReason,
+                  onSelected: playable ? () => onPresetSelected(preset) : null,
                 ),
-              ),
-            ),
+              );
+            }),
         ],
       ),
     );
@@ -111,11 +121,15 @@ class ExampleDolbyAcceptancePresetRow extends StatelessWidget {
     super.key,
     required this.preset,
     required this.palette,
+    required this.playable,
+    required this.disabledReason,
     required this.onSelected,
   });
 
   final ExampleDolbyAcceptancePreset preset;
   final ExampleHostPalette palette;
+  final bool playable;
+  final String? disabledReason;
   final VoidCallback? onSelected;
 
   @override
@@ -144,7 +158,7 @@ class ExampleDolbyAcceptancePresetRow extends StatelessWidget {
             Row(
               children: <Widget>[
                 Icon(
-                  preset.isPlayable
+                  playable
                       ? Icons.play_circle_outline_rounded
                       : Icons.lock_clock_rounded,
                   size: 18,
@@ -172,10 +186,10 @@ class ExampleDolbyAcceptancePresetRow extends StatelessWidget {
                 height: 1.35,
               ),
             ),
-            if (preset.notes.isNotEmpty) ...<Widget>[
+            if (disabledReason != null || preset.notes.isNotEmpty) ...<Widget>[
               const SizedBox(height: 4),
               Text(
-                preset.notes.first,
+                disabledReason ?? preset.notes.first,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.bodySmall?.copyWith(

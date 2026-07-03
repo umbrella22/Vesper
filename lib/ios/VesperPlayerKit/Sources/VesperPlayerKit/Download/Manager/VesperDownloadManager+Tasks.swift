@@ -7,9 +7,17 @@ extension VesperDownloadManager {
         source: VesperDownloadSource,
         profile: VesperDownloadProfile = VesperDownloadProfile(),
         assetIndex: VesperDownloadAssetIndex = VesperDownloadAssetIndex()
-    ) -> VesperDownloadTaskId? {
+    ) throws -> VesperDownloadTaskId? {
         guard sessionHandle != 0 else {
             return nil
+        }
+        if let drmConfiguration = source.source.drmConfiguration {
+            iosHostLog("download createTask rejected DRM source")
+            throw VesperPlayerDrmUnsupportedError(
+                route: "download",
+                keySystem: drmConfiguration.keySystem,
+                reason: "drmUnsupportedRoute"
+            )
         }
         let normalizedAssetIndex: VesperDownloadAssetIndex
         do {
@@ -57,12 +65,21 @@ extension VesperDownloadManager {
         return taskId
     }
 
-    public func restoreTasks(_ tasks: [VesperDownloadTaskSnapshot]) -> Bool {
+    public func restoreTasks(_ tasks: [VesperDownloadTaskSnapshot]) throws -> Bool {
         guard sessionHandle != 0 else {
             return false
         }
         guard !tasks.isEmpty else {
             return true
+        }
+        if let task = tasks.first(where: { $0.source.source.drmConfiguration != nil }),
+           let drmConfiguration = task.source.source.drmConfiguration {
+            iosHostLog("download restoreTasks rejected DRM source")
+            throw VesperPlayerDrmUnsupportedError(
+                route: "download",
+                keySystem: drmConfiguration.keySystem,
+                reason: "drmUnsupportedRoute"
+            )
         }
 
         let materializer = VesperGeneratedDownloadResourceMaterializer(baseDirectory: configuration.baseDirectory)
