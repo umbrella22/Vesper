@@ -156,17 +156,16 @@ Private encryption that is not Widevine should be handled by a separate
 host-owned or future SDK pre-decryption adapter before a normal source is handed
 to Media3. That is outside the current DRM contract.
 
-### DRM diagnostics and acceptance
+### DRM Diagnostics
 
-The license must be issued for the **same asset (key ID)** as the content.
-Different assets mean different keys, so the license loads but cannot decrypt and
-playback stalls in `BUFFERING` with no error. Verify the content `default_KID`
-(`curl -s "<mpd>" | grep -oiE 'cenc:default_KID="[^"]*"'`) maps to the same
-provider asset your `licenseUri` targets.
+The license must be issued for the same asset key ID as the content. Different
+assets mean different keys, so the license may load while playback remains in
+`BUFFERING` because the encrypted samples cannot be decrypted. For DASH
+sources, compare the manifest `cenc:default_KID` with the provider asset that
+backs `licenseUri`.
 
-Capture DRM logs and let a Widevine source sit for at least 30 seconds before
-judging — cross-region license requests may not return within a quick source
-switch:
+Capture DRM logs and let a Widevine source run for at least 30 seconds before
+judging cross-region license behavior:
 
 ```bash
 adb logcat -c
@@ -175,10 +174,10 @@ adb logcat -v time | grep -Ei \
 ```
 
 Read `onDrmKeysLoaded` / `onDrmSessionManagerError` (not the raw `MediaDrm event`
-code, whose meaning is version-dependent) as the source of truth. A full
-walkthrough — including a provisioning-vs-license failure table and the Dolby
-Profile 5 no-video case (device without a Dolby Vision decoder) — lives in
-[`devnotes/验证/android-dolby-vision-drm-acceptance-2026-07-02.md`](../../devnotes/验证/android-dolby-vision-drm-acceptance-2026-07-02.md).
+code, whose meaning is version-dependent) as the source of truth. A Dolby Vision
+Profile 5 source can also fail as a video capability mismatch on devices without
+a compatible Dolby Vision decoder; that is distinct from Widevine license
+failure.
 
 ## Local-Network Cleartext HTTP
 

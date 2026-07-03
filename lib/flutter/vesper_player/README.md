@@ -238,7 +238,7 @@ headers, local files, and `content://` inputs are served through a tokenized
 local HTTP relay when the proxy policy allows it. Cast V2 direct playback still
 supports remote `http` / `https` HLS, DASH, and progressive sources with the
 default Google receiver. DRM, transcoding, DASH manifest rewrite, and custom
-receiver flows are outside the MVP scope.
+receiver flows are not supported by this package.
 
 Android hosts that use DLNA discovery or relay-backed local playback must
 declare their own cleartext HTTP policy in the app manifest or Android network

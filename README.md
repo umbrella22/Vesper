@@ -194,43 +194,9 @@ for how FFmpeg is resolved when desktop builds need demuxing / decoding support.
 
 Desktop plugin experiments are opt-in. `basic-player` can load native-frame
 decoder plugins, frame processor diagnostic plugins, and packet-stream source
-normalizer plugins through environment-configured library paths. These paths are
-intended for SDK development and diagnostics, not for Android / iOS public
-host-kit APIs.
-
-Recommended SourceNormalizer smoke command:
-
-```sh
-VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libvesper_source_normalizer_ffmpeg.dylib \
-VESPER_SOURCE_NORMALIZER_MODE=prefer-normalized \
-cargo run -p basic-player
-```
-
-Recommended macOS native-frame closed-loop smoke command:
-
-```sh
-VESPER_SOURCE_NORMALIZER_PLUGIN_PATHS=target/debug/libvesper_source_normalizer_ffmpeg.dylib \
-VESPER_SOURCE_NORMALIZER_MODE=prefer-normalized \
-VESPER_DECODER_PLUGIN_PATHS=target/debug/libvesper_decoder_videotoolbox.dylib \
-VESPER_DECODER_PLUGIN_VIDEO_MODE=native-frame \
-VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libvesper_frame_processor_diagnostic.dylib \
-VESPER_FRAME_PROCESSOR_MODE=prefer-processed \
-VESPER_FRAME_PROCESSOR_DEBUG=1 \
-cargo run -p basic-player
-```
-
-This route is expected to show SourceNormalizer `selected` until the packet
-stream is handed to the VideoToolbox native-frame decoder and presenter; only
-then should diagnostics mark it as `participated`.
-
-FrameProcessor remains a diagnostics / debug route unless you explicitly choose
-a stricter desktop processing mode:
-
-```sh
-VESPER_FRAME_PROCESSOR_PLUGIN_PATHS=target/debug/libvesper_frame_processor_diagnostic.dylib \
-VESPER_FRAME_PROCESSOR_MODE=diagnostics \
-cargo run -p basic-player
-```
+normalizer plugins through environment-configured library paths. These routes
+are for SDK development and diagnostics; Android and iOS public host-kit APIs
+stay on native platform playback by default.
 
 Desktop rendering caveat: the current `wgpu` software-render path uses the
 repository shader path for SDR video and is calibrated around Rec.709 limited
@@ -480,10 +446,10 @@ generation tasks during their own Gradle / Xcode build.
 
 Vesper is still evolving and has not yet shipped as a stable 1.0 public SDK.
 Android and iOS host kits have releasable package paths, while the Flutter
-federated packages are still source-distributed from this repository. The macOS
-Flutter package is currently a stub without a real playback backend, and the
-macOS native VideoToolbox native-frame decoder path remains opt-in experimental;
-FFmpeg software fallback is the default desktop route.
+federated packages are still source-distributed from this repository. Desktop
+Flutter packages are not shipped in the current package set. The macOS native
+VideoToolbox native-frame decoder path remains opt-in experimental; FFmpeg
+software fallback is the default desktop route.
 
 ## License
 
