@@ -1,6 +1,7 @@
 package io.github.ikaros.vesper.player.android
 
 import android.content.Context
+import android.net.Uri
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
@@ -121,13 +122,20 @@ internal data class ResolvedBufferingPolicy(
 )
 
 internal fun media3MinimumRetryCount(retryPolicy: NativeRetryPolicy): Int {
-    val maxAttempts = retryPolicy.maxAttempts.takeIf { retryPolicy.hasMaxAttempts }
+    val maxAttempts = retryPolicy.resolvedMaxAttempts()
     return when {
         maxAttempts == null -> Int.MAX_VALUE
         maxAttempts <= 0 -> 0
         else -> maxAttempts
     }
 }
+
+internal fun NativeRetryPolicy.resolvedMaxAttempts(): Int? =
+    when {
+        usesDefaultMaxAttempts -> 3
+        hasMaxAttempts -> maxAttempts
+        else -> null
+    }
 
 internal class VesperLoadErrorHandlingPolicy(
     private val retryPolicy: NativeRetryPolicy,
@@ -139,7 +147,7 @@ internal class VesperLoadErrorHandlingPolicy(
             return C.TIME_UNSET
         }
 
-        val maxAttempts = retryPolicy.maxAttempts.takeIf { retryPolicy.hasMaxAttempts }
+        val maxAttempts = retryPolicy.resolvedMaxAttempts()
         if (maxAttempts != null && loadErrorInfo.errorCount > maxAttempts) {
             return C.TIME_UNSET
         }
@@ -197,5 +205,36 @@ internal fun buildMediaItem(source: VesperPlayerSource): MediaItem {
         else -> Unit
     }
 
+    buildWidevineDrmConfiguration(source)?.let(builder::setDrmConfiguration)
+
     return builder.build()
 }
+
+internal fun buildWidevineDrmConfiguration(source: VesperPlayerSource): MediaItem.DrmConfiguration? {
+    val drmConfiguration = source.drmConfiguration ?: return null
+    if (!drmConfiguration.keySystem.equals("widevine", ignoreCase = true)) {
+        return null
+    }
+    val licenseUriText =
+        drmConfiguration.licenseUri.takeIf { it.isNotBlank() }
+            ?: throw VesperPlayerUnsupportedOperation(
+                "Widevine DRM requires a non-empty license URI.",
+                drmUnsupportedRouteDetails(source, route = "direct", reason = "drmLicenseUriMissing"),
+            )
+    val builder = MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID)
+        .setLicenseRequestHeaders(drmConfiguration.licenseHeaders)
+        .setMultiSession(drmConfiguration.multiSession)
+    val parsedLicenseUri = parseAndroidUriForDrm(licenseUriText)
+    if (parsedLicenseUri != null) {
+        builder
+            .setLicenseUri(parsedLicenseUri)
+            .setForceDefaultLicenseUri(true)
+    } else {
+        // Local JVM tests use Android stubs where Uri.parse may be unavailable.
+        builder.setLicenseUri(licenseUriText)
+    }
+    return builder.build()
+}
+
+internal fun parseAndroidUriForDrm(uri: String): Uri? =
+    runCatching { Uri.parse(uri) }.getOrNull()

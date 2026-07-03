@@ -279,6 +279,14 @@ void main() {
       return <String, Object?>{
         'status': 'unsupported',
         'message': 'DASH is not supported for DLNA in this MVP.',
+        'code': 'unsupported',
+        'category': 'capability',
+        'retriable': false,
+        'details': <String, Object?>{
+          'reason': 'drmUnsupportedRoute',
+          'route': 'externalPlayback',
+          'keySystem': 'widevine',
+        },
       };
     });
     final controller = VesperExternalPlaybackController(methodChannel: channel);
@@ -287,6 +295,12 @@ void main() {
 
     expect(result.status, VesperExternalPlaybackResultStatus.unsupported);
     expect(result.message, contains('DASH'));
+    expect(result.code, 'unsupported');
+    expect(result.category, 'capability');
+    expect(result.retriable, isFalse);
+    expect(result.details['reason'], 'drmUnsupportedRoute');
+    expect(result.details['route'], 'externalPlayback');
+    expect(result.details['keySystem'], 'widevine');
     expect(calls.single.method, 'connect');
   });
 

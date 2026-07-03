@@ -199,6 +199,12 @@ vesper_android_resolve_gradle() {
   local project_gradlew="$project_dir/gradlew"
   local local_gradle=""
   local fallback_gradle=""
+  local wrapper_version=""
+  local wrapper_properties="$project_dir/gradle/wrapper/gradle-wrapper.properties"
+
+  if [[ -f "$wrapper_properties" ]]; then
+    wrapper_version="$(sed -nE 's/^distributionUrl=.*gradle-([0-9][^-]*)-[^/]*\.zip.*/\1/p' "$wrapper_properties" | head -n 1)"
+  fi
 
   if [[ "${CI:-}" == "true" ]]; then
     if command -v gradle >/dev/null 2>&1; then
@@ -211,14 +217,22 @@ vesper_android_resolve_gradle() {
     return 1
   fi
 
-  local_gradle="$(find "$project_dir/.gradle/wrapper/dists" -path '*/bin/gradle' -type f -perm -111 2>/dev/null | sort | tail -n 1 || true)"
+  if [[ -n "$wrapper_version" ]]; then
+    local_gradle="$(find "$project_dir/.gradle/wrapper/dists" -path "*/gradle-$wrapper_version/bin/gradle" -type f -perm -111 2>/dev/null | sort | tail -n 1 || true)"
+  else
+    local_gradle="$(find "$project_dir/.gradle/wrapper/dists" -path '*/bin/gradle' -type f -perm -111 2>/dev/null | sort | tail -n 1 || true)"
+  fi
   if [[ -n "$local_gradle" && -x "$local_gradle" ]]; then
     printf '%s\n' "$local_gradle"
     return 0
   fi
 
   if [[ -n "$fallback_project_dir" ]]; then
-    fallback_gradle="$(find "$fallback_project_dir/.gradle/wrapper/dists" -path '*/bin/gradle' -type f -perm -111 2>/dev/null | sort | tail -n 1 || true)"
+    if [[ -n "$wrapper_version" ]]; then
+      fallback_gradle="$(find "$fallback_project_dir/.gradle/wrapper/dists" -path "*/gradle-$wrapper_version/bin/gradle" -type f -perm -111 2>/dev/null | sort | tail -n 1 || true)"
+    else
+      fallback_gradle="$(find "$fallback_project_dir/.gradle/wrapper/dists" -path '*/bin/gradle' -type f -perm -111 2>/dev/null | sort | tail -n 1 || true)"
+    fi
     if [[ -n "$fallback_gradle" && -x "$fallback_gradle" ]]; then
       printf '%s\n' "$fallback_gradle"
       return 0
@@ -227,6 +241,9 @@ vesper_android_resolve_gradle() {
 
   cat <<EOF >&2
 No local cached Gradle distribution was found for local Android work.
+
+Project wrapper version:
+  ${wrapper_version:-unknown}
 
 Checked local distributions under:
   $project_dir/.gradle/wrapper/dists

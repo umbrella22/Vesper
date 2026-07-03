@@ -62,6 +62,38 @@ cleanup() {
 }
 trap cleanup EXIT
 
+cache_dir="$tmp_dir/cache"
+mkdir -p "$cache_dir"
+touch \
+  "$cache_dir/ffmpeg-8.1.tar.xz" \
+  "$cache_dir/ffmpeg-8.1.2.tar.xz" \
+  "$cache_dir/ffmpeg-8.1.10.tar.xz" \
+  "$cache_dir/ffmpeg-8.2.1.tar.xz" \
+  "$cache_dir/openssl-3.5.1.tar.gz" \
+  "$cache_dir/openssl-3.5.7.tar.gz" \
+  "$cache_dir/openssl-4.0.1.tar.gz"
+
+VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" assert_eq \
+  "8.1.10" \
+  "$(VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" vesper_ffmpeg_resolve_version android)" \
+  "FFmpeg resolver selects highest cached patch in the default series"
+VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" VESPER_ANDROID_FFMPEG_SERIES=8.2 assert_eq \
+  "8.2.1" \
+  "$(VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" VESPER_ANDROID_FFMPEG_SERIES=8.2 vesper_ffmpeg_resolve_version android)" \
+  "FFmpeg resolver honors platform series override"
+VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" VESPER_ANDROID_FFMPEG_VERSION=8.1.2 assert_eq \
+  "8.1.2" \
+  "$(VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" VESPER_ANDROID_FFMPEG_VERSION=8.1.2 vesper_ffmpeg_resolve_version android)" \
+  "FFmpeg resolver honors exact platform version override"
+VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" assert_eq \
+  "3.5.7" \
+  "$(VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" vesper_openssl_resolve_version android)" \
+  "OpenSSL resolver selects highest cached patch in the LTS series"
+VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" VESPER_ANDROID_OPENSSL_SERIES=4.0 assert_eq \
+  "4.0.1" \
+  "$(VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" VESPER_ANDROID_OPENSSL_SERIES=4.0 vesper_openssl_resolve_version android)" \
+  "OpenSSL resolver honors platform series override"
+
 temp_config="$tmp_dir/ffmpeg-profiles.toml"
 cat >"$temp_config" <<'EOF'
 [profile.base]

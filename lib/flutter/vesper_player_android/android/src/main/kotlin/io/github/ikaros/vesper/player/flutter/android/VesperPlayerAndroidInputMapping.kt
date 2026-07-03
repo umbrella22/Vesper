@@ -41,6 +41,7 @@ import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
 import io.github.ikaros.vesper.player.android.VesperTrackPreferencePolicy
 import io.github.ikaros.vesper.player.android.VesperTrackSelection
 import io.github.ikaros.vesper.player.android.VesperVideoSurfaceKind
+import io.github.ikaros.vesper.player.android.vesperPlayerDrmConfigurationFromWireMap
 import java.io.File
 
 internal fun Map<String, Any?>.toBenchmarkConfiguration(): VesperBenchmarkConfiguration =
@@ -169,6 +170,10 @@ internal fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
             else -> VesperPlayerSourceProtocol.Unknown
         },
         headers = this["headers"].stringStringMap(),
+        drmConfiguration =
+            (this["drmConfiguration"] as? Map<*, *>)
+                ?.stringMap()
+                ?.let(::vesperPlayerDrmConfigurationFromWireMap),
     )
 }
 

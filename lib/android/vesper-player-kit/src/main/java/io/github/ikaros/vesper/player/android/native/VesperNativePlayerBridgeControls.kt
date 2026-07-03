@@ -42,7 +42,13 @@ internal fun VesperNativePlayerBridge.playNativeBridge() {
     }
     bindings.play()
     nativeFramePipelinePlaybackRequested = true
-    updateState { copy(playbackState = PlaybackStateUi.Playing, isBuffering = false) }
+    updateState {
+        copy(
+            playbackState = PlaybackStateUi.Playing,
+            isBuffering = false,
+            lastError = null,
+        )
+    }
     startNativeFramePipelinePump("play")
     refreshFromNative()
 }
@@ -87,6 +93,7 @@ internal fun VesperNativePlayerBridge.stopNativeBridge() {
             playbackState = PlaybackStateUi.Ready,
             timeline = timeline.copy(positionMs = 0L),
             isBuffering = false,
+            lastError = null,
         )
     }
     refreshFromNative()

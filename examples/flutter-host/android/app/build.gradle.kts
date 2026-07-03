@@ -112,13 +112,13 @@ flutter {
 }
 
 dependencies {
-    implementation(project(":vesper-player-kit-ffmpeg-runtime"))
-    implementation(project(":vesper-player-kit-external-playback"))
-    implementation(project(":vesper-player-kit-source-normalizer-ffmpeg"))
-    implementation(project(":vesper-player-kit-frame-processor-diagnostic"))
+    implementation(project.dependencies.project(":vesper-player-kit-ffmpeg-runtime"))
+    implementation(project.dependencies.project(":vesper-player-kit-external-playback"))
+    implementation(project.dependencies.project(":vesper-player-kit-source-normalizer-ffmpeg"))
+    implementation(project.dependencies.project(":vesper-player-kit-frame-processor-diagnostic"))
 }
 
-val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
+val buildPlayerRemuxFfmpegAndroidPlugin = tasks.register<Exec>("buildPlayerRemuxFfmpegAndroidPlugin") {
     description = "Builds the Android player-remux-ffmpeg plugin libraries used by the Flutter host."
     group = "vesper"
 
@@ -148,7 +148,8 @@ val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
     }
 }
 
-val buildPlayerSourceNormalizerFfmpegAndroidPlugin by tasks.registering(Exec::class) {
+val buildPlayerSourceNormalizerFfmpegAndroidPlugin =
+    tasks.register<Exec>("buildPlayerSourceNormalizerFfmpegAndroidPlugin") {
     description = "Builds the Android player-source-normalizer-ffmpeg plugin libraries used by the Flutter host."
     group = "vesper"
 
@@ -180,7 +181,8 @@ val buildPlayerSourceNormalizerFfmpegAndroidPlugin by tasks.registering(Exec::cl
     }
 }
 
-val buildPlayerFrameProcessorDiagnosticAndroidPlugin by tasks.registering(Exec::class) {
+val buildPlayerFrameProcessorDiagnosticAndroidPlugin =
+    tasks.register<Exec>("buildPlayerFrameProcessorDiagnosticAndroidPlugin") {
     description = "Builds the Android player-frame-processor-diagnostic plugin libraries used by the Flutter host."
     group = "vesper"
 

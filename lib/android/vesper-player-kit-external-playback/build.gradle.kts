@@ -93,7 +93,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
-val buildRelayFfmpegAndroidJni by tasks.registering(Exec::class) {
+val buildRelayFfmpegAndroidJni = tasks.register<Exec>("buildRelayFfmpegAndroidJni") {
     description = "Builds the Android relay FFmpeg JNI library for external playback."
     group = "vesper"
 

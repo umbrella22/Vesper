@@ -132,7 +132,9 @@ for abi in "${selected_abis[@]}"; do
 
   configure_metadata=""
   if [[ -f "$metadata_path" ]]; then
-    configure_metadata="$(tr '\n' ';' <"$metadata_path")"
+    configure_metadata="$(
+      LC_ALL=C tr '\n' ';' <"$metadata_path" | LC_ALL=C tr -c '\40-\176' '?'
+    )"
     if [[ -n "$METADATA_DIR" ]]; then
       cp "$metadata_path" "$METADATA_DIR/$abi-vesper-ffmpeg-build-metadata.txt"
       printf 'profile_hash=%s\n' "$PROFILE_HASH" >>"$METADATA_DIR/$abi-vesper-ffmpeg-build-metadata.txt"

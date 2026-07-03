@@ -5,6 +5,14 @@ VESPER_FFMPEG_SH_INCLUDED=1
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
+vesper_ffmpeg_default_series() {
+  printf '%s\n' "${VESPER_FFMPEG_SERIES:-8.1}"
+}
+
+vesper_openssl_default_lts_series() {
+  printf '%s\n' "${VESPER_OPENSSL_LTS_SERIES:-3.5}"
+}
+
 vesper_ffmpeg_archive_name() {
   local version="$1"
 
@@ -25,6 +33,181 @@ vesper_ffmpeg_source_cache_path() {
   local archive_name="$1"
 
   printf '%s/%s\n' "$(vesper_ffmpeg_source_cache_dir)" "$archive_name"
+}
+
+vesper_series_patch_number() {
+  local series="$1"
+  local version="$2"
+  local prefix="$series."
+  local patch
+
+  if [[ "$version" == "$series" ]]; then
+    printf '0\n'
+    return 0
+  fi
+
+  if [[ "$version" == "$prefix"* ]]; then
+    patch="${version#"$prefix"}"
+    if [[ "$patch" =~ ^[0-9]+$ ]]; then
+      printf '%s\n' "$patch"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+vesper_resolve_cached_series_archive_version() {
+  local package_name="$1"
+  local series="$2"
+  local extension="$3"
+  local cache_dir
+  local best_version=""
+  local best_patch=-1
+  local path
+  local version
+  local patch
+
+  cache_dir="$(vesper_ffmpeg_source_cache_dir)"
+
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    version="$(basename "$path")"
+    version="${version#"$package_name-"}"
+    version="${version%"$extension"}"
+    if ! patch="$(vesper_series_patch_number "$series" "$version")"; then
+      continue
+    fi
+    if (( patch > best_patch )); then
+      best_patch="$patch"
+      best_version="$version"
+    fi
+  done < <(
+    compgen -G "$cache_dir/$package_name-$series$extension" || true
+    compgen -G "$cache_dir/$package_name-$series.[0-9]*$extension" || true
+  )
+
+  [[ -n "$best_version" ]] || return 1
+  printf '%s\n' "$best_version"
+}
+
+vesper_resolve_remote_series_archive_version() {
+  local package_name="$1"
+  local series="$2"
+  local extension="$3"
+  local index_url="$4"
+  local series_pattern="${series//./\\.}"
+  local extension_pattern="${extension//./\\.}"
+  local html
+  local archive_name
+  local version
+  local patch
+  local best_version=""
+  local best_patch=-1
+
+  command -v curl >/dev/null 2>&1 || return 1
+  html="$(curl --fail --location --silent --show-error "$index_url" 2>/dev/null)" || return 1
+
+  while IFS= read -r archive_name; do
+    [[ -n "$archive_name" ]] || continue
+    version="${archive_name#"$package_name-"}"
+    version="${version%"$extension"}"
+    if ! patch="$(vesper_series_patch_number "$series" "$version")"; then
+      continue
+    fi
+    if (( patch > best_patch )); then
+      best_patch="$patch"
+      best_version="$version"
+    fi
+  done < <(printf '%s\n' "$html" | grep -Eo "$package_name-$series_pattern(\\.[0-9]+)?$extension_pattern" || true)
+
+  [[ -n "$best_version" ]] || return 1
+  printf '%s\n' "$best_version"
+}
+
+vesper_resolve_series_archive_version() {
+  local package_name="$1"
+  local series="$2"
+  local extension="$3"
+  local index_url="$4"
+  local version
+
+  if version="$(vesper_resolve_cached_series_archive_version "$package_name" "$series" "$extension")"; then
+    printf '%s\n' "$version"
+    return 0
+  fi
+
+  if version="$(vesper_resolve_remote_series_archive_version "$package_name" "$series" "$extension" "$index_url")"; then
+    printf '%s\n' "$version"
+    return 0
+  fi
+
+  echo "Could not resolve latest $package_name patch for series $series; falling back to $series." >&2
+  printf '%s\n' "$series"
+}
+
+vesper_ffmpeg_resolve_version() {
+  local platform_key="${1:-}"
+  local platform_name
+  local exact_name
+  local series_name
+  local series
+
+  if [[ -n "$platform_key" ]]; then
+    platform_name="$(vesper_ffmpeg_uppercase "$platform_key")"
+    exact_name="VESPER_${platform_name}_FFMPEG_VERSION"
+    if [[ -n "${!exact_name:-}" ]]; then
+      printf '%s\n' "${!exact_name}"
+      return 0
+    fi
+  fi
+
+  if [[ -n "${VESPER_FFMPEG_VERSION:-}" ]]; then
+    printf '%s\n' "$VESPER_FFMPEG_VERSION"
+    return 0
+  fi
+
+  if [[ -n "${platform_name:-}" ]]; then
+    series_name="VESPER_${platform_name}_FFMPEG_SERIES"
+    if [[ -n "${!series_name:-}" ]]; then
+      series="${!series_name}"
+    fi
+  fi
+  series="${series:-$(vesper_ffmpeg_default_series)}"
+
+  vesper_resolve_series_archive_version ffmpeg "$series" .tar.xz https://ffmpeg.org/releases/
+}
+
+vesper_openssl_resolve_version() {
+  local platform_key="${1:-}"
+  local platform_name
+  local exact_name
+  local series_name
+  local series
+
+  if [[ -n "$platform_key" ]]; then
+    platform_name="$(vesper_ffmpeg_uppercase "$platform_key")"
+    exact_name="VESPER_${platform_name}_OPENSSL_VERSION"
+    if [[ -n "${!exact_name:-}" ]]; then
+      printf '%s\n' "${!exact_name}"
+      return 0
+    fi
+  fi
+
+  if [[ -n "${VESPER_OPENSSL_VERSION:-}" ]]; then
+    printf '%s\n' "$VESPER_OPENSSL_VERSION"
+    return 0
+  fi
+
+  if [[ -n "${platform_name:-}" ]]; then
+    series_name="VESPER_${platform_name}_OPENSSL_SERIES"
+    if [[ -n "${!series_name:-}" ]]; then
+      series="${!series_name}"
+    fi
+  fi
+  series="${series:-$(vesper_openssl_default_lts_series)}"
+
+  vesper_resolve_series_archive_version openssl "$series" .tar.gz https://openssl-library.org/source/
 }
 
 vesper_ffmpeg_shell_quote() {

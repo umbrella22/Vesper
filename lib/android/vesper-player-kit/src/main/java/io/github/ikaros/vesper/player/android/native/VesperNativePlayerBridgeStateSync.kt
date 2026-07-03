@@ -160,11 +160,12 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
 
     bindings.pollSnapshot()?.let { snapshot ->
         updateState {
+            val terminalErrorActive = lastError != null
             copy(
-                playbackState = snapshot.playbackState,
+                playbackState = if (terminalErrorActive) PlaybackStateUi.Paused else snapshot.playbackState,
                 playbackRate = snapshot.playbackRate,
-                isBuffering = snapshot.isBuffering,
-                isInterrupted = snapshot.isInterrupted,
+                isBuffering = if (terminalErrorActive) false else snapshot.isBuffering,
+                isInterrupted = if (terminalErrorActive) false else snapshot.isInterrupted,
                 timeline = snapshot.timeline,
             )
         }
@@ -177,9 +178,14 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
                     "playback_state_changed",
                     mapOf("state" to event.state.name),
                 )
-                nativeFramePipelinePlaybackRequested = event.state == PlaybackStateUi.Playing
+                nativeFramePipelinePlaybackRequested =
+                    event.state == PlaybackStateUi.Playing && _uiState.value.lastError == null
                 updateState {
-                    copy(playbackState = event.state)
+                    if (lastError != null) {
+                        copy(playbackState = PlaybackStateUi.Paused)
+                    } else {
+                        copy(playbackState = event.state)
+                    }
                 }
             }
             is NativeBridgeEvent.PlaybackRateChanged -> {
@@ -197,7 +203,7 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
                     mapOf("isBuffering" to event.isBuffering.toString()),
                 )
                 updateState {
-                    copy(isBuffering = event.isBuffering)
+                    copy(isBuffering = if (lastError != null) false else event.isBuffering)
                 }
             }
             is NativeBridgeEvent.InterruptionChanged -> {
@@ -206,7 +212,7 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
                     mapOf("isInterrupted" to event.isInterrupted.toString()),
                 )
                 updateState {
-                    copy(isInterrupted = event.isInterrupted)
+                    copy(isInterrupted = if (lastError != null) false else event.isInterrupted)
                 }
             }
             is NativeBridgeEvent.VideoSurfaceChanged -> {
@@ -267,8 +273,21 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
                         "retriable" to event.retriable.toString(),
                     ),
                 )
+                if (_uiState.value.lastError != null) {
+                    return@forEach
+                }
+                val terminalError = event.toPlayerErrorState()
+                stopNativeFramePipelinePump()
+                nativeFramePipelinePlaybackRequested = false
+                runCatching { bindings.pause() }
                 updateState {
-                    copy(subtitle = i18n.nativeError(event.message))
+                    copy(
+                        subtitle = i18n.nativeError(event.message),
+                        playbackState = PlaybackStateUi.Paused,
+                        isBuffering = false,
+                        isInterrupted = false,
+                        lastError = terminalError,
+                    )
                 }
             }
         }

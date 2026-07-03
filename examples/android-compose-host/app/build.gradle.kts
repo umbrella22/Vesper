@@ -110,7 +110,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
 
-val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
+val buildPlayerRemuxFfmpegAndroidPlugin = tasks.register<Exec>("buildPlayerRemuxFfmpegAndroidPlugin") {
     description = "Builds the Android player-remux-ffmpeg plugin libraries used by the example host."
     group = "vesper"
 
@@ -140,7 +140,8 @@ val buildPlayerRemuxFfmpegAndroidPlugin by tasks.registering(Exec::class) {
     }
 }
 
-val buildPlayerSourceNormalizerFfmpegAndroidPlugin by tasks.registering(Exec::class) {
+val buildPlayerSourceNormalizerFfmpegAndroidPlugin =
+    tasks.register<Exec>("buildPlayerSourceNormalizerFfmpegAndroidPlugin") {
     description = "Builds the Android player-source-normalizer-ffmpeg plugin libraries used by the example host."
     group = "vesper"
 
@@ -172,7 +173,8 @@ val buildPlayerSourceNormalizerFfmpegAndroidPlugin by tasks.registering(Exec::cl
     }
 }
 
-val buildPlayerFrameProcessorDiagnosticAndroidPlugin by tasks.registering(Exec::class) {
+val buildPlayerFrameProcessorDiagnosticAndroidPlugin =
+    tasks.register<Exec>("buildPlayerFrameProcessorDiagnosticAndroidPlugin") {
     description = "Builds the Android player-frame-processor-diagnostic plugin libraries used by the example host."
     group = "vesper"
 
@@ -199,7 +201,8 @@ val buildPlayerFrameProcessorDiagnosticAndroidPlugin by tasks.registering(Exec::
     }
 }
 
-val buildPlayerDecoderMediaCodecAndroidPlugin by tasks.registering(Exec::class) {
+val buildPlayerDecoderMediaCodecAndroidPlugin =
+    tasks.register<Exec>("buildPlayerDecoderMediaCodecAndroidPlugin") {
     description = "Builds the Android player-decoder-mediacodec plugin libraries used by the example host."
     group = "vesper"
 

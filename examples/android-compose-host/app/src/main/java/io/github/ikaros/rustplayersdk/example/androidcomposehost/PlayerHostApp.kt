@@ -74,6 +74,7 @@ import io.github.ikaros.vesper.player.android.VesperPlaylistCoordinator
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
+import io.github.ikaros.vesper.player.android.VesperPlayerUnsupportedOperation
 import io.github.ikaros.vesper.player.android.VesperBackgroundPlaybackMode
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackConfiguration
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControls
@@ -140,6 +141,15 @@ internal fun PlayerHostApp(
     }
     var selectedHdrEvidencePreset by remember {
         mutableStateOf(exampleHdrEvidenceP0Presets[1])
+    }
+    var selectedDolbyDrmKind by rememberSaveable {
+        mutableStateOf(ExampleDolbyAcceptanceDrmKind.Clear)
+    }
+    var selectedDolbyProfile by rememberSaveable {
+        mutableStateOf<ExampleDolbyAcceptanceProfile?>(null)
+    }
+    var selectedDolbyFps by rememberSaveable {
+        mutableStateOf<Int?>(null)
     }
     var isCapturingHdrEvidence by remember { mutableStateOf(false) }
     val systemDarkTheme = isSystemInDarkTheme()
@@ -378,6 +388,7 @@ internal fun PlayerHostApp(
             return
         }
         val preset = selectedHdrEvidencePreset
+        val dolbyAcceptancePreset = exampleDolbyAcceptancePresetById(preset.sampleId)
         val source =
             if (preset.sampleId == "NETWORK-FAILURE-CONTROL") {
                 VesperPlayerSource.remote(
@@ -385,6 +396,8 @@ internal fun PlayerHostApp(
                     label = context.getString(R.string.example_plugins_hdr_evidence_network_control_label),
                     protocol = VesperPlayerSourceProtocol.Progressive,
                 )
+            } else if (dolbyAcceptancePreset != null) {
+                dolbyAcceptancePreset.source
             } else {
                 controllerRebuildSource
             }
@@ -475,7 +488,22 @@ internal fun PlayerHostApp(
 
     fun selectSourceForPlayback(source: VesperPlayerSource) {
         activePlaybackSource = source
-        controller.selectSource(source)
+        runCatching {
+            controller.selectSource(source)
+        }.onFailure { error ->
+            Log.e(
+                PLAYER_HOST_EXAMPLE_TAG,
+                "failed to select source=${source.uri}",
+                error,
+            )
+            Toast
+                .makeText(
+                    context,
+                    error.localizedMessage ?: error::class.java.simpleName,
+                    Toast.LENGTH_LONG,
+                ).show()
+            return
+        }
         controller.configureSystemPlayback(
             VesperSystemPlaybackConfiguration(
                 metadata =
@@ -486,6 +514,125 @@ internal fun PlayerHostApp(
                 backgroundMode = VesperBackgroundPlaybackMode.Disabled,
                 controls = VesperSystemPlaybackControls.videoDefault(),
             ),
+        )
+    }
+
+    fun handleDolbyAcceptanceSelectionFailure(
+        preset: ExampleDolbyAcceptancePreset,
+        error: Throwable,
+    ) {
+        val details =
+            (error as? VesperPlayerUnsupportedOperation)
+                ?.details
+                ?.entries
+                ?.joinToString(separator = ", ") { (key, value) -> "$key=$value" }
+                ?.takeUnless(String::isBlank)
+        val message =
+            listOfNotNull(
+                error.localizedMessage ?: error::class.java.simpleName,
+                details?.let { "details: $it" },
+            ).joinToString(separator = "\n")
+        Log.e(
+            PLAYER_HOST_EXAMPLE_TAG,
+            "dolby acceptance failed preset=${preset.id} $details",
+            error,
+        )
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        controlsVisible = true
+    }
+
+    fun activateDolbyAcceptancePreset(preset: ExampleDolbyAcceptancePreset) {
+        if (!preset.isPlayable) {
+            Toast
+                .makeText(
+                    context,
+                    R.string.example_dolby_acceptance_pending_toast,
+                    Toast.LENGTH_SHORT,
+                ).show()
+            return
+        }
+        val previousSourceNormalizerSetting = sourceNormalizerSetting
+        val previousNativeFramePipelineSetting = nativeFramePipelineSetting
+        var nextSourceNormalizerSetting = sourceNormalizerSetting
+        var nextNativeFramePipelineSetting = nativeFramePipelineSetting
+        val requiresDirectNativeRoute = preset.source.drmConfiguration != null
+        if (requiresDirectNativeRoute && sourceNormalizerSetting != ExampleSourceNormalizerSetting.Disabled) {
+            nextSourceNormalizerSetting = ExampleSourceNormalizerSetting.Disabled
+        } else if (
+            !requiresDirectNativeRoute &&
+            sourceNormalizerSetting != ExampleSourceNormalizerSetting.Disabled &&
+            sourceNormalizerSetting != ExampleSourceNormalizerSetting.DiagnosticsOnly
+        ) {
+            nextSourceNormalizerSetting = ExampleSourceNormalizerSetting.Disabled
+        }
+        if (requiresDirectNativeRoute && nativeFramePipelineSetting != ExampleNativeFramePipelineSetting.Disabled) {
+            nextNativeFramePipelineSetting = ExampleNativeFramePipelineSetting.Disabled
+        } else if (
+            !requiresDirectNativeRoute &&
+            nativeFramePipelineSetting != ExampleNativeFramePipelineSetting.Disabled &&
+            nativeFramePipelineSetting != ExampleNativeFramePipelineSetting.DiagnosticsOnly
+        ) {
+            nextNativeFramePipelineSetting = ExampleNativeFramePipelineSetting.DiagnosticsOnly
+        }
+        val needsControllerRebuild =
+            requiresDirectNativeRoute ||
+                nextSourceNormalizerSetting != sourceNormalizerSetting ||
+                nextNativeFramePipelineSetting != nativeFramePipelineSetting
+        activePlaybackSource = preset.source
+        if (externalSession != null) {
+            scope.launch {
+                runCatching { externalPlaybackController.disconnectAsync() }
+            }
+            externalSession = null
+        }
+        if (needsControllerRebuild) {
+            val rebuildSnapshot = exampleControllerRebuildSnapshot(latestUiState)
+            sourceNormalizerSetting = nextSourceNormalizerSetting
+            nativeFramePipelineSetting = nextNativeFramePipelineSetting
+            val nextController =
+                runCatching {
+                    onRebuildController(
+                        nextSourceNormalizerSetting,
+                        nextNativeFramePipelineSetting,
+                        preset.source,
+                        selectedResilienceProfile.policy,
+                        rebuildSnapshot.shouldResumePlayback,
+                        null,
+                        rebuildSnapshot.restorePlaybackRate,
+                    )
+                }.getOrElse { error ->
+                    sourceNormalizerSetting = previousSourceNormalizerSetting
+                    nativeFramePipelineSetting = previousNativeFramePipelineSetting
+                    handleDolbyAcceptanceSelectionFailure(preset, error)
+                    return
+                }
+            nextController.configureSystemPlayback(
+                VesperSystemPlaybackConfiguration(
+                    metadata =
+                        VesperSystemPlaybackMetadata(
+                            title = preset.source.label.ifBlank { preset.source.uri },
+                            contentUri = preset.source.uri,
+                        ),
+                    backgroundMode = VesperBackgroundPlaybackMode.Disabled,
+                    controls = VesperSystemPlaybackControls.videoDefault(),
+                ),
+            )
+            Toast
+                .makeText(
+                    context,
+                    R.string.example_dolby_acceptance_direct_route_toast,
+                    Toast.LENGTH_SHORT,
+                ).show()
+        } else {
+            selectSourceForPlayback(preset.source)
+        }
+        selectedHdrEvidencePreset = preset.toHdrEvidencePreset()
+        controlsVisible = true
+        Log.i(
+            PLAYER_HOST_EXAMPLE_TAG,
+            "dolby acceptance preset=${preset.id} route=directNative " +
+                "sourceNormalizer=$previousSourceNormalizerSetting->$nextSourceNormalizerSetting " +
+                "nativeFrame=$previousNativeFramePipelineSetting->$nextNativeFramePipelineSetting",
         )
     }
 
@@ -1475,6 +1622,26 @@ internal fun PlayerHostApp(
                                     }
 
                                     item {
+                                        ExampleDolbyAcceptanceSection(
+                                            palette = palette,
+                                            presets = exampleDolbyAcceptanceCatalog,
+                                            selectedDrmKind = selectedDolbyDrmKind,
+                                            selectedProfile = selectedDolbyProfile,
+                                            selectedFps = selectedDolbyFps,
+                                            onDrmKindChange = { drmKind ->
+                                                selectedDolbyDrmKind = drmKind
+                                            },
+                                            onProfileChange = { profile ->
+                                                selectedDolbyProfile = profile
+                                            },
+                                            onFpsChange = { fps ->
+                                                selectedDolbyFps = fps
+                                            },
+                                            onPresetSelected = ::activateDolbyAcceptancePreset,
+                                        )
+                                    }
+
+                                    item {
                                         ExampleExternalPlaybackSection(
                                             palette = palette,
                                             routes = externalRoutes,
@@ -1542,7 +1709,9 @@ internal fun PlayerHostApp(
                                                 decoderMediaCodecPluginLibraryPaths,
                                             frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths,
                                             pluginDiagnostics = controller.pluginDiagnostics,
-                                            hdrEvidencePresets = exampleHdrEvidenceP0Presets,
+                                            hdrEvidencePresets =
+                                                exampleHdrEvidenceP0Presets +
+                                                    exampleDolbyAcceptanceHdrEvidencePresets(),
                                             selectedHdrEvidencePreset = selectedHdrEvidencePreset,
                                             isCapturingHdrEvidence = isCapturingHdrEvidence,
                                             hdrEvidenceActiveSourceAvailable = controllerRebuildSource != null,

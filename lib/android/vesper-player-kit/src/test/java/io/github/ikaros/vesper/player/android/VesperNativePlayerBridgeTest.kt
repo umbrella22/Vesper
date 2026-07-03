@@ -77,6 +77,373 @@ class VesperNativePlayerBridgeTest {
     }
 
     @Test
+    fun terminalNativeErrorStopsBufferingAndStoresLastError() {
+        val bindings =
+            FakeBindings(
+                snapshot =
+                    NativeBridgeSnapshot(
+                        playbackState = PlaybackStateUi.Playing,
+                        playbackRate = 1.0f,
+                        isBuffering = true,
+                        isInterrupted = true,
+                        timeline = testVodTimeline(positionMs = 1_200L),
+                    ),
+            )
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+        bindings.events +=
+            NativeBridgeEvent.Error(
+                message = "Widevine license failed",
+                codeOrdinal = VesperPlayerErrorCode.BackendFailure.jniOrdinal,
+                categoryOrdinal = VesperPlayerErrorCategory.Network.jniOrdinal,
+                retriable = true,
+                details =
+                    mapOf(
+                        "reason" to "drmLicenseAcquisitionFailed",
+                        "keySystem" to "widevine",
+                        "licenseUriHost" to "license.example.com",
+                        "attemptsExhausted" to true,
+                        "maxAttempts" to 3,
+                    ),
+            )
+
+        bridge.refresh()
+
+        val uiState = bridge.uiState.value
+        assertEquals(PlaybackStateUi.Paused, uiState.playbackState)
+        assertFalse(uiState.isBuffering)
+        assertFalse(uiState.isInterrupted)
+        assertEquals(1, bindings.pauseCount)
+        assertEquals("Widevine license failed", uiState.lastError?.message)
+        assertEquals(VesperPlayerErrorCode.BackendFailure, uiState.lastError?.code)
+        assertEquals(VesperPlayerErrorCategory.Network, uiState.lastError?.category)
+        assertEquals(true, uiState.lastError?.retriable)
+        assertEquals("widevine", uiState.lastError?.details?.get("keySystem"))
+        assertEquals(true, uiState.lastError?.details?.get("attemptsExhausted"))
+        assertEquals(3, uiState.lastError?.details?.get("maxAttempts"))
+    }
+
+    @Test
+    fun retryScheduledDoesNotStoreTerminalLastError() {
+        val bindings = FakeBindings()
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+        bindings.events += NativeBridgeEvent.RetryScheduled(attempt = 1, delayMs = 1_000L)
+
+        bridge.refresh()
+
+        assertNull(bridge.uiState.value.lastError)
+        assertFalse(bridge.uiState.value.isBuffering)
+        assertEquals(0, bindings.pauseCount)
+    }
+
+    @Test
+    fun nonWidevineDrmSourceFailsBeforeNativeInitialization() {
+        val bindings = FakeBindings()
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource =
+                    VesperPlayerSource.hls(
+                        uri = "https://example.com/drm.m3u8",
+                        label = "DRM",
+                        drmConfiguration =
+                            VesperPlayerDrmConfiguration(
+                                keySystem = "fairPlay",
+                                licenseUri = "https://license.example.com/fairplay",
+                            ),
+                    ),
+            )
+
+        val error =
+            runCatching { bridge.initialize() }
+                .exceptionOrNull() as? VesperPlayerUnsupportedOperation
+
+        assertNotNull(error)
+        assertNull(bindings.lastInitializedSource)
+        assertEquals("drmUnsupportedKeySystem", error?.details?.get("reason"))
+        assertEquals("direct", error?.details?.get("route"))
+        assertEquals("fairPlay", error?.details?.get("keySystem"))
+        assertFalse(bridge.uiState.value.isBuffering)
+        assertEquals(PlaybackStateUi.Paused, bridge.uiState.value.playbackState)
+        assertEquals(
+            "drmUnsupportedKeySystem",
+            bridge.uiState.value.lastError?.details?.get("reason"),
+        )
+        assertEquals(VesperPlayerErrorCode.Unsupported, bridge.uiState.value.lastError?.code)
+        assertEquals(VesperPlayerErrorCategory.Capability, bridge.uiState.value.lastError?.category)
+    }
+
+    @Test
+    fun widevineDirectDrmSourceInitializesThroughMedia3Route() {
+        val bindings = FakeBindings()
+        val source =
+            VesperPlayerSource.hls(
+                uri = "https://example.com/drm.m3u8",
+                label = "Widevine",
+                drmConfiguration =
+                    VesperPlayerDrmConfiguration(
+                        keySystem = "widevine",
+                        licenseUri = "https://license.example.com/widevine",
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = source,
+            )
+
+        bridge.initialize()
+
+        assertEquals(source, bindings.lastInitializedSource)
+        assertFalse(bridge.uiState.value.isBuffering)
+    }
+
+    @Test
+    fun disabledPluginPathsDoNotBlockWidevineDirectDrmRoute() {
+        val bindings = FakeBindings()
+        val source =
+            VesperPlayerSource.dash(
+                uri = "https://example.com/drm.mpd",
+                label = "Widevine",
+                drmConfiguration =
+                    VesperPlayerDrmConfiguration(
+                        keySystem = "widevine",
+                        licenseUri = "https://license.example.com/widevine",
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = source,
+                sourceNormalizerConfiguration =
+                    VesperSourceNormalizerConfiguration(
+                        mode = VesperSourceNormalizerMode.Disabled,
+                        pluginLibraryPaths = listOf("/tmp/libvesper_source_normalizer_ffmpeg.so"),
+                    ),
+                nativeFramePipelineConfiguration =
+                    VesperNativeFramePipelineConfiguration(
+                        mode = VesperNativeFramePipelineMode.Disabled,
+                        decoderPluginLibraryPaths = listOf("/tmp/libdecoder.so"),
+                        frameProcessorPluginLibraryPaths = listOf("/tmp/libframe.so"),
+                        maxInFlightFrames = 3,
+                    ),
+            )
+
+        bridge.initialize()
+
+        assertEquals(source, bindings.lastInitializedSource)
+        assertTrue(bridge.pluginDiagnostics.isEmpty())
+    }
+
+    @Test
+    fun widevineRemoteDrmBypassesSourceNormalizerRouteGuardWhenSystemPlaybackHandlesSource() {
+        val bindings = FakeBindings()
+        val source =
+            VesperPlayerSource.dash(
+                uri = "https://example.com/drm.mpd",
+                label = "Widevine",
+                drmConfiguration =
+                    VesperPlayerDrmConfiguration(
+                        keySystem = "widevine",
+                        licenseUri = "https://license.example.com/widevine",
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = source,
+                sourceNormalizerConfiguration =
+                    VesperSourceNormalizerConfiguration(
+                        mode = VesperSourceNormalizerMode.PreferNormalized,
+                        pluginLibraryPaths = listOf("/tmp/libvesper_source_normalizer_ffmpeg.so"),
+                    ),
+            )
+
+        bridge.initialize()
+
+        assertEquals(source, bindings.lastInitializedSource)
+        assertEquals(true, bindings.lastSystemPlaybackUsesSourceNormalizerResource)
+        assertEquals(true, bindings.lastSystemPlaybackVideoEnabled)
+    }
+
+    @Test
+    fun widevineRemoteDrmIsAllowedWithDiagnosticsOnlySourceNormalizer() {
+        val bindings = FakeBindings()
+        val source =
+            VesperPlayerSource.dash(
+                uri = "https://example.com/drm.mpd",
+                label = "Widevine",
+                drmConfiguration =
+                    VesperPlayerDrmConfiguration(
+                        keySystem = "widevine",
+                        licenseUri = "https://license.example.com/widevine",
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = source,
+                sourceNormalizerConfiguration =
+                    VesperSourceNormalizerConfiguration(
+                        mode = VesperSourceNormalizerMode.DiagnosticsOnly,
+                        pluginLibraryPaths = listOf("/tmp/libvesper_source_normalizer_ffmpeg.so"),
+                    ),
+            )
+
+        bridge.initialize()
+
+        assertEquals(source, bindings.lastInitializedSource)
+        assertEquals(true, bindings.lastSystemPlaybackUsesSourceNormalizerResource)
+        assertEquals(true, bindings.lastSystemPlaybackVideoEnabled)
+    }
+
+    @Test
+    fun widevineDrmAllowsNativeFrameFallbackToSystemPlayback() {
+        val bindings =
+            FakeBindings(
+                nativeFramePipelineOpenError =
+                    IllegalStateException("simulated native-frame open failure"),
+            )
+        val source =
+            VesperPlayerSource.dash(
+                uri = "https://example.com/drm.mpd",
+                label = "Widevine",
+                drmConfiguration =
+                    VesperPlayerDrmConfiguration(
+                        keySystem = "widevine",
+                        licenseUri = "https://license.example.com/widevine",
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = source,
+                sourceNormalizerConfiguration =
+                    VesperSourceNormalizerConfiguration(
+                        mode = VesperSourceNormalizerMode.PreflightOnly,
+                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                    ),
+                nativeFramePipelineConfiguration =
+                    VesperNativeFramePipelineConfiguration(
+                        mode = VesperNativeFramePipelineMode.PreferNativeFrame,
+                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                    ),
+            )
+
+        bridge.initialize()
+
+        assertEquals(source, bindings.lastInitializedSource)
+        assertEquals(true, bindings.lastSystemPlaybackVideoEnabled)
+    }
+
+    @Test
+    fun widevineDrmRejectsRequiredNativeFrameRoute() {
+        val bindings = FakeBindings()
+        val source =
+            VesperPlayerSource.dash(
+                uri = "https://example.com/drm.mpd",
+                label = "Widevine",
+                drmConfiguration =
+                    VesperPlayerDrmConfiguration(
+                        keySystem = "widevine",
+                        licenseUri = "https://license.example.com/widevine",
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = source,
+                sourceNormalizerConfiguration =
+                    VesperSourceNormalizerConfiguration(
+                        mode = VesperSourceNormalizerMode.PreflightOnly,
+                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                    ),
+                nativeFramePipelineConfiguration =
+                    VesperNativeFramePipelineConfiguration(
+                        mode = VesperNativeFramePipelineMode.RequireNativeFrame,
+                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                    ),
+            )
+
+        val error =
+            runCatching { bridge.initialize() }
+                .exceptionOrNull() as? VesperPlayerUnsupportedOperation
+
+        assertNotNull(error)
+        assertNull(bindings.lastInitializedSource)
+        assertEquals("drmUnsupportedRoute", error?.details?.get("reason"))
+        assertEquals("nativeFrame", error?.details?.get("route"))
+        assertEquals("widevine", error?.details?.get("keySystem"))
+    }
+
+    @Test
+    fun widevineMediaItemKeepsLicenseHeadersSeparateFromMediaHeaders() {
+        val source =
+            VesperPlayerSource.hls(
+                uri = "https://example.com/drm.m3u8",
+                label = "Widevine",
+                headers = mapOf("User-Agent" to "media-client"),
+                drmConfiguration =
+                    VesperPlayerDrmConfiguration(
+                        keySystem = "widevine",
+                        licenseUri = "https://license.example.com/widevine",
+                        licenseHeaders = mapOf("Authorization" to "Bearer drm-token"),
+                        multiSession = true,
+                    ),
+            )
+
+        val drmConfiguration = checkNotNull(buildWidevineDrmConfiguration(source))
+
+        assertEquals(C.WIDEVINE_UUID, drmConfiguration.scheme)
+        assertEquals(
+            mapOf("Authorization" to "Bearer drm-token"),
+            drmConfiguration.licenseRequestHeaders,
+        )
+        assertEquals(true, drmConfiguration.multiSession)
+        assertFalse(drmConfiguration.licenseRequestHeaders.containsKey("User-Agent"))
+    }
+
+    @Test
+    fun widevineMediaItemRejectsBlankLicenseUri() {
+        val source =
+            VesperPlayerSource.hls(
+                uri = "https://example.com/drm.m3u8",
+                label = "Widevine",
+                drmConfiguration =
+                    VesperPlayerDrmConfiguration(
+                        keySystem = "widevine",
+                        licenseUri = " ",
+                    ),
+            )
+
+        val error =
+            runCatching { buildWidevineDrmConfiguration(source) }
+                .exceptionOrNull() as? VesperPlayerUnsupportedOperation
+
+        assertNotNull(error)
+        assertEquals("drmLicenseUriMissing", error?.details?.get("reason"))
+        assertEquals("direct", error?.details?.get("route"))
+    }
+
+    @Test
+    fun firstFrameWatchdogRouteOnlyEnablesSystemVideoPlayback() {
+        val enabled = FirstFrameWatchdogRoute.systemPlayback(videoEnabled = true)
+        val disabled = FirstFrameWatchdogRoute.systemPlayback(videoEnabled = false)
+
+        assertTrue(enabled.enabled)
+        assertEquals("systemPlayer", enabled.payloadValue)
+        assertFalse(disabled.enabled)
+        assertEquals("systemPlayer", disabled.payloadValue)
+    }
+
+    @Test
+    fun defaultRetryPolicyMapsToFiniteMedia3RetryCount() {
+        val policy = VesperRetryPolicy().toNativePayload()
+
+        assertEquals(3, media3MinimumRetryCount(policy))
+        assertEquals(3, policy.resolvedMaxAttempts())
+    }
+
+    @Test
     fun pictureInPictureReadinessAllowsInitializedSystemVideoRoute() {
         val bindings =
             FakeBindings(
@@ -3691,6 +4058,16 @@ class VesperNativePlayerBridgeTest {
         assertNull(effectiveTrackId)
     }
 }
+
+private fun testVodTimeline(positionMs: Long = 0L): TimelineUiState =
+    TimelineUiState(
+        kind = TimelineKind.Vod,
+        isSeekable = true,
+        seekableRange = SeekableRangeUi(0L, 10_000L),
+        liveEdgeMs = null,
+        positionMs = positionMs,
+        durationMs = 10_000L,
+    )
 
 private class FakeBindings(
     var snapshot: NativeBridgeSnapshot? = null,

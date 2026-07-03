@@ -87,6 +87,10 @@ extension _PlayerHostHdrEvidenceActions on _PlayerHostPageState {
         protocol: VesperPlayerSourceProtocol.progressive,
       );
     }
+    final dolbyPreset = exampleDolbyAcceptancePresetById(preset.sampleId);
+    if (dolbyPreset != null) {
+      return dolbyPreset.source;
+    }
     return _activePlaylistItemId == null
         ? null
         : _playlistSourceForItem(_activePlaylistItemId!);

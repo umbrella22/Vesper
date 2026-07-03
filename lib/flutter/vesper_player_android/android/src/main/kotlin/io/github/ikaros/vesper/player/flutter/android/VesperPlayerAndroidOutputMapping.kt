@@ -31,6 +31,7 @@ import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeStatu
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeResult
 import io.github.ikaros.vesper.player.android.VesperPlaybackCodecFamily
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
+import io.github.ikaros.vesper.player.android.VesperPlayerUnsupportedOperation
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperRecommendedPlaybackPath
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
@@ -131,8 +132,18 @@ internal fun VesperCachePolicy.toMap(): Map<String, Any?> =
         "maxDiskBytes" to maxDiskBytes,
     )
 
-internal fun Throwable.toErrorMap(): Map<String, Any?> =
-    mapOf(
+internal fun Throwable.toErrorMap(): Map<String, Any?> {
+    if (this is VesperPlayerUnsupportedOperation) {
+        val errorDetails = mapOf("exception" to this::class.java.name) + details
+        return mapOf(
+            "message" to (message ?: toString()),
+            "code" to "unsupported",
+            "category" to "capability",
+            "retriable" to false,
+            "details" to errorDetails,
+        )
+    }
+    return mapOf(
         "message" to (message ?: toString()),
         "code" to "backendFailure",
         "category" to "platform",
@@ -141,6 +152,7 @@ internal fun Throwable.toErrorMap(): Map<String, Any?> =
             "exception" to this::class.java.name,
         ),
     )
+}
 
 internal fun VesperPlaybackCapabilityProbeResult.toMap(): Map<String, Any?> =
     mapOf(
@@ -446,8 +458,18 @@ private fun Map<String, Any?>.chromaticityPoint(key: String): Map<String, Double
     return mapOf("x" to x, "y" to y)
 }
 
-internal fun Throwable.toDownloadErrorMap(): Map<String, Any?> =
-    mapOf(
+internal fun Throwable.toDownloadErrorMap(): Map<String, Any?> {
+    if (this is VesperPlayerUnsupportedOperation) {
+        val errorDetails = mapOf("exception" to this::class.java.name) + details
+        return mapOf(
+            "code" to "unsupported",
+            "category" to "capability",
+            "retriable" to false,
+            "message" to (message ?: toString()),
+            "details" to errorDetails,
+        )
+    }
+    return mapOf(
         "code" to "backendFailure",
         "category" to "platform",
         "retriable" to false,
@@ -456,3 +478,4 @@ internal fun Throwable.toDownloadErrorMap(): Map<String, Any?> =
             "exception" to this::class.java.name,
         ),
     )
+}

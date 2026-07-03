@@ -152,6 +152,7 @@ data class PlayerHostUiState(
     val isBuffering: Boolean,
     val isInterrupted: Boolean,
     val timeline: TimelineUiState,
+    val lastError: VesperPlayerErrorState? = null,
 )
 
 data class VesperSystemPlaybackMetadata(

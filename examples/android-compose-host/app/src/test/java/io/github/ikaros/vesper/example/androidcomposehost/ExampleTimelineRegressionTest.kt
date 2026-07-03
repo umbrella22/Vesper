@@ -24,6 +24,115 @@ class ExampleTimelineRegressionTest {
     }
 
     @Test
+    fun `dolby acceptance urls follow browser test kit patterns`() {
+        assertEquals(
+            "https://ott.dolby.com/browser_test_kit/clear/p5/24/dash.mpd",
+            exampleDolbyAcceptanceUrl(
+                profile = ExampleDolbyAcceptanceProfile.P5,
+                fps = 24,
+                protocol = VesperPlayerSourceProtocol.Dash,
+                drmKind = ExampleDolbyAcceptanceDrmKind.Clear,
+            ),
+        )
+        assertEquals(
+            "https://ott.dolby.com/browser_test_kit/clear/p81/50/master.m3u8",
+            exampleDolbyAcceptanceUrl(
+                profile = ExampleDolbyAcceptanceProfile.P81,
+                fps = 50,
+                protocol = VesperPlayerSourceProtocol.Hls,
+                drmKind = ExampleDolbyAcceptanceDrmKind.Clear,
+            ),
+        )
+        assertEquals(
+            "https://ott.dolby.com/browser_test_kit/cenc/p84/120/dash.mpd",
+            exampleDolbyAcceptanceUrl(
+                profile = ExampleDolbyAcceptanceProfile.P84,
+                fps = 120,
+                protocol = VesperPlayerSourceProtocol.Dash,
+                drmKind = ExampleDolbyAcceptanceDrmKind.Widevine,
+            ),
+        )
+    }
+
+    @Test
+    fun `dolby widevine presets carry drm configuration for direct dash`() {
+        val preset =
+            exampleDolbyAcceptanceCatalog.first {
+                it.profile == ExampleDolbyAcceptanceProfile.P5 &&
+                    it.fps == 24 &&
+                    it.protocol == VesperPlayerSourceProtocol.Dash &&
+                    it.drmKind == ExampleDolbyAcceptanceDrmKind.Widevine
+            }
+
+        assertEquals(true, preset.isPlayable)
+        assertEquals("widevine", preset.source.drmConfiguration?.keySystem)
+        assertEquals(
+            EXAMPLE_DOLBY_ACCEPTANCE_WIDEVINE_LICENSE_URI,
+            preset.source.drmConfiguration?.licenseUri,
+        )
+        assertEquals(VesperPlayerSourceProtocol.Dash, preset.source.protocol)
+    }
+
+    @Test
+    fun `dolby widevine presets use surface view even when plugin route is disabled`() {
+        val preset =
+            exampleDolbyAcceptanceCatalog.first {
+                it.profile == ExampleDolbyAcceptanceProfile.P81 &&
+                    it.fps == 24 &&
+                    it.protocol == VesperPlayerSourceProtocol.Dash &&
+                    it.drmKind == ExampleDolbyAcceptanceDrmKind.Widevine
+            }
+
+        assertEquals(
+            VesperVideoSurfaceKind.SurfaceView,
+            exampleSurfaceKindForNativeFrameSetting(
+                ExampleNativeFramePipelineSetting.Disabled,
+                preset.source,
+            ),
+        )
+    }
+
+    @Test
+    fun `dolby fairplay presets remain pending and disabled`() {
+        val preset =
+            exampleDolbyAcceptanceCatalog.first {
+                it.profile == ExampleDolbyAcceptanceProfile.P81 &&
+                    it.fps == 30 &&
+                    it.protocol == VesperPlayerSourceProtocol.Hls &&
+                    it.drmKind == ExampleDolbyAcceptanceDrmKind.FairPlayPending
+            }
+
+        assertFalse(preset.enabled)
+        assertFalse(preset.isPlayable)
+        assertEquals(null, preset.source.drmConfiguration)
+        assertEquals(
+            "https://ott.dolby.com/browser_test_kit/cbcs/p81/30/master.m3u8",
+            preset.source.uri,
+        )
+    }
+
+    @Test
+    fun `dolby hdr evidence presets preserve profile fps protocol and drm metadata`() {
+        val preset =
+            exampleDolbyAcceptanceCatalog.first {
+                it.profile == ExampleDolbyAcceptanceProfile.P84 &&
+                    it.fps == 50 &&
+                    it.protocol == VesperPlayerSourceProtocol.Hls &&
+                    it.drmKind == ExampleDolbyAcceptanceDrmKind.Clear
+            }.toHdrEvidencePreset()
+
+        assertEquals("dolbyVision", preset.sourceMetadata["hdrKind"])
+        assertEquals("hls", preset.sourceMetadata["manifestKind"])
+        assertEquals(50.0, preset.sourceMetadata["frameRate"])
+        assertEquals("none", preset.sourceMetadata["drmKind"])
+        assertEquals("requiresDolbyVisionDisplay", preset.sourceMetadata["manualGate"])
+        assertEquals(
+            "profile8.4",
+            (preset.sourceMetadata["dolbyVision"] as Map<*, *>)["profileFamily"],
+        )
+    }
+
+    @Test
     fun `go live falls back to seekable end for live dvr`() {
         val timeline =
             TimelineUiState(

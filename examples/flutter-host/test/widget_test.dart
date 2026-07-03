@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_host/src/player/example_dolby_acceptance_catalog.dart';
 import 'package:flutter_host/src/player/example_player_models.dart';
 import 'package:flutter_host/src/player/example_player_sections.dart';
 import 'package:flutter_host/src/hdr_evidence/hdr_evidence_capture.dart';
@@ -112,4 +113,181 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('Dolby acceptance section exposes clear and Widevine presets', (
+    WidgetTester tester,
+  ) async {
+    ExampleDolbyAcceptancePreset? selected;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ExampleDolbyAcceptanceSection(
+              palette: exampleHostPalette(false),
+              presets: exampleDolbyAcceptanceCatalog,
+              selectedDrmKind: ExampleDolbyAcceptanceDrmKind.clear,
+              selectedProfile: ExampleDolbyAcceptanceProfile.p5,
+              selectedFps: 24,
+              onDrmKindChanged: (_) {},
+              onProfileChanged: (_) {},
+              onFpsChanged: (_) {},
+              onPresetSelected: (preset) {
+                selected = preset;
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Dolby 验收'), findsOneWidget);
+    expect(find.text('P5 24fps DASH Clear'), findsOneWidget);
+    expect(find.text('P5 24fps HLS Clear'), findsOneWidget);
+
+    await tester.tap(find.text('P5 24fps DASH Clear'));
+    expect(selected?.id, 'DOLBY-DV-P5-24-DASH-CLEAR');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ExampleDolbyAcceptanceSection(
+              palette: exampleHostPalette(false),
+              presets: exampleDolbyAcceptanceCatalog,
+              selectedDrmKind: ExampleDolbyAcceptanceDrmKind.widevine,
+              selectedProfile: ExampleDolbyAcceptanceProfile.p81,
+              selectedFps: 50,
+              onDrmKindChanged: (_) {},
+              onProfileChanged: (_) {},
+              onFpsChanged: (_) {},
+              onPresetSelected: (preset) {
+                selected = preset;
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('P8.1 50fps DASH Widevine'), findsOneWidget);
+    expect(
+      find.textContaining('Widevine DASH direct native route'),
+      findsOneWidget,
+    );
+    expect(find.widgetWithText(OutlinedButton, '创建下载任务'), findsNothing);
+    expect(find.widgetWithText(OutlinedButton, '外部投放'), findsNothing);
+  });
+
+  testWidgets('Dolby FairPlay pending presets are disabled', (
+    WidgetTester tester,
+  ) async {
+    var selected = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ExampleDolbyAcceptanceSection(
+              palette: exampleHostPalette(false),
+              presets: exampleDolbyAcceptanceCatalog,
+              selectedDrmKind: ExampleDolbyAcceptanceDrmKind.fairPlayPending,
+              selectedProfile: ExampleDolbyAcceptanceProfile.p5,
+              selectedFps: 24,
+              onDrmKindChanged: (_) {},
+              onProfileChanged: (_) {},
+              onFpsChanged: (_) {},
+              onPresetSelected: (_) {
+                selected = true;
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('P5 24fps HLS FairPlay pending'), findsOneWidget);
+    expect(find.textContaining('certificate URI or base64'), findsOneWidget);
+
+    final button = tester.widget<OutlinedButton>(
+      find.ancestor(
+        of: find.text('P5 24fps HLS FairPlay pending'),
+        matching: find.byType(OutlinedButton),
+      ),
+    );
+    expect(button.onPressed, isNull);
+
+    await tester.tap(find.text('P5 24fps HLS FairPlay pending'));
+    expect(selected, isFalse);
+  });
+
+  testWidgets(
+    'recent error section explains Dolby P5 device capability failure',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ExampleRecentErrorSection(
+              palette: exampleHostPalette(false),
+              error: const VesperPlayerError(
+                message: 'Decoder init failed.',
+                code: VesperPlayerErrorCode.decodeFailure,
+                category: VesperPlayerErrorCategory.decode,
+                retriable: false,
+                details: <String, Object?>{
+                  'dolbyVisionProfile': 5,
+                  'codec': 'dvhe.05.06',
+                  'decoderName': 'pending',
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(
+        find.text('当前设备不支持这个 Dolby Vision P5 / Widevine 播放组合。'),
+        findsOneWidget,
+      );
+      expect(find.text('codec：dvhe.05.06'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'recent error section explains exhausted Widevine retry failure',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ExampleRecentErrorSection(
+              palette: exampleHostPalette(false),
+              error: const VesperPlayerError(
+                message: 'Widevine license failed.',
+                code: VesperPlayerErrorCode.backendFailure,
+                category: VesperPlayerErrorCategory.network,
+                retriable: true,
+                details: <String, Object?>{
+                  'keySystem': 'widevine',
+                  'licenseUriHost': 'license.example.com',
+                  'attemptsExhausted': true,
+                  'maxAttempts': 3,
+                  'errorCodeName': 'ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED',
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(
+        find.text('Widevine license 或 provisioning 请求失败，已重试 3 次。'),
+        findsOneWidget,
+      );
+      expect(find.text('license host：license.example.com'), findsOneWidget);
+      expect(
+        find.text('错误码：ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED'),
+        findsOneWidget,
+      );
+    },
+  );
 }

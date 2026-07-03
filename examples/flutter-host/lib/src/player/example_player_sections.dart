@@ -3,11 +3,13 @@ import 'package:vesper_player/vesper_player.dart';
 import 'package:vesper_player_external_playback/vesper_player_external_playback.dart';
 import 'package:vesper_player_ui/vesper_player_ui.dart' as ui;
 
+import 'example_dolby_acceptance_catalog.dart';
 import 'example_player_helpers.dart';
 import 'example_player_models.dart';
 import '../hdr_evidence/hdr_evidence_capture.dart';
 
 part 'example_player_resilience_section.dart';
+part 'example_player_dolby_acceptance_section.dart';
 part 'example_player_plugin_sections.dart';
 part 'example_player_system_section.dart';
 part 'example_player_playlist_section.dart';

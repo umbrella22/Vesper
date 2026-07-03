@@ -519,6 +519,26 @@ void main() {
           .remoteDashMediaRequestHeaders,
       <String>{'User-Agent', 'Referer'},
     );
+    final unsupported = VesperExternalPlaybackResult.fromMap(
+      const <Object?, Object?>{
+        'status': 'unsupported',
+        'message':
+            'DRM is not supported on the externalPlayback playback route.',
+        'code': 'unsupported',
+        'category': 'capability',
+        'retriable': false,
+        'details': <Object?, Object?>{
+          'reason': 'drmUnsupportedRoute',
+          'route': 'externalPlayback',
+          'keySystem': 'widevine',
+        },
+      },
+    );
+    expect(unsupported.status, VesperExternalPlaybackResultStatus.unsupported);
+    expect(unsupported.code, 'unsupported');
+    expect(unsupported.category, 'capability');
+    expect(unsupported.retriable, isFalse);
+    expect(unsupported.details['reason'], 'drmUnsupportedRoute');
   });
 
   test('player source preserves request headers in wire map', () {
@@ -539,6 +559,38 @@ void main() {
     final restored = VesperPlayerSource.fromMap(source.toMap());
     expect(restored.headers, source.headers);
     expect(restored.protocol, VesperPlayerSourceProtocol.dash);
+  });
+
+  test('player source preserves drm configuration in wire map', () {
+    const drm = VesperPlayerDrmConfiguration(
+      keySystem: 'widevine',
+      licenseUri: 'https://license.example.com/widevine',
+      licenseHeaders: <String, String>{'Authorization': 'Bearer token'},
+      fairPlayCertificateUri: 'https://license.example.com/fairplay.cer',
+      fairPlayCertificateBase64: 'ZmFrZS1jZXJ0',
+      multiSession: true,
+    );
+    final source = VesperPlayerSource.hls(
+      uri: 'https://example.com/drm.m3u8',
+      label: 'DRM',
+      drmConfiguration: drm,
+    );
+
+    expect(source.toMap()['drmConfiguration'], drm.toMap());
+
+    final restored = VesperPlayerSource.fromMap(source.toMap());
+    expect(restored.drmConfiguration?.keySystem, 'widevine');
+    expect(restored.drmConfiguration?.licenseUri, drm.licenseUri);
+    expect(restored.drmConfiguration?.licenseHeaders, drm.licenseHeaders);
+    expect(
+      restored.drmConfiguration?.fairPlayCertificateUri,
+      drm.fairPlayCertificateUri,
+    );
+    expect(
+      restored.drmConfiguration?.fairPlayCertificateBase64,
+      drm.fairPlayCertificateBase64,
+    );
+    expect(restored.drmConfiguration?.multiSession, isTrue);
   });
 
   test('local DASH source keeps local kind and DASH protocol', () {

@@ -107,7 +107,7 @@ and only accepts generic `VesperPlayerSource` values.
 
 ```sh
 GRADLE_USER_HOME=$PWD/.gradle/gradle-user-home \
-examples/android-compose-host/.gradle/wrapper/dists/gradle-9.4.0-bin/lcvyxq3t37f6mx9miaydrrgs/gradle-9.4.0/bin/gradle \
+examples/android-compose-host/.gradle/wrapper/dists/gradle-9.6.0-bin/42k10rwplmzkhuboz9kdazi7s/gradle-9.6.0/bin/gradle \
   -p examples/android-compose-host \
   -Pvesper.player.android.abis=arm64-v8a \
   assembleRelease
@@ -118,7 +118,7 @@ examples/android-compose-host/.gradle/wrapper/dists/gradle-9.4.0-bin/lcvyxq3t37f
 ```sh
 ./scripts/vesper android jni release arm64-v8a
 GRADLE_USER_HOME=$PWD/.gradle/gradle-user-home \
-examples/android-compose-host/.gradle/wrapper/dists/gradle-9.4.0-bin/lcvyxq3t37f6mx9miaydrrgs/gradle-9.4.0/bin/gradle \
+examples/android-compose-host/.gradle/wrapper/dists/gradle-9.6.0-bin/42k10rwplmzkhuboz9kdazi7s/gradle-9.6.0/bin/gradle \
   -p examples/android-compose-host \
   -Pvesper.player.android.abis=arm64-v8a \
   :app:testDebugUnitTest
@@ -129,7 +129,7 @@ examples/android-compose-host/.gradle/wrapper/dists/gradle-9.4.0-bin/lcvyxq3t37f
 The project is pinned to:
 
 - Android Gradle Plugin `9.1.0`
-- Gradle Wrapper `9.4.0`
+- Gradle Wrapper `9.6.0`
 - Kotlin `2.3.10`
 - Compose BOM `2026.02.01`
 - Android NDK `29.0.14206865`
@@ -141,7 +141,7 @@ Gradle storage is project-local and does not affect any shared global Gradle
 cache:
 
 - wrapper distributions: `examples/android-compose-host/.gradle/wrapper/dists`
-- Gradle service home: `examples/android-compose-host/.gradle/local-gradle-user-home`
+- Gradle service home: `.gradle/gradle-user-home`
 
 References:
 

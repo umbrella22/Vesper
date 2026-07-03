@@ -121,6 +121,12 @@ class VesperDownloadManager internal constructor(
         profile: VesperDownloadProfile = VesperDownloadProfile(),
         assetIndex: VesperDownloadAssetIndex = VesperDownloadAssetIndex(),
     ): VesperDownloadTaskId? {
+        source.source.drmConfiguration?.let {
+            throw VesperPlayerUnsupportedOperation(
+                drmUnsupportedRouteMessage("download"),
+                drmUnsupportedRouteDetails(source.source, route = "download"),
+            )
+        }
         val normalizedAssetIndex =
             runCatching {
                 generatedResourceMaterializer().materialize(
@@ -150,6 +156,12 @@ class VesperDownloadManager internal constructor(
     fun restoreTasks(tasks: List<VesperDownloadTaskSnapshot>): Boolean {
         if (tasks.isEmpty()) {
             return true
+        }
+        tasks.firstOrNull { it.source.source.drmConfiguration != null }?.let { task ->
+            throw VesperPlayerUnsupportedOperation(
+                drmUnsupportedRouteMessage("download"),
+                drmUnsupportedRouteDetails(task.source.source, route = "download"),
+            )
         }
         val normalizedTasks =
             runCatching {

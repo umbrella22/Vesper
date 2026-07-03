@@ -52,7 +52,7 @@ kotlin {
 dependencies {
     def hostKitProject = findProject(":vesper-player-kit")
     if (hostKitProject != null) {
-        implementation hostKitProject
+        implementation project(":vesper-player-kit")
     } else {
         implementation "io.github.ikaros.vesper:vesper-player-kit:$vesperPlayerKitVersion"
     }

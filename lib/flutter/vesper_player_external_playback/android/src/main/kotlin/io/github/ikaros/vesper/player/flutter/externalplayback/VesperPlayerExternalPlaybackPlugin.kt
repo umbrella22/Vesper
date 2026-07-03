@@ -14,6 +14,7 @@ import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackMetadata
+import io.github.ikaros.vesper.player.android.vesperPlayerDrmConfigurationFromWireMap
 import io.github.ikaros.vesper.player.android.external.VesperExternalFallbackFormat
 import io.github.ikaros.vesper.player.android.external.VesperExternalFormatAdaptationConfig
 import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackController
@@ -213,7 +214,14 @@ private fun VesperExternalPlaybackResult.toMap(): Map<String, Any?> =
         is VesperExternalPlaybackResult.Unavailable ->
             mapOf("status" to "unavailable", "message" to message)
         is VesperExternalPlaybackResult.Unsupported ->
-            mapOf("status" to "unsupported", "message" to message)
+            mapOf(
+                "status" to "unsupported",
+                "message" to message,
+                "code" to code,
+                "category" to category,
+                "retriable" to retriable,
+                "details" to details,
+            )
         is VesperExternalPlaybackResult.Failed ->
             mapOf("status" to "failed", "message" to message)
     }
@@ -270,6 +278,10 @@ private fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
             else -> VesperPlayerSourceProtocol.Unknown
         },
         headers = this["headers"].stringStringMap(),
+        drmConfiguration =
+            (this["drmConfiguration"] as? Map<*, *>)
+                ?.stringMap()
+                ?.let(::vesperPlayerDrmConfigurationFromWireMap),
     )
 }
 

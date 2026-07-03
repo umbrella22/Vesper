@@ -2,6 +2,10 @@ part of 'player_host_page.dart';
 
 extension _PlayerHostPlaylistActions on _PlayerHostPageState {
   VesperPlayerSource? _playlistSourceForItem(String itemId) {
+    final dolbyPreset = exampleDolbyAcceptancePresetById(itemId);
+    if (dolbyPreset != null) {
+      return dolbyPreset.source;
+    }
     return switch (itemId) {
       flutterHlsPlaylistItemId => flutterHlsDemoSource(),
       flutterDashPlaylistItemId => flutterDashDemoSource(),
@@ -103,5 +107,46 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
       source: source,
       remoteSource: source,
     );
+  }
+
+  Future<void> _activateDolbyAcceptancePreset(
+    VesperPlayerController controller,
+    ExampleDolbyAcceptancePreset preset,
+  ) async {
+    if (!preset.isPlayable) {
+      _showMessage('FairPlay certificate is not configured yet.');
+      return;
+    }
+    if (preset.protocol == VesperPlayerSourceProtocol.dash &&
+        !controller.capabilities.supportsDash) {
+      _showMessage('当前平台宿主暂不支持 DASH Dolby 验收流。');
+      return;
+    }
+    if (preset.isDrm &&
+        _sourceNormalizerSetting != ExampleSourceNormalizerSetting.disabled &&
+        _sourceNormalizerSetting !=
+            ExampleSourceNormalizerSetting.diagnosticsOnly) {
+      _updateState(() {
+        _sourceNormalizerSetting = ExampleSourceNormalizerSetting.disabled;
+      });
+      _showMessage('DRM 验收已切回 direct native 路径，SourceNormalizer 已关闭。');
+      await _rebuildControllerForSource(
+        preset.source,
+        shouldResumePlayback:
+            controller.snapshot.playbackState == VesperPlaybackState.playing,
+      );
+    } else {
+      await _activatePlaylistSource(
+        controller,
+        itemId: preset.id,
+        source: preset.source,
+      );
+    }
+    if (!mounted) {
+      return;
+    }
+    _updateState(() {
+      _selectedHdrEvidencePreset = preset.toHdrEvidencePreset();
+    });
   }
 }

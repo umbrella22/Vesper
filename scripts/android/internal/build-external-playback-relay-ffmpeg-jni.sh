@@ -111,7 +111,9 @@ for abi in "${selected_abis[@]}"; do
 
   configure_metadata=""
   if [[ -f "$metadata_path" ]]; then
-    configure_metadata="$(tr '\n' ';' <"$metadata_path")"
+    configure_metadata="$(
+      LC_ALL=C tr '\n' ';' <"$metadata_path" | LC_ALL=C tr -c '\40-\176' '?'
+    )"
   fi
 
   cargo_args=(

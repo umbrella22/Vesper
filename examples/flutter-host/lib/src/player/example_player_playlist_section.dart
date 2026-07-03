@@ -55,17 +55,97 @@ class ExampleRecentErrorSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final message = _exampleRecentErrorMessage(error);
+    final diagnostics = _exampleRecentErrorDiagnostics(error).take(4).toList();
     return ExampleSectionShell(
       palette: palette,
       title: '最近错误',
       subtitle: '平台层错误会同时进入 snapshot 和 event stream。',
       accent: const Color(0xFFC13C36),
-      child: Text(
-        error.message,
-        style: const TextStyle(color: Color(0xFF7F231F), height: 1.45),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            message,
+            style: const TextStyle(color: Color(0xFF7F231F), height: 1.45),
+          ),
+          if (diagnostics.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 8),
+            for (final line in diagnostics)
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Text(
+                  line,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF7F463E),
+                    fontSize: 12,
+                    height: 1.25,
+                  ),
+                ),
+              ),
+          ],
+        ],
       ),
     );
   }
+}
+
+String _exampleRecentErrorMessage(VesperPlayerError error) {
+  if (_isDolbyVisionP5CapabilityFailure(error)) {
+    return '当前设备不支持这个 Dolby Vision P5 / Widevine 播放组合。';
+  }
+  if (_isWidevineNetworkExhausted(error)) {
+    final attempts = error.details['maxAttempts']?.toString();
+    return 'Widevine license 或 provisioning 请求失败，已重试 ${attempts?.isNotEmpty == true ? attempts : '3'} 次。';
+  }
+  return error.message;
+}
+
+Iterable<String> _exampleRecentErrorDiagnostics(VesperPlayerError error) sync* {
+  final details = error.details;
+  final licenseHost = details['licenseUriHost']?.toString();
+  if (licenseHost != null && licenseHost.isNotEmpty) {
+    yield 'license host：$licenseHost';
+  }
+  final errorCode = details['errorCodeName']?.toString();
+  if (errorCode != null && errorCode.isNotEmpty) {
+    yield '错误码：$errorCode';
+  }
+  final codec = details['codec']?.toString();
+  if (codec != null && codec.isNotEmpty) {
+    yield 'codec：$codec';
+  }
+  final decoderName = details['decoderName']?.toString();
+  if (decoderName != null && decoderName.isNotEmpty) {
+    yield 'decoder：$decoderName';
+  }
+}
+
+bool _isWidevineNetworkExhausted(VesperPlayerError error) {
+  return error.category == VesperPlayerErrorCategory.network &&
+      error.details['keySystem']?.toString().toLowerCase() == 'widevine' &&
+      error.details['attemptsExhausted']?.toString().toLowerCase() == 'true';
+}
+
+bool _isDolbyVisionP5CapabilityFailure(VesperPlayerError error) {
+  if (error.category != VesperPlayerErrorCategory.decode &&
+      error.category != VesperPlayerErrorCategory.capability) {
+    return false;
+  }
+  final evidence = error.hdrCapabilityEvidence;
+  final profile =
+      evidence?.hdrMetadata?.dolbyVisionProfile?.toString() ??
+      error.details['dolbyVisionProfile']?.toString();
+  final codec = error.details['codec']?.toString().toLowerCase() ?? '';
+  final sampleMimeType =
+      error.details['sampleMimeType']?.toString().toLowerCase() ?? '';
+  final cause =
+      error.details['capabilityFailureCause']?.toString().toLowerCase() ?? '';
+  return profile == '5' ||
+      codec.contains('.05') ||
+      sampleMimeType == 'video/dolby-vision' && cause.contains('decoder');
 }
 
 class _ExamplePlaylistRow extends StatelessWidget {

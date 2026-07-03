@@ -11,6 +11,7 @@ import '../device/example_device_controls.dart';
 import '../download/example_download_planner.dart';
 import '../download/example_download_sections.dart';
 import '../device/example_local_media_picker.dart';
+import 'example_dolby_acceptance_catalog.dart';
 import 'example_player_helpers.dart';
 import 'example_player_models.dart';
 import 'example_player_sections.dart';
@@ -66,6 +67,10 @@ class _PlayerHostPageState extends State<PlayerHostPage>
       ExampleResilienceProfile.balanced;
   ExampleSourceNormalizerSetting _sourceNormalizerSetting =
       ExampleSourceNormalizerSetting.preflightOnly;
+  ExampleDolbyAcceptanceDrmKind _selectedDolbyDrmKind =
+      ExampleDolbyAcceptanceDrmKind.clear;
+  ExampleDolbyAcceptanceProfile? _selectedDolbyProfile;
+  int? _selectedDolbyFps;
   ExampleHdrEvidenceSamplePreset _selectedHdrEvidencePreset =
       exampleHdrEvidenceP0Presets[1];
   bool _isApplyingResilienceProfile = false;
@@ -124,7 +129,6 @@ class _PlayerHostPageState extends State<PlayerHostPage>
       _externalEventsSubscription = _externalPlaybackController.events.listen(
         _handleExternalEvent,
       );
-      unawaited(_externalPlaybackController.startDiscovery());
     }
     _controllerFuture = _createController();
   }

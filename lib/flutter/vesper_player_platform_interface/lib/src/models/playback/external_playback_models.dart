@@ -193,6 +193,10 @@ final class VesperExternalPlaybackResult {
     this.message,
     this.routeId,
     this.relayEnabled = false,
+    this.code,
+    this.category,
+    this.retriable = false,
+    this.details = const <String, String>{},
   });
 
   factory VesperExternalPlaybackResult.fromMap(Map<Object?, Object?> map) {
@@ -205,6 +209,10 @@ final class VesperExternalPlaybackResult {
       message: map['message'] as String?,
       routeId: map['routeId'] as String?,
       relayEnabled: _decodeBool(map, 'relayEnabled'),
+      code: map['code'] as String?,
+      category: map['category'] as String?,
+      retriable: _decodeBool(map, 'retriable'),
+      details: _decodeStringMap(map['details']),
     );
   }
 
@@ -212,6 +220,10 @@ final class VesperExternalPlaybackResult {
   final String? message;
   final String? routeId;
   final bool relayEnabled;
+  final String? code;
+  final String? category;
+  final bool retriable;
+  final Map<String, String> details;
 
   bool get isSuccess => status == VesperExternalPlaybackResultStatus.success;
 }

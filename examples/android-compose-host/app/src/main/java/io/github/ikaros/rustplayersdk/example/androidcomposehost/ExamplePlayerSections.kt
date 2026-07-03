@@ -314,6 +314,163 @@ internal fun ExampleExternalPlaybackSection(
 }
 
 @Composable
+internal fun ExampleDolbyAcceptanceSection(
+    palette: ExampleHostPalette,
+    presets: List<ExampleDolbyAcceptancePreset>,
+    selectedDrmKind: ExampleDolbyAcceptanceDrmKind,
+    selectedProfile: ExampleDolbyAcceptanceProfile?,
+    selectedFps: Int?,
+    onDrmKindChange: (ExampleDolbyAcceptanceDrmKind) -> Unit,
+    onProfileChange: (ExampleDolbyAcceptanceProfile?) -> Unit,
+    onFpsChange: (Int?) -> Unit,
+    onPresetSelected: (ExampleDolbyAcceptancePreset) -> Unit,
+) {
+    val filteredPresets =
+        presets.filter { preset ->
+            preset.drmKind == selectedDrmKind &&
+                (selectedProfile == null || preset.profile == selectedProfile) &&
+                (selectedFps == null || preset.fps == selectedFps)
+        }
+
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_dolby_acceptance_title),
+        subtitle = stringResource(R.string.example_dolby_acceptance_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                ExampleDolbyAcceptanceDrmKind.values().forEach { drmKind ->
+                    SelectionChip(
+                        label = drmKind.title,
+                        selected = drmKind == selectedDrmKind,
+                        onClick = { onDrmKindChange(drmKind) },
+                    )
+                }
+            }
+
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                SelectionChip(
+                    label = stringResource(R.string.example_dolby_acceptance_all_profiles),
+                    selected = selectedProfile == null,
+                    onClick = { onProfileChange(null) },
+                )
+                ExampleDolbyAcceptanceProfile.values().forEach { profile ->
+                    SelectionChip(
+                        label = profile.title,
+                        selected = profile == selectedProfile,
+                        onClick = { onProfileChange(profile) },
+                    )
+                }
+            }
+
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                SelectionChip(
+                    label = stringResource(R.string.example_dolby_acceptance_all_fps),
+                    selected = selectedFps == null,
+                    onClick = { onFpsChange(null) },
+                )
+                exampleDolbyAcceptanceFpsValues.forEach { fps ->
+                    SelectionChip(
+                        label = "${fps}fps",
+                        selected = fps == selectedFps,
+                        onClick = { onFpsChange(fps) },
+                    )
+                }
+            }
+
+            if (selectedDrmKind == ExampleDolbyAcceptanceDrmKind.FairPlayPending) {
+                Text(
+                    text = stringResource(R.string.example_dolby_acceptance_fairplay_pending),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = palette.body,
+                        lineHeight = 20.sp,
+                    ),
+                )
+            }
+
+            if (filteredPresets.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.example_dolby_acceptance_empty),
+                    style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    filteredPresets.forEach { preset ->
+                        DolbyAcceptancePresetRow(
+                            preset = preset,
+                            palette = palette,
+                            onPresetSelected = onPresetSelected,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DolbyAcceptancePresetRow(
+    preset: ExampleDolbyAcceptancePreset,
+    palette: ExampleHostPalette,
+    onPresetSelected: (ExampleDolbyAcceptancePreset) -> Unit,
+) {
+    OutlinedButton(
+        onClick = { onPresetSelected(preset) },
+        enabled = preset.isPlayable,
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(
+                text = preset.label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    color = if (preset.isPlayable) palette.title else palette.body,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            Text(
+                text =
+                    listOf(
+                        preset.profile.title,
+                        "${preset.fps}fps",
+                        preset.protocolLabel,
+                        preset.drmKind.title,
+                        preset.manualGate,
+                    ).joinToString(" · "),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+            preset.notes.firstOrNull()?.let { note ->
+                Text(
+                    text = note,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelSmall.copy(color = palette.body),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun CastRoutePickerRow(
     palette: ExampleHostPalette,
     requestId: Long,

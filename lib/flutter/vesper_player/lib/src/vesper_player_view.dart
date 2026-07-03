@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
@@ -48,8 +50,8 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
   void didUpdateWidget(covariant VesperPlayerView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
-      _reportAsyncViewportError(
-        oldWidget.controller.clearViewport(),
+      _runViewportOperation(
+        oldWidget.controller.clearViewport,
         'clear old viewport',
       );
       _lastViewport = null;
@@ -69,8 +71,7 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
     WidgetsBinding.instance.removeObserver(_bindingObserver);
     _scrollPosition?.removeListener(_scheduleViewportReport);
     _scrollPosition = null;
-    _reportAsyncViewportError(
-        widget.controller.clearViewport(), 'clear viewport');
+    _runViewportOperation(widget.controller.clearViewport, 'clear viewport');
     super.dispose();
   }
 
@@ -97,16 +98,7 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
   Widget _buildPlatformBaseLayer() {
     return widget.visible
         ? switch (defaultTargetPlatform) {
-            TargetPlatform.android => AndroidView(
-                key: ValueKey<String>(
-                  'vesper_player_android_${widget.controller.playerId}',
-                ),
-                viewType: _platformViewType,
-                creationParams: <String, Object?>{
-                  'playerId': widget.controller.playerId,
-                },
-                creationParamsCodec: const StandardMessageCodec(),
-              ),
+            TargetPlatform.android => _buildAndroidPlatformView(),
             TargetPlatform.iOS => UiKitView(
                 key: ValueKey<String>(
                   'vesper_player_ios_${widget.controller.playerId}',
@@ -120,6 +112,41 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
             _ => const ColoredBox(color: Color(0x00000000)),
           }
         : const ColoredBox(color: Color(0x00000000));
+  }
+
+  Widget _buildAndroidPlatformView() {
+    return PlatformViewLink(
+      key: ValueKey<String>(
+        'vesper_player_android_${widget.controller.playerId}',
+      ),
+      viewType: _platformViewType,
+      surfaceFactory: (
+        BuildContext context,
+        PlatformViewController controller,
+      ) {
+        return AndroidViewSurface(
+          controller: controller as AndroidViewController,
+          hitTestBehavior: PlatformViewHitTestBehavior.opaque,
+          gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
+        );
+      },
+      onCreatePlatformView: (PlatformViewCreationParams params) {
+        final controller = PlatformViewsService.initSurfaceAndroidView(
+          id: params.id,
+          viewType: params.viewType,
+          layoutDirection: Directionality.of(context),
+          creationParams: <String, Object?>{
+            'playerId': widget.controller.playerId,
+          },
+          creationParamsCodec: const StandardMessageCodec(),
+          onFocus: () => params.onFocusChanged(true),
+        );
+        controller.addOnPlatformViewCreatedListener(
+          params.onPlatformViewCreated,
+        );
+        return controller;
+      },
+    );
   }
 
   Widget _buildLayeredContent(Widget baseLayer) {
@@ -191,8 +218,8 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
     }
 
     _lastViewport = viewport;
-    _reportAsyncViewportError(
-      widget.controller.updateViewport(viewport),
+    _runViewportOperation(
+      () => widget.controller.updateViewport(viewport),
       'update viewport',
     );
   }
@@ -202,8 +229,7 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
       return;
     }
     _lastViewport = null;
-    _reportAsyncViewportError(
-        widget.controller.clearViewport(), 'clear viewport');
+    _runViewportOperation(widget.controller.clearViewport, 'clear viewport');
   }
 
   void _handleLifecycleChanged(AppLifecycleState state) {
@@ -233,18 +259,41 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
         (previous.height - next.height).abs() < 0.5;
   }
 
-  void _reportAsyncViewportError(Future<void> future, String context) {
+  void _runViewportOperation(
+    Future<void> Function() operation,
+    String context,
+  ) {
+    late final Future<void> future;
+    try {
+      future = operation();
+    } catch (error, stackTrace) {
+      _reportViewportError(error, stackTrace, context);
+      return;
+    }
+
     unawaited(
       future.catchError((Object error, StackTrace stackTrace) {
-        FlutterError.reportError(
-          FlutterErrorDetails(
-            exception: error,
-            stack: stackTrace,
-            library: 'vesper_player',
-            context: ErrorDescription(context),
-          ),
-        );
+        _reportViewportError(error, stackTrace, context);
       }),
+    );
+  }
+
+  void _reportViewportError(
+    Object error,
+    StackTrace stackTrace,
+    String context,
+  ) {
+    if (error is StateError &&
+        error.message == 'VesperPlayerController has already been disposed.') {
+      return;
+    }
+    FlutterError.reportError(
+      FlutterErrorDetails(
+        exception: error,
+        stack: stackTrace,
+        library: 'vesper_player',
+        context: ErrorDescription(context),
+      ),
     );
   }
 }

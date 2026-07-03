@@ -36,11 +36,15 @@ import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.drm.KeyRequestInfo
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 import java.io.File
+import java.io.IOException
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.absoluteValue
@@ -284,6 +288,13 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
                     error.message ?: error.errorCodeName,
                 )
             }
+            enqueueTerminalPlaybackError(
+                message = error.message ?: error.errorCodeName,
+                classified = classified,
+                reason = error.terminalPlaybackErrorReason(),
+                errorCodeName = error.errorCodeName,
+                error = error,
+            )
             pushSnapshotToRust()
             notifyNativeUpdate()
         }
@@ -298,6 +309,10 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
             initializationDurationMs: Long,
         ) {
             currentVideoDecoderName = decoderName
+            Log.i(
+                NATIVE_JNI_BINDINGS_TAG,
+                "onVideoDecoderInitialized decoder=$decoderName durationMs=$initializationDurationMs",
+            )
             recordBenchmark(
                 "video_decoder_initialized",
                 mapOf(
@@ -315,23 +330,31 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
         ) {
             val codec = nativeTrackCodec(format) ?: ""
             val mimeType = videoMimeType(format)
+            val decoderDiagnostics = VesperHardwareMediaCodecSelector.decoderDiagnostics(mimeType)
             val hardwareDecodeSupported =
-                VesperHardwareMediaCodecSelector.hasHardwareDecoder(mimeType)
+                decoderDiagnostics["hardwareDecoderCount"]?.toIntOrNull()?.let { it > 0 }
+                    ?: VesperHardwareMediaCodecSelector.hasHardwareDecoder(mimeType)
             Log.d(
                 NATIVE_JNI_BINDINGS_TAG,
-                "onVideoInputFormatChanged formatId=${format.id} bitrate=${format.bitrate} width=${format.width} height=${format.height}",
+                "onVideoInputFormatChanged formatId=${format.id} sampleMimeType=${format.sampleMimeType} codecs=${format.codecs} " +
+                    "bitrate=${format.bitrate} width=${format.width} height=${format.height} " +
+                    "hardwareDecoders=${decoderDiagnostics["hardwareDecoderCount"] ?: "unknown"} " +
+                    "secureHardwareDecoders=${decoderDiagnostics["secureHardwareDecoderCount"] ?: "unknown"} " +
+                    "decoderName=${currentVideoDecoderName ?: "pending"}",
             )
             recordBenchmark(
                 "video_input_format_changed",
                 mapOf(
                     "formatId" to (format.id ?: ""),
+                    "sampleMimeType" to (format.sampleMimeType ?: ""),
+                    "codecs" to (format.codecs ?: ""),
                     "codecFamily" to vesperAndroidVideoCodecFamily(codec).toBenchmarkValue(),
                     "hardwareDecodeSupported" to hardwareDecodeSupported.toString(),
                     "selectionReason" to "hardware_decode_source_selection",
                     "bitrate" to format.bitrate.toString(),
                     "width" to format.width.toString(),
                     "height" to format.height.toString(),
-                ) + (currentVideoDecoderName?.let { mapOf("decoderName" to it) } ?: emptyMap()),
+                ) + decoderDiagnostics + (currentVideoDecoderName?.let { mapOf("decoderName" to it) } ?: emptyMap()),
             )
             currentRuntimeHdrEvidence = format.androidRuntimeHdrEvidence()
             currentRuntimeSessionProbe = buildRuntimeSessionProbeSnapshot(format)
@@ -345,6 +368,11 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
             output: Any,
             renderTimeMs: Long,
         ) {
+            firstFrameRenderedForCurrentSource = true
+            Log.i(
+                NATIVE_JNI_BINDINGS_TAG,
+                "onRenderedFirstFrame renderTimeMs=$renderTimeMs output=${output::class.java.name}",
+            )
             val firstFrameMark = firstFrameGate.markFirstFrameRendered()
             if (!firstFrameMark.isFirstForEpoch) {
                 return
@@ -357,7 +385,366 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
                 ),
             )
         }
+
+        @Suppress("DEPRECATION")
+        override fun onDrmSessionAcquired(
+            eventTime: AnalyticsListener.EventTime,
+            state: Int,
+        ) {
+            val source = currentDrmDiagnosticsSource ?: return
+            val drm = source.drmConfiguration ?: return
+            Log.i(
+                NATIVE_JNI_BINDINGS_TAG,
+                "onDrmSessionAcquired keySystem=${drm.keySystem} state=$state source=${source.uri}",
+            )
+            recordBenchmark(
+                "drm_session_acquired",
+                mapOf(
+                    "keySystem" to drm.keySystem,
+                    "state" to state.toString(),
+                    "licenseUriHost" to drm.licenseUri.hostForDiagnostics(),
+                ),
+            )
+        }
+
+        override fun onDrmKeysLoaded(
+            eventTime: AnalyticsListener.EventTime,
+            keyRequestInfo: KeyRequestInfo,
+        ) {
+            val source = currentDrmDiagnosticsSource ?: return
+            val drm = source.drmConfiguration ?: return
+            Log.i(
+                NATIVE_JNI_BINDINGS_TAG,
+                "onDrmKeysLoaded keySystem=${drm.keySystem} source=${source.uri}",
+            )
+            recordBenchmark(
+                "drm_keys_loaded",
+                mapOf(
+                    "keySystem" to drm.keySystem,
+                    "licenseUriHost" to drm.licenseUri.hostForDiagnostics(),
+                ),
+            )
+        }
+
+        override fun onDrmSessionManagerError(
+            eventTime: AnalyticsListener.EventTime,
+            error: Exception,
+        ) {
+            val source = currentDrmDiagnosticsSource
+            val drm = source?.drmConfiguration
+            currentDrmRuntimeErrorCount += 1
+            val maxAttempts = currentRetryMaxAttempts
+            val attemptsExhausted = maxAttempts != null && currentDrmRuntimeErrorCount >= maxAttempts
+            val maxAttemptsLabel = maxAttempts?.toString() ?: "unlimited"
+            Log.e(
+                NATIVE_JNI_BINDINGS_TAG,
+                "onDrmSessionManagerError keySystem=${drm?.keySystem ?: "none"} source=${source?.uri ?: ""} " +
+                    "attempt=$currentDrmRuntimeErrorCount/$maxAttemptsLabel exhausted=$attemptsExhausted " +
+                    "error=${error::class.java.name}: ${error.message}",
+                error,
+            )
+            recordBenchmark(
+                "drm_session_manager_error",
+                mapOf(
+                    "keySystem" to (drm?.keySystem ?: ""),
+                    "licenseUriHost" to (drm?.licenseUri?.hostForDiagnostics() ?: ""),
+                    "attempt" to currentDrmRuntimeErrorCount.toString(),
+                    "maxAttempts" to maxAttemptsLabel,
+                    "attemptsExhausted" to attemptsExhausted.toString(),
+                    "errorClass" to error::class.java.name,
+                    "errorMessage" to (error.message ?: ""),
+                ),
+            )
+            localBridgeEvents +=
+                NativeBridgeEvent.Warning(
+                    VesperRuntimeWarning(
+                        domain = "drm",
+                        payload =
+                            linkedMapOf(
+                                "reason" to "drmSessionManagerError",
+                                "keySystem" to (drm?.keySystem ?: ""),
+                                "licenseUriHost" to (drm?.licenseUri?.hostForDiagnostics() ?: ""),
+                                "sourceUri" to (source?.uri ?: ""),
+                                "attempt" to currentDrmRuntimeErrorCount.toString(),
+                                "maxAttempts" to maxAttemptsLabel,
+                                "attemptsExhausted" to attemptsExhausted.toString(),
+                                "errorClass" to error::class.java.name,
+                                "errorMessage" to (error.message ?: ""),
+                            ),
+                    ),
+                )
+            if (!attemptsExhausted) {
+                notifyNativeUpdate()
+                return
+            }
+            enqueueTerminalPlaybackError(
+                message = error.message ?: "Widevine DRM license/provisioning failed.",
+                classified =
+                    NativePlaybackError(
+                        codeOrdinal = BACKEND_FAILURE_ORDINAL,
+                        categoryOrdinal = NETWORK_CATEGORY_ORDINAL,
+                        retriable = true,
+                    ),
+                reason = "drmSessionManagerError",
+                errorCodeName = null,
+                error = error,
+                extraDetails =
+                    mapOf(
+                        "attempt" to currentDrmRuntimeErrorCount,
+                        "attemptsExhausted" to true,
+                    ),
+            )
+            notifyNativeUpdate()
+        }
+
+        override fun onDrmSessionReleased(eventTime: AnalyticsListener.EventTime) {
+            val source = currentDrmDiagnosticsSource ?: return
+            val drm = source.drmConfiguration ?: return
+            Log.i(
+                NATIVE_JNI_BINDINGS_TAG,
+                "onDrmSessionReleased keySystem=${drm.keySystem} source=${source.uri}",
+            )
+            recordBenchmark(
+                "drm_session_released",
+                mapOf("keySystem" to drm.keySystem),
+            )
+        }
+
+        override fun onLoadError(
+            eventTime: AnalyticsListener.EventTime,
+            loadEventInfo: LoadEventInfo,
+            mediaLoadData: MediaLoadData,
+            error: IOException,
+            wasCanceled: Boolean,
+        ) {
+            val source = currentDrmDiagnosticsSource
+            val drm = source?.drmConfiguration
+            Log.w(
+                NATIVE_JNI_BINDINGS_TAG,
+                "onLoadError dataType=${mediaLoadData.dataType.media3DataTypeName()} " +
+                    "trackType=${mediaLoadData.trackType.media3TrackTypeName()} canceled=$wasCanceled " +
+                    "uri=${loadEventInfo.uri} bytesLoaded=${loadEventInfo.bytesLoaded} " +
+                    "error=${error::class.java.name}: ${error.message}",
+                error,
+            )
+            recordBenchmark(
+                "load_error",
+                mapOf(
+                    "dataType" to mediaLoadData.dataType.media3DataTypeName(),
+                    "trackType" to mediaLoadData.trackType.media3TrackTypeName(),
+                    "wasCanceled" to wasCanceled.toString(),
+                    "keySystem" to (drm?.keySystem ?: ""),
+                    "uriHost" to loadEventInfo.uri.toString().hostForDiagnostics(),
+                    "errorClass" to error::class.java.name,
+                    "errorMessage" to (error.message ?: ""),
+                ),
+            )
+        }
     }
+
+internal fun VesperNativeJniBindings.scheduleFirstFrameWatchdog(
+    source: VesperPlayerSource,
+    playbackEpoch: Long,
+    route: FirstFrameWatchdogRoute,
+) {
+    cancelFirstFrameWatchdog()
+    if (!route.enabled) {
+        return
+    }
+    firstFrameWatchdogSource = source
+    val runnable =
+        Runnable {
+            val exoPlayer = player ?: return@Runnable
+            if (isDisposed.get() || firstFrameWatchdogSource != source || firstFrameGate.currentEpoch != playbackEpoch) {
+                return@Runnable
+            }
+            if (firstFrameRenderedForCurrentSource || exoPlayer.playbackState != Player.STATE_BUFFERING) {
+                return@Runnable
+            }
+            val videoFormat = exoPlayer.videoFormat
+            val mimeType = videoFormat?.let(::videoMimeType)
+            val decoderDiagnostics = VesperHardwareMediaCodecSelector.decoderDiagnostics(mimeType)
+            val drm = source.drmConfiguration
+            Log.w(
+                NATIVE_JNI_BINDINGS_TAG,
+                "firstFrameWatchdog state=${exoPlaybackStateName(exoPlayer.playbackState)} " +
+                    "positionMs=${exoPlayer.currentPosition} durationMs=${exoPlayer.duration.normalizedDurationMs()} " +
+                    "keySystem=${drm?.keySystem ?: "none"} surfaceAttached=${attachedSurface?.isValid == true} " +
+                    "formatId=${videoFormat?.id ?: ""} sampleMimeType=${videoFormat?.sampleMimeType ?: ""} " +
+                    "codecs=${videoFormat?.codecs ?: ""} decoderName=${currentVideoDecoderName ?: "pending"} " +
+                    "hardwareDecoders=${decoderDiagnostics["hardwareDecoderCount"] ?: "unknown"} " +
+                    "secureHardwareDecoders=${decoderDiagnostics["secureHardwareDecoderCount"] ?: "unknown"}",
+            )
+            localBridgeEvents +=
+                NativeBridgeEvent.Warning(
+                    VesperRuntimeWarning(
+                        domain = "playback",
+                        payload =
+                            linkedMapOf(
+                                "reason" to "firstFrameTimeout",
+                                "route" to route.payloadValue,
+                                "sourceUri" to source.uri,
+                                "keySystem" to (drm?.keySystem ?: ""),
+                                "playbackState" to exoPlaybackStateName(exoPlayer.playbackState),
+                                "positionMs" to exoPlayer.currentPosition,
+                                "durationMs" to exoPlayer.duration.normalizedDurationMs(),
+                                "surfaceAttached" to (attachedSurface?.isValid == true),
+                                "formatId" to (videoFormat?.id ?: ""),
+                                "sampleMimeType" to (videoFormat?.sampleMimeType ?: ""),
+                                "codecs" to (videoFormat?.codecs ?: ""),
+                                "decoderName" to (currentVideoDecoderName ?: ""),
+                            ) + decoderDiagnostics,
+                    ),
+                )
+            notifyNativeUpdate()
+        }
+    firstFrameWatchdogRunnable = runnable
+    mainHandler.postDelayed(runnable, FIRST_FRAME_WATCHDOG_DELAY_MS)
+}
+
+internal fun VesperNativeJniBindings.cancelFirstFrameWatchdog() {
+    firstFrameWatchdogRunnable?.let(mainHandler::removeCallbacks)
+    firstFrameWatchdogRunnable = null
+    firstFrameWatchdogSource = null
+}
+
+internal data class FirstFrameWatchdogRoute(
+    val enabled: Boolean,
+    val payloadValue: String,
+) {
+    companion object {
+        fun systemPlayback(videoEnabled: Boolean): FirstFrameWatchdogRoute =
+            FirstFrameWatchdogRoute(
+                enabled = videoEnabled,
+                payloadValue = "systemPlayer",
+            )
+    }
+}
+
+internal fun Int.media3DataTypeName(): String =
+    when (this) {
+        C.DATA_TYPE_MEDIA -> "media"
+        C.DATA_TYPE_MEDIA_INITIALIZATION -> "mediaInitialization"
+        C.DATA_TYPE_DRM -> "drm"
+        C.DATA_TYPE_MANIFEST -> "manifest"
+        C.DATA_TYPE_TIME_SYNCHRONIZATION -> "timeSynchronization"
+        C.DATA_TYPE_AD -> "ad"
+        C.DATA_TYPE_MEDIA_PROGRESSIVE_LIVE -> "mediaProgressiveLive"
+        C.DATA_TYPE_UNKNOWN -> "unknown"
+        else -> "custom($this)"
+    }
+
+internal fun Int.media3TrackTypeName(): String =
+    when (this) {
+        C.TRACK_TYPE_NONE -> "none"
+        C.TRACK_TYPE_UNKNOWN -> "unknown"
+        C.TRACK_TYPE_DEFAULT -> "default"
+        C.TRACK_TYPE_AUDIO -> "audio"
+        C.TRACK_TYPE_VIDEO -> "video"
+        C.TRACK_TYPE_TEXT -> "text"
+        C.TRACK_TYPE_IMAGE -> "image"
+        C.TRACK_TYPE_METADATA -> "metadata"
+        C.TRACK_TYPE_CAMERA_MOTION -> "cameraMotion"
+        else -> "custom($this)"
+    }
+
+internal fun String.hostForDiagnostics(): String =
+    runCatching { URI(this).host.orEmpty() }
+        .getOrDefault("")
+
+internal fun VesperNativeJniBindings.enqueueTerminalPlaybackError(
+    message: String,
+    classified: NativePlaybackError,
+    reason: String,
+    errorCodeName: String?,
+    error: Throwable,
+    extraDetails: Map<String, Any?> = emptyMap(),
+) {
+    if (terminalErrorReportedForCurrentSource) {
+        return
+    }
+    terminalErrorReportedForCurrentSource = true
+    localBridgeEvents +=
+        NativeBridgeEvent.Error(
+            message = message,
+            codeOrdinal = classified.codeOrdinal,
+            categoryOrdinal = classified.categoryOrdinal,
+            retriable = classified.retriable,
+            details =
+                terminalPlaybackErrorDetails(
+                    classified = classified,
+                    reason = reason,
+                    errorCodeName = errorCodeName,
+                    error = error,
+                    extraDetails = extraDetails,
+                ),
+        )
+}
+
+internal fun VesperNativeJniBindings.terminalPlaybackErrorDetails(
+    classified: NativePlaybackError,
+    reason: String,
+    errorCodeName: String?,
+    error: Throwable,
+    extraDetails: Map<String, Any?> = emptyMap(),
+): Map<String, Any?> {
+    val output = linkedMapOf<String, Any?>(
+        "reason" to reason,
+        "errorClass" to error::class.java.name,
+        "errorMessage" to (error.message?.boundedFailureMessage() ?: ""),
+    )
+    errorCodeName?.takeIf(String::isNotBlank)?.let { output["errorCodeName"] = it }
+    val drm = currentDrmDiagnosticsSource?.drmConfiguration
+    if (drm != null) {
+        output["keySystem"] = drm.keySystem
+        output["licenseUriHost"] = drm.licenseUri.hostForDiagnostics()
+        if (classified.categoryOrdinal == NETWORK_CATEGORY_ORDINAL) {
+            output["attemptsExhausted"] = true
+            currentRetryMaxAttempts?.let { output["maxAttempts"] = it }
+        }
+    }
+    val videoFormat = player?.videoFormat
+    videoFormat?.id?.takeIf(String::isNotBlank)?.let { output["formatId"] = it }
+    videoFormat?.sampleMimeType?.takeIf(String::isNotBlank)?.let { output["sampleMimeType"] = it }
+    videoFormat?.let(::nativeTrackCodec)?.takeIf(String::isNotBlank)?.let { output["codec"] = it }
+    videoFormat?.width?.takeIf { it > 0 }?.let { output["width"] = it }
+    videoFormat?.height?.takeIf { it > 0 }?.let { output["height"] = it }
+    output["decoderName"] = currentVideoDecoderName ?: "pending"
+    output.putAll(VesperHardwareMediaCodecSelector.decoderDiagnostics(videoFormat?.let(::videoMimeType)))
+    classified.capabilityFailureCause?.let { output["capabilityFailureCause"] = it.wireName }
+    classified.capabilityFailureAxis?.let { output["capabilityFailureAxis"] = it.wireName }
+    output.putAll(classified.causeEvidence?.diagnostics().orEmpty())
+    if (classified.likelyCapabilityIssue) {
+        currentRuntimeHdrEvidence
+            ?.failureHintPayload(errorCodeName ?: reason, classified, currentRuntimeSessionProbe)
+            ?.let { hdrPayload ->
+                output.putAll(hdrPayload)
+                output["reason"] = reason
+            }
+    }
+    output.putAll(extraDetails)
+    return output
+}
+
+internal fun PlaybackException.terminalPlaybackErrorReason(): String =
+    when (errorCode) {
+        PlaybackException.ERROR_CODE_DRM_PROVISIONING_FAILED -> "drmProvisioningFailed"
+        PlaybackException.ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED -> "drmLicenseAcquisitionFailed"
+        PlaybackException.ERROR_CODE_DRM_SYSTEM_ERROR -> "drmSystemError"
+        PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED -> "drmLicenseExpired"
+        PlaybackException.ERROR_CODE_DRM_CONTENT_ERROR -> "drmContentError"
+        PlaybackException.ERROR_CODE_DRM_UNSPECIFIED -> "drmRuntimeError"
+        PlaybackException.ERROR_CODE_DRM_SCHEME_UNSUPPORTED -> "drmUnsupportedKeySystem"
+        PlaybackException.ERROR_CODE_DRM_DISALLOWED_OPERATION -> "drmDisallowedOperation"
+        PlaybackException.ERROR_CODE_DRM_DEVICE_REVOKED -> "drmDeviceRevoked"
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "decoderInit"
+        PlaybackException.ERROR_CODE_DECODING_FAILED -> "decodeFailed"
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "unsupportedFormat"
+        PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES -> "formatExceedsCapabilities"
+        else -> "playbackError"
+    }
+
+internal const val FIRST_FRAME_WATCHDOG_DELAY_MS = 15_000L
 
 internal fun VesperNativeJniBindings.pushSnapshotToRust() {
     val handle = sessionHandle ?: return

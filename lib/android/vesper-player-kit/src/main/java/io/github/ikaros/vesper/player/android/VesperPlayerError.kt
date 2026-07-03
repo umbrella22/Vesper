@@ -47,3 +47,20 @@ enum class VesperPlayerErrorCategory(
             entries.firstOrNull { it.jniOrdinal == ordinal } ?: Platform
     }
 }
+
+data class VesperPlayerErrorState(
+    val message: String,
+    val code: VesperPlayerErrorCode,
+    val category: VesperPlayerErrorCategory,
+    val retriable: Boolean,
+    val details: Map<String, Any?> = emptyMap(),
+) {
+    fun toMap(): Map<String, Any?> =
+        mapOf(
+            "message" to message,
+            "code" to code.wireName,
+            "category" to category.wireName,
+            "retriable" to retriable,
+            "details" to details,
+        )
+}

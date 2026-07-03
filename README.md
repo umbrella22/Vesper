@@ -51,6 +51,10 @@ reference.
   local HTTP relay for protected headers, local files, and `content://` sources.
 - Platform-native surfaces instead of frame-copy rendering paths for mobile
   playback.
+- Native-only DRM playback integration for direct mobile playback paths:
+  Widevine is configured on Android Media3, and FairPlay is configured on iOS
+  AVPlayer. DRM sources are not processed by Rust, FFI, plugins, download,
+  preload, remux, SourceNormalizer, or external playback relays.
 - Optional plugin architecture for advanced media workflows: post-download
   remux, native-frame decoder experiments, internal frame processor diagnostics,
   and desktop-first source normalization.
@@ -77,6 +81,7 @@ check before exposing advanced controls.
 | Resilience policy          | ✅                                | ✅                                         | ✅                                                                                                                                                  | ✅ Android / iOS                                     |
 | Preload budget             | ✅                                | ✅                                         | ⚠️ shared policy/planner only; `player-host-desktop` uses a noop executor today                                                                      | ✅ Android / iOS                                     |
 | Download manager           | ✅ VOD prepare + restore + export | ✅ VOD prepare + restore + export          | ✅ public `player-host-desktop::download` service                                                                                                   | ✅ Android / iOS                                     |
+| DRM direct playback        | ✅ Widevine through Media3 direct paths | ✅ FairPlay through AVPlayer direct paths | ⛔ not supported                                                                                                                                    | ✅ Android / iOS direct native paths only           |
 | Hardware decode probe      | `VesperDecoderBackend`            | `VesperCodecSupport`                       | macOS VideoToolbox native-frame opt-in; Windows D3D11 roadmap; Linux software-only today                                                            | Reflected through mobile capabilities                |
 | Plugin startup diagnostics | Internal runtime diagnostics      | Internal runtime diagnostics               | macOS / Windows decoder diagnostics; macOS frame processor chain; Linux reports unsupported diagnostics for configured plugin paths                | Exposed as create-result diagnostics where supported |
 
@@ -84,6 +89,25 @@ Flutter support is mobile-only for now. Desktop Flutter targets are intentionall
 not shipped while the Flutter desktop integration model settles. Product UI
 should rely on runtime capability flags rather than assuming every row above is
 available on every backend.
+
+## DRM Boundary
+
+DRM in Vesper is a native-only playback integration, not a media-processing
+feature. `VesperPlayerSource.drmConfiguration` is a public source DTO so hosts
+can pass license metadata to the platform player, but protected media stays
+inside the platform DRM stack: Android uses Media3 / Widevine, and iOS uses
+AVPlayer / FairPlay.
+
+Any route that rewrites the stream, changes the origin, or asks the SDK to touch
+decoded frames rejects DRM sources with an unsupported capability error. This
+includes SourceNormalizer, SDK-managed native-frame playback, the iOS DASH
+bridge, download, preload, post-download remux, and external playback relay
+flows. Plugins do not receive Widevine or FairPlay protected media.
+
+If a future product needs a cloud-vendor-style private encryption format, that
+must be designed as a separate pre-decryption adapter that turns private
+encrypted input into a normal source for the platform player. It is not part of
+the current Widevine / FairPlay DRM contract.
 
 ## Repository Layout
 
@@ -324,6 +348,16 @@ ABIs and slices record `vesper-ffmpeg-build-metadata.txt` with the declared
 profile, profile hash, source archive, license-sensitive flags, and exact
 configure line for release review.
 
+Android builds that explicitly opt into `--tls-backend openssl` provision
+OpenSSL from the 3.5 LTS series by default. FFmpeg source builds default to the
+8.1.x series. Both defaults resolve the highest matching patch already present
+in `third_party/_cache` before consulting upstream release indexes; release
+metadata still records the exact resolved version. Use `VESPER_FFMPEG_VERSION`
+or `VESPER_ANDROID_OPENSSL_VERSION` for exact-version reproduction, and use
+`VESPER_FFMPEG_SERIES` or `VESPER_ANDROID_OPENSSL_SERIES` only for intentional
+series moves. Stale local OpenSSL prebuilts are rebuilt when their `openssl.pc`
+version does not match the selected version.
+
 ## Desktop FFmpeg
 
 Desktop Rust builds that link FFmpeg resolve libraries in this order:
@@ -332,8 +366,8 @@ Desktop Rust builds that link FFmpeg resolve libraries in this order:
    `third_party/ffmpeg/desktop` when it already exists.
 2. Otherwise use the latest system FFmpeg exposed through `pkg-config` or
    Homebrew `ffmpeg`.
-3. If neither exists, build and install the matching workspace FFmpeg
-   major/minor release into `third_party/ffmpeg/desktop`.
+3. If neither exists, build and install the shared audited FFmpeg source release
+   into `third_party/ffmpeg/desktop`.
 
 The local source archive cache is `third_party/_cache` by default. FFmpeg,
 OpenSSL, and libxml2 source archives are reused from that directory before any
@@ -345,7 +379,10 @@ Useful overrides:
 | Variable                               | Purpose                                                         |
 | -------------------------------------- | --------------------------------------------------------------- |
 | `VESPER_DESKTOP_FFMPEG_DIR`            | Override the repository-local desktop FFmpeg install directory. |
-| `VESPER_DESKTOP_FFMPEG_VERSION`        | Override the auto-resolved FFmpeg major/minor version.          |
+| `VESPER_FFMPEG_SERIES`                 | Override the shared default FFmpeg source series.               |
+| `VESPER_FFMPEG_VERSION`                | Override the shared FFmpeg source version exactly.              |
+| `VESPER_DESKTOP_FFMPEG_SERIES`         | Override the desktop fallback FFmpeg source series.             |
+| `VESPER_DESKTOP_FFMPEG_VERSION`        | Override the desktop fallback FFmpeg source version exactly.    |
 | `VESPER_DESKTOP_FFMPEG_SOURCE_ARCHIVE` | Point to a pre-downloaded FFmpeg source archive.                |
 | `VESPER_DESKTOP_FFMPEG_SOURCE_URL`     | Override the source download URL.                               |
 | `VESPER_THIRD_PARTY_SOURCE_CACHE_DIR`  | Override the shared source archive cache directory.             |

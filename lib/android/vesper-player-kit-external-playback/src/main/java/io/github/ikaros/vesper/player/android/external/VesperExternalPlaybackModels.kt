@@ -58,7 +58,13 @@ sealed class VesperExternalPlaybackResult {
     ) : VesperExternalPlaybackResult()
 
     data class Unavailable(val message: String) : VesperExternalPlaybackResult()
-    data class Unsupported(val message: String) : VesperExternalPlaybackResult()
+    data class Unsupported(
+        val message: String,
+        val code: String = "unsupported",
+        val category: String = "capability",
+        val retriable: Boolean = false,
+        val details: Map<String, Any?> = emptyMap(),
+    ) : VesperExternalPlaybackResult()
     data class Failed(val message: String) : VesperExternalPlaybackResult()
 }
 

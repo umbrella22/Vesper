@@ -3,8 +3,8 @@ set -euo pipefail
 
 # This script only fills the repository-local fallback path and does not change
 # the system-first resolution order.
-# The default version follows the workspace ffmpeg-next major/minor version so
-# the helper is not pinned to a fixed FFmpeg release.
+# The default source version is shared with the mobile FFmpeg scripts so
+# repository-local fallback builds use the same audited release archive.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg.sh"
 
 ROOT_DIR="$VESPER_REPO_ROOT"
@@ -23,15 +23,7 @@ resolve_ffmpeg_version() {
     return 0
   fi
 
-  local cargo_toml="$ROOT_DIR/Cargo.toml"
-  local version_line
-  version_line="$(sed -n 's/^[[:space:]]*ffmpeg-next[[:space:]]*=[[:space:]]*{[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*$/\1/p' "$cargo_toml" | head -n 1)"
-  if [[ -z "$version_line" ]]; then
-    echo "Could not resolve ffmpeg-next version from $cargo_toml" >&2
-    exit 1
-  fi
-
-  awk -F. '{ print $1 "." $2 }' <<<"$version_line"
+  vesper_ffmpeg_resolve_version desktop
 }
 
 FFMPEG_VERSION="$(resolve_ffmpeg_version)"

@@ -5,6 +5,8 @@ import android.os.Handler
 import android.os.Looper
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
+import io.github.ikaros.vesper.player.android.drmUnsupportedRouteDetails
+import io.github.ikaros.vesper.player.android.drmUnsupportedRouteMessage
 import io.github.ikaros.vesper.player.android.external.internal.cast.VesperCastController
 import io.github.ikaros.vesper.player.android.external.internal.cast.VesperCastLoadRequest
 import io.github.ikaros.vesper.player.android.external.internal.dlna.VesperDlnaDevice
@@ -217,6 +219,12 @@ class VesperExternalPlaybackController(context: Context) {
         if (item.sources.isEmpty()) {
             return VesperExternalPlaybackResult.Unsupported("No media sources were provided.")
         }
+        item.sources.firstOrNull { it.drmConfiguration != null }?.let { source ->
+            return VesperExternalPlaybackResult.Unsupported(
+                drmUnsupportedRouteMessage("externalPlayback"),
+                details = drmUnsupportedRouteDetails(source, route = "externalPlayback"),
+            )
+        }
         return when (activeRouteId) {
             CAST_ROUTE_ID -> loadCast(item, startPositionMs, autoplay)
             null -> VesperExternalPlaybackResult.Unavailable("No external playback route is connected.")
@@ -232,6 +240,12 @@ class VesperExternalPlaybackController(context: Context) {
         checkNotReleased()
         if (item.sources.isEmpty()) {
             return VesperExternalPlaybackResult.Unsupported("No media sources were provided.")
+        }
+        item.sources.firstOrNull { it.drmConfiguration != null }?.let { source ->
+            return VesperExternalPlaybackResult.Unsupported(
+                drmUnsupportedRouteMessage("externalPlayback"),
+                details = drmUnsupportedRouteDetails(source, route = "externalPlayback"),
+            )
         }
         return when (activeRouteId) {
             CAST_ROUTE_ID -> loadCast(item, startPositionMs, autoplay)

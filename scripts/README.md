@@ -217,4 +217,15 @@ tarballs somewhere else.
 - FFmpeg, OpenSSL, and libxml2 version, source URL, source archive, and output
   directory overrides continue to use the existing `VESPER_*` environment
   variable semantics.
+- FFmpeg source builds default to the shared audited source series declared in
+  `scripts/lib/ffmpeg.sh`. The resolver selects the highest matching patch from
+  `third_party/_cache` before consulting upstream release indexes. Use
+  `VESPER_FFMPEG_SERIES` / `VESPER_<PLATFORM>_FFMPEG_SERIES` for intentional
+  series moves, and `VESPER_FFMPEG_VERSION` /
+  `VESPER_<PLATFORM>_FFMPEG_VERSION` only for exact-version reproduction.
+- Android OpenSSL provisioning is opt-in through FFmpeg TLS overlays and uses
+  the OpenSSL 3.5 LTS series by default. The resolver uses the same cache-first
+  patch selection as FFmpeg. Override `VESPER_ANDROID_OPENSSL_SERIES` only for
+  intentional LTS-series moves and `VESPER_ANDROID_OPENSSL_VERSION` only for
+  exact-version reproduction.
 - `scripts/lib/` contains only shared functions and default constants. Sourcing these files must not start build work.

@@ -16,11 +16,11 @@ internal fun VesperNativePlayerBridge.initializeNativeBridge() {
                 sourceLabel = i18n.noSourceSelected(),
                 playbackState = PlaybackStateUi.Ready,
                 isBuffering = false,
+                lastError = null,
             )
         }
         return
     }
-
     currentPluginDiagnostics = probePluginsForSource(source)
     stopNativeFramePipelinePump()
     releasePendingTimedNativeFrameOnRuntime(presented = false)
@@ -39,6 +39,27 @@ internal fun VesperNativePlayerBridge.initializeNativeBridge() {
             "decoderPlugins=${nativeFramePipelineConfiguration.decoderPluginLibraryPaths.size} " +
             "frameProcessors=${nativeFramePipelineConfiguration.frameProcessorPluginLibraryPaths.size}",
     )
+    source.androidDrmPhase0Failure(nativeFrameDecision)?.let { failure ->
+        recordBenchmark(
+            "initialize_failed",
+            mapOf("error" to failure.message.orEmpty()),
+        )
+        hasInitializedSource = false
+        pendingAutoPlay = false
+        clearTrackState()
+        val terminalError = failure.toPlayerErrorState()
+        updateState {
+            copy(
+                subtitle = i18n.stubError(failure.message ?: drmUnsupportedRouteMessage("systemPlayer")),
+                sourceLabel = source.label,
+                playbackState = PlaybackStateUi.Paused,
+                isBuffering = false,
+                isInterrupted = false,
+                lastError = terminalError,
+            )
+        }
+        throw failure
+    }
     when (nativeFrameDecision) {
         NativeFramePipelineRoute.SystemPlayer -> Unit
         is NativeFramePipelineRoute.Fallback -> {
@@ -49,10 +70,26 @@ internal fun VesperNativePlayerBridge.initializeNativeBridge() {
             hasInitializedSource = false
             pendingAutoPlay = false
             clearTrackState()
+            val terminalError =
+                VesperPlayerErrorState(
+                    message = nativeFrameDecision.reason,
+                    code = VesperPlayerErrorCode.Unsupported,
+                    category = VesperPlayerErrorCategory.Capability,
+                    retriable = false,
+                    details =
+                        mapOf(
+                            "reason" to "nativeFrameRouteUnavailable",
+                            "route" to "nativeFrame",
+                        ),
+                )
             updateState {
                 copy(
                     subtitle = i18n.stubError(nativeFrameDecision.reason),
                     sourceLabel = source.label,
+                    playbackState = PlaybackStateUi.Paused,
+                    isBuffering = false,
+                    isInterrupted = false,
+                    lastError = terminalError,
                 )
             }
             return
@@ -96,13 +133,20 @@ internal fun VesperNativePlayerBridge.initializeNativeBridge() {
                 Log.i(NATIVE_PLAYER_BRIDGE_TAG, "auto-playing selected source=${source.uri}")
                 bindings.play()
                 nativeFramePipelinePlaybackRequested = true
-                updateState { copy(playbackState = PlaybackStateUi.Playing, isBuffering = false) }
+                updateState {
+                    copy(
+                        playbackState = PlaybackStateUi.Playing,
+                        isBuffering = false,
+                        lastError = null,
+                    )
+                }
                 startNativeFramePipelinePump("autoplay")
             }
             updateState {
                 copy(
                     subtitle = it.subtitle ?: sourceSubtitle(source),
                     sourceLabel = source.label,
+                    lastError = null,
                 )
             }
             refreshFromNative()
@@ -117,13 +161,41 @@ internal fun VesperNativePlayerBridge.initializeNativeBridge() {
             clearTrackState()
             Log.e(NATIVE_PLAYER_BRIDGE_TAG, "failed to initialize source=${source.uri}", it)
             val message = it.message?.takeUnless(String::isBlank) ?: i18n.nativeBindingsUnavailable()
+            val terminalError = it.toInitializePlayerErrorState(message)
             updateState {
                 copy(
                     subtitle = i18n.stubError(message),
                     sourceLabel = source.label,
+                    playbackState = PlaybackStateUi.Paused,
+                    isBuffering = false,
+                    isInterrupted = false,
+                    lastError = terminalError,
                 )
             }
         }
+}
+
+internal fun VesperPlayerSource.androidDrmPhase0Failure(
+    nativeFrameDecision: NativeFramePipelineRoute,
+): VesperPlayerUnsupportedOperation? {
+    drmConfiguration ?: return null
+    val route =
+        when (nativeFrameDecision) {
+            NativeFramePipelineRoute.SdkManaged,
+            is NativeFramePipelineRoute.Fail -> "nativeFrame"
+            NativeFramePipelineRoute.SystemPlayer,
+            is NativeFramePipelineRoute.Fallback -> "direct"
+        }
+    val reason =
+        when {
+            route == "nativeFrame" -> "drmUnsupportedRoute"
+            !drmConfiguration.keySystem.equals("widevine", ignoreCase = true) -> "drmUnsupportedKeySystem"
+            else -> return null
+        }
+    return VesperPlayerUnsupportedOperation(
+        drmUnsupportedRouteMessage(route),
+        drmUnsupportedRouteDetails(this, route = route, reason = reason),
+    )
 }
 
 internal fun VesperNativePlayerBridge.disposeNativeBridge() {
@@ -187,7 +259,26 @@ internal fun VesperNativePlayerBridge.selectNativeSource(source: VesperPlayerSou
             playbackState = PlaybackStateUi.Ready,
             isBuffering = true,
             timeline = timeline.copy(positionMs = 0L),
+            lastError = null,
         )
     }
     initialize()
 }
+
+private fun Throwable.toInitializePlayerErrorState(message: String): VesperPlayerErrorState =
+    when (this) {
+        is VesperPlayerUnsupportedOperation -> toPlayerErrorState()
+        else ->
+            VesperPlayerErrorState(
+                message = message,
+                code = VesperPlayerErrorCode.BackendFailure,
+                category = VesperPlayerErrorCategory.Platform,
+                retriable = false,
+                details =
+                    mapOf(
+                        "reason" to "initializeFailed",
+                        "errorClass" to this::class.java.name,
+                        "errorMessage" to message,
+                    ),
+            )
+    }

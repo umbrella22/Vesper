@@ -28,7 +28,7 @@ dependencies {
     api(project(":vesper-player-kit-ffmpeg-runtime"))
 }
 
-val checkNoBundledFfmpegRuntimeLibraries by tasks.registering {
+val checkNoBundledFfmpegRuntimeLibraries = tasks.register("checkNoBundledFfmpegRuntimeLibraries") {
     group = "verification"
     description = "Fails if the SourceNormalizer AAR bundles FFmpeg/runtime shared libraries."
     val nativeLibraries = fileTree("src/main/jniLibs") {

@@ -17,7 +17,7 @@ data class VesperSourceNormalizerConfiguration(
     val runtimeProfile: String? = null,
 ) {
     internal val isDisabled: Boolean
-        get() = mode == VesperSourceNormalizerMode.Disabled && pluginLibraryPaths.isEmpty()
+        get() = mode == VesperSourceNormalizerMode.Disabled
 
     internal val modeOrdinal: Int
         get() = when (mode) {
@@ -46,7 +46,7 @@ data class VesperFrameProcessorConfiguration(
     val pluginLibraryPaths: List<String> = emptyList(),
 ) {
     internal val isDisabled: Boolean
-        get() = mode == VesperFrameProcessorMode.Disabled && pluginLibraryPaths.isEmpty()
+        get() = mode == VesperFrameProcessorMode.Disabled
 
     internal val modeOrdinal: Int
         get() = when (mode) {
@@ -63,10 +63,7 @@ data class VesperNativeFramePipelineConfiguration(
 ) {
     internal val isDisabled: Boolean
         get() =
-            mode == VesperNativeFramePipelineMode.Disabled &&
-                decoderPluginLibraryPaths.isEmpty() &&
-                frameProcessorPluginLibraryPaths.isEmpty() &&
-                maxInFlightFrames == null
+            mode == VesperNativeFramePipelineMode.Disabled
 
     internal val modeOrdinal: Int
         get() = when (mode) {

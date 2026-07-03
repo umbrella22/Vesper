@@ -1364,6 +1364,7 @@ class VesperPlayerAndroidPlugin :
                 buildSnapshotMap(session)
             }.collect { snapshot ->
                 emitRuntimeWarnings(session)
+                emitHostTerminalErrorIfNeeded(session, snapshot)
                 emitSnapshot(session, snapshot)
             }
         }
@@ -1412,6 +1413,31 @@ class VesperPlayerAndroidPlugin :
                 "type" to "error",
                 "error" to (session.lastError ?: error.toErrorMap()),
                 "snapshot" to buildSnapshotMap(session),
+            ),
+        )
+        emitBenchmarkConsoleLog(session, force = true)
+    }
+
+    private fun emitHostTerminalErrorIfNeeded(
+        session: PlayerSession,
+        snapshot: Map<String, Any?>,
+    ) {
+        val hostError = session.controller.uiState.value.lastError?.toMap()
+        if (hostError == null) {
+            session.lastEmittedTerminalError = null
+            return
+        }
+        session.lastError = hostError
+        if (session.lastEmittedTerminalError == hostError) {
+            return
+        }
+        session.lastEmittedTerminalError = hostError
+        emitEvent(
+            mapOf(
+                "playerId" to session.id,
+                "type" to "error",
+                "error" to hostError,
+                "snapshot" to snapshot,
             ),
         )
         emitBenchmarkConsoleLog(session, force = true)
@@ -1606,6 +1632,11 @@ class VesperPlayerAndroidPlugin :
         val effectiveVideoTrackId = session.controller.effectiveVideoTrackId.value
         val videoVariantObservation = session.controller.videoVariantObservation.value
         val resiliencePolicy = session.controller.resiliencePolicy.value
+        val hostLastError = uiState.lastError?.toMap()
+        if (hostLastError != null) {
+            session.lastError = hostLastError
+        }
+        val resolvedLastError = hostLastError ?: session.lastError
 
         return mapOf(
             "title" to uiState.title,
@@ -1626,7 +1657,7 @@ class VesperPlayerAndroidPlugin :
             "effectiveVideoTrackId" to effectiveVideoTrackId,
             "videoVariantObservation" to videoVariantObservation?.toMap(),
             "resiliencePolicy" to resiliencePolicy.toMap(),
-            "lastError" to session.lastError,
+            "lastError" to resolvedLastError,
         )
     }
 

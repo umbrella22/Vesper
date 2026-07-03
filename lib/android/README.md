@@ -91,6 +91,7 @@ Core (`vesper-player-kit`):
 - `VesperPlayerControllerFactory` — `createDefault(...)` for production bridge, `createPreview(...)` for a Fake bridge
 - `VesperPlayerBackendFamily` — public backend family snapshot exposed through `VesperPlayerController.backendFamily`
 - `VesperPlayerSource` — media source DTO with `local / remote / hls / dash` factories
+- `VesperPlayerDrmConfiguration` — Widevine license metadata for direct Media3 playback
 - `VesperTrackSelection` — audio / subtitle / video track selection (`auto`, `disabled`, `track(id)`)
 - Reactive state on the controller: `uiState`, `trackCatalog`, `trackSelection`, `effectiveVideoTrackId`, `videoVariantObservation`, `resiliencePolicy` (all `StateFlow<...>`)
 - `VesperAbrPolicy` — `auto`, `constrained`, `fixedTrack`
@@ -130,6 +131,54 @@ The library does not ship preset URLs or demo sources. Construct
 - Progressive HTTP/HTTPS
 - HLS (`.m3u8`)
 - DASH (`.mpd`)
+
+## DRM Boundary
+
+Android DRM support is native-only. Set
+`VesperPlayerSource.drmConfiguration` with `keySystem = "widevine"` to let the
+direct Media3 route build a `MediaItem.DrmConfiguration`. The license URI,
+license headers, and `multiSession` flag are passed to Media3; source media
+headers remain separate from license request headers. The Widevine license URI
+must be non-empty; missing license configuration fails before Media3 startup so
+hosts receive a clear configuration error.
+
+DRM sources do not enter Rust, JNI media pipelines, optional plugins, download,
+preload, remux, SourceNormalizer, native-frame playback, or external playback
+relay routes. Those paths fail with an unsupported capability error instead of
+silently stripping DRM. Non-Widevine key systems on Android also fail as
+unsupported.
+
+Provisioning, license acquisition, DRM system, and license-expired failures are
+reported as retriable runtime/network failures. Scheme unsupported, device
+revoked, and disallowed operation failures remain unsupported capability errors.
+
+Private encryption that is not Widevine should be handled by a separate
+host-owned or future SDK pre-decryption adapter before a normal source is handed
+to Media3. That is outside the current DRM contract.
+
+### DRM diagnostics and acceptance
+
+The license must be issued for the **same asset (key ID)** as the content.
+Different assets mean different keys, so the license loads but cannot decrypt and
+playback stalls in `BUFFERING` with no error. Verify the content `default_KID`
+(`curl -s "<mpd>" | grep -oiE 'cenc:default_KID="[^"]*"'`) maps to the same
+provider asset your `licenseUri` targets.
+
+Capture DRM logs and let a Widevine source sit for at least 30 seconds before
+judging — cross-region license requests may not return within a quick source
+switch:
+
+```bash
+adb logcat -c
+adb logcat -v time | grep -Ei \
+  "VesperPlayerAndroidHost|DrmSession|onDrmKeys|MediaDrm|DefaultDrmSession|CryptoException"
+```
+
+Read `onDrmKeysLoaded` / `onDrmSessionManagerError` (not the raw `MediaDrm event`
+code, whose meaning is version-dependent) as the source of truth. A full
+walkthrough — including a provisioning-vs-license failure table and the Dolby
+Profile 5 no-video case (device without a Dolby Vision decoder) — lives in
+[`devnotes/验证/android-dolby-vision-drm-acceptance-2026-07-02.md`](../../devnotes/验证/android-dolby-vision-drm-acceptance-2026-07-02.md).
 
 ## Local-Network Cleartext HTTP
 
@@ -290,6 +339,12 @@ SDK-managed native-frame route is SDR-only today and is not an HDR-ready path.
 The capability probe reports `recommendedPlaybackPath = systemPlayer` with an
 `hdrNativeFrameUnsupported` capability warning rather than claiming programmable
 native-frame HDR support.
+
+Android video decode remains hardware-only in the main host kit. The
+`VesperHardwareMediaCodecSelector` filters out software-only video decoders and
+reports hardware / secure hardware decoder diagnostics; software fallback, if
+reintroduced, must be an optional separate route instead of being folded into the
+main `vesper-player-kit` behavior.
 `preferNativeFrame` falls back to ExoPlayer when that route is unavailable;
 `requireNativeFrame` reports a capability error. `TextureView` remains a system
 player surface and falls back or fails according to the selected mode. Default
@@ -318,7 +373,10 @@ makes the host responsible for FFmpeg notices, corresponding source, configure
 flags, and LGPL relinking rights. The default Vesper `download-remux`,
 `relay-remux`, and `default` profiles validate no-network/no-OpenSSL builds; any
 overlay that enables GPL, nonfree, OpenSSL, or network capability must be
-reviewed before release. See
+reviewed before release. Android OpenSSL overlays default to the OpenSSL 3.5 LTS
+series, resolve the highest matching patch from `third_party/_cache` first, and
+rebuild stale local prebuilts when their recorded version differs from the
+selected version. See
 [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) before publishing such an
 artifact.
 

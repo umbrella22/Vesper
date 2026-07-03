@@ -42,6 +42,9 @@ internal class VesperNativePreloadCoordinator(
         }
 
     fun planCurrentSource(source: VesperPlayerSource): List<NativePreloadCommand> {
+        if (source.drmConfiguration != null) {
+            return emptyList()
+        }
         val handle = ensureSession()
         val taskIds =
             bindings.planPreloadCandidates(

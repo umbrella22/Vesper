@@ -53,9 +53,9 @@ kotlin {
 
 dependencies {
     if (hostKitProject != null) {
-        implementation hostKitProject
+        implementation project(":vesper-player-kit")
     } else if (flutterAndroidProject != null) {
-        implementation flutterAndroidProject
+        implementation project(":vesper_player_android")
     } else {
         throw new GradleException(
             "vesper_player_external_playback requires ':vesper-player-kit' or " +
@@ -73,5 +73,5 @@ dependencies {
         )
     }
 
-    implementation externalPlaybackProject
+    implementation project(":vesper-player-kit-external-playback")
 }

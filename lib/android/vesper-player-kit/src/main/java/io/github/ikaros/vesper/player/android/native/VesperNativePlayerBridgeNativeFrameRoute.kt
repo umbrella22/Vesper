@@ -184,6 +184,9 @@ internal fun VesperNativePlayerBridge.evaluateNativeFramePipelineRoute(): Native
 }
 
 internal fun VesperNativePlayerBridge.nativeFramePipelineUnavailableReason(): String? {
+    if (currentSource?.drmConfiguration != null) {
+        return drmUnsupportedRouteMessage("nativeFrame")
+    }
     if (nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty()) {
         return "Android native-frame pipeline requires a MediaCodec decoder plugin path."
     }

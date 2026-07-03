@@ -375,13 +375,16 @@ internal const val CODEC_FORMAT_SUPPORTED_KEY = "codecFormatSupported"
 internal const val CODEC_FORMAT_MISSING_CAPABILITY_KEY = "codecFormatMissingCapability"
 private const val SESSION_PROBE_TAG = "VesperSessionProbe"
 
-private fun Context.primaryDisplayOrNull(): Display? =
+private fun Context.primaryDisplayOrNull(): Display? {
     if (Build.VERSION.SDK_INT >= 30) {
-        display
-    } else {
-        @Suppress("DEPRECATION")
-        (getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)?.getDisplay(Display.DEFAULT_DISPLAY)
+        runCatching { display }
+            .getOrNull()
+            ?.let { return it }
     }
+    @Suppress("DEPRECATION")
+    return (getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)
+        ?.getDisplay(Display.DEFAULT_DISPLAY)
+}
 
 private fun Display.supportedHdrKinds(): Set<VesperPlaybackCapabilityHdrKind> {
     if (Build.VERSION.SDK_INT < 24) {

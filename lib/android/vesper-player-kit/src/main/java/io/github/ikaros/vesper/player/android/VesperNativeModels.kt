@@ -363,8 +363,18 @@ internal sealed interface NativeBridgeEvent {
         val codeOrdinal: Int,
         val categoryOrdinal: Int,
         val retriable: Boolean,
+        val details: Map<String, Any?> = emptyMap(),
     ) : NativeBridgeEvent
 }
+
+internal fun NativeBridgeEvent.Error.toPlayerErrorState(): VesperPlayerErrorState =
+    VesperPlayerErrorState(
+        message = message,
+        code = VesperPlayerErrorCode.fromJniOrdinal(codeOrdinal),
+        category = VesperPlayerErrorCategory.fromJniOrdinal(categoryOrdinal),
+        retriable = retriable,
+        details = details,
+    )
 
 internal sealed interface NativePlayerCommand {
     data object Play : NativePlayerCommand

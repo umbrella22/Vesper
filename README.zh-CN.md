@@ -301,7 +301,7 @@ FFmpeg packaging profiles。
 1. 如果 `third_party/ffmpeg/desktop` 下已经存在仓库本地 desktop FFmpeg install，
    优先使用它。
 2. 否则使用通过 `pkg-config` 或 Homebrew `ffmpeg` 暴露的最新系统 FFmpeg。
-3. 如果两者都不存在，则构建匹配 workspace major/minor 版本的 FFmpeg，并安装到
+3. 如果两者都不存在，则构建共享的已审计 FFmpeg source release，并安装到
    `third_party/ffmpeg/desktop`。
 
 本地源码压缩包默认缓存到 `third_party/_cache`。FFmpeg、OpenSSL 和 libxml2
@@ -312,7 +312,10 @@ FFmpeg packaging profiles。
 | 变量                                   | 用途                                          |
 | -------------------------------------- | --------------------------------------------- |
 | `VESPER_DESKTOP_FFMPEG_DIR`            | 覆盖仓库本地 desktop FFmpeg install 目录。    |
-| `VESPER_DESKTOP_FFMPEG_VERSION`        | 覆盖自动解析的 FFmpeg major/minor 版本。      |
+| `VESPER_FFMPEG_SERIES`                 | 覆盖共享默认 FFmpeg source 系列。             |
+| `VESPER_FFMPEG_VERSION`                | 精确覆盖共享 FFmpeg source 版本。             |
+| `VESPER_DESKTOP_FFMPEG_SERIES`         | 覆盖 desktop fallback FFmpeg source 系列。    |
+| `VESPER_DESKTOP_FFMPEG_VERSION`        | 精确覆盖 desktop fallback FFmpeg source 版本。 |
 | `VESPER_DESKTOP_FFMPEG_SOURCE_ARCHIVE` | 指向已经预下载的 FFmpeg source archive。      |
 | `VESPER_DESKTOP_FFMPEG_SOURCE_URL`     | 覆盖源码下载 URL。                            |
 | `VESPER_THIRD_PARTY_SOURCE_CACHE_DIR`  | 覆盖共享源码压缩包缓存目录。                  |

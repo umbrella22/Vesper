@@ -174,6 +174,31 @@ extension _PlayerHostLayout on _PlayerHostPageState {
                 unawaited(_focusPlaylistItem(controller, itemId)),
           ),
           const SizedBox(height: 18),
+          ExampleDolbyAcceptanceSection(
+            palette: palette,
+            presets: exampleDolbyAcceptanceCatalog,
+            selectedDrmKind: _selectedDolbyDrmKind,
+            selectedProfile: _selectedDolbyProfile,
+            selectedFps: _selectedDolbyFps,
+            onDrmKindChanged: (value) {
+              _updateState(() {
+                _selectedDolbyDrmKind = value;
+              });
+            },
+            onProfileChanged: (value) {
+              _updateState(() {
+                _selectedDolbyProfile = value;
+              });
+            },
+            onFpsChanged: (value) {
+              _updateState(() {
+                _selectedDolbyFps = value;
+              });
+            },
+            onPresetSelected: (preset) =>
+                unawaited(_activateDolbyAcceptancePreset(controller, preset)),
+          ),
+          const SizedBox(height: 18),
           ExamplePluginDiagnosticsSection(
             palette: palette,
             sourceNormalizerSetting: _sourceNormalizerSetting,
@@ -184,8 +209,15 @@ extension _PlayerHostLayout on _PlayerHostPageState {
             isCapturingHdrEvidence: _isCapturingHdrEvidence,
             hdrEvidenceActiveSourceAvailable:
                 _selectedHdrEvidencePresetUsesNetworkControl ||
+                exampleDolbyAcceptancePresetById(
+                      _selectedHdrEvidencePreset.sampleId,
+                    ) !=
+                    null ||
                 _activePlaylistItemId != null,
-            hdrEvidencePresets: exampleHdrEvidenceP0Presets,
+            hdrEvidencePresets: <ExampleHdrEvidenceSamplePreset>[
+              ...exampleHdrEvidenceP0Presets,
+              ...exampleDolbyAcceptanceHdrEvidencePresets(),
+            ],
             selectedHdrEvidencePreset: _selectedHdrEvidencePreset,
             onSourceNormalizerSettingChange: (setting) =>
                 unawaited(_applySourceNormalizerSetting(setting)),

@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.media3.common.MimeTypes
 import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import java.util.concurrent.ConcurrentHashMap
 
 internal enum class VesperAndroidVideoCodecFamily {
     Vvc,
@@ -14,6 +15,8 @@ internal enum class VesperAndroidVideoCodecFamily {
 }
 
 internal object VesperHardwareMediaCodecSelector : MediaCodecSelector {
+    private val decoderDiagnosticsCache = ConcurrentHashMap<String, Map<String, String>>()
+
     override fun getDecoderInfos(
         mimeType: String,
         requiresSecureDecoder: Boolean,
@@ -46,6 +49,45 @@ internal object VesperHardwareMediaCodecSelector : MediaCodecSelector {
         }.onFailure { error ->
             Log.w(TAG, "failed to probe hardware decoder for $mimeType", error)
         }.getOrDefault(false)
+    }
+
+    fun decoderDiagnostics(mimeType: String?): Map<String, String> {
+        if (mimeType.isNullOrBlank() || !MimeTypes.isVideo(mimeType)) {
+            return mapOf(
+                "mimeType" to (mimeType ?: ""),
+                "hardwareDecoderCount" to "0",
+                "secureHardwareDecoderCount" to "0",
+            )
+        }
+        decoderDiagnosticsCache[mimeType]?.let { return it }
+        return runCatching {
+            val clearDecoders =
+                getDecoderInfos(
+                    mimeType,
+                    requiresSecureDecoder = false,
+                    requiresTunnelingDecoder = false,
+                )
+            val secureDecoders =
+                getDecoderInfos(
+                    mimeType,
+                    requiresSecureDecoder = true,
+                    requiresTunnelingDecoder = false,
+                )
+            linkedMapOf(
+                "mimeType" to mimeType,
+                "hardwareDecoderCount" to clearDecoders.size.toString(),
+                "secureHardwareDecoderCount" to secureDecoders.size.toString(),
+                "hardwareDecoders" to clearDecoders.joinToString(separator = ",") { it.name },
+                "secureHardwareDecoders" to secureDecoders.joinToString(separator = ",") { it.name },
+            ).also { decoderDiagnosticsCache[mimeType] = it }
+        }.onFailure { error ->
+            Log.w(TAG, "failed to probe decoder diagnostics for $mimeType", error)
+        }.getOrElse { error ->
+            mapOf(
+                "mimeType" to mimeType,
+                "decoderProbeError" to (error.message ?: error::class.java.simpleName),
+            )
+        }
     }
 }
 

@@ -81,6 +81,13 @@ internal class VesperNativeJniBindings(
     internal var currentVideoDecoderName: String? = null
     internal var currentRuntimeHdrEvidence: AndroidRuntimeHdrEvidence? = null
     internal var currentRuntimeSessionProbe: AndroidRuntimeSessionProbeSnapshot? = null
+    internal var currentDrmDiagnosticsSource: VesperPlayerSource? = null
+    internal var currentRetryMaxAttempts: Int? = null
+    internal var currentDrmRuntimeErrorCount = 0
+    internal var terminalErrorReportedForCurrentSource = false
+    internal var firstFrameWatchdogSource: VesperPlayerSource? = null
+    internal var firstFrameWatchdogRunnable: Runnable? = null
+    internal var firstFrameRenderedForCurrentSource = false
     internal val localBridgeEvents = ArrayDeque<NativeBridgeEvent>()
     internal val preloadCoordinator =
         VesperNativePreloadCoordinator(
@@ -125,6 +132,10 @@ internal class VesperNativeJniBindings(
         dispose()
         isDisposed.set(false)
         currentBenchmarkSourceProtocol = source.protocol
+        terminalErrorReportedForCurrentSource = false
+        currentDrmRuntimeErrorCount = 0
+        cancelFirstFrameWatchdog()
+        firstFrameRenderedForCurrentSource = false
         firstFrameGate.advanceEpoch()
         recordBenchmark("source_load_start")
         VesperNativeLibrary.ensureLoaded()
@@ -139,7 +150,10 @@ internal class VesperNativeJniBindings(
             )
         val normalizedResource = sourceNormalizerOpen.resource
         val playbackSource = normalizedResource?.playbackSource ?: source
+        currentDrmDiagnosticsSource = playbackSource
+        firstFrameWatchdogSource = playbackSource
         val resolvedResiliencePolicy = resolveResiliencePolicy(source, resiliencePolicy)
+        currentRetryMaxAttempts = resolvedResiliencePolicy.retry.resolvedMaxAttempts()
         val resolvedTrackPreferences = resolveTrackPreferences(trackPreferencePolicy)
         val renderersFactory =
             DefaultRenderersFactory(appContext)
@@ -187,6 +201,9 @@ internal class VesperNativeJniBindings(
             exoPlayer.setVideoSurface(surface)
         }
         exoPlayer.prepare()
+        val firstFrameWatchdogRoute =
+            FirstFrameWatchdogRoute.systemPlayback(systemPlaybackVideoEnabled)
+        scheduleFirstFrameWatchdog(playbackSource, firstFrameGate.currentEpoch, firstFrameWatchdogRoute)
         recordBenchmark("source_load_configured")
         executePreloadWarmupCommands(source)
 
@@ -401,6 +418,14 @@ internal class VesperNativeJniBindings(
         currentVideoVariantObservationState = null
         currentVideoLayoutState = null
         currentVideoDecoderName = null
+        currentRuntimeHdrEvidence = null
+        currentRuntimeSessionProbe = null
+        currentDrmDiagnosticsSource = null
+        currentRetryMaxAttempts = null
+        currentDrmRuntimeErrorCount = 0
+        terminalErrorReportedForCurrentSource = false
+        cancelFirstFrameWatchdog()
+        firstFrameRenderedForCurrentSource = false
         currentBenchmarkSourceProtocol = null
     }
 
@@ -496,6 +521,7 @@ internal class VesperNativeJniBindings(
     override fun seekTo(positionMs: Long) {
         Log.i(NATIVE_JNI_BINDINGS_TAG, "seekTo positionMs=$positionMs")
         recordBenchmark("native_seek_command", mapOf("positionMs" to positionMs.toString()))
+        cancelFirstFrameWatchdog()
         dispatchRustCommand { handle -> VesperNativeJni.seekTo(handle, positionMs) }
     }
 

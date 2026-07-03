@@ -7,12 +7,14 @@ final class VesperPlayerSource {
     required this.kind,
     required this.protocol,
     this.headers = const <String, String>{},
+    this.drmConfiguration,
   });
 
   factory VesperPlayerSource.local({
     required String uri,
     String? label,
     Map<String, String> headers = const <String, String>{},
+    VesperPlayerDrmConfiguration? drmConfiguration,
   }) {
     return VesperPlayerSource(
       uri: uri,
@@ -20,6 +22,7 @@ final class VesperPlayerSource {
       kind: VesperPlayerSourceKind.local,
       protocol: _inferLocalProtocol(uri),
       headers: headers,
+      drmConfiguration: drmConfiguration,
     );
   }
 
@@ -27,6 +30,7 @@ final class VesperPlayerSource {
     required String uri,
     String? label,
     Map<String, String> headers = const <String, String>{},
+    VesperPlayerDrmConfiguration? drmConfiguration,
   }) {
     return VesperPlayerSource(
       uri: uri,
@@ -34,6 +38,7 @@ final class VesperPlayerSource {
       kind: VesperPlayerSourceKind.local,
       protocol: VesperPlayerSourceProtocol.dash,
       headers: headers,
+      drmConfiguration: drmConfiguration,
     );
   }
 
@@ -42,6 +47,7 @@ final class VesperPlayerSource {
     String? label,
     VesperPlayerSourceProtocol? protocol,
     Map<String, String> headers = const <String, String>{},
+    VesperPlayerDrmConfiguration? drmConfiguration,
   }) {
     return VesperPlayerSource(
       uri: uri,
@@ -49,6 +55,7 @@ final class VesperPlayerSource {
       kind: VesperPlayerSourceKind.remote,
       protocol: protocol ?? _inferRemoteProtocol(uri),
       headers: headers,
+      drmConfiguration: drmConfiguration,
     );
   }
 
@@ -56,12 +63,14 @@ final class VesperPlayerSource {
     required String uri,
     String? label,
     Map<String, String> headers = const <String, String>{},
+    VesperPlayerDrmConfiguration? drmConfiguration,
   }) {
     return VesperPlayerSource.remote(
       uri: uri,
       label: label,
       protocol: VesperPlayerSourceProtocol.hls,
       headers: headers,
+      drmConfiguration: drmConfiguration,
     );
   }
 
@@ -69,12 +78,14 @@ final class VesperPlayerSource {
     required String uri,
     String? label,
     Map<String, String> headers = const <String, String>{},
+    VesperPlayerDrmConfiguration? drmConfiguration,
   }) {
     return VesperPlayerSource.remote(
       uri: uri,
       label: label,
       protocol: VesperPlayerSourceProtocol.dash,
       headers: headers,
+      drmConfiguration: drmConfiguration,
     );
   }
 
@@ -96,6 +107,9 @@ final class VesperPlayerSource {
         VesperPlayerSourceProtocol.unknown,
       ),
       headers: _decodeStringMap(map['headers']),
+      drmConfiguration: VesperPlayerDrmConfiguration.tryFromMap(
+        _rawMap(map['drmConfiguration']),
+      ),
     );
   }
 
@@ -104,6 +118,7 @@ final class VesperPlayerSource {
   final VesperPlayerSourceKind kind;
   final VesperPlayerSourceProtocol protocol;
   final Map<String, String> headers;
+  final VesperPlayerDrmConfiguration? drmConfiguration;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
@@ -112,6 +127,8 @@ final class VesperPlayerSource {
       'kind': kind.name,
       'protocol': protocol.name,
       'headers': headers,
+      if (drmConfiguration != null)
+        'drmConfiguration': drmConfiguration?.toMap(),
     };
   }
 
@@ -139,5 +156,56 @@ final class VesperPlayerSource {
       return VesperPlayerSourceProtocol.progressive;
     }
     return VesperPlayerSourceProtocol.unknown;
+  }
+}
+
+final class VesperPlayerDrmConfiguration {
+  const VesperPlayerDrmConfiguration({
+    required this.keySystem,
+    required this.licenseUri,
+    this.licenseHeaders = const <String, String>{},
+    this.fairPlayCertificateUri,
+    this.fairPlayCertificateBase64,
+    this.multiSession = false,
+  });
+
+  factory VesperPlayerDrmConfiguration.fromMap(Map<Object?, Object?> map) {
+    return VesperPlayerDrmConfiguration(
+      keySystem: map['keySystem'] as String? ?? '',
+      licenseUri: map['licenseUri'] as String? ?? '',
+      licenseHeaders: _decodeStringMap(map['licenseHeaders']),
+      fairPlayCertificateUri: map['fairPlayCertificateUri'] as String?,
+      fairPlayCertificateBase64: map['fairPlayCertificateBase64'] as String?,
+      multiSession: _decodeBool(map, 'multiSession'),
+    );
+  }
+
+  static VesperPlayerDrmConfiguration? tryFromMap(
+    Map<Object?, Object?>? map,
+  ) {
+    if (map == null || map.isEmpty) {
+      return null;
+    }
+    return VesperPlayerDrmConfiguration.fromMap(map);
+  }
+
+  final String keySystem;
+  final String licenseUri;
+  final Map<String, String> licenseHeaders;
+  final String? fairPlayCertificateUri;
+  final String? fairPlayCertificateBase64;
+  final bool multiSession;
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'keySystem': keySystem,
+      'licenseUri': licenseUri,
+      'licenseHeaders': licenseHeaders,
+      if (fairPlayCertificateUri != null)
+        'fairPlayCertificateUri': fairPlayCertificateUri,
+      if (fairPlayCertificateBase64 != null)
+        'fairPlayCertificateBase64': fairPlayCertificateBase64,
+      'multiSession': multiSession,
+    };
   }
 }

@@ -52,7 +52,7 @@ kotlin {
 dependencies {
     def sourceNormalizerProject = findProject(":vesper-player-kit-source-normalizer-ffmpeg")
     if (sourceNormalizerProject != null) {
-        implementation sourceNormalizerProject
+        implementation project(":vesper-player-kit-source-normalizer-ffmpeg")
     } else {
         implementation "io.github.ikaros.vesper:vesper-player-kit-source-normalizer-ffmpeg:$vesperPlayerKitVersion"
     }

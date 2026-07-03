@@ -77,6 +77,33 @@ class VesperNativePreloadCoordinatorTest {
     }
 
     @Test
+    fun drmCurrentSourceDoesNotEnterPreloadRuntime() {
+        val bindings = FakePreloadBindings()
+        val coordinator =
+            VesperNativePreloadCoordinator(
+                bindings = bindings,
+                preloadBudgetPolicy = VesperPreloadBudgetPolicy(),
+            )
+
+        val commands =
+            coordinator.planCurrentSource(
+                VesperPlayerSource.hls(
+                    uri = "https://example.com/drm.m3u8",
+                    label = "DRM",
+                    drmConfiguration =
+                        VesperPlayerDrmConfiguration(
+                            keySystem = "widevine",
+                            licenseUri = "https://license.example.com/widevine",
+                        ),
+                ),
+            )
+
+        assertTrue(commands.isEmpty())
+        assertTrue(bindings.plannedCandidates.isEmpty())
+        assertEquals(0, bindings.createCount.get())
+    }
+
+    @Test
     fun completionAndFailureDelegateToBindings() {
         val bindings = FakePreloadBindings()
         val coordinator =

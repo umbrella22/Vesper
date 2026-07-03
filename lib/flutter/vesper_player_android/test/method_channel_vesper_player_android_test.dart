@@ -31,6 +31,12 @@ void main() {
     final source = VesperPlayerSource.hls(
       uri: 'https://example.com/live.m3u8',
       label: 'Live',
+      drmConfiguration: const VesperPlayerDrmConfiguration(
+        keySystem: 'widevine',
+        licenseUri: 'https://license.example.com/widevine',
+        licenseHeaders: <String, String>{'Authorization': 'Bearer token'},
+        multiSession: true,
+      ),
     );
     const policy = VesperPlaybackResiliencePolicy.resilient();
     const trackPreferencePolicy = VesperTrackPreferencePolicy(
@@ -373,6 +379,74 @@ void main() {
         evidence?.hdrMetadata?.dolbyVisionBaseLayerTransferFunction, 'st2084');
   });
 
+  test('error event carries terminal Widevine snapshot lastError details',
+      () async {
+    const eventChannel = EventChannel('io.github.ikaros.vesper_player/events');
+    final platform = MethodChannelVesperPlayerAndroid();
+    final events = <VesperPlayerEvent>[];
+
+    final subscription =
+        platform.eventsFor('android-player').listen(events.add);
+    addTearDown(subscription.cancel);
+    await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .handlePlatformMessage(
+      eventChannel.name,
+      const StandardMethodCodec().encodeSuccessEnvelope(<String, Object?>{
+        'playerId': 'android-player',
+        'type': 'error',
+        'error': <String, Object?>{
+          'message': 'Widevine license failed',
+          'code': 'backendFailure',
+          'category': 'network',
+          'retriable': true,
+          'details': <String, Object?>{
+            'reason': 'drmLicenseAcquisitionFailed',
+            'keySystem': 'widevine',
+            'licenseUriHost': 'license.example.com',
+            'attemptsExhausted': true,
+            'maxAttempts': 3,
+            'errorCodeName': 'ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED',
+          },
+        },
+        'snapshot': <String, Object?>{
+          'title': 'Demo',
+          'subtitle': 'Widevine license failed',
+          'sourceLabel': 'P8.1 Widevine',
+          'playbackState': 'paused',
+          'playbackRate': 1.0,
+          'isBuffering': false,
+          'isInterrupted': false,
+          'hasVideoSurface': true,
+          'timeline': const VesperTimeline.initial().toMap(),
+          'lastError': <String, Object?>{
+            'message': 'Widevine license failed',
+            'code': 'backendFailure',
+            'category': 'network',
+            'retriable': true,
+            'details': <String, Object?>{
+              'reason': 'drmLicenseAcquisitionFailed',
+              'keySystem': 'widevine',
+              'licenseUriHost': 'license.example.com',
+              'attemptsExhausted': true,
+              'maxAttempts': 3,
+            },
+          },
+        },
+      }),
+      (_) {},
+    );
+
+    expect(events.single, isA<VesperPlayerErrorEvent>());
+    final event = events.single as VesperPlayerErrorEvent;
+    expect(event.error.category, VesperPlayerErrorCategory.network);
+    expect(event.error.retriable, isTrue);
+    expect(event.error.details['attemptsExhausted'], isTrue);
+    expect(event.error.details['maxAttempts'], 3);
+    expect(event.snapshot?.playbackState, VesperPlaybackState.paused);
+    expect(event.snapshot?.isBuffering, isFalse);
+    expect(event.snapshot?.lastError?.details['keySystem'], 'widevine');
+  });
+
   test('createPlayer forwards explicit texture render surface kind', () async {
     final platform = MethodChannelVesperPlayerAndroid();
 
@@ -505,6 +579,11 @@ void main() {
           'category': 'capability',
           'retriable': false,
           'message': 'unsupported operation',
+          'details': <String, Object?>{
+            'reason': 'drmUnsupportedRoute',
+            'route': 'sourceNormalizer',
+            'keySystem': 'widevine',
+          },
         },
       );
     });
@@ -523,6 +602,11 @@ void main() {
               (error) => error.platformDetails['code'],
               'details.code',
               'unsupported',
+            )
+            .having(
+              (error) => (error.platformDetails['details'] as Map?)?['reason'],
+              'details.details.reason',
+              'drmUnsupportedRoute',
             ),
       ),
     );
@@ -546,6 +630,52 @@ void main() {
     expect(
       () => platform.refreshPlayer('android-player'),
       throwsA(isA<PlatformException>()),
+    );
+  });
+
+  test('download DRM unsupported platform error maps to unsupported exception',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) async {
+      throw PlatformException(
+        code: 'vesper_download_operation_failed',
+        message: 'DRM is not supported on the download playback route.',
+        details: <String, Object?>{
+          'code': 'unsupported',
+          'category': 'capability',
+          'retriable': false,
+          'message': 'DRM is not supported on the download playback route.',
+          'details': <String, Object?>{
+            'reason': 'drmUnsupportedRoute',
+            'route': 'download',
+            'keySystem': 'widevine',
+          },
+        },
+      );
+    });
+    final platform = MethodChannelVesperPlayerAndroid();
+
+    await expectLater(
+      platform.createDownloadTask(
+        'downloads',
+        assetId: 'movie',
+        source: VesperDownloadSource.fromSource(
+          source: VesperPlayerSource.hls(
+            uri: 'https://example.com/movie.m3u8',
+            drmConfiguration: const VesperPlayerDrmConfiguration(
+              keySystem: 'widevine',
+              licenseUri: 'https://license.example.com/widevine',
+            ),
+          ),
+        ),
+      ),
+      throwsA(
+        isA<VesperUnsupportedError>().having(
+          (error) => (error.platformDetails['details'] as Map?)?['route'],
+          'details.details.route',
+          'download',
+        ),
+      ),
     );
   });
 

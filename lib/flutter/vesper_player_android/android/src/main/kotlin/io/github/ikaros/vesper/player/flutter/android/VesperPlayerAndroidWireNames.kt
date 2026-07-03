@@ -118,6 +118,17 @@ internal fun VesperPlayerSource.toMap(): Map<String, Any?> =
         "kind" to kind.toWireName(),
         "protocol" to protocol.toWireName(),
         "headers" to headers,
+        "drmConfiguration" to drmConfiguration?.toMap(),
+    )
+
+internal fun io.github.ikaros.vesper.player.android.VesperPlayerDrmConfiguration.toMap(): Map<String, Any?> =
+    mapOf(
+        "keySystem" to keySystem,
+        "licenseUri" to licenseUri,
+        "licenseHeaders" to licenseHeaders,
+        "fairPlayCertificateUri" to fairPlayCertificateUri,
+        "fairPlayCertificateBase64" to fairPlayCertificateBase64,
+        "multiSession" to multiSession,
     )
 
 internal fun VesperDownloadTaskSnapshot.toMap(): Map<String, Any?> =

@@ -90,6 +90,51 @@ class VesperNativeErrorMappingTest {
     }
 
     @Test
+    fun playbackExceptionDrmRuntimeErrorsMapToRetriableNetworkBackendFailure() {
+        listOf(
+            PlaybackException.ERROR_CODE_DRM_PROVISIONING_FAILED,
+            PlaybackException.ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED,
+            PlaybackException.ERROR_CODE_DRM_SYSTEM_ERROR,
+            PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED,
+            PlaybackException.ERROR_CODE_DRM_UNSPECIFIED,
+            PlaybackException.ERROR_CODE_DRM_CONTENT_ERROR,
+        ).forEach { errorCode ->
+            val error =
+                classifyPlaybackException(
+                    playbackException(errorCode)
+                )
+
+            assertEquals(VesperPlayerErrorCode.BackendFailure, VesperPlayerErrorCode.fromJniOrdinal(error.codeOrdinal))
+            assertEquals(VesperPlayerErrorCategory.Network, VesperPlayerErrorCategory.fromJniOrdinal(error.categoryOrdinal))
+            assertEquals(BACKEND_FAILURE_ORDINAL, error.codeOrdinal)
+            assertEquals(NETWORK_CATEGORY_ORDINAL, error.categoryOrdinal)
+            assertTrue(error.retriable)
+            assertFalse(error.likelyCapabilityIssue)
+        }
+    }
+
+    @Test
+    fun playbackExceptionDrmCapabilityErrorsMapToUnsupported() {
+        listOf(
+            PlaybackException.ERROR_CODE_DRM_SCHEME_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DRM_DISALLOWED_OPERATION,
+            PlaybackException.ERROR_CODE_DRM_DEVICE_REVOKED,
+        ).forEach { errorCode ->
+            val error =
+                classifyPlaybackException(
+                    playbackException(errorCode)
+                )
+
+            assertEquals(VesperPlayerErrorCode.Unsupported, VesperPlayerErrorCode.fromJniOrdinal(error.codeOrdinal))
+            assertEquals(VesperPlayerErrorCategory.Capability, VesperPlayerErrorCategory.fromJniOrdinal(error.categoryOrdinal))
+            assertEquals(UNSUPPORTED_ORDINAL, error.codeOrdinal)
+            assertEquals(CAPABILITY_CATEGORY_ORDINAL, error.categoryOrdinal)
+            assertFalse(error.retriable)
+            assertTrue(error.likelyCapabilityIssue)
+        }
+    }
+
+    @Test
     fun playbackExceptionDecodeErrorsMapToDecodeFailure() {
         val error =
             classifyPlaybackException(

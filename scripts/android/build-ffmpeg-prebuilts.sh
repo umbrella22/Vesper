@@ -9,12 +9,12 @@ ANDROID_SDK_ROOT="$(vesper_android_sdk_root)"
 ANDROID_NDK_VERSION="$(vesper_android_ndk_version)"
 ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-}"
 ANDROID_API_LEVEL="${VESPER_ANDROID_FFMPEG_ANDROID_API:-26}"
-FFMPEG_VERSION="${VESPER_ANDROID_FFMPEG_VERSION:-8.1}"
+FFMPEG_VERSION="$(vesper_ffmpeg_resolve_version android)"
 FFMPEG_ARCHIVE_NAME="$(vesper_ffmpeg_archive_name "$FFMPEG_VERSION")"
 FFMPEG_SOURCE_URL="${VESPER_ANDROID_FFMPEG_SOURCE_URL:-$(vesper_ffmpeg_release_url "$FFMPEG_ARCHIVE_NAME")}"
 FFMPEG_SOURCE_ARCHIVE="${VESPER_ANDROID_FFMPEG_SOURCE_ARCHIVE:-$(vesper_ffmpeg_source_cache_path "$FFMPEG_ARCHIVE_NAME")}"
 FFMPEG_BASE_OUTPUT_DIR="$ROOT_DIR/third_party/ffmpeg/android"
-OPENSSL_VERSION="${VESPER_ANDROID_OPENSSL_VERSION:-3.6.2}"
+OPENSSL_VERSION="$(vesper_openssl_resolve_version android)"
 OPENSSL_SERIES="${OPENSSL_VERSION%.*}"
 OPENSSL_ARCHIVE_NAME="openssl-${OPENSSL_VERSION}.tar.gz"
 OPENSSL_SOURCE_URL="${VESPER_ANDROID_OPENSSL_SOURCE_URL:-https://www.openssl.org/source/${OPENSSL_ARCHIVE_NAME}}"
@@ -141,12 +141,23 @@ ensure_android_openssl_prebuilt() {
   local toolchain_target="$2"
   local openssl_target="$3"
   local openssl_dir="$OPENSSL_ANDROID_DIR/$abi"
+  local openssl_pc="$openssl_dir/lib/pkgconfig/openssl.pc"
+  local installed_version=""
 
-  if [[ -d "$openssl_dir/lib/pkgconfig" ]]; then
+  if [[ -f "$openssl_pc" ]]; then
+    installed_version="$(sed -n 's/^Version:[[:space:]]*//p' "$openssl_pc" | head -n 1)"
+  fi
+
+  if [[ "$installed_version" == "$OPENSSL_VERSION" ]]; then
     return 0
   fi
 
-  echo "Android OpenSSL prebuilt for ABI $abi is missing locally; restoring from cached archive or official source."
+  if [[ -n "$installed_version" ]]; then
+    echo "Android OpenSSL prebuilt for ABI $abi is version $installed_version; rebuilding $OPENSSL_VERSION."
+  else
+    echo "Android OpenSSL prebuilt for ABI $abi is missing locally; restoring from cached archive or official source."
+  fi
+
   build_android_openssl_prebuilt "$abi" "$openssl_target" "$toolchain_target"
   ensure_dependency_dir "$openssl_dir/lib/pkgconfig" "Failed to provision Android OpenSSL prebuilt for ABI $abi: $openssl_dir"
 }

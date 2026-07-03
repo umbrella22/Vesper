@@ -375,8 +375,23 @@ internal fun classifyPlaybackException(error: PlaybackException): NativePlayback
                 retriable = false,
             )
 
+            PlaybackException.ERROR_CODE_DRM_PROVISIONING_FAILED,
+            PlaybackException.ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED,
+            PlaybackException.ERROR_CODE_DRM_SYSTEM_ERROR,
+            PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED,
+            PlaybackException.ERROR_CODE_DRM_UNSPECIFIED,
+            PlaybackException.ERROR_CODE_DRM_CONTENT_ERROR,
+            -> NativePlaybackError(
+                codeOrdinal = BACKEND_FAILURE_ORDINAL,
+                categoryOrdinal = NETWORK_CATEGORY_ORDINAL,
+                retriable = true,
+            )
+
             PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
             PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED,
+            PlaybackException.ERROR_CODE_DRM_SCHEME_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DRM_DISALLOWED_OPERATION,
+            PlaybackException.ERROR_CODE_DRM_DEVICE_REVOKED,
             -> NativePlaybackError(
                 codeOrdinal = UNSUPPORTED_ORDINAL,
                 categoryOrdinal = CAPABILITY_CATEGORY_ORDINAL,

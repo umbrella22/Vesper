@@ -5,7 +5,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/apple.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg.sh"
 
 ROOT_DIR="$VESPER_REPO_ROOT"
-FFMPEG_VERSION="${VESPER_APPLE_FFMPEG_VERSION:-8.1}"
+FFMPEG_VERSION="$(vesper_ffmpeg_resolve_version apple)"
 FFMPEG_ARCHIVE_NAME="$(vesper_ffmpeg_archive_name "$FFMPEG_VERSION")"
 FFMPEG_SOURCE_URL="${VESPER_APPLE_FFMPEG_SOURCE_URL:-$(vesper_ffmpeg_release_url "$FFMPEG_ARCHIVE_NAME")}"
 FFMPEG_SOURCE_ARCHIVE="${VESPER_APPLE_FFMPEG_SOURCE_ARCHIVE:-$(vesper_ffmpeg_source_cache_path "$FFMPEG_ARCHIVE_NAME")}"

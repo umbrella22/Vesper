@@ -24,6 +24,7 @@ across platforms.
 | Buffering / retry policy | ✅                                           | ✅                                                  |
 | Download management      | ✅                                           | ✅                                                  |
 | Preload                  | ✅                                           | ✅                                                  |
+| DRM direct playback      | ✅ Widevine through native Media3 direct paths | ✅ FairPlay through native AVPlayer direct paths |
 | System playback controls | ✅ MediaSession notification + FGS           | ✅ Now Playing / RemoteCommand                      |
 | External playback        | ✅ Optional `vesper_player_external_playback` package | ✅ AirPlay route picker via `vesper_player_ui`      |
 
@@ -263,6 +264,42 @@ VesperPlayerSource.dash(
 VesperPlayerSource.local(uri: '/storage/emulated/0/Movies/video.mp4')
 VesperPlayerSource.remote(uri: 'https://example.com/video.mp4')
 ```
+
+### DRM sources
+
+`VesperPlayerDrmConfiguration` is a native playback configuration. Flutter sends
+it through the platform channel as `drmConfiguration`; Android maps Widevine to
+Media3, and iOS maps FairPlay to AVPlayer. The Flutter plugin does not process,
+decrypt, remux, preload, download, relay, or inspect protected media frames.
+
+```dart
+VesperPlayerSource.dash(
+  uri: 'https://example.com/manifest.mpd',
+  drmConfiguration: const VesperPlayerDrmConfiguration(
+    keySystem: 'widevine',
+    licenseUri: 'https://license.example.com/widevine',
+    licenseHeaders: <String, String>{
+      'Authorization': 'Bearer token',
+    },
+  ),
+)
+
+VesperPlayerSource.hls(
+  uri: 'https://example.com/fairplay/master.m3u8',
+  drmConfiguration: const VesperPlayerDrmConfiguration(
+    keySystem: 'fairPlay',
+    licenseUri: 'https://license.example.com/fairplay',
+    fairPlayCertificateUri: 'https://license.example.com/fairplay.cer',
+  ),
+)
+```
+
+Only direct native playback routes support DRM. SourceNormalizer,
+SDK-managed native-frame playback, the iOS DASH bridge, download, preload,
+remux, and external playback relay routes reject DRM sources with an unsupported
+capability error. Private encryption schemes should be handled by a separate
+pre-decryption adapter before a normal source is given to the player; they are
+not part of the current Widevine / FairPlay DRM contract.
 
 ### Snapshot Listenable
 

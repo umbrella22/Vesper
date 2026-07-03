@@ -128,12 +128,17 @@ internal enum class ExampleNativeFramePipelineSetting(
 
 internal fun exampleSurfaceKindForNativeFrameSetting(
     setting: ExampleNativeFramePipelineSetting,
+    source: VesperPlayerSource? = null,
 ): VesperVideoSurfaceKind =
-    when (setting.mode) {
-        VesperNativeFramePipelineMode.PreferNativeFrame,
-        VesperNativeFramePipelineMode.RequireNativeFrame -> VesperVideoSurfaceKind.SurfaceView
-        VesperNativeFramePipelineMode.Disabled,
-        VesperNativeFramePipelineMode.DiagnosticsOnly -> VesperVideoSurfaceKind.TextureView
+    if (source?.drmConfiguration != null) {
+        VesperVideoSurfaceKind.SurfaceView
+    } else {
+        when (setting.mode) {
+            VesperNativeFramePipelineMode.PreferNativeFrame,
+            VesperNativeFramePipelineMode.RequireNativeFrame -> VesperVideoSurfaceKind.SurfaceView
+            VesperNativeFramePipelineMode.Disabled,
+            VesperNativeFramePipelineMode.DiagnosticsOnly -> VesperVideoSurfaceKind.TextureView
+        }
     }
 
 internal fun exampleNativeFrameSettingRequiresControllerRebuild(

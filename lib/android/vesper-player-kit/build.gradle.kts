@@ -19,7 +19,7 @@ require(rustAndroidBuildScript.isFile) {
     "Rust Android build script not found: ${rustAndroidBuildScript.absolutePath}"
 }
 
-val buildRustAndroidHostDebug by tasks.registering(Exec::class) {
+val buildRustAndroidHostDebug = tasks.register<Exec>("buildRustAndroidHostDebug") {
     group = "rust"
     description = "Builds debug Android JNI libraries for the Rust player host library."
     workingDir = repoRoot
@@ -29,7 +29,7 @@ val buildRustAndroidHostDebug by tasks.registering(Exec::class) {
     }
 }
 
-val buildRustAndroidHostRelease by tasks.registering(Exec::class) {
+val buildRustAndroidHostRelease = tasks.register<Exec>("buildRustAndroidHostRelease") {
     group = "rust"
     description = "Builds release Android JNI libraries for the Rust player host library."
     workingDir = repoRoot
@@ -82,7 +82,7 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
-val checkPublicApiSurface by tasks.registering {
+val checkPublicApiSurface = tasks.register("checkPublicApiSurface") {
     group = "verification"
     description = "Fails when bridge, JNI, or Native* implementation types leak into the Kotlin public API."
     val kotlinSources = fileTree("src/main/java") {

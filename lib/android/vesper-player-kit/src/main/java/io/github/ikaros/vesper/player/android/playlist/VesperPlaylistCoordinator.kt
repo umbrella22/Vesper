@@ -241,6 +241,17 @@ class VesperPlaylistCoordinator(
     private fun startWarmup(task: NativePreloadTask) {
         cancelWarmup(task.taskId)
         val source = currentSourceForTask(task.sourceUri)
+        if (source.drmConfiguration != null) {
+            VesperNativeJni.failPlaylistPreloadTask(
+                sessionHandle,
+                task.taskId,
+                PLAYLIST_UNSUPPORTED_ORDINAL,
+                PLAYLIST_CAPABILITY_CATEGORY_ORDINAL,
+                false,
+                drmUnsupportedRouteMessage("playlistPreload"),
+            )
+            return
+        }
         val resolvedResiliencePolicy = resolvePlaylistResiliencePolicy(source, resiliencePolicy)
         val dataSourceFactory =
             buildPlaylistDataSourceFactory(appContext, resolvedResiliencePolicy.cache)
@@ -431,4 +442,6 @@ private object VesperPlaylistMediaCacheStore {
 
 private const val DEFAULT_PLAYLIST_WARMUP_READ_BYTES = 32 * 1024
 private const val PLAYLIST_BACKEND_FAILURE_ORDINAL = 3
+private const val PLAYLIST_UNSUPPORTED_ORDINAL = 7
+private const val PLAYLIST_CAPABILITY_CATEGORY_ORDINAL = 6
 private const val PLAYLIST_PLATFORM_CATEGORY_ORDINAL = 7

@@ -146,7 +146,10 @@ internal class PlayerHostViewModel(
             context = application.applicationContext,
             initialSource = initialSource,
             resiliencePolicy = resiliencePolicy,
-            surfaceKind = exampleSurfaceKindForNativeFrameSetting(nativeFramePipelineSetting),
+            surfaceKind = exampleSurfaceKindForNativeFrameSetting(
+                nativeFramePipelineSetting,
+                initialSource,
+            ),
             preloadBudgetPolicy = playerPreloadBudgetPolicy,
             sourceNormalizerConfiguration =
                 VesperSourceNormalizerConfiguration(
