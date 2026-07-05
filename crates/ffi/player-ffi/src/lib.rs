@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 mod c_api;
 
 use std::time::{Duration, Instant};

@@ -55,7 +55,12 @@ pub fn free_c_string(ptr_ref: &mut *mut c_char) {
     *ptr_ref = ptr::null_mut();
 }
 
-pub fn clear_c_string_output(out: *mut *mut c_char) -> bool {
+/// # Safety
+///
+/// `out` must be either null or a valid, writable pointer to a `*mut c_char`.
+/// This is a low-level FFI helper; callers must uphold the pointer validity
+/// contract.
+pub unsafe fn clear_c_string_output(out: *mut *mut c_char) -> bool {
     // SAFETY: `as_mut` only creates a temporary reference when `out` is non-null.
     // Callers still own the pointed-to slot; this helper only writes the null
     // sentinel used by FFI output parameters.
@@ -66,7 +71,12 @@ pub fn clear_c_string_output(out: *mut *mut c_char) -> bool {
     true
 }
 
-pub fn write_c_string_output(out: *mut *mut c_char, text: String) -> bool {
+/// # Safety
+///
+/// `out` must be either null or a valid, writable pointer to a `*mut c_char`.
+/// This is a low-level FFI helper; callers must uphold the pointer validity
+/// contract.
+pub unsafe fn write_c_string_output(out: *mut *mut c_char, text: String) -> bool {
     // SAFETY: `as_mut` only creates a temporary reference when `out` is non-null.
     // The slot must be writable by the caller's FFI contract; this helper does
     // not assume ownership of any previous value stored there.
@@ -101,10 +111,10 @@ mod tests {
     fn c_string_output_helpers_write_and_clear_slot() {
         let mut value: *mut c_char = ptr::null_mut();
 
-        assert!(clear_c_string_output(&mut value));
+        assert!(unsafe { clear_c_string_output(&mut value) });
         assert!(value.is_null());
 
-        assert!(write_c_string_output(&mut value, "hello\0world".to_owned()));
+        assert!(unsafe { write_c_string_output(&mut value, "hello\0world".to_owned()) });
         let text = unsafe { CStr::from_ptr(value) }
             .to_str()
             .expect("string should be utf8");
@@ -116,11 +126,8 @@ mod tests {
 
     #[test]
     fn c_string_output_helpers_reject_null_slot() {
-        assert!(!clear_c_string_output(ptr::null_mut()));
-        assert!(!write_c_string_output(
-            ptr::null_mut(),
-            "ignored".to_owned()
-        ));
+        assert!(!unsafe { clear_c_string_output(ptr::null_mut()) });
+        assert!(!unsafe { write_c_string_output(ptr::null_mut(), "ignored".to_owned()) });
     }
 
     #[test]

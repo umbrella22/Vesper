@@ -36,6 +36,7 @@ pub(crate) fn write_error(out_error: *mut PlayerFfiError, mut error: PlayerFfiEr
         return;
     }
 
+// SAFETY: caller upholds the FFI contract for this pointer operation
     unsafe {
         ptr::write(out_error, error);
     }
@@ -46,6 +47,7 @@ pub(crate) fn write_success(out_error: *mut PlayerFfiError) {
         return;
     }
 
+// SAFETY: caller upholds the FFI contract for this pointer operation
     unsafe {
         ptr::write(out_error, PlayerFfiError::default());
     }

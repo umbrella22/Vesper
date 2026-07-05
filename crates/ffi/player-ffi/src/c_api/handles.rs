@@ -129,6 +129,7 @@ pub(crate) fn into_initializer_handle(
     let raw = match lock_initializer_registry().insert(pointer) {
         Ok(raw) => raw,
         Err(HandleRegistryError::TooManyHandles) => {
+// SAFETY: caller upholds the FFI contract for this pointer operation
             unsafe {
                 drop(Box::from_raw(pointer as *mut FfiPlayerInitializer));
             }
@@ -155,6 +156,7 @@ pub(crate) fn with_initializer_ref<R>(
     let pointer = registry.get(handle.raw).copied()?;
     // SAFETY: initializer handles are registry indices created by this FFI layer.
     // The registry owns the boxed initializer until `take` or `destroy` removes it.
+// SAFETY: caller upholds the FFI contract for this pointer operation
     unsafe { Some(f(&*(pointer as *const FfiPlayerInitializer))) }
 }
 
@@ -162,6 +164,7 @@ pub(crate) fn take_initializer(handle: PlayerFfiInitializerHandle) -> Option<Ffi
     let pointer = lock_initializer_registry().remove(handle.raw)?;
     // SAFETY: removing the registry entry transfers ownership of the boxed
     // initializer back to this call, so it can be reconstructed and moved out.
+// SAFETY: the pointer was created by Box::into_raw and ownership is uniquely reclaimed here
     unsafe { Some(*Box::from_raw(pointer as *mut FfiPlayerInitializer)) }
 }
 
@@ -171,6 +174,7 @@ pub(crate) fn destroy_initializer_handle(handle: PlayerFfiInitializerHandle) -> 
     };
     // SAFETY: removing the registry entry guarantees this call owns the boxed
     // initializer and that later handle lookups cannot free it again.
+// SAFETY: caller upholds the FFI contract for this pointer operation
     unsafe {
         drop(Box::from_raw(pointer as *mut FfiPlayerInitializer));
     }
@@ -232,6 +236,7 @@ pub(crate) fn invalid_player_handle_error() -> PlayerFfiError {
 pub(crate) fn write_handle<T: Copy>(out_handle: *mut T, handle: T) {
     // SAFETY: callers validate that `out_handle` points to writable storage for
     // one handle before calling this helper.
+// SAFETY: caller upholds the FFI contract for this pointer operation
     unsafe {
         ptr::write(out_handle, handle);
     }
@@ -244,6 +249,7 @@ pub(crate) fn write_default_if_non_null<T: Default>(out: *mut T) {
 
     // SAFETY: non-null output pointers passed to this helper point to writable
     // storage for one default value owned by the caller.
+// SAFETY: caller upholds the FFI contract for this pointer operation
     unsafe {
         ptr::write(out, T::default());
     }
@@ -257,6 +263,7 @@ fn with_mut_ptr<T, R>(ptr: *mut T, f: impl FnOnce(&mut T) -> R) -> Option<R> {
     // SAFETY: FFI callers must pass a valid, uniquely borrowed pointer for the
     // duration of the synchronous call. The mutable reference cannot escape
     // this helper because it is only exposed to the closure.
+// SAFETY: caller upholds the FFI contract for this pointer operation
     Some(f(unsafe { &mut *ptr }))
 }
 

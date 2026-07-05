@@ -16,6 +16,11 @@ use player_runtime::{
     PlayerRuntimeWarning,
 };
 
+/// Maximum number of pending runtime events the frame processor chain buffers
+/// before discarding oldest events. Hosts must call `drain_events()` regularly
+/// to consume events and stay within this bound.
+const MAX_PENDING_EVENTS: usize = 256;
+
 #[derive(Debug)]
 pub struct NativeFrameProcessorChainCore {
     processors: Vec<NativeFrameProcessorNode>,
@@ -593,6 +598,9 @@ impl NativeFrameProcessorChainCore {
         policy_action: FrameProcessorPolicyAction,
         message: Option<String>,
     ) {
+        if self.pending_events.len() >= MAX_PENDING_EVENTS {
+            self.pending_events.pop_front();
+        }
         self.pending_events.push_back(PlayerRuntimeEvent::Warning(
             PlayerRuntimeWarning::FrameProcessor(FrameProcessorWarning {
                 kind,

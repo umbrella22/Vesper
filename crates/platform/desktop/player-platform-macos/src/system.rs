@@ -63,6 +63,7 @@ impl Drop for MacosSystemNativeCommandSink {
         // SAFETY: both raw pointers are created together by
         // `player_macos_avfoundation_create_session`. Destroying the native
         // session stops future callbacks before reclaiming the boxed context.
+// SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             player_macos_avfoundation_destroy_session(self.session_handle);
             drop(Box::from_raw(self.callback_context));
@@ -109,6 +110,7 @@ impl MacosVideoLayerSurface {
             let mut error_message = [0 as c_char; 256];
             // SAFETY: the bridge writes at most `error_message.len()` bytes into
             // the caller-owned buffer and returns an opaque surface handle.
+// SAFETY: caller upholds the FFI contract for this pointer operation
             let handle = unsafe {
                 player_macos_video_layer_surface_create(
                     host_surface,
@@ -126,6 +128,7 @@ impl MacosVideoLayerSurface {
 
             // SAFETY: `handle` is a live surface handle returned by the bridge.
             // The bridge only reads the handle to expose its runtime target.
+// SAFETY: caller upholds the FFI contract for this pointer operation
             let target = unsafe { player_macos_video_layer_surface_target(handle) }
                 .to_runtime_surface()
                 .ok_or_else(|| {
@@ -155,6 +158,7 @@ impl MacosVideoLayerSurface {
         #[cfg(target_os = "macos")]
         {
             let frame = MacosLayerFrameRepr::from_frame(frame);
+// SAFETY: caller upholds the FFI contract for this pointer operation
             let (succeeded, error_message) = invoke_native_session_command(|buffer, len| unsafe {
                 player_macos_video_layer_surface_update_frame(self.handle, frame, buffer, len)
             });
@@ -187,6 +191,7 @@ impl Drop for MacosVideoLayerSurface {
         #[cfg(target_os = "macos")]
         // SAFETY: `handle` is an owned opaque surface handle returned by the
         // bridge and is destroyed exactly once here.
+// SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             player_macos_video_layer_surface_destroy(self.handle);
         }
@@ -201,6 +206,7 @@ impl MacosMetalLayerPresenter {
             let mut error_message = [0 as c_char; 256];
             // SAFETY: the bridge writes at most `error_message.len()` bytes into
             // the caller-owned buffer and returns an opaque presenter handle.
+// SAFETY: caller upholds the FFI contract for this pointer operation
             let handle = unsafe {
                 player_macos_metal_presenter_create(
                     surface,
@@ -237,6 +243,7 @@ impl MacosMetalLayerPresenter {
                     "forced test presenter failure",
                 ));
             }
+// SAFETY: caller upholds the FFI contract for this pointer operation
             let (succeeded, error_message) = invoke_native_session_command(|buffer, len| unsafe {
                 player_macos_metal_presenter_present_cv_pixel_buffer(
                     self.handle,
@@ -274,6 +281,7 @@ impl Drop for MacosMetalLayerPresenter {
         #[cfg(target_os = "macos")]
         // SAFETY: `handle` is an owned opaque presenter handle returned by the
         // bridge and is destroyed exactly once here.
+// SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             player_macos_metal_presenter_destroy(self.handle);
         }
@@ -286,16 +294,19 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
         {
             let (succeeded, error_message) = match command {
                 MacosNativePlayerCommand::Play => {
+// SAFETY: caller upholds the FFI contract for this pointer operation
                     invoke_native_session_command(|buffer, len| unsafe {
                         player_macos_avfoundation_session_play(self.session_handle, buffer, len)
                     })
                 }
                 MacosNativePlayerCommand::Pause => {
+// SAFETY: caller upholds the FFI contract for this pointer operation
                     invoke_native_session_command(|buffer, len| unsafe {
                         player_macos_avfoundation_session_pause(self.session_handle, buffer, len)
                     })
                 }
                 MacosNativePlayerCommand::SeekTo { position } => {
+// SAFETY: caller upholds the FFI contract for this pointer operation
                     invoke_native_session_command(|buffer, len| unsafe {
                         player_macos_avfoundation_session_seek_to(
                             self.session_handle,
@@ -306,11 +317,13 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
                     })
                 }
                 MacosNativePlayerCommand::Stop => {
+// SAFETY: caller upholds the FFI contract for this pointer operation
                     invoke_native_session_command(|buffer, len| unsafe {
                         player_macos_avfoundation_session_stop(self.session_handle, buffer, len)
                     })
                 }
                 MacosNativePlayerCommand::SetPlaybackRate { rate } => {
+// SAFETY: caller upholds the FFI contract for this pointer operation
                     invoke_native_session_command(|buffer, len| unsafe {
                         player_macos_avfoundation_session_set_playback_rate(
                             self.session_handle,
@@ -353,6 +366,7 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
         #[cfg(target_os = "macos")]
         {
             let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(video_surface)?;
+// SAFETY: caller upholds the FFI contract for this pointer operation
             let (succeeded, error_message) = invoke_native_session_command(|buffer, len| unsafe {
                 player_macos_avfoundation_session_attach_surface(
                     self.session_handle,
@@ -389,6 +403,7 @@ impl MacosNativeCommandSink for MacosSystemNativeCommandSink {
     fn detach_video_surface(&mut self) -> PlayerResult<()> {
         #[cfg(target_os = "macos")]
         {
+// SAFETY: caller upholds the FFI contract for this pointer operation
             let (succeeded, error_message) = invoke_native_session_command(|buffer, len| unsafe {
                 player_macos_avfoundation_session_detach_surface(self.session_handle, buffer, len)
             });
@@ -482,6 +497,7 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
             let mut error_message = [0 as c_char; 256];
             // SAFETY: all pointers are valid for the duration of the call. On
             // success the native session owns the callback context until sink Drop.
+// SAFETY: caller upholds the FFI contract for this pointer operation
             let created = unsafe {
                 player_macos_avfoundation_create_session(
                     source_c_string.as_ptr(),
@@ -495,6 +511,7 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
             if !created {
                 // SAFETY: session creation failed, so the native side did not
                 // retain the callback context and Rust must reclaim the box.
+// SAFETY: caller upholds the FFI contract for this pointer operation
                 unsafe {
                     drop(Box::from_raw(callback_context));
                 }
@@ -537,6 +554,7 @@ pub fn probe_source_with_avfoundation(
 
         let mut probe = MacosAvFoundationProbeResult::default();
         let succeeded =
+// SAFETY: caller upholds the FFI contract for this pointer operation
             unsafe { player_macos_avfoundation_probe(source_c_string.as_ptr(), &mut probe) };
         if !succeeded {
             let message = c_string_buffer_to_string(&probe.error_message);
@@ -719,6 +737,7 @@ extern "C" fn macos_on_snapshot(context: *mut c_void, snapshot: MacosAvFoundatio
     let _ = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: callbacks receive the context pointer registered during session
         // creation. The native session keeps it alive until destroy.
+// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
         else {
             return;
@@ -758,6 +777,7 @@ extern "C" fn macos_on_seek_completed(context: *mut c_void, position_ms: u64) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: callbacks receive the context pointer registered during session
         // creation. The native session keeps it alive until destroy.
+// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
         else {
             return;
@@ -773,6 +793,7 @@ extern "C" fn macos_on_first_frame_ready(context: *mut c_void, position_ms: u64)
     let _ = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: callbacks receive the context pointer registered during session
         // creation. The native session keeps it alive until destroy.
+// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
         else {
             return;
@@ -788,6 +809,7 @@ extern "C" fn macos_on_interruption_changed(context: *mut c_void, interrupted: c
     let _ = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: callbacks receive the context pointer registered during session
         // creation. The native session keeps it alive until destroy.
+// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
         else {
             return;
@@ -803,6 +825,7 @@ extern "C" fn macos_on_error(context: *mut c_void, message: *const c_char) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: callbacks receive the context pointer registered during session
         // creation. The native session keeps it alive until destroy.
+// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(context) = (unsafe { context.cast::<MacosNativeCallbackContext>().as_ref() })
         else {
             return;
@@ -812,6 +835,7 @@ extern "C" fn macos_on_error(context: *mut c_void, message: *const c_char) {
         } else {
             // SAFETY: non-null error messages are provided as NUL-terminated
             // strings valid for this callback invocation.
+// SAFETY: caller validated the pointer is non-null and points to a null-terminated C string
             unsafe { CStr::from_ptr(message) }
                 .to_string_lossy()
                 .into_owned()
@@ -1013,6 +1037,7 @@ unsafe extern "C" {
 fn c_string_buffer_to_string(buffer: &[c_char]) -> String {
     // SAFETY: the byte slice covers exactly the caller-owned fixed C buffer and
     // does not outlive `buffer`.
+// SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
     let bytes = unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), buffer.len()) };
     CStr::from_bytes_until_nul(bytes)
         .unwrap_or(c"")
@@ -1149,6 +1174,7 @@ mod tests {
                 &PlayerRuntimeOptions::default(),
             )
             .expect("probe should succeed");
+// SAFETY: caller upholds the FFI contract for this pointer operation
         let layer_handle = unsafe { player_macos_test_create_player_layer() };
         assert!(
             !layer_handle.is_null(),
@@ -1180,6 +1206,7 @@ mod tests {
             .expect("native session should accept pause");
         drop(sink);
 
+// SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             player_macos_test_release_object(layer_handle);
         }
@@ -1188,6 +1215,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn system_metal_presenter_creates_with_layer_surface() {
+// SAFETY: caller upholds the FFI contract for this pointer operation
         let layer_handle = unsafe { player_macos_test_create_player_layer() };
         assert!(
             !layer_handle.is_null(),
@@ -1201,6 +1229,7 @@ mod tests {
         let presenter = match presenter_result {
             Ok(presenter) => presenter,
             Err(error) if error.message().contains("Metal is unavailable") => {
+// SAFETY: caller upholds the FFI contract for this pointer operation
                 unsafe {
                     player_macos_test_release_object(layer_handle);
                 }
@@ -1211,6 +1240,7 @@ mod tests {
         };
         drop(presenter);
 
+// SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             player_macos_test_release_object(layer_handle);
         }

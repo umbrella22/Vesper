@@ -1,5 +1,10 @@
 use super::*;
 
+/// Maximum number of outstanding native frames the loader tracks per decoder
+/// session before rejecting further receives. Hosts must release frames through
+/// [`NativeDecoderSession::release_native_frame`] to stay within this bound.
+const MAX_OUTSTANDING_FRAMES: usize = 64;
+
 #[derive(Debug)]
 pub(crate) struct DynamicNativeDecoderPluginFactoryInner {
     #[allow(dead_code)]
@@ -426,6 +431,12 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
                             metadata: frame,
                             handle: result.handle,
                         };
+                        if self.outstanding_frames.len() >= MAX_OUTSTANDING_FRAMES {
+                            return Err(DecoderError::internal(format!(
+                                "native decoder plugin `{}` exceeded outstanding frame limit ({MAX_OUTSTANDING_FRAMES})",
+                                self.factory.name
+                            )));
+                        }
                         self.outstanding_frames.push(frame.clone());
                         Ok(DecoderReceiveNativeFrameOutput::Frame(frame))
                     }

@@ -434,11 +434,10 @@ impl PluginDiagnosticRecord {
     pub fn from_loaded_source_normalizer_plugin(
         path: impl Into<PathBuf>,
         plugin: &LoadedDynamicPlugin,
-    ) -> Self {
+    ) -> Option<Self> {
         Self::from_loaded_source_normalizer_plugin_records(path, plugin)
             .into_iter()
             .next()
-            .expect("source normalizer diagnostics returns one or more records")
     }
 
     pub(crate) fn from_loaded_source_normalizer_plugin_records(

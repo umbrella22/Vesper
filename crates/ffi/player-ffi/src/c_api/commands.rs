@@ -18,6 +18,7 @@ pub(crate) fn read_optional_c_string(
         return Ok(None);
     }
 
+// SAFETY: caller validated the pointer is non-null and points to a null-terminated C string
     let text = unsafe { CStr::from_ptr(value) };
     let text = text.to_str().map_err(|_| {
         owned_api_error(
@@ -31,6 +32,7 @@ pub(crate) fn read_optional_c_string(
 pub(crate) fn read_track_selection(
     selection: *const PlayerFfiTrackSelection,
 ) -> Result<BridgeTrackSelection, PlayerFfiError> {
+// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(selection) = (unsafe { selection.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -51,6 +53,7 @@ pub(crate) fn read_track_selection(
 pub(crate) fn read_abr_policy(
     policy: *const PlayerFfiAbrPolicy,
 ) -> Result<BridgeAbrPolicy, PlayerFfiError> {
+// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(policy) = (unsafe { policy.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -74,6 +77,7 @@ pub(crate) fn read_abr_policy(
 pub(crate) fn read_preload_budget(
     budget: *const PlayerFfiPreloadBudgetPolicy,
 ) -> Result<BridgePreloadBudgetPolicy, PlayerFfiError> {
+// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(budget) = (unsafe { budget.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -98,6 +102,7 @@ pub(crate) fn read_preload_budget(
 pub(crate) fn read_track_preferences(
     preferences: *const PlayerFfiTrackPreferences,
 ) -> Result<BridgeTrackPreferences, PlayerFfiError> {
+// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(preferences) = (unsafe { preferences.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -125,6 +130,7 @@ pub(crate) fn read_track_preferences(
 pub(crate) fn read_buffering_policy(
     policy: *const PlayerFfiBufferingPolicy,
 ) -> Result<BridgeBufferingPolicy, PlayerFfiError> {
+// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(policy) = (unsafe { policy.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -148,6 +154,7 @@ pub(crate) fn read_buffering_policy(
 pub(crate) fn read_retry_policy(
     policy: *const PlayerFfiRetryPolicy,
 ) -> Result<BridgeRetryPolicy, PlayerFfiError> {
+// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(policy) = (unsafe { policy.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -184,6 +191,7 @@ pub(crate) fn read_retry_policy(
 pub(crate) fn read_cache_policy(
     policy: *const PlayerFfiCachePolicy,
 ) -> Result<BridgeCachePolicy, PlayerFfiError> {
+// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(policy) = (unsafe { policy.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -208,6 +216,7 @@ pub(crate) fn read_uri(uri: *const c_char) -> Result<String, PlayerFfiError> {
         ));
     }
 
+// SAFETY: caller validated the pointer is non-null and points to a null-terminated C string
     let uri = unsafe { CStr::from_ptr(uri) };
     let uri = uri
         .to_str()

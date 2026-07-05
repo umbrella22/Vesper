@@ -1,5 +1,10 @@
 use super::*;
 
+/// Maximum number of outstanding frames the loader tracks per frame processor
+/// session before rejecting further receives. Hosts must release frames through
+/// [`FrameProcessorSession::release_frame`] to stay within this bound.
+const MAX_OUTSTANDING_FRAMES: usize = 64;
+
 #[derive(Debug)]
 pub(crate) struct DynamicFrameProcessorPluginFactoryInner {
     #[allow(dead_code)]
@@ -359,6 +364,12 @@ impl FrameProcessorSession for DynamicFrameProcessorSession {
                             handle: result.handle,
                         };
                         if frame_processor_output_requires_release(&frame) {
+                            if self.outstanding_frames.len() >= MAX_OUTSTANDING_FRAMES {
+                                return Err(FrameProcessorError::internal(format!(
+                                    "frame processor plugin `{}` exceeded outstanding frame limit ({MAX_OUTSTANDING_FRAMES})",
+                                    self.factory.name
+                                )));
+                            }
                             self.outstanding_frames.push(frame.clone());
                         }
                         Ok(FrameProcessorReceiveOutput::Frame(

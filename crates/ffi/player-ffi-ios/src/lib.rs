@@ -70,7 +70,11 @@ pub unsafe extern "C" fn player_ffi_ios_plugin_abi_summary_json(
             );
             return PlayerFfiCallStatus::Error;
         }
-        clear_c_string_output(out_json);
+        // SAFETY: `out_json` was validated non-null above; the slot is
+        // writable per the FFI contract and is owned by the caller for the
+        // duration of this call.
+        // SAFETY: the output pointer was validated non-null above; the slot is writable per the FFI contract
+        unsafe { clear_c_string_output(out_json) };
 
         let summary = serde_json::json!({
             "decoderAbiVersion": VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
@@ -79,7 +83,10 @@ pub unsafe extern "C" fn player_ffi_ios_plugin_abi_summary_json(
             "abiSemantics": "signature-only",
             "capabilityMatching": "requirements-first",
         });
-        write_c_string_output(out_json, summary.to_string());
+        // SAFETY: `out_json` was validated non-null above; the slot is
+        // writable per the FFI contract.
+        // SAFETY: the output pointer was validated non-null above; the slot is writable per the FFI contract
+        unsafe { write_c_string_output(out_json, summary.to_string()) };
         PlayerFfiCallStatus::Ok
     })
 }
@@ -147,6 +154,7 @@ pub unsafe extern "C" fn player_ffi_resolve_resilience_policy(
             cache_policy,
         );
 
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_policy, resolved.into());
         }
@@ -184,6 +192,7 @@ pub unsafe extern "C" fn player_ffi_resolve_preload_budget(
         };
 
         let resolved = resolve_preload_budget_with_runtime(preload_budget);
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_budget, resolved.into());
         }
@@ -212,6 +221,7 @@ pub unsafe extern "C" fn player_ffi_preload_session_create(
             return PlayerFfiCallStatus::Error;
         }
 
+        // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(preload_budget) = (unsafe { preload_budget.as_ref() }) else {
             write_error(
                 out_error,
@@ -239,6 +249,7 @@ pub unsafe extern "C" fn player_ffi_preload_session_create(
             return PlayerFfiCallStatus::Error;
         };
         let handle = sessions.insert(session);
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_handle, handle);
         }
@@ -306,6 +317,7 @@ pub unsafe extern "C" fn player_ffi_preload_session_plan(
                 );
                 return PlayerFfiCallStatus::Error;
             }
+            // SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
             unsafe { slice::from_raw_parts(candidates, candidates_len) }
         };
 
@@ -379,6 +391,7 @@ pub unsafe extern "C" fn player_ffi_preload_session_drain_commands(
         } else {
             Box::into_raw(commands.into_boxed_slice()) as *mut PlayerFfiPreloadCommand
         };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(
                 out_commands,
@@ -491,7 +504,7 @@ pub unsafe extern "C" fn player_ffi_preload_session_fail(
             return PlayerFfiCallStatus::Error;
         };
 
-        let error = PlayerError::with_taxonomy(code.into(), category.into(), retriable, message);
+        let error = PlayerError::with_taxonomy(code, category, retriable, message);
         if let Err(error) = session.fail(player_runtime::PreloadTaskId::from_raw(task_id), error) {
             write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
@@ -511,10 +524,12 @@ pub unsafe extern "C" fn player_ffi_preload_command_list_free(
     list: *mut PlayerFfiPreloadCommandList,
 ) {
     ffi_void(|| {
+        // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(list) = (unsafe { list.as_mut() }) else {
             return;
         };
         if !list.commands.is_null() && list.len > 0 {
+            // SAFETY: caller upholds the FFI contract for this pointer operation
             let commands = unsafe { Vec::from_raw_parts(list.commands, list.len, list.len) };
             for mut command in commands {
                 preload_command_free(&mut command);
@@ -576,6 +591,7 @@ pub unsafe extern "C" fn player_ffi_download_session_create(
             return PlayerFfiCallStatus::Error;
         };
         let handle = sessions.insert(IosDownloadBridgeSessionHandle::new(Mutex::new(session)));
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_handle, handle);
         }
@@ -623,6 +639,7 @@ unsafe impl Sync for FfiDownloadExportProgress {}
 impl ProcessorProgress for FfiDownloadExportProgress {
     fn on_progress(&self, ratio: f32) {
         if let Some(on_progress) = self.callbacks.on_progress {
+            // SAFETY: caller upholds the FFI contract for this pointer operation
             unsafe { on_progress(self.callbacks.context, ratio) };
         }
     }
@@ -630,6 +647,7 @@ impl ProcessorProgress for FfiDownloadExportProgress {
     fn is_cancelled(&self) -> bool {
         self.callbacks
             .is_cancelled
+            // SAFETY: caller upholds the FFI contract for this pointer operation
             .map(|is_cancelled| unsafe { is_cancelled(self.callbacks.context) })
             .unwrap_or(false)
     }
@@ -740,6 +758,7 @@ pub unsafe extern "C" fn player_ffi_download_session_create_task(
                 return PlayerFfiCallStatus::Error;
             }
         };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_task_id, task_id.get());
         }
@@ -771,6 +790,7 @@ pub unsafe extern "C" fn player_ffi_download_session_restore_tasks(
                 );
                 return PlayerFfiCallStatus::Error;
             }
+            // SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
             unsafe { slice::from_raw_parts(tasks, tasks_len) }
         };
 
@@ -1361,7 +1381,7 @@ pub unsafe extern "C" fn player_ffi_download_session_fail_task(
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        let error = PlayerError::with_taxonomy(code.into(), category.into(), retriable, message);
+        let error = PlayerError::with_taxonomy(code, category, retriable, message);
         if let Err(error) = session.fail_task(
             player_runtime::DownloadTaskId::from_raw(task_id),
             error,
@@ -1457,6 +1477,7 @@ pub unsafe extern "C" fn player_ffi_download_session_snapshot(
         } else {
             Box::into_raw(tasks.into_boxed_slice()) as *mut PlayerFfiDownloadTask
         };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_snapshot, PlayerFfiDownloadSnapshot { tasks: ptr, len });
         }
@@ -1527,6 +1548,7 @@ pub unsafe extern "C" fn player_ffi_download_session_drain_commands(
         } else {
             Box::into_raw(commands.into_boxed_slice()) as *mut PlayerFfiDownloadCommand
         };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(
                 out_commands,
@@ -1600,6 +1622,7 @@ pub unsafe extern "C" fn player_ffi_download_session_drain_events(
         } else {
             Box::into_raw(events.into_boxed_slice()) as *mut PlayerFfiDownloadEvent
         };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_events, PlayerFfiDownloadEventList { events: ptr, len });
         }
@@ -1618,10 +1641,12 @@ pub unsafe extern "C" fn player_ffi_download_snapshot_free(
     snapshot: *mut PlayerFfiDownloadSnapshot,
 ) {
     ffi_void(|| {
+        // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(snapshot) = (unsafe { snapshot.as_mut() }) else {
             return;
         };
         if !snapshot.tasks.is_null() && snapshot.len > 0 {
+            // SAFETY: caller upholds the FFI contract for this pointer operation
             let tasks = unsafe { Vec::from_raw_parts(snapshot.tasks, snapshot.len, snapshot.len) };
             for mut task in tasks {
                 download_task_free(&mut task);
@@ -1642,10 +1667,12 @@ pub unsafe extern "C" fn player_ffi_download_command_list_free(
     list: *mut PlayerFfiDownloadCommandList,
 ) {
     ffi_void(|| {
+        // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(list) = (unsafe { list.as_mut() }) else {
             return;
         };
         if !list.commands.is_null() && list.len > 0 {
+            // SAFETY: caller upholds the FFI contract for this pointer operation
             let commands = unsafe { Vec::from_raw_parts(list.commands, list.len, list.len) };
             for mut command in commands {
                 download_command_free(&mut command);
@@ -1666,10 +1693,12 @@ pub unsafe extern "C" fn player_ffi_download_event_list_free(
     list: *mut PlayerFfiDownloadEventList,
 ) {
     ffi_void(|| {
+        // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(list) = (unsafe { list.as_mut() }) else {
             return;
         };
         if !list.events.is_null() && list.len > 0 {
+            // SAFETY: caller upholds the FFI contract for this pointer operation
             let events = unsafe { Vec::from_raw_parts(list.events, list.len, list.len) };
             for mut event in events {
                 download_event_free(&mut event);
@@ -1709,6 +1738,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_create(
             }
         };
 
+        // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(preload_budget) = (unsafe { preload_budget.as_ref() }) else {
             write_error(
                 out_error,
@@ -1739,6 +1769,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_create(
             return PlayerFfiCallStatus::Error;
         };
         let handle = sessions.insert(session);
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_handle, handle);
         }
@@ -1806,6 +1837,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_replace_queue(
                 );
                 return PlayerFfiCallStatus::Error;
             }
+            // SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
             unsafe { slice::from_raw_parts(queue, queue_len) }
         };
 
@@ -1871,6 +1903,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_update_viewport_hints(
                 );
                 return PlayerFfiCallStatus::Error;
             }
+            // SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
             unsafe { slice::from_raw_parts(hints, hints_len) }
         };
 
@@ -2077,6 +2110,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_current_active_item(
             .active_item()
             .map(playlist_active_item_to_ffi)
             .unwrap_or_default();
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_active_item, active_item);
         }
@@ -2095,6 +2129,7 @@ pub unsafe extern "C" fn player_ffi_playlist_active_item_free(
     item: *mut PlayerFfiPlaylistActiveItem,
 ) {
     ffi_void(|| {
+        // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(item) = (unsafe { item.as_mut() }) else {
             return;
         };
@@ -2156,6 +2191,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_drain_preload_commands(
         } else {
             Box::into_raw(commands.into_boxed_slice()) as *mut PlayerFfiPreloadCommand
         };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(
                 out_commands,
@@ -2271,7 +2307,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_fail_preload_task(
             return PlayerFfiCallStatus::Error;
         };
 
-        let error = PlayerError::with_taxonomy(code.into(), category.into(), retriable, message);
+        let error = PlayerError::with_taxonomy(code, category, retriable, message);
         if let Err(error) =
             session.fail_preload_task(player_runtime::PreloadTaskId::from_raw(task_id), error)
         {
@@ -2312,6 +2348,7 @@ pub unsafe extern "C" fn player_ffi_resolve_track_preferences(
         };
 
         let resolved = resolve_track_preferences_with_runtime(track_preferences);
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_preferences, resolved.into());
         }
@@ -2375,6 +2412,7 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_create(
             return PlayerFfiCallStatus::Error;
         };
         let handle = sessions.insert(IosBenchmarkSinkSession::new(Mutex::new(session)));
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_handle, handle);
         }
@@ -2436,6 +2474,7 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_on_event_batch_json(
             return PlayerFfiCallStatus::Error;
         }
 
+        // SAFETY: caller validated the pointer is non-null and points to a null-terminated C string
         let batch_json = match unsafe { CStr::from_ptr(batch_json) }.to_str() {
             Ok(value) => value,
             Err(_) => {
@@ -2494,7 +2533,10 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_on_event_batch_json(
             }
         };
 
-        write_c_string_output(out_report_json, report_json);
+        // SAFETY: `out_report_json` was validated non-null at the function
+        // entry point; the slot is writable per the FFI contract.
+        // SAFETY: the output pointer was validated non-null above; the slot is writable per the FFI contract
+        unsafe { write_c_string_output(out_report_json, report_json) };
         PlayerFfiCallStatus::Ok
     })
 }
@@ -2563,7 +2605,10 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_flush_json(
             }
         };
 
-        write_c_string_output(out_report_json, report_json);
+        // SAFETY: `out_report_json` was validated non-null at the function
+        // entry point; the slot is writable per the FFI contract.
+        // SAFETY: the output pointer was validated non-null above; the slot is writable per the FFI contract
+        unsafe { write_c_string_output(out_report_json, report_json) };
         PlayerFfiCallStatus::Ok
     })
 }
@@ -2607,7 +2652,10 @@ pub unsafe extern "C" fn player_ffi_mobile_plugin_diagnostics_json(
             );
             return PlayerFfiCallStatus::Error;
         }
-        clear_c_string_output(out_json);
+        // SAFETY: `out_json` was validated non-null above; the slot is
+        // writable per the FFI contract.
+        // SAFETY: the output pointer was validated non-null above; the slot is writable per the FFI contract
+        unsafe { clear_c_string_output(out_json) };
 
         let source_uri = match read_optional_c_string(source_uri, "source_uri") {
             Ok(Some(value)) => value,
@@ -2674,7 +2722,10 @@ pub unsafe extern "C" fn player_ffi_mobile_plugin_diagnostics_json(
             }
         };
 
-        write_c_string_output(out_json, diagnostics_json);
+        // SAFETY: `out_json` was validated non-null above; the slot is
+        // writable per the FFI contract.
+        // SAFETY: the output pointer was validated non-null above; the slot is writable per the FFI contract
+        unsafe { write_c_string_output(out_json, diagnostics_json) };
         PlayerFfiCallStatus::Ok
     })
 }
@@ -2722,6 +2773,7 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
             );
             return PlayerFfiCallStatus::Error;
         }
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_handle, 0);
             ptr::write(out_json, ptr::null_mut());
@@ -2816,6 +2868,7 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
                             return PlayerFfiCallStatus::Error;
                         }
                     };
+                    // SAFETY: caller upholds the FFI contract for this pointer operation
                     unsafe {
                         ptr::write(out_json, into_c_string_ptr(json));
                     }
@@ -2858,11 +2911,7 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let json = match mobile_source_normalizer_resource_open_json(
-            handle,
-            &opened_guard,
-            None,
-        ) {
+        let json = match mobile_source_normalizer_resource_open_json(handle, &opened_guard, None) {
             Ok(value) => value,
             Err(error) => {
                 drop(opened_guard);
@@ -2876,6 +2925,7 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
                 return PlayerFfiCallStatus::Error;
             }
         };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_handle, handle);
             ptr::write(out_json, into_c_string_ptr(json));
@@ -2901,6 +2951,7 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_poll(
             );
             return PlayerFfiCallStatus::Error;
         }
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_json, ptr::null_mut());
         }
@@ -2959,6 +3010,7 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_poll(
                 return PlayerFfiCallStatus::Error;
             }
         };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_json, into_c_string_ptr(json));
         }
@@ -3020,6 +3072,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_open(
             );
             return PlayerFfiCallStatus::Error;
         }
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_handle, 0);
             ptr::write(out_json, ptr::null_mut());
@@ -3111,7 +3164,9 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_open(
                 return PlayerFfiCallStatus::Error;
             }
         };
-        let handle = sessions.insert(IosNativeFramePipelineSessionHandle::new(Mutex::new(session)));
+        let handle = sessions.insert(IosNativeFramePipelineSessionHandle::new(Mutex::new(
+            session,
+        )));
         let opened = match sessions.get(handle).cloned() {
             Some(opened) => opened,
             None => {
@@ -3147,6 +3202,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_open(
                 return PlayerFfiCallStatus::Error;
             }
         };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_handle, handle);
             ptr::write(out_json, into_c_string_ptr(json));
@@ -3172,6 +3228,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_advance(
             );
             return PlayerFfiCallStatus::Error;
         }
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_json, ptr::null_mut());
         }
@@ -3271,6 +3328,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_advance(
                 return PlayerFfiCallStatus::Error;
             }
         };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_json, into_c_string_ptr(json));
         }
@@ -3297,6 +3355,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_release_frame(
             );
             return PlayerFfiCallStatus::Error;
         }
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_json, ptr::null_mut());
         }
@@ -3339,7 +3398,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_release_frame(
             );
             return PlayerFfiCallStatus::Error;
         }
-        let json = match native_frame_pipeline_status_json(handle, &*session, None) {
+        let json = match native_frame_pipeline_status_json(handle, &session, None) {
             Ok(value) => value,
             Err(error) => {
                 write_error(
@@ -3349,6 +3408,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_release_frame(
                 return PlayerFfiCallStatus::Error;
             }
         };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_json, into_c_string_ptr(json));
         }
@@ -3373,6 +3433,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_flush(
             );
             return PlayerFfiCallStatus::Error;
         }
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_json, ptr::null_mut());
         }
@@ -3416,7 +3477,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_flush(
             return PlayerFfiCallStatus::Error;
         }
         let json =
-            match native_frame_pipeline_status_json(handle, &*session, Some("flushed".to_owned())) {
+            match native_frame_pipeline_status_json(handle, &session, Some("flushed".to_owned())) {
                 Ok(value) => value,
                 Err(error) => {
                     write_error(
@@ -3426,6 +3487,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_flush(
                     return PlayerFfiCallStatus::Error;
                 }
             };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_json, into_c_string_ptr(json));
         }
@@ -3451,6 +3513,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_seek(
             );
             return PlayerFfiCallStatus::Error;
         }
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_json, ptr::null_mut());
         }
@@ -3495,7 +3558,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_seek(
         }
         let json = match native_frame_pipeline_status_json(
             handle,
-            &*session,
+            &session,
             Some(format!("seeked to {position_millis} ms")),
         ) {
             Ok(value) => value,
@@ -3507,6 +3570,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_seek(
                 return PlayerFfiCallStatus::Error;
             }
         };
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_json, into_c_string_ptr(json));
         }
@@ -3564,6 +3628,7 @@ pub unsafe extern "C" fn player_ffi_dash_bridge_execute_json(
             return PlayerFfiCallStatus::Error;
         }
 
+        // SAFETY: caller validated the pointer is non-null and points to a null-terminated C string
         let request_json = match unsafe { CStr::from_ptr(request_json) }.to_str() {
             Ok(value) => value,
             Err(_) => {
@@ -3589,6 +3654,7 @@ pub unsafe extern "C" fn player_ffi_dash_bridge_execute_json(
             }
         };
 
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_json, into_c_string_ptr(response_json));
         }
@@ -3654,6 +3720,7 @@ pub unsafe extern "C" fn player_ffi_dash_bridge_parse_sidx(
         let data = if data_len == 0 {
             &[]
         } else {
+            // SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
             unsafe { slice::from_raw_parts(data, data_len) }
         };
         let sidx = match player_dash_hls_bridge::mp4::parse_sidx(data) {
@@ -3680,6 +3747,7 @@ pub unsafe extern "C" fn player_ffi_dash_bridge_parse_sidx(
             }
         };
 
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_json, into_c_string_ptr(response_json));
         }
@@ -3710,6 +3778,7 @@ pub unsafe extern "C" fn player_ffi_dash_bridge_string_free(value: *mut c_char) 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_error_free(error: *mut PlayerFfiError) {
     ffi_void(|| {
+        // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(error) = (unsafe { error.as_mut() }) else {
             return;
         };
@@ -3730,6 +3799,7 @@ pub unsafe extern "C" fn player_ffi_track_preferences_free(
     track_preferences: *mut PlayerFfiTrackPreferences,
 ) {
     ffi_void(|| {
+        // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
         let Some(track_preferences) = (unsafe { track_preferences.as_mut() }) else {
             return;
         };

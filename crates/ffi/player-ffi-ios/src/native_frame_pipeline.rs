@@ -66,6 +66,16 @@ pub struct IosNativeFramePipelineOpenConfig {
     pub max_in_flight_frames: Option<u32>,
 }
 
+/// Maximum number of pending frames the iOS native frame pipeline session tracks
+/// before rejecting further stores. The host must release frames through the
+/// `player_ffi_ios_native_frame_pipeline_release_frame` FFI entry point to stay
+/// within this bound.
+const MAX_PENDING_FRAMES: usize = 64;
+
+/// Handle used when `store_frame` cannot accept a new frame because the pending
+/// frame limit has been reached.
+const STORE_FRAME_FULL: u64 = 0;
+
 pub struct IosNativeFramePipelineSession {
     source_uri: String,
     duration_millis: Option<u64>,
@@ -616,6 +626,9 @@ impl IosNativeFramePipelineSession {
     }
 
     pub fn store_frame(&mut self, frame: IosNativeFramePipelineFrame) -> u64 {
+        if self.pending_frames.len() >= MAX_PENDING_FRAMES {
+            return STORE_FRAME_FULL;
+        }
         let handle = self.next_frame_handle.max(1);
         self.next_frame_handle = self.next_frame_handle.wrapping_add(1).max(1);
         self.pending_frames.insert(handle, frame);

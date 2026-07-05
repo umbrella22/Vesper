@@ -225,7 +225,8 @@ fn plugin_registry_reports_source_normalizer_packet_current_support() {
     let record = PluginDiagnosticRecord::from_loaded_source_normalizer_plugin(
         PathBuf::from("test-source-normalizer-packet"),
         &plugin,
-    );
+    )
+    .expect("source normalizer diagnostics returns one or more records");
 
     assert_eq!(
         record.status,

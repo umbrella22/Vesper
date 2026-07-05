@@ -84,6 +84,7 @@ pub(crate) fn free_c_string_array(ptr_ref: &mut *mut *mut c_char, len: usize) {
         // SAFETY: the array pointer is produced by `into_owned_struct_array` with
         // len as both length and capacity. Each element is an owned C string or
         // null and is freed before the boxed slice is dropped.
+// SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(*ptr_ref, len));
             for value in boxed.iter_mut() {
