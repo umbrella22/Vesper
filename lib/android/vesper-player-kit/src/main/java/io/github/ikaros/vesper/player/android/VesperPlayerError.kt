@@ -18,11 +18,19 @@ enum class VesperPlayerErrorCode(
     Timeout("timeout", 11);
 
     companion object {
+        private val logger = java.util.logging.Logger.getLogger(VesperPlayerErrorCode::class.java.name)
+
         fun fromWireName(wireName: String?): VesperPlayerErrorCode =
             entries.firstOrNull { it.wireName == wireName } ?: BackendFailure
 
-        internal fun fromJniOrdinal(ordinal: Int): VesperPlayerErrorCode =
-            entries.firstOrNull { it.jniOrdinal == ordinal } ?: BackendFailure
+        internal fun fromJniOrdinal(ordinal: Int): VesperPlayerErrorCode {
+            val entry = entries.firstOrNull { it.jniOrdinal == ordinal }
+            if (entry == null) {
+                logger.warning { "Unknown VesperPlayerErrorCode ordinal $ordinal from native layer; falling back to BackendFailure" }
+                return BackendFailure
+            }
+            return entry
+        }
     }
 }
 
@@ -40,11 +48,19 @@ enum class VesperPlayerErrorCategory(
     Platform("platform", 7);
 
     companion object {
+        private val logger = java.util.logging.Logger.getLogger(VesperPlayerErrorCategory::class.java.name)
+
         fun fromWireName(wireName: String?): VesperPlayerErrorCategory =
             entries.firstOrNull { it.wireName == wireName } ?: Platform
 
-        internal fun fromJniOrdinal(ordinal: Int): VesperPlayerErrorCategory =
-            entries.firstOrNull { it.jniOrdinal == ordinal } ?: Platform
+        internal fun fromJniOrdinal(ordinal: Int): VesperPlayerErrorCategory {
+            val entry = entries.firstOrNull { it.jniOrdinal == ordinal }
+            if (entry == null) {
+                logger.warning { "Unknown VesperPlayerErrorCategory ordinal $ordinal from native layer; falling back to Platform" }
+                return Platform
+            }
+            return entry
+        }
     }
 }
 

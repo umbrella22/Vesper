@@ -112,7 +112,11 @@ class VesperBenchmarkRecorder(
 
         synchronized(lock) {
             acceptedEvents += 1
-            samplesByName.getOrPut(eventName) { ArrayList() }.add(elapsed)
+            val samples = samplesByName.getOrPut(eventName) { ArrayList() }
+            if (samples.size >= MAX_SAMPLES_PER_EVENT_NAME) {
+                samples.removeFirst()
+            }
+            samples.add(elapsed)
             if (configuration.includeRawEvents) {
                 if (rawEvents.size < configuration.maxBufferedEvents.coerceAtLeast(0)) {
                     rawEvents += event

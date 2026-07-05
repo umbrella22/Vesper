@@ -79,7 +79,12 @@ internal class HandlerNativeFramePipelinePumpScheduler(
 ) : NativeFramePipelinePumpScheduler {
     override val inlineCallbacksForTests: Boolean = inlineRuntimeCommandsForLocalTests
     private val thread: HandlerThread by lazy {
-        HandlerThread("VesperNativeFramePump").also { it.start() }
+        HandlerThread("VesperNativeFramePump").apply {
+            // Mark as daemon so a host that forgets to call close() cannot
+            // keep the JVM alive past player release.
+            isDaemon = true
+            start()
+        }
     }
     private val handler: Handler by lazy { Handler(thread.looper) }
     private var scheduled: Runnable? = null
@@ -141,6 +146,11 @@ internal class HandlerNativeFramePipelinePumpScheduler(
         if (started) {
             handler.removeCallbacksAndMessages(null)
         }
+    }
+
+    fun quitLooperSafely() {
+        // Called after close() releases the monitor so that the blocking
+        // quitSafely() does not hold a lock (AGENTS.md rule).
         if (started && thread.isAlive) {
             thread.quitSafely()
         }

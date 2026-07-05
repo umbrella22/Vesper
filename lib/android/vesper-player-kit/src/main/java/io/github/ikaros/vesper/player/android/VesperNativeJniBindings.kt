@@ -69,6 +69,7 @@ internal class VesperNativeJniBindings(
     internal var player: ExoPlayer? = null
     internal var playerListener: Player.Listener? = null
     internal var analyticsListener: AnalyticsListener? = null
+    @Volatile
     internal var attachedSurface: Surface? = null
     internal var nativeFramePipelineOwnsSurface = false
     internal var updateListener: (() -> Unit)? = null
@@ -89,6 +90,17 @@ internal class VesperNativeJniBindings(
     internal var firstFrameWatchdogRunnable: Runnable? = null
     internal var firstFrameRenderedForCurrentSource = false
     internal val localBridgeEvents = ArrayDeque<NativeBridgeEvent>()
+
+    internal fun addLocalBridgeEvent(event: NativeBridgeEvent) {
+        if (localBridgeEvents.size >= MAX_LOCAL_BRIDGE_EVENTS) {
+            localBridgeEvents.removeFirst()
+        }
+        localBridgeEvents += event
+    }
+
+    companion object {
+        private const val MAX_LOCAL_BRIDGE_EVENTS = 256
+    }
     internal val preloadCoordinator =
         VesperNativePreloadCoordinator(
             bindings = VesperNativePreloadCoordinator.NativeJniPreloadBindings,
@@ -353,8 +365,14 @@ internal class VesperNativeJniBindings(
     }
 
     override fun closeNativeFramePipeline() {
-        val handle = nativeFramePipelineHandle
-        nativeFramePipelineHandle = null
+        val handle: Long?
+        synchronized(this) {
+            handle = nativeFramePipelineHandle
+            if (handle == null) {
+                return
+            }
+            nativeFramePipelineHandle = null
+        }
         nativeFramePipelineStatus = null
         nativeFramePipelineOwnsSurface = false
         if (handle != null) {
@@ -405,12 +423,15 @@ internal class VesperNativeJniBindings(
         } finally {
             player = null
             if (handle != null) {
+                // Null sessionHandle before the JNI call so that concurrent
+                // dispatchRustCommand invocations see a null handle and bail
+                // out rather than passing a stale handle to native code.
+                sessionHandle = null
                 runCatching { VesperNativeJni.disposeSession(handle) }
                     .onFailure { error -> Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose native session", error) }
             }
             closeCurrentSourceNormalizerResource()
             sourceNormalizerLoopbackServer.stop()
-            sessionHandle = null
         }
         currentTrackCatalogState = VesperTrackCatalog.Empty
         currentTrackSelectionState = VesperTrackSelectionSnapshot()

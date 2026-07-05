@@ -16,11 +16,20 @@ internal class VesperNativePreloadCoordinator(
             if (sessionHandle != 0L) {
                 return sessionHandle
             }
-            val handle = bindings.createPreloadSession(resolvedBudget)
-            check(handle != 0L) { "native preload session handle must not be zero" }
-            sessionHandle = handle
-            return handle
         }
+        // Perform the JNI call outside the synchronized block to avoid holding a
+        // monitor during a potentially long-running native call (AGENTS.md rule).
+        val handle = bindings.createPreloadSession(resolvedBudget)
+        check(handle != 0L) { "native preload session handle must not be zero" }
+        synchronized(sessionLock) {
+            // Another thread may have raced and created a session first.
+            if (sessionHandle != 0L) {
+                bindings.disposePreloadSession(handle)
+                return sessionHandle
+            }
+            sessionHandle = handle
+        }
+        return handle
     }
 
     fun dispose() {

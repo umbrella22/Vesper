@@ -57,10 +57,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal fun VesperNativeJniBindings.dispatchRustCommand(action: (Long) -> Unit) {
+    // Read sessionHandle first so that if dispose() has already nulled it we
+    // bail out before checking isDisposed and avoid passing a stale handle.
+    val handle = sessionHandle ?: return
     if (isDisposed.get()) {
         return
     }
-    val handle = sessionHandle ?: return
     action(handle)
     drainAndApplyNativeCommands()
     pushSnapshotToRust()
@@ -455,7 +457,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
                     "errorMessage" to (error.message ?: ""),
                 ),
             )
-            localBridgeEvents +=
+            addLocalBridgeEvent(
                 NativeBridgeEvent.Warning(
                     VesperRuntimeWarning(
                         domain = "drm",
@@ -473,6 +475,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
                             ),
                     ),
                 )
+            )
             if (!attemptsExhausted) {
                 notifyNativeUpdate()
                 return
@@ -575,7 +578,7 @@ internal fun VesperNativeJniBindings.scheduleFirstFrameWatchdog(
                     "hardwareDecoders=${decoderDiagnostics["hardwareDecoderCount"] ?: "unknown"} " +
                     "secureHardwareDecoders=${decoderDiagnostics["secureHardwareDecoderCount"] ?: "unknown"}",
             )
-            localBridgeEvents +=
+            addLocalBridgeEvent(
                 NativeBridgeEvent.Warning(
                     VesperRuntimeWarning(
                         domain = "playback",
@@ -596,6 +599,7 @@ internal fun VesperNativeJniBindings.scheduleFirstFrameWatchdog(
                             ) + decoderDiagnostics,
                     ),
                 )
+            )
             notifyNativeUpdate()
         }
     firstFrameWatchdogRunnable = runnable
@@ -664,7 +668,7 @@ internal fun VesperNativeJniBindings.enqueueTerminalPlaybackError(
         return
     }
     terminalErrorReportedForCurrentSource = true
-    localBridgeEvents +=
+    addLocalBridgeEvent(
         NativeBridgeEvent.Error(
             message = message,
             codeOrdinal = classified.codeOrdinal,
@@ -679,6 +683,7 @@ internal fun VesperNativeJniBindings.enqueueTerminalPlaybackError(
                     extraDetails = extraDetails,
                 ),
         )
+    )
 }
 
 internal fun VesperNativeJniBindings.terminalPlaybackErrorDetails(
@@ -883,13 +888,14 @@ internal fun VesperNativeJniBindings.currentSourceOrFallback(uri: String): Vespe
 
 internal fun VesperNativeJniBindings.enqueueHdrCapabilityWarningIfNeeded(format: Format) {
     val evidence = format.androidRuntimeHdrEvidence() ?: return
-    localBridgeEvents +=
+    addLocalBridgeEvent(
         NativeBridgeEvent.Warning(
             VesperRuntimeWarning(
                 domain = "capability",
                 payload = evidence.capabilityWarningPayload(),
             )
         )
+    )
 }
 
 internal fun VesperNativeJniBindings.enqueueHdrFailureHintIfNeeded(
@@ -900,7 +906,7 @@ internal fun VesperNativeJniBindings.enqueueHdrFailureHintIfNeeded(
     if (!classified.likelyCapabilityIssue) {
         return
     }
-    localBridgeEvents +=
+    addLocalBridgeEvent(
         NativeBridgeEvent.Warning(
             VesperRuntimeWarning(
                 domain = "capability",
@@ -912,6 +918,7 @@ internal fun VesperNativeJniBindings.enqueueHdrFailureHintIfNeeded(
                     ),
             )
         )
+    )
 }
 
 internal fun VesperNativeJniBindings.buildRuntimeSessionProbeSnapshot(format: Format): AndroidRuntimeSessionProbeSnapshot? {

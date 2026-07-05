@@ -67,11 +67,15 @@ internal object VesperRelayFfmpegNative {
             return
         }
         synchronized(this) {
-            if (!loaded) {
-                System.loadLibrary("vesper_player_relay_ffmpeg")
-                loaded = true
+            if (loaded) {
+                return
             }
         }
+        // Load the native library outside the synchronized block to avoid
+        // holding a monitor during file I/O (AGENTS.md rule). A second thread
+        // may also pass through, but System.loadLibrary is idempotent.
+        System.loadLibrary("vesper_player_relay_ffmpeg")
+        loaded = true
     }
 
     @JvmStatic

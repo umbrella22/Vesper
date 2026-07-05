@@ -43,5 +43,10 @@ internal fun VesperExternalPlaybackController.dlnaRouteCacheMissDetails(routeId:
 
 internal fun VesperExternalPlaybackController.pruneRecentlySeenDlnaDevices() {
     val now = System.currentTimeMillis()
-    recentlySeenDlnaDevices.entries.removeIf { it.value.expiresAtMillis <= now }
+    val iterator = recentlySeenDlnaDevices.iterator()
+    while (iterator.hasNext()) {
+        if (iterator.next().value.expiresAtMillis <= now) {
+            iterator.remove()
+        }
+    }
 }

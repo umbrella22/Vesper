@@ -152,6 +152,10 @@ internal fun VesperNativePlayerBridge.initializeNativeBridge() {
             refreshFromNative()
         }
         .onFailure {
+            // Dispose any partially-initialized native session to prevent a
+            // permanent resource leak when initialization fails after the
+            // session handle has been assigned (AGENTS.md rule).
+            runCatching { bindings.dispose() }
             recordBenchmark(
                 "initialize_failed",
                 mapOf("error" to (it.message ?: it::class.java.simpleName)),
@@ -208,6 +212,7 @@ internal fun VesperNativePlayerBridge.disposeNativeBridge() {
     releasePendingTimedNativeFrameOnRuntime(presented = false)
     closeNativeFramePipelineOnRuntime()
     nativeFramePipelinePumpScheduler.close()
+    nativeFramePipelinePumpScheduler.quitLooperSafely()
     clearTrackState()
     nativeFramePipelineOpenStatus = null
     nativeFramePipelineLastStatus = null

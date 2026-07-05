@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 class VesperDownloadManager internal constructor(
     private val configuration: VesperDownloadConfiguration,
@@ -29,11 +30,17 @@ class VesperDownloadManager internal constructor(
     private val runtimeScope = CoroutineScope(SupervisorJob() + runtimeDispatcher)
     private val eventBufferLock = Any()
     private val eventBuffer = mutableListOf<VesperDownloadEvent>()
+
+    companion object {
+        private const val MAX_EVENT_BUFFER_SIZE = 500
+        private const val RUNTIME_OP_TIMEOUT_MS = 30_000L
+    }
     private val taskStore = DownloadTaskStore()
     private val lastProgressPersistence = mutableMapOf<VesperDownloadTaskId, ProgressPersistenceCheckpoint>()
     private val _snapshot = MutableStateFlow(VesperDownloadSnapshot(emptyList()))
     @Volatile
     private var sessionHandle: Long = bindings.createDownloadSession(configuration.toNativePayload())
+    private val isDisposed = java.util.concurrent.atomic.AtomicBoolean(false)
 
     val snapshot: StateFlow<VesperDownloadSnapshot> = _snapshot.asStateFlow()
 
@@ -76,6 +83,11 @@ class VesperDownloadManager internal constructor(
     )
 
     fun dispose() {
+        if (!isDisposed.compareAndSet(false, true)) {
+            return
+        }
+        val handle = sessionHandle
+        sessionHandle = 0L
         snapshot.value.tasks
             .filter {
                 it.state == VesperDownloadState.Preparing ||
@@ -84,11 +96,18 @@ class VesperDownloadManager internal constructor(
             .forEach { pauseTask(it.taskId) }
         persistSnapshot(snapshot.value)
         executor.dispose()
-        if (sessionHandle != 0L) {
-            onRuntimeThread {
-                bindings.disposeDownloadSession(sessionHandle)
+        runCatching {
+            if (handle != 0L) {
+                // Bypass onRuntimeThread because its isDisposed guard would
+                // skip the dispose call; we must dispose regardless.
+                runBlocking {
+                    withTimeout(RUNTIME_OP_TIMEOUT_MS) {
+                        withContext(runtimeDispatcher) {
+                            bindings.disposeDownloadSession(handle)
+                        }
+                    }
+                }
             }
-            sessionHandle = 0L
         }
         runtimeScope.cancel()
         (runtimeDispatcher as? AutoCloseable)?.close()
@@ -138,10 +157,14 @@ class VesperDownloadManager internal constructor(
             }.getOrElse {
                 return null
             }
+        val handle = sessionHandle
+        if (handle == 0L) {
+            return null
+        }
         val taskId =
             onRuntimeThread {
                 bindings.createDownloadTask(
-                    sessionHandle = sessionHandle,
+                    sessionHandle = handle,
                     assetId = assetId,
                     source = source.toNativePayload(),
                     profile = profile.toNativePayload(),
@@ -194,9 +217,13 @@ class VesperDownloadManager internal constructor(
     }
 
     fun startTask(taskId: VesperDownloadTaskId): Boolean {
+        val handle = sessionHandle
+        if (handle == 0L) {
+            return false
+        }
         val started =
             onRuntimeThread {
-                bindings.startDownloadTask(sessionHandle, taskId, System.currentTimeMillis())
+                bindings.startDownloadTask(handle, taskId, System.currentTimeMillis())
             }
         if (started) {
             syncRuntimeState(processCommands = true)
@@ -205,9 +232,13 @@ class VesperDownloadManager internal constructor(
     }
 
     fun pauseTask(taskId: VesperDownloadTaskId): Boolean {
+        val handle = sessionHandle
+        if (handle == 0L) {
+            return false
+        }
         val paused =
             onRuntimeThread {
-                bindings.pauseDownloadTask(sessionHandle, taskId, System.currentTimeMillis())
+                bindings.pauseDownloadTask(handle, taskId, System.currentTimeMillis())
             }
         if (paused) {
             syncRuntimeState(processCommands = true)
@@ -216,9 +247,13 @@ class VesperDownloadManager internal constructor(
     }
 
     fun resumeTask(taskId: VesperDownloadTaskId): Boolean {
+        val handle = sessionHandle
+        if (handle == 0L) {
+            return false
+        }
         val resumed =
             onRuntimeThread {
-                bindings.resumeDownloadTask(sessionHandle, taskId, System.currentTimeMillis())
+                bindings.resumeDownloadTask(handle, taskId, System.currentTimeMillis())
             }
         if (resumed) {
             syncRuntimeState(processCommands = true)
@@ -227,9 +262,13 @@ class VesperDownloadManager internal constructor(
     }
 
     fun removeTask(taskId: VesperDownloadTaskId): Boolean {
+        val handle = sessionHandle
+        if (handle == 0L) {
+            return false
+        }
         val removed =
             onRuntimeThread {
-                bindings.removeDownloadTask(sessionHandle, taskId, System.currentTimeMillis())
+                bindings.removeDownloadTask(handle, taskId, System.currentTimeMillis())
             }
         if (removed) {
             syncRuntimeState(processCommands = true)
@@ -243,11 +282,12 @@ class VesperDownloadManager internal constructor(
         onProgress: (Float) -> Unit = {},
         isCancelled: () -> Boolean = { false },
     ) {
-        check(sessionHandle != 0L) { "native download session handle must not be zero" }
+        val handle = sessionHandle
+        check(handle != 0L) { "native download session handle must not be zero" }
         withContext(runtimeDispatcher) {
             val exported =
                 bindings.exportDownloadTask(
-                    sessionHandle = sessionHandle,
+                    sessionHandle = handle,
                     taskId = taskId,
                     outputPath = outputPath,
                     progressCallback =
@@ -292,7 +332,8 @@ class VesperDownloadManager internal constructor(
     )
 
     private fun syncRuntimeState(processCommands: Boolean) {
-        if (sessionHandle == 0L) {
+        val handle = sessionHandle
+        if (handle == 0L) {
             taskStore.replaceAll(VesperDownloadSnapshot(emptyList()))
             _snapshot.value = VesperDownloadSnapshot(emptyList())
             lastProgressPersistence.clear()
@@ -302,11 +343,16 @@ class VesperDownloadManager internal constructor(
             return
         }
 
-        val events = onRuntimeThread { bindings.drainDownloadEvents(sessionHandle).toList() }
+        val events = onRuntimeThread { bindings.drainDownloadEvents(handle).toList() }
             .map(NativeDownloadEvent::toPublic)
         if (events.isNotEmpty()) {
             synchronized(eventBufferLock) {
                 eventBuffer += events
+                // Drop oldest events when buffer exceeds capacity to prevent unbounded growth.
+                if (eventBuffer.size > MAX_EVENT_BUFFER_SIZE) {
+                    val excess = eventBuffer.size - MAX_EVENT_BUFFER_SIZE
+                    eventBuffer.subList(0, excess).clear()
+                }
             }
             val immediateEvents = events.filterNot { it.isRemovedStatePatch }
             if (immediateEvents.isNotEmpty()) {
@@ -316,7 +362,7 @@ class VesperDownloadManager internal constructor(
         }
 
         if (processCommands) {
-            val commands = onRuntimeThread { bindings.drainDownloadCommands(sessionHandle).toList() }
+            val commands = onRuntimeThread { bindings.drainDownloadCommands(handle).toList() }
             commands.forEach(::applyCommand)
         }
 
@@ -333,7 +379,8 @@ class VesperDownloadManager internal constructor(
     }
 
     private fun forceFullSync(processCommands: Boolean) {
-        if (sessionHandle == 0L) {
+        val handle = sessionHandle
+        if (handle == 0L) {
             taskStore.replaceAll(VesperDownloadSnapshot(emptyList()))
             _snapshot.value = VesperDownloadSnapshot(emptyList())
             lastProgressPersistence.clear()
@@ -344,7 +391,7 @@ class VesperDownloadManager internal constructor(
         }
 
         val fullSnapshot =
-            onRuntimeThread { bindings.pollDownloadSnapshot(sessionHandle) }?.toPublic()
+            onRuntimeThread { bindings.pollDownloadSnapshot(handle) }?.toPublic()
                 ?: VesperDownloadSnapshot(emptyList())
         taskStore.replaceAll(fullSnapshot)
         val activeSnapshot = taskStore.snapshot()
@@ -415,7 +462,20 @@ class VesperDownloadManager internal constructor(
         }
     }
 
-    private fun <T> onRuntimeThread(block: () -> T): T = runBlocking(runtimeDispatcher) { block() }
+    /**
+     * Executes [block] on the single-threaded runtime dispatcher and blocks the
+     * calling thread until completion or [RUNTIME_OP_TIMEOUT_MS].
+     *
+     * Callers on the main thread should prefer [exportTaskOutput] (already
+     * suspend) or dispatch to a background coroutine; synchronous methods exist
+     * for convenience but may block the caller for the duration of the JNI call.
+     */
+    private fun <T> onRuntimeThread(block: () -> T): T =
+        runBlocking {
+            withTimeout(RUNTIME_OP_TIMEOUT_MS) {
+                withContext(runtimeDispatcher) { block() }
+            }
+        }
 
     private fun restorePersistedTasks() {
         val storedTasks = stateStore?.load()?.tasks.orEmpty()
@@ -538,12 +598,13 @@ class VesperDownloadManager internal constructor(
                 taskId: VesperDownloadTaskId,
                 assetIndex: VesperDownloadAssetIndex,
             ) {
-                if (sessionHandle == 0L) {
+                val handle = sessionHandle
+                if (handle == 0L) {
                     return
                 }
                 onRuntimeThread {
                     bindings.completeDownloadPreparation(
-                        sessionHandle = sessionHandle,
+                        sessionHandle = handle,
                         taskId = taskId,
                         assetIndex = assetIndex.toNativePayload(),
                         nowEpochMs = System.currentTimeMillis(),
@@ -558,12 +619,13 @@ class VesperDownloadManager internal constructor(
                 profile: VesperDownloadProfile,
                 assetIndex: VesperDownloadAssetIndex,
             ) {
-                if (sessionHandle == 0L) {
+                val handle = sessionHandle
+                if (handle == 0L) {
                     return
                 }
                 onRuntimeThread {
                     bindings.replaceDownloadTaskPlan(
-                        sessionHandle = sessionHandle,
+                        sessionHandle = handle,
                         taskId = taskId,
                         source = source.toNativePayload(),
                         profile = profile.toNativePayload(),
@@ -579,12 +641,13 @@ class VesperDownloadManager internal constructor(
                 receivedBytes: Long,
                 receivedSegments: Int,
             ) {
-                if (sessionHandle == 0L) {
+                val handle = sessionHandle
+                if (handle == 0L) {
                     return
                 }
                 onRuntimeThread {
                     bindings.updateDownloadTaskProgress(
-                        sessionHandle = sessionHandle,
+                        sessionHandle = handle,
                         taskId = taskId,
                         receivedBytes = receivedBytes,
                         receivedSegments = receivedSegments,
@@ -595,12 +658,13 @@ class VesperDownloadManager internal constructor(
             }
 
             override fun complete(taskId: VesperDownloadTaskId, completedPath: String?) {
-                if (sessionHandle == 0L) {
+                val handle = sessionHandle
+                if (handle == 0L) {
                     return
                 }
                 onRuntimeThread {
                     bindings.completeDownloadTask(
-                        sessionHandle = sessionHandle,
+                        sessionHandle = handle,
                         taskId = taskId,
                         completedPath = completedPath.orEmpty(),
                         nowEpochMs = System.currentTimeMillis(),
@@ -610,12 +674,13 @@ class VesperDownloadManager internal constructor(
             }
 
             override fun fail(taskId: VesperDownloadTaskId, error: VesperDownloadError) {
-                if (sessionHandle == 0L) {
+                val handle = sessionHandle
+                if (handle == 0L) {
                     return
                 }
                 onRuntimeThread {
                     bindings.failDownloadTask(
-                        sessionHandle = sessionHandle,
+                        sessionHandle = handle,
                         taskId = taskId,
                         codeOrdinal = error.code.jniOrdinal,
                         categoryOrdinal = error.category.jniOrdinal,
@@ -629,9 +694,20 @@ class VesperDownloadManager internal constructor(
         }
 
     init {
-        check(sessionHandle != 0L) { "native download session handle must not be zero" }
-        restorePersistedTasks()
-        forceFullSync()
+        try {
+            check(sessionHandle != 0L) { "native download session handle must not be zero" }
+            restorePersistedTasks()
+            forceFullSync()
+        } catch (error: Throwable) {
+            // Clean up the native session if constructor initialization fails,
+            // preventing a permanent resource leak (AGENTS.md rule).
+            val handle = sessionHandle
+            if (handle != 0L) {
+                runCatching { bindings.disposeDownloadSession(handle) }
+                sessionHandle = 0L
+            }
+            throw error
+        }
     }
 
 }

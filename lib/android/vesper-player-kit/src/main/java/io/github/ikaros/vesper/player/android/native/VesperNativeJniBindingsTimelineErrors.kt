@@ -326,25 +326,33 @@ internal data class ResolvedCachePolicy(
 internal object VesperMediaCacheStore {
     private val caches = mutableMapOf<Long, SimpleCache>()
     private val databaseProviders = mutableMapOf<Long, StandaloneDatabaseProvider>()
+    private val lock = Any()
 
-    @Synchronized
     fun cache(
         appContext: Context,
         maxDiskBytes: Long,
     ): SimpleCache {
-        return caches.getOrPut(maxDiskBytes) {
-            val cacheDir =
-                File(appContext.cacheDir, "vesper-media-cache/$maxDiskBytes").apply { mkdirs() }
-            val databaseProvider =
-                databaseProviders.getOrPut(maxDiskBytes) { StandaloneDatabaseProvider(appContext) }
+        synchronized(lock) {
+            caches[maxDiskBytes]?.let { return it }
+        }
+        // Perform file I/O and SQLite initialization outside the lock
+        // to avoid holding a monitor during blocking operations.
+        val cacheDir =
+            File(appContext.cacheDir, "vesper-media-cache/$maxDiskBytes").apply { mkdirs() }
+        val databaseProvider =
+            StandaloneDatabaseProvider(appContext)
+        val newCache =
             SimpleCache(
                 cacheDir,
                 LeastRecentlyUsedCacheEvictor(maxDiskBytes),
                 databaseProvider,
             )
+        synchronized(lock) {
+            caches.getOrPut(maxDiskBytes) { newCache }
+            databaseProviders.getOrPut(maxDiskBytes) { databaseProvider }
         }
+        return caches[maxDiskBytes]!!
     }
-}
 
 internal fun classifyPlaybackException(error: PlaybackException): NativePlaybackError {
     val causeEvidence = error.playbackFailureCauseEvidence()

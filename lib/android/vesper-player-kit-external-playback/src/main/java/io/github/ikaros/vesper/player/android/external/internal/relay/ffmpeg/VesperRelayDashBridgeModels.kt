@@ -18,11 +18,14 @@ internal object VesperRelayDashBridgeNative {
             return
         }
         synchronized(this) {
-            if (!loaded.get()) {
-                System.loadLibrary("vesper_player_relay_ffmpeg")
-                loaded.set(true)
+            if (loaded.get()) {
+                return
             }
         }
+        // Load the native library outside the synchronized block to avoid
+        // holding a monitor during file I/O (AGENTS.md rule).
+        System.loadLibrary("vesper_player_relay_ffmpeg")
+        loaded.set(true)
     }
 
     fun executeJson(requestJson: String): String = VesperRelayDashBridgeExecutor(requestJson)

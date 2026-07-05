@@ -17,6 +17,7 @@ import io.github.ikaros.vesper.player.android.external.internal.dlna.matchesRout
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperExternalPlaybackSourcePreparer
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayServer
 import io.github.ikaros.vesper.player.android.external.internal.relay.ffmpeg.VesperRelayFfmpegAdapter
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,16 +36,19 @@ class VesperExternalPlaybackController(context: Context) {
     )
     internal val sourcePreparer = VesperExternalPlaybackSourcePreparer(relayServer)
     internal val castController = VesperCastController(applicationContext)
-    internal val dlnaDevices = linkedMapOf<String, VesperDlnaDevice>()
-    internal val recentlySeenDlnaDevices = linkedMapOf<String, RecentDlnaDevice>()
-    internal val activeRelayTokens = mutableSetOf<String>()
+    internal val dlnaDevices = ConcurrentHashMap<String, VesperDlnaDevice>()
+    internal val recentlySeenDlnaDevices = ConcurrentHashMap<String, RecentDlnaDevice>()
+    internal val activeRelayTokens = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     internal var discoveryGeneration = 0
+    @Volatile
     internal var activeRouteId: String? = null
     internal var activeCastRouteName: String? = null
     internal var dlnaDiscovery: VesperDlnaDiscovery? = null
+    @Volatile
     internal var dlnaSession: VesperDlnaSession? = null
     @Volatile
     internal var released = false
+    private val releaseGuard = java.util.concurrent.atomic.AtomicBoolean(false)
     internal val castContextExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "vesper-cast-context").apply { isDaemon = true }
     }
@@ -425,7 +429,7 @@ class VesperExternalPlaybackController(context: Context) {
     }
 
     fun release() {
-        if (released) {
+        if (!releaseGuard.compareAndSet(false, true)) {
             return
         }
         released = true

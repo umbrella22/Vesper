@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -35,40 +36,101 @@ struct AndroidDownloadSessionConfig {
 
 struct JniDownloadExportProgress {
     java_vm: JavaVM,
-    callback: Option<Global<JObject<'static>>>,
+    callback: Option<Arc<Global<JObject<'static>>>>,
+}
+
+impl JniDownloadExportProgress {
+    /// Runs the supplied Java callback invocation on a freshly spawned worker
+    /// thread and returns its result via a oneshot channel.
+    ///
+    /// `export_task_output` is driven while the per-session `Mutex` is held by
+    /// the calling (runtime-dispatcher) thread. If the host's Java callback
+    /// re-enters the same download session through another JNI method, that
+    /// call would route through `runBlocking(runtimeDispatcher)` on the very
+    /// thread we are blocking here — a guaranteed self-deadlock. Off-loading
+    /// the Java upcall to a separate thread leaves the runtime-dispatcher
+    /// thread's run-loop free to service that re-entrant call, while still
+    /// preserving the synchronous cancel/progress contract expected by
+    /// `ProcessorProgress`.
+    fn invoke_on_worker_thread<R: Send + 'static>(
+        &self,
+        run: impl FnOnce(&JavaVM, &Global<JObject<'static>>) -> R + Send + 'static,
+    ) -> Option<R> {
+        let (tx, rx) = mpsc::channel::<std::thread::Result<R>>();
+        let java_vm = self.java_vm.clone();
+        let callback = self.callback.clone()?;
+        std::thread::Builder::new()
+            .name("vesper-jni-export-cb".to_owned())
+            .spawn(move || {
+                // Catch panics from the Java upcall (e.g. an unexpected return
+                // type, or a Java `Error` propagated through JNI). Without this
+                // the worker thread dies silently and the export thread would
+                // observe only a disconnected channel — debugging "export ran
+                // to completion with no cancellation" would be impossible.
+                // Print to stderr (Android routes stderr to logcat) so the
+                // failure is observable without pulling in a logging crate.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run(&java_vm, callback.as_ref())
+                }));
+                if let Err(ref payload) = result {
+                    let message = payload
+                        .downcast_ref::<&'static str>()
+                        .copied()
+                        .map(|s| s.to_owned())
+                        .or_else(|| {
+                            payload
+                                .downcast_ref::<String>()
+                                .map(|s| s.as_str().to_owned())
+                        })
+                        .map(|m| format!("vesper export progress worker panicked: {m}"))
+                        .unwrap_or_else(|| "vesper export progress worker panicked".to_owned());
+                    eprintln!("{message}");
+                }
+                let _ = tx.send(result);
+            })
+            .ok()?;
+        // A send-side panic (or spawn failure) disconnects the channel and
+        // `recv()` returns `Err`; `.ok()?` then yields `None`, which each
+        // caller interprets as a benign "no value / not cancelled" outcome.
+        rx.recv().ok()?.ok()
+    }
 }
 
 impl ProcessorProgress for JniDownloadExportProgress {
     fn on_progress(&self, ratio: f32) {
-        let Some(callback) = self.callback.as_ref() else {
-            return;
-        };
-        let _: JniResult<()> = self.java_vm.attach_current_thread_for_scope(|env| {
-            env.call_method(
-                callback.as_obj(),
-                jni_name("onProgress"),
-                method_sig("(F)V").method_signature(),
-                &[JValue::Float(ratio)],
-            )?;
-            Ok(())
+        // Route through the shared worker (see invoke_on_worker_thread) so we
+        // don't spawn a fresh OS thread on every muxer progress tick. Progress
+        // is best-effort: if the worker thread is gone (panic / shutdown) we
+        // silently drop the tick, which is safe — the export continues and the
+        // next tick reuses the same single-offload model.
+        let _ = self.invoke_on_worker_thread(move |java_vm, callback| {
+            let _: JniResult<()> = java_vm.attach_current_thread_for_scope(|env| {
+                env.call_method(
+                    callback.as_obj(),
+                    jni_name("onProgress"),
+                    method_sig("(F)V").method_signature(),
+                    &[JValue::Float(ratio)],
+                )?;
+                Ok(())
+            });
         });
     }
 
     fn is_cancelled(&self) -> bool {
-        let Some(callback) = self.callback.as_ref() else {
-            return false;
-        };
-        self.java_vm
-            .attach_current_thread_for_scope(|env| {
-                let value = env.call_method(
-                    callback.as_obj(),
-                    jni_name("isCancelled"),
-                    method_sig("()Z").method_signature(),
-                    &[],
-                )?;
-                value.z()
-            })
-            .unwrap_or(false)
+        self.invoke_on_worker_thread(|java_vm, callback| {
+            java_vm
+                .attach_current_thread_for_scope(|env| {
+                    let value = env.call_method(
+                        callback.as_obj(),
+                        jni_name("isCancelled"),
+                        method_sig("()Z").method_signature(),
+                        &[],
+                    )?;
+                    value.z()
+                })
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
     }
 }
 
@@ -1451,7 +1513,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                 let callback = if progress_callback.is_null() {
                     None
                 } else {
-                    Some(env.new_global_ref(progress_callback)?)
+                    Some(Arc::new(env.new_global_ref(progress_callback)?))
                 };
                 let progress = JniDownloadExportProgress { java_vm, callback };
                 let Some(result) = with_download_session(env, session_handle, |session| {

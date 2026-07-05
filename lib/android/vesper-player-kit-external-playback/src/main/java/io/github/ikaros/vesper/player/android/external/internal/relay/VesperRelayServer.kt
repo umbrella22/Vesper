@@ -9,6 +9,8 @@ import java.util.Base64
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 data class VesperRelayHandle(
     val token: String,
@@ -58,10 +60,34 @@ class VesperRelayServer @JvmOverloads constructor(
     private var requestExecutor: ExecutorService? = null
     @Volatile
     private var boundAddress: InetAddress? = null
+    private val stateLock = ReentrantLock()
 
-    @Synchronized
+    /**
+     * Snapshot of resources owned by a running relay server. Captured under
+     * [stateLock] and torn down outside the lock so blocking work (socket
+     * close, executor shutdown, client teardown) never holds the monitor.
+     */
+    private class RunningState(
+        val socket: ServerSocket,
+        val boundAddress: InetAddress,
+        val acceptExecutor: ExecutorService,
+        val requestExecutor: ExecutorService,
+    )
+
+    /**
+     * Brings the relay server up on [preferredBindAddress] (or an auto-detected
+     * Wi-Fi LAN address).
+     *
+     * The monitor is held only to read/swap the volatile running-state fields.
+     * LAN address enumeration, socket bind, and executor construction happen
+     * *outside* [stateLock] because they are blocking network operations. A
+     * concurrent [stop] during setup is detected on re-lock and the freshly
+     * built resources are torn down instead of being published.
+     */
     @JvmOverloads
     fun start(preferredBindAddress: InetAddress? = null) {
+        // Fast path: already running on an address that satisfies the request.
+        // Touch only @Volatile fields here; no lock, no blocking.
         if (running.get()) {
             val preferredAddress = preferredBindAddress?.takeIf { it.isBindableLanAddress() }
             val currentAddress = boundAddress
@@ -74,42 +100,84 @@ class VesperRelayServer @JvmOverloads constructor(
             }
             stop()
         }
+
+        // Bind + executor construction are blocking network/OS operations;
+        // perform them outside the monitor.
         val bindAddress = preferredBindAddress?.takeIf { it.isBindableLanAddress() }
             ?: bindAddressProvider()
             ?: appContext?.findWifiLanIpv4Address()
             ?: throw IllegalStateException("No Wi-Fi LAN address is available for relay.")
         val socket = ServerSocket(0, 50, bindAddress)
-        serverSocket = socket
-        boundAddress = bindAddress
-        requestExecutor = Executors.newFixedThreadPool(maxRequestThreads.coerceAtLeast(1)) { runnable ->
-            Thread(runnable, "vesper-relay-request").apply { isDaemon = true }
-        }
-        acceptExecutor = Executors.newSingleThreadExecutor { runnable ->
+        val requestExecutor =
+            Executors.newFixedThreadPool(maxRequestThreads.coerceAtLeast(1)) { runnable ->
+                Thread(runnable, "vesper-relay-request").apply { isDaemon = true }
+            }
+        val acceptExecutor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "vesper-relay-accept").apply { isDaemon = true }
         }
-        running.set(true)
-        acceptExecutor?.execute {
-            runRelayAcceptLoop(
-                running = running,
-                socket = socket,
-                requestExecutorProvider = { requestExecutor },
-                clientHandler = clientHandler,
-            )
+
+        // Publish under the lock. If another start() already won the race to
+        // flip running from false -> true while we were building resources
+        // off-lock, tear down what we just built without touching running
+        // (the winner owns it now).
+        val lostTheRace = stateLock.withLock {
+            if (!running.compareAndSet(false, true)) {
+                true
+            } else {
+                serverSocket = socket
+                boundAddress = bindAddress
+                this.acceptExecutor = acceptExecutor
+                this.requestExecutor = requestExecutor
+                acceptExecutor.execute {
+                    runRelayAcceptLoop(
+                        running = running,
+                        socket = socket,
+                        requestExecutorProvider = { this.requestExecutor },
+                        clientHandler = clientHandler,
+                    )
+                }
+                false
+            }
+        }
+        if (lostTheRace) {
+            runCatching { socket.close() }
+            acceptExecutor.shutdownNow()
+            requestExecutor.shutdownNow()
         }
     }
 
-    @Synchronized
+    /**
+     * Tears the relay server down. The monitor is held only long enough to
+     * detach the running-state fields; socket close, executor shutdown, and
+     * active-client teardown all run *outside* [stateLock].
+     */
     fun stop() {
-        running.set(false)
-        entries.invalidateAll()
-        runCatching { serverSocket?.close() }
+        val state = stateLock.withLock {
+            running.set(false)
+            entries.invalidateAll()
+            val captured = RunningState(
+                socket = serverSocket ?: return@withLock null,
+                boundAddress = boundAddress ?: return@withLock null,
+                acceptExecutor = acceptExecutor ?: return@withLock null,
+                requestExecutor = requestExecutor ?: return@withLock null,
+            )
+            serverSocket = null
+            boundAddress = null
+            this.acceptExecutor = null
+            this.requestExecutor = null
+            captured
+        } ?: run {
+            // Nothing was running; still ensure clients/entries are cleared so
+            // callers see a clean quiescent state. closeActiveClients is the
+            // only potentially blocking call here and runs without the lock.
+            clientHandler.closeActiveClients()
+            return
+        }
+        // Blocking teardown outside the monitor.
+        runCatching { state.socket.close() }
         clientHandler.closeActiveClients()
-        serverSocket = null
-        boundAddress = null
-        acceptExecutor?.shutdownNow()
-        requestExecutor?.shutdownNow()
-        acceptExecutor = null
-        requestExecutor = null
+        state.acceptExecutor.shutdownNow()
+        state.requestExecutor.shutdownNow()
     }
 
     @JvmOverloads

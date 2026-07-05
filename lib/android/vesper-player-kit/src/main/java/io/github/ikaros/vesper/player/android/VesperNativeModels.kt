@@ -367,14 +367,27 @@ internal sealed interface NativeBridgeEvent {
     ) : NativeBridgeEvent
 }
 
-internal fun NativeBridgeEvent.Error.toPlayerErrorState(): VesperPlayerErrorState =
-    VesperPlayerErrorState(
+internal fun NativeBridgeEvent.Error.toPlayerErrorState(): VesperPlayerErrorState {
+    val code = VesperPlayerErrorCode.fromJniOrdinal(codeOrdinal)
+    val category = VesperPlayerErrorCategory.fromJniOrdinal(categoryOrdinal)
+    // Preserve raw ordinals in details when they fall back to default, so hosts can
+    // still diagnose cross-version enum mismatches.
+    val enrichedDetails =
+        if (code == VesperPlayerErrorCode.BackendFailure && codeOrdinal != VesperPlayerErrorCode.BackendFailure.jniOrdinal) {
+            details + ("_rawCodeOrdinal" to codeOrdinal)
+        } else if (category == VesperPlayerErrorCategory.Platform && categoryOrdinal != VesperPlayerErrorCategory.Platform.jniOrdinal) {
+            details + ("_rawCategoryOrdinal" to categoryOrdinal)
+        } else {
+            details
+        }
+    return VesperPlayerErrorState(
         message = message,
-        code = VesperPlayerErrorCode.fromJniOrdinal(codeOrdinal),
-        category = VesperPlayerErrorCategory.fromJniOrdinal(categoryOrdinal),
+        code = code,
+        category = category,
         retriable = retriable,
-        details = details,
+        details = enrichedDetails,
     )
+}
 
 internal sealed interface NativePlayerCommand {
     data object Play : NativePlayerCommand

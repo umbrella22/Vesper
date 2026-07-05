@@ -135,10 +135,24 @@ class VesperPlaylistCoordinator(
     val snapshot: StateFlow<VesperPlaylistSnapshot> = _snapshot.asStateFlow()
 
     init {
-        check(sessionHandle != 0L) { "native playlist session handle must not be zero" }
+        try {
+            check(sessionHandle != 0L) { "native playlist session handle must not be zero" }
+        } catch (error: Throwable) {
+            // Clean up the native session if constructor initialization fails,
+            // preventing a permanent resource leak (AGENTS.md rule).
+            if (sessionHandle != 0L) {
+                runCatching { VesperNativeJni.disposePlaylistSession(sessionHandle) }
+            }
+            throw error
+        }
     }
 
+    private val isDisposed = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun dispose() {
+        if (!isDisposed.compareAndSet(false, true)) {
+            return
+        }
         cancelAllWarmups()
         scope.cancel()
         VesperNativeJni.disposePlaylistSession(sessionHandle)
@@ -420,23 +434,32 @@ private data class PlaylistResolvedCachePolicy(
 private object VesperPlaylistMediaCacheStore {
     private val caches = mutableMapOf<Long, SimpleCache>()
     private val databaseProviders = mutableMapOf<Long, StandaloneDatabaseProvider>()
+    private val lock = Any()
 
-    @Synchronized
     fun cache(
         appContext: Context,
         maxDiskBytes: Long,
     ): SimpleCache {
-        return caches.getOrPut(maxDiskBytes) {
-            val cacheDir =
-                File(appContext.cacheDir, "vesper-playlist-cache/$maxDiskBytes").apply { mkdirs() }
-            val databaseProvider =
-                databaseProviders.getOrPut(maxDiskBytes) { StandaloneDatabaseProvider(appContext) }
+        synchronized(lock) {
+            caches[maxDiskBytes]?.let { return it }
+        }
+        // Perform file I/O and SQLite initialization outside the lock
+        // to avoid holding a monitor during blocking operations.
+        val cacheDir =
+            File(appContext.cacheDir, "vesper-playlist-cache/$maxDiskBytes").apply { mkdirs() }
+        val databaseProvider =
+            StandaloneDatabaseProvider(appContext)
+        val newCache =
             SimpleCache(
                 cacheDir,
                 LeastRecentlyUsedCacheEvictor(maxDiskBytes),
                 databaseProvider,
             )
+        synchronized(lock) {
+            caches.getOrPut(maxDiskBytes) { newCache }
+            databaseProviders.getOrPut(maxDiskBytes) { databaseProvider }
         }
+        return caches[maxDiskBytes]!!
     }
 }
 

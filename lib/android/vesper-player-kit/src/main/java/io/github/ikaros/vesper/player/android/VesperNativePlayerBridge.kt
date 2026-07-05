@@ -80,6 +80,10 @@ internal class VesperNativePlayerBridge(
     internal var nativeFramePipelineLastPublishedDiagnosticsKey: String? = null
     internal var nativeFramePipelineDiagnosticsDirty = false
     internal val runtimeWarnings = ArrayDeque<VesperRuntimeWarning>()
+
+    internal companion object {
+        const val MAX_RUNTIME_WARNINGS = 128
+    }
     internal var currentPluginDiagnostics: List<Map<String, Any?>> =
         initialSource?.let(::probePluginsForSource)
             ?: nativeFramePipelineDiagnostics()

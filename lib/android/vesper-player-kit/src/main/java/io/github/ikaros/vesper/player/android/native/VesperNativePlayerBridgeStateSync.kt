@@ -53,7 +53,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal inline fun VesperNativePlayerBridge.updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
-    _uiState.value = _uiState.value.transform()
+    _uiState.update { it.transform() }
     syncKeepScreenOn()
 }
 
@@ -263,6 +263,9 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
                 }
             }
             is NativeBridgeEvent.Warning -> {
+                if (runtimeWarnings.size >= VesperNativePlayerBridge.MAX_RUNTIME_WARNINGS) {
+                    runtimeWarnings.removeFirst()
+                }
                 runtimeWarnings += event.warning
             }
             is NativeBridgeEvent.Error -> {
