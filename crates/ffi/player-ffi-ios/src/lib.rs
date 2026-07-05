@@ -4,6 +4,7 @@ use std::ffi::{CStr, c_char};
 use std::path::PathBuf;
 use std::ptr;
 use std::slice;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use player_ffi_common::{clear_c_string_output, write_c_string_output};
@@ -574,7 +575,7 @@ pub unsafe extern "C" fn player_ffi_download_session_create(
             );
             return PlayerFfiCallStatus::Error;
         };
-        let handle = sessions.insert(session);
+        let handle = sessions.insert(IosDownloadBridgeSessionHandle::new(Mutex::new(session)));
         unsafe {
             ptr::write(out_handle, handle);
         }
@@ -591,9 +592,19 @@ pub unsafe extern "C" fn player_ffi_download_session_create(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_download_session_dispose(handle: u64) {
     ffi_void(|| {
-        if let Ok(mut sessions) = download_sessions().lock() {
-            sessions.remove(handle);
-        }
+        // Remove the entry under the registry lock, but drop the returned `Arc`
+        // (whose inner `IosDownloadBridgeSession::Drop` tears down the
+        // `DownloadManager`, which may invoke plugin post-processor `destroy`
+        // FFI) *after* releasing the registry lock. Dropping it under the lock
+        // would serialize every download session process-wide.
+        let session = {
+            if let Ok(mut sessions) = download_sessions().lock() {
+                sessions.remove(handle)
+            } else {
+                None
+            }
+        };
+        drop(session);
     });
 }
 
@@ -685,25 +696,35 @@ pub unsafe extern "C" fn player_ffi_download_session_create_task(
             }
         };
 
-        let Ok(mut sessions) = download_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "download session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let task_id = {
+            let sessions = match download_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidArgument,
+                            "download session registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid download session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid download session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let mut session = match task_id.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         let task_id = match session.create_task(
@@ -766,28 +787,36 @@ pub unsafe extern "C" fn player_ffi_download_session_restore_tasks(
             }
         };
 
-        let Ok(mut sessions) = download_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "download session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
-        };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid download session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
-        };
-
-        if let Err(error) = session.restore_tasks(restored_tasks, now) {
+        if let Err(error) = {
+            let sessions = match download_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidArgument,
+                            "download session registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid download session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
+        }
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .restore_tasks(restored_tasks, now)
+        {
             write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
@@ -805,29 +834,39 @@ fn with_download_session_task_mutation(
         std::time::Instant,
     ) -> player_runtime::PlayerResult<Option<DownloadTaskSnapshot>>,
 ) -> PlayerFfiCallStatus {
-    let Ok(mut sessions) = download_sessions().lock() else {
-        write_error(
-            out_error,
-            owned_api_error(
-                PlayerFfiErrorCode::InvalidArgument,
-                "download session registry lock failed",
-            ),
-        );
-        return PlayerFfiCallStatus::Error;
+    let session = {
+        let sessions = match download_sessions().lock() {
+            Ok(sessions) => sessions,
+            Err(_) => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "download session registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let Some(session) = sessions.get(handle).cloned() else {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidArgument,
+                    "invalid download session handle",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        };
+        session
     };
-    let Some(session) = sessions.get_mut(handle) else {
-        write_error(
-            out_error,
-            owned_api_error(
-                PlayerFfiErrorCode::InvalidArgument,
-                "invalid download session handle",
-            ),
-        );
-        return PlayerFfiCallStatus::Error;
+    let mut session = match session.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     };
 
     if let Err(error) = mutate(
-        session,
+        &mut session,
         player_runtime::DownloadTaskId::from_raw(task_id),
         std::time::Instant::now(),
     ) {
@@ -909,25 +948,35 @@ pub unsafe extern "C" fn player_ffi_download_session_update_progress(
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
     ffi_call(out_error, || {
-        let Ok(mut sessions) = download_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "download session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let session = {
+            let sessions = match download_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidArgument,
+                            "download session registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid download session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid download session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         if let Err(error) = session.update_progress(
@@ -965,25 +1014,40 @@ pub unsafe extern "C" fn player_ffi_download_session_complete_task(
             }
         };
 
-        let Ok(mut sessions) = download_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "download session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        // Clone the Arc under the registry lock, then drop the registry lock
+        // before `complete_task`. When `run_post_processors_on_completion` is
+        // true, completion synchronously invokes each plugin post-processor's
+        // `process_json` FFI (FFmpeg remux/encode); holding the global registry
+        // mutex across that work would serialize every download session.
+        let session = {
+            let sessions = match download_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidArgument,
+                            "download session registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid download session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid download session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         if let Err(error) = session.complete_task(
@@ -1020,25 +1084,35 @@ pub unsafe extern "C" fn player_ffi_download_session_complete_preparation(
             }
         };
 
-        let Ok(mut sessions) = download_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "download session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let session = {
+            let sessions = match download_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidArgument,
+                            "download session registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid download session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid download session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         if let Err(error) = session.complete_preparation(
@@ -1091,25 +1165,35 @@ pub unsafe extern "C" fn player_ffi_download_session_replace_task_plan(
             }
         };
 
-        let Ok(mut sessions) = download_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "download session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let session = {
+            let sessions = match download_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidArgument,
+                            "download session registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid download session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid download session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         if let Err(error) = session.replace_task_plan(
@@ -1157,25 +1241,40 @@ pub unsafe extern "C" fn player_ffi_download_session_export_task(
         };
 
         let progress = FfiDownloadExportProgress { callbacks };
-        let Ok(mut sessions) = download_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "download session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        // Clone the Arc under the registry lock, then drop the registry lock
+        // before `export_task_output`. Export runs the plugin post-processor
+        // chain (`process_json` FFI) and the host progress callback; holding the
+        // global registry mutex across that work would serialize every download
+        // session.
+        let session = {
+            let sessions = match download_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidArgument,
+                            "download session registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid download session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid download session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         if let Err(error) = session.export_task_output(
@@ -1231,25 +1330,35 @@ pub unsafe extern "C" fn player_ffi_download_session_fail_task(
             }
         };
 
-        let Ok(mut sessions) = download_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "download session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let session = {
+            let sessions = match download_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidArgument,
+                            "download session registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid download session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid download session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         let error = PlayerError::with_taxonomy(code.into(), category.into(), retriable, message);
@@ -1305,25 +1414,35 @@ pub unsafe extern "C" fn player_ffi_download_session_snapshot(
             return PlayerFfiCallStatus::Error;
         }
 
-        let Ok(sessions) = download_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "download session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let session = {
+            let sessions = match download_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidArgument,
+                            "download session registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid download session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
         };
-        let Some(session) = sessions.get(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid download session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         let tasks = session
@@ -1366,25 +1485,35 @@ pub unsafe extern "C" fn player_ffi_download_session_drain_commands(
             return PlayerFfiCallStatus::Error;
         }
 
-        let Ok(mut sessions) = download_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "download session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let session = {
+            let sessions = match download_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidArgument,
+                            "download session registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid download session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid download session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         let commands = session
@@ -1429,25 +1558,35 @@ pub unsafe extern "C" fn player_ffi_download_session_drain_events(
             return PlayerFfiCallStatus::Error;
         }
 
-        let Ok(mut sessions) = download_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "download session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let session = {
+            let sessions = match download_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidArgument,
+                            "download session registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid download session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid download session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         let events = session
@@ -2235,7 +2374,7 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_create(
             );
             return PlayerFfiCallStatus::Error;
         };
-        let handle = sessions.insert(session);
+        let handle = sessions.insert(IosBenchmarkSinkSession::new(Mutex::new(session)));
         unsafe {
             ptr::write(out_handle, handle);
         }
@@ -2252,9 +2391,19 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_create(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_benchmark_session_dispose(handle: u64) {
     ffi_void(|| {
-        if let Ok(mut sessions) = benchmark_sessions().lock() {
-            sessions.remove(handle);
-        }
+        // Remove the entry under the registry lock, but drop the returned
+        // `Arc` (and therefore the inner `BenchmarkSinkPluginSession`, whose
+        // `Drop` invokes plugin FFI `destroy`) *after* releasing the registry
+        // lock. Dropping it under the lock would serialize every benchmark
+        // session process-wide and block create/dispose for the plugin call.
+        let session = {
+            if let Ok(mut sessions) = benchmark_sessions().lock() {
+                sessions.remove(handle)
+            } else {
+                None
+            }
+        };
+        drop(session);
     });
 }
 
@@ -2301,25 +2450,37 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_on_event_batch_json(
             }
         };
 
-        let Ok(sessions) = benchmark_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "benchmark session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        // Clone the Arc under the registry lock, then drop the registry lock
+        // before invoking the plugin FFI call. `on_event_batch_report_json`
+        // crosses into a dlopen-loaded plugin; holding the global registry
+        // mutex across that call would serialize every benchmark session
+        // process-wide and block create/dispose operations.
+        let session = {
+            let Ok(sessions) = benchmark_sessions().lock() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "benchmark session registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid benchmark session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
         };
-        let Some(session) = sessions.get(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid benchmark session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         let report_json = match session.on_event_batch_report_json(batch_json) {
@@ -2359,25 +2520,36 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_flush_json(
             return PlayerFfiCallStatus::Error;
         }
 
-        let Ok(sessions) = benchmark_sessions().lock() else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "benchmark session registry lock failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        // Clone the Arc under the registry lock, then drop the registry lock
+        // before invoking the plugin FFI call. `flush_json` crosses into a
+        // dlopen-loaded plugin; holding the global registry mutex across that
+        // call would serialize every benchmark session process-wide.
+        let session = {
+            let Ok(sessions) = benchmark_sessions().lock() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "benchmark session registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid benchmark session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
         };
-        let Some(session) = sessions.get(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid benchmark session handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
 
         let report_json = match session.flush_json() {
@@ -2664,21 +2836,39 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
                 return PlayerFfiCallStatus::Error;
             }
         };
-        let handle = sessions.insert(opened);
-        let Some(opened) = sessions.get(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidState,
-                    "source normalizer resource registry insert failed",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let handle = sessions.insert(IosSourceNormalizerResourceSession::new(Mutex::new(opened)));
+        let opened = match sessions.get(handle).cloned() {
+            Some(opened) => opened,
+            None => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidState,
+                        "source normalizer resource registry insert failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
         };
-        let json = match mobile_source_normalizer_resource_open_json(handle, opened, None) {
+        // Drop the registry lock before any potentially blocking work; opening
+        // already performed its I/O, but JSON serialization may also walk the
+        // resource list and we want to keep the registry lock short.
+        drop(sessions);
+        let opened_guard = match opened.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let json = match mobile_source_normalizer_resource_open_json(
+            handle,
+            &opened_guard,
+            None,
+        ) {
             Ok(value) => value,
             Err(error) => {
-                let _ = sessions.remove(handle);
+                drop(opened_guard);
+                if let Ok(mut sessions) = source_normalizer_resource_sessions().lock() {
+                    let _ = sessions.remove(handle);
+                }
                 write_error(
                     out_error,
                     owned_api_error(PlayerFfiErrorCode::BackendFailure, &error.to_string()),
@@ -2714,28 +2904,39 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_poll(
         unsafe {
             ptr::write(out_json, ptr::null_mut());
         }
-        let mut sessions = match source_normalizer_resource_sessions().lock() {
-            Ok(sessions) => sessions,
-            Err(_) => {
+        let session = {
+            let sessions = match source_normalizer_resource_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidState,
+                            "source normalizer resource registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
                 write_error(
                     out_error,
                     owned_api_error(
-                        PlayerFfiErrorCode::InvalidState,
-                        "source normalizer resource registry lock failed",
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid source normalizer resource handle",
                     ),
                 );
                 return PlayerFfiCallStatus::Error;
-            }
+            };
+            session
         };
-        let Some(opened) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid source normalizer resource handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        // The registry lock is released above. Plugin `poll()` performs blocking
+        // filesystem I/O (directory walks, disk-usage scans); running it under
+        // the global registry lock would serialize every source-normalizer
+        // session process-wide and block open/dispose calls.
+        let mut opened = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
         let status = match opened.session.poll() {
             Ok(status) => status,
@@ -2748,7 +2949,7 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_poll(
             }
         };
         opened.status = status;
-        let json = match mobile_source_normalizer_resource_status_json(handle, opened, None) {
+        let json = match mobile_source_normalizer_resource_status_json(handle, &opened, None) {
             Ok(value) => value,
             Err(error) => {
                 write_error(
@@ -2771,9 +2972,17 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_poll(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_source_normalizer_resource_dispose(handle: u64) {
     ffi_void(|| {
-        if let Ok(mut sessions) = source_normalizer_resource_sessions().lock() {
-            sessions.remove(handle);
-        }
+        // Remove the entry under the registry lock, but drop the returned `Arc`
+        // (whose inner `MobileSourceNormalizerResourceOpen::Drop` calls plugin
+        // FFI `close_resource_session`) *after* releasing the registry lock.
+        let session = {
+            if let Ok(mut sessions) = source_normalizer_resource_sessions().lock() {
+                sessions.remove(handle)
+            } else {
+                None
+            }
+        };
+        drop(session);
     });
 }
 
@@ -2902,21 +3111,35 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_open(
                 return PlayerFfiCallStatus::Error;
             }
         };
-        let handle = sessions.insert(session);
-        let Some(opened) = sessions.get(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidState,
-                    "native-frame pipeline session handle could not be resolved",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let handle = sessions.insert(IosNativeFramePipelineSessionHandle::new(Mutex::new(session)));
+        let opened = match sessions.get(handle).cloned() {
+            Some(opened) => opened,
+            None => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidState,
+                        "native-frame pipeline session handle could not be resolved",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
         };
-        let json = match native_frame_pipeline_open_json(handle, opened) {
+        // Drop the registry lock before JSON serialization; the open work
+        // (decoders/plugins) already ran above and the registry lock should not
+        // be held across any potentially blocking call.
+        drop(sessions);
+        let opened = match opened.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let json = match native_frame_pipeline_open_json(handle, &opened) {
             Ok(value) => value,
             Err(error) => {
-                let _ = sessions.remove(handle);
+                drop(opened);
+                if let Ok(mut sessions) = native_frame_pipeline_sessions().lock() {
+                    let _ = sessions.remove(handle);
+                }
                 write_error(
                     out_error,
                     owned_api_error(PlayerFfiErrorCode::BackendFailure, &error.to_string()),
@@ -2952,28 +3175,40 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_advance(
         unsafe {
             ptr::write(out_json, ptr::null_mut());
         }
-        let mut sessions = match native_frame_pipeline_sessions().lock() {
-            Ok(sessions) => sessions,
-            Err(_) => {
+        // Clone the Arc under the registry lock, then drop the registry lock
+        // before invoking `advance()`. `advance()` performs blocking
+        // VideoToolbox decode, plugin FFI packet sends, and an EOS-drain sleep;
+        // holding the global registry mutex across that work would serialize
+        // every native-frame pipeline session process-wide and block open/close.
+        let session = {
+            let sessions = match native_frame_pipeline_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidState,
+                            "native-frame pipeline registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
                 write_error(
                     out_error,
                     owned_api_error(
-                        PlayerFfiErrorCode::InvalidState,
-                        "native-frame pipeline registry lock failed",
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid native-frame pipeline handle",
                     ),
                 );
                 return PlayerFfiCallStatus::Error;
-            }
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid native-frame pipeline handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
         let frame = match session.advance() {
             Ok(frame) => frame,
@@ -3065,28 +3300,37 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_release_frame(
         unsafe {
             ptr::write(out_json, ptr::null_mut());
         }
-        let mut sessions = match native_frame_pipeline_sessions().lock() {
-            Ok(sessions) => sessions,
-            Err(_) => {
+        // Clone the Arc under the registry lock, then drop the registry lock
+        // before `release_pending_frame` (which may invoke plugin FFI release).
+        let session = {
+            let sessions = match native_frame_pipeline_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidState,
+                            "native-frame pipeline registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
                 write_error(
                     out_error,
                     owned_api_error(
-                        PlayerFfiErrorCode::InvalidState,
-                        "native-frame pipeline registry lock failed",
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid native-frame pipeline handle",
                     ),
                 );
                 return PlayerFfiCallStatus::Error;
-            }
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid native-frame pipeline handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
         if let Err(error) = session.release_pending_frame(frame_handle, presented) {
             write_error(
@@ -3095,7 +3339,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_release_frame(
             );
             return PlayerFfiCallStatus::Error;
         }
-        let json = match native_frame_pipeline_status_json(handle, session, None) {
+        let json = match native_frame_pipeline_status_json(handle, &*session, None) {
             Ok(value) => value,
             Err(error) => {
                 write_error(
@@ -3132,28 +3376,37 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_flush(
         unsafe {
             ptr::write(out_json, ptr::null_mut());
         }
-        let mut sessions = match native_frame_pipeline_sessions().lock() {
-            Ok(sessions) => sessions,
-            Err(_) => {
+        // Clone the Arc under the registry lock, then drop the registry lock
+        // before `flush()` (which flushes decoder/packet/processor plugin FFI).
+        let session = {
+            let sessions = match native_frame_pipeline_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidState,
+                            "native-frame pipeline registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
                 write_error(
                     out_error,
                     owned_api_error(
-                        PlayerFfiErrorCode::InvalidState,
-                        "native-frame pipeline registry lock failed",
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid native-frame pipeline handle",
                     ),
                 );
                 return PlayerFfiCallStatus::Error;
-            }
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid native-frame pipeline handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
         if let Err(error) = session.flush() {
             write_error(
@@ -3163,7 +3416,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_flush(
             return PlayerFfiCallStatus::Error;
         }
         let json =
-            match native_frame_pipeline_status_json(handle, session, Some("flushed".to_owned())) {
+            match native_frame_pipeline_status_json(handle, &*session, Some("flushed".to_owned())) {
                 Ok(value) => value,
                 Err(error) => {
                     write_error(
@@ -3201,28 +3454,37 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_seek(
         unsafe {
             ptr::write(out_json, ptr::null_mut());
         }
-        let mut sessions = match native_frame_pipeline_sessions().lock() {
-            Ok(sessions) => sessions,
-            Err(_) => {
+        // Clone the Arc under the registry lock, then drop the registry lock
+        // before `seek_to()` (which flushes and re-primes decoder/packet plugin FFI).
+        let session = {
+            let sessions = match native_frame_pipeline_sessions().lock() {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidState,
+                            "native-frame pipeline registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
                 write_error(
                     out_error,
                     owned_api_error(
-                        PlayerFfiErrorCode::InvalidState,
-                        "native-frame pipeline registry lock failed",
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid native-frame pipeline handle",
                     ),
                 );
                 return PlayerFfiCallStatus::Error;
-            }
+            };
+            session
         };
-        let Some(session) = sessions.get_mut(handle) else {
-            write_error(
-                out_error,
-                owned_api_error(
-                    PlayerFfiErrorCode::InvalidArgument,
-                    "invalid native-frame pipeline handle",
-                ),
-            );
-            return PlayerFfiCallStatus::Error;
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
         if let Err(error) = session.seek_to(position_millis) {
             write_error(
@@ -3233,7 +3495,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_seek(
         }
         let json = match native_frame_pipeline_status_json(
             handle,
-            session,
+            &*session,
             Some(format!("seeked to {position_millis} ms")),
         ) {
             Ok(value) => value,
@@ -3258,9 +3520,19 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_seek(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_close(handle: u64) {
     ffi_void(|| {
-        if let Ok(mut sessions) = native_frame_pipeline_sessions().lock() {
-            sessions.remove(handle);
-        }
+        // Remove the entry under the registry lock, but drop the returned
+        // `IosNativeFramePipelineSession` (whose `Drop` runs plugin FFI close on
+        // the decoder/packet/processor chain) *after* releasing the registry
+        // lock. Dropping it under the lock would serialize every native-frame
+        // pipeline session process-wide and block open/close for the teardown.
+        let session = {
+            if let Ok(mut sessions) = native_frame_pipeline_sessions().lock() {
+                sessions.remove(handle)
+            } else {
+                None
+            }
+        };
+        drop(session);
     });
 }
 

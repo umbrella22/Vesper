@@ -170,6 +170,10 @@ fn string_array_field(
         return Ok(Vec::new());
     }
 
+    // SAFETY: `value` is a local reference whose raw pointer was just produced by
+    // `into_raw()` on the same thread-attached `env`. `JObjectArray::from_raw` re-wraps
+    // the raw `jobjectArray` without dereferencing foreign memory; the borrow is bounded
+    // by `env`'s local frame and the local reference is released when `value` drops.
     let array =
         unsafe { JObjectArray::<JString<'_>>::from_raw(env, value.into_raw() as jobjectArray) };
     let len = array.len(env)?;
@@ -337,6 +341,10 @@ fn download_resource_records_from_java(
         return Ok(Vec::new());
     }
 
+    // SAFETY: `value` is a local reference whose raw pointer was just produced by
+    // `into_raw()` on the same thread-attached `env`. `JObjectArray::from_raw` re-wraps
+    // the raw `jobjectArray` without dereferencing foreign memory; the borrow is bounded
+    // by `env`'s local frame and the local reference is released when `value` drops.
     let array =
         unsafe { JObjectArray::<JObject<'_>>::from_raw(env, value.into_raw() as jobjectArray) };
     let len = array.len(env)?;
@@ -365,6 +373,10 @@ fn download_segment_records_from_java(
         return Ok(Vec::new());
     }
 
+    // SAFETY: `value` is a local reference whose raw pointer was just produced by
+    // `into_raw()` on the same thread-attached `env`. `JObjectArray::from_raw` re-wraps
+    // the raw `jobjectArray` without dereferencing foreign memory; the borrow is bounded
+    // by `env`'s local frame and the local reference is released when `value` drops.
     let array =
         unsafe { JObjectArray::<JObject<'_>>::from_raw(env, value.into_raw() as jobjectArray) };
     let len = array.len(env)?;
@@ -424,6 +436,10 @@ fn download_asset_streams_from_java(
         return Ok(Vec::new());
     }
 
+    // SAFETY: `value` is a local reference whose raw pointer was just produced by
+    // `into_raw()` on the same thread-attached `env`. `JObjectArray::from_raw` re-wraps
+    // the raw `jobjectArray` without dereferencing foreign memory; the borrow is bounded
+    // by `env`'s local frame and the local reference is released when `value` drops.
     let array =
         unsafe { JObjectArray::<JObject<'_>>::from_raw(env, value.into_raw() as jobjectArray) };
     let len = array.len(env)?;
@@ -1142,8 +1158,17 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
             .with_env(|_env| -> JniResult<()> {
-                let mut guard = lock_or_recover(download_sessions());
-                guard.remove(session_handle);
+                // Remove the entry under the registry lock, but drop the
+                // returned `Arc<Mutex<AndroidDownloadBridgeSession>>` *after*
+                // releasing the registry lock. The session wraps a
+                // `DownloadManager` whose post-processor chain may invoke plugin
+                // `destroy` FFI on Drop; dropping it under the lock would
+                // serialize every download session process-wide.
+                let session = {
+                    let mut guard = lock_or_recover(download_sessions());
+                    guard.remove(session_handle)
+                };
+                drop(session);
                 Ok(())
             })
             .resolve::<ThrowRuntimeExAndDefault>()

@@ -902,12 +902,18 @@ fn initialize_ffmpeg() -> Result<(), RelayError> {
 fn session_cache(request: &OpenRequest) -> Result<Arc<SessionCache>, RelayError> {
     cleanup_stale_caches_once();
 
-    let mut sessions = sessions().lock().unwrap_or_else(|error| error.into_inner());
-    if let Some(existing) = sessions.get_mut(&request.session_id) {
+    let mut guard = sessions().lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(existing) = guard.get_mut(&request.session_id) {
         return Ok(existing.touch());
     }
 
     let root_dir = relay_cache_root().join(safe_file_component(&request.session_id));
+    // Drop the registry lock before performing blocking filesystem I/O
+    // (AGENTS.md: do not hold a mutex/global registry lock while performing
+    // blocking I/O). We re-acquire the registry lock only to insert the newly
+    // built cache; another opener racing us may create a duplicate directory,
+    // which is harmless because the directory is per-session-id and idempotent.
+    drop(guard);
     fs::create_dir_all(&root_dir).map_err(|error| {
         relay_error(
             "ffmpeg_open_failed",
@@ -924,7 +930,14 @@ fn session_cache(request: &OpenRequest) -> Result<Arc<SessionCache>, RelayError>
         root_dir,
         state: Mutex::new(SessionState::default()),
     });
-    insert_session_cache(&mut sessions, request.session_id.clone(), cache.clone());
+    let mut guard = sessions().lock().unwrap_or_else(|error| error.into_inner());
+    let evicted_roots = insert_session_cache(&mut guard, request.session_id.clone(), cache.clone());
+    drop(guard);
+    // Drop the registry lock before performing blocking filesystem I/O
+    // (AGENTS.md: no blocking I/O under a global registry lock).
+    for root_dir in evicted_roots {
+        let _ = fs::remove_dir_all(&root_dir);
+    }
     Ok(cache)
 }
 
@@ -2093,24 +2106,32 @@ fn insert_session_cache(
     sessions: &mut HashMap<String, SessionCacheEntry>,
     session_id: String,
     cache: Arc<SessionCache>,
-) {
+) -> Vec<PathBuf> {
     sessions.insert(session_id, SessionCacheEntry::new(cache));
-    evict_oldest_session_caches(sessions);
+    evict_oldest_session_caches(sessions)
 }
 
-fn evict_oldest_session_caches(sessions: &mut HashMap<String, SessionCacheEntry>) {
+/// Removes oldest session cache entries while the registry is over capacity and
+/// returns their root directories. Callers MUST drop the registry lock before
+/// invoking `fs::remove_dir_all` on the returned paths (AGENTS.md: no blocking
+/// I/O under a global registry lock).
+fn evict_oldest_session_caches(sessions: &mut HashMap<String, SessionCacheEntry>) -> Vec<PathBuf> {
+    let mut evicted_roots = Vec::new();
     while sessions.len() > MAX_SESSION_CACHES {
         let Some(oldest_key) = sessions
             .iter()
             .min_by_key(|(_, entry)| entry.last_access)
             .map(|(session_id, _)| session_id.clone())
         else {
-            return;
+            return evicted_roots;
         };
         if let Some(entry) = sessions.remove(&oldest_key) {
-            let _ = fs::remove_dir_all(&entry.cache.root_dir);
+            // Collected for the caller to `fs::remove_dir_all` after releasing
+            // the registry lock; do NOT block on I/O here.
+            evicted_roots.push(entry.cache.root_dir.clone());
         }
     }
+    evicted_roots
 }
 
 fn insert_native_stream(stream: NativeStream) -> Result<i64, RelayError> {
@@ -2400,7 +2421,13 @@ mod tests {
             );
         }
 
-        evict_oldest_session_caches(&mut sessions);
+        let evicted_roots = evict_oldest_session_caches(&mut sessions);
+        // The eviction helper collects evicted cache directories without removing
+        // them from disk; the registry lock must be released before the host
+        // performs the blocking `fs::remove_dir_all` calls.
+        for evicted_root in evicted_roots {
+            let _ = fs::remove_dir_all(&evicted_root);
+        }
 
         assert_eq!(sessions.len(), MAX_SESSION_CACHES);
         assert!(!sessions.contains_key("session-0"));

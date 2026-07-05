@@ -247,6 +247,11 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
             .with_env(|env| -> JniResult<jboolean> {
+                // SAFETY: `queue` is a `jobjectArray` argument passed by the JVM on the
+                // currently-attached thread; `env` owns the local reference frame for this
+                // call. `JObjectArray::from_raw` re-wraps the raw handle without
+                // dereferencing foreign memory; the local reference is released by the JVM
+                // at call return.
                 let queue_array =
                     unsafe { JObjectArray::<JObject<'_>>::from_raw(env, queue as jobjectArray) };
                 let len = queue_array.len(env)?;
@@ -281,6 +286,11 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
             .with_env(|env| -> JniResult<jboolean> {
+                // SAFETY: `hints` is a `jobjectArray` argument passed by the JVM on the
+                // currently-attached thread; `env` owns the local reference frame for this
+                // call. `JObjectArray::from_raw` re-wraps the raw handle without
+                // dereferencing foreign memory; the local reference is released by the JVM
+                // at call return.
                 let hints_array =
                     unsafe { JObjectArray::<JObject<'_>>::from_raw(env, hints as jobjectArray) };
                 let len = hints_array.len(env)?;

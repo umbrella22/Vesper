@@ -202,7 +202,17 @@ pub(crate) fn with_player_mut<R>(
 }
 
 pub(crate) fn destroy_player_handle(handle: PlayerFfiHandle) -> bool {
-    lock_player_registry().remove(handle.raw).is_some()
+    // Remove the entry under the registry lock, but drop the returned `Arc`
+    // (and therefore the inner `FfiPlayer`, whose `Drop` may run the runtime
+    // adapter's teardown — on macOS this includes a worker-thread `join()` and
+    // plugin FFI close on the native-frame chain) *after* releasing the
+    // registry lock. Dropping it under the lock would serialize every player
+    // handle process-wide and block create/destroy for the teardown duration.
+    let player = {
+        let mut registry = lock_player_registry();
+        registry.remove(handle.raw)
+    };
+    player.is_some()
 }
 
 pub(crate) fn invalid_initializer_handle_error() -> PlayerFfiError {

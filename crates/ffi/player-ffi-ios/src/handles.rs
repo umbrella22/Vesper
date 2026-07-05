@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use player_platform_ios::{
     IosDownloadBridgeSession, IosPlaylistBridgeSession, IosPreloadBridgeSession,
@@ -8,6 +8,41 @@ use player_platform_mobile::MobileSourceNormalizerResourceOpen;
 use player_plugin_loader::BenchmarkSinkPluginSession;
 
 use crate::native_frame_pipeline::IosNativeFramePipelineSession;
+
+/// Source-normalizer resource sessions wrap blocking plugin `poll()` calls that
+/// perform filesystem I/O (directory walks, disk-usage scans). They are stored
+/// behind an `Arc<Mutex<...>>` so accessors can clone the `Arc` under the global
+/// registry lock, drop the registry lock, and only then take the per-session
+/// lock while running caller closures. This keeps blocking I/O off the global
+/// registry mutex.
+pub(crate) type IosSourceNormalizerResourceSession = Arc<Mutex<MobileSourceNormalizerResourceOpen>>;
+
+/// Benchmark sink sessions invoke plugin FFI calls (`on_event_batch`/`flush`)
+/// that may block on a dlopen-loaded plugin. They are stored behind an
+/// `Arc<Mutex<...>>` so accessors clone the `Arc` under the global registry
+/// lock, drop the registry lock, and only then take the per-session lock while
+/// running caller closures. This keeps plugin FFI off the global registry
+/// mutex, mirroring the JNI `AndroidBenchmarkSinkSession` pattern.
+pub(crate) type IosBenchmarkSinkSession = Arc<Mutex<BenchmarkSinkPluginSession>>;
+
+/// Native-frame pipeline sessions perform blocking VideoToolbox decode,
+/// plugin FFI (decoder/packet/processor flush + close), and EOS-drain sleeps
+/// during `advance`/`flush`/`seek`/`release_pending_frame`. They are stored
+/// behind an `Arc<Mutex<...>>` so accessors clone the `Arc` under the global
+/// registry lock, drop the registry lock, and only then take the per-session
+/// lock while running caller closures. This keeps blocking decode/plugin work
+/// off the global registry mutex, mirroring the JNI
+/// `AndroidNativeFramePipelineSession` pattern.
+pub(crate) type IosNativeFramePipelineSessionHandle = Arc<Mutex<IosNativeFramePipelineSession>>;
+
+/// Download bridge sessions hold a `DownloadManager` whose post-processor chain
+/// (`DynamicPostDownloadProcessor`) performs blocking plugin FFI (`process_json`
+/// during complete/export, `destroy` during Drop). They are stored behind an
+/// `Arc<Mutex<...>>` so accessors clone the `Arc` under the global registry lock,
+/// drop the registry lock, and only then take the per-session lock while running
+/// caller closures. This keeps blocking plugin post-processing off the global
+/// registry mutex, mirroring the JNI `with_download_session_mut` pattern.
+pub(crate) type IosDownloadBridgeSessionHandle = Arc<Mutex<IosDownloadBridgeSession>>;
 
 #[derive(Debug)]
 pub(crate) struct HandleRegistry<T> {
@@ -97,24 +132,25 @@ pub(crate) fn next_generation(generation: u32) -> u32 {
 }
 
 static PRELOAD_SESSIONS: OnceLock<Mutex<HandleRegistry<IosPreloadBridgeSession>>> = OnceLock::new();
-static DOWNLOAD_SESSIONS: OnceLock<Mutex<HandleRegistry<IosDownloadBridgeSession>>> =
+static DOWNLOAD_SESSIONS: OnceLock<Mutex<HandleRegistry<IosDownloadBridgeSessionHandle>>> =
     OnceLock::new();
 static PLAYLIST_SESSIONS: OnceLock<Mutex<HandleRegistry<IosPlaylistBridgeSession>>> =
     OnceLock::new();
-static BENCHMARK_SESSIONS: OnceLock<Mutex<HandleRegistry<BenchmarkSinkPluginSession>>> =
+static BENCHMARK_SESSIONS: OnceLock<Mutex<HandleRegistry<IosBenchmarkSinkSession>>> =
     OnceLock::new();
 static SOURCE_NORMALIZER_RESOURCE_SESSIONS: OnceLock<
-    Mutex<HandleRegistry<MobileSourceNormalizerResourceOpen>>,
+    Mutex<HandleRegistry<IosSourceNormalizerResourceSession>>,
 > = OnceLock::new();
 static NATIVE_FRAME_PIPELINE_SESSIONS: OnceLock<
-    Mutex<HandleRegistry<IosNativeFramePipelineSession>>,
+    Mutex<HandleRegistry<IosNativeFramePipelineSessionHandle>>,
 > = OnceLock::new();
 
 pub(crate) fn preload_sessions() -> &'static Mutex<HandleRegistry<IosPreloadBridgeSession>> {
     PRELOAD_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
-pub(crate) fn download_sessions() -> &'static Mutex<HandleRegistry<IosDownloadBridgeSession>> {
+pub(crate) fn download_sessions() -> &'static Mutex<HandleRegistry<IosDownloadBridgeSessionHandle>>
+{
     DOWNLOAD_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
@@ -122,16 +158,16 @@ pub(crate) fn playlist_sessions() -> &'static Mutex<HandleRegistry<IosPlaylistBr
     PLAYLIST_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
-pub(crate) fn benchmark_sessions() -> &'static Mutex<HandleRegistry<BenchmarkSinkPluginSession>> {
+pub(crate) fn benchmark_sessions() -> &'static Mutex<HandleRegistry<IosBenchmarkSinkSession>> {
     BENCHMARK_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
 pub(crate) fn source_normalizer_resource_sessions()
--> &'static Mutex<HandleRegistry<MobileSourceNormalizerResourceOpen>> {
+-> &'static Mutex<HandleRegistry<IosSourceNormalizerResourceSession>> {
     SOURCE_NORMALIZER_RESOURCE_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
 pub(crate) fn native_frame_pipeline_sessions()
--> &'static Mutex<HandleRegistry<IosNativeFramePipelineSession>> {
+-> &'static Mutex<HandleRegistry<IosNativeFramePipelineSessionHandle>> {
     NATIVE_FRAME_PIPELINE_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }

@@ -291,8 +291,6 @@ unsafe extern "C" fn normalizer_close_packet_session(
         }
         // SAFETY: the session pointer was allocated with `Box::into_raw` by
         // this plugin and close is called once by the host.
-        // SAFETY: the session pointer was allocated with `Box::into_raw` by
-        // this plugin and close is called once by the host.
         drop(unsafe { Box::from_raw(session.cast::<DiagnosticPacketSession>()) });
         process_success()
     })

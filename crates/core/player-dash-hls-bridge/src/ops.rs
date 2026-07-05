@@ -823,6 +823,18 @@ pub fn template_segments(
         ));
     }
     let segment_count = segment_count as usize;
+    // Bound the total number of segments we are willing to materialize from a
+    // single SegmentTemplate. `segment_count` is derived from the MPD's declared
+    // media presentation duration and per-segment duration; a malicious or
+    // malformed manifest with a tiny segment duration can otherwise request
+    // billions of entries and exhaust memory. 100k covers any realistic
+    // multi-day presentation at sub-second granularity.
+    const MAX_TEMPLATE_SEGMENTS: usize = 100_000;
+    if segment_count > MAX_TEMPLATE_SEGMENTS {
+        return Err(DashHlsError::UnsupportedMpd(format!(
+            "SegmentTemplate produced more than {MAX_TEMPLATE_SEGMENTS} segments"
+        )));
+    }
     let mut segments = Vec::with_capacity(segment_count);
     for index in 0..segment_count {
         let number = checked_add(
@@ -881,6 +893,18 @@ fn timeline_template_segments(
                 && current_start >= timeline_end
             {
                 break;
+            }
+            // Bound the total number of segments produced from a SegmentTimeline.
+            // `repeat_count` (from the MPD `r` attribute) is an i32 and can be as
+            // large as ~2.1B; without an end tick (e.g. when `duration_ms` is
+            // absent or zero) the loop has no other termination condition and a
+            // single malicious timeline entry could otherwise allocate tens of
+            // GB. 100k comfortably exceeds any realistic live/VOD timeline.
+            const MAX_TIMELINE_TEMPLATE_SEGMENTS: usize = 100_000;
+            if segments.len() >= MAX_TIMELINE_TEMPLATE_SEGMENTS {
+                return Err(DashHlsError::UnsupportedMpd(format!(
+                    "SegmentTimeline produced more than {MAX_TIMELINE_TEMPLATE_SEGMENTS} segments"
+                )));
             }
             let unclipped_end =
                 checked_add(current_start, entry.duration, "SegmentTimeline segment end")?;
@@ -1205,6 +1229,18 @@ fn format_template_number(value: u64, format: Option<&str>) -> DashHlsResult<Str
     }
     let raw = value.to_string();
     let width = width_text.parse::<usize>().unwrap_or(0);
+    // Cap the parsed width to a sane maximum. The width originates from an
+    // MPD `SegmentTemplate` token (e.g. `$Number%09999999999d$`) and is therefore
+    // untrusted. `str::repeat` panics when capacity exceeds `isize::MAX`, and a
+    // large but sub-panic width can still allocate gigabytes before failing.
+    // 32 digits comfortably exceeds any realistic segment / time / bandwidth
+    // magnitude while keeping allocations trivially bounded.
+    const MAX_TEMPLATE_NUMBER_WIDTH: usize = 32;
+    if width > MAX_TEMPLATE_NUMBER_WIDTH {
+        return Err(DashHlsError::UnsupportedMpd(format!(
+            "SegmentTemplate format width exceeds {MAX_TEMPLATE_NUMBER_WIDTH}: {format}"
+        )));
+    }
     if width <= raw.len() {
         return Ok(raw);
     }
@@ -1782,5 +1818,77 @@ mod tests {
             hardware_decode_supported,
             decoder_name: None,
         }
+    }
+
+    // Regression: an MPD `SegmentTemplate` token with an absurdly large format
+    // width (e.g. `$Number%09999999999d$`) must not drive `str::repeat` into a
+    // panic or multi-gigabyte allocation. The width is untrusted input.
+    #[test]
+    fn format_template_number_rejects_oversized_width() {
+        let error =
+            format_template_number(7, Some("%09999999999d")).expect_err("must reject huge width");
+        assert!(
+            matches!(error, DashHlsError::UnsupportedMpd(_)),
+            "expected UnsupportedMpd, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn format_template_number_accepts_normal_width() {
+        let formatted = format_template_number(7, Some("%05d")).expect("normal width");
+        assert_eq!(formatted, "00007");
+    }
+
+    // Regression: a SegmentTimeline entry with a huge `r` (repeat_count) and no
+    // mediaPresentationDuration must not be expanded into billions of segments.
+    #[test]
+    fn template_segments_rejects_oversized_timeline_repeat() {
+        let template = DashSegmentTemplate {
+            timescale: 1_000,
+            duration: None,
+            start_number: 1,
+            presentation_time_offset: 0,
+            initialization: Some("init.mp4".to_owned()),
+            media: "chunk-$Time$.m4s".to_owned(),
+            timeline: vec![crate::dash::DashSegmentTimelineEntry {
+                start_time: Some(0),
+                duration: 1_000,
+                repeat_count: i32::MAX,
+            }],
+        };
+
+        let error = template_segments(Some(DashManifestType::Dynamic), None, &template)
+            .expect_err("must reject oversized timeline expansion when no end tick is available");
+        assert!(
+            matches!(error, DashHlsError::UnsupportedMpd(_)),
+            "expected UnsupportedMpd, got {error:?}"
+        );
+    }
+
+    // Regression: a fixed-duration SegmentTemplate with a tiny per-segment
+    // duration must not be expanded into a multi-billion segment vector.
+    #[test]
+    fn template_segments_rejects_oversized_fixed_duration() {
+        let template = DashSegmentTemplate {
+            timescale: 1_000,
+            duration: Some(1),
+            start_number: 1,
+            presentation_time_offset: 0,
+            initialization: Some("init.mp4".to_owned()),
+            media: "chunk-$Number$.m4s".to_owned(),
+            timeline: Vec::new(),
+        };
+
+        // 1 hour presentation, 1ms segments => 3,600,000 segments, but still
+        // below the cap; assert the cap fires at a pathological duration.
+        let error = template_segments(Some(DashManifestType::Static), Some(u64::MAX), &template)
+            .expect_err("must reject oversized fixed-duration expansion");
+        assert!(
+            matches!(
+                error,
+                DashHlsError::UnsupportedMpd(_) | DashHlsError::InvalidMpd(_)
+            ),
+            "expected UnsupportedMpd or InvalidMpd, got {error:?}"
+        );
     }
 }

@@ -585,6 +585,21 @@ fn parse_xml_document(input: &str) -> DashHlsResult<XmlNode> {
                 })?;
                 parent.children.push(node);
             } else {
+                // Bound the XML element nesting depth. The stack is driven by
+                // untrusted MPD input; a malformed/manifest with deeply nested
+                // elements (e.g. `<a><a><a>...` repeated millions of times)
+                // would otherwise grow `stack` without limit, exhausting memory
+                // or risking stack overflow during deep `XmlNode` drops. 256
+                // dwarfs any realistic MPD (MPD -> Period -> AdaptationSet ->
+                // Representation -> SegmentBase/SegmentTemplate -> Initialization
+                // is typically depth <= 8) while keeping worst-case memory
+                // bounded at ~256 * sizeof(XmlNode).
+                const MAX_XML_ELEMENT_DEPTH: usize = 256;
+                if stack.len() >= MAX_XML_ELEMENT_DEPTH {
+                    return Err(DashHlsError::InvalidMpd(format!(
+                        "MPD element nesting exceeds {MAX_XML_ELEMENT_DEPTH}"
+                    )));
+                }
                 stack.push(node);
             }
         }
@@ -823,5 +838,22 @@ mod tests {
             assert_eq!(parse_iso8601_duration_ms(value), None, "{value}");
         }
         assert_eq!(parse_iso8601_duration_ms("PT1H2M3.5S"), Some(3_723_500));
+    }
+
+    // Regression: a malicious/manifest with deeply nested XML elements must not
+    // drive the XML parser stack toward unbounded memory or stack overflow.
+    // The depth cap fires well before any realistic MPD nesting.
+    #[test]
+    fn rejects_deeply_nested_xml_elements() {
+        let depth = 300; // exceeds MAX_XML_ELEMENT_DEPTH (256)
+        let mut input = String::from("<MPD>");
+        input.push_str(&"<x>".repeat(depth));
+        input.push_str(&"</x>".repeat(depth));
+        input.push_str("<Period /></MPD>");
+        let error = parse_mpd(&input).expect_err("deep nesting must be rejected");
+        assert!(
+            matches!(error, DashHlsError::InvalidMpd(_)),
+            "expected InvalidMpd, got {error:?}"
+        );
     }
 }

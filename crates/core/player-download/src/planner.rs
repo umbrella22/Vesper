@@ -7,6 +7,30 @@ use crate::{
     DownloadStreamKind, PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult,
 };
 
+/// Maximum number of segments/clips the planner is willing to materialize from a
+/// single manifest. Manifests (HLS media playlists, FLV ffconcat lists, and DASH
+/// SegmentTemplate expansions) are untrusted media input; without a cap, a
+/// malicious or malformed manifest with millions of `#EXTINF`/URI lines (or a
+/// pathological SegmentTemplate duration) could drive `Vec` allocations into the
+/// multi-GB range and trigger a probe-request amplification storm (one HEAD per
+/// segment). 100k comfortably exceeds any realistic multi-day VOD presentation
+/// at sub-second granularity while keeping worst-case memory bounded. This
+/// mirrors the cap already enforced in `player-dash-hls-bridge::ops::template_segments`.
+const MAX_PLANNED_SEGMENTS: usize = 100_000;
+
+fn ensure_segment_capacity(current_len: usize) -> PlayerResult<()> {
+    if current_len >= MAX_PLANNED_SEGMENTS {
+        return Err(planning_error(
+            PlayerErrorCode::InvalidSource,
+            PlayerErrorCategory::Source,
+            format!(
+                "download planning refused to expand more than {MAX_PLANNED_SEGMENTS} segments from a single manifest"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 pub trait DownloadPlanningClient {
     fn fetch_text(&self, uri: &str) -> PlayerResult<String>;
 
@@ -222,6 +246,7 @@ where
         }
 
         for index in 0..segment_count {
+            ensure_segment_capacity(segments.len())?;
             let number = template.start_number + index;
             let remote = resolve_uri(
                 &base_uri,
@@ -331,6 +356,7 @@ where
         let mut concat = String::from("ffconcat version 1.0\n");
         let mut segments = Vec::with_capacity(clip_uris.len());
         for (index, clip_uri) in clip_uris.iter().enumerate() {
+            ensure_segment_capacity(segments.len())?;
             let size = self.probe_required_size(clip_uri, None)?;
             add_total_size(&mut total_size_bytes, size)?;
             let sequence = index as u64 + 1;
@@ -477,6 +503,7 @@ where
         }
 
         for segment in &playlist.segments {
+            ensure_segment_capacity(segments.len())?;
             let size = planner.probe_required_size(&segment.uri, segment.byte_range)?;
             add_total_size(&mut total_size_bytes, size)?;
             let segment_id = format!("hls-{media_id}-{}", segment.sequence);
@@ -733,6 +760,7 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
         if line.starts_with('#') {
             continue;
         }
+        ensure_segment_capacity(segments.len())?;
         segments.push(HlsSegment {
             uri: resolve_uri(manifest_uri, line),
             duration: pending_duration.take(),
@@ -1104,7 +1132,23 @@ fn dash_segment_count(duration_seconds: f64, segment_seconds: f64) -> PlayerResu
             "DASH SegmentTemplate segment count exceeds u64 range",
         ));
     }
-    Ok(segment_count as u64)
+    let segment_count = segment_count as u64;
+    // Bound the segment count up front. The caller iterates `0..segment_count`
+    // and probes each segment over HTTP; an unbounded count from a pathological
+    // SegmentTemplate duration would otherwise drive a multi-GB allocation and
+    // a probe-request amplification storm before the per-iteration cap inside
+    // the loop fires. 100k mirrors MAX_PLANNED_SEGMENTS.
+    const MAX_DASH_PLANNED_SEGMENT_COUNT: u64 = 100_000;
+    if segment_count > MAX_DASH_PLANNED_SEGMENT_COUNT {
+        return Err(planning_error(
+            PlayerErrorCode::InvalidSource,
+            PlayerErrorCategory::Source,
+            format!(
+                "DASH SegmentTemplate planning refused to expand more than {MAX_DASH_PLANNED_SEGMENT_COUNT} segments"
+            ),
+        ));
+    }
+    Ok(segment_count)
 }
 
 fn parse_iso8601_duration_seconds(value: &str) -> Option<f64> {
@@ -1277,6 +1321,7 @@ fn parse_flv_clip_manifest(base_uri: &str, manifest: &str) -> PlayerResult<Vec<S
         if raw_uri.is_empty() {
             continue;
         }
+        ensure_segment_capacity(clips.len())?;
         clips.push(resolve_uri(base_uri, raw_uri));
     }
 
@@ -1814,5 +1859,65 @@ mod tests {
             .expect_err("missing content length should fail");
 
         assert_eq!(error.category(), PlayerErrorCategory::Network);
+    }
+
+    // Regression: a malicious HLS media playlist with millions of segment URI
+    // lines must not drive unbounded Vec allocation or a probe-request storm.
+    // The planner must refuse to expand beyond MAX_PLANNED_SEGMENTS.
+    #[test]
+    fn refuses_oversized_hls_media_playlist() {
+        // Build a VOD playlist with MAX_PLANNED_SEGMENTS + 1 segment lines. We
+        // do NOT register sizes (planning would fail on the first probe anyway),
+        // because the parser-side cap fires before any probe is issued.
+        let mut manifest = String::from("#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-ENDLIST\n");
+        for sequence in 0..=super::MAX_PLANNED_SEGMENTS {
+            manifest.push_str(&format!("#EXTINF:1,\nseg-{sequence}.ts\n"));
+        }
+        let client = FakeClient::default().with_text("https://cdn.test/main.m3u8", &manifest);
+        let planner = DownloadPlanner::new(client);
+
+        let error = planner
+            .plan(
+                &hls_source("https://cdn.test/main.m3u8"),
+                &DownloadProfile::default(),
+            )
+            .expect_err("oversized HLS playlist must be rejected");
+        assert_eq!(error.category(), PlayerErrorCategory::Source);
+        assert_eq!(error.code(), PlayerErrorCode::InvalidSource);
+    }
+
+    // Regression: a pathological DASH SegmentTemplate that would expand to more
+    // than MAX_PLANNED_SEGMENTS segments must be rejected up front, before any
+    // probe is issued.
+    #[test]
+    fn refuses_oversized_dash_segment_template() {
+        // duration_seconds huge, segment_seconds tiny => segment_count huge.
+        let error = super::dash_segment_count(3_600_000_000.0, 0.001)
+            .expect_err("pathological DASH template must be rejected");
+        assert_eq!(error.category(), PlayerErrorCategory::Source);
+        assert_eq!(error.code(), PlayerErrorCode::InvalidSource);
+    }
+
+    // Regression: an FLV ffconcat manifest with too many clip URIs must be
+    // rejected by the same cap.
+    #[test]
+    fn refuses_oversized_flv_clip_manifest() {
+        let mut manifest = String::from("ffconcat version 1.0\n");
+        for sequence in 0..=super::MAX_PLANNED_SEGMENTS {
+            manifest.push_str(&format!("file 'clip-{sequence}.flv'\n"));
+        }
+        let client = FakeClient::default().with_text("https://cdn.test/main.ffconcat", &manifest);
+        let planner = DownloadPlanner::new(client);
+
+        let source = DownloadSource::new(
+            MediaSource::new("https://cdn.test/main.ffconcat"),
+            DownloadContentFormat::FlvSegments,
+        )
+        .with_manifest_uri("https://cdn.test/main.ffconcat");
+        let error = planner
+            .plan(&source, &DownloadProfile::default())
+            .expect_err("oversized FLV clip manifest must be rejected");
+        assert_eq!(error.category(), PlayerErrorCategory::Source);
+        assert_eq!(error.code(), PlayerErrorCode::InvalidSource);
     }
 }

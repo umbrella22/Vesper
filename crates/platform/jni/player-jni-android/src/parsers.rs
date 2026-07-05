@@ -133,6 +133,10 @@ pub(crate) fn string_from_java_object(
         return Ok(None);
     }
 
+    // SAFETY: `object` is a local reference whose raw pointer was just produced by
+    // `into_raw()` on the same thread-attached `env`. `JString::from_raw` re-wraps the
+    // raw `jstring` without dereferencing foreign memory; the borrow is bounded by
+    // `env`'s local frame and the local reference is released when `object` drops.
     let value = unsafe { JString::from_raw(env, object.into_raw() as jni::sys::jstring) };
     Ok(Some(value.try_to_string(env)?))
 }
@@ -262,6 +266,11 @@ pub(crate) fn parse_native_track_catalog(
 
     let mut tracks = Vec::new();
     if !tracks_object.is_null() {
+        // SAFETY: `tracks_object` is a local reference whose raw pointer was just produced
+        // by `into_raw()` on the same thread-attached `env`. `JObjectArray::from_raw`
+        // re-wraps the raw `jobjectArray` without dereferencing foreign memory; the borrow
+        // is bounded by `env`'s local frame and the local reference is released when
+        // `tracks_object` drops.
         let tracks_array = unsafe {
             JObjectArray::<JObject<'_>>::from_raw(env, tracks_object.into_raw() as jobjectArray)
         };

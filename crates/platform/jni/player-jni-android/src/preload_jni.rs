@@ -359,6 +359,11 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
             .with_env(|env| -> JniResult<jobjectArray> {
+                // SAFETY: `candidates` is a `jobjectArray` argument passed by the JVM on
+                // the currently-attached thread; `env` owns the local reference frame for
+                // this call. `JObjectArray::from_raw` re-wraps the raw handle without
+                // dereferencing foreign memory; the local reference is released by the JVM
+                // at call return.
                 let candidates_array = unsafe {
                     JObjectArray::<JObject<'_>>::from_raw(env, candidates as jobjectArray)
                 };
