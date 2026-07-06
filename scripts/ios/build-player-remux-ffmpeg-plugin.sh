@@ -107,6 +107,7 @@ for slice in "${selected_slices[@]}"; do
   env \
     FFMPEG_DIR="$ffmpeg_dir" \
     CARGO_TARGET_DIR="$cargo_target_dir" \
+    RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-headerpad_max_install_names" \
     "${cargo_command[@]}"
 
   cp "$cargo_target_dir/$rust_target/$PROFILE_DIR/libvesper_remux_ffmpeg.dylib" "$output_path"

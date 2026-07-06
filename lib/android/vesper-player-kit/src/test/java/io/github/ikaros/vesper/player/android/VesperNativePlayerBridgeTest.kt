@@ -4464,7 +4464,7 @@ private class ThreadedNativeFramePipelinePumpScheduler : NativeFramePipelinePump
     var lastError: Throwable? = null
         private set
 
-    private var latch = CountDownLatch(1)
+    private var latch = CountDownLatch(2)
     private var closed = false
 
     @Synchronized

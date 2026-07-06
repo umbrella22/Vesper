@@ -1,6 +1,8 @@
 package io.github.ikaros.vesper.player.android
 
 import android.util.Log
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 internal class VesperNativePreloadCoordinator(
     private val bindings: PreloadBindings,
@@ -10,26 +12,64 @@ internal class VesperNativePreloadCoordinator(
     private val sessionLock = Any()
     @Volatile
     private var sessionHandle: Long = 0L
+    private var sessionCreationLatch: CountDownLatch? = null
 
     fun ensureSession(): Long {
-        synchronized(sessionLock) {
-            if (sessionHandle != 0L) {
-                return sessionHandle
+        while (true) {
+            var shouldCreate = false
+            val latch =
+                synchronized(sessionLock) {
+                    if (sessionHandle != 0L) {
+                        return sessionHandle
+                    }
+                    sessionCreationLatch ?: CountDownLatch(1).also {
+                        sessionCreationLatch = it
+                        shouldCreate = true
+                    }
+                }
+
+            if (shouldCreate) {
+                return createSession(latch)
             }
+
+            awaitSessionCreation(latch)
         }
-        // Perform the JNI call outside the synchronized block to avoid holding a
-        // monitor during a potentially long-running native call (AGENTS.md rule).
-        val handle = bindings.createPreloadSession(resolvedBudget)
-        check(handle != 0L) { "native preload session handle must not be zero" }
-        synchronized(sessionLock) {
-            // Another thread may have raced and created a session first.
-            if (sessionHandle != 0L) {
-                bindings.disposePreloadSession(handle)
-                return sessionHandle
+    }
+
+    private fun createSession(latch: CountDownLatch): Long {
+        try {
+            // Perform the JNI call outside the synchronized block to avoid holding a
+            // monitor during a potentially long-running native call (AGENTS.md rule).
+            val handle = bindings.createPreloadSession(resolvedBudget)
+            check(handle != 0L) { "native preload session handle must not be zero" }
+            synchronized(sessionLock) {
+                sessionHandle = handle
+                if (sessionCreationLatch === latch) {
+                    sessionCreationLatch = null
+                }
             }
-            sessionHandle = handle
+            return handle
+        } finally {
+            synchronized(sessionLock) {
+                if (sessionCreationLatch === latch) {
+                    sessionCreationLatch = null
+                }
+            }
+            latch.countDown()
         }
-        return handle
+    }
+
+    private fun awaitSessionCreation(latch: CountDownLatch) {
+        val completed =
+            try {
+                latch.await(SESSION_CREATION_WAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IllegalStateException("interrupted while waiting for native preload session", error)
+            }
+        check(completed) {
+            "timed out waiting for native preload session"
+        }
     }
 
     fun dispose() {
@@ -163,6 +203,10 @@ internal class VesperNativePreloadCoordinator(
 
     private fun resolvePreloadBudget(policy: VesperPreloadBudgetPolicy): NativeResolvedPreloadBudgetPolicy =
         bindings.resolvePreloadBudget(policy.toNativePayload())
+
+    private companion object {
+        const val SESSION_CREATION_WAIT_TIMEOUT_MS = 30_000L
+    }
 }
 
 private fun VesperPreloadBudgetPolicy.toNativePayload(): NativePreloadBudget =
