@@ -48,6 +48,13 @@ extension _PlayerHostDownloadActions on _PlayerHostPageState {
           : taskId == null
           ? '创建下载任务失败。'
           : null;
+      if (_downloadMessage != null) {
+        _appendHostLog(
+          severity: ExampleHostLogSeverity.error,
+          title: '下载任务创建失败',
+          detail: _downloadMessage,
+        );
+      }
     });
   }
 

@@ -123,7 +123,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SingleChildScrollView(
-            child: ExampleDolbyAcceptanceSection(
+            child: ExampleDolbyCatalogPanel(
               palette: exampleHostPalette(false),
               presets: exampleDolbyAcceptanceCatalog,
               selectedDrmKind: ExampleDolbyAcceptanceDrmKind.clear,
@@ -132,9 +132,10 @@ void main() {
               onDrmKindChanged: (_) {},
               onProfileChanged: (_) {},
               onFpsChanged: (_) {},
-              onPresetSelected: (preset) {
+              onPresetPlayNow: (preset) {
                 selected = preset;
               },
+              onPresetAddToQueue: (_) {},
             ),
           ),
         ),
@@ -145,14 +146,14 @@ void main() {
     expect(find.text('P5 24fps DASH Clear'), findsOneWidget);
     expect(find.text('P5 24fps HLS Clear'), findsOneWidget);
 
-    await tester.tap(find.text('P5 24fps DASH Clear'));
+    await tester.tap(find.widgetWithText(FilledButton, '立即播放').first);
     expect(selected?.id, 'DOLBY-DV-P5-24-DASH-CLEAR');
 
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: SingleChildScrollView(
-            child: ExampleDolbyAcceptanceSection(
+            child: ExampleDolbyCatalogPanel(
               palette: exampleHostPalette(false),
               presets: exampleDolbyAcceptanceCatalog,
               selectedDrmKind: ExampleDolbyAcceptanceDrmKind.widevine,
@@ -161,9 +162,10 @@ void main() {
               onDrmKindChanged: (_) {},
               onProfileChanged: (_) {},
               onFpsChanged: (_) {},
-              onPresetSelected: (preset) {
+              onPresetPlayNow: (preset) {
                 selected = preset;
               },
+              onPresetAddToQueue: (_) {},
             ),
           ),
         ),
@@ -188,7 +190,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: SingleChildScrollView(
-              child: ExampleDolbyAcceptanceSection(
+              child: ExampleDolbyCatalogPanel(
                 palette: exampleHostPalette(false),
                 presets: exampleDolbyAcceptanceCatalog,
                 selectedDrmKind: ExampleDolbyAcceptanceDrmKind.clear,
@@ -201,9 +203,10 @@ void main() {
                 onDrmKindChanged: (_) {},
                 onProfileChanged: (_) {},
                 onFpsChanged: (_) {},
-                onPresetSelected: (preset) {
+                onPresetPlayNow: (preset) {
                   selected = preset;
                 },
+                onPresetAddToQueue: (_) {},
               ),
             ),
           ),
@@ -214,15 +217,12 @@ void main() {
         find.text('iOS Dolby acceptance uses HLS direct playback.'),
         findsOneWidget,
       );
-      final dashButton = tester.widget<OutlinedButton>(
-        find.ancestor(
-          of: find.text('P5 24fps DASH Clear'),
-          matching: find.byType(OutlinedButton),
-        ),
+      final dashButton = tester.widget<FilledButton>(
+        find.widgetWithText(FilledButton, '立即播放').first,
       );
       expect(dashButton.onPressed, isNull);
 
-      await tester.tap(find.text('P5 24fps DASH Clear'));
+      await tester.tap(find.widgetWithText(FilledButton, '立即播放').first);
       expect(selected, isNull);
     },
   );
@@ -236,7 +236,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: SingleChildScrollView(
-            child: ExampleDolbyAcceptanceSection(
+            child: ExampleDolbyCatalogPanel(
               palette: exampleHostPalette(false),
               presets: exampleDolbyAcceptanceCatalog,
               selectedDrmKind: ExampleDolbyAcceptanceDrmKind.fairPlayPending,
@@ -245,9 +245,10 @@ void main() {
               onDrmKindChanged: (_) {},
               onProfileChanged: (_) {},
               onFpsChanged: (_) {},
-              onPresetSelected: (_) {
+              onPresetPlayNow: (_) {
                 selected = true;
               },
+              onPresetAddToQueue: (_) {},
             ),
           ),
         ),
@@ -257,15 +258,12 @@ void main() {
     expect(find.text('P5 24fps HLS FairPlay pending'), findsOneWidget);
     expect(find.textContaining('certificate URI or base64'), findsOneWidget);
 
-    final button = tester.widget<OutlinedButton>(
-      find.ancestor(
-        of: find.text('P5 24fps HLS FairPlay pending'),
-        matching: find.byType(OutlinedButton),
-      ),
+    final button = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, '立即播放').first,
     );
     expect(button.onPressed, isNull);
 
-    await tester.tap(find.text('P5 24fps HLS FairPlay pending'));
+    await tester.tap(find.widgetWithText(FilledButton, '立即播放').first);
     expect(selected, isFalse);
   });
 

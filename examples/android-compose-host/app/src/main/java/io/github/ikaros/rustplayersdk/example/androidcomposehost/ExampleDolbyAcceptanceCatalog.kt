@@ -213,6 +213,18 @@ internal val exampleDolbyAcceptanceCatalog: List<ExampleDolbyAcceptancePreset> =
 internal fun exampleDolbyAcceptancePresetById(id: String): ExampleDolbyAcceptancePreset? =
     exampleDolbyAcceptanceCatalog.firstOrNull { preset -> preset.id == id }
 
+internal fun filterDolbyAcceptancePresets(
+    presets: List<ExampleDolbyAcceptancePreset>,
+    drmKind: ExampleDolbyAcceptanceDrmKind,
+    profile: ExampleDolbyAcceptanceProfile?,
+    fps: Int?,
+): List<ExampleDolbyAcceptancePreset> =
+    presets.filter { preset ->
+        preset.drmKind == drmKind &&
+            (profile == null || preset.profile == profile) &&
+            (fps == null || preset.fps == fps)
+    }
+
 internal fun exampleDolbyAcceptanceHdrEvidencePresets(): List<ExampleHdrEvidenceSamplePreset> =
     exampleDolbyAcceptanceCatalog
         .filter { preset -> preset.isPlayable }

@@ -64,9 +64,19 @@ extension _PlayerHostHdrEvidenceActions on _PlayerHostPageState {
         return;
       }
       _showMessage('HDR evidence bundle 已写入：${directory.path}');
+      _updateState(() {
+        _appendHostLog(title: 'HDR evidence 结果', detail: directory.path);
+      });
     } catch (error) {
       if (mounted) {
         _showMessage('HDR evidence capture 失败：$error');
+        _updateState(() {
+          _appendHostLog(
+            severity: ExampleHostLogSeverity.error,
+            title: 'HDR evidence 结果',
+            detail: '$error',
+          );
+        });
       }
     } finally {
       if (mounted) {
@@ -91,9 +101,7 @@ extension _PlayerHostHdrEvidenceActions on _PlayerHostPageState {
     if (dolbyPreset != null) {
       return dolbyPreset.source;
     }
-    return _activePlaylistItemId == null
-        ? null
-        : _playlistSourceForItem(_activePlaylistItemId!);
+    return _activePlaybackSource();
   }
 
   Future<Map<String, Object?>?> _confirmHdrEvidenceSourceMetadata({

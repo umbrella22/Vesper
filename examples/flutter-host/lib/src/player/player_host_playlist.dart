@@ -2,7 +2,10 @@ part of 'player_host_page.dart';
 
 extension _PlayerHostPlaylistActions on _PlayerHostPageState {
   VesperPlayerSource? _playlistSourceForItem(String itemId) {
-    final dolbyPreset = exampleDolbyAcceptancePresetById(itemId);
+    final dolbyPresetId = flutterDolbyPresetIdFromPlaylistItemId(itemId);
+    final dolbyPreset = dolbyPresetId == null
+        ? null
+        : exampleDolbyAcceptancePresetById(dolbyPresetId);
     if (dolbyPreset != null) {
       return dolbyPreset.source;
     }
@@ -50,7 +53,11 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
     VesperPlayerSource? remoteSource,
     VesperPlayerSource? localSource,
   }) async {
-    await _selectSource(controller, source);
+    await _selectSource(
+      controller,
+      source,
+      origin: ExampleQueuePlaybackOrigin(itemId),
+    );
     if (!mounted) {
       return;
     }
@@ -63,6 +70,7 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
       }
       _playlistItemIds = enqueuePlaylistItem(_playlistItemIds, itemId);
       _activePlaylistItemId = itemId;
+      _appendHostLog(title: '已选择 source', detail: source.label);
     });
   }
 
@@ -74,7 +82,23 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
     if (source == null) {
       return;
     }
-    await _selectSource(controller, source);
+    final dolbyPresetId = flutterDolbyPresetIdFromPlaylistItemId(itemId);
+    if (dolbyPresetId != null) {
+      final preset = exampleDolbyAcceptancePresetById(dolbyPresetId);
+      if (preset != null) {
+        await _activateDolbyAcceptancePreset(
+          controller,
+          preset,
+          origin: ExampleQueuePlaybackOrigin(itemId),
+        );
+      }
+    } else {
+      await _selectSource(
+        controller,
+        source,
+        origin: ExampleQueuePlaybackOrigin(itemId),
+      );
+    }
     if (!mounted) {
       return;
     }
@@ -111,11 +135,21 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
 
   Future<void> _activateDolbyAcceptancePreset(
     VesperPlayerController controller,
-    ExampleDolbyAcceptancePreset preset,
-  ) async {
+    ExampleDolbyAcceptancePreset preset, {
+    required ExamplePlaybackOrigin origin,
+  }) async {
     final unavailableReason = _dolbyAcceptancePresetUnavailableReason(preset);
     if (unavailableReason != null) {
       _showMessage(unavailableReason);
+      if (mounted) {
+        _updateState(() {
+          _appendHostLog(
+            severity: ExampleHostLogSeverity.warning,
+            title: '已选择 Dolby 预设',
+            detail: unavailableReason,
+          );
+        });
+      }
       return;
     }
     if (preset.protocol == VesperPlayerSourceProtocol.dash &&
@@ -123,31 +157,55 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
       _showMessage('当前平台宿主暂不支持 DASH Dolby 验收流。');
       return;
     }
-    if (preset.isDrm &&
-        _sourceNormalizerSetting != ExampleSourceNormalizerSetting.disabled &&
+    if (_sourceNormalizerSetting != ExampleSourceNormalizerSetting.disabled &&
         _sourceNormalizerSetting !=
             ExampleSourceNormalizerSetting.diagnosticsOnly) {
       _updateState(() {
         _sourceNormalizerSetting = ExampleSourceNormalizerSetting.disabled;
+        _activeDirectSource = preset.source;
+        _playbackOrigin = origin;
       });
-      _showMessage('DRM 验收已切回 direct native 路径，SourceNormalizer 已关闭。');
+      _showMessage('Dolby 验收已切回 direct native 路径，SourceNormalizer 已关闭。');
       await _rebuildControllerForSource(
         preset.source,
         shouldResumePlayback:
             controller.snapshot.playbackState == VesperPlaybackState.playing,
       );
     } else {
-      await _activatePlaylistSource(
-        controller,
-        itemId: preset.id,
-        source: preset.source,
-      );
+      await _selectSource(controller, preset.source, origin: origin);
     }
     if (!mounted) {
       return;
     }
     _updateState(() {
       _selectedHdrEvidencePreset = preset.toHdrEvidencePreset();
+      _appendHostLog(title: '已选择 Dolby 预设', detail: preset.label);
+    });
+  }
+
+  void _addDolbyPresetToQueue(ExampleDolbyAcceptancePreset preset) {
+    if (!canQueueDolbyAcceptancePresetOnHost(
+      preset,
+      isAndroid: Platform.isAndroid,
+      isIOS: Platform.isIOS,
+    )) {
+      final reason =
+          _dolbyAcceptancePresetUnavailableReason(preset) ??
+          '这个 Dolby 预设暂不能加入队列。';
+      _showMessage(reason);
+      _updateState(() {
+        _appendHostLog(
+          severity: ExampleHostLogSeverity.warning,
+          title: 'Dolby 预设已加入队列',
+          detail: reason,
+        );
+      });
+      return;
+    }
+    final itemId = flutterDolbyPlaylistItemId(preset.id);
+    _updateState(() {
+      _playlistItemIds = enqueuePlaylistItem(_playlistItemIds, itemId);
+      _appendHostLog(title: 'Dolby 预设已加入队列', detail: preset.label);
     });
   }
 

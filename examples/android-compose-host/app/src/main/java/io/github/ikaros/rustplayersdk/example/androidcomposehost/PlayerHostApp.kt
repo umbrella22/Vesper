@@ -30,8 +30,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -127,7 +129,7 @@ internal fun PlayerHostApp(
     }
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-    var selectedTab by rememberSaveable { mutableStateOf(ExampleHostTab.Player) }
+    var selectedTab by rememberSaveable { mutableStateOf(ExampleHostTab.Play) }
 
     var themeMode by rememberSaveable { mutableStateOf(ExampleThemeMode.System) }
     var selectedResilienceProfile by rememberSaveable {
@@ -160,7 +162,7 @@ internal fun PlayerHostApp(
             ExampleThemeMode.Dark -> true
         }
 
-    val immersivePlayer = isLandscape && selectedTab == ExampleHostTab.Player
+    val immersivePlayer = isLandscape && selectedTab == ExampleHostTab.Play
 
     LaunchedEffect(activity, immersivePlayer, useDarkTheme) {
         val window = activity?.window ?: return@LaunchedEffect
@@ -202,6 +204,9 @@ internal fun PlayerHostApp(
     var savingTaskIds by remember { mutableStateOf(setOf<Long>()) }
     var exportProgressByTaskId by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
     var externalSession by remember { mutableStateOf<ExampleExternalPlaybackSession?>(null) }
+    var playbackOrigin by remember { mutableStateOf<ExamplePlaybackOrigin?>(null) }
+    var hostLogEntries by remember { mutableStateOf<List<ExampleHostLogEntry>>(emptyList()) }
+    var nextHostLogId by remember { mutableStateOf(0L) }
     var pictureInPictureEnabled by rememberSaveable { mutableStateOf(false) }
     var pictureInPicturePresentationState by remember {
         mutableStateOf(ExamplePictureInPicturePresentationState())
@@ -255,6 +260,26 @@ internal fun PlayerHostApp(
         } ?: uiState
 
     val pictureInPicturePresentation = pictureInPicturePresentationState.presentation
+
+    fun recordHostLog(
+        severity: ExampleHostLogSeverity,
+        title: String,
+        detail: String? = null,
+    ) {
+        nextHostLogId += 1L
+        hostLogEntries =
+            appendExampleHostLogEntry(
+                entries = hostLogEntries,
+                entry =
+                    ExampleHostLogEntry(
+                        id = nextHostLogId,
+                        atMillis = System.currentTimeMillis(),
+                        severity = severity,
+                        title = title,
+                        detail = detail,
+                    ),
+            )
+    }
 
     LaunchedEffect(isInPictureInPictureMode) {
         pictureInPicturePresentationState =
@@ -324,6 +349,11 @@ internal fun PlayerHostApp(
             pendingDownloadTasks =
                 pendingDownloadTasks.filterNot { pendingTask -> pendingTask.requestId == assetId }
             result.exceptionOrNull()?.let { error ->
+                recordHostLog(
+                    severity = ExampleHostLogSeverity.Error,
+                    title = context.getString(R.string.example_log_download_create_failed),
+                    detail = error.localizedMessage ?: error::class.java.simpleName,
+                )
                 Toast
                     .makeText(
                         context,
@@ -460,6 +490,11 @@ internal fun PlayerHostApp(
                 }
             result.fold(
                 onSuccess = { directory ->
+                    recordHostLog(
+                        severity = ExampleHostLogSeverity.Info,
+                        title = context.getString(R.string.example_log_hdr_evidence_written),
+                        detail = directory.absolutePath,
+                    )
                     Toast
                         .makeText(
                             context,
@@ -471,6 +506,11 @@ internal fun PlayerHostApp(
                         ).show()
                 },
                 onFailure = { error ->
+                    recordHostLog(
+                        severity = ExampleHostLogSeverity.Error,
+                        title = context.getString(R.string.example_log_hdr_evidence_failed),
+                        detail = error.message ?: error::class.java.simpleName,
+                    )
                     Toast
                         .makeText(
                             context,
@@ -486,8 +526,12 @@ internal fun PlayerHostApp(
         }
     }
 
-    fun selectSourceForPlayback(source: VesperPlayerSource) {
+    fun selectSourceForPlayback(
+        source: VesperPlayerSource,
+        origin: ExamplePlaybackOrigin?,
+    ) {
         activePlaybackSource = source
+        playbackOrigin = origin
         runCatching {
             controller.selectSource(source)
         }.onFailure { error ->
@@ -515,6 +559,11 @@ internal fun PlayerHostApp(
                 controls = VesperSystemPlaybackControls.videoDefault(),
             ),
         )
+        recordHostLog(
+            severity = ExampleHostLogSeverity.Info,
+            title = context.getString(R.string.example_log_source_selected),
+            detail = source.label.ifBlank { source.uri },
+        )
     }
 
     fun handleDolbyAcceptanceSelectionFailure(
@@ -541,7 +590,10 @@ internal fun PlayerHostApp(
         controlsVisible = true
     }
 
-    fun activateDolbyAcceptancePreset(preset: ExampleDolbyAcceptancePreset) {
+    fun activateDolbyAcceptancePreset(
+        preset: ExampleDolbyAcceptancePreset,
+        origin: ExamplePlaybackOrigin,
+    ) {
         if (!preset.isPlayable) {
             Toast
                 .makeText(
@@ -551,6 +603,7 @@ internal fun PlayerHostApp(
                 ).show()
             return
         }
+        playbackOrigin = origin
         val previousSourceNormalizerSetting = sourceNormalizerSetting
         val previousNativeFramePipelineSetting = nativeFramePipelineSetting
         var nextSourceNormalizerSetting = sourceNormalizerSetting
@@ -617,6 +670,11 @@ internal fun PlayerHostApp(
                     controls = VesperSystemPlaybackControls.videoDefault(),
                 ),
             )
+            recordHostLog(
+                severity = ExampleHostLogSeverity.Info,
+                title = context.getString(R.string.example_log_controller_rebuilt),
+                detail = preset.label,
+            )
             Toast
                 .makeText(
                     context,
@@ -624,10 +682,15 @@ internal fun PlayerHostApp(
                     Toast.LENGTH_SHORT,
                 ).show()
         } else {
-            selectSourceForPlayback(preset.source)
+            selectSourceForPlayback(preset.source, origin)
         }
         selectedHdrEvidencePreset = preset.toHdrEvidencePreset()
         controlsVisible = true
+        recordHostLog(
+            severity = ExampleHostLogSeverity.Info,
+            title = context.getString(R.string.example_log_dolby_play_now),
+            detail = preset.label,
+        )
         Log.i(
             PLAYER_HOST_EXAMPLE_TAG,
             "dolby acceptance preset=${preset.id} route=directNative " +
@@ -666,6 +729,11 @@ internal fun PlayerHostApp(
                 rebuildSnapshot.restorePositionMs,
                 rebuildSnapshot.restorePlaybackRate,
             )
+        recordHostLog(
+            severity = ExampleHostLogSeverity.Info,
+            title = context.getString(R.string.example_log_source_normalizer_changed),
+            detail = context.getString(setting.titleRes),
+        )
         if (activeSource != null) {
             nextController.configureSystemPlayback(
                 VesperSystemPlaybackConfiguration(
@@ -700,6 +768,11 @@ internal fun PlayerHostApp(
         )
         nativeFramePipelineSetting = setting
         if (!requiresControllerRebuild) {
+            recordHostLog(
+                severity = ExampleHostLogSeverity.Info,
+                title = context.getString(R.string.example_log_native_frame_changed),
+                detail = context.getString(setting.titleRes),
+            )
             controlsVisible = true
             return
         }
@@ -719,6 +792,11 @@ internal fun PlayerHostApp(
                 rebuildSnapshot.restorePositionMs,
                 rebuildSnapshot.restorePlaybackRate,
             )
+        recordHostLog(
+            severity = ExampleHostLogSeverity.Info,
+            title = context.getString(R.string.example_log_native_frame_changed),
+            detail = context.getString(setting.titleRes),
+        )
         if (activeSource != null) {
             nextController.configureSystemPlayback(
                 VesperSystemPlaybackConfiguration(
@@ -1131,6 +1209,33 @@ internal fun PlayerHostApp(
         }
     }
 
+    fun addDolbyPresetToQueue(preset: ExampleDolbyAcceptancePreset) {
+        if (!canQueueDolbyPreset(preset)) {
+            Toast
+                .makeText(
+                    context,
+                    R.string.example_dolby_acceptance_pending_toast,
+                    Toast.LENGTH_SHORT,
+                ).show()
+            return
+        }
+        val itemId = dolbyPlaylistItemId(preset.id)
+        val nextPlaylistItems =
+            enqueuePlaylistItem(
+                playlistItemIds = playlistItemIds,
+                itemId = itemId,
+            )
+        applyPlaylistQueue(
+            focusItemId = playlistSnapshot.activeItem?.itemId,
+            playlistItems = nextPlaylistItems,
+        )
+        recordHostLog(
+            severity = ExampleHostLogSeverity.Info,
+            title = context.getString(R.string.example_log_dolby_added_to_queue),
+            detail = preset.label,
+        )
+    }
+
     val pickVideoLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -1210,7 +1315,15 @@ internal fun PlayerHostApp(
         if (externalSession != null) {
             disconnectExternalPlayback()
         }
-        selectSourceForPlayback(source)
+        val queueOrigin = ExamplePlaybackOrigin.Queue(activeItem.itemId)
+        val dolbyPreset =
+            dolbyPresetIdFromPlaylistItemId(activeItem.itemId)
+                ?.let(::exampleDolbyAcceptancePresetById)
+        if (dolbyPreset != null) {
+            activateDolbyAcceptancePreset(dolbyPreset, queueOrigin)
+        } else {
+            selectSourceForPlayback(source, queueOrigin)
+        }
         controlsVisible = true
     }
 
@@ -1271,6 +1384,11 @@ internal fun PlayerHostApp(
                 VesperExternalPlaybackEventKind.RouteDisconnected,
                 VesperExternalPlaybackEventKind.Stopped,
                 -> {
+                    recordHostLog(
+                        severity = ExampleHostLogSeverity.Warning,
+                        title = context.getString(R.string.example_log_external_disconnected),
+                        detail = event.routeName ?: event.routeId,
+                    )
                     externalSession = null
                 }
 
@@ -1278,6 +1396,16 @@ internal fun PlayerHostApp(
                 VesperExternalPlaybackEventKind.DiscoveryDiagnostic,
                 -> {
                     event.message?.takeIf(String::isNotBlank)?.let { message ->
+                        recordHostLog(
+                            severity =
+                                if (event.kind == VesperExternalPlaybackEventKind.Error) {
+                                    ExampleHostLogSeverity.Error
+                                } else {
+                                    ExampleHostLogSeverity.Warning
+                                },
+                            title = context.getString(R.string.example_log_external_event),
+                            detail = message,
+                        )
                         externalSession =
                             externalSession?.copy(
                                 status =
@@ -1305,7 +1433,13 @@ internal fun PlayerHostApp(
             hasHandledFinishedPlayback = false
             return@LaunchedEffect
         }
-        if (!hasHandledFinishedPlayback && playlistSnapshot.activeItem != null) {
+        if (
+            !hasHandledFinishedPlayback &&
+            shouldAdvancePlaylistOnFinished(
+                origin = playbackOrigin,
+                activeItemId = playlistSnapshot.activeItem?.itemId,
+            )
+        ) {
             hasHandledFinishedPlayback = true
             playlistCoordinator.handlePlaybackCompleted()
         }
@@ -1393,8 +1527,8 @@ internal fun PlayerHostApp(
                 if (!immersivePlayer) {
                     NavigationBar {
                         NavigationBarItem(
-                            selected = selectedTab == ExampleHostTab.Player,
-                            onClick = { selectedTab = ExampleHostTab.Player },
+                            selected = selectedTab == ExampleHostTab.Play,
+                            onClick = { selectedTab = ExampleHostTab.Play },
                             icon = {
                                 androidx.compose.material3.Icon(
                                     imageVector = Icons.Rounded.VideoLibrary,
@@ -1402,6 +1536,17 @@ internal fun PlayerHostApp(
                                 )
                             },
                             label = { Text(stringResource(R.string.example_tab_player)) },
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == ExampleHostTab.Diagnostics,
+                            onClick = { selectedTab = ExampleHostTab.Diagnostics },
+                            icon = {
+                                androidx.compose.material3.Icon(
+                                    imageVector = Icons.Rounded.Settings,
+                                    contentDescription = null,
+                                )
+                            },
+                            label = { Text(stringResource(R.string.example_tab_diagnostics)) },
                         )
                         NavigationBarItem(
                             selected = selectedTab == ExampleHostTab.Downloads,
@@ -1485,77 +1630,68 @@ internal fun PlayerHostApp(
                             )
                         }
 
-                        selectedTab == ExampleHostTab.Player -> {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = 18.dp, vertical = 18.dp),
-                                verticalArrangement = Arrangement.spacedBy(18.dp),
+                        selectedTab == ExampleHostTab.Play -> {
+                            ExamplePlayScreen(
+                                palette = palette,
+                                sourceLabel = displayedUiState.sourceLabel,
+                                subtitle = displayedUiState.subtitle,
+                                themeSelector = {
+                                    ExampleThemeModeSelector(
+                                        themeMode = themeMode,
+                                        onThemeModeChange = { themeMode = it },
+                                    )
+                                },
+                                playerStage = {
+                                    ExamplePlayerStage(
+                                        controller = controller,
+                                        uiState = displayedUiState,
+                                        controlsVisible = controlsVisible,
+                                        pendingSeekRatio = pendingSeekRatio,
+                                        isPortrait = true,
+                                        trackCatalog = trackCatalog,
+                                        trackSelection = trackSelection,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(248.dp),
+                                        pictureInPicturePresentation = pictureInPicturePresentation,
+                                        onControlsVisibilityChange = { controlsVisible = it },
+                                        onPendingSeekRatioChange = { pendingSeekRatio = it },
+                                        onOpenSheet = { activeSheet = it },
+                                        onToggleFullscreen = {
+                                            activity?.requestedOrientation =
+                                                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                        },
+                                        onTogglePlayback =
+                                            if (externalSession.isActiveRemotePlayback()) {
+                                                ::toggleExternalPlayback
+                                            } else {
+                                                controller::togglePause
+                                            },
+                                        onSeekToRatio =
+                                            if (externalSession.isActiveRemotePlayback()) {
+                                                ::seekExternalToRatio
+                                            } else {
+                                                controller::seekToRatio
+                                            },
+                                        onSeekToLiveEdge =
+                                            if (externalSession.isActiveRemotePlayback()) {
+                                                ::seekExternalToLiveEdge
+                                            } else {
+                                                controller::seekToLiveEdge
+                                            },
+                                        onSetPlaybackRate = controller::setPlaybackRate,
+                                        playbackRateControlsEnabled = !externalSession.isActiveRemotePlayback(),
+                                        currentBrightnessRatio = deviceControls::currentBrightnessRatio,
+                                        onSetBrightnessRatio = deviceControls::setBrightnessRatio,
+                                        currentVolumeRatio = deviceControls::currentVolumeRatio,
+                                        onSetVolumeRatio = deviceControls::setVolumeRatio,
+                                    )
+                                },
                             ) {
-                                ExamplePlayerHeader(
-                                    sourceLabel = displayedUiState.sourceLabel,
-                                    subtitle = displayedUiState.subtitle,
-                                    palette = palette,
-                                )
-
-                                ExamplePlayerStage(
-                                    controller = controller,
-                                    uiState = displayedUiState,
-                                    controlsVisible = controlsVisible,
-                                    pendingSeekRatio = pendingSeekRatio,
-                                    isPortrait = true,
-                                    trackCatalog = trackCatalog,
-                                    trackSelection = trackSelection,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(248.dp),
-                                    pictureInPicturePresentation = pictureInPicturePresentation,
-                                    onControlsVisibilityChange = { controlsVisible = it },
-                                    onPendingSeekRatioChange = { pendingSeekRatio = it },
-                                    onOpenSheet = { activeSheet = it },
-                                    onToggleFullscreen = {
-                                        activity?.requestedOrientation =
-                                            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                                    },
-                                    onTogglePlayback =
-                                        if (externalSession.isActiveRemotePlayback()) {
-                                            ::toggleExternalPlayback
-                                        } else {
-                                            controller::togglePause
-                                        },
-                                    onSeekToRatio =
-                                        if (externalSession.isActiveRemotePlayback()) {
-                                            ::seekExternalToRatio
-                                        } else {
-                                            controller::seekToRatio
-                                        },
-                                    onSeekToLiveEdge =
-                                        if (externalSession.isActiveRemotePlayback()) {
-                                            ::seekExternalToLiveEdge
-                                        } else {
-                                            controller::seekToLiveEdge
-                                        },
-                                    onSetPlaybackRate = controller::setPlaybackRate,
-                                    playbackRateControlsEnabled = !externalSession.isActiveRemotePlayback(),
-                                    currentBrightnessRatio = deviceControls::currentBrightnessRatio,
-                                    onSetBrightnessRatio = deviceControls::setBrightnessRatio,
-                                    currentVolumeRatio = deviceControls::currentVolumeRatio,
-                                    onSetVolumeRatio = deviceControls::setVolumeRatio,
-                                )
-
-                                LazyColumn(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f),
-                                    contentPadding = PaddingValues(bottom = 18.dp),
-                                    verticalArrangement = Arrangement.spacedBy(18.dp),
-                                ) {
                                     item {
-                                        ExampleSourceSection(
+                                        ExampleQuickSourcePanel(
                                             palette = palette,
-                                            themeMode = themeMode,
                                             remoteStreamUrl = remoteStreamUrl,
-                                            onThemeModeChange = { themeMode = it },
                                             onRemoteStreamUrlChange = { remoteStreamUrl = it },
                                             onPickVideo = {
                                                 pickVideoLauncher.launch(arrayOf("video/*"))
@@ -1622,26 +1758,6 @@ internal fun PlayerHostApp(
                                     }
 
                                     item {
-                                        ExampleDolbyAcceptanceSection(
-                                            palette = palette,
-                                            presets = exampleDolbyAcceptanceCatalog,
-                                            selectedDrmKind = selectedDolbyDrmKind,
-                                            selectedProfile = selectedDolbyProfile,
-                                            selectedFps = selectedDolbyFps,
-                                            onDrmKindChange = { drmKind ->
-                                                selectedDolbyDrmKind = drmKind
-                                            },
-                                            onProfileChange = { profile ->
-                                                selectedDolbyProfile = profile
-                                            },
-                                            onFpsChange = { fps ->
-                                                selectedDolbyFps = fps
-                                            },
-                                            onPresetSelected = ::activateDolbyAcceptancePreset,
-                                        )
-                                    }
-
-                                    item {
                                         ExampleExternalPlaybackSection(
                                             palette = palette,
                                             routes = externalRoutes,
@@ -1685,7 +1801,7 @@ internal fun PlayerHostApp(
                                     }
 
                                     item {
-                                        ExamplePlaylistSection(
+                                        ExampleQueuePanel(
                                             palette = palette,
                                             playlistQueue = playlistSnapshot.queue,
                                             onFocusPlaylistItem = { itemId ->
@@ -1699,71 +1815,126 @@ internal fun PlayerHostApp(
                                         )
                                     }
 
-                                    item {
-                                        ExamplePluginDiagnosticsSection(
-                                            palette = palette,
-                                            sourceNormalizerSetting = sourceNormalizerSetting,
-                                            nativeFramePipelineSetting = nativeFramePipelineSetting,
-                                            sourceNormalizerPluginLibraryPaths = sourceNormalizerPluginLibraryPaths,
-                                            decoderMediaCodecPluginLibraryPaths =
-                                                decoderMediaCodecPluginLibraryPaths,
-                                            frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths,
-                                            pluginDiagnostics = controller.pluginDiagnostics,
-                                            hdrEvidencePresets =
-                                                exampleHdrEvidenceP0Presets +
-                                                    exampleDolbyAcceptanceHdrEvidencePresets(),
-                                            selectedHdrEvidencePreset = selectedHdrEvidencePreset,
-                                            isCapturingHdrEvidence = isCapturingHdrEvidence,
-                                            hdrEvidenceActiveSourceAvailable = controllerRebuildSource != null,
-                                            onSourceNormalizerSettingChange = ::applySourceNormalizerSetting,
-                                            onNativeFramePipelineSettingChange = ::applyNativeFramePipelineSetting,
-                                            onHdrEvidencePresetChange = { preset ->
-                                                selectedHdrEvidencePreset = preset
-                                            },
-                                            onCaptureHdrEvidence = ::captureHdrEvidence,
-                                        )
-                                    }
+                            }
+                        }
 
-                                    item {
-                                        ExampleResilienceSection(
-                                            palette = palette,
-                                            selectedProfile = selectedResilienceProfile,
-                                            isApplyingProfile = isApplyingResilienceProfile,
-                                            onApplyProfile = { profile ->
-                                                if (
-                                                    !isApplyingResilienceProfile &&
-                                                    profile != selectedResilienceProfile
-                                                ) {
-                                                    val previousProfile = selectedResilienceProfile
-                                                    selectedResilienceProfile = profile
-                                                    scope.launch {
-                                                        isApplyingResilienceProfile = true
-                                                        kotlinx.coroutines.yield()
-                                                        val result =
-                                                            runCatching {
-                                                                controller.setResiliencePolicy(profile.policy)
-                                                                playlistCoordinator.setResiliencePolicy(profile.policy)
-                                                            }
-                                                        if (result.isFailure) {
-                                                            selectedResilienceProfile = previousProfile
+                        selectedTab == ExampleHostTab.Diagnostics -> {
+                            ExampleDiagnosticsScreen {
+                                item {
+                                    ExampleDiagnosticsSummarySection(
+                                        palette = palette,
+                                        sourceLabel = displayedUiState.sourceLabel,
+                                        sourceProtocol =
+                                            controllerRebuildSource?.protocol?.name
+                                                ?: stringResource(R.string.example_diagnostics_none),
+                                        routeLabel =
+                                            externalSession?.routeName
+                                                ?: stringResource(R.string.example_diagnostics_none),
+                                        playbackOrigin = playbackOrigin,
+                                        sourceNormalizerSetting = sourceNormalizerSetting,
+                                        nativeFramePipelineSetting = nativeFramePipelineSetting,
+                                    )
+                                }
+                                item {
+                                    ExampleEventLogSection(
+                                        palette = palette,
+                                        entries = hostLogEntries,
+                                    )
+                                }
+                                item {
+                                    ExampleDolbyCatalogPanel(
+                                        palette = palette,
+                                        presets = exampleDolbyAcceptanceCatalog,
+                                        selectedDrmKind = selectedDolbyDrmKind,
+                                        selectedProfile = selectedDolbyProfile,
+                                        selectedFps = selectedDolbyFps,
+                                        onDrmKindChange = { drmKind ->
+                                            selectedDolbyDrmKind = drmKind
+                                        },
+                                        onProfileChange = { profile ->
+                                            selectedDolbyProfile = profile
+                                        },
+                                        onFpsChange = { fps ->
+                                            selectedDolbyFps = fps
+                                        },
+                                        onPresetPlayNow = { preset ->
+                                            activateDolbyAcceptancePreset(
+                                                preset,
+                                                ExamplePlaybackOrigin.DolbyAdHoc(preset.id),
+                                            )
+                                        },
+                                        onPresetAddToQueue = ::addDolbyPresetToQueue,
+                                    )
+                                }
+                                item {
+                                    ExamplePluginDiagnosticsSection(
+                                        palette = palette,
+                                        sourceNormalizerSetting = sourceNormalizerSetting,
+                                        nativeFramePipelineSetting = nativeFramePipelineSetting,
+                                        sourceNormalizerPluginLibraryPaths = sourceNormalizerPluginLibraryPaths,
+                                        decoderMediaCodecPluginLibraryPaths =
+                                            decoderMediaCodecPluginLibraryPaths,
+                                        frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths,
+                                        pluginDiagnostics = controller.pluginDiagnostics,
+                                        hdrEvidencePresets =
+                                            exampleHdrEvidenceP0Presets +
+                                                exampleDolbyAcceptanceHdrEvidencePresets(),
+                                        selectedHdrEvidencePreset = selectedHdrEvidencePreset,
+                                        isCapturingHdrEvidence = isCapturingHdrEvidence,
+                                        hdrEvidenceActiveSourceAvailable = controllerRebuildSource != null,
+                                        onSourceNormalizerSettingChange = ::applySourceNormalizerSetting,
+                                        onNativeFramePipelineSettingChange = ::applyNativeFramePipelineSetting,
+                                        onHdrEvidencePresetChange = { preset ->
+                                            selectedHdrEvidencePreset = preset
+                                        },
+                                        onCaptureHdrEvidence = ::captureHdrEvidence,
+                                    )
+                                }
+                                item {
+                                    ExampleResilienceSection(
+                                        palette = palette,
+                                        selectedProfile = selectedResilienceProfile,
+                                        isApplyingProfile = isApplyingResilienceProfile,
+                                        onApplyProfile = { profile ->
+                                            if (
+                                                !isApplyingResilienceProfile &&
+                                                profile != selectedResilienceProfile
+                                            ) {
+                                                val previousProfile = selectedResilienceProfile
+                                                selectedResilienceProfile = profile
+                                                scope.launch {
+                                                    isApplyingResilienceProfile = true
+                                                    kotlinx.coroutines.yield()
+                                                    val result =
+                                                        runCatching {
+                                                            controller.setResiliencePolicy(profile.policy)
+                                                            playlistCoordinator.setResiliencePolicy(profile.policy)
                                                         }
-                                                        isApplyingResilienceProfile = false
+                                                    if (result.isFailure) {
+                                                        selectedResilienceProfile = previousProfile
+                                                        recordHostLog(
+                                                            severity = ExampleHostLogSeverity.Error,
+                                                            title = context.getString(R.string.example_log_resilience_failed),
+                                                            detail = result.exceptionOrNull()?.localizedMessage,
+                                                        )
+                                                    } else {
+                                                        recordHostLog(
+                                                            severity = ExampleHostLogSeverity.Info,
+                                                            title = context.getString(R.string.example_log_resilience_applied),
+                                                            detail = context.getString(profile.titleRes),
+                                                        )
                                                     }
+                                                    isApplyingResilienceProfile = false
                                                 }
-                                            },
-                                        )
-                                    }
+                                            }
+                                        },
+                                    )
                                 }
                             }
                         }
 
                         else -> {
-                            LazyColumn(
-                                modifier = Modifier
-                                    .fillMaxSize(),
-                                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
-                                verticalArrangement = Arrangement.spacedBy(18.dp),
-                            ) {
+                            ExampleDownloadsScreen {
                                 item {
                                     ExampleDownloadHeader(
                                         palette = palette,
@@ -1863,6 +2034,63 @@ private fun Activity.supportsExamplePictureInPicture(): Boolean =
     Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
         packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
 
+@Composable
+private fun ExamplePlayScreen(
+    palette: ExampleHostPalette,
+    sourceLabel: String,
+    subtitle: String,
+    themeSelector: @Composable () -> Unit,
+    playerStage: @Composable () -> Unit,
+    content: LazyListScope.() -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 18.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        ExamplePlayerHeader(
+            sourceLabel = sourceLabel,
+            subtitle = subtitle,
+            palette = palette,
+        )
+        themeSelector()
+        playerStage()
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            contentPadding = PaddingValues(bottom = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun ExampleDiagnosticsScreen(
+    content: LazyListScope.() -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+        content = content,
+    )
+}
+
+@Composable
+private fun ExampleDownloadsScreen(
+    content: LazyListScope.() -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+        content = content,
+    )
+}
+
 private fun buildExamplePictureInPictureParams(autoEnter: Boolean): PictureInPictureParams {
     check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         "Picture in Picture params require Android O or newer."
@@ -1934,7 +2162,8 @@ private fun Context.hasNearbyWifiPermission(): Boolean =
         ) == PackageManager.PERMISSION_GRANTED
 
 private enum class ExampleHostTab {
-    Player,
+    Play,
+    Diagnostics,
     Downloads,
 }
 

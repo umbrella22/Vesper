@@ -66,15 +66,60 @@ class ExamplePlayerHeader extends StatelessWidget {
   }
 }
 
-class ExampleSourceSection extends StatelessWidget {
-  const ExampleSourceSection({
+class ExampleThemeModeControl extends StatelessWidget {
+  const ExampleThemeModeControl({
     super.key,
     required this.palette,
     required this.themeMode,
+    required this.onThemeModeChange,
+  });
+
+  final ExampleHostPalette palette;
+  final ExampleThemeMode themeMode;
+  final ValueChanged<ExampleThemeMode> onThemeModeChange;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: <Widget>[
+          ExampleThemeModeChip(
+            icon: Icons.brightness_auto_rounded,
+            label: ExampleThemeMode.system.title,
+            selected: themeMode == ExampleThemeMode.system,
+            palette: palette,
+            onTap: () => onThemeModeChange(ExampleThemeMode.system),
+          ),
+          const SizedBox(width: 10),
+          ExampleThemeModeChip(
+            icon: Icons.light_mode_rounded,
+            label: ExampleThemeMode.light.title,
+            selected: themeMode == ExampleThemeMode.light,
+            palette: palette,
+            onTap: () => onThemeModeChange(ExampleThemeMode.light),
+          ),
+          const SizedBox(width: 10),
+          ExampleThemeModeChip(
+            icon: Icons.dark_mode_rounded,
+            label: ExampleThemeMode.dark.title,
+            selected: themeMode == ExampleThemeMode.dark,
+            palette: palette,
+            onTap: () => onThemeModeChange(ExampleThemeMode.dark),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ExampleQuickSourcePanel extends StatelessWidget {
+  const ExampleQuickSourcePanel({
+    super.key,
+    required this.palette,
     required this.remoteUrlController,
     required this.localFilesEnabled,
     required this.dashEnabled,
-    required this.onThemeModeChange,
     required this.onPickVideo,
     required this.onUseHlsDemo,
     required this.onUseDashDemo,
@@ -84,11 +129,9 @@ class ExampleSourceSection extends StatelessWidget {
   });
 
   final ExampleHostPalette palette;
-  final ExampleThemeMode themeMode;
   final TextEditingController remoteUrlController;
   final bool localFilesEnabled;
   final bool dashEnabled;
-  final ValueChanged<ExampleThemeMode> onThemeModeChange;
   final VoidCallback onPickVideo;
   final VoidCallback onUseHlsDemo;
   final VoidCallback onUseDashDemo;
@@ -165,50 +208,6 @@ class ExampleSourceSection extends StatelessWidget {
             keyboardType: TextInputType.url,
             maxLines: 1,
             decoration: const InputDecoration(labelText: '远程流 URL'),
-          ),
-          const SizedBox(height: 14),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                '主题',
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  color: palette.title,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 10),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: <Widget>[
-                    ExampleThemeModeChip(
-                      icon: Icons.brightness_auto_rounded,
-                      label: ExampleThemeMode.system.title,
-                      selected: themeMode == ExampleThemeMode.system,
-                      palette: palette,
-                      onTap: () => onThemeModeChange(ExampleThemeMode.system),
-                    ),
-                    const SizedBox(width: 10),
-                    ExampleThemeModeChip(
-                      icon: Icons.light_mode_rounded,
-                      label: ExampleThemeMode.light.title,
-                      selected: themeMode == ExampleThemeMode.light,
-                      palette: palette,
-                      onTap: () => onThemeModeChange(ExampleThemeMode.light),
-                    ),
-                    const SizedBox(width: 10),
-                    ExampleThemeModeChip(
-                      icon: Icons.dark_mode_rounded,
-                      label: ExampleThemeMode.dark.title,
-                      selected: themeMode == ExampleThemeMode.dark,
-                      palette: palette,
-                      onTap: () => onThemeModeChange(ExampleThemeMode.dark),
-                    ),
-                  ],
-                ),
-              ),
-            ],
           ),
           const SizedBox(height: 14),
           FilledButton(

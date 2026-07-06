@@ -27,6 +27,25 @@ internal enum class ExamplePlayerSheet {
     Speed,
 }
 
+internal sealed interface ExamplePlaybackOrigin {
+    data class Queue(val itemId: String) : ExamplePlaybackOrigin
+    data class DolbyAdHoc(val presetId: String) : ExamplePlaybackOrigin
+}
+
+internal enum class ExampleHostLogSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+internal data class ExampleHostLogEntry(
+    val id: Long,
+    val atMillis: Long,
+    val severity: ExampleHostLogSeverity,
+    val title: String,
+    val detail: String? = null,
+)
+
 internal enum class ExampleThemeMode(
     @get:StringRes val titleRes: Int,
 ) {
@@ -231,6 +250,36 @@ internal const val ANDROID_LIVE_DVR_PLAYLIST_ITEM_ID: String = "live-dvr-accepta
 internal const val ANDROID_REMOTE_PLAYLIST_ITEM_ID: String = "custom-remote"
 internal const val ANDROID_LOCAL_PLAYLIST_ITEM_ID: String = "local-file"
 
+private const val DOLBY_PLAYLIST_ITEM_PREFIX: String = "dolby-"
+internal const val EXAMPLE_HOST_LOG_CAPACITY: Int = 80
+
+internal fun dolbyPlaylistItemId(presetId: String): String = "$DOLBY_PLAYLIST_ITEM_PREFIX$presetId"
+
+internal fun dolbyPresetIdFromPlaylistItemId(itemId: String): String? =
+    itemId.removePrefix(DOLBY_PLAYLIST_ITEM_PREFIX)
+        .takeIf { presetId -> itemId != presetId && presetId.isNotBlank() }
+
+internal fun canQueueDolbyPreset(preset: ExampleDolbyAcceptancePreset): Boolean = preset.isPlayable
+
+internal fun appendExampleHostLogEntry(
+    entries: List<ExampleHostLogEntry>,
+    entry: ExampleHostLogEntry,
+    capacity: Int = EXAMPLE_HOST_LOG_CAPACITY,
+): List<ExampleHostLogEntry> {
+    if (capacity <= 0) {
+        return emptyList()
+    }
+    return (listOf(entry) + entries).take(capacity)
+}
+
+internal fun shouldAdvancePlaylistOnFinished(
+    origin: ExamplePlaybackOrigin?,
+    activeItemId: String?,
+): Boolean =
+    origin is ExamplePlaybackOrigin.Queue &&
+        activeItemId != null &&
+        origin.itemId == activeItemId
+
 internal fun androidHlsDemoSource(context: Context? = null): VesperPlayerSource =
     VesperPlayerSource.hls(
         uri = ANDROID_HLS_DEMO_URL,
@@ -328,6 +377,25 @@ internal fun examplePlaylistQueue(
                             ),
                         )
                     }
+
+                else ->
+                    dolbyPresetIdFromPlaylistItemId(itemId)
+                        ?.let(::exampleDolbyAcceptancePresetById)
+                        ?.takeIf(::canQueueDolbyPreset)
+                        ?.let { preset ->
+                            add(
+                                VesperPlaylistQueueItem(
+                                    itemId = itemId,
+                                    source = preset.source,
+                                    preloadProfile =
+                                        VesperPlaylistItemPreloadProfile(
+                                            expectedMemoryBytes = 256 * 1024L,
+                                            expectedDiskBytes = 512 * 1024L,
+                                            warmupWindowMs = 30_000L,
+                                        ),
+                                ),
+                            )
+                        }
             }
         }
     }

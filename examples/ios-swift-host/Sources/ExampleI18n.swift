@@ -22,7 +22,9 @@ enum ExampleI18n {
     static var themeSystem: String { string("example.theme.system") }
     static var themeLight: String { string("example.theme.light") }
     static var themeDark: String { string("example.theme.dark") }
-    static var tabPlayer: String { string("example.tab.player") }
+    static var tabPlay: String { string("example.tab.play") }
+    static var tabPlayer: String { tabPlay }
+    static var tabDiagnostics: String { string("example.tab.diagnostics") }
     static var tabDownloads: String { string("example.tab.downloads") }
 
     static var sourcesTitle: String { string("example.sources.title") }
@@ -58,6 +60,12 @@ enum ExampleI18n {
     static var dolbyAcceptanceDirectRouteMessage: String {
         string("example.dolby_acceptance.direct_route_message")
     }
+    static var dolbyAcceptancePlayNow: String { string("example.dolby_acceptance.play_now") }
+    static var dolbyAcceptanceAddToQueue: String { string("example.dolby_acceptance.add_to_queue") }
+    static var queueTitle: String { string("example.queue.title") }
+    static var queueSubtitle: String { string("example.queue.subtitle") }
+    static var queueEmpty: String { string("example.queue.empty") }
+    static var queueManage: String { string("example.queue.manage") }
     static var playlistTitle: String { string("example.playlist.title") }
     static var playlistSubtitle: String { string("example.playlist.subtitle") }
     static var playlistEmpty: String { string("example.playlist.empty") }
@@ -66,6 +74,33 @@ enum ExampleI18n {
     static var playlistStatusNearVisible: String { string("example.playlist.status_near_visible") }
     static var playlistStatusPrefetch: String { string("example.playlist.status_prefetch") }
     static var playlistStatusHidden: String { string("example.playlist.status_hidden") }
+    static var diagnosticsSummaryTitle: String { string("example.diagnostics.summary_title") }
+    static var diagnosticsSummarySubtitle: String { string("example.diagnostics.summary_subtitle") }
+    static var diagnosticsSource: String { string("example.diagnostics.source") }
+    static var diagnosticsProtocol: String { string("example.diagnostics.protocol") }
+    static var diagnosticsRoute: String { string("example.diagnostics.route") }
+    static var diagnosticsOrigin: String { string("example.diagnostics.origin") }
+    static var diagnosticsSourceNormalizer: String {
+        string("example.diagnostics.source_normalizer")
+    }
+    static var diagnosticsNativeFrame: String { string("example.diagnostics.native_frame") }
+    static var diagnosticsOriginNone: String { string("example.diagnostics.origin_none") }
+    static func diagnosticsOriginQueue(_ itemId: String) -> String {
+        string("example.diagnostics.origin_queue", itemId)
+    }
+    static func diagnosticsOriginDolby(_ presetId: String) -> String {
+        string("example.diagnostics.origin_dolby", presetId)
+    }
+    static var diagnosticsNone: String { string("example.diagnostics.none") }
+    static var eventLogTitle: String { string("example.event_log.title") }
+    static var eventLogSubtitle: String { string("example.event_log.subtitle") }
+    static var eventLogEmpty: String { string("example.event_log.empty") }
+    static var logSourceSelected: String { string("example.log.source_selected") }
+    static var logDolbyPlayNow: String { string("example.log.dolby_play_now") }
+    static var logDolbyAddedToQueue: String { string("example.log.dolby_added_to_queue") }
+    static var logPluginModeChange: String { string("example.log.plugin_mode_change") }
+    static var logDownloadCreateFailure: String { string("example.log.download_create_failure") }
+    static var logHdrEvidenceResult: String { string("example.log.hdr_evidence_result") }
     static var pictureInPictureTitle: String { string("example.picture_in_picture.title") }
     static var pictureInPictureSubtitle: String { string("example.picture_in_picture.subtitle") }
     static var pictureInPictureEnable: String { string("example.picture_in_picture.enable") }

@@ -19,6 +19,74 @@ void main() {
     );
   });
 
+  test('dolby ad-hoc origin does not advance playlist on finished', () {
+    expect(
+      shouldAdvancePlaylistOnFinished(
+        origin: const ExampleDolbyAdHocPlaybackOrigin(
+          'DOLBY-DV-P5-24-HLS-CLEAR',
+        ),
+        activeItemId: flutterHlsPlaylistItemId,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldAdvancePlaylistOnFinished(
+        origin: const ExampleQueuePlaybackOrigin(flutterDashPlaylistItemId),
+        activeItemId: flutterHlsPlaylistItemId,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldAdvancePlaylistOnFinished(
+        origin: const ExampleQueuePlaybackOrigin(flutterHlsPlaylistItemId),
+        activeItemId: flutterHlsPlaylistItemId,
+      ),
+      isTrue,
+    );
+  });
+
+  test('next playlist item only advances after current item', () {
+    expect(
+      nextPlaylistItemIdOnFinished(
+        playlistItemIds: const <String>[
+          flutterHlsPlaylistItemId,
+          flutterDashPlaylistItemId,
+        ],
+        activeItemId: flutterHlsPlaylistItemId,
+      ),
+      flutterDashPlaylistItemId,
+    );
+    expect(
+      nextPlaylistItemIdOnFinished(
+        playlistItemIds: const <String>[
+          flutterHlsPlaylistItemId,
+          flutterDashPlaylistItemId,
+        ],
+        activeItemId: flutterDashPlaylistItemId,
+      ),
+      isNull,
+    );
+  });
+
+  test('event log is bounded newest first', () {
+    var entries = const <ExampleHostLogEntry>[];
+    for (var i = 0; i < 83; i += 1) {
+      entries = appendExampleHostLogEntry(
+        entries,
+        ExampleHostLogEntry(
+          id: i,
+          atMillis: i,
+          severity: ExampleHostLogSeverity.info,
+          title: 'entry-$i',
+        ),
+      );
+    }
+
+    expect(entries, hasLength(exampleHostLogCapacity));
+    expect(entries.first.id, 82);
+    expect(entries.last.id, 3);
+  });
+
   test('go live falls back to seekable end for live dvr', () {
     const timeline = VesperTimeline(
       kind: VesperTimelineKind.liveDvr,

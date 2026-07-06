@@ -51,6 +51,10 @@ extension _PlayerHostExternalPlaybackActions on _PlayerHostPageState {
         _updateState(() {
           _externalPlaybackPausedLocalPlayback = false;
           _setExternalPlaybackMessage('外部播放已断开，本地播放已恢复。', force: true);
+          _appendHostLog(
+            title: '外部播放已断开',
+            detail: event.routeName ?? event.routeId,
+          );
         });
       case VesperExternalPlaybackSessionEventKind.loaded:
         _updateState(() {
@@ -87,6 +91,19 @@ extension _PlayerHostExternalPlaybackActions on _PlayerHostPageState {
             event.message ?? '外部播放发生错误。',
             diagnostic: true,
           );
+          _appendHostLog(
+            severity: ExampleHostLogSeverity.error,
+            title: '外部播放错误',
+            detail: event.message,
+          );
+        });
+      case VesperExternalPlaybackSessionEventKind.unknown:
+        _updateState(() {
+          _appendHostLog(
+            severity: ExampleHostLogSeverity.warning,
+            title: '未知外部播放事件',
+            detail: event.rawKind,
+          );
         });
     }
   }
@@ -113,9 +130,7 @@ extension _PlayerHostExternalPlaybackActions on _PlayerHostPageState {
 
   Future<void> _loadCurrentExternalMedia({required String routeLabel}) async {
     final controller = _controller ?? await _controllerFuture;
-    final source = _activePlaylistItemId == null
-        ? null
-        : _playlistSourceForItem(_activePlaylistItemId!);
+    final source = _activePlaybackSource();
     if (source == null) {
       return;
     }

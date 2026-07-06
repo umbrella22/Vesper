@@ -23,6 +23,7 @@
     <string name="example_theme_light">浅色</string>
     <string name="example_theme_dark">深色</string>
     <string name="example_tab_player">播放器</string>
+    <string name="example_tab_diagnostics">诊断</string>
     <string name="example_tab_downloads">下载</string>
 
     <string name="example_sources_title">媒体源</string>
@@ -44,6 +45,8 @@
     <string name="example_dolby_acceptance_empty">当前筛选下没有 Dolby 预设。</string>
     <string name="example_dolby_acceptance_pending_toast">这个 Dolby 预设仍是 pending，暂不能播放。</string>
     <string name="example_dolby_acceptance_direct_route_toast">已切到 direct native 播放用于 Dolby 验收。</string>
+    <string name="example_dolby_acceptance_play_now">立即播放</string>
+    <string name="example_dolby_acceptance_add_to_queue">加入队列</string>
     <string name="example_error_terminal_title">播放已停止</string>
     <string name="example_error_dolby_p5_device_unsupported">当前设备不支持这个 Dolby Vision P5 / Widevine 播放组合。</string>
     <string name="example_error_widevine_network_exhausted">Widevine license 或 provisioning 请求失败，已重试 %1$s 次。</string>
@@ -79,6 +82,10 @@
     <string name="example_playlist_title">播放列表</string>
     <string name="example_playlist_subtitle">点击演示流、本地视频或自定义远程 URL 后，媒体源会按加入顺序出现在这里。</string>
     <string name="example_playlist_empty">播放列表里还没有媒体源。</string>
+    <string name="example_queue_title">待播放队列</string>
+    <string name="example_queue_subtitle">这里只显示明确准备连续播放的媒体源。Dolby 预设默认留在诊断页，除非手动加入。</string>
+    <string name="example_queue_manage">管理队列</string>
+    <string name="example_queue_show_less">收起</string>
     <string name="example_playlist_status_current">当前播放</string>
     <string name="example_playlist_status_visible">当前可见</string>
     <string name="example_playlist_status_near_visible">临近可见</string>
@@ -194,6 +201,39 @@
     <string name="example_plugins_hdr_evidence_network_control_label">网络失败对照</string>
     <string name="example_plugins_hdr_evidence_written">HDR evidence bundle 已写入：%1$s</string>
     <string name="example_plugins_hdr_evidence_failed">HDR evidence capture 失败：%1$s</string>
+
+    <string name="example_diagnostics_summary_title">会话摘要</string>
+    <string name="example_diagnostics_summary_subtitle">当前宿主会话的 source、路由和运行模式。</string>
+    <string name="example_diagnostics_source">source</string>
+    <string name="example_diagnostics_protocol">协议</string>
+    <string name="example_diagnostics_route">路由</string>
+    <string name="example_diagnostics_origin">来源</string>
+    <string name="example_diagnostics_source_normalizer">normalizer</string>
+    <string name="example_diagnostics_native_frame">native frame</string>
+    <string name="example_diagnostics_origin_queue">队列：%1$s</string>
+    <string name="example_diagnostics_origin_dolby">Dolby 临时播放：%1$s</string>
+    <string name="example_diagnostics_origin_none">无</string>
+    <string name="example_diagnostics_none">无</string>
+
+    <string name="example_event_log_title">事件日志</string>
+    <string name="example_event_log_subtitle">示例 App 内部记录的最近宿主操作和诊断事件。</string>
+    <string name="example_event_log_empty">暂无宿主事件。</string>
+    <string name="example_event_log_info">INFO</string>
+    <string name="example_event_log_warning">WARN</string>
+    <string name="example_event_log_error">ERROR</string>
+    <string name="example_log_source_selected">已选择媒体源</string>
+    <string name="example_log_dolby_play_now">已选择 Dolby 预设</string>
+    <string name="example_log_dolby_added_to_queue">Dolby 预设已加入队列</string>
+    <string name="example_log_controller_rebuilt">Controller 已重建</string>
+    <string name="example_log_source_normalizer_changed">SourceNormalizer 模式已切换</string>
+    <string name="example_log_native_frame_changed">Native-frame 模式已切换</string>
+    <string name="example_log_hdr_evidence_written">HDR evidence 已写入</string>
+    <string name="example_log_hdr_evidence_failed">HDR evidence 失败</string>
+    <string name="example_log_download_create_failed">创建下载任务失败</string>
+    <string name="example_log_external_disconnected">外部路由已断开</string>
+    <string name="example_log_external_event">外部播放事件</string>
+    <string name="example_log_resilience_applied">恢复策略已应用</string>
+    <string name="example_log_resilience_failed">恢复策略应用失败</string>
 
     <string name="example_sheet_menu_subtitle">打开音轨、字幕、画质和速度控制，同时避免播放器浮层过于拥挤。</string>
     <string name="example_sheet_quality_subtitle">切换自适应视频，或将流固定到某个具体画质轨道。</string>

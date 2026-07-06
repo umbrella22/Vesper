@@ -56,6 +56,37 @@ extension _PlayerHostLayout on _PlayerHostPageState {
     );
   }
 
+  Widget _buildDiagnosticsFutureContent(
+    BuildContext context, {
+    required ExampleHostPalette palette,
+  }) {
+    return FutureBuilder<VesperPlayerController>(
+      future: _controllerFuture,
+      builder: (context, asyncSnapshot) {
+        if (asyncSnapshot.hasError && !asyncSnapshot.hasData) {
+          return ExampleErrorState(error: asyncSnapshot.error);
+        }
+
+        final controller = asyncSnapshot.data ?? _controller;
+        if (controller == null) {
+          return const ExampleLoadingState();
+        }
+
+        return ValueListenableBuilder<VesperPlayerSnapshot>(
+          valueListenable: controller.snapshotListenable,
+          builder: (context, snapshot, _) {
+            return _buildDiagnosticsLayout(
+              context,
+              controller,
+              snapshot,
+              palette,
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _buildPictureInPicturePresentationContent() {
     return FutureBuilder<VesperPlayerController>(
       future: _controllerFuture,
@@ -109,6 +140,12 @@ extension _PlayerHostLayout on _PlayerHostPageState {
             subtitle: snapshot.subtitle,
             palette: palette,
           ),
+          const SizedBox(height: 14),
+          ExampleThemeModeControl(
+            palette: palette,
+            themeMode: widget.themeMode,
+            onThemeModeChange: widget.onThemeModeChange,
+          ),
           if (transientError != null) ...<Widget>[
             const SizedBox(height: 18),
             ExampleInlineControllerError(error: transientError),
@@ -132,16 +169,14 @@ extension _PlayerHostLayout on _PlayerHostPageState {
             ),
           ),
           const SizedBox(height: 18),
-          ExampleSourceSection(
+          ExampleQuickSourcePanel(
             palette: palette,
-            themeMode: widget.themeMode,
             remoteUrlController: _remoteUrlController,
             localFilesEnabled: snapshot.capabilities.supportsLocalFiles,
             dashEnabled: snapshot.capabilities.supportsDash,
             dashUnavailableMessage: snapshot.capabilities.supportsDash
                 ? null
                 : '当前平台宿主暂不支持 DASH 演示。',
-            onThemeModeChange: widget.onThemeModeChange,
             onPickVideo: () => unawaited(_pickLocalVideo(controller)),
             onUseHlsDemo: () => unawaited(
               _activatePlaylistSource(
@@ -167,69 +202,23 @@ extension _PlayerHostLayout on _PlayerHostPageState {
             onOpenRemote: () => unawaited(_playCustomUrl(controller)),
           ),
           const SizedBox(height: 18),
-          ExamplePlaylistSection(
+          ExampleQueuePanel(
             palette: palette,
             playlistItems: playlistItems,
             onSelectItem: (itemId) =>
                 unawaited(_focusPlaylistItem(controller, itemId)),
-          ),
-          const SizedBox(height: 18),
-          ExampleDolbyAcceptanceSection(
-            palette: palette,
-            presets: exampleDolbyAcceptanceCatalog,
-            selectedDrmKind: _selectedDolbyDrmKind,
-            selectedProfile: _selectedDolbyProfile,
-            selectedFps: _selectedDolbyFps,
-            isPresetPlayable: _isDolbyAcceptancePresetPlayableOnCurrentPlatform,
-            disabledReasonForPreset: _dolbyAcceptancePresetUnavailableReason,
-            onDrmKindChanged: (value) {
-              _updateState(() {
-                _selectedDolbyDrmKind = value;
-              });
+            onManageQueue: () {
+              showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                builder: (context) => ExampleQueueSheet(
+                  palette: palette,
+                  playlistItems: playlistItems,
+                  onSelectItem: (itemId) =>
+                      unawaited(_focusPlaylistItem(controller, itemId)),
+                ),
+              );
             },
-            onProfileChanged: (value) {
-              _updateState(() {
-                _selectedDolbyProfile = value;
-              });
-            },
-            onFpsChanged: (value) {
-              _updateState(() {
-                _selectedDolbyFps = value;
-              });
-            },
-            onPresetSelected: (preset) =>
-                unawaited(_activateDolbyAcceptancePreset(controller, preset)),
-          ),
-          const SizedBox(height: 18),
-          ExamplePluginDiagnosticsSection(
-            palette: palette,
-            sourceNormalizerSetting: _sourceNormalizerSetting,
-            sourceNormalizerPluginLibraryPaths:
-                _sourceNormalizerPluginLibraryPaths,
-            frameProcessorPluginLibraryPaths: _frameProcessorPluginLibraryPaths,
-            pluginDiagnostics: controller.pluginDiagnostics,
-            isCapturingHdrEvidence: _isCapturingHdrEvidence,
-            hdrEvidenceActiveSourceAvailable:
-                _selectedHdrEvidencePresetUsesNetworkControl ||
-                exampleDolbyAcceptancePresetById(
-                      _selectedHdrEvidencePreset.sampleId,
-                    ) !=
-                    null ||
-                _activePlaylistItemId != null,
-            hdrEvidencePresets: <ExampleHdrEvidenceSamplePreset>[
-              ...exampleHdrEvidenceP0Presets,
-              ...exampleDolbyAcceptanceHdrEvidencePresets(),
-            ],
-            selectedHdrEvidencePreset: _selectedHdrEvidencePreset,
-            onSourceNormalizerSettingChange: (setting) =>
-                unawaited(_applySourceNormalizerSetting(setting)),
-            onHdrEvidencePresetChange: (preset) {
-              _updateState(() {
-                _selectedHdrEvidencePreset = preset;
-              });
-            },
-            onCaptureHdrEvidence: () =>
-                unawaited(_captureHdrEvidenceBundle(controller)),
           ),
           const SizedBox(height: 18),
           ExampleSystemPlaybackSection(
@@ -255,6 +244,99 @@ extension _PlayerHostLayout on _PlayerHostPageState {
             onRequestPictureInPicture: () =>
                 unawaited(_requestPictureInPicture(controller)),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDiagnosticsLayout(
+    BuildContext context,
+    VesperPlayerController controller,
+    VesperPlayerSnapshot snapshot,
+    ExampleHostPalette palette,
+  ) {
+    final activeSource = _activePlaybackSource();
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          ExampleDiagnosticsSummarySection(
+            palette: palette,
+            sourceLabel: snapshot.sourceLabel.isEmpty
+                ? snapshot.title
+                : snapshot.sourceLabel,
+            sourceProtocol: activeSource?.protocol.name ?? '无',
+            routeLabel: _diagnosticsRouteLabel(),
+            playbackOrigin: _playbackOrigin,
+            sourceNormalizerSetting: _sourceNormalizerSetting,
+          ),
+          const SizedBox(height: 18),
+          ExampleEventLogSection(palette: palette, entries: _hostLogEntries),
+          const SizedBox(height: 18),
+          ExampleDolbyCatalogPanel(
+            palette: palette,
+            presets: exampleDolbyAcceptanceCatalog,
+            selectedDrmKind: _selectedDolbyDrmKind,
+            selectedProfile: _selectedDolbyProfile,
+            selectedFps: _selectedDolbyFps,
+            isPresetPlayable: _isDolbyAcceptancePresetPlayableOnCurrentPlatform,
+            disabledReasonForPreset: _dolbyAcceptancePresetUnavailableReason,
+            onDrmKindChanged: (value) {
+              _updateState(() {
+                _selectedDolbyDrmKind = value;
+              });
+            },
+            onProfileChanged: (value) {
+              _updateState(() {
+                _selectedDolbyProfile = value;
+              });
+            },
+            onFpsChanged: (value) {
+              _updateState(() {
+                _selectedDolbyFps = value;
+              });
+            },
+            onPresetPlayNow: (preset) => unawaited(
+              _activateDolbyAcceptancePreset(
+                controller,
+                preset,
+                origin: ExampleDolbyAdHocPlaybackOrigin(preset.id),
+              ),
+            ),
+            onPresetAddToQueue: _addDolbyPresetToQueue,
+          ),
+          const SizedBox(height: 18),
+          ExamplePluginDiagnosticsSection(
+            palette: palette,
+            sourceNormalizerSetting: _sourceNormalizerSetting,
+            sourceNormalizerPluginLibraryPaths:
+                _sourceNormalizerPluginLibraryPaths,
+            frameProcessorPluginLibraryPaths: _frameProcessorPluginLibraryPaths,
+            pluginDiagnostics: controller.pluginDiagnostics,
+            isCapturingHdrEvidence: _isCapturingHdrEvidence,
+            hdrEvidenceActiveSourceAvailable:
+                _selectedHdrEvidencePresetUsesNetworkControl ||
+                exampleDolbyAcceptancePresetById(
+                      _selectedHdrEvidencePreset.sampleId,
+                    ) !=
+                    null ||
+                activeSource != null,
+            hdrEvidencePresets: <ExampleHdrEvidenceSamplePreset>[
+              ...exampleHdrEvidenceP0Presets,
+              ...exampleDolbyAcceptanceHdrEvidencePresets(),
+            ],
+            selectedHdrEvidencePreset: _selectedHdrEvidencePreset,
+            onSourceNormalizerSettingChange: (setting) =>
+                unawaited(_applySourceNormalizerSetting(setting)),
+            onHdrEvidencePresetChange: (preset) {
+              _updateState(() {
+                _selectedHdrEvidencePreset = preset;
+              });
+            },
+            onCaptureHdrEvidence: () =>
+                unawaited(_captureHdrEvidenceBundle(controller)),
+          ),
           const SizedBox(height: 18),
           ExampleResilienceSection(
             palette: palette,
@@ -272,6 +354,15 @@ extension _PlayerHostLayout on _PlayerHostPageState {
         ],
       ),
     );
+  }
+
+  String _diagnosticsRouteLabel() {
+    if (_sourceNormalizerSetting == ExampleSourceNormalizerSetting.disabled ||
+        _sourceNormalizerSetting ==
+            ExampleSourceNormalizerSetting.diagnosticsOnly) {
+      return 'direct native';
+    }
+    return _sourceNormalizerSetting.title;
   }
 
   Widget _buildLandscapeLayout(

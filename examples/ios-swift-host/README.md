@@ -9,11 +9,14 @@ Use this example as a reference for:
 - Selecting local videos via the Photos picker
 - Playing HLS or local files through `AVPlayer`
 - Switching themes, sources, tracks, and ABR policies
+- Keeping playback, diagnostics, and download workflows separated
 
 ## Features Demonstrated
 
+- Three workspaces: `Play`, `Diagnostics`, and `Downloads`
 - System / Light / Dark theme modes
 - Fullscreen stage
+- Compact playback queue with a full manage-queue sheet
 - Quality / audio / subtitle / playback-speed bottom sheets
 - AirPlay route picker in portrait and fullscreen playback
 - Double-tap seek
@@ -26,10 +29,29 @@ Use this example as a reference for:
   plugin when available, but does not open frame sessions or alter rendering.
 - Dolby Browser Test Kit HLS presets, including locally configured FairPlay
   CBCS validation rows for real devices.
+- Bounded in-app event log for host UI actions such as source selection,
+  Dolby actions, plugin mode changes, external-route events, and HDR evidence
+  capture results.
 
 Demo URLs are owned by the example. The reusable package under
 [`lib/ios/VesperPlayerKit`](../../lib/ios/VesperPlayerKit/) only exposes
 generic `VesperPlayerSource` APIs.
+
+## Host Workspaces
+
+`Play` is the primary playback surface. It keeps the player stage, theme
+control, quick source actions, system playback controls, Picture in Picture,
+and the compact queue in the first workflow.
+
+`Diagnostics` contains the session summary, bounded event log, Dolby catalog,
+plugin diagnostics, HDR evidence capture, and resilience controls. Dolby
+presets default to `Play now`, which starts that preset without changing the
+real playback queue. A preset enters continuous playback only when the user
+selects `Add to queue`.
+
+`Downloads` stays isolated for download regression testing. The event log is an
+example-host operation log; it does not read Logcat, native logs, or system
+diagnostic streams.
 
 ## Local FairPlay Configuration
 

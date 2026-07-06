@@ -172,7 +172,8 @@ struct PlayerHostView: View {
     @State private var pictureInPictureController: AVPictureInPictureController?
     @State private var pictureInPictureDelegate = ExamplePictureInPictureDelegate()
     @State private var currentSurfaceView: PlayerSurfaceView?
-    @State private var selectedTab: ExampleHostTab = .player
+    @State private var selectedTab: ExampleHostTab = .play
+    @State private var isManageQueuePresented = false
     @State private var selectedResilienceProfile: ExampleResilienceProfile = .balanced
     @State private var sourceNormalizerSetting: ExampleSourceNormalizerSetting = .preflightOnly
     @State private var nativeFramePipelineSetting: ExampleNativeFramePipelineSetting = .disabled
@@ -185,6 +186,9 @@ struct PlayerHostView: View {
     @State private var hasHandledFinishedPlayback = false
     @State private var controlsHideTask: Task<Void, Never>?
     @State private var activeDirectSource: VesperPlayerSource?
+    @State private var playbackOrigin: ExamplePlaybackOrigin?
+    @State private var hostLogEntries: [ExampleHostLogEntry] = []
+    @State private var hostLogNextId: Int64 = 1
     @State private var queuedRemoteSource: VesperPlayerSource?
     @State private var queuedLocalSource: VesperPlayerSource?
     @State private var playlistItemIds: [String] = [IOS_HLS_PLAYLIST_ITEM_ID]
@@ -296,14 +300,23 @@ struct PlayerHostView: View {
                     .ignoresSafeArea()
             } else {
                 TabView(selection: $selectedTab) {
-                    playerPage(
+                    playPage(
                         palette: palette,
                         uiState: uiState,
                         playlistSnapshot: playlistSnapshot
                     )
-                    .tag(ExampleHostTab.player)
+                    .tag(ExampleHostTab.play)
                     .tabItem {
-                        Label(ExampleI18n.tabPlayer, systemImage: "play.rectangle.fill")
+                        Label(ExampleI18n.tabPlay, systemImage: "play.rectangle.fill")
+                    }
+
+                    diagnosticsPage(
+                        palette: palette,
+                        uiState: uiState
+                    )
+                    .tag(ExampleHostTab.diagnostics)
+                    .tabItem {
+                        Label(ExampleI18n.tabDiagnostics, systemImage: "stethoscope")
                     }
 
                     downloadPage(
@@ -351,7 +364,15 @@ struct PlayerHostView: View {
                 )
                 return
             }
-            selectSourceForPlayback(source)
+            if let presetId = dolbyPresetIdFromPlaylistItemId(activeItemId),
+               let preset = exampleDolbyAcceptancePreset(id: presetId) {
+                activateDolbyAcceptancePreset(
+                    preset,
+                    origin: .queue(itemId: activeItemId)
+                )
+            } else {
+                selectSourceForPlayback(source, origin: .queue(itemId: activeItemId))
+            }
             controlsVisible = true
             handlePlaybackCompletionIfNeeded(
                 playbackState: controller.uiState.playbackState,
@@ -433,6 +454,18 @@ struct PlayerHostView: View {
             .presentationDetents([.height(sheetHeight(for: sheet))])
             .presentationDragIndicator(.hidden)
         }
+        .sheet(isPresented: $isManageQueuePresented) {
+            ExampleQueueManagementSheet(
+                palette: palette,
+                playlistQueue: playlistSnapshot.queue,
+                onFocusPlaylistItem: { itemId in
+                    focusPlaylistItem(itemId)
+                    isManageQueuePresented = false
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
         .alert(
             ExampleI18n.downloadSaveToPhotosTitle,
             isPresented: Binding(
@@ -453,7 +486,7 @@ struct PlayerHostView: View {
     }
 
     @ViewBuilder
-    private func playerPage(
+    private func playPage(
         palette: ExampleHostPalette,
         uiState: PlayerHostUiState,
         playlistSnapshot: VesperPlaylistSnapshot
@@ -466,68 +499,91 @@ struct PlayerHostView: View {
                     palette: palette
                 )
 
+                ExampleThemeModeControl(
+                    palette: palette,
+                    themeMode: themeMode,
+                    onThemeModeChange: { themeModeRaw = $0.rawValue }
+                )
+
                 playerStage(uiState: uiState)
                     .frame(height: 248)
 
-                ExampleSourceSection(
+                ExampleQuickSourcePanel(
                     palette: palette,
-                    themeMode: themeMode,
                     remoteStreamUrl: $remoteStreamUrl,
                     hostMessage: hostMessage,
                     dashDemoEnabled: true,
                     dashDemoNote: nil,
-                    onThemeModeChange: { themeModeRaw = $0.rawValue },
                     onPickVideo: {
                         pickVideo()
                     },
                     onUseHlsDemo: {
-                        hostMessage = nil
-                        let nextPlaylistItemIds = enqueuePlaylistItem(
-                            playlistItemIds,
-                            itemId: IOS_HLS_PLAYLIST_ITEM_ID
+                        enqueueAndFocusPlaylistItem(
+                            IOS_HLS_PLAYLIST_ITEM_ID,
+                            logTitle: ExampleI18n.logSourceSelected,
+                            logDetail: ExampleI18n.hlsDemoLabel
                         )
-                        applyPlaylistQueue(
-                            focusItemId: IOS_HLS_PLAYLIST_ITEM_ID,
-                            playlistItemIds: nextPlaylistItemIds
-                        )
-                        controlsVisible = true
                     },
                     onUseDashDemo: {
-                        hostMessage = nil
-                        let nextPlaylistItemIds = enqueuePlaylistItem(
-                            playlistItemIds,
-                            itemId: IOS_DASH_PLAYLIST_ITEM_ID
+                        enqueueAndFocusPlaylistItem(
+                            IOS_DASH_PLAYLIST_ITEM_ID,
+                            logTitle: ExampleI18n.logSourceSelected,
+                            logDetail: ExampleI18n.dashDemoLabel
                         )
-                        applyPlaylistQueue(
-                            focusItemId: IOS_DASH_PLAYLIST_ITEM_ID,
-                            playlistItemIds: nextPlaylistItemIds
-                        )
-                        controlsVisible = true
                     },
                     onUseLiveDvrAcceptance: {
-                        hostMessage = nil
-                        let nextPlaylistItemIds = enqueuePlaylistItem(
-                            playlistItemIds,
-                            itemId: IOS_LIVE_DVR_PLAYLIST_ITEM_ID
+                        enqueueAndFocusPlaylistItem(
+                            IOS_LIVE_DVR_PLAYLIST_ITEM_ID,
+                            logTitle: ExampleI18n.logSourceSelected,
+                            logDetail: ExampleI18n.liveDvrAcceptanceLabel
                         )
-                        applyPlaylistQueue(
-                            focusItemId: IOS_LIVE_DVR_PLAYLIST_ITEM_ID,
-                            playlistItemIds: nextPlaylistItemIds
-                        )
-                        controlsVisible = true
                     },
                     onOpenRemote: {
                         openRemoteSource()
                     }
                 )
 
-                ExamplePlaylistSection(
+                ExampleQueuePanel(
                     palette: palette,
                     playlistQueue: playlistSnapshot.queue,
-                    onFocusPlaylistItem: focusPlaylistItem
+                    onFocusPlaylistItem: focusPlaylistItem,
+                    onManageQueue: { isManageQueuePresented = true }
                 )
 
-                ExampleDolbyAcceptanceSection(
+                ExamplePictureInPictureSection(
+                    palette: palette,
+                    enabled: $pictureInPictureEnabled,
+                    onRequestPictureInPicture: requestPictureInPicture
+                )
+
+            }
+            .padding(20)
+        }
+    }
+
+    @ViewBuilder
+    private func diagnosticsPage(
+        palette: ExampleHostPalette,
+        uiState: PlayerHostUiState
+    ) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                ExampleDiagnosticsSummarySection(
+                    palette: palette,
+                    sourceLabel: uiState.sourceLabel.isEmpty ? ExampleI18n.diagnosticsNone : uiState.sourceLabel,
+                    sourceProtocol: activePlaybackSource()?.protocol.rawValue ?? ExampleI18n.diagnosticsNone,
+                    routeLabel: diagnosticsRouteLabel(),
+                    playbackOrigin: playbackOrigin,
+                    sourceNormalizerSetting: sourceNormalizerSetting,
+                    nativeFramePipelineSetting: nativeFramePipelineSetting
+                )
+
+                ExampleEventLogSection(
+                    palette: palette,
+                    entries: hostLogEntries
+                )
+
+                ExampleDolbyCatalogPanel(
                     palette: palette,
                     presets: exampleDolbyAcceptanceCatalog,
                     selectedDrmKind: selectedDolbyDrmKind,
@@ -536,13 +592,13 @@ struct PlayerHostView: View {
                     onDrmKindChange: { selectedDolbyDrmKind = $0 },
                     onProfileChange: { selectedDolbyProfile = $0 },
                     onFpsChange: { selectedDolbyFps = $0 },
-                    onPresetSelected: activateDolbyAcceptancePreset
-                )
-
-                ExamplePictureInPictureSection(
-                    palette: palette,
-                    enabled: $pictureInPictureEnabled,
-                    onRequestPictureInPicture: requestPictureInPicture
+                    onPresetPlayNow: { preset in
+                        activateDolbyAcceptancePreset(
+                            preset,
+                            origin: .dolbyAdHoc(presetId: preset.id)
+                        )
+                    },
+                    onPresetAddToQueue: addDolbyPresetToQueue
                 )
 
                 ExamplePluginDiagnosticsSection(
@@ -685,12 +741,81 @@ struct PlayerHostView: View {
         )
     }
 
+    private func appendHostLog(
+        severity: ExampleHostLogSeverity = .info,
+        title: String,
+        detail: String? = nil
+    ) {
+        let entry = ExampleHostLogEntry(
+            id: hostLogNextId,
+            atMillis: Int64(Date().timeIntervalSince1970 * 1000.0),
+            severity: severity,
+            title: title,
+            detail: detail
+        )
+        hostLogNextId += 1
+        hostLogEntries = appendExampleHostLogEntry(hostLogEntries, entry: entry)
+    }
+
+    private func enqueueAndFocusPlaylistItem(
+        _ itemId: String,
+        logTitle: String,
+        logDetail: String
+    ) {
+        hostMessage = nil
+        let nextPlaylistItemIds = enqueuePlaylistItem(
+            playlistItemIds,
+            itemId: itemId
+        )
+        applyPlaylistQueue(
+            focusItemId: itemId,
+            playlistItemIds: nextPlaylistItemIds
+        )
+        appendHostLog(title: logTitle, detail: logDetail)
+        controlsVisible = true
+    }
+
+    private func addDolbyPresetToQueue(_ preset: ExampleDolbyAcceptancePreset) {
+        guard canQueueDolbyAcceptancePreset(preset) else {
+            hostMessage = ExampleI18n.dolbyAcceptancePendingMessage
+            appendHostLog(
+                severity: .warning,
+                title: ExampleI18n.logDolbyAddedToQueue,
+                detail: hostMessage
+            )
+            return
+        }
+        let itemId = dolbyPlaylistItemId(preset.id)
+        let nextPlaylistItemIds = enqueuePlaylistItem(
+            playlistItemIds,
+            itemId: itemId
+        )
+        applyPlaylistQueue(playlistItemIds: nextPlaylistItemIds)
+        appendHostLog(
+            title: ExampleI18n.logDolbyAddedToQueue,
+            detail: preset.label
+        )
+    }
+
+    private func diagnosticsRouteLabel() -> String {
+        switch nativeFramePipelineSetting {
+        case .preferNativeFrame, .requireNativeFrame:
+            return nativeFramePipelineSetting.title
+        case .disabled, .diagnosticsOnly:
+            return "AVPlayer"
+        }
+    }
+
     private func applyResilienceProfile(_ profile: ExampleResilienceProfile) {
         guard profile != selectedResilienceProfile, !isApplyingResilienceProfile else {
             return
         }
 
         selectedResilienceProfile = profile
+        appendHostLog(
+            title: ExampleI18n.logPluginModeChange,
+            detail: profile.title
+        )
         Task { @MainActor in
             isApplyingResilienceProfile = true
             await Task.yield()
@@ -706,9 +831,13 @@ struct PlayerHostView: View {
         }
 
         let previousController = controller
-        let activeSource = activePlaylistSource()
+        let activeSource = activePlaybackSource()
         let previousUiState = previousController.uiState
         sourceNormalizerSetting = setting
+        appendHostLog(
+            title: ExampleI18n.logPluginModeChange,
+            detail: setting.title
+        )
         let resolvedNativeFrameSetting = nativeFrameSettingForSourceNormalizer(
             sourceNormalizerSetting: setting,
             nativeFramePipelineSetting: nativeFramePipelineSetting
@@ -740,13 +869,17 @@ struct PlayerHostView: View {
         }
 
         let previousController = controller
-        let activeSource = activePlaylistSource()
+        let activeSource = activePlaybackSource()
         let previousUiState = previousController.uiState
         let resolvedSetting = nativeFrameSettingForSourceNormalizer(
             sourceNormalizerSetting: sourceNormalizerSetting,
             nativeFramePipelineSetting: setting
         )
         nativeFramePipelineSetting = resolvedSetting
+        appendHostLog(
+            title: ExampleI18n.logPluginModeChange,
+            detail: resolvedSetting.title
+        )
         if resolvedSetting != setting {
             hostMessage = ExampleI18n.nativeFrameRequireDowngradedForPlayback
         }
@@ -811,18 +944,35 @@ struct PlayerHostView: View {
                     )
                 )
                 hostMessage = ExampleI18n.hdrEvidenceWritten(directory.path)
+                appendHostLog(
+                    title: ExampleI18n.logHdrEvidenceResult,
+                    detail: directory.path
+                )
             } catch {
                 hostMessage = ExampleI18n.hdrEvidenceFailed(error.localizedDescription)
+                appendHostLog(
+                    severity: .error,
+                    title: ExampleI18n.logHdrEvidenceResult,
+                    detail: error.localizedDescription
+                )
             }
             isCapturingHdrEvidence = false
         }
     }
 
-    private func activateDolbyAcceptancePreset(_ preset: ExampleDolbyAcceptancePreset) {
+    private func activateDolbyAcceptancePreset(
+        _ preset: ExampleDolbyAcceptancePreset,
+        origin: ExamplePlaybackOrigin
+    ) {
         guard preset.isPlayable else {
             hostMessage = preset.drmKind == .fairPlay
                 ? ExampleI18n.dolbyAcceptanceFairPlayConfigRequired
                 : ExampleI18n.dolbyAcceptancePendingMessage
+            appendHostLog(
+                severity: .warning,
+                title: ExampleI18n.logDolbyPlayNow,
+                detail: hostMessage
+            )
             return
         }
 
@@ -842,6 +992,7 @@ struct PlayerHostView: View {
             let previousController = controller
             let previousUiState = previousController.uiState
             activeDirectSource = preset.source
+            playbackOrigin = origin
             sourceNormalizerSetting = nextSourceNormalizerSetting
             nativeFramePipelineSetting = nextNativeFramePipelineSetting
             let nextController = makeExampleController(
@@ -861,11 +1012,15 @@ struct PlayerHostView: View {
             )
             hostMessage = ExampleI18n.dolbyAcceptanceDirectRouteMessage
         } else {
-            selectSourceForPlayback(preset.source)
+            selectSourceForPlayback(preset.source, origin: origin)
             hostMessage = nil
         }
         selectedHdrEvidencePreset = preset.toHdrEvidencePreset()
         controlsVisible = true
+        appendHostLog(
+            title: ExampleI18n.logDolbyPlayNow,
+            detail: preset.label
+        )
         exampleIosHostLog(
             "dolby acceptance preset=\(preset.id) route=directNative sourceNormalizer=\(sourceNormalizerSetting.rawValue) nativeFrame=\(nativeFramePipelineSetting.rawValue)"
         )
@@ -918,9 +1073,13 @@ struct PlayerHostView: View {
         }
     }
 
-    private func selectSourceForPlayback(_ source: VesperPlayerSource) {
+    private func selectSourceForPlayback(
+        _ source: VesperPlayerSource,
+        origin: ExamplePlaybackOrigin?
+    ) {
         ensurePlaybackSafeNativeFrameSetting()
         activeDirectSource = source
+        playbackOrigin = origin
         controller.selectSource(source)
         configureSystemPlayback(for: source)
     }
@@ -1045,15 +1204,11 @@ struct PlayerHostView: View {
         let source = VesperPlayerSource.remoteUrl(url, label: ExampleI18n.customRemoteUrlLabel)
         hostMessage = nil
         queuedRemoteSource = source
-        let nextPlaylistItemIds = enqueuePlaylistItem(
-            playlistItemIds,
-            itemId: IOS_REMOTE_PLAYLIST_ITEM_ID
+        enqueueAndFocusPlaylistItem(
+            IOS_REMOTE_PLAYLIST_ITEM_ID,
+            logTitle: ExampleI18n.logSourceSelected,
+            logDetail: trimmed
         )
-        applyPlaylistQueue(
-            focusItemId: IOS_REMOTE_PLAYLIST_ITEM_ID,
-            playlistItemIds: nextPlaylistItemIds
-        )
-        controlsVisible = true
     }
 
     private func openRemoteDownloadSource() {
@@ -1095,11 +1250,23 @@ struct PlayerHostView: View {
                     )
                     pendingDownloadTasks.removeAll { $0.id == assetId }
                     downloadMessage = taskId == nil ? ExampleI18n.downloadCreateTaskFailed : nil
+                    if taskId == nil {
+                        appendHostLog(
+                            severity: .error,
+                            title: ExampleI18n.logDownloadCreateFailure,
+                            detail: assetId
+                        )
+                    }
                 }
             } catch {
                 await MainActor.run {
                     pendingDownloadTasks.removeAll { $0.id == assetId }
                     downloadMessage = ExampleI18n.downloadCreateTaskFailed
+                    appendHostLog(
+                        severity: .error,
+                        title: ExampleI18n.logDownloadCreateFailure,
+                        detail: error.localizedDescription
+                    )
                 }
             }
         }
@@ -1338,7 +1505,13 @@ struct PlayerHostView: View {
             hasHandledFinishedPlayback = false
             return
         }
-        guard !hasHandledFinishedPlayback, activeItemId != nil else {
+        guard
+            !hasHandledFinishedPlayback,
+            shouldAdvancePlaylistOnFinished(
+                origin: playbackOrigin,
+                activeItemId: activeItemId
+            )
+        else {
             return
         }
         hasHandledFinishedPlayback = true
@@ -1366,6 +1539,10 @@ struct PlayerHostView: View {
                 applyPlaylistQueue(
                     focusItemId: localItemId,
                     playlistItemIds: nextPlaylistItemIds
+                )
+                appendHostLog(
+                    title: ExampleI18n.logSourceSelected,
+                    detail: imported.label
                 )
                 controlsVisible = true
             }

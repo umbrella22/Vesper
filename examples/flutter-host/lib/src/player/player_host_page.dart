@@ -62,7 +62,7 @@ class _PlayerHostPageState extends State<PlayerHostPage>
   _externalRoutesSubscription;
   StreamSubscription<VesperExternalPlaybackSessionEvent>?
   _externalEventsSubscription;
-  ExampleHostTab _selectedTab = ExampleHostTab.player;
+  ExampleHostTab _selectedTab = ExampleHostTab.play;
   ExampleResilienceProfile _selectedResilienceProfile =
       ExampleResilienceProfile.balanced;
   ExampleSourceNormalizerSetting _sourceNormalizerSetting =
@@ -77,8 +77,14 @@ class _PlayerHostPageState extends State<PlayerHostPage>
   bool _isRebuildingController = false;
   bool _isCapturingHdrEvidence = false;
   bool _sheetOpen = false;
+  bool _hasHandledFinishedPlayback = false;
   List<String> _playlistItemIds = <String>[flutterHlsPlaylistItemId];
   String? _activePlaylistItemId = flutterHlsPlaylistItemId;
+  VesperPlayerSource? _activeDirectSource;
+  ExamplePlaybackOrigin? _playbackOrigin = const ExampleQueuePlaybackOrigin(
+    flutterHlsPlaylistItemId,
+  );
+  VesperPlayerController? _observedController;
   String? _downloadMessage;
   String? _externalPlaybackMessage;
   bool _externalPlaybackMessageIsDiagnostic = false;
@@ -104,6 +110,8 @@ class _PlayerHostPageState extends State<PlayerHostPage>
       <VesperExternalPlaybackRoute>[];
   List<ExamplePendingDownloadTask> _pendingDownloadTasks =
       <ExamplePendingDownloadTask>[];
+  List<ExampleHostLogEntry> _hostLogEntries = const <ExampleHostLogEntry>[];
+  int _nextHostLogId = 1;
 
   bool get _selectedHdrEvidencePresetUsesNetworkControl {
     return _selectedHdrEvidencePreset.sampleId == 'NETWORK-FAILURE-CONTROL';
@@ -111,6 +119,31 @@ class _PlayerHostPageState extends State<PlayerHostPage>
 
   void _updateState(VoidCallback fn) {
     setState(fn);
+  }
+
+  void _appendHostLog({
+    ExampleHostLogSeverity severity = ExampleHostLogSeverity.info,
+    required String title,
+    String? detail,
+  }) {
+    _hostLogEntries = appendExampleHostLogEntry(
+      _hostLogEntries,
+      ExampleHostLogEntry(
+        id: _nextHostLogId,
+        atMillis: DateTime.now().millisecondsSinceEpoch,
+        severity: severity,
+        title: title,
+        detail: detail,
+      ),
+    );
+    _nextHostLogId += 1;
+  }
+
+  VesperPlayerSource? _activePlaybackSource() {
+    return _activeDirectSource ??
+        (_activePlaylistItemId == null
+            ? null
+            : _playlistSourceForItem(_activePlaylistItemId!));
   }
 
   @override
@@ -137,6 +170,9 @@ class _PlayerHostPageState extends State<PlayerHostPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _pictureInPictureHostChannel.setMethodCallHandler(null);
+    _observedController?.snapshotListenable.removeListener(
+      _handleControllerSnapshotChanged,
+    );
     unawaited(_downloadEventsSubscription?.cancel() ?? Future<void>.value());
     unawaited(_pictureInPictureSubscription?.cancel() ?? Future<void>.value());
     unawaited(_externalRoutesSubscription?.cancel() ?? Future<void>.value());
@@ -187,7 +223,7 @@ class _PlayerHostPageState extends State<PlayerHostPage>
     final mediaQuery = MediaQuery.of(context);
     final immersivePlayer =
         mediaQuery.orientation == Orientation.landscape &&
-        _selectedTab == ExampleHostTab.player;
+        _selectedTab == ExampleHostTab.play;
     final useDarkTheme = Theme.of(context).brightness == Brightness.dark;
     final palette = exampleHostPalette(useDarkTheme);
 
@@ -199,9 +235,13 @@ class _PlayerHostPageState extends State<PlayerHostPage>
     }
 
     final body = switch (_selectedTab) {
-      ExampleHostTab.player => _buildPlayerFutureContent(
+      ExampleHostTab.play => _buildPlayerFutureContent(
         context,
         immersivePlayer: immersivePlayer,
+        palette: palette,
+      ),
+      ExampleHostTab.diagnostics => _buildDiagnosticsFutureContent(
+        context,
         palette: palette,
       ),
       ExampleHostTab.downloads => _buildDownloadFutureContent(palette),
@@ -230,7 +270,11 @@ class _PlayerHostPageState extends State<PlayerHostPage>
               destinations: const <Widget>[
                 NavigationDestination(
                   icon: Icon(Icons.video_library_rounded),
-                  label: '播放器',
+                  label: '播放',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.troubleshoot_rounded),
+                  label: '诊断',
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.download_rounded),
@@ -252,6 +296,42 @@ class _PlayerHostPageState extends State<PlayerHostPage>
       _setPictureInPicturePresentation(false);
     }
   }
-}
 
-enum ExampleHostTab { player, downloads }
+  void _observeControllerSnapshot(VesperPlayerController controller) {
+    if (identical(_observedController, controller)) {
+      return;
+    }
+    _observedController?.snapshotListenable.removeListener(
+      _handleControllerSnapshotChanged,
+    );
+    _observedController = controller;
+    controller.snapshotListenable.addListener(_handleControllerSnapshotChanged);
+  }
+
+  void _handleControllerSnapshotChanged() {
+    final controller = _observedController;
+    if (controller == null || !mounted) {
+      return;
+    }
+    final snapshot = controller.snapshot;
+    if (snapshot.playbackState != VesperPlaybackState.finished) {
+      _hasHandledFinishedPlayback = false;
+      return;
+    }
+    if (_hasHandledFinishedPlayback ||
+        !shouldAdvancePlaylistOnFinished(
+          origin: _playbackOrigin,
+          activeItemId: _activePlaylistItemId,
+        )) {
+      return;
+    }
+    _hasHandledFinishedPlayback = true;
+    final nextItemId = nextPlaylistItemIdOnFinished(
+      playlistItemIds: _playlistItemIds,
+      activeItemId: _activePlaylistItemId,
+    );
+    if (nextItemId != null) {
+      unawaited(_focusPlaylistItem(controller, nextItemId));
+    }
+  }
+}

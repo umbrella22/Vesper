@@ -245,6 +245,22 @@ ExampleDolbyAcceptancePreset? exampleDolbyAcceptancePresetById(String id) {
   return null;
 }
 
+List<ExampleDolbyAcceptancePreset> filterDolbyAcceptancePresets({
+  required List<ExampleDolbyAcceptancePreset> presets,
+  required ExampleDolbyAcceptanceDrmKind drmKind,
+  required ExampleDolbyAcceptanceProfile? profile,
+  required int? fps,
+}) {
+  return presets
+      .where(
+        (preset) =>
+            preset.drmKind == drmKind &&
+            (profile == null || preset.profile == profile) &&
+            (fps == null || preset.fps == fps),
+      )
+      .toList(growable: false);
+}
+
 bool exampleDolbyAcceptancePresetIsPlayableOnHost(
   ExampleDolbyAcceptancePreset preset, {
   required bool isAndroid,
@@ -256,6 +272,18 @@ bool exampleDolbyAcceptancePresetIsPlayableOnHost(
         isIOS: isIOS,
       ) ==
       null;
+}
+
+bool canQueueDolbyAcceptancePresetOnHost(
+  ExampleDolbyAcceptancePreset preset, {
+  required bool isAndroid,
+  required bool isIOS,
+}) {
+  return exampleDolbyAcceptancePresetIsPlayableOnHost(
+    preset,
+    isAndroid: isAndroid,
+    isIOS: isIOS,
+  );
 }
 
 String? exampleDolbyAcceptancePresetUnavailableReasonOnHost(

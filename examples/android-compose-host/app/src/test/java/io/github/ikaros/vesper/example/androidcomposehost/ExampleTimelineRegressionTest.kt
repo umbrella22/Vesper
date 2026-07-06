@@ -5,6 +5,9 @@ import io.github.ikaros.vesper.player.android.PlaybackStateUi
 import io.github.ikaros.vesper.player.android.PlayerHostUiState
 import io.github.ikaros.vesper.player.android.TimelineKind
 import io.github.ikaros.vesper.player.android.TimelineUiState
+import io.github.ikaros.vesper.player.android.VesperPlaylistQueueItem
+import io.github.ikaros.vesper.player.android.VesperPlaylistQueueItemState
+import io.github.ikaros.vesper.player.android.VesperPlaylistViewportHintKind
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.VesperVideoSurfaceKind
@@ -108,6 +111,116 @@ class ExampleTimelineRegressionTest {
         assertEquals(
             "https://ott.dolby.com/browser_test_kit/cbcs/p81/30/master.m3u8",
             preset.source.uri,
+        )
+    }
+
+    @Test
+    fun `dolby catalog filter keeps drm profile and fps boundaries`() {
+        val filtered =
+            filterDolbyAcceptancePresets(
+                presets = exampleDolbyAcceptanceCatalog,
+                drmKind = ExampleDolbyAcceptanceDrmKind.Clear,
+                profile = ExampleDolbyAcceptanceProfile.P81,
+                fps = 50,
+            )
+
+        assertEquals(2, filtered.size)
+        filtered.forEach { preset ->
+            assertEquals(ExampleDolbyAcceptanceDrmKind.Clear, preset.drmKind)
+            assertEquals(ExampleDolbyAcceptanceProfile.P81, preset.profile)
+            assertEquals(50, preset.fps)
+        }
+    }
+
+    @Test
+    fun `fairplay pending presets cannot be queued`() {
+        val preset =
+            exampleDolbyAcceptanceCatalog.first {
+                it.drmKind == ExampleDolbyAcceptanceDrmKind.FairPlayPending
+            }
+
+        assertFalse(canQueueDolbyPreset(preset))
+    }
+
+    @Test
+    fun `dolby playlist item id resolves to queue item`() {
+        val preset =
+            exampleDolbyAcceptanceCatalog.first {
+                it.profile == ExampleDolbyAcceptanceProfile.P5 &&
+                    it.fps == 24 &&
+                    it.protocol == VesperPlayerSourceProtocol.Dash &&
+                    it.drmKind == ExampleDolbyAcceptanceDrmKind.Clear
+            }
+        val itemId = dolbyPlaylistItemId(preset.id)
+
+        assertEquals(preset.id, dolbyPresetIdFromPlaylistItemId(itemId))
+        val queue =
+            examplePlaylistQueue(
+                context = android.content.ContextWrapper(null),
+                playlistItemIds = listOf(itemId),
+            )
+
+        assertEquals(1, queue.size)
+        assertEquals(itemId, queue.single().itemId)
+        assertEquals(preset.source.uri, queue.single().source.uri)
+    }
+
+    @Test
+    fun `ad hoc dolby playback does not advance playlist on finished`() {
+        assertFalse(
+            shouldAdvancePlaylistOnFinished(
+                origin = ExamplePlaybackOrigin.DolbyAdHoc("DOLBY-DV-P5-24-DASH-CLEAR"),
+                activeItemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
+            ),
+        )
+        assertEquals(
+            true,
+            shouldAdvancePlaylistOnFinished(
+                origin = ExamplePlaybackOrigin.Queue(ANDROID_HLS_PLAYLIST_ITEM_ID),
+                activeItemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
+            ),
+        )
+    }
+
+    @Test
+    fun `host event log keeps newest entries within capacity`() {
+        val entries =
+            (1L..85L).fold(emptyList<ExampleHostLogEntry>()) { current, id ->
+                appendExampleHostLogEntry(
+                    entries = current,
+                    entry =
+                        ExampleHostLogEntry(
+                            id = id,
+                            atMillis = id,
+                            severity = ExampleHostLogSeverity.Info,
+                            title = "event-$id",
+                        ),
+                )
+            }
+
+        assertEquals(EXAMPLE_HOST_LOG_CAPACITY, entries.size)
+        assertEquals(85L, entries.first().id)
+        assertEquals(6L, entries.last().id)
+    }
+
+    @Test
+    fun `compact queue keeps active item and nearest neighbors`() {
+        val source = androidHlsDemoSource(context = null)
+        val queue =
+            (0 until 8).map { index ->
+                VesperPlaylistQueueItemState(
+                    item = VesperPlaylistQueueItem(itemId = "item-$index", source = source),
+                    index = index,
+                    viewportHint = VesperPlaylistViewportHintKind.Hidden,
+                    isActive = index == 4,
+                )
+            }
+
+        val compact = compactPlaylistQueueItems(queue, maxVisibleItems = 5)
+
+        assertEquals(
+            listOf("item-2", "item-3", "item-4", "item-5", "item-6"),
+            compact.map { it.item.itemId },
         )
     }
 

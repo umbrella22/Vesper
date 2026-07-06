@@ -392,6 +392,19 @@ func exampleDolbyAcceptancePreset(id: String) -> ExampleDolbyAcceptancePreset? {
     exampleDolbyAcceptanceCatalog.first { $0.id == id }
 }
 
+func filterDolbyAcceptancePresets(
+    _ presets: [ExampleDolbyAcceptancePreset],
+    drmKind: ExampleDolbyAcceptanceDrmKind,
+    profile: ExampleDolbyAcceptanceProfile?,
+    fps: Int?
+) -> [ExampleDolbyAcceptancePreset] {
+    presets.filter { preset in
+        preset.drmKind == drmKind &&
+            (profile == nil || preset.profile == profile) &&
+            (fps == nil || preset.fps == fps)
+    }
+}
+
 func exampleDolbyAcceptanceHdrEvidencePresets() -> [ExampleHdrEvidenceSamplePreset] {
     exampleDolbyAcceptanceCatalog
         .filter(\.isPlayable)

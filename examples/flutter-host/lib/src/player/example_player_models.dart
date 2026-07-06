@@ -3,6 +3,42 @@ import 'package:vesper_player/vesper_player.dart';
 
 enum ExamplePlayerSheet { menu, quality, audio, subtitle, speed }
 
+enum ExampleHostTab { play, diagnostics, downloads }
+
+sealed class ExamplePlaybackOrigin {
+  const ExamplePlaybackOrigin();
+}
+
+final class ExampleQueuePlaybackOrigin extends ExamplePlaybackOrigin {
+  const ExampleQueuePlaybackOrigin(this.itemId);
+
+  final String itemId;
+}
+
+final class ExampleDolbyAdHocPlaybackOrigin extends ExamplePlaybackOrigin {
+  const ExampleDolbyAdHocPlaybackOrigin(this.presetId);
+
+  final String presetId;
+}
+
+enum ExampleHostLogSeverity { info, warning, error }
+
+final class ExampleHostLogEntry {
+  const ExampleHostLogEntry({
+    required this.id,
+    required this.atMillis,
+    required this.severity,
+    required this.title,
+    this.detail,
+  });
+
+  final int id;
+  final int atMillis;
+  final ExampleHostLogSeverity severity;
+  final String title;
+  final String? detail;
+}
+
 enum ExampleThemeMode { system, light, dark }
 
 extension ExampleThemeModeLabels on ExampleThemeMode {
@@ -224,6 +260,20 @@ const String flutterDashPlaylistItemId = 'dash-demo';
 const String flutterLiveDvrPlaylistItemId = 'live-dvr-acceptance';
 const String flutterRemotePlaylistItemId = 'custom-remote';
 const String flutterLocalPlaylistItemId = 'local-file';
+const int exampleHostLogCapacity = 80;
+const String _dolbyPlaylistItemPrefix = 'dolby-';
+
+String flutterDolbyPlaylistItemId(String presetId) {
+  return '$_dolbyPlaylistItemPrefix$presetId';
+}
+
+String? flutterDolbyPresetIdFromPlaylistItemId(String itemId) {
+  if (!itemId.startsWith(_dolbyPlaylistItemPrefix)) {
+    return null;
+  }
+  final presetId = itemId.substring(_dolbyPlaylistItemPrefix.length);
+  return presetId.isEmpty ? null : presetId;
+}
 
 const List<ExampleSource> exampleSources = <ExampleSource>[
   ExampleSource(
@@ -287,6 +337,40 @@ List<String> enqueuePlaylistItem(List<String> playlistItemIds, String itemId) {
     ...playlistItemIds.where((existingItemId) => existingItemId != itemId),
     itemId,
   ];
+}
+
+List<ExampleHostLogEntry> appendExampleHostLogEntry(
+  List<ExampleHostLogEntry> entries,
+  ExampleHostLogEntry entry, {
+  int capacity = exampleHostLogCapacity,
+}) {
+  if (capacity <= 0) {
+    return const <ExampleHostLogEntry>[];
+  }
+  return <ExampleHostLogEntry>[entry, ...entries].take(capacity).toList();
+}
+
+bool shouldAdvancePlaylistOnFinished({
+  required ExamplePlaybackOrigin? origin,
+  required String? activeItemId,
+}) {
+  return origin is ExampleQueuePlaybackOrigin &&
+      activeItemId != null &&
+      origin.itemId == activeItemId;
+}
+
+String? nextPlaylistItemIdOnFinished({
+  required List<String> playlistItemIds,
+  required String? activeItemId,
+}) {
+  if (activeItemId == null) {
+    return null;
+  }
+  final activeIndex = playlistItemIds.indexOf(activeItemId);
+  if (activeIndex < 0 || activeIndex + 1 >= playlistItemIds.length) {
+    return null;
+  }
+  return playlistItemIds[activeIndex + 1];
 }
 
 VesperPlayerSource flutterHlsDemoSource() {

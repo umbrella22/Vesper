@@ -23,6 +23,7 @@
     <string name="example_theme_light">Light</string>
     <string name="example_theme_dark">Dark</string>
     <string name="example_tab_player">Player</string>
+    <string name="example_tab_diagnostics">Diagnostics</string>
     <string name="example_tab_downloads">Downloads</string>
 
     <string name="example_sources_title">Sources</string>
@@ -44,6 +45,8 @@
     <string name="example_dolby_acceptance_empty">No Dolby presets match this filter.</string>
     <string name="example_dolby_acceptance_pending_toast">This Dolby preset is pending and cannot be played yet.</string>
     <string name="example_dolby_acceptance_direct_route_toast">Switched to direct native playback for Dolby acceptance.</string>
+    <string name="example_dolby_acceptance_play_now">Play now</string>
+    <string name="example_dolby_acceptance_add_to_queue">Add to queue</string>
     <string name="example_error_terminal_title">Playback stopped</string>
     <string name="example_error_dolby_p5_device_unsupported">This device does not support the current Dolby Vision P5 / Widevine playback combination.</string>
     <string name="example_error_widevine_network_exhausted">Widevine license or provisioning failed after %1$s attempts.</string>
@@ -79,6 +82,10 @@
     <string name="example_playlist_title">Playlist</string>
     <string name="example_playlist_subtitle">Media sources appear here after you open a demo stream, a local video, or a custom remote URL.</string>
     <string name="example_playlist_empty">No media has been added to the playlist yet.</string>
+    <string name="example_queue_title">Queue</string>
+    <string name="example_queue_subtitle">Only sources explicitly prepared for continuous playback appear here. Dolby presets stay in Diagnostics unless you add them.</string>
+    <string name="example_queue_manage">Manage queue</string>
+    <string name="example_queue_show_less">Show less</string>
     <string name="example_playlist_status_current">Now Playing</string>
     <string name="example_playlist_status_visible">Visible</string>
     <string name="example_playlist_status_near_visible">Near Visible</string>
@@ -198,6 +205,39 @@
     <string name="example_plugins_hdr_evidence_network_control_label">Network failure control</string>
     <string name="example_plugins_hdr_evidence_written">HDR evidence bundle written: %1$s</string>
     <string name="example_plugins_hdr_evidence_failed">HDR evidence capture failed: %1$s</string>
+
+    <string name="example_diagnostics_summary_title">Session Summary</string>
+    <string name="example_diagnostics_summary_subtitle">Current route, source, and runtime mode for this host session.</string>
+    <string name="example_diagnostics_source">source</string>
+    <string name="example_diagnostics_protocol">protocol</string>
+    <string name="example_diagnostics_route">route</string>
+    <string name="example_diagnostics_origin">origin</string>
+    <string name="example_diagnostics_source_normalizer">normalizer</string>
+    <string name="example_diagnostics_native_frame">native frame</string>
+    <string name="example_diagnostics_origin_queue">Queue: %1$s</string>
+    <string name="example_diagnostics_origin_dolby">Dolby ad-hoc: %1$s</string>
+    <string name="example_diagnostics_origin_none">None</string>
+    <string name="example_diagnostics_none">None</string>
+
+    <string name="example_event_log_title">Event Log</string>
+    <string name="example_event_log_subtitle">Recent host actions and diagnostics captured inside the sample app.</string>
+    <string name="example_event_log_empty">No host events yet.</string>
+    <string name="example_event_log_info">INFO</string>
+    <string name="example_event_log_warning">WARN</string>
+    <string name="example_event_log_error">ERROR</string>
+    <string name="example_log_source_selected">Source selected</string>
+    <string name="example_log_dolby_play_now">Dolby preset selected</string>
+    <string name="example_log_dolby_added_to_queue">Dolby preset added to queue</string>
+    <string name="example_log_controller_rebuilt">Controller rebuilt</string>
+    <string name="example_log_source_normalizer_changed">SourceNormalizer mode changed</string>
+    <string name="example_log_native_frame_changed">Native-frame mode changed</string>
+    <string name="example_log_hdr_evidence_written">HDR evidence written</string>
+    <string name="example_log_hdr_evidence_failed">HDR evidence failed</string>
+    <string name="example_log_download_create_failed">Download task creation failed</string>
+    <string name="example_log_external_disconnected">External route disconnected</string>
+    <string name="example_log_external_event">External playback event</string>
+    <string name="example_log_resilience_applied">Resilience profile applied</string>
+    <string name="example_log_resilience_failed">Resilience profile failed</string>
 
     <string name="example_sheet_menu_subtitle">Open track, subtitle, quality, and speed controls without crowding the player overlay.</string>
     <string name="example_sheet_quality_subtitle">Switch adaptive video or pin the stream to a specific quality track.</string>

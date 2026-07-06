@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_host/src/player/example_dolby_acceptance_catalog.dart';
+import 'package:flutter_host/src/player/example_player_models.dart';
 import 'package:vesper_player/vesper_player.dart';
 
 void main() {
@@ -142,5 +143,85 @@ void main() {
         );
       }
     }
+  });
+
+  test('filter returns presets for selected drm, profile, and fps', () {
+    final filtered = filterDolbyAcceptancePresets(
+      presets: exampleDolbyAcceptanceCatalog,
+      drmKind: ExampleDolbyAcceptanceDrmKind.clear,
+      profile: ExampleDolbyAcceptanceProfile.p81,
+      fps: 50,
+    );
+
+    expect(filtered, hasLength(2));
+    expect(
+      filtered.every(
+        (preset) => preset.drmKind == ExampleDolbyAcceptanceDrmKind.clear,
+      ),
+      isTrue,
+    );
+    expect(
+      filtered.every(
+        (preset) => preset.profile == ExampleDolbyAcceptanceProfile.p81,
+      ),
+      isTrue,
+    );
+    expect(filtered.every((preset) => preset.fps == 50), isTrue);
+  });
+
+  test('dolby queue ids use explicit prefix and resolve preset id', () {
+    final preset = exampleDolbyAcceptancePresetById(
+      'DOLBY-DV-P5-24-HLS-CLEAR',
+    )!;
+    final itemId = flutterDolbyPlaylistItemId(preset.id);
+
+    expect(itemId, 'dolby-${preset.id}');
+    expect(flutterDolbyPresetIdFromPlaylistItemId(itemId), preset.id);
+    expect(flutterDolbyPresetIdFromPlaylistItemId(preset.id), isNull);
+  });
+
+  test('host queueability follows platform playable rules', () {
+    final widevine = exampleDolbyAcceptancePresetById(
+      'DOLBY-DV-P84-50-DASH-WIDEVINE',
+    )!;
+    final fairPlayPending = exampleDolbyAcceptancePresetById(
+      'DOLBY-DV-P5-24-HLS-FAIRPLAY-PENDING',
+    )!;
+    final hlsClear = exampleDolbyAcceptancePresetById(
+      'DOLBY-DV-P5-24-HLS-CLEAR',
+    )!;
+
+    expect(
+      canQueueDolbyAcceptancePresetOnHost(
+        widevine,
+        isAndroid: true,
+        isIOS: false,
+      ),
+      isTrue,
+    );
+    expect(
+      canQueueDolbyAcceptancePresetOnHost(
+        widevine,
+        isAndroid: false,
+        isIOS: true,
+      ),
+      isFalse,
+    );
+    expect(
+      canQueueDolbyAcceptancePresetOnHost(
+        fairPlayPending,
+        isAndroid: true,
+        isIOS: false,
+      ),
+      isFalse,
+    );
+    expect(
+      canQueueDolbyAcceptancePresetOnHost(
+        hlsClear,
+        isAndroid: false,
+        isIOS: true,
+      ),
+      isTrue,
+    );
   });
 }

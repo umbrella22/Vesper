@@ -9,9 +9,12 @@ Use this example as a reference for:
 - Selecting local files via the Android document picker
 - Playing HLS, DASH, or progressive HTTP streams
 - Switching themes, sources, tracks, and ABR policies through bottom sheets
+- Keeping the main playback queue separate from acceptance-test catalogs and
+  diagnostics
 
 ## Features Demonstrated
 
+- Three app workspaces: **Play**, **Diagnostics**, and **Downloads**
 - System / Light / Dark theme modes
 - Fullscreen stage
 - Quality / audio / subtitle / playback-speed bottom sheets
@@ -21,11 +24,32 @@ Use this example as a reference for:
 - Built-in HLS demo source
 - Built-in DASH demo source
 - Generic remote URL field with `HLS / DASH / progressive` inference
+- Compact playback queue for sources that should really play continuously
+- In-app host event log for source changes, controller rebuilds, plugin mode
+  switches, external playback events, HDR evidence results, and download
+  preparation failures
 - SourceNormalizer plugin diagnostics panel. The example defaults to
   `preflightOnly` and lets you switch among `disabled`, `diagnosticsOnly`,
   `preflightOnly`, `preferNormalized`, and `requireNormalized` at runtime.
 - FrameProcessor diagnostic plugin logging. The example packages the diagnostic
   plugin and can run it in the explicit SDK-managed native-frame route.
+
+## App Layout
+
+The **Play** workspace is intentionally small: player stage, theme selector,
+quick source actions, external playback / Picture in Picture tools, and the real
+playback queue. The queue only contains media the user explicitly prepared for
+continuous playback.
+
+The **Diagnostics** workspace holds acceptance and troubleshooting surfaces:
+session summary, bounded host event log, Dolby acceptance catalog, plugin / HDR
+evidence controls, and resilience policy switching. Dolby presets default to
+**Play now**, which loads the preset without changing the real queue. Use
+**Add to queue** only when a preset should become part of the continuous
+playback queue.
+
+The **Downloads** workspace remains dedicated to foreground download-session
+regression.
 
 ## Optional Plugin Diagnostics
 

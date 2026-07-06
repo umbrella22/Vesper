@@ -1,7 +1,62 @@
 part of 'example_player_sections.dart';
 
-class ExamplePlaylistSection extends StatelessWidget {
-  const ExamplePlaylistSection({
+class ExampleQueuePanel extends StatelessWidget {
+  const ExampleQueuePanel({
+    super.key,
+    required this.palette,
+    required this.playlistItems,
+    required this.onSelectItem,
+    required this.onManageQueue,
+  });
+
+  final ExampleHostPalette palette;
+  final List<ExamplePlaylistItemViewData> playlistItems;
+  final ValueChanged<String> onSelectItem;
+  final VoidCallback onManageQueue;
+
+  List<ExamplePlaylistItemViewData> get _compactItems {
+    return compactQueueItems(playlistItems);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ExampleSectionShell(
+      palette: palette,
+      title: '待播放队列',
+      subtitle: '这里只显示明确准备连续播放的媒体源。Dolby 预设默认留在诊断页，除非手动加入。',
+      child: playlistItems.isEmpty
+          ? Text(
+              '队列里还没有媒体源。',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: palette.body),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                for (final item in _compactItems)
+                  Padding(
+                    key: ValueKey<String>(item.itemId),
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _ExamplePlaylistRow(
+                      item: item,
+                      palette: palette,
+                      onTap: () => onSelectItem(item.itemId),
+                    ),
+                  ),
+                OutlinedButton.icon(
+                  onPressed: onManageQueue,
+                  icon: const Icon(Icons.list_rounded, size: 18),
+                  label: const Text('管理队列'),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+class ExampleQueueSheet extends StatelessWidget {
+  const ExampleQueueSheet({
     super.key,
     required this.palette,
     required this.playlistItems,
@@ -14,33 +69,78 @@ class ExamplePlaylistSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ExampleSectionShell(
-      palette: palette,
-      title: '播放列表',
-      subtitle: '点击演示流、本地视频或自定义远程 URL 后，媒体源会按加入顺序出现在这里。',
-      child: playlistItems.isEmpty
-          ? Text(
-              '播放列表里还没有媒体源。',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: palette.body),
-            )
-          : Column(
-              children: playlistItems
-                  .map(
-                    (item) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _ExamplePlaylistRow(
-                        item: item,
-                        palette: palette,
-                        onTap: () => onSelectItem(item.itemId),
-                      ),
-                    ),
-                  )
-                  .toList(growable: false),
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              '管理队列',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: palette.title,
+                fontWeight: FontWeight.w700,
+              ),
             ),
+            const SizedBox(height: 14),
+            Expanded(
+              child: playlistItems.isEmpty
+                  ? Text(
+                      '队列里还没有媒体源。',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: palette.body),
+                    )
+                  : ListView.builder(
+                      itemCount: playlistItems.length,
+                      itemBuilder: (context, index) {
+                        final item = playlistItems[index];
+                        return Padding(
+                          key: ValueKey<String>(item.itemId),
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _ExamplePlaylistRow(
+                            item: item,
+                            palette: palette,
+                            onTap: () {
+                              Navigator.of(context).pop();
+                              onSelectItem(item.itemId);
+                            },
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
     );
   }
+}
+
+List<ExamplePlaylistItemViewData> compactQueueItems(
+  List<ExamplePlaylistItemViewData> items, {
+  int maxVisibleItems = 5,
+}) {
+  if (items.length <= maxVisibleItems) {
+    return items;
+  }
+  final activeIndex = items.indexWhere((item) => item.isActive);
+  if (activeIndex < 0) {
+    return items.take(maxVisibleItems).toList(growable: false);
+  }
+  var lowerBound = activeIndex - 2;
+  if (lowerBound < 0) {
+    lowerBound = 0;
+  }
+  var upperBound = lowerBound + maxVisibleItems;
+  if (upperBound > items.length) {
+    upperBound = items.length;
+  }
+  var start = upperBound - maxVisibleItems;
+  if (start < 0) {
+    start = 0;
+  }
+  return items.sublist(start, upperBound);
 }
 
 class ExampleRecentErrorSection extends StatelessWidget {

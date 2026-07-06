@@ -54,8 +54,28 @@ enum ExampleThemeMode: String, CaseIterable, Identifiable {
 }
 
 enum ExampleHostTab: Hashable {
-    case player
+    case play
+    case diagnostics
     case downloads
+}
+
+enum ExamplePlaybackOrigin: Equatable {
+    case queue(itemId: String)
+    case dolbyAdHoc(presetId: String)
+}
+
+enum ExampleHostLogSeverity: String, Equatable {
+    case info
+    case warning
+    case error
+}
+
+struct ExampleHostLogEntry: Identifiable, Equatable {
+    let id: Int64
+    let atMillis: Int64
+    let severity: ExampleHostLogSeverity
+    let title: String
+    let detail: String?
 }
 
 enum ExampleResilienceProfile: String, CaseIterable, Identifiable {
@@ -276,6 +296,48 @@ let IOS_DASH_PLAYLIST_ITEM_ID = "dash-demo"
 let IOS_LIVE_DVR_PLAYLIST_ITEM_ID = "live-dvr-acceptance"
 let IOS_REMOTE_PLAYLIST_ITEM_ID = "custom-remote"
 let IOS_LOCAL_PLAYLIST_ITEM_ID = "local-file"
+let EXAMPLE_HOST_LOG_CAPACITY = 80
+
+private let DOLBY_PLAYLIST_ITEM_PREFIX = "dolby-"
+
+func dolbyPlaylistItemId(_ presetId: String) -> String {
+    "\(DOLBY_PLAYLIST_ITEM_PREFIX)\(presetId)"
+}
+
+func dolbyPresetIdFromPlaylistItemId(_ itemId: String) -> String? {
+    guard itemId.hasPrefix(DOLBY_PLAYLIST_ITEM_PREFIX) else {
+        return nil
+    }
+    let presetId = String(itemId.dropFirst(DOLBY_PLAYLIST_ITEM_PREFIX.count))
+    return presetId.isEmpty ? nil : presetId
+}
+
+func canQueueDolbyAcceptancePreset(_ preset: ExampleDolbyAcceptancePreset) -> Bool {
+    preset.isPlayable
+}
+
+func appendExampleHostLogEntry(
+    _ entries: [ExampleHostLogEntry],
+    entry: ExampleHostLogEntry,
+    capacity: Int = EXAMPLE_HOST_LOG_CAPACITY
+) -> [ExampleHostLogEntry] {
+    guard capacity > 0 else {
+        return []
+    }
+    return Array(([entry] + entries).prefix(capacity))
+}
+
+func shouldAdvancePlaylistOnFinished(
+    origin: ExamplePlaybackOrigin?,
+    activeItemId: String?
+) -> Bool {
+    guard case let .queue(itemId)? = origin,
+          let activeItemId
+    else {
+        return false
+    }
+    return itemId == activeItemId
+}
 
 func iosLocalPlaylistItemId() -> String {
     "\(IOS_LOCAL_PLAYLIST_ITEM_ID)-\(UUID().uuidString)"
@@ -369,7 +431,22 @@ func examplePlaylistQueue(
             )
 
         default:
-            return nil
+            guard
+                let presetId = dolbyPresetIdFromPlaylistItemId(itemId),
+                let preset = exampleDolbyAcceptancePreset(id: presetId),
+                canQueueDolbyAcceptancePreset(preset)
+            else {
+                return nil
+            }
+            return VesperPlaylistQueueItem(
+                itemId: itemId,
+                source: preset.source,
+                preloadProfile: VesperPlaylistItemPreloadProfile(
+                    expectedMemoryBytes: 256 * 1024,
+                    expectedDiskBytes: 512 * 1024,
+                    warmupWindowMs: 30_000
+                )
+            )
         }
     }
 }

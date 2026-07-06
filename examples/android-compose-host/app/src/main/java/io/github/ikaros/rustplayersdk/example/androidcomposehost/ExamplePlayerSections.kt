@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -36,8 +38,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -53,6 +59,9 @@ import androidx.mediarouter.app.MediaRouteButton
 import io.github.ikaros.vesper.player.android.VesperPlaylistQueueItemState
 import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackRoute
 import io.github.ikaros.vesper.player.android.external.VesperExternalRouteButton
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.max
 
 @Composable
@@ -194,6 +203,93 @@ internal fun ExampleSourceSection(
 }
 
 @Composable
+internal fun ExampleThemeModeSelector(
+    themeMode: ExampleThemeMode,
+    onThemeModeChange: (ExampleThemeMode) -> Unit,
+) {
+    Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        ThemeModeChip(
+            icon = Icons.Rounded.BrightnessAuto,
+            label = stringResource(ExampleThemeMode.System.titleRes),
+            selected = themeMode == ExampleThemeMode.System,
+            onClick = { onThemeModeChange(ExampleThemeMode.System) },
+        )
+        ThemeModeChip(
+            icon = Icons.Rounded.LightMode,
+            label = stringResource(ExampleThemeMode.Light.titleRes),
+            selected = themeMode == ExampleThemeMode.Light,
+            onClick = { onThemeModeChange(ExampleThemeMode.Light) },
+        )
+        ThemeModeChip(
+            icon = Icons.Rounded.DarkMode,
+            label = stringResource(ExampleThemeMode.Dark.titleRes),
+            selected = themeMode == ExampleThemeMode.Dark,
+            onClick = { onThemeModeChange(ExampleThemeMode.Dark) },
+        )
+    }
+}
+
+@Composable
+internal fun ExampleQuickSourcePanel(
+    palette: ExampleHostPalette,
+    remoteStreamUrl: String,
+    onRemoteStreamUrlChange: (String) -> Unit,
+    onPickVideo: () -> Unit,
+    onUseHlsDemo: () -> Unit,
+    onUseDashDemo: () -> Unit,
+    onUseLiveDvrAcceptance: () -> Unit,
+    onOpenRemote: () -> Unit,
+) {
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_sources_title),
+        subtitle = stringResource(R.string.example_sources_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(onClick = onPickVideo) {
+                    Text(stringResource(R.string.example_sources_pick_video))
+                }
+                OutlinedButton(onClick = onUseHlsDemo) {
+                    Text(stringResource(R.string.example_sources_hls_demo))
+                }
+                OutlinedButton(onClick = onUseDashDemo) {
+                    Text(stringResource(R.string.example_sources_dash_demo))
+                }
+                OutlinedButton(onClick = onUseLiveDvrAcceptance) {
+                    Text(stringResource(R.string.example_sources_live_dvr_acceptance))
+                }
+            }
+
+            OutlinedTextField(
+                value = remoteStreamUrl,
+                onValueChange = onRemoteStreamUrlChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.example_sources_remote_stream_url)) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                singleLine = true,
+            )
+
+            Button(
+                onClick = onOpenRemote,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = palette.primaryAction,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(stringResource(R.string.example_sources_open_remote_url))
+            }
+        }
+    }
+}
+
+@Composable
 internal fun ExampleExternalPlaybackSection(
     palette: ExampleHostPalette,
     routes: List<VesperExternalPlaybackRoute>,
@@ -314,7 +410,7 @@ internal fun ExampleExternalPlaybackSection(
 }
 
 @Composable
-internal fun ExampleDolbyAcceptanceSection(
+internal fun ExampleDolbyCatalogPanel(
     palette: ExampleHostPalette,
     presets: List<ExampleDolbyAcceptancePreset>,
     selectedDrmKind: ExampleDolbyAcceptanceDrmKind,
@@ -323,14 +419,19 @@ internal fun ExampleDolbyAcceptanceSection(
     onDrmKindChange: (ExampleDolbyAcceptanceDrmKind) -> Unit,
     onProfileChange: (ExampleDolbyAcceptanceProfile?) -> Unit,
     onFpsChange: (Int?) -> Unit,
-    onPresetSelected: (ExampleDolbyAcceptancePreset) -> Unit,
+    onPresetPlayNow: (ExampleDolbyAcceptancePreset) -> Unit,
+    onPresetAddToQueue: (ExampleDolbyAcceptancePreset) -> Unit,
 ) {
-    val filteredPresets =
-        presets.filter { preset ->
-            preset.drmKind == selectedDrmKind &&
-                (selectedProfile == null || preset.profile == selectedProfile) &&
-                (selectedFps == null || preset.fps == selectedFps)
+    val filteredPresets by remember(presets, selectedDrmKind, selectedProfile, selectedFps) {
+        derivedStateOf {
+            filterDolbyAcceptancePresets(
+                presets = presets,
+                drmKind = selectedDrmKind,
+                profile = selectedProfile,
+                fps = selectedFps,
+            )
         }
+    }
 
     ExampleSectionShell(
         palette = palette,
@@ -406,12 +507,22 @@ internal fun ExampleDolbyAcceptanceSection(
                     style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
                 )
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    filteredPresets.forEach { preset ->
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 460.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(
+                        items = filteredPresets,
+                        key = { preset -> preset.id },
+                        contentType = { "dolbyPreset" },
+                    ) { preset ->
                         DolbyAcceptancePresetRow(
                             preset = preset,
                             palette = palette,
-                            onPresetSelected = onPresetSelected,
+                            onPresetPlayNow = onPresetPlayNow,
+                            onPresetAddToQueue = onPresetAddToQueue,
                         )
                     }
                 }
@@ -424,13 +535,16 @@ internal fun ExampleDolbyAcceptanceSection(
 private fun DolbyAcceptancePresetRow(
     preset: ExampleDolbyAcceptancePreset,
     palette: ExampleHostPalette,
-    onPresetSelected: (ExampleDolbyAcceptancePreset) -> Unit,
+    onPresetPlayNow: (ExampleDolbyAcceptancePreset) -> Unit,
+    onPresetAddToQueue: (ExampleDolbyAcceptancePreset) -> Unit,
 ) {
-    OutlinedButton(
-        onClick = { onPresetSelected(preset) },
-        enabled = preset.isPlayable,
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
-        modifier = Modifier.fillMaxWidth(),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(palette.fieldBackground, RoundedCornerShape(18.dp))
+            .border(1.dp, palette.sectionStroke, RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -465,6 +579,27 @@ private fun DolbyAcceptancePresetRow(
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.labelSmall.copy(color = palette.body),
                 )
+            }
+        }
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Button(
+                onClick = { onPresetPlayNow(preset) },
+                enabled = preset.isPlayable,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = palette.primaryAction,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(stringResource(R.string.example_dolby_acceptance_play_now))
+            }
+            OutlinedButton(
+                onClick = { onPresetAddToQueue(preset) },
+                enabled = canQueueDolbyPreset(preset),
+            ) {
+                Text(stringResource(R.string.example_dolby_acceptance_add_to_queue))
             }
         }
     }
@@ -695,6 +830,88 @@ internal fun ExamplePlaylistSection(
             }
         }
     }
+}
+
+@Composable
+internal fun ExampleQueuePanel(
+    palette: ExampleHostPalette,
+    playlistQueue: List<VesperPlaylistQueueItemState>,
+    onFocusPlaylistItem: (String) -> Unit,
+) {
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    val visibleQueue =
+        remember(playlistQueue, showAll) {
+            if (showAll) playlistQueue else compactPlaylistQueueItems(playlistQueue)
+        }
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_queue_title),
+        subtitle = stringResource(R.string.example_queue_subtitle),
+    ) {
+        if (playlistQueue.isEmpty()) {
+            Text(
+                text = stringResource(R.string.example_playlist_empty),
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = if (showAll) 360.dp else 260.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(
+                        items = visibleQueue,
+                        key = { item -> item.item.itemId },
+                        contentType = { "queueItem" },
+                    ) { item ->
+                        PlaylistQueueRow(
+                            label = item.item.source.label,
+                            hint =
+                                if (item.isActive) {
+                                    stringResource(R.string.example_playlist_status_current)
+                                } else {
+                                    playlistHintLabel(item.viewportHint)
+                                },
+                            active = item.isActive,
+                            palette = palette,
+                            onClick = { onFocusPlaylistItem(item.item.itemId) },
+                        )
+                    }
+                }
+                if (playlistQueue.size > visibleQueue.size || showAll) {
+                    TextButton(onClick = { showAll = !showAll }) {
+                        Text(
+                            if (showAll) {
+                                stringResource(R.string.example_queue_show_less)
+                            } else {
+                                stringResource(R.string.example_queue_manage)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+internal fun compactPlaylistQueueItems(
+    playlistQueue: List<VesperPlaylistQueueItemState>,
+    maxVisibleItems: Int = 5,
+): List<VesperPlaylistQueueItemState> {
+    if (playlistQueue.size <= maxVisibleItems || maxVisibleItems <= 0) {
+        return playlistQueue
+    }
+    val activeIndex = playlistQueue.indexOfFirst { item -> item.isActive }.takeIf { it >= 0 } ?: 0
+    return playlistQueue
+        .sortedWith(
+            compareBy<VesperPlaylistQueueItemState> { item ->
+                kotlin.math.abs(item.index - activeIndex)
+            }.thenBy { item -> item.index },
+        )
+        .take(maxVisibleItems)
+        .sortedBy { item -> item.index }
 }
 
 @Composable
@@ -979,6 +1196,173 @@ internal fun ExamplePluginDiagnosticsSection(
         }
     }
 }
+
+@Composable
+internal fun ExampleDiagnosticsSummarySection(
+    palette: ExampleHostPalette,
+    sourceLabel: String,
+    sourceProtocol: String,
+    routeLabel: String,
+    playbackOrigin: ExamplePlaybackOrigin?,
+    sourceNormalizerSetting: ExampleSourceNormalizerSetting,
+    nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
+) {
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_diagnostics_summary_title),
+        subtitle = stringResource(R.string.example_diagnostics_summary_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_source),
+                value = sourceLabel,
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_protocol),
+                value = sourceProtocol,
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_route),
+                value = routeLabel,
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_origin),
+                value = playbackOriginLabel(playbackOrigin),
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_source_normalizer),
+                value = stringResource(sourceNormalizerSetting.titleRes),
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_native_frame),
+                value = stringResource(nativeFramePipelineSetting.titleRes),
+                palette = palette,
+            )
+        }
+    }
+}
+
+@Composable
+private fun playbackOriginLabel(origin: ExamplePlaybackOrigin?): String =
+    when (origin) {
+        is ExamplePlaybackOrigin.DolbyAdHoc ->
+            stringResource(R.string.example_diagnostics_origin_dolby, origin.presetId)
+        is ExamplePlaybackOrigin.Queue ->
+            stringResource(R.string.example_diagnostics_origin_queue, origin.itemId)
+        null -> stringResource(R.string.example_diagnostics_origin_none)
+    }
+
+@Composable
+internal fun ExampleEventLogSection(
+    palette: ExampleHostPalette,
+    entries: List<ExampleHostLogEntry>,
+) {
+    val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_event_log_title),
+        subtitle = stringResource(R.string.example_event_log_subtitle),
+    ) {
+        if (entries.isEmpty()) {
+            Text(
+                text = stringResource(R.string.example_event_log_empty),
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(
+                    items = entries,
+                    key = { entry -> entry.id },
+                    contentType = { "eventLogEntry" },
+                ) { entry ->
+                    EventLogRow(
+                        entry = entry,
+                        timeLabel = timeFormat.format(Date(entry.atMillis)),
+                        palette = palette,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EventLogRow(
+    entry: ExampleHostLogEntry,
+    timeLabel: String,
+    palette: ExampleHostPalette,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(palette.fieldBackground, RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = timeLabel,
+                modifier = Modifier.width(72.dp),
+                style = MaterialTheme.typography.labelMedium.copy(
+                    color = palette.body,
+                    fontFeatureSettings = "tnum",
+                ),
+            )
+            Text(
+                text = eventSeverityLabel(entry.severity),
+                style = MaterialTheme.typography.labelMedium.copy(
+                    color = eventSeverityColor(entry.severity, palette),
+                    fontWeight = FontWeight.Bold,
+                ),
+            )
+        }
+        Text(
+            text = entry.title,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                color = palette.title,
+                fontWeight = FontWeight.SemiBold,
+            ),
+        )
+        entry.detail?.takeIf(String::isNotBlank)?.let { detail ->
+            Text(
+                text = detail,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+    }
+}
+
+@Composable
+private fun eventSeverityLabel(severity: ExampleHostLogSeverity): String =
+    when (severity) {
+        ExampleHostLogSeverity.Info -> stringResource(R.string.example_event_log_info)
+        ExampleHostLogSeverity.Warning -> stringResource(R.string.example_event_log_warning)
+        ExampleHostLogSeverity.Error -> stringResource(R.string.example_event_log_error)
+    }
+
+private fun eventSeverityColor(
+    severity: ExampleHostLogSeverity,
+    palette: ExampleHostPalette,
+): Color =
+    when (severity) {
+        ExampleHostLogSeverity.Info -> palette.primaryAction
+        ExampleHostLogSeverity.Warning -> Color(0xFFC77B00)
+        ExampleHostLogSeverity.Error -> Color(0xFFD64242)
+    }
 
 @Composable
 private fun hdrEvidenceStatusText(

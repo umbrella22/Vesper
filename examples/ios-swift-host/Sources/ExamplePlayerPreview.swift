@@ -67,7 +67,7 @@ import VesperPlayerKit
     .background(Color.black)
 }
 
-#Preview("Sources Light") {
+#Preview("Play Sources Light") {
     let palette = exampleHostPalette(useDarkTheme: false)
     ZStack {
         LinearGradient(
@@ -77,14 +77,12 @@ import VesperPlayerKit
         )
         .ignoresSafeArea()
 
-        ExampleSourceSection(
+        ExampleQuickSourcePanel(
             palette: palette,
-            themeMode: .system,
             remoteStreamUrl: .constant(IOS_HLS_DEMO_URL),
             hostMessage: nil,
             dashDemoEnabled: true,
             dashDemoNote: nil,
-            onThemeModeChange: { _ in },
             onPickVideo: {},
             onUseHlsDemo: {},
             onUseDashDemo: {},
@@ -95,7 +93,7 @@ import VesperPlayerKit
     }
 }
 
-#Preview("Playlist Light") {
+#Preview("Play Queue Light") {
     let palette = exampleHostPalette(useDarkTheme: false)
     ZStack {
         LinearGradient(
@@ -105,10 +103,11 @@ import VesperPlayerKit
         )
         .ignoresSafeArea()
 
-        ExamplePlaylistSection(
+        ExampleQueuePanel(
             palette: palette,
             playlistQueue: previewPlaylistQueue(),
-            onFocusPlaylistItem: { _ in }
+            onFocusPlaylistItem: { _ in },
+            onManageQueue: {}
         )
         .padding(20)
     }

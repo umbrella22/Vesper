@@ -38,10 +38,15 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
       if (!preservePlaylistState) {
         _playlistItemIds = <String>[flutterHlsPlaylistItemId];
         _activePlaylistItemId = flutterHlsPlaylistItemId;
+        _activeDirectSource = selectedSource;
+        _playbackOrigin = const ExampleQueuePlaybackOrigin(
+          flutterHlsPlaylistItemId,
+        );
       }
 
       final previous = _controller;
       _controller = nextController;
+      _observeControllerSnapshot(nextController);
       if (previous != null && !identical(previous, nextController)) {
         _disposeControllerSilently(previous);
       }
@@ -77,9 +82,7 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
     }
 
     final previousController = _controller ?? await _controllerFuture;
-    final activeSource = _activePlaylistItemId == null
-        ? null
-        : _playlistSourceForItem(_activePlaylistItemId!);
+    final activeSource = _activePlaybackSource();
     final previousSnapshot = previousController.snapshot;
     final restorePositionMs = previousSnapshot.timeline.positionMs;
     final shouldResumePlayback =
@@ -88,6 +91,7 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
     _updateState(() {
       _sourceNormalizerSetting = setting;
       _isRebuildingController = true;
+      _appendHostLog(title: '插件模式已切换', detail: setting.title);
       _controllerFuture = _createController(
         initialSource: activeSource,
         preservePlaylistState: true,
@@ -152,6 +156,7 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
       case VesperDownloadTaskRemovedEvent():
       case VesperDownloadErrorEvent():
       case VesperDownloadDisposedEvent():
+      case VesperDownloadUnknownEvent():
         break;
     }
   }
@@ -175,6 +180,7 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
     _updateState(() {
       _selectedResilienceProfile = profile;
       _isApplyingResilienceProfile = true;
+      _appendHostLog(title: '插件模式已切换', detail: profile.title);
     });
     try {
       await controller.setResiliencePolicy(profile.policy);
@@ -196,8 +202,11 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
 
   Future<void> _selectSource(
     VesperPlayerController controller,
-    VesperPlayerSource source,
-  ) async {
+    VesperPlayerSource source, {
+    ExamplePlaybackOrigin? origin,
+  }) async {
+    _activeDirectSource = source;
+    _playbackOrigin = origin;
     if (source.kind == VesperPlayerSourceKind.remote) {
       _remoteUrlController.text = source.uri;
     }

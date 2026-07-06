@@ -101,6 +101,108 @@ final class ExampleTimelineRegressionTests: XCTestCase {
         XCTAssertEqual(fairPlay?.notes.first?.contains("Bearer fake"), false)
     }
 
+    func testDolbyCatalogFilterMatchesDrmProfileAndFps() {
+        let catalog = buildExampleDolbyAcceptanceCatalog(fairPlayConfiguration: nil)
+        let filtered = filterDolbyAcceptancePresets(
+            catalog,
+            drmKind: .clear,
+            profile: .p81,
+            fps: 50
+        )
+
+        XCTAssertEqual(filtered.count, 2)
+        XCTAssertTrue(filtered.allSatisfy { $0.drmKind == .clear })
+        XCTAssertTrue(filtered.allSatisfy { $0.profile == .p81 })
+        XCTAssertTrue(filtered.allSatisfy { $0.fps == 50 })
+    }
+
+    func testDolbyPlaylistItemIdResolvesPlayablePresetIntoQueueItem() {
+        let preset = buildExampleDolbyAcceptanceCatalog(fairPlayConfiguration: nil).first {
+            $0.drmKind == .clear &&
+                $0.sourceProtocol == .hls &&
+                $0.profile == .p5 &&
+                $0.fps == 24
+        }!
+        let itemId = dolbyPlaylistItemId(preset.id)
+
+        XCTAssertEqual(dolbyPresetIdFromPlaylistItemId(itemId), preset.id)
+        let queue = examplePlaylistQueue(playlistItemIds: [itemId])
+        XCTAssertEqual(queue.map(\.itemId), [itemId])
+        XCTAssertEqual(queue.first?.source.uri, preset.source.uri)
+    }
+
+    func testPendingDolbyPresetCannotBeQueued() {
+        let catalog = buildExampleDolbyAcceptanceCatalog(fairPlayConfiguration: nil)
+        let widevine = catalog.first { $0.drmKind == .widevinePending }!
+        let fairPlay = catalog.first { $0.drmKind == .fairPlay }!
+
+        XCTAssertFalse(canQueueDolbyAcceptancePreset(widevine))
+        XCTAssertFalse(canQueueDolbyAcceptancePreset(fairPlay))
+        XCTAssertTrue(
+            examplePlaylistQueue(
+                playlistItemIds: [
+                    dolbyPlaylistItemId(widevine.id),
+                    dolbyPlaylistItemId(fairPlay.id),
+                ]
+            ).isEmpty
+        )
+    }
+
+    func testConfiguredFairPlayPresetCanBeQueued() {
+        let config = ExampleFairPlayLocalConfiguration(
+            licenseUri: "https://license.example.com/fps",
+            certificateUri: "https://license.example.com/fps.cer",
+            certificateBase64: nil,
+            licenseHeaders: [:]
+        )
+        let fairPlay = buildExampleDolbyAcceptanceCatalog(fairPlayConfiguration: config).first {
+            $0.drmKind == .fairPlay &&
+                $0.sourceProtocol == .hls
+        }!
+
+        XCTAssertTrue(canQueueDolbyAcceptancePreset(fairPlay))
+    }
+
+    func testDolbyAdHocOriginDoesNotAdvancePlaylistOnFinished() {
+        XCTAssertFalse(
+            shouldAdvancePlaylistOnFinished(
+                origin: .dolbyAdHoc(presetId: "DOLBY-DV-P5-24-HLS-CLEAR"),
+                activeItemId: IOS_HLS_PLAYLIST_ITEM_ID
+            )
+        )
+        XCTAssertFalse(
+            shouldAdvancePlaylistOnFinished(
+                origin: .queue(itemId: IOS_DASH_PLAYLIST_ITEM_ID),
+                activeItemId: IOS_HLS_PLAYLIST_ITEM_ID
+            )
+        )
+        XCTAssertTrue(
+            shouldAdvancePlaylistOnFinished(
+                origin: .queue(itemId: IOS_HLS_PLAYLIST_ITEM_ID),
+                activeItemId: IOS_HLS_PLAYLIST_ITEM_ID
+            )
+        )
+    }
+
+    func testEventLogIsBoundedNewestFirst() {
+        let entries = (0..<83).reduce(into: [ExampleHostLogEntry]()) { values, index in
+            values = appendExampleHostLogEntry(
+                values,
+                entry: ExampleHostLogEntry(
+                    id: Int64(index),
+                    atMillis: Int64(index),
+                    severity: .info,
+                    title: "entry-\(index)",
+                    detail: nil
+                )
+            )
+        }
+
+        XCTAssertEqual(entries.count, EXAMPLE_HOST_LOG_CAPACITY)
+        XCTAssertEqual(entries.first?.id, 82)
+        XCTAssertEqual(entries.last?.id, 3)
+    }
+
     func testFairPlayLocalConfigReadsEnvironmentWithoutLeakingSecretsIntoSummary() {
         let config = exampleFairPlayLocalConfiguration(
             environment: [

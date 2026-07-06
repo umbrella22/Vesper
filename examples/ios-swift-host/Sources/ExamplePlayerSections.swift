@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import VesperPlayerKit
 
@@ -25,14 +26,33 @@ struct ExamplePlayerHeader: View {
     }
 }
 
-struct ExampleSourceSection: View {
+struct ExampleThemeModeControl: View {
     let palette: ExampleHostPalette
     let themeMode: ExampleThemeMode
+    let onThemeModeChange: (ExampleThemeMode) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(ExampleThemeMode.allCases) { mode in
+                    ExampleThemeModeChip(
+                        mode: mode,
+                        selected: themeMode == mode,
+                        palette: palette,
+                        onClick: { onThemeModeChange(mode) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+struct ExampleQuickSourcePanel: View {
+    let palette: ExampleHostPalette
     @Binding var remoteStreamUrl: String
     let hostMessage: String?
     let dashDemoEnabled: Bool
     let dashDemoNote: String?
-    let onThemeModeChange: (ExampleThemeMode) -> Void
     let onPickVideo: () -> Void
     let onUseHlsDemo: () -> Void
     let onUseDashDemo: () -> Void
@@ -73,25 +93,6 @@ struct ExampleSourceSection: View {
                     .font(.footnote)
                     .foregroundStyle(palette.body)
                     .lineSpacing(4)
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text(ExampleI18n.themeTitle)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(palette.title)
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(ExampleThemeMode.allCases) { mode in
-                            ExampleThemeModeChip(
-                                mode: mode,
-                                selected: themeMode == mode,
-                                palette: palette,
-                                onClick: { onThemeModeChange(mode) }
-                            )
-                        }
-                    }
-                }
             }
 
             TextField(ExampleI18n.remoteUrlPlaceholder, text: $remoteStreamUrl)
@@ -138,24 +139,29 @@ struct ExampleSourceSection: View {
     }
 }
 
-struct ExamplePlaylistSection: View {
+struct ExampleQueuePanel: View {
     let palette: ExampleHostPalette
     let playlistQueue: [VesperPlaylistQueueItemState]
     let onFocusPlaylistItem: (String) -> Void
+    let onManageQueue: () -> Void
+
+    private var compactItems: [VesperPlaylistQueueItemState] {
+        compactQueueItems(playlistQueue)
+    }
 
     var body: some View {
         ExampleSectionShell(
             palette: palette,
-            title: ExampleI18n.playlistTitle,
-            subtitle: ExampleI18n.playlistSubtitle
+            title: ExampleI18n.queueTitle,
+            subtitle: ExampleI18n.queueSubtitle
         ) {
             if playlistQueue.isEmpty {
-                Text(ExampleI18n.playlistEmpty)
+                Text(ExampleI18n.queueEmpty)
                     .font(.footnote)
                     .foregroundStyle(palette.body)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(playlistQueue, id: \.item.itemId) { item in
+                    ForEach(compactItems, id: \.item.itemId) { item in
                         PlaylistQueueRow(
                             label: item.item.source.label,
                             hint: item.isActive ? ExampleI18n.playlistStatusCurrent : playlistHintLabel(item.viewportHint),
@@ -164,10 +170,67 @@ struct ExamplePlaylistSection: View {
                             onClick: { onFocusPlaylistItem(item.item.itemId) }
                         )
                     }
+                    Button(action: onManageQueue) {
+                        Label(ExampleI18n.queueManage, systemImage: "list.bullet")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(palette.primaryAction)
                 }
             }
         }
     }
+}
+
+struct ExampleQueueManagementSheet: View {
+    let palette: ExampleHostPalette
+    let playlistQueue: [VesperPlaylistQueueItemState]
+    let onFocusPlaylistItem: (String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if playlistQueue.isEmpty {
+                        Text(ExampleI18n.queueEmpty)
+                            .font(.footnote)
+                            .foregroundStyle(palette.body)
+                    } else {
+                        ForEach(playlistQueue, id: \.item.itemId) { item in
+                            PlaylistQueueRow(
+                                label: item.item.source.label,
+                                hint: item.isActive ? ExampleI18n.playlistStatusCurrent : playlistHintLabel(item.viewportHint),
+                                active: item.isActive,
+                                palette: palette,
+                                onClick: { onFocusPlaylistItem(item.item.itemId) }
+                            )
+                        }
+                    }
+                }
+                .padding(20)
+            }
+            .background(palette.pageBottom.ignoresSafeArea())
+            .navigationTitle(ExampleI18n.queueManage)
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+func compactQueueItems(
+    _ items: [VesperPlaylistQueueItemState],
+    maxVisibleItems: Int = 5
+) -> [VesperPlaylistQueueItemState] {
+    guard items.count > maxVisibleItems,
+          let activeIndex = items.firstIndex(where: { $0.isActive })
+    else {
+        return Array(items.prefix(maxVisibleItems))
+    }
+
+    let lowerBound = max(0, activeIndex - 2)
+    let upperBound = min(items.count, lowerBound + maxVisibleItems)
+    let start = max(0, upperBound - maxVisibleItems)
+    return Array(items[start..<upperBound])
 }
 
 private struct PlaylistQueueRow: View {
@@ -204,7 +267,7 @@ private struct PlaylistQueueRow: View {
     }
 }
 
-struct ExampleDolbyAcceptanceSection: View {
+struct ExampleDolbyCatalogPanel: View {
     let palette: ExampleHostPalette
     let presets: [ExampleDolbyAcceptancePreset]
     let selectedDrmKind: ExampleDolbyAcceptanceDrmKind
@@ -213,14 +276,16 @@ struct ExampleDolbyAcceptanceSection: View {
     let onDrmKindChange: (ExampleDolbyAcceptanceDrmKind) -> Void
     let onProfileChange: (ExampleDolbyAcceptanceProfile?) -> Void
     let onFpsChange: (Int?) -> Void
-    let onPresetSelected: (ExampleDolbyAcceptancePreset) -> Void
+    let onPresetPlayNow: (ExampleDolbyAcceptancePreset) -> Void
+    let onPresetAddToQueue: (ExampleDolbyAcceptancePreset) -> Void
 
     private var filteredPresets: [ExampleDolbyAcceptancePreset] {
-        presets.filter { preset in
-            preset.drmKind == selectedDrmKind &&
-                (selectedProfile == nil || preset.profile == selectedProfile) &&
-                (selectedFps == nil || preset.fps == selectedFps)
-        }
+        filterDolbyAcceptancePresets(
+            presets,
+            drmKind: selectedDrmKind,
+            profile: selectedProfile,
+            fps: selectedFps
+        )
     }
 
     var body: some View {
@@ -298,12 +363,13 @@ struct ExampleDolbyAcceptanceSection: View {
                         .font(.footnote)
                         .foregroundStyle(palette.body)
                 } else {
-                    VStack(alignment: .leading, spacing: 10) {
+                    LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(filteredPresets) { preset in
                             DolbyAcceptancePresetRow(
                                 preset: preset,
                                 palette: palette,
-                                onClick: { onPresetSelected(preset) }
+                                onPresetPlayNow: { onPresetPlayNow(preset) },
+                                onPresetAddToQueue: { onPresetAddToQueue(preset) }
                             )
                         }
                     }
@@ -325,10 +391,11 @@ struct ExampleDolbyAcceptanceSection: View {
 private struct DolbyAcceptancePresetRow: View {
     let preset: ExampleDolbyAcceptancePreset
     let palette: ExampleHostPalette
-    let onClick: () -> Void
+    let onPresetPlayNow: () -> Void
+    let onPresetAddToQueue: () -> Void
 
     var body: some View {
-        Button(action: onClick) {
+        VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(preset.label)
                     .font(.body.weight(.semibold))
@@ -353,18 +420,30 @@ private struct DolbyAcceptancePresetRow: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .foregroundStyle(preset.isPlayable ? palette.title : palette.body)
-            .background(palette.fieldBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(palette.sectionStroke, lineWidth: 1)
-            )
-            .opacity(preset.isPlayable ? 1.0 : 0.58)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    Button(ExampleI18n.dolbyAcceptancePlayNow, action: onPresetPlayNow)
+                        .buttonStyle(.borderedProminent)
+                        .tint(palette.primaryAction)
+                        .disabled(!preset.isPlayable)
+                    Button(ExampleI18n.dolbyAcceptanceAddToQueue, action: onPresetAddToQueue)
+                        .buttonStyle(.bordered)
+                        .tint(palette.primaryAction)
+                        .disabled(!canQueueDolbyAcceptancePreset(preset))
+                }
+                .frame(minHeight: 44)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(!preset.isPlayable)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .foregroundStyle(preset.isPlayable ? palette.title : palette.body)
+        .background(palette.fieldBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(palette.sectionStroke, lineWidth: 1)
+        )
+        .opacity(preset.isPlayable ? 1.0 : 0.58)
     }
 }
 
@@ -866,6 +945,146 @@ private func pluginDisplayValue(_ paths: [String]) -> String {
 private func pluginRecordTitle(pluginName: String, status: String) -> String {
     let value = [pluginName, status].filter { !$0.isEmpty }.joined(separator: " · ")
     return value.isEmpty ? ExampleI18n.pluginUnknownRecord : value
+}
+
+struct ExampleDiagnosticsSummarySection: View {
+    let palette: ExampleHostPalette
+    let sourceLabel: String
+    let sourceProtocol: String
+    let routeLabel: String
+    let playbackOrigin: ExamplePlaybackOrigin?
+    let sourceNormalizerSetting: ExampleSourceNormalizerSetting
+    let nativeFramePipelineSetting: ExampleNativeFramePipelineSetting
+
+    var body: some View {
+        ExampleSectionShell(
+            palette: palette,
+            title: ExampleI18n.diagnosticsSummaryTitle,
+            subtitle: ExampleI18n.diagnosticsSummarySubtitle
+        ) {
+            VStack(alignment: .leading, spacing: 4) {
+                ExampleFactRow(label: ExampleI18n.diagnosticsSource, value: sourceLabel, palette: palette)
+                ExampleFactRow(label: ExampleI18n.diagnosticsProtocol, value: sourceProtocol, palette: palette)
+                ExampleFactRow(label: ExampleI18n.diagnosticsRoute, value: routeLabel, palette: palette)
+                ExampleFactRow(label: ExampleI18n.diagnosticsOrigin, value: playbackOriginLabel(playbackOrigin), palette: palette)
+                ExampleFactRow(
+                    label: ExampleI18n.diagnosticsSourceNormalizer,
+                    value: sourceNormalizerSetting.title,
+                    palette: palette
+                )
+                ExampleFactRow(
+                    label: ExampleI18n.diagnosticsNativeFrame,
+                    value: nativeFramePipelineSetting.title,
+                    palette: palette
+                )
+            }
+        }
+    }
+}
+
+private func playbackOriginLabel(_ origin: ExamplePlaybackOrigin?) -> String {
+    switch origin {
+    case let .queue(itemId):
+        return ExampleI18n.diagnosticsOriginQueue(itemId)
+    case let .dolbyAdHoc(presetId):
+        return ExampleI18n.diagnosticsOriginDolby(presetId)
+    case nil:
+        return ExampleI18n.diagnosticsOriginNone
+    }
+}
+
+struct ExampleEventLogSection: View {
+    let palette: ExampleHostPalette
+    let entries: [ExampleHostLogEntry]
+
+    private static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+
+    var body: some View {
+        ExampleSectionShell(
+            palette: palette,
+            title: ExampleI18n.eventLogTitle,
+            subtitle: ExampleI18n.eventLogSubtitle
+        ) {
+            if entries.isEmpty {
+                Text(ExampleI18n.eventLogEmpty)
+                    .font(.footnote)
+                    .foregroundStyle(palette.body)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(entries) { entry in
+                        EventLogRow(
+                            entry: entry,
+                            timeLabel: Self.formatter.string(
+                                from: Date(timeIntervalSince1970: TimeInterval(entry.atMillis) / 1000.0)
+                            ),
+                            palette: palette
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct EventLogRow: View {
+    let entry: ExampleHostLogEntry
+    let timeLabel: String
+    let palette: ExampleHostPalette
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(timeLabel)
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(palette.body)
+                    .frame(width: 72, alignment: .leading)
+                Text(eventSeverityLabel(entry.severity))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(eventSeverityColor(entry.severity))
+                Text(entry.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(palette.title)
+                    .lineLimit(1)
+            }
+            if let detail = entry.detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.footnote)
+                    .foregroundStyle(palette.body)
+                    .lineLimit(3)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.fieldBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+private func eventSeverityLabel(_ severity: ExampleHostLogSeverity) -> String {
+    switch severity {
+    case .info:
+        return "INFO"
+    case .warning:
+        return "WARN"
+    case .error:
+        return "ERROR"
+    }
+}
+
+private func eventSeverityColor(_ severity: ExampleHostLogSeverity) -> Color {
+    switch severity {
+    case .info:
+        return Color(red: 0.145, green: 0.427, blue: 1.0)
+    case .warning:
+        return Color(red: 0.76, green: 0.45, blue: 0.08)
+    case .error:
+        return Color(red: 0.76, green: 0.24, blue: 0.21)
+    }
 }
 
 struct ExampleThemeModeChip: View {

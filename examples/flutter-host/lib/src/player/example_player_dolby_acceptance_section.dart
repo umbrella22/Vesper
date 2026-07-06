@@ -1,7 +1,7 @@
 part of 'example_player_sections.dart';
 
-class ExampleDolbyAcceptanceSection extends StatelessWidget {
-  const ExampleDolbyAcceptanceSection({
+class ExampleDolbyCatalogPanel extends StatelessWidget {
+  const ExampleDolbyCatalogPanel({
     super.key,
     required this.palette,
     required this.presets,
@@ -11,7 +11,8 @@ class ExampleDolbyAcceptanceSection extends StatelessWidget {
     required this.onDrmKindChanged,
     required this.onProfileChanged,
     required this.onFpsChanged,
-    required this.onPresetSelected,
+    required this.onPresetPlayNow,
+    required this.onPresetAddToQueue,
     this.isPresetPlayable,
     this.disabledReasonForPreset,
   });
@@ -24,19 +25,19 @@ class ExampleDolbyAcceptanceSection extends StatelessWidget {
   final ValueChanged<ExampleDolbyAcceptanceDrmKind> onDrmKindChanged;
   final ValueChanged<ExampleDolbyAcceptanceProfile?> onProfileChanged;
   final ValueChanged<int?> onFpsChanged;
-  final ValueChanged<ExampleDolbyAcceptancePreset> onPresetSelected;
+  final ValueChanged<ExampleDolbyAcceptancePreset> onPresetPlayNow;
+  final ValueChanged<ExampleDolbyAcceptancePreset> onPresetAddToQueue;
   final bool Function(ExampleDolbyAcceptancePreset preset)? isPresetPlayable;
   final String? Function(ExampleDolbyAcceptancePreset preset)?
   disabledReasonForPreset;
 
   List<ExampleDolbyAcceptancePreset> get _filteredPresets {
-    return presets
-        .where((preset) {
-          return preset.drmKind == selectedDrmKind &&
-              (selectedProfile == null || preset.profile == selectedProfile) &&
-              (selectedFps == null || preset.fps == selectedFps);
-        })
-        .toList(growable: false);
+    return filterDolbyAcceptancePresets(
+      presets: presets,
+      drmKind: selectedDrmKind,
+      profile: selectedProfile,
+      fps: selectedFps,
+    );
   }
 
   @override
@@ -93,23 +94,36 @@ class ExampleDolbyAcceptanceSection extends StatelessWidget {
               ).textTheme.bodySmall?.copyWith(color: palette.body),
             )
           else
-            ...filteredPresets.map((preset) {
-              final playable =
-                  isPresetPlayable?.call(preset) ?? preset.isPlayable;
-              final disabledReason = playable
-                  ? null
-                  : disabledReasonForPreset?.call(preset);
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: ExampleDolbyAcceptancePresetRow(
-                  preset: preset,
-                  palette: palette,
-                  playable: playable,
-                  disabledReason: disabledReason,
-                  onSelected: playable ? () => onPresetSelected(preset) : null,
-                ),
-              );
-            }),
+            SizedBox(
+              height: 460,
+              child: ListView.builder(
+                itemCount: filteredPresets.length,
+                itemBuilder: (context, index) {
+                  final preset = filteredPresets[index];
+                  final playable =
+                      isPresetPlayable?.call(preset) ?? preset.isPlayable;
+                  final disabledReason = playable
+                      ? null
+                      : disabledReasonForPreset?.call(preset);
+                  return Padding(
+                    key: ValueKey<String>(preset.id),
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: ExampleDolbyAcceptancePresetRow(
+                      preset: preset,
+                      palette: palette,
+                      playable: playable,
+                      disabledReason: disabledReason,
+                      onPlayNow: playable
+                          ? () => onPresetPlayNow(preset)
+                          : null,
+                      onAddToQueue: playable
+                          ? () => onPresetAddToQueue(preset)
+                          : null,
+                    ),
+                  );
+                },
+              ),
+            ),
         ],
       ),
     );
@@ -123,19 +137,20 @@ class ExampleDolbyAcceptancePresetRow extends StatelessWidget {
     required this.palette,
     required this.playable,
     required this.disabledReason,
-    required this.onSelected,
+    required this.onPlayNow,
+    required this.onAddToQueue,
   });
 
   final ExampleDolbyAcceptancePreset preset;
   final ExampleHostPalette palette;
   final bool playable;
   final String? disabledReason;
-  final VoidCallback? onSelected;
+  final VoidCallback? onPlayNow;
+  final VoidCallback? onAddToQueue;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final enabled = onSelected != null;
     final details = <String>[
       preset.profile.title,
       '${preset.fps}fps',
@@ -143,53 +158,44 @@ class ExampleDolbyAcceptancePresetRow extends StatelessWidget {
       preset.drmKind.title,
       preset.manualGate,
     ].join(' · ');
-    return OutlinedButton(
-      onPressed: onSelected,
-      style: OutlinedButton.styleFrom(
-        alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        foregroundColor: enabled ? palette.title : palette.body,
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: palette.fieldBackground,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: palette.sectionStroke),
       ),
       child: SizedBox(
         width: double.infinity,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Icon(
-                  playable
-                      ? Icons.play_circle_outline_rounded
-                      : Icons.lock_clock_rounded,
-                  size: 18,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    preset.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Icon(
+                    playable
+                        ? Icons.play_circle_outline_rounded
+                        : Icons.lock_clock_rounded,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      preset.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: playable ? palette.title : palette.body,
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              details,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: palette.body,
-                height: 1.35,
+                ],
               ),
-            ),
-            if (disabledReason != null || preset.notes.isNotEmpty) ...<Widget>[
-              const SizedBox(height: 4),
+              const SizedBox(height: 6),
               Text(
-                disabledReason ?? preset.notes.first,
+                details,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.bodySmall?.copyWith(
@@ -197,8 +203,42 @@ class ExampleDolbyAcceptancePresetRow extends StatelessWidget {
                   height: 1.35,
                 ),
               ),
+              if (disabledReason != null ||
+                  preset.notes.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 4),
+                Text(
+                  disabledReason ?? preset.notes.first,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: palette.body,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 10),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: <Widget>[
+                    FilledButton(
+                      onPressed: onPlayNow,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: palette.primaryAction,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('立即播放'),
+                    ),
+                    const SizedBox(width: 10),
+                    OutlinedButton(
+                      onPressed: onAddToQueue,
+                      child: const Text('加入队列'),
+                    ),
+                  ],
+                ),
+              ),
             ],
-          ],
+          ),
         ),
       ),
     );

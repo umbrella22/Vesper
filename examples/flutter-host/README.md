@@ -10,6 +10,7 @@ Use this example as a reference for:
 - Source selection, quality / audio / subtitle / speed sheets
 - Configuring `VesperPlaybackResiliencePolicy`
 - Exercising Android external playback through Cast / DLNA and iOS AirPlay
+- Keeping playback, diagnostics, and download workflows separated
 - SourceNormalizer plugin diagnostics panel on Android and iOS. The example
   defaults to `preflightOnly` and lets you switch among `disabled`,
   `diagnosticsOnly`, `preflightOnly`, `preferNormalized`, and
@@ -17,6 +18,27 @@ Use this example as a reference for:
 - FrameProcessor diagnostic plugin logging when the optional artifact is
   bundled. The example does not expose a mobile FrameProcessor toggle and does
   not route frames through the plugin.
+- Dolby Browser Test Kit catalog with explicit `Play now` and `Add to queue`
+  actions.
+- Bounded in-app event log for host UI actions such as source selection,
+  Dolby actions, plugin mode changes, external-route events, and HDR evidence
+  capture results.
+
+## Host Workspaces
+
+The host is organized into three bottom-navigation workspaces:
+
+- `Play` keeps the player stage, theme control, quick source actions, system
+  playback / Picture in Picture, and compact queue focused on the first
+  workflow.
+- `Diagnostics` contains the session summary, bounded event log, Dolby
+  catalog, plugin diagnostics, HDR evidence capture, and resilience controls.
+- `Downloads` stays isolated for download regression testing.
+
+Dolby presets default to ad-hoc `Play now`, which starts that preset without
+changing the real playback queue. A preset enters continuous playback only when
+the user selects `Add to queue`. The event log is an example-host operation
+log; it does not read Logcat, native logs, or system diagnostic streams.
 
 ## Requirements
 
