@@ -948,17 +948,16 @@ internal fun VesperNativeJniBindings.notifyNativeUpdate() {
     }
 }
 
-internal fun VesperNativeJniBindings.openSourceNormalizerResourceForPlayback(
+internal fun VesperNativeJniBindings.prepareSourceNormalizerResourceForPlayback(
     source: VesperPlayerSource,
     enabled: Boolean,
-): NativeSourceNormalizerResourceOpenOutcome {
-    closeCurrentSourceNormalizerResource()
+): NativeSourceNormalizerResourcePreparedOpenOutcome {
     if (!enabled) {
         Log.i(NATIVE_JNI_BINDINGS_TAG, "source normalizer resource playback skipped for SDK-managed native-frame route")
-        return NativeSourceNormalizerResourceOpenOutcome()
+        return NativeSourceNormalizerResourcePreparedOpenOutcome()
     }
     if (!sourceNormalizerConfiguration.shouldOpenNormalizedResourceForPlayback(source)) {
-        return NativeSourceNormalizerResourceOpenOutcome()
+        return NativeSourceNormalizerResourcePreparedOpenOutcome()
     }
     VesperNativeLibrary.ensureLoaded()
     val outputRoot = File(appContext.cacheDir, "vesper-source-normalizer").absolutePath
@@ -978,22 +977,49 @@ internal fun VesperNativeJniBindings.openSourceNormalizerResourceForPlayback(
             }
             Log.w(NATIVE_JNI_BINDINGS_TAG, "source normalizer normalized resource open failed; using original source", error)
             null
-        } ?: return NativeSourceNormalizerResourceOpenOutcome()
+        } ?: return NativeSourceNormalizerResourcePreparedOpenOutcome()
 
     parseSourceNormalizerBypassDiagnostics(json)?.let { diagnostics ->
         val bypassReason = sourceNormalizerBypassReason(diagnostics)
         Log.i(NATIVE_JNI_BINDINGS_TAG, "source normalizer resource bypassed; route=native fallbackReason=$bypassReason")
-        return NativeSourceNormalizerResourceOpenOutcome(diagnostics = diagnostics)
+        return NativeSourceNormalizerResourcePreparedOpenOutcome(diagnostics = diagnostics)
     }
+    return NativeSourceNormalizerResourcePreparedOpenOutcome(resourceJson = json)
+}
+
+internal fun VesperNativeJniBindings.openPreparedSourceNormalizerResourceForPlayback(
+    source: VesperPlayerSource,
+    prepared: NativeSourceNormalizerResourcePreparedOpenOutcome,
+): NativeSourceNormalizerResourceOpenOutcome {
+    closeCurrentSourceNormalizerResource()
+    val json =
+        prepared.resourceJson
+            ?: return NativeSourceNormalizerResourceOpenOutcome(diagnostics = prepared.diagnostics)
     val resource =
         parseSourceNormalizerResource(json, source, sourceNormalizerLoopbackServer)
-            ?: return NativeSourceNormalizerResourceOpenOutcome()
+            ?: run {
+                disposePreparedSourceNormalizerResourceForPlayback(prepared)
+                return NativeSourceNormalizerResourceOpenOutcome()
+            }
     currentSourceNormalizerResource = resource
     Log.i(
         NATIVE_JNI_BINDINGS_TAG,
         "source normalizer resource selected route=${resource.outputRoute} playbackUri=${resource.playbackSource.uri}",
     )
     return NativeSourceNormalizerResourceOpenOutcome(resource = resource)
+}
+
+internal fun VesperNativeJniBindings.disposePreparedSourceNormalizerResourceForPlayback(
+    prepared: NativeSourceNormalizerResourcePreparedOpenOutcome,
+) {
+    val handle = prepared.resourceJson?.let(::sourceNormalizerResourceHandle) ?: return
+    if (handle == 0L) {
+        return
+    }
+    runCatching { VesperNativeJni.disposeSourceNormalizerResource(handle) }
+        .onFailure { error ->
+            Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose stale prepared source normalizer resource", error)
+        }
 }
 
 internal fun VesperNativeJniBindings.closeCurrentSourceNormalizerResource() {

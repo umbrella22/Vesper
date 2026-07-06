@@ -133,12 +133,23 @@ internal class VesperNativeJniBindings(
         return parsePluginDiagnosticsJson(json)
     }
 
+    override fun prepareSourceNormalizerForPlayback(
+        source: VesperPlayerSource,
+        enabled: Boolean,
+    ): NativeSourceNormalizerResourcePreparedOpenOutcome =
+        prepareSourceNormalizerResourceForPlayback(source, enabled)
+
+    override fun disposePreparedSourceNormalizerResource(
+        prepared: NativeSourceNormalizerResourcePreparedOpenOutcome,
+    ) = disposePreparedSourceNormalizerResourceForPlayback(prepared)
+
     override fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
         trackPreferencePolicy: VesperTrackPreferencePolicy,
         systemPlaybackUsesSourceNormalizerResource: Boolean,
         systemPlaybackVideoEnabled: Boolean,
+        preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
     ): NativeBridgeStartup {
         Log.i(NATIVE_JNI_BINDINGS_TAG, "initialize source=${source.uri} kind=${source.kind} protocol=${source.protocol}")
         dispose()
@@ -156,9 +167,9 @@ internal class VesperNativeJniBindings(
         check(handle != 0L) { "native session handle must not be zero" }
         sessionHandle = handle
         val sourceNormalizerOpen =
-            openSourceNormalizerResourceForPlayback(
+            openPreparedSourceNormalizerResourceForPlayback(
                 source,
-                enabled = systemPlaybackUsesSourceNormalizerResource,
+                prepared = preparedSourceNormalizer,
             )
         val normalizedResource = sourceNormalizerOpen.resource
         val playbackSource = normalizedResource?.playbackSource ?: source

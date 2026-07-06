@@ -205,12 +205,22 @@ internal interface VesperNativeBindings {
         frameProcessorConfiguration: VesperFrameProcessorConfiguration,
     ): List<Map<String, Any?>>
 
+    fun prepareSourceNormalizerForPlayback(
+        source: VesperPlayerSource,
+        enabled: Boolean,
+    ): NativeSourceNormalizerResourcePreparedOpenOutcome
+
+    fun disposePreparedSourceNormalizerResource(
+        prepared: NativeSourceNormalizerResourcePreparedOpenOutcome,
+    )
+
     fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
         trackPreferencePolicy: VesperTrackPreferencePolicy,
         systemPlaybackUsesSourceNormalizerResource: Boolean,
         systemPlaybackVideoEnabled: Boolean,
+        preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
     ): NativeBridgeStartup
     fun openNativeFramePipeline(
         source: VesperPlayerSource,
@@ -262,12 +272,23 @@ internal class MissingVesperNativeBindings : VesperNativeBindings {
         frameProcessorConfiguration: VesperFrameProcessorConfiguration,
     ): List<Map<String, Any?>> = emptyList()
 
+    override fun prepareSourceNormalizerForPlayback(
+        source: VesperPlayerSource,
+        enabled: Boolean,
+    ): NativeSourceNormalizerResourcePreparedOpenOutcome =
+        NativeSourceNormalizerResourcePreparedOpenOutcome()
+
+    override fun disposePreparedSourceNormalizerResource(
+        prepared: NativeSourceNormalizerResourcePreparedOpenOutcome,
+    ) = Unit
+
     override fun initialize(
         source: VesperPlayerSource,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
         trackPreferencePolicy: VesperTrackPreferencePolicy,
         systemPlaybackUsesSourceNormalizerResource: Boolean,
         systemPlaybackVideoEnabled: Boolean,
+        preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
     ): NativeBridgeStartup {
         throw UnsupportedOperationException(VesperNativeLibrary.failureMessage())
     }

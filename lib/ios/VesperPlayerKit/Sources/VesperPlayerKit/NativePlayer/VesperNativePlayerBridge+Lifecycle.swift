@@ -58,7 +58,6 @@ extension VesperNativePlayerBridge {
         iosHostLog(
             "initialize source=\(currentSource.uri) label=\(currentSource.label) kind=\(currentSource.kind.rawValue) protocol=\(currentSource.protocol.rawValue) autoPlay=\(shouldAutoPlay)"
         )
-        currentPluginDiagnostics = probePlugins(for: currentSource)
         configureAudioSessionIfNeeded()
         pendingAutoPlay = shouldAutoPlay
         startSourceLoadTask(source: currentSource, shouldAutoPlay: shouldAutoPlay)
@@ -128,11 +127,15 @@ extension VesperNativePlayerBridge {
 
     func startSourceLoadTask(source: VesperPlayerSource, shouldAutoPlay: Bool) {
         cancelSourceLoadTask()
+        let epoch = nextSourceLoadEpoch()
         sourceLoadTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                try await self.loadCurrentSource(source)
-                guard !Task.isCancelled, self.currentSource == source else { return }
+                let pluginDiagnostics = await self.probeMobilePluginsAsync(for: source)
+                guard !Task.isCancelled, self.isCurrentSourceLoad(epoch, source: source) else { return }
+                self.currentPluginDiagnostics = self.pluginDiagnosticsWithNativeFramePipeline(pluginDiagnostics)
+                try await self.loadCurrentSource(source, sourceLoadEpoch: epoch)
+                guard !Task.isCancelled, self.isCurrentSourceLoad(epoch, source: source) else { return }
                 self.sourceLoadTask = nil
                 self.pendingNativeFrameSurfaceLoad = false
                 let shouldStartAfterLoad = shouldAutoPlay && self.pendingAutoPlay
@@ -154,6 +157,7 @@ extension VesperNativePlayerBridge {
     func cancelSourceLoadTask() {
         sourceLoadTask?.cancel()
         sourceLoadTask = nil
+        sourceLoadEpoch &+= 1
         fairPlayDrmCoordinator?.cancelPendingRequests()
     }
 
@@ -179,12 +183,31 @@ extension VesperNativePlayerBridge {
         handlePlaybackFailure(error: error, fallbackMessage: error.localizedDescription)
     }
 
-    func probePlugins(for source: VesperPlayerSource) -> [[String: Any]] {
-        VesperMobilePluginDiagnosticsProbe.run(
-            source: source,
-            sourceNormalizer: sourceNormalizerConfiguration,
-            frameProcessor: frameProcessorConfiguration
-        ) + nativeFramePipelineDiagnostics(fallbackIssue: nativeFramePipelineFallbackIssue)
+    func probeMobilePluginsAsync(for source: VesperPlayerSource) async -> [[String: Any]] {
+        let sourceNormalizer = sourceNormalizerConfiguration
+        let frameProcessor = frameProcessorConfiguration
+        return await Task.detached(priority: .utility) {
+            VesperMobilePluginDiagnosticsProbe.run(
+                source: source,
+                sourceNormalizer: sourceNormalizer,
+                frameProcessor: frameProcessor
+            )
+        }.value
+    }
+
+    func pluginDiagnosticsWithNativeFramePipeline(_ diagnostics: [[String: Any]]) -> [[String: Any]] {
+        diagnostics.filter { diagnostic in
+            (diagnostic["pluginKind"] as? String) != "native_frame_pipeline"
+        } + nativeFramePipelineDiagnostics(fallbackIssue: nativeFramePipelineFallbackIssue)
+    }
+
+    func nextSourceLoadEpoch() -> UInt64 {
+        sourceLoadEpoch &+= 1
+        return sourceLoadEpoch
+    }
+
+    func isCurrentSourceLoad(_ epoch: UInt64, source: VesperPlayerSource) -> Bool {
+        sourceLoadEpoch == epoch && currentSource == source
     }
 
     func logLinkedPluginAbiSummaryIfNeeded() {
@@ -248,7 +271,7 @@ extension VesperNativePlayerBridge {
             nativeFramePipelineFallbackIssue = nil
             iosHostLog("native-frame pipeline waiting: \(issue.message)")
         }
-        currentPluginDiagnostics = probePlugins(for: source)
+        currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
         if case .fallback(let issue) = decision {
             iosHostLog("native-frame pipeline fallback: \(issue.message)")
         }

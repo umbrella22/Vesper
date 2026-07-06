@@ -19,7 +19,7 @@ extension VesperNativePlayerBridge {
         hasAppliedDefaultTrackPreferences = false
         resetTrackState()
         _ = advancePlaybackEpoch()
-        currentPluginDiagnostics = probePlugins(for: source)
+        currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
         updateState {
             PlayerHostUiState(
                 title: $0.title,

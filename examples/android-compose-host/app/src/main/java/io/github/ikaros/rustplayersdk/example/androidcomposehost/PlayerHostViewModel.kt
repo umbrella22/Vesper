@@ -2,6 +2,7 @@ package io.github.ikaros.vesper.example.androidcomposehost
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import dalvik.system.BaseDexClassLoader
 import io.github.ikaros.vesper.player.android.VesperDownloadConfiguration
 import io.github.ikaros.vesper.player.android.VesperFrameProcessorConfiguration
@@ -24,6 +25,7 @@ import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 internal class PlayerHostViewModel(
     private val application: Application,
@@ -169,7 +171,9 @@ internal class PlayerHostViewModel(
             nativeFramePipelineConfiguration =
                 nativeFramePipelineConfiguration(nativeFramePipelineSetting),
         ).also { controller ->
-            controller.initialize()
+            viewModelScope.launch {
+                controller.initializeAsync()
+            }
         }
 
     private fun nativeFramePipelineConfiguration(

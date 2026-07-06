@@ -7,7 +7,13 @@ import android.view.ViewGroup
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
+import kotlinx.coroutines.SupervisorJob
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.Executors
 
 internal class VesperNativePlayerBridge(
     internal val bindings: VesperNativeBindings = MissingVesperNativeBindings(),
@@ -37,6 +43,14 @@ internal class VesperNativePlayerBridge(
     internal val i18n = VesperPlayerI18n.fromContext(appContext)
     internal val mainHandler = Handler(Looper.getMainLooper())
     internal val nativeFramePipelineRuntimeLock = Any()
+    internal val sourceLoadEpoch = AtomicLong(0L)
+    internal val sourceLoadDispatcher: ExecutorCoroutineDispatcher =
+        Executors.newFixedThreadPool(2) { runnable ->
+            Thread(runnable, "vesper-source-load").apply {
+                isDaemon = true
+            }
+        }.asCoroutineDispatcher()
+    internal val sourceLoadScope = CoroutineScope(SupervisorJob() + sourceLoadDispatcher)
 
     internal val _uiState = MutableStateFlow(
         PlayerHostUiState(
@@ -85,8 +99,7 @@ internal class VesperNativePlayerBridge(
         const val MAX_RUNTIME_WARNINGS = 128
     }
     internal var currentPluginDiagnostics: List<Map<String, Any?>> =
-        initialSource?.let(::probePluginsForSource)
-            ?: nativeFramePipelineDiagnostics()
+        nativeFramePipelineDiagnostics()
 
     override val backend: PlayerBridgeBackend = PlayerBridgeBackend.VesperNativeStub
     override val uiState: StateFlow<PlayerHostUiState> = _uiState.asStateFlow()
@@ -111,11 +124,16 @@ internal class VesperNativePlayerBridge(
 
     override fun initialize() = initializeNativeBridge()
 
+    override suspend fun initializeAsync() = initializeNativeBridgeAsync()
+
     override fun dispose() = disposeNativeBridge()
 
     override fun refresh() = refreshNativeBridge()
 
     override fun selectSource(source: VesperPlayerSource) = selectNativeSource(source)
+
+    override suspend fun selectSourceAsync(source: VesperPlayerSource) =
+        selectNativeSourceAsync(source)
 
     override fun attachSurfaceHost(host: ViewGroup) = attachNativeSurfaceHost(host)
 

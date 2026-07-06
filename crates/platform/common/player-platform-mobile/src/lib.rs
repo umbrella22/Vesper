@@ -1,10 +1,11 @@
 #![deny(unsafe_code)]
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use player_model::MediaSource;
 use player_plugin::{
@@ -43,7 +44,17 @@ use serde::ser::{SerializeMap, Serializer};
 const SOURCE_NORMALIZER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const SOURCE_NORMALIZER_SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 const SOURCE_NORMALIZER_RESOURCE_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const SOURCE_NORMALIZER_PREFLIGHT_CACHE_CAPACITY: usize = 64;
+const SOURCE_NORMALIZER_PREFLIGHT_SUCCESS_TTL: Duration = Duration::from_secs(5 * 60);
+const SOURCE_NORMALIZER_PREFLIGHT_FAILURE_TTL: Duration = Duration::from_secs(30);
 const FMP4_BOX_MARKER_SCAN_LIMIT_BYTES: u64 = 1024 * 1024;
+
+static SOURCE_NORMALIZER_PREFLIGHT_CACHE: LazyLock<Mutex<PreflightDiagnosticCache>> =
+    LazyLock::new(|| {
+        Mutex::new(PreflightDiagnosticCache::new(
+            SOURCE_NORMALIZER_PREFLIGHT_CACHE_CAPACITY,
+        ))
+    });
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MobilePreloadCommand {
@@ -554,6 +565,178 @@ impl Default for MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::Disabled,
             plugin_library_paths: Vec::new(),
             runtime_profile: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PreflightDiagnosticCacheKey {
+    source_uri: String,
+    runtime_profile: Option<String>,
+    mode: &'static str,
+    plugin_paths: Vec<PreflightPluginPathFingerprint>,
+}
+
+impl PreflightDiagnosticCacheKey {
+    fn from_source(
+        source: &MediaSource,
+        configuration: &MobileSourceNormalizerConfiguration,
+    ) -> Self {
+        Self {
+            source_uri: source.uri().to_owned(),
+            runtime_profile: configuration.runtime_profile.clone(),
+            mode: source_normalizer_mode_cache_label(configuration.mode),
+            plugin_paths: configuration
+                .plugin_library_paths
+                .iter()
+                .map(PreflightPluginPathFingerprint::from_path)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PreflightPluginPathFingerprint {
+    path: String,
+    len: Option<u64>,
+    modified_ms: Option<u128>,
+}
+
+impl PreflightPluginPathFingerprint {
+    fn from_path(path: &PathBuf) -> Self {
+        let metadata = fs::metadata(path).ok();
+        let len = metadata.as_ref().map(fs::Metadata::len);
+        let modified_ms = metadata
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis());
+
+        Self {
+            path: path.display().to_string(),
+            len,
+            modified_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PreflightDiagnosticCacheEntry {
+    diagnostic: PlayerPluginDiagnostic,
+    inserted_at: Instant,
+    ttl: Duration,
+    original_ready_ms: Option<u128>,
+}
+
+#[derive(Debug)]
+struct PreflightDiagnosticCache {
+    capacity: usize,
+    entries: HashMap<PreflightDiagnosticCacheKey, PreflightDiagnosticCacheEntry>,
+    lru: VecDeque<PreflightDiagnosticCacheKey>,
+}
+
+impl PreflightDiagnosticCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            entries: HashMap::new(),
+            lru: VecDeque::new(),
+        }
+    }
+
+    fn get(
+        &mut self,
+        key: &PreflightDiagnosticCacheKey,
+        now: Instant,
+    ) -> Option<PlayerPluginDiagnostic> {
+        let Some(entry) = self.entries.get(key) else {
+            return None;
+        };
+        let age = now.saturating_duration_since(entry.inserted_at);
+        if age > entry.ttl {
+            self.remove(key);
+            return None;
+        }
+
+        let mut diagnostic = entry.diagnostic.clone();
+        diagnostic
+            .details
+            .push(player_plugin_detail("cached", "true"));
+        diagnostic.details.push(player_plugin_detail(
+            "cacheAgeMs",
+            age.as_millis().to_string(),
+        ));
+        diagnostic.details.push(player_plugin_detail(
+            "originalReadyMs",
+            entry
+                .original_ready_ms
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_owned()),
+        ));
+        self.touch(key);
+        Some(diagnostic)
+    }
+
+    fn insert(
+        &mut self,
+        key: PreflightDiagnosticCacheKey,
+        diagnostic: PlayerPluginDiagnostic,
+        now: Instant,
+    ) {
+        if self.capacity == 0 {
+            return;
+        }
+
+        self.remove(&key);
+        let ttl = if diagnostic.status == PlayerPluginDiagnosticStatus::SourceNormalizerSupported {
+            SOURCE_NORMALIZER_PREFLIGHT_SUCCESS_TTL
+        } else {
+            SOURCE_NORMALIZER_PREFLIGHT_FAILURE_TTL
+        };
+        let original_ready_ms = diagnostic
+            .message
+            .as_deref()
+            .and_then(parse_ready_ms_from_diagnostic_message);
+        self.entries.insert(
+            key.clone(),
+            PreflightDiagnosticCacheEntry {
+                diagnostic,
+                inserted_at: now,
+                ttl,
+                original_ready_ms,
+            },
+        );
+        self.lru.push_back(key);
+        while self.entries.len() > self.capacity {
+            let Some(oldest) = self.lru.pop_front() else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[cfg(test)]
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.lru.clear();
+    }
+
+    fn remove(&mut self, key: &PreflightDiagnosticCacheKey) {
+        self.entries.remove(key);
+        if let Some(index) = self.lru.iter().position(|candidate| candidate == key) {
+            self.lru.remove(index);
+        }
+    }
+
+    fn touch(&mut self, key: &PreflightDiagnosticCacheKey) {
+        if let Some(index) = self.lru.iter().position(|candidate| candidate == key) {
+            if let Some(key) = self.lru.remove(index) {
+                self.lru.push_back(key);
+            }
         }
     }
 }
@@ -1187,7 +1370,11 @@ pub fn source_normalizer_diagnostics(
         return diagnostics;
     };
 
-    diagnostics.push(preflight_source_normalizer(source, configuration, record));
+    diagnostics.push(cached_preflight_source_normalizer(
+        source,
+        configuration,
+        record,
+    ));
     diagnostics
 }
 
@@ -1361,6 +1548,45 @@ fn preflight_source_normalizer(
         ),
         PlayerPluginParticipation::Bypassed,
     )
+}
+
+fn cached_preflight_source_normalizer(
+    source: &MediaSource,
+    configuration: &MobileSourceNormalizerConfiguration,
+    record: &PluginDiagnosticRecord,
+) -> PlayerPluginDiagnostic {
+    let key = PreflightDiagnosticCacheKey::from_source(source, configuration);
+    let now = Instant::now();
+    if let Some(diagnostic) = SOURCE_NORMALIZER_PREFLIGHT_CACHE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(&key, now)
+    {
+        return diagnostic;
+    }
+
+    let diagnostic = preflight_source_normalizer(source, configuration, record);
+    SOURCE_NORMALIZER_PREFLIGHT_CACHE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(key, diagnostic.clone(), Instant::now());
+    diagnostic
+}
+
+#[cfg(test)]
+fn cached_preflight_diagnostic_with(
+    cache: &mut PreflightDiagnosticCache,
+    key: PreflightDiagnosticCacheKey,
+    now: Instant,
+    open: impl FnOnce() -> PlayerPluginDiagnostic,
+) -> PlayerPluginDiagnostic {
+    if let Some(diagnostic) = cache.get(&key, now) {
+        return diagnostic;
+    }
+
+    let diagnostic = open();
+    cache.insert(key, diagnostic.clone(), now);
+    diagnostic
 }
 
 fn open_source_normalizer_packet_session(
@@ -2084,6 +2310,28 @@ fn player_plugin_detail(
     }
 }
 
+fn parse_ready_ms_from_diagnostic_message(message: &str) -> Option<u128> {
+    let (_, suffix) = message.split_once("ready_ms=")?;
+    let digits = suffix
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+fn source_normalizer_mode_cache_label(mode: SourceNormalizerMode) -> &'static str {
+    match mode {
+        SourceNormalizerMode::Disabled => "disabled",
+        SourceNormalizerMode::DiagnosticsOnly => "diagnosticsOnly",
+        SourceNormalizerMode::PreflightOnly => "preflightOnly",
+        SourceNormalizerMode::PreferNormalized => "preferNormalized",
+        SourceNormalizerMode::RequireNormalized => "requireNormalized",
+    }
+}
+
 fn plugin_kind_label(kind: player_plugin::VesperPluginKind) -> &'static str {
     match kind {
         player_plugin::VesperPluginKind::PostDownloadProcessor => "post_download_processor",
@@ -2781,6 +3029,185 @@ mod tests {
         assert_eq!(
             diagnostics[0].participation,
             PlayerPluginParticipation::Unknown
+        );
+    }
+
+    #[test]
+    fn preflight_cache_hit_avoids_second_packet_session_open() {
+        let source = MediaSource::new("https://cdn.example.test/video.flv");
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreflightOnly,
+            plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            runtime_profile: Some("flv".to_owned()),
+        };
+        let key = PreflightDiagnosticCacheKey::from_source(&source, &configuration);
+        let mut cache = PreflightDiagnosticCache::new(64);
+        let opened = std::cell::Cell::new(0);
+        let now = Instant::now();
+
+        let first = cached_preflight_diagnostic_with(&mut cache, key.clone(), now, || {
+            opened.set(opened.get() + 1);
+            test_source_normalizer_diagnostic(
+                PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
+                "source normalizer preflight opened and closed packet session; ready_ms=42",
+            )
+        });
+        let second = cached_preflight_diagnostic_with(
+            &mut cache,
+            key,
+            now + Duration::from_millis(12),
+            || {
+                opened.set(opened.get() + 1);
+                test_source_normalizer_diagnostic(
+                    PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+                    "unexpected second open",
+                )
+            },
+        );
+
+        assert_eq!(opened.get(), 1);
+        assert_eq!(first.status, second.status);
+        assert_eq!(first.capability, second.capability);
+        assert_eq!(
+            second
+                .details
+                .iter()
+                .find(|detail| detail.key == "cached")
+                .map(|detail| detail.value.as_str()),
+            Some("true")
+        );
+        assert_eq!(
+            second
+                .details
+                .iter()
+                .find(|detail| detail.key == "cacheAgeMs")
+                .map(|detail| detail.value.as_str()),
+            Some("12")
+        );
+        assert_eq!(
+            second
+                .details
+                .iter()
+                .find(|detail| detail.key == "originalReadyMs")
+                .map(|detail| detail.value.as_str()),
+            Some("42")
+        );
+    }
+
+    #[test]
+    fn preflight_cache_key_changes_with_runtime_profile_and_plugin_metadata() {
+        let source = MediaSource::new("https://cdn.example.test/video.flv");
+        let path = std::env::temp_dir().join(format!(
+            "vesper-preflight-cache-key-{}-{}.so",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        std::fs::write(&path, b"one").expect("write plugin fingerprint fixture");
+        let generic = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreflightOnly,
+            plugin_library_paths: vec![path.clone()],
+            runtime_profile: Some("generic-fallback".to_owned()),
+        };
+        let flv = MobileSourceNormalizerConfiguration {
+            runtime_profile: Some("flv".to_owned()),
+            ..generic.clone()
+        };
+        let generic_key = PreflightDiagnosticCacheKey::from_source(&source, &generic);
+        let flv_key = PreflightDiagnosticCacheKey::from_source(&source, &flv);
+
+        assert_ne!(generic_key, flv_key);
+
+        std::fs::write(&path, b"one-two").expect("rewrite plugin fingerprint fixture");
+        let rewritten_key = PreflightDiagnosticCacheKey::from_source(&source, &generic);
+        let _ = std::fs::remove_file(&path);
+
+        assert_ne!(generic_key, rewritten_key);
+    }
+
+    #[test]
+    fn preflight_failure_cache_expires_before_success_cache() {
+        let source = MediaSource::new("https://cdn.example.test/video.flv");
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreflightOnly,
+            plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            runtime_profile: None,
+        };
+        let key = PreflightDiagnosticCacheKey::from_source(&source, &configuration);
+        let mut cache = PreflightDiagnosticCache::new(64);
+        let opened = std::cell::Cell::new(0);
+        let now = Instant::now();
+
+        let _ = cached_preflight_diagnostic_with(&mut cache, key.clone(), now, || {
+            opened.set(opened.get() + 1);
+            test_source_normalizer_diagnostic(
+                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+                "source normalizer preflight open failed: boom",
+            )
+        });
+        let cached = cached_preflight_diagnostic_with(
+            &mut cache,
+            key.clone(),
+            now + Duration::from_secs(29),
+            || {
+                opened.set(opened.get() + 1);
+                test_source_normalizer_diagnostic(
+                    PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
+                    "unexpected second open; ready_ms=1",
+                )
+            },
+        );
+        let refreshed = cached_preflight_diagnostic_with(
+            &mut cache,
+            key,
+            now + Duration::from_secs(31),
+            || {
+                opened.set(opened.get() + 1);
+                test_source_normalizer_diagnostic(
+                    PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
+                    "source normalizer preflight opened and closed packet session; ready_ms=7",
+                )
+            },
+        );
+
+        assert_eq!(opened.get(), 2);
+        assert_eq!(
+            cached.status,
+            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
+        );
+        assert_eq!(
+            refreshed.status,
+            PlayerPluginDiagnosticStatus::SourceNormalizerSupported
+        );
+    }
+
+    #[test]
+    fn normalized_resource_modes_are_not_served_from_preflight_cache() {
+        SOURCE_NORMALIZER_PREFLIGHT_CACHE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        let diagnostics = source_normalizer_diagnostics(
+            &MediaSource::new("https://cdn.example.test/video.flv"),
+            &MobileSourceNormalizerConfiguration {
+                mode: SourceNormalizerMode::RequireNormalized,
+                plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+                runtime_profile: Some("flv".to_owned()),
+            },
+        );
+
+        assert!(
+            diagnostics.iter().all(|diagnostic| diagnostic
+                .details
+                .iter()
+                .all(|detail| detail.key != "cached")),
+            "live normalized-resource diagnostics must not come from the preflight cache"
+        );
+        assert_eq!(
+            SOURCE_NORMALIZER_PREFLIGHT_CACHE
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .len(),
+            0
         );
     }
 
@@ -3501,6 +3928,19 @@ mod tests {
         }));
 
         assert!(hdr_resource_metadata_not_preserved_reason(&info).is_none());
+    }
+
+    fn test_source_normalizer_diagnostic(
+        status: PlayerPluginDiagnosticStatus,
+        message: &str,
+    ) -> PlayerPluginDiagnostic {
+        runtime_source_normalizer_diagnostic(
+            "/plugins/source-normalizer.so".to_owned(),
+            Some("source-normalizer".to_owned()),
+            status,
+            message,
+            PlayerPluginParticipation::Bypassed,
+        )
     }
 
     fn mobile_resource_record(name: &str, profiles: &[&str]) -> PluginDiagnosticRecord {

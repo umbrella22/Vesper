@@ -6,23 +6,27 @@ import java.io.File
 internal fun VesperNativePlayerBridge.probePluginsForSource(
     source: VesperPlayerSource,
 ): List<Map<String, Any?>> {
+    return pluginDiagnosticsWithNativeFramePipeline(probeMobilePluginsForSource(source))
+}
+
+internal fun VesperNativePlayerBridge.probeMobilePluginsForSource(
+    source: VesperPlayerSource,
+): List<Map<String, Any?>> {
     if (
         sourceNormalizerConfiguration.isDisabled &&
-            frameProcessorConfiguration.isDisabled &&
-            nativeFramePipelineConfiguration.isDisabled
+            frameProcessorConfiguration.isDisabled
     ) {
         return emptyList()
     }
-    val pluginDiagnostics = runCatching {
+    return runCatching {
         bindings.probeMobilePlugins(
             source = source,
             sourceNormalizerConfiguration = sourceNormalizerConfiguration,
             frameProcessorConfiguration = frameProcessorConfiguration,
         )
     }.onFailure { error ->
-        Log.w(NATIVE_PLAYER_BRIDGE_TAG, "mobile plugin diagnostics failed for source=${source.uri}", error)
+            Log.w(NATIVE_PLAYER_BRIDGE_TAG, "mobile plugin diagnostics failed for source=${source.uri}", error)
     }.getOrDefault(emptyList())
-    return pluginDiagnosticsWithNativeFramePipeline(pluginDiagnostics)
 }
 
 internal fun VesperNativePlayerBridge.pluginDiagnosticsWithNativeFramePipeline(
@@ -165,14 +169,13 @@ internal fun VesperNativePlayerBridge.evaluateNativeFramePipelineRoute(): Native
             if (reason == null) {
                 nativeFramePipelineFallbackReason = null
                 nativeFramePipelineRequiredFailure = false
-                currentPluginDiagnostics =
-                    probePluginsForSource(currentSource ?: return NativeFramePipelineRoute.SystemPlayer)
+                currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
                 NativeFramePipelineRoute.SdkManaged
             } else {
                 nativeFramePipelineFallbackReason = reason
                 nativeFramePipelineRequiredFailure =
                     nativeFramePipelineConfiguration.mode == VesperNativeFramePipelineMode.RequireNativeFrame
-                currentSource?.let { currentPluginDiagnostics = probePluginsForSource(it) }
+                currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
                 if (nativeFramePipelineConfiguration.mode == VesperNativeFramePipelineMode.RequireNativeFrame) {
                     NativeFramePipelineRoute.Fail(reason)
                 } else {

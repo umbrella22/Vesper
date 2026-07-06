@@ -287,9 +287,11 @@ internal interface PlayerBridge {
     val pluginDiagnostics: List<Map<String, Any?>>
 
     fun initialize()
+    suspend fun initializeAsync()
     fun dispose()
     fun refresh()
     fun selectSource(source: VesperPlayerSource)
+    suspend fun selectSourceAsync(source: VesperPlayerSource)
 
     fun attachSurfaceHost(host: ViewGroup)
     fun detachSurfaceHost(host: ViewGroup? = null)

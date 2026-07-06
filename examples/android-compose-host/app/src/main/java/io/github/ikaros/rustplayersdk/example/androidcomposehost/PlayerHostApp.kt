@@ -454,7 +454,7 @@ internal fun PlayerHostApp(
                     val networkFailureEvidence =
                         if (preset.sampleId == "NETWORK-FAILURE-CONTROL") {
                             activePlaybackSource = source
-                            controller.selectSource(source)
+                            controller.selectSourceAsync(source)
                             controller.configureSystemPlayback(
                                 VesperSystemPlaybackConfiguration(
                                     metadata =
@@ -532,38 +532,40 @@ internal fun PlayerHostApp(
     ) {
         activePlaybackSource = source
         playbackOrigin = origin
-        runCatching {
-            controller.selectSource(source)
-        }.onFailure { error ->
-            Log.e(
-                PLAYER_HOST_EXAMPLE_TAG,
-                "failed to select source=${source.uri}",
-                error,
+        scope.launch {
+            runCatching {
+                controller.selectSourceAsync(source)
+            }.onFailure { error ->
+                Log.e(
+                    PLAYER_HOST_EXAMPLE_TAG,
+                    "failed to select source=${source.uri}",
+                    error,
+                )
+                Toast
+                    .makeText(
+                        context,
+                        error.localizedMessage ?: error::class.java.simpleName,
+                        Toast.LENGTH_LONG,
+                    ).show()
+                return@launch
+            }
+            controller.configureSystemPlayback(
+                VesperSystemPlaybackConfiguration(
+                    metadata =
+                        VesperSystemPlaybackMetadata(
+                            title = source.label.ifBlank { source.uri },
+                            contentUri = source.uri,
+                        ),
+                    backgroundMode = VesperBackgroundPlaybackMode.Disabled,
+                    controls = VesperSystemPlaybackControls.videoDefault(),
+                ),
             )
-            Toast
-                .makeText(
-                    context,
-                    error.localizedMessage ?: error::class.java.simpleName,
-                    Toast.LENGTH_LONG,
-                ).show()
-            return
+            recordHostLog(
+                severity = ExampleHostLogSeverity.Info,
+                title = context.getString(R.string.example_log_source_selected),
+                detail = source.label.ifBlank { source.uri },
+            )
         }
-        controller.configureSystemPlayback(
-            VesperSystemPlaybackConfiguration(
-                metadata =
-                    VesperSystemPlaybackMetadata(
-                        title = source.label.ifBlank { source.uri },
-                        contentUri = source.uri,
-                    ),
-                backgroundMode = VesperBackgroundPlaybackMode.Disabled,
-                controls = VesperSystemPlaybackControls.videoDefault(),
-            ),
-        )
-        recordHostLog(
-            severity = ExampleHostLogSeverity.Info,
-            title = context.getString(R.string.example_log_source_selected),
-            detail = source.label.ifBlank { source.uri },
-        )
     }
 
     fun handleDolbyAcceptanceSelectionFailure(

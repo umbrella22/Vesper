@@ -63,6 +63,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var retryTask: Task<Void, Never>?
     var stopSeekTimeoutTask: Task<Void, Never>?
     var sourceLoadTask: Task<Void, Never>?
+    var sourceLoadEpoch: UInt64 = 0
     var retryAttemptCount = 0
     let cachePolicyToken = UUID()
     let preloadCoordinator: VesperNativePreloadCoordinator
@@ -180,7 +181,6 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedFixedTrackStatus = nil
         publishedResiliencePolicy = resiliencePolicy
         publishedLastError = nil
-        currentPluginDiagnostics = initialSource.map { probePlugins(for: $0) }
-            ?? nativeFramePipelineDiagnostics()
+        currentPluginDiagnostics = nativeFramePipelineDiagnostics()
     }
 }

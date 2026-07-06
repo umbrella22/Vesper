@@ -205,8 +205,12 @@ internal fun VesperNativePlayerBridge.setNativeResiliencePolicy(policy: VesperPl
         "apply resilience policy buffering=${policy.buffering.preset} retry=${policy.retry.backoff} cache=${policy.cache.preset}",
     )
     updateState { copy(isBuffering = true) }
-    initialize()
-    restorePlaybackState(source, preservedState)
+    sourceLoadScope.launchSourceLoad {
+        initializeNativeBridgeAsync()
+        runOnMainForSourceLoad {
+            restorePlaybackState(source, preservedState)
+        }
+    }
 }
 
 internal fun VesperNativePlayerBridge.setNativeKeepScreenOnDuringPlayback(enabled: Boolean) {

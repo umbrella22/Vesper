@@ -34,13 +34,31 @@ class VesperPlayerController internal constructor(
     val pluginDiagnostics: List<Map<String, Any?>>
         get() = bridge.pluginDiagnostics
 
+    /**
+     * Enqueues player initialization and returns after the request is accepted.
+     * Use [initializeAsync] when the caller needs to wait for source startup.
+     */
     fun initialize() = bridge.initialize()
+
+    /**
+     * Initializes the current source and resumes only after startup work has completed.
+     */
+    suspend fun initializeAsync() = bridge.initializeAsync()
 
     fun dispose() = bridge.dispose()
 
     fun refresh() = bridge.refresh()
 
+    /**
+     * Enqueues source selection and returns after the request is accepted.
+     * Use [selectSourceAsync] when the caller needs to wait for source startup.
+     */
     fun selectSource(source: VesperPlayerSource) = bridge.selectSource(source)
+
+    /**
+     * Selects a source and resumes only after startup work has completed or failed.
+     */
+    suspend fun selectSourceAsync(source: VesperPlayerSource) = bridge.selectSourceAsync(source)
 
     fun attachSurfaceHost(host: ViewGroup) = bridge.attachSurfaceHost(host)
 

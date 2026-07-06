@@ -264,17 +264,17 @@ class VesperPlayerAndroidPlugin :
                 disposeDownloadSession(session)
                 null
             }
-            "initialize" -> handleSessionCommand(call, result) { session ->
+            "initialize" -> handleSessionCommandAsync(call, result) { session ->
                 session.lastError = null
-                session.controller.initialize()
+                session.controller.initializeAsync()
                 emitSnapshot(session)
                 null
             }
-            "selectSource" -> handleSessionCommand(call, result) { session ->
+            "selectSource" -> handleSessionCommandAsync(call, result) { session ->
                 val sourceMap = requireNestedMap(call.argumentMap(), "source")
                 session.lastError = null
                 session.recentCapabilityProbe = null
-                session.controller.selectSource(sourceMap.toVesperPlayerSource())
+                session.controller.selectSourceAsync(sourceMap.toVesperPlayerSource())
                 emitSnapshot(session)
                 null
             }
@@ -995,6 +995,57 @@ class VesperPlayerAndroidPlugin :
                     session.lastError,
                 )
             }
+    }
+
+    private fun handleSessionCommandAsync(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        action: suspend (PlayerSession) -> Any?,
+    ) {
+        val sessionId = call.argumentMap()["playerId"] as? String
+        if (sessionId.isNullOrBlank()) {
+            result.error(
+                "vesper_missing_player_id",
+                "Missing playerId.",
+                mapOf(
+                    "message" to "Missing playerId.",
+                    "code" to "backendFailure",
+                    "category" to "platform",
+                    "retriable" to false,
+                ),
+            )
+            return
+        }
+
+        val session = sessions[sessionId]
+        if (session == null) {
+            result.error(
+                "vesper_unknown_player",
+                "Unknown playerId: $sessionId",
+                mapOf(
+                    "message" to "Unknown playerId: $sessionId",
+                    "code" to "backendFailure",
+                    "category" to "platform",
+                    "retriable" to false,
+                ),
+            )
+            return
+        }
+
+        scope.launch {
+            runCatching {
+                action(session)
+            }.onSuccess(result::success)
+                .onFailure { error ->
+                    session.lastError = error.toErrorMap()
+                    emitError(session, error)
+                    result.error(
+                        "vesper_operation_failed",
+                        error.message,
+                        session.lastError,
+                    )
+                }
+        }
     }
 
     private fun handlePictureInPictureCommand(

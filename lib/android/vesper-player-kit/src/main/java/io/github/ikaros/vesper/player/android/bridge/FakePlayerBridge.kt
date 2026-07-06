@@ -63,6 +63,14 @@ internal class FakePlayerBridge(
     override val pluginDiagnostics: List<Map<String, Any?>> = emptyList()
 
     override fun initialize() {
+        initializePreview()
+    }
+
+    override suspend fun initializeAsync() {
+        initializePreview()
+    }
+
+    private fun initializePreview() {
         if (isDisposed.get()) {
             return
         }
@@ -87,6 +95,14 @@ internal class FakePlayerBridge(
     override fun refresh() = Unit
 
     override fun selectSource(source: VesperPlayerSource) {
+        selectPreviewSource(source)
+    }
+
+    override suspend fun selectSourceAsync(source: VesperPlayerSource) {
+        selectPreviewSource(source)
+    }
+
+    private fun selectPreviewSource(source: VesperPlayerSource) {
         if (isDisposed.get()) {
             return
         }

@@ -4,7 +4,10 @@ import UIKit
 import VesperPlayerKitBridgeShim
 
 extension VesperNativePlayerBridge {
-    func loadCurrentSource(_ source: VesperPlayerSource) async throws {
+    func loadCurrentSource(
+        _ source: VesperPlayerSource,
+        sourceLoadEpoch: UInt64
+    ) async throws {
         guard currentSource == source else {
             throw NSError(
                 domain: "io.github.ikaros.vesper.host.ios",
@@ -27,7 +30,7 @@ extension VesperNativePlayerBridge {
         case .waitForSurface(let issue):
             pendingNativeFrameSurfaceLoad = true
             pendingAutoPlay = pendingAutoPlay || player == nil
-            currentPluginDiagnostics = probePlugins(for: source)
+            currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
             throw NSError(
                 domain: "io.github.ikaros.vesper.host.ios",
                 code: -5,
@@ -51,11 +54,11 @@ extension VesperNativePlayerBridge {
                 if nativeFramePipelineConfiguration.mode == .preferNativeFrame {
                     nativeFramePipelineFallbackIssue = error.issue
                     nativeFramePipelineCoordinator.closeActiveSession()
-                    currentPluginDiagnostics = probePlugins(for: source)
+                    currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
                     iosHostLog("native-frame pipeline fallback: \(error.message)")
                     break
                 }
-                currentPluginDiagnostics = probePlugins(for: source)
+                currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
                 nativeFramePipelineCoordinator.closeActiveSession()
                 throw NSError(
                     domain: "io.github.ikaros.vesper.host.ios",
@@ -70,7 +73,10 @@ extension VesperNativePlayerBridge {
                 userInfo: [NSLocalizedDescriptionKey: issue.message]
             )
         }
-        let normalizedResource = openSourceNormalizerResourceIfNeeded(for: source)
+        let normalizedResource = await openSourceNormalizerResourceIfNeeded(
+            for: source,
+            sourceLoadEpoch: sourceLoadEpoch
+        )
         if normalizedResource == nil && sourceNormalizerConfiguration.mode == .requireNormalized {
             throw NSError(
                 domain: "io.github.ikaros.vesper.host.ios",

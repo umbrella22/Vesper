@@ -63,6 +63,11 @@ internal data class NativeSourceNormalizerResourceOpenOutcome(
     val diagnostics: List<Map<String, Any?>> = emptyList(),
 )
 
+internal data class NativeSourceNormalizerResourcePreparedOpenOutcome(
+    val resourceJson: String? = null,
+    val diagnostics: List<Map<String, Any?>> = emptyList(),
+)
+
 internal data class NativeSourceNormalizerResource(
     val handle: Long,
     val outputRoute: String,
@@ -185,6 +190,11 @@ internal fun parseSourceNormalizerResource(
         Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to parse source normalizer resource open result", error)
     }.getOrNull()
 
+internal fun sourceNormalizerResourceHandle(json: String): Long =
+    runCatching {
+        JSONObject(json).optLong("handle", 0L)
+    }.getOrDefault(0L)
+
 internal fun parseSourceNormalizerBypassDiagnostics(json: String): List<Map<String, Any?>>? =
     runCatching {
         if (!json.trimStart().startsWith("[")) {
@@ -210,4 +220,3 @@ internal fun parseNativeFramePipelineJson(json: String): Map<String, Any?>? =
     }.onFailure { error ->
         Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to parse native-frame pipeline result", error)
     }.getOrNull()
-

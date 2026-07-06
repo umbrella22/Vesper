@@ -5,8 +5,9 @@ import VesperPlayerKitBridgeShim
 
 extension VesperNativePlayerBridge {
     func openSourceNormalizerResourceIfNeeded(
-        for source: VesperPlayerSource
-    ) -> VesperSourceNormalizerResourceOpenResult? {
+        for source: VesperPlayerSource,
+        sourceLoadEpoch: UInt64
+    ) async -> VesperSourceNormalizerResourceOpenResult? {
         closeCurrentSourceNormalizerResource()
         guard sourceNormalizerConfiguration.mode == .preferNormalized ||
             sourceNormalizerConfiguration.mode == .requireNormalized
@@ -20,14 +21,24 @@ extension VesperNativePlayerBridge {
 
         let outputRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("vesper-source-normalizer", isDirectory: true)
-        let outcome = VesperMobileSourceNormalizerResource.open(
-            source: source,
-            configuration: sourceNormalizerConfiguration,
-            outputRoot: outputRoot,
-            forceNormalized: sourceNormalizerConfiguration.mode == .requireNormalized
-        )
+        let configuration = sourceNormalizerConfiguration
+        let forceNormalized = sourceNormalizerConfiguration.mode == .requireNormalized
+        let outcome = await Task.detached(priority: .utility) {
+            VesperMobileSourceNormalizerResource.open(
+                source: source,
+                configuration: configuration,
+                outputRoot: outputRoot,
+                forceNormalized: forceNormalized
+            )
+        }.value
+        guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else {
+            if let resource = outcome.resource {
+                VesperMobileSourceNormalizerResource.dispose(handle: resource.handle)
+            }
+            return nil
+        }
         if !outcome.diagnostics.isEmpty {
-            currentPluginDiagnostics = outcome.diagnostics
+            currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(outcome.diagnostics)
         }
         let resource = outcome.resource
         guard let resource else {
@@ -49,7 +60,7 @@ extension VesperNativePlayerBridge {
 
         currentSourceNormalizerResource = resource
         if !resource.diagnostics.isEmpty {
-            currentPluginDiagnostics = resource.diagnostics.map { diagnostic in
+            let enrichedDiagnostics = resource.diagnostics.map { diagnostic in
                 var enriched = diagnostic
                 enriched["outputRoute"] = resource.outputRoute
                 enriched["selectedProfile"] = resource.selectedProfile
@@ -66,6 +77,7 @@ extension VesperNativePlayerBridge {
                 enriched["participation"] = "participated"
                 return enriched
             }
+            currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(enrichedDiagnostics)
         }
         iosHostLog(
             "source normalizer resource selected route=\(resource.outputRoute) path=\(resource.primaryResourcePath)"
