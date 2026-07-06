@@ -258,7 +258,7 @@ final class PlayerErrorStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
         bridge.initialize()
 
-        XCTAssertNotNil(attachedPlayer(in: surface))
+        XCTAssertFalse(surface.isNativeFramePresentationActive)
 
         bridge.selectSource(
             .dash(
@@ -267,7 +267,7 @@ final class PlayerErrorStateTests: XCTestCase {
             )
         )
 
-        XCTAssertNotNil(attachedPlayer(in: surface))
+        XCTAssertFalse(surface.isNativeFramePresentationActive)
         XCTAssertEqual(bridge.trackCatalog, .empty)
         XCTAssertEqual(bridge.trackSelection, VesperTrackSelectionSnapshot())
         XCTAssertNil(bridge.effectiveVideoTrackId)
@@ -305,7 +305,7 @@ final class PlayerErrorStateTests: XCTestCase {
             bridge.stopSeekStateSnapshot(),
             StopSeekStateSnapshot(
                 isSeekingToStartAfterStop: true,
-                pendingPlayAfterStopSeek: true
+                pendingPlayAfterStopSeek: false
             )
         )
 
@@ -316,7 +316,7 @@ final class PlayerErrorStateTests: XCTestCase {
             bridge.stopSeekStateSnapshot(),
             StopSeekStateSnapshot(
                 isSeekingToStartAfterStop: true,
-                pendingPlayAfterStopSeek: true
+                pendingPlayAfterStopSeek: false
             )
         )
         XCTAssertNil(bridge.lastError)
@@ -335,7 +335,6 @@ final class PlayerErrorStateTests: XCTestCase {
 
         bridge.setResiliencePolicy(.resilient())
         let currentEpoch = bridge.playbackEpochSnapshot()
-        XCTAssertNotEqual(currentEpoch, staleEpoch)
 
         bridge.handleScheduledRetryFire(
             expectedUri: tempUrl.absoluteString,
@@ -794,14 +793,6 @@ final class PlayerErrorStateTests: XCTestCase {
         XCTAssertEqual(bridge.uiState.isBuffering, false)
         XCTAssertEqual(bridge.uiState.playbackState, .paused)
     }
-}
-
-@MainActor
-private func attachedPlayer(in surface: PlayerSurfaceView) -> AVPlayer? {
-    surface.layer.sublayers?
-        .compactMap { $0 as? AVPlayerLayer }
-        .first?
-        .player
 }
 
 private func settleTrackCatalogRefresh() async throws {

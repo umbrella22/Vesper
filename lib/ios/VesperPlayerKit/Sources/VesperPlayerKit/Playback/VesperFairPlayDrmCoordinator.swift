@@ -449,8 +449,17 @@ private func fairPlayErrorDetails(
     from error: Error,
     merging additionalDetails: [String: String] = [:]
 ) -> [String: String] {
+    let nsError = error as NSError
+    let reportedErrorClass: String
+    if nsError.domain == NSURLErrorDomain {
+        reportedErrorClass = "URLError"
+    } else if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+        reportedErrorClass = String(describing: type(of: underlyingError))
+    } else {
+        reportedErrorClass = String(describing: type(of: error))
+    }
     var values = [
-        "errorClass": String(describing: type(of: error)),
+        "errorClass": reportedErrorClass,
         "errorMessage": error.localizedDescription,
     ]
     values.merge(additionalDetails) { current, _ in current }

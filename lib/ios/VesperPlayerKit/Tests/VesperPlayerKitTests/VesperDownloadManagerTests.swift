@@ -177,7 +177,11 @@ final class VesperDownloadManagerTests: XCTestCase {
                             licenseUri: "https://license.example.com/fairplay"
                         )
                     )
-                )
+                ),
+                profile: VesperDownloadProfile(),
+                state: .queued,
+                progress: VesperDownloadProgressSnapshot(),
+                assetIndex: VesperDownloadAssetIndex()
             )
 
         XCTAssertThrowsError(try manager.restoreTasks([task])) { error in
