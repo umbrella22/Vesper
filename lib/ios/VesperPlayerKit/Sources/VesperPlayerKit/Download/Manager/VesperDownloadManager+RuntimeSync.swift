@@ -16,6 +16,9 @@ extension VesperDownloadManager {
         if bindings.drainDownloadEvents(sessionHandle: sessionHandle, outEvents: &runtimeEvents) {
             events = runtimeEvents.toPublic()
             eventBuffer.append(contentsOf: events)
+            if eventBuffer.count > maxEventBufferCapacity {
+                eventBuffer.removeFirst(eventBuffer.count - maxEventBufferCapacity)
+            }
             bindings.freeDownloadEventList(&runtimeEvents)
         }
 

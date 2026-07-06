@@ -76,6 +76,7 @@ final class VesperBenchmarkRecorder {
     private let baseTimestampNs = DispatchTime.now().uptimeNanoseconds
     private var rawEvents: [VesperBenchmarkEvent] = []
     private var samplesByName: [String: [UInt64]] = [:]
+    private let maxSamplesPerName = 10_000
     private var acceptedEvents: UInt64 = 0
     private var droppedEvents: UInt64 = 0
     private var pluginAcceptedEvents: UInt64 = 0
@@ -114,7 +115,12 @@ final class VesperBenchmarkRecorder {
         let now = DispatchTime.now().uptimeNanoseconds
         let elapsed = now >= baseTimestampNs ? now - baseTimestampNs : 0
         acceptedEvents += 1
-        samplesByName[eventName, default: []].append(elapsed)
+        var samples = samplesByName[eventName, default: []]
+        if samples.count >= maxSamplesPerName {
+            samples.removeFirst(samples.count - maxSamplesPerName + 1)
+        }
+        samples.append(elapsed)
+        samplesByName[eventName] = samples
 
         let event = VesperBenchmarkEvent(
             runId: runId,
@@ -337,8 +343,16 @@ private func makeCStringList(
     let pointer = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>.allocate(
         capacity: values.count
     )
+    pointer.initialize(repeating: nil, count: values.count)
     for (index, value) in values.enumerated() {
-        pointer[index] = strdup(value)
+        guard let dup = strdup(value) else {
+            for i in 0..<index {
+                free(pointer[i])
+            }
+            pointer.deallocate()
+            return nil
+        }
+        pointer[index] = dup
     }
     return pointer
 }

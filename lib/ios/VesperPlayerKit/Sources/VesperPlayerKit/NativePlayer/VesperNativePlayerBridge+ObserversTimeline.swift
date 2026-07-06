@@ -137,7 +137,7 @@ extension VesperNativePlayerBridge {
 
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
-            object: player.currentItem,
+            object: item,
             queue: .main
         ) { [weak self] _ in
             guard let self else { return }
@@ -152,7 +152,7 @@ extension VesperNativePlayerBridge {
 
         playbackStalledObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemPlaybackStalled,
-            object: player.currentItem,
+            object: item,
             queue: .main
         ) { [weak self] _ in
             guard let self else { return }

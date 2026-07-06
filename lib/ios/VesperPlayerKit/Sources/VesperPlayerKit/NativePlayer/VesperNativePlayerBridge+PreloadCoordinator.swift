@@ -52,6 +52,14 @@ final class VesperNativePreloadCoordinator {
         }
     }
 
+    deinit {
+        cancelWarmupOnly()
+        if sessionHandle != 0 {
+            vesper_runtime_preload_session_dispose(sessionHandle)
+            sessionHandle = 0
+        }
+    }
+
     func cancelAll() {
         cancelWarmupOnly()
         if sessionHandle != 0 {

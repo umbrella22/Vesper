@@ -165,7 +165,9 @@ public final class VesperPlayerController: ObservableObject {
     deinit {
         bridgeObservation?.cancel()
         let token = screenSleepToken
+        let disposeFn = disposeImpl
         Task { @MainActor in
+            disposeFn()
             VesperScreenSleepCoordinator.release(token)
         }
     }

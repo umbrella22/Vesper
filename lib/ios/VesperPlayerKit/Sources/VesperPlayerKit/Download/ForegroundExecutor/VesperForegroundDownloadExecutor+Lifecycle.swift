@@ -81,6 +81,7 @@ extension VesperForegroundDownloadExecutor {
         lock.lock()
         let activeTasks = Array(tasks.values)
         tasks.removeAll(keepingCapacity: false)
+        recoveredSources.removeAll(keepingCapacity: false)
         lock.unlock()
         activeTasks.forEach { $0.cancel() }
     }

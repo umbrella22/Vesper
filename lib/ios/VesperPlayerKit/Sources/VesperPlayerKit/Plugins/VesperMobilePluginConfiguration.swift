@@ -348,7 +348,17 @@ func withCStringArray<R>(
         return body(nil, 0)
     }
 
-    var duplicated = values.map { strdup($0) }
+    var duplicated: [UnsafeMutablePointer<CChar>?] = []
+    duplicated.reserveCapacity(values.count)
+    for value in values {
+        guard let dup = strdup(value) else {
+            for ptr in duplicated {
+                free(ptr)
+            }
+            return body(nil, 0)
+        }
+        duplicated.append(dup)
+    }
     defer {
         for pointer in duplicated {
             free(pointer)

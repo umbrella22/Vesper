@@ -318,6 +318,9 @@ final class VesperFairPlayDrmCoordinator:
                     AVContentKeyResponse(fairPlayStreamingKeyResponseData: ckcData)
                 )
                 removePendingTask(requestId)
+            } catch is CancellationError {
+                removePendingTask(requestId)
+                return
             } catch {
                 let drmError = normalizeFairPlayError(error, fallbackReason: "fairPlayCkcRequestFailed")
                 keyRequest.processContentKeyResponseError(drmError as NSError)

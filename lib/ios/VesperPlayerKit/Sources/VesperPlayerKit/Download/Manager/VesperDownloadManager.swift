@@ -11,6 +11,7 @@ public final class VesperDownloadManager: ObservableObject {
     let stateStore: VesperDownloadStateStore?
     let taskStore = DownloadTaskStore()
     var eventBuffer: [VesperDownloadEvent] = []
+    let maxEventBufferCapacity = 1_000
     var lastProgressPersistence: [VesperDownloadTaskId: (bytes: UInt64, date: Date)] = [:]
     var sessionHandle: UInt64 = 0
 

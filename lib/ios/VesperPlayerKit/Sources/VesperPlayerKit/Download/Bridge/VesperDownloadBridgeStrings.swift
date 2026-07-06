@@ -2,7 +2,11 @@ import Foundation
 import VesperPlayerKitBridgeShim
 
 func duplicateDownloadCString(_ value: String) -> UnsafeMutablePointer<CChar>? {
-    strdup(value)
+    guard let result = strdup(value) else {
+        iosHostLog("duplicateDownloadCString: strdup returned NULL for value length \(value.utf8.count)")
+        return nil
+    }
+    return result
 }
 
 func duplicateDownloadCStringArray(_ values: [String]) -> UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>? {

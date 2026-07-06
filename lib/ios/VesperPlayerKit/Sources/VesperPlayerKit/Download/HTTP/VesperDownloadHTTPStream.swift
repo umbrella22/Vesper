@@ -32,7 +32,7 @@ final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate
         lastActivityNs = DispatchTime.now().uptimeNanoseconds
 
         var continuation: AsyncThrowingStream<Data, Error>.Continuation!
-        chunks = AsyncThrowingStream(Data.self, bufferingPolicy: .unbounded) { streamContinuation in
+        chunks = AsyncThrowingStream(Data.self, bufferingPolicy: .bufferingNewest(256)) { streamContinuation in
             continuation = streamContinuation
         }
         chunksContinuation = continuation
@@ -40,6 +40,10 @@ final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate
         chunksContinuation.onTermination = { @Sendable [weak self] _ in
             self?.cancel()
         }
+    }
+
+    deinit {
+        watchdog?.cancel()
     }
 
     func bind(session: URLSession, task: URLSessionDataTask) {
