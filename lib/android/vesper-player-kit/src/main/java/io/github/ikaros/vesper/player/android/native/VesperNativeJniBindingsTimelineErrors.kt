@@ -353,6 +353,7 @@ internal object VesperMediaCacheStore {
         }
         return caches[maxDiskBytes]!!
     }
+}
 
 internal fun classifyPlaybackException(error: PlaybackException): NativePlaybackError {
     val causeEvidence = error.playbackFailureCauseEvidence()

@@ -72,6 +72,7 @@ internal interface NativeFramePipelinePumpScheduler {
     fun execute(action: () -> Unit) = schedule(delayMs = 0L, action)
     fun cancel()
     fun close() = cancel()
+    fun quitLooperSafely() = Unit
 }
 
 internal class HandlerNativeFramePipelinePumpScheduler(
@@ -148,7 +149,7 @@ internal class HandlerNativeFramePipelinePumpScheduler(
         }
     }
 
-    fun quitLooperSafely() {
+    override fun quitLooperSafely() {
         // Called after close() releases the monitor so that the blocking
         // quitSafely() does not hold a lock (AGENTS.md rule).
         if (started && thread.isAlive) {

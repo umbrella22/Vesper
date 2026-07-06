@@ -49,10 +49,11 @@ import kotlin.math.roundToLong
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import org.json.JSONArray
 import org.json.JSONObject
 
-internal inline fun VesperNativePlayerBridge.updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
+internal inline fun VesperNativePlayerBridge.updateState(crossinline transform: PlayerHostUiState.() -> PlayerHostUiState) {
     _uiState.update { it.transform() }
     syncKeepScreenOn()
 }

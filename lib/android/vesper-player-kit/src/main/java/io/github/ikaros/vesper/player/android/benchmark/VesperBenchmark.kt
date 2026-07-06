@@ -5,6 +5,8 @@ import org.json.JSONObject
 import java.util.UUID
 import kotlin.math.ceil
 
+private const val MAX_SAMPLES_PER_EVENT_NAME = 2_048
+
 data class VesperBenchmarkConfiguration(
     val enabled: Boolean = false,
     val maxBufferedEvents: Int = 2_048,

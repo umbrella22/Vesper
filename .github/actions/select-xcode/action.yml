@@ -44,7 +44,8 @@ runs:
             continue
           fi
 
-          candidate_version="$("$candidate_xcodebuild" -version | awk '/^Xcode / { print $2; exit }')"
+          candidate_version_output="$("$candidate_xcodebuild" -version)"
+          candidate_version="$(awk '/^Xcode / { print $2; found = 1 } found { exit }' <<< "$candidate_version_output")"
           IFS=. read -r major minor patch <<< "$candidate_version"
           minor="${minor:-0}"
           patch="${patch:-0}"
