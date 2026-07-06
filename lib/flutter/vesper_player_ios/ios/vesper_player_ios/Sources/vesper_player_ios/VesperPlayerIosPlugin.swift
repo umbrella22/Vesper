@@ -80,6 +80,25 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         return nil
     }
 
+    public func detachFromEngine(for registrar: any FlutterPluginRegistrar) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for session in sessions.values {
+                disposeSession(session)
+            }
+            for session in downloadSessions.values {
+                disposeDownloadSession(session)
+            }
+            sessions.removeAll()
+            downloadSessions.removeAll()
+            eventSink = nil
+            downloadEventSink = nil
+            methodChannel?.setMethodCallHandler(nil)
+            eventChannel?.setStreamHandler(nil)
+            downloadEventChannel?.setStreamHandler(nil)
+        }
+    }
+
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         Task { @MainActor in
             handleOnMain(call, result: result)

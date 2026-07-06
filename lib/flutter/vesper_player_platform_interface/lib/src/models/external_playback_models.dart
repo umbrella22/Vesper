@@ -23,6 +23,7 @@ enum VesperExternalPlaybackSessionEventKind {
   suspended,
   discoveryDiagnostic,
   error,
+  unknown,
 }
 
 final class VesperExternalFormatAdaptationConfig {

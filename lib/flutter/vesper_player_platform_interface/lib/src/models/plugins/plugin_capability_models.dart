@@ -445,6 +445,13 @@ T _decodeRequiredEnum<T extends Enum>(
       return value;
     }
   }
+  // Fall back to the `unknown` variant instead of throwing, so that
+  // forward-compatible native enum additions do not crash the event stream.
+  for (final value in values) {
+    if (value.name == 'unknown') {
+      return value;
+    }
+  }
   throw FormatException(
     'Unknown enum value `$raw` for field `$key`. Expected one of '
     '${values.map((value) => value.name).join(', ')}.',

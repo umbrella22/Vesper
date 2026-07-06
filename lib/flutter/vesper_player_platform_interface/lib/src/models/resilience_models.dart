@@ -21,6 +21,7 @@ enum VesperPlayerErrorCategory {
   playback,
   capability,
   platform,
+  unknown,
 }
 
 enum VesperPlayerErrorCode {
@@ -36,4 +37,5 @@ enum VesperPlayerErrorCode {
   eventChannelClosed,
   cancelled,
   timeout,
+  unknown,
 }

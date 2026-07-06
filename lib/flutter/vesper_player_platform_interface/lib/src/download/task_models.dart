@@ -178,6 +178,13 @@ T _decodeRequiredDownloadEnum<T extends Enum>(
       return value;
     }
   }
+  // Fall back to the `unknown` variant instead of throwing, so that
+  // forward-compatible native enum additions do not crash the event stream.
+  for (final value in values) {
+    if (value.name == 'unknown') {
+      return value;
+    }
+  }
   throw FormatException('Unknown $key: $raw.');
 }
 

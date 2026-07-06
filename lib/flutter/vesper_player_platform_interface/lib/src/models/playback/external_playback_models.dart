@@ -231,6 +231,7 @@ final class VesperExternalPlaybackResult {
 final class VesperExternalPlaybackSessionEvent {
   const VesperExternalPlaybackSessionEvent({
     required this.kind,
+    this.rawKind,
     this.routeId,
     this.routeName,
     this.message,
@@ -242,12 +243,17 @@ final class VesperExternalPlaybackSessionEvent {
   factory VesperExternalPlaybackSessionEvent.fromMap(
     Map<Object?, Object?> map,
   ) {
+    final rawKind = map['kind'] as String?;
+    final kind = _decodeEnum(
+      VesperExternalPlaybackSessionEventKind.values,
+      rawKind,
+      VesperExternalPlaybackSessionEventKind.unknown,
+    );
     return VesperExternalPlaybackSessionEvent(
-      kind: _decodeEnum(
-        VesperExternalPlaybackSessionEventKind.values,
-        map['kind'],
-        VesperExternalPlaybackSessionEventKind.error,
-      ),
+      kind: kind,
+      rawKind: kind == VesperExternalPlaybackSessionEventKind.unknown
+          ? rawKind
+          : null,
       routeId: map['routeId'] as String?,
       routeName: map['routeName'] as String?,
       message: map['message'] as String?,
@@ -258,6 +264,7 @@ final class VesperExternalPlaybackSessionEvent {
   }
 
   final VesperExternalPlaybackSessionEventKind kind;
+  final String? rawKind;
   final String? routeId;
   final String? routeName;
   final String? message;

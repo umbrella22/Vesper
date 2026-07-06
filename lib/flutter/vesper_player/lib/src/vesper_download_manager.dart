@@ -179,25 +179,52 @@ class VesperDownloadManager {
   }
 
   void _bindPlatformEvents() {
-    _platformSubscription =
-        _platform.downloadEventsFor(downloadId).listen((event) {
-      switch (event) {
-        case VesperDownloadInitialSnapshotEvent():
-          _applySnapshot(event.snapshot, forwardEvent: event);
-        case VesperDownloadErrorEvent():
-          _applyErrorEvent(event);
-        case VesperDownloadExportProgressEvent():
-          _eventsController.add(event);
-        case VesperDownloadTaskCreatedEvent():
-          _applyTaskCreatedEvent(event);
-        case VesperDownloadTaskUpdatedEvent():
-          _applyTaskUpdatedEvent(event);
-        case VesperDownloadTaskRemovedEvent():
-          _applyTaskRemovedEvent(event);
-        case VesperDownloadDisposedEvent():
-          _eventsController.add(event);
-      }
-    });
+    _platformSubscription = _platform.downloadEventsFor(downloadId).listen(
+      (event) {
+        switch (event) {
+          case VesperDownloadInitialSnapshotEvent():
+            _applySnapshot(event.snapshot, forwardEvent: event);
+          case VesperDownloadErrorEvent():
+            _applyErrorEvent(event);
+          case VesperDownloadExportProgressEvent():
+            _eventsController.add(event);
+          case VesperDownloadTaskCreatedEvent():
+            _applyTaskCreatedEvent(event);
+          case VesperDownloadTaskUpdatedEvent():
+            _applyTaskUpdatedEvent(event);
+          case VesperDownloadTaskRemovedEvent():
+            _applyTaskRemovedEvent(event);
+          case VesperDownloadDisposedEvent():
+            _eventsController.add(event);
+          case VesperDownloadUnknownEvent():
+            _eventsController.add(event);
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        _eventsController.add(
+          VesperDownloadErrorEvent(
+            downloadId: downloadId,
+            error: VesperDownloadError(
+              code: VesperPlayerErrorCode.backendFailure,
+              category: VesperPlayerErrorCategory.platform,
+              retriable: false,
+              message: 'Download event stream error: $error',
+            ),
+            snapshot: snapshot,
+          ),
+        );
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'vesper_player',
+            context: ErrorDescription(
+              'unhandled error on download event stream',
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _applySnapshot(
@@ -307,6 +334,7 @@ class VesperDownloadManager {
       totalSizeBytes: assetIndex.totalSizeBytes,
       resources: assetIndex.resources,
       segments: assetIndex.segments,
+      streams: assetIndex.streams,
       completedPath: completedPath ?? assetIndex.completedPath,
     );
   }

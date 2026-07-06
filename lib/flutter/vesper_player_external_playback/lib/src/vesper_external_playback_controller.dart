@@ -30,6 +30,10 @@ class VesperExternalPlaybackController {
   final bool _usesDefaultSessionEventChannel;
 
   Stream<List<VesperExternalPlaybackRoute>>? _nativeRoutes;
+  StreamSubscription<List<VesperExternalPlaybackRoute>>?
+      _instanceRoutesEventSubscription;
+  StreamSubscription<VesperExternalPlaybackSessionEvent>?
+      _instanceEventsSubscription;
   Stream<VesperExternalPlaybackSessionEvent>? _events;
   List<VesperExternalPlaybackRoute>? _latestRoutes;
   bool _disposed = false;
@@ -63,30 +67,59 @@ class VesperExternalPlaybackController {
     if (_usesDefaultSessionEventChannel) {
       return _sharedEventsStream();
     }
-    return _events ??= _sessionEventChannel
+    if (_events != null) {
+      return _events!;
+    }
+    final controller = StreamController<VesperExternalPlaybackSessionEvent>.broadcast(
+      onCancel: () {
+        _instanceEventsSubscription?.cancel();
+        _instanceEventsSubscription = null;
+        _events = null;
+      },
+    );
+    _instanceEventsSubscription = _sessionEventChannel
         .receiveBroadcastStream()
         .where((event) => event is Map)
         .map(
           (event) => VesperExternalPlaybackSessionEvent.fromMap(
             Map<Object?, Object?>.from(event as Map),
           ),
+        )
+        .listen(
+          controller.add,
+          onError: controller.addError,
+          onDone: controller.close,
         );
+    _events = controller.stream;
+    return _events!;
   }
 
   Stream<List<VesperExternalPlaybackRoute>> _instanceRoutesStream() {
-    return _nativeRoutes ??= _routesEventChannel
-        .receiveBroadcastStream()
-        .map(_decodeRoutes)
-        .map((routes) {
-      _latestRoutes = routes;
-      return routes;
-    }).asBroadcastStream(
-      onCancel: (subscription) {
+    if (_nativeRoutes != null) {
+      return _nativeRoutes!;
+    }
+    final controller =
+        StreamController<List<VesperExternalPlaybackRoute>>.broadcast(
+      onCancel: () {
+        _instanceRoutesEventSubscription?.cancel();
+        _instanceRoutesEventSubscription = null;
         _latestRoutes = null;
         _nativeRoutes = null;
-        unawaited(subscription.cancel());
       },
     );
+    _instanceRoutesEventSubscription = _routesEventChannel
+        .receiveBroadcastStream()
+        .map(_decodeRoutes)
+        .listen(
+      (routes) {
+        _latestRoutes = routes;
+        controller.add(routes);
+      },
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+    _nativeRoutes = controller.stream;
+    return _nativeRoutes!;
   }
 
   static Stream<List<VesperExternalPlaybackRoute>> _sharedRoutesStream() {
@@ -217,9 +250,14 @@ class VesperExternalPlaybackController {
       _sharedLatestRoutes = null;
     } else {
       _latestRoutes = null;
+      _instanceRoutesEventSubscription?.cancel();
+      _instanceRoutesEventSubscription = null;
+      _nativeRoutes?.drain<List<VesperExternalPlaybackRoute>>();
       _nativeRoutes = null;
     }
     if (!_usesDefaultSessionEventChannel) {
+      _instanceEventsSubscription?.cancel();
+      _instanceEventsSubscription = null;
       _events = null;
     }
   }

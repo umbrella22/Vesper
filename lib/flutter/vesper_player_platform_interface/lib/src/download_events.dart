@@ -69,8 +69,11 @@ sealed class VesperDownloadManagerEvent {
       case 'disposed':
         return VesperDownloadDisposedEvent(downloadId: downloadId);
       default:
-        throw FormatException(
-            'Unknown download event type: ${type ?? '<missing>'}');
+        return VesperDownloadUnknownEvent(
+          downloadId: downloadId,
+          type: type ?? '<missing>',
+          payload: vesperDecodeMap(normalized),
+        );
     }
   }
 
@@ -100,6 +103,17 @@ final class VesperDownloadErrorEvent extends VesperDownloadManagerEvent {
 
 final class VesperDownloadDisposedEvent extends VesperDownloadManagerEvent {
   const VesperDownloadDisposedEvent({required super.downloadId});
+}
+
+final class VesperDownloadUnknownEvent extends VesperDownloadManagerEvent {
+  const VesperDownloadUnknownEvent({
+    required super.downloadId,
+    required this.type,
+    this.payload = const <String, Object?>{},
+  });
+
+  final String type;
+  final Map<String, Object?> payload;
 }
 
 final class VesperDownloadExportProgressEvent

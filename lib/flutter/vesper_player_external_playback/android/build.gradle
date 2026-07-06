@@ -1,6 +1,11 @@
 group = "io.github.ikaros.vesper.player.flutter.externalplayback"
 version = "0.3.0"
 
+ext.vesperPlayerKitVersion = providers
+    .gradleProperty("vesperPlayerKitVersion")
+    .orElse(version.toString())
+    .get()
+
 buildscript {
     ext.kotlin_version = "2.3.10"
     repositories {
@@ -57,21 +62,14 @@ dependencies {
     } else if (flutterAndroidProject != null) {
         implementation project(":vesper_player_android")
     } else {
-        throw new GradleException(
-            "vesper_player_external_playback requires ':vesper-player-kit' or " +
-            "the Flutter ':vesper_player_android' project to be included in the Android build."
-        )
+        implementation "io.github.ikaros.vesper:vesper-player-kit:$vesperPlayerKitVersion"
     }
 
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
 
-    if (externalPlaybackProject == null) {
-        throw new GradleException(
-            "vesper_player_external_playback requires ':vesper-player-kit-external-playback' " +
-            "to be included in the Android build. Expected source module under " +
-            new File(androidKitDir, "vesper-player-kit-external-playback").absolutePath + "."
-        )
+    if (externalPlaybackProject != null) {
+        implementation project(":vesper-player-kit-external-playback")
+    } else {
+        implementation "io.github.ikaros.vesper:vesper-player-kit-external-playback:$vesperPlayerKitVersion"
     }
-
-    implementation project(":vesper-player-kit-external-playback")
 }

@@ -73,6 +73,17 @@ if let runtimeArtifactPath, let pluginArtifactPath {
             path: pluginArtifactPath
         )
     )
+} else {
+    let searched = [
+        "lib/ios/VesperPlayerKit/.build/player-ffmpeg-runtime/VesperPlayerFfmpegRuntime.xcframework",
+        "lib/ios/VesperPlayerKit/.build/player-source-normalizer-ffmpeg-plugin/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework",
+    ]
+    let hint = "Build the FFmpeg runtime and source normalizer plugin xcframeworks first: "
+        + "./scripts/vesper ios ffmpeg-runtime && ./scripts/vesper ios source-normalizer-plugin."
+    fatalError("""
+        Vesper FFmpeg source normalizer requires pre-built xcframeworks but none were found \
+        from \(#filePath). Searched: \(searched.joined(separator: ", ")). \(hint)
+        """)
 }
 
 targets.append(
