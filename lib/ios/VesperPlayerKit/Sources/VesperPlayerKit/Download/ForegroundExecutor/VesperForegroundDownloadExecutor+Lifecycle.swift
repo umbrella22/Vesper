@@ -5,10 +5,15 @@ extension VesperForegroundDownloadExecutor {
         task: VesperDownloadTaskSnapshot,
         reporter: any VesperDownloadExecutionReporter
     ) {
-        Task.detached(priority: .utility) {
+        let work = Task.detached(priority: .utility) { [weak self] in
+            guard let self else {
+                return
+            }
             do {
                 let assetIndex = try await self.prepareAssetIndexWithRecovery(task: task, reporter: reporter)
                 await reporter.completePreparation(taskId: task.taskId, assetIndex: assetIndex)
+            } catch is CancellationError {
+                return
             } catch {
                 await reporter.fail(
                     taskId: task.taskId,
@@ -20,7 +25,15 @@ extension VesperForegroundDownloadExecutor {
                     )
                 )
             }
+            await MainActor.run {
+                self.lock.lock()
+                self.tasks.removeValue(forKey: task.taskId)
+                self.lock.unlock()
+            }
         }
+        lock.lock()
+        tasks[task.taskId] = work
+        lock.unlock()
     }
 
     public func start(
