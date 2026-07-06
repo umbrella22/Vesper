@@ -50,7 +50,16 @@ final class VesperFfiNativeFramePipelineBackend: VesperNativeFramePipelineBacken
         var openedHandle: UInt64 = 0
         var outputPointer: UnsafeMutablePointer<CChar>?
         var errorPointer: UnsafeMutablePointer<CChar>?
-        let maxInFlightFrames = UInt32(configuration.maxInFlightFrames ?? 0)
+        // Clamp the host-provided frame budget into the FFI's u32 range. A
+        // negative or oversized Int must not crash the host process; the FFI
+        // treats 0 as "use the runtime default".
+        let maxInFlightFrames = configuration.maxInFlightFrames.map { value -> UInt32 in
+            if value <= 0 {
+                return 0
+            }
+            let clamped = min(UInt64(value), UInt64(UInt32.max))
+            return UInt32(clamped)
+        } ?? 0
         let ok = source.uri.withCString { sourceUriPointer in
             withOptionalCString(sourceNormalizer.runtimeProfile) { runtimeProfilePointer in
                 withCStringArray(sourceNormalizer.pluginLibraryPaths) {
