@@ -149,6 +149,7 @@ internal class VesperRelaySourceRelay(
     private val appContext: android.content.Context?,
     private val formatAdapter: VesperRelayFormatAdapter,
     private val emitDiagnostic: (VesperRelayDiagnostic) -> Unit,
+    private val allowPrivateRemoteSources: Boolean,
 ) {
     fun relay(
         token: String,
@@ -257,8 +258,10 @@ internal class VesperRelaySourceRelay(
         var redirectsRemaining = MAX_RELAY_REDIRECTS
         var currentUri = source.uri
         while (true) {
-            // Validate target host before every connection to prevent SSRF.
-            validateRelayRemoteHost(currentUri)
+            if (!allowPrivateRemoteSources) {
+                // Validate target host before every connection to prevent SSRF.
+                validateRelayRemoteHost(currentUri)
+            }
             val connection = (java.net.URL(currentUri).openConnection() as java.net.HttpURLConnection)
             connection.instanceFollowRedirects = false
             connection.connectTimeout = 10_000

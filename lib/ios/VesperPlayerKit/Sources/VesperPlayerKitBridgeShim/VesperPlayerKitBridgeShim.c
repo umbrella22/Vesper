@@ -148,8 +148,8 @@ typedef struct PlayerFfiError {
 } PlayerFfiError;
 
 extern PlayerFfiCallStatus player_ffi_resolve_resilience_policy(
-    uint32_t source_kind,
-    uint32_t source_protocol,
+    PlayerFfiMediaSourceKind source_kind,
+    PlayerFfiMediaSourceProtocol source_protocol,
     const PlayerFfiBufferingPolicy *buffering_policy,
     const PlayerFfiRetryPolicy *retry_policy,
     const PlayerFfiCachePolicy *cache_policy,
@@ -488,8 +488,8 @@ extern PlayerFfiCallStatus player_ffi_preload_session_complete(
 extern PlayerFfiCallStatus player_ffi_preload_session_fail(
     uint64_t handle,
     uint64_t task_id,
-    uint32_t error_code,
-    uint32_t error_category,
+    PlayerFfiErrorCode error_code,
+    PlayerFfiErrorCategory error_category,
     bool retriable,
     const char *message,
     PlayerFfiError *out_error);
@@ -556,8 +556,8 @@ extern PlayerFfiCallStatus player_ffi_playlist_session_complete_preload_task(
 extern PlayerFfiCallStatus player_ffi_playlist_session_fail_preload_task(
     uint64_t handle,
     uint64_t task_id,
-    uint32_t error_code,
-    uint32_t error_category,
+    PlayerFfiErrorCode error_code,
+    PlayerFfiErrorCategory error_category,
     bool retriable,
     const char *message,
     PlayerFfiError *out_error);
@@ -636,8 +636,8 @@ extern PlayerFfiCallStatus player_ffi_download_session_export_task(
 extern PlayerFfiCallStatus player_ffi_download_session_fail_task(
     uint64_t handle,
     uint64_t task_id,
-    uint32_t error_code,
-    uint32_t error_category,
+    PlayerFfiErrorCode error_code,
+    PlayerFfiErrorCategory error_category,
     bool retriable,
     const char *message,
     PlayerFfiError *out_error);
@@ -1728,8 +1728,8 @@ bool vesper_runtime_resolve_resilience_policy(
   memset(&ffi_error, 0, sizeof(ffi_error));
 
   PlayerFfiCallStatus status = player_ffi_resolve_resilience_policy(
-      (uint32_t)source_kind_ordinal,
-      (uint32_t)source_protocol_ordinal,
+      (PlayerFfiMediaSourceKind)source_kind_ordinal,
+      (PlayerFfiMediaSourceProtocol)source_protocol_ordinal,
       &ffi_buffering_policy,
       &ffi_retry_policy,
       &ffi_cache_policy,
@@ -2073,8 +2073,8 @@ bool vesper_runtime_preload_session_fail(
   PlayerFfiCallStatus status = player_ffi_preload_session_fail(
       handle,
       task_id,
-      (uint32_t)error_code,
-      (uint32_t)error_category,
+      error_code,
+      error_category,
       retriable,
       message,
       &ffi_error);
@@ -2403,8 +2403,8 @@ bool vesper_runtime_playlist_session_fail_preload_task(
       player_ffi_playlist_session_fail_preload_task(
           handle,
           task_id,
-          (uint32_t)error_code,
-          (uint32_t)error_category,
+          error_code,
+          error_category,
           retriable,
           message,
           &ffi_error),
@@ -2645,8 +2645,8 @@ bool vesper_runtime_download_session_fail_task(
       player_ffi_download_session_fail_task(
           handle,
           task_id,
-          (uint32_t)error_code,
-          (uint32_t)error_category,
+          error_code,
+          error_category,
           retriable,
           message,
           &ffi_error),

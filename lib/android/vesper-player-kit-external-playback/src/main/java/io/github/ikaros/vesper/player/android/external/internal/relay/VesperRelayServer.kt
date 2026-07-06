@@ -32,6 +32,7 @@ class VesperRelayServer @JvmOverloads constructor(
     private val diagnosticListener: (VesperRelayDiagnostic) -> Unit = {},
     private val maxRequestThreads: Int = DEFAULT_MAX_REQUEST_THREADS,
     private val maxActiveClients: Int = DEFAULT_MAX_ACTIVE_CLIENTS,
+    private val allowPrivateRemoteSources: Boolean = false,
 ) {
     private val appContext = context?.applicationContext
     private val random = SecureRandom()
@@ -45,6 +46,7 @@ class VesperRelayServer @JvmOverloads constructor(
         appContext = appContext,
         formatAdapter = formatAdapter,
         emitDiagnostic = ::emitDiagnostic,
+        allowPrivateRemoteSources = allowPrivateRemoteSources,
     )
     private val clientHandler = VesperRelayClientHandler(
         running = running,

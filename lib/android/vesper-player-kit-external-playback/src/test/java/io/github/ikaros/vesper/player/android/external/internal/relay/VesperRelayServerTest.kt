@@ -29,6 +29,7 @@ class VesperRelayServerTest {
     private val relay = VesperRelayServer(
         advertisedAddressProvider = { loopback },
         bindAddressProvider = { loopback },
+        allowPrivateRemoteSources = true,
     )
     private val additionalRelays = mutableListOf<VesperRelayServer>()
     private var upstream: RecordingHttpServer? = null
