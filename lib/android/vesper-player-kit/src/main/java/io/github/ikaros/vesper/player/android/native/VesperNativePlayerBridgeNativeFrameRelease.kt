@@ -1,17 +1,18 @@
 package io.github.ikaros.vesper.player.android
 
+import android.util.Log
+
 internal fun VesperNativePlayerBridge.releasePendingTimedNativeFrame(presented: Boolean) {
     releasePendingTimedNativeFrameOnRuntime(presented)
 }
 
 internal fun VesperNativePlayerBridge.releasePendingTimedNativeFrameOnRuntime(presented: Boolean) {
-    nativeFramePipelinePumpScheduler.execute {
-        val result = runCatching {
-            releasePendingTimedNativeFrameFromRuntime(presented)
-        }
-        runOnMainThread {
-            result.onFailure { handleNativeFramePipelineRuntimeFailure("release", it) }
-        }
+    postNativeFramePipelineCleanupCommand(
+        operation = "releasePending",
+        coalescingKey = "releasePending",
+    ) {
+        releasePendingTimedNativeFrameFromRuntime(presented)
+        null
     }
 }
 
@@ -49,20 +50,72 @@ internal fun VesperNativePlayerBridge.releaseNativeFramePipelineFrame(frameHandl
 }
 
 internal fun VesperNativePlayerBridge.postNativeFramePipelineRelease(frameHandle: Long, presented: Boolean) {
-    nativeFramePipelinePumpScheduler.execute {
-        val result =
-            runCatching {
-                bindings.releaseNativeFramePipelineFrame(frameHandle, presented = presented)
-            }
-        runOnMainThread {
-            result
-                .onSuccess { status ->
-                    nativeFramePipelineLastStatus = status ?: nativeFramePipelineLastStatus
-                    publishNativeFramePipelinePumpStatus(nativeFramePipelineLastStatus)
-                }
-                .onFailure { handleNativeFramePipelineRuntimeFailure("release", it) }
-        }
+    postNativeFramePipelineCleanupCommand(
+        operation = "release",
+    ) {
+        bindings.releaseNativeFramePipelineFrame(frameHandle, presented = presented)
     }
+}
+
+internal fun VesperNativePlayerBridge.postNativeFramePipelineCleanupCommand(
+    operation: String,
+    coalescingKey: String? = null,
+    command: () -> Map<String, Any?>?,
+) {
+    val epoch = sourceLoadEpoch.get()
+    nativeFramePipelinePumpScheduler.executeCommand(
+        NativeFramePipelineRuntimeCommand(
+            operation = operation,
+            coalescingKey = coalescingKey,
+            runsDuringClose = true,
+            action = cleanupCommand@{
+                if (!isCurrentNativeFramePipelineRuntimeCommand(epoch, allowDisposedBridge = true)) {
+                    return@cleanupCommand
+                }
+                val result = runCatching(command)
+                runOnMainThread {
+                    if (!isCurrentNativeFramePipelineRuntimeCommand(epoch, allowDisposedBridge = true)) {
+                        return@runOnMainThread
+                    }
+                    result
+                        .onSuccess { status ->
+                            if (status != null) {
+                                nativeFramePipelineLastStatus = status
+                                publishNativeFramePipelinePumpStatus(nativeFramePipelineLastStatus)
+                            }
+                        }
+                        .onFailure { error ->
+                            if (isDisposed.get()) {
+                                Log.w(
+                                    NATIVE_PLAYER_BRIDGE_TAG,
+                                    "native-frame pipeline $operation failed after dispose",
+                                    error,
+                                )
+                            } else {
+                                handleNativeFramePipelineRuntimeFailure(operation, error)
+                            }
+                        }
+                }
+            },
+            onRejected = {
+                runOnMainThread {
+                    val error =
+                        IllegalStateException(
+                            "Android native-frame runtime command queue rejected $operation.",
+                        )
+                    if (isDisposed.get()) {
+                        Log.w(
+                            NATIVE_PLAYER_BRIDGE_TAG,
+                            "native-frame pipeline $operation rejected after dispose",
+                            error,
+                        )
+                    } else {
+                        handleNativeFramePipelineRuntimeFailure(operation, error)
+                    }
+                }
+            }
+        )
+    )
 }
 
 internal fun VesperNativePlayerBridge.releaseStaleNativeFramePipelineFrame(frameHandle: Long) {

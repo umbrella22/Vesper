@@ -89,6 +89,8 @@ internal class VesperNativeJniBindings(
     internal var firstFrameWatchdogSource: VesperPlayerSource? = null
     internal var firstFrameWatchdogRunnable: Runnable? = null
     internal var firstFrameRenderedForCurrentSource = false
+    @Volatile
+    internal var lastSnapshotLogElapsedMs = 0L
     internal val localBridgeEvents = ArrayDeque<NativeBridgeEvent>()
 
     internal fun addLocalBridgeEvent(event: NativeBridgeEvent) {
@@ -100,6 +102,7 @@ internal class VesperNativeJniBindings(
 
     companion object {
         private const val MAX_LOCAL_BRIDGE_EVENTS = 256
+        internal const val EXO_SNAPSHOT_LOG_INTERVAL_MS = 2_000L
     }
     internal val preloadCoordinator =
         VesperNativePreloadCoordinator(
@@ -152,99 +155,112 @@ internal class VesperNativeJniBindings(
         preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
     ): NativeBridgeStartup {
         Log.i(NATIVE_JNI_BINDINGS_TAG, "initialize source=${source.uri} kind=${source.kind} protocol=${source.protocol}")
-        dispose()
+        dispose(stopSourceNormalizerLoopbackServer = preparedSourceNormalizer.resource == null)
         isDisposed.set(false)
-        currentBenchmarkSourceProtocol = source.protocol
-        terminalErrorReportedForCurrentSource = false
-        currentDrmRuntimeErrorCount = 0
-        cancelFirstFrameWatchdog()
-        firstFrameRenderedForCurrentSource = false
-        firstFrameGate.advanceEpoch()
-        recordBenchmark("source_load_start")
-        VesperNativeLibrary.ensureLoaded()
+        var preparedSourceNormalizerConsumed = false
+        try {
+            currentBenchmarkSourceProtocol = source.protocol
+            terminalErrorReportedForCurrentSource = false
+            currentDrmRuntimeErrorCount = 0
+            cancelFirstFrameWatchdog()
+            firstFrameRenderedForCurrentSource = false
+            firstFrameGate.advanceEpoch()
+            recordBenchmark("source_load_start")
+            VesperNativeLibrary.ensureLoaded()
 
-        val handle = VesperNativeJni.createSession(source.uri)
-        check(handle != 0L) { "native session handle must not be zero" }
-        sessionHandle = handle
-        val sourceNormalizerOpen =
-            openPreparedSourceNormalizerResourceForPlayback(
-                source,
-                prepared = preparedSourceNormalizer,
+            val handle = VesperNativeJni.createSession(source.uri)
+            check(handle != 0L) { "native session handle must not be zero" }
+            sessionHandle = handle
+            val sourceNormalizerOpen =
+                openPreparedSourceNormalizerResourceForPlayback(
+                    source,
+                    prepared = preparedSourceNormalizer,
+                )
+            preparedSourceNormalizerConsumed = true
+            val normalizedResource = sourceNormalizerOpen.resource
+            val playbackSource = normalizedResource?.playbackSource ?: source
+            currentDrmDiagnosticsSource = playbackSource
+            firstFrameWatchdogSource = playbackSource
+            val resolvedResiliencePolicy = resolveResiliencePolicy(source, resiliencePolicy)
+            currentRetryMaxAttempts = resolvedResiliencePolicy.retry.resolvedMaxAttempts()
+            val resolvedTrackPreferences = resolveTrackPreferences(trackPreferencePolicy)
+            val renderersFactory =
+                DefaultRenderersFactory(appContext)
+                    .setExtensionRendererMode(decoderBackend.toExtensionRendererMode())
+                    .setMediaCodecSelector(VesperHardwareMediaCodecSelector)
+
+            val mediaSourceFactory =
+                DefaultMediaSourceFactory(appContext)
+                    .setDataSourceFactory(
+                        buildDataSourceFactory(appContext, resolvedResiliencePolicy.cache, playbackSource.headers)
+                    )
+                    .setLoadErrorHandlingPolicy(
+                        buildLoadErrorHandlingPolicy(playbackSource, resolvedResiliencePolicy.retry) { attempt, delayMs ->
+                            VesperNativeJni.reportRetryScheduled(handle, attempt, delayMs)
+                        }
+                    )
+            Log.i(
+                NATIVE_JNI_BINDINGS_TAG,
+                "using decoderBackend=$decoderBackend extensionRendererMode=${decoderBackend.toExtensionRendererMode()} sourceNormalizerRoute=${normalizedResource?.outputRoute ?: "native"}",
             )
-        val normalizedResource = sourceNormalizerOpen.resource
-        val playbackSource = normalizedResource?.playbackSource ?: source
-        currentDrmDiagnosticsSource = playbackSource
-        firstFrameWatchdogSource = playbackSource
-        val resolvedResiliencePolicy = resolveResiliencePolicy(source, resiliencePolicy)
-        currentRetryMaxAttempts = resolvedResiliencePolicy.retry.resolvedMaxAttempts()
-        val resolvedTrackPreferences = resolveTrackPreferences(trackPreferencePolicy)
-        val renderersFactory =
-            DefaultRenderersFactory(appContext)
-                .setExtensionRendererMode(decoderBackend.toExtensionRendererMode())
-                .setMediaCodecSelector(VesperHardwareMediaCodecSelector)
+            val exoPlayer =
+                ExoPlayer.Builder(appContext, renderersFactory)
+                    .setLoadControl(buildLoadControl(resolvedResiliencePolicy.buffering))
+                    .setMediaSourceFactory(mediaSourceFactory)
+                    .build()
+            exoPlayer.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                false,
+            )
+            applyTrackPreferenceDefaults(
+                exoPlayer = exoPlayer,
+                policy = resolvedTrackPreferences,
+                videoEnabled = systemPlaybackVideoEnabled,
+            )
+            val listener = buildPlayerListener(resolvedTrackPreferences)
+            val analytics = buildAnalyticsListener()
+            exoPlayer.addListener(listener)
+            exoPlayer.addAnalyticsListener(analytics)
+            exoPlayer.setMediaItem(buildMediaItem(playbackSource))
+            attachedSurface?.takeIf { systemPlaybackVideoEnabled }?.let { surface ->
+                Log.i(NATIVE_JNI_BINDINGS_TAG, "reusing attached surface for source=${source.uri}")
+                exoPlayer.setVideoSurface(surface)
+            }
+            exoPlayer.prepare()
+            val firstFrameWatchdogRoute =
+                FirstFrameWatchdogRoute.systemPlayback(systemPlaybackVideoEnabled)
+            scheduleFirstFrameWatchdog(playbackSource, firstFrameGate.currentEpoch, firstFrameWatchdogRoute)
+            recordBenchmark("source_load_configured")
+            executePreloadWarmupCommands(source)
 
-        val mediaSourceFactory =
-            DefaultMediaSourceFactory(appContext)
-                .setDataSourceFactory(
-                    buildDataSourceFactory(appContext, resolvedResiliencePolicy.cache, playbackSource.headers)
-                )
-                .setLoadErrorHandlingPolicy(
-                    buildLoadErrorHandlingPolicy(playbackSource, resolvedResiliencePolicy.retry) { attempt, delayMs ->
-                        VesperNativeJni.reportRetryScheduled(handle, attempt, delayMs)
-                    }
-                )
-        Log.i(
-            NATIVE_JNI_BINDINGS_TAG,
-            "using decoderBackend=$decoderBackend extensionRendererMode=${decoderBackend.toExtensionRendererMode()} sourceNormalizerRoute=${normalizedResource?.outputRoute ?: "native"}",
-        )
-        val exoPlayer =
-            ExoPlayer.Builder(appContext, renderersFactory)
-                .setLoadControl(buildLoadControl(resolvedResiliencePolicy.buffering))
-                .setMediaSourceFactory(mediaSourceFactory)
-                .build()
-        exoPlayer.setAudioAttributes(
-            AudioAttributes.Builder()
-                .setUsage(C.USAGE_MEDIA)
-                .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                .build(),
-            false,
-        )
-        applyTrackPreferenceDefaults(
-            exoPlayer = exoPlayer,
-            policy = resolvedTrackPreferences,
-            videoEnabled = systemPlaybackVideoEnabled,
-        )
-        val listener = buildPlayerListener(resolvedTrackPreferences)
-        val analytics = buildAnalyticsListener()
-        exoPlayer.addListener(listener)
-        exoPlayer.addAnalyticsListener(analytics)
-        exoPlayer.setMediaItem(buildMediaItem(playbackSource))
-        attachedSurface?.takeIf { systemPlaybackVideoEnabled }?.let { surface ->
-            Log.i(NATIVE_JNI_BINDINGS_TAG, "reusing attached surface for source=${source.uri}")
-            exoPlayer.setVideoSurface(surface)
+            player = exoPlayer
+            playerListener = listener
+            analyticsListener = analytics
+            systemPlaybackCoordinator.attachPlayer(exoPlayer)
+
+            pushSnapshotToRust()
+            pushTrackStateToRust()
+            notifyNativeUpdate()
+
+            return NativeBridgeStartup(
+                subtitle = normalizedResource?.subtitle ?: i18n.sourceSubtitle(source),
+                pluginDiagnostics =
+                    normalizedResource?.diagnostics
+                        ?: sourceNormalizerOpen.diagnostics,
+            )
+        } catch (error: Throwable) {
+            if (!preparedSourceNormalizerConsumed) {
+                runCatching {
+                    disposePreparedSourceNormalizerResource(preparedSourceNormalizer)
+                }.onFailure { disposeError ->
+                    Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose unconsumed source normalizer resource", disposeError)
+                }
+            }
+            throw error
         }
-        exoPlayer.prepare()
-        val firstFrameWatchdogRoute =
-            FirstFrameWatchdogRoute.systemPlayback(systemPlaybackVideoEnabled)
-        scheduleFirstFrameWatchdog(playbackSource, firstFrameGate.currentEpoch, firstFrameWatchdogRoute)
-        recordBenchmark("source_load_configured")
-        executePreloadWarmupCommands(source)
-
-        player = exoPlayer
-        playerListener = listener
-        analyticsListener = analytics
-        systemPlaybackCoordinator.attachPlayer(exoPlayer)
-
-        pushSnapshotToRust()
-        pushTrackStateToRust()
-        notifyNativeUpdate()
-
-        return NativeBridgeStartup(
-            subtitle = normalizedResource?.subtitle ?: i18n.sourceSubtitle(source),
-            pluginDiagnostics =
-                normalizedResource?.diagnostics
-                    ?: sourceNormalizerOpen.diagnostics,
-        )
     }
 
     override fun openNativeFramePipeline(
@@ -407,6 +423,10 @@ internal class VesperNativeJniBindings(
     }
 
     override fun dispose() {
+        dispose(stopSourceNormalizerLoopbackServer = true)
+    }
+
+    private fun dispose(stopSourceNormalizerLoopbackServer: Boolean) {
         if (!isDisposed.compareAndSet(false, true)) {
             return
         }
@@ -442,7 +462,9 @@ internal class VesperNativeJniBindings(
                     .onFailure { error -> Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose native session", error) }
             }
             closeCurrentSourceNormalizerResource()
-            sourceNormalizerLoopbackServer.stop()
+            if (stopSourceNormalizerLoopbackServer) {
+                sourceNormalizerLoopbackServer.stop()
+            }
         }
         currentTrackCatalogState = VesperTrackCatalog.Empty
         currentTrackSelectionState = VesperTrackSelectionSnapshot()

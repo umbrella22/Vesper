@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use player_model::MediaSource;
@@ -44,6 +44,7 @@ use serde::ser::{SerializeMap, Serializer};
 const SOURCE_NORMALIZER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const SOURCE_NORMALIZER_SESSION_TIMEOUT: Duration = Duration::from_secs(30);
 const SOURCE_NORMALIZER_RESOURCE_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const SOURCE_NORMALIZER_PREFLIGHT_IN_FLIGHT_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const SOURCE_NORMALIZER_PREFLIGHT_CACHE_CAPACITY: usize = 64;
 const SOURCE_NORMALIZER_PREFLIGHT_SUCCESS_TTL: Duration = Duration::from_secs(5 * 60);
 const SOURCE_NORMALIZER_PREFLIGHT_FAILURE_TTL: Duration = Duration::from_secs(30);
@@ -55,6 +56,7 @@ static SOURCE_NORMALIZER_PREFLIGHT_CACHE: LazyLock<Mutex<PreflightDiagnosticCach
             SOURCE_NORMALIZER_PREFLIGHT_CACHE_CAPACITY,
         ))
     });
+static SOURCE_NORMALIZER_PREFLIGHT_CACHE_CHANGED: LazyLock<Condvar> = LazyLock::new(Condvar::new);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MobilePreloadCommand {
@@ -584,7 +586,7 @@ impl PreflightDiagnosticCacheKey {
     ) -> Self {
         Self {
             source_uri: source.uri().to_owned(),
-            runtime_profile: configuration.runtime_profile.clone(),
+            runtime_profile: canonical_runtime_profile_cache_key(configuration),
             mode: source_normalizer_mode_cache_label(configuration.mode),
             plugin_paths: configuration
                 .plugin_library_paths
@@ -632,6 +634,9 @@ struct PreflightDiagnosticCache {
     capacity: usize,
     entries: HashMap<PreflightDiagnosticCacheKey, PreflightDiagnosticCacheEntry>,
     lru: VecDeque<PreflightDiagnosticCacheKey>,
+    in_flight: HashMap<PreflightDiagnosticCacheKey, u64>,
+    in_flight_lru: VecDeque<PreflightDiagnosticCacheKey>,
+    next_in_flight_token: u64,
 }
 
 impl PreflightDiagnosticCache {
@@ -640,6 +645,9 @@ impl PreflightDiagnosticCache {
             capacity,
             entries: HashMap::new(),
             lru: VecDeque::new(),
+            in_flight: HashMap::new(),
+            in_flight_lru: VecDeque::new(),
+            next_in_flight_token: 1,
         }
     }
 
@@ -714,21 +722,86 @@ impl PreflightDiagnosticCache {
         }
     }
 
+    fn begin_in_flight(&mut self, key: PreflightDiagnosticCacheKey) -> Option<u64> {
+        if self.in_flight.contains_key(&key) {
+            return None;
+        }
+        let token = self.next_in_flight_token;
+        self.next_in_flight_token = self.next_in_flight_token.wrapping_add(1).max(1);
+        self.in_flight.insert(key.clone(), token);
+        self.in_flight_lru.push_back(key.clone());
+        while self.in_flight.len() > self.capacity {
+            let Some(oldest) = self.in_flight_lru.pop_front() else {
+                break;
+            };
+            self.in_flight.remove(&oldest);
+        }
+        Some(token)
+    }
+
+    fn finish_in_flight(
+        &mut self,
+        key: PreflightDiagnosticCacheKey,
+        token: u64,
+        diagnostic: PlayerPluginDiagnostic,
+        now: Instant,
+    ) {
+        if self.in_flight.get(&key).copied() != Some(token) {
+            return;
+        }
+        self.remove_in_flight(&key);
+        self.insert(key, diagnostic, now);
+    }
+
+    fn cancel_in_flight(&mut self, key: &PreflightDiagnosticCacheKey, token: u64) {
+        if self.in_flight.get(key).copied() == Some(token) {
+            self.remove_in_flight(key);
+        }
+    }
+
+    fn in_flight_token(&self, key: &PreflightDiagnosticCacheKey) -> Option<u64> {
+        self.in_flight.get(key).copied()
+    }
+
+    fn expire_in_flight(&mut self, key: &PreflightDiagnosticCacheKey, token: u64) {
+        if self.in_flight.get(key).copied() == Some(token) {
+            self.remove_in_flight(key);
+        }
+    }
+
     #[cfg(test)]
     fn len(&self) -> usize {
         self.entries.len()
     }
 
     #[cfg(test)]
+    fn in_flight_len(&self) -> usize {
+        self.in_flight.len()
+    }
+
+    #[cfg(test)]
     fn clear(&mut self) {
         self.entries.clear();
         self.lru.clear();
+        self.in_flight.clear();
+        self.in_flight_lru.clear();
     }
 
     fn remove(&mut self, key: &PreflightDiagnosticCacheKey) {
         self.entries.remove(key);
         if let Some(index) = self.lru.iter().position(|candidate| candidate == key) {
             self.lru.remove(index);
+        }
+    }
+
+    fn remove_in_flight(&mut self, key: &PreflightDiagnosticCacheKey) {
+        self.in_flight.remove(key);
+        if let Some(index) = self
+            .in_flight_lru
+            .iter()
+            .position(|candidate| candidate == key)
+        {
+            self.in_flight_lru.remove(index);
         }
     }
 
@@ -1206,9 +1279,12 @@ pub fn open_mobile_source_normalizer_packet_session(
 ) -> Result<MobileSourceNormalizerPacketOpen, String> {
     let registry =
         PluginRegistry::inspect_source_normalizer_support(&configuration.plugin_library_paths);
-    let Some(record) = registry.best_source_normalizer_packet() else {
+    let Some(record) = best_mobile_source_normalizer_packet(&registry, configuration) else {
+        let profile = configured_runtime_profile(configuration)
+            .map(|profile| format!(" for runtime profile `{profile}`"))
+            .unwrap_or_default();
         return Err(format!(
-            "no packet-stream source normalizer plugin is available{}",
+            "no packet-stream source normalizer plugin is available{profile}{}",
             mobile_source_normalizer_registry_notes(&registry)
         ));
     };
@@ -1301,6 +1377,10 @@ pub fn source_normalizer_diagnostics(
         )];
     }
 
+    if configuration.mode == SourceNormalizerMode::PreflightOnly {
+        return vec![cached_preflight_source_normalizer(source, configuration)];
+    }
+
     let registry =
         PluginRegistry::inspect_source_normalizer_support(&configuration.plugin_library_paths);
     let mut diagnostics = registry
@@ -1355,26 +1435,6 @@ pub fn source_normalizer_diagnostics(
         return diagnostics;
     }
 
-    if configuration.mode != SourceNormalizerMode::PreflightOnly {
-        return diagnostics;
-    }
-
-    let Some(record) = registry.best_source_normalizer_packet() else {
-        diagnostics.push(runtime_source_normalizer_diagnostic(
-            String::new(),
-            None,
-            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
-            "source normalizer preflight skipped because no packet-stream source normalizer plugin is available",
-            PlayerPluginParticipation::Unknown,
-        ));
-        return diagnostics;
-    };
-
-    diagnostics.push(cached_preflight_source_normalizer(
-        source,
-        configuration,
-        record,
-    ));
     diagnostics
 }
 
@@ -1553,24 +1613,139 @@ fn preflight_source_normalizer(
 fn cached_preflight_source_normalizer(
     source: &MediaSource,
     configuration: &MobileSourceNormalizerConfiguration,
-    record: &PluginDiagnosticRecord,
 ) -> PlayerPluginDiagnostic {
     let key = PreflightDiagnosticCacheKey::from_source(source, configuration);
-    let now = Instant::now();
-    if let Some(diagnostic) = SOURCE_NORMALIZER_PREFLIGHT_CACHE
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .get(&key, now)
-    {
-        return diagnostic;
+    match reserve_preflight_diagnostic_cache(&key) {
+        PreflightDiagnosticCacheReservation::Hit(diagnostic) => return diagnostic,
+        PreflightDiagnosticCacheReservation::Owner(guard) => {
+            let diagnostic = preflight_source_normalizer_with_registry(source, configuration);
+            guard.finish(diagnostic.clone());
+            return diagnostic;
+        }
+    }
+}
+
+enum PreflightDiagnosticCacheReservation {
+    Hit(PlayerPluginDiagnostic),
+    Owner(PreflightDiagnosticInFlightGuard),
+}
+
+struct PreflightDiagnosticInFlightGuard {
+    key: Option<PreflightDiagnosticCacheKey>,
+    token: u64,
+}
+
+impl PreflightDiagnosticInFlightGuard {
+    fn new(key: PreflightDiagnosticCacheKey, token: u64) -> Self {
+        Self {
+            key: Some(key),
+            token,
+        }
     }
 
-    let diagnostic = preflight_source_normalizer(source, configuration, record);
+    fn finish(mut self, diagnostic: PlayerPluginDiagnostic) {
+        let Some(key) = self.key.take() else {
+            return;
+        };
+        finish_preflight_diagnostic_cache(key, self.token, diagnostic);
+    }
+}
+
+impl Drop for PreflightDiagnosticInFlightGuard {
+    fn drop(&mut self) {
+        let Some(key) = self.key.take() else {
+            return;
+        };
+        SOURCE_NORMALIZER_PREFLIGHT_CACHE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .cancel_in_flight(&key, self.token);
+        SOURCE_NORMALIZER_PREFLIGHT_CACHE_CHANGED.notify_all();
+    }
+}
+
+fn reserve_preflight_diagnostic_cache(
+    key: &PreflightDiagnosticCacheKey,
+) -> PreflightDiagnosticCacheReservation {
+    reserve_preflight_diagnostic_cache_with_timeout(
+        key,
+        SOURCE_NORMALIZER_PREFLIGHT_IN_FLIGHT_WAIT_TIMEOUT,
+    )
+}
+
+fn reserve_preflight_diagnostic_cache_with_timeout(
+    key: &PreflightDiagnosticCacheKey,
+    wait_timeout: Duration,
+) -> PreflightDiagnosticCacheReservation {
+    let mut cache = SOURCE_NORMALIZER_PREFLIGHT_CACHE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let wait_started = Instant::now();
+    loop {
+        if let Some(diagnostic) = cache.get(key, Instant::now()) {
+            return PreflightDiagnosticCacheReservation::Hit(diagnostic);
+        }
+        if let Some(token) = cache.begin_in_flight(key.clone()) {
+            drop(cache);
+            SOURCE_NORMALIZER_PREFLIGHT_CACHE_CHANGED.notify_all();
+            return PreflightDiagnosticCacheReservation::Owner(
+                PreflightDiagnosticInFlightGuard::new(key.clone(), token),
+            );
+        }
+        let Some(waited_token) = cache.in_flight_token(key) else {
+            continue;
+        };
+        let Some(remaining) = wait_timeout.checked_sub(wait_started.elapsed()) else {
+            cache.expire_in_flight(key, waited_token);
+            continue;
+        };
+        if remaining.is_zero() {
+            cache.expire_in_flight(key, waited_token);
+            continue;
+        }
+        let (next_cache, wait_result) = SOURCE_NORMALIZER_PREFLIGHT_CACHE_CHANGED
+            .wait_timeout(cache, remaining)
+            .unwrap_or_else(|error| error.into_inner());
+        cache = next_cache;
+        if wait_result.timed_out() {
+            cache.expire_in_flight(key, waited_token);
+        }
+    }
+}
+
+fn finish_preflight_diagnostic_cache(
+    key: PreflightDiagnosticCacheKey,
+    token: u64,
+    diagnostic: PlayerPluginDiagnostic,
+) {
     SOURCE_NORMALIZER_PREFLIGHT_CACHE
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .insert(key, diagnostic.clone(), Instant::now());
-    diagnostic
+        .finish_in_flight(key, token, diagnostic, Instant::now());
+    SOURCE_NORMALIZER_PREFLIGHT_CACHE_CHANGED.notify_all();
+}
+
+fn preflight_source_normalizer_with_registry(
+    source: &MediaSource,
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> PlayerPluginDiagnostic {
+    let registry =
+        PluginRegistry::inspect_source_normalizer_support(&configuration.plugin_library_paths);
+    let Some(record) = best_mobile_source_normalizer_packet(&registry, configuration) else {
+        return runtime_source_normalizer_diagnostic(
+            String::new(),
+            None,
+            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+            source_normalizer_packet_selection_failure_message(
+                "preflight",
+                &registry,
+                configuration,
+            ),
+            PlayerPluginParticipation::Unknown,
+        );
+    };
+
+    preflight_source_normalizer(source, configuration, record)
 }
 
 #[cfg(test)]
@@ -1589,6 +1764,21 @@ fn cached_preflight_diagnostic_with(
     diagnostic
 }
 
+#[cfg(test)]
+fn cached_preflight_diagnostic_with_global(
+    key: PreflightDiagnosticCacheKey,
+    open: impl FnOnce() -> PlayerPluginDiagnostic,
+) -> PlayerPluginDiagnostic {
+    match reserve_preflight_diagnostic_cache(&key) {
+        PreflightDiagnosticCacheReservation::Hit(diagnostic) => diagnostic,
+        PreflightDiagnosticCacheReservation::Owner(guard) => {
+            let diagnostic = open();
+            guard.finish(diagnostic.clone());
+            diagnostic
+        }
+    }
+}
+
 fn open_source_normalizer_packet_session(
     source: &MediaSource,
     configuration: &MobileSourceNormalizerConfiguration,
@@ -1605,7 +1795,7 @@ fn open_source_normalizer_packet_session(
                 plugin.plugin_name()
             )
         })?;
-    let runtime_profile = configuration.runtime_profile.clone().unwrap_or_default();
+    let runtime_profile = canonical_runtime_profile(configuration).unwrap_or_default();
     let requirements = SourceNormalizerPacketSessionRequirements {
         runtime_profile: runtime_profile.clone(),
         media_kind: Some(SourceNormalizerPacketMediaKind::Video),
@@ -1700,7 +1890,7 @@ fn probe_source_normalizer_resource(
         );
     };
 
-    let runtime_profile = configuration.runtime_profile.clone().unwrap_or_default();
+    let runtime_profile = canonical_runtime_profile(configuration).unwrap_or_default();
     let preferred_route = preferred_resource_route_for_source(source);
     let requirements = SourceNormalizerResourceSessionRequirements {
         runtime_profile: runtime_profile.clone(),
@@ -1841,7 +2031,7 @@ fn open_source_normalizer_resource_session(
                 plugin.plugin_name()
             )
         })?;
-    let runtime_profile = configuration.runtime_profile.clone().unwrap_or_default();
+    let runtime_profile = canonical_runtime_profile(configuration).unwrap_or_default();
     let preferred_route = preferred_resource_route_for_source(source);
     let requirements = SourceNormalizerResourceSessionRequirements {
         runtime_profile: runtime_profile.clone(),
@@ -2396,6 +2586,18 @@ fn configured_runtime_profile(configuration: &MobileSourceNormalizerConfiguratio
         .filter(|profile| !profile.is_empty())
 }
 
+fn canonical_runtime_profile(
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> Option<String> {
+    configured_runtime_profile(configuration).map(str::to_owned)
+}
+
+fn canonical_runtime_profile_cache_key(
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> Option<String> {
+    canonical_runtime_profile(configuration)
+}
+
 fn best_mobile_source_normalizer_resource<'a>(
     registry: &'a PluginRegistry,
     configuration: &MobileSourceNormalizerConfiguration,
@@ -2403,6 +2605,16 @@ fn best_mobile_source_normalizer_resource<'a>(
     match configured_runtime_profile(configuration) {
         Some(profile) => registry.best_source_normalizer_resource_for_profile(profile),
         None => registry.best_source_normalizer_resource(),
+    }
+}
+
+fn best_mobile_source_normalizer_packet<'a>(
+    registry: &'a PluginRegistry,
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> Option<&'a PluginDiagnosticRecord> {
+    match configured_runtime_profile(configuration) {
+        Some(profile) => registry.best_source_normalizer_packet_for_profile(profile),
+        None => registry.best_source_normalizer_packet(),
     }
 }
 
@@ -2418,6 +2630,23 @@ fn source_normalizer_resource_selection_failure_message(
         ),
         None => format!(
             "source normalizer {operation} skipped because no resource-output plugin is available: {}",
+            mobile_source_normalizer_registry_notes(registry)
+        ),
+    }
+}
+
+fn source_normalizer_packet_selection_failure_message(
+    operation: &str,
+    registry: &PluginRegistry,
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> String {
+    match configured_runtime_profile(configuration) {
+        Some(profile) => format!(
+            "source normalizer {operation} skipped because no packet-stream plugin supports runtime profile '{profile}': {}",
+            mobile_source_normalizer_registry_notes(registry)
+        ),
+        None => format!(
+            "source normalizer {operation} skipped because no packet-stream plugin is available: {}",
             mobile_source_normalizer_registry_notes(registry)
         ),
     }
@@ -2908,6 +3137,14 @@ mod tests {
     use player_plugin::SourceNormalizerResourceSessionWaitStatus;
     use serde_json::Value;
 
+    static PREFLIGHT_CACHE_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn lock_preflight_cache_for_test() -> std::sync::MutexGuard<'static, ()> {
+        PREFLIGHT_CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
     #[test]
     fn disabled_configs_emit_no_diagnostics() {
         let diagnostics = apply_mobile_plugin_diagnostics(
@@ -3095,6 +3332,290 @@ mod tests {
     }
 
     #[test]
+    fn preflight_diagnostics_cache_hit_skips_plugin_registry_probe() {
+        let _guard = lock_preflight_cache_for_test();
+        SOURCE_NORMALIZER_PREFLIGHT_CACHE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        let source = MediaSource::new("https://cdn.example.test/video.flv");
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreflightOnly,
+            plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+            runtime_profile: Some("flv".to_owned()),
+        };
+        let key = PreflightDiagnosticCacheKey::from_source(&source, &configuration);
+        SOURCE_NORMALIZER_PREFLIGHT_CACHE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(
+                key,
+                test_source_normalizer_diagnostic(
+                    PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
+                    "source normalizer preflight opened and closed packet session; ready_ms=42",
+                ),
+                Instant::now(),
+            );
+
+        let diagnostics = source_normalizer_diagnostics(&source, &configuration);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].status,
+            PlayerPluginDiagnosticStatus::SourceNormalizerSupported
+        );
+        assert_eq!(
+            diagnostics[0]
+                .details
+                .iter()
+                .find(|detail| detail.key == "cached")
+                .map(|detail| detail.value.as_str()),
+            Some("true")
+        );
+        assert!(
+            !diagnostics[0]
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("failed to open plugin library"),
+            "cache hit must not probe the missing plugin path"
+        );
+        SOURCE_NORMALIZER_PREFLIGHT_CACHE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+    }
+
+    #[test]
+    fn preflight_cache_coalesces_concurrent_misses_for_same_key() {
+        let _guard = lock_preflight_cache_for_test();
+        SOURCE_NORMALIZER_PREFLIGHT_CACHE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        let source = MediaSource::new("https://cdn.example.test/video.flv");
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreflightOnly,
+            plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            runtime_profile: Some("flv".to_owned()),
+        };
+        let key = Arc::new(PreflightDiagnosticCacheKey::from_source(
+            &source,
+            &configuration,
+        ));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let opened = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let handles = (0..2)
+            .map(|_| {
+                let key = Arc::clone(&key);
+                let barrier = Arc::clone(&barrier);
+                let opened = Arc::clone(&opened);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    cached_preflight_diagnostic_with_global((*key).clone(), || {
+                        opened.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        std::thread::sleep(Duration::from_millis(25));
+                        test_source_normalizer_diagnostic(
+                            PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
+                            "source normalizer preflight opened and closed packet session; ready_ms=7",
+                        )
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        let diagnostics = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("preflight worker should not panic"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(opened.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(diagnostics.iter().all(|diagnostic| {
+            diagnostic.status == PlayerPluginDiagnosticStatus::SourceNormalizerSupported
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .details
+                .iter()
+                .any(|detail| detail.key == "cached" && detail.value == "true")
+        }));
+        SOURCE_NORMALIZER_PREFLIGHT_CACHE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+    }
+
+    #[test]
+    fn preflight_cache_in_flight_owner_drop_does_not_block_future_attempts() {
+        let _guard = lock_preflight_cache_for_test();
+        SOURCE_NORMALIZER_PREFLIGHT_CACHE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        let source = MediaSource::new("https://cdn.example.test/video.flv");
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreflightOnly,
+            plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            runtime_profile: Some("flv".to_owned()),
+        };
+        let key = PreflightDiagnosticCacheKey::from_source(&source, &configuration);
+
+        match reserve_preflight_diagnostic_cache(&key) {
+            PreflightDiagnosticCacheReservation::Owner(owner) => drop(owner),
+            PreflightDiagnosticCacheReservation::Hit(_) => {
+                panic!("empty cache should not return a diagnostic")
+            }
+        }
+
+        let refreshed = cached_preflight_diagnostic_with_global(key, || {
+            test_source_normalizer_diagnostic(
+                PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
+                "source normalizer preflight opened and closed packet session; ready_ms=9",
+            )
+        });
+
+        assert_eq!(
+            refreshed.status,
+            PlayerPluginDiagnosticStatus::SourceNormalizerSupported
+        );
+        SOURCE_NORMALIZER_PREFLIGHT_CACHE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+    }
+
+    #[test]
+    fn preflight_cache_in_flight_wait_timeout_retries_with_new_owner() {
+        let _guard = lock_preflight_cache_for_test();
+        SOURCE_NORMALIZER_PREFLIGHT_CACHE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        let source = MediaSource::new("https://cdn.example.test/video.flv");
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreflightOnly,
+            plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            runtime_profile: Some("flv".to_owned()),
+        };
+        let key = PreflightDiagnosticCacheKey::from_source(&source, &configuration);
+
+        let first_owner =
+            match reserve_preflight_diagnostic_cache_with_timeout(&key, Duration::from_millis(1)) {
+                PreflightDiagnosticCacheReservation::Owner(owner) => owner,
+                PreflightDiagnosticCacheReservation::Hit(_) => {
+                    panic!("empty cache should not return a diagnostic")
+                }
+            };
+        let started = Instant::now();
+        let second_owner =
+            match reserve_preflight_diagnostic_cache_with_timeout(&key, Duration::from_millis(5)) {
+                PreflightDiagnosticCacheReservation::Owner(owner) => owner,
+                PreflightDiagnosticCacheReservation::Hit(_) => {
+                    panic!("stalled owner should not produce a cached diagnostic")
+                }
+            };
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "test timeout path should not wait for the production in-flight timeout"
+        );
+
+        first_owner.finish(test_source_normalizer_diagnostic(
+            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+            "stale preflight result",
+        ));
+        second_owner.finish(test_source_normalizer_diagnostic(
+            PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
+            "source normalizer preflight opened and closed packet session; ready_ms=11",
+        ));
+
+        let cached = cached_preflight_diagnostic_with_global(key, || {
+            panic!("fresh owner result should be cached")
+        });
+        assert_eq!(
+            cached.status,
+            PlayerPluginDiagnosticStatus::SourceNormalizerSupported
+        );
+        assert!(
+            cached
+                .details
+                .iter()
+                .any(|detail| detail.key == "cached" && detail.value == "true")
+        );
+        SOURCE_NORMALIZER_PREFLIGHT_CACHE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+    }
+
+    #[test]
+    fn preflight_cache_bounds_distinct_in_flight_owners() {
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreflightOnly,
+            plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            runtime_profile: Some("flv".to_owned()),
+        };
+        let source_a = MediaSource::new("https://cdn.example.test/a.flv");
+        let source_b = MediaSource::new("https://cdn.example.test/b.flv");
+        let source_c = MediaSource::new("https://cdn.example.test/c.flv");
+        let key_a = PreflightDiagnosticCacheKey::from_source(&source_a, &configuration);
+        let key_b = PreflightDiagnosticCacheKey::from_source(&source_b, &configuration);
+        let key_c = PreflightDiagnosticCacheKey::from_source(&source_c, &configuration);
+        let mut cache = PreflightDiagnosticCache::new(2);
+        let now = Instant::now();
+
+        let token_a = cache
+            .begin_in_flight(key_a.clone())
+            .expect("first distinct key should become owner");
+        let token_b = cache
+            .begin_in_flight(key_b.clone())
+            .expect("second distinct key should become owner");
+        let token_c = cache
+            .begin_in_flight(key_c.clone())
+            .expect("third distinct key should become owner after evicting oldest");
+
+        assert_eq!(cache.in_flight_len(), 2);
+        assert_eq!(cache.in_flight_token(&key_a), None);
+        assert_eq!(cache.in_flight_token(&key_b), Some(token_b));
+        assert_eq!(cache.in_flight_token(&key_c), Some(token_c));
+
+        cache.finish_in_flight(
+            key_a.clone(),
+            token_a,
+            test_source_normalizer_diagnostic(
+                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+                "evicted stale preflight result",
+            ),
+            now,
+        );
+        assert!(
+            cache.get(&key_a, now + Duration::from_millis(1)).is_none(),
+            "evicted in-flight owner must not populate the cache"
+        );
+
+        cache.finish_in_flight(
+            key_b.clone(),
+            token_b,
+            test_source_normalizer_diagnostic(
+                PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
+                "source normalizer preflight opened and closed packet session; ready_ms=13",
+            ),
+            now,
+        );
+        cache.finish_in_flight(
+            key_c.clone(),
+            token_c,
+            test_source_normalizer_diagnostic(
+                PlayerPluginDiagnosticStatus::SourceNormalizerSupported,
+                "source normalizer preflight opened and closed packet session; ready_ms=17",
+            ),
+            now,
+        );
+
+        assert!(cache.get(&key_b, now + Duration::from_millis(1)).is_some());
+        assert!(cache.get(&key_c, now + Duration::from_millis(1)).is_some());
+    }
+
+    #[test]
     fn preflight_cache_key_changes_with_runtime_profile_and_plugin_metadata() {
         let source = MediaSource::new("https://cdn.example.test/video.flv");
         let path = std::env::temp_dir().join(format!(
@@ -3122,6 +3643,47 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         assert_ne!(generic_key, rewritten_key);
+    }
+
+    #[test]
+    fn preflight_cache_key_trims_runtime_profile_without_changing_identity() {
+        let source = MediaSource::new("https://cdn.example.test/video.flv");
+        let base = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreflightOnly,
+            plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            runtime_profile: Some(" FLV ".to_owned()),
+        };
+        let normalized = MobileSourceNormalizerConfiguration {
+            runtime_profile: Some("flv".to_owned()),
+            ..base.clone()
+        };
+        let blank = MobileSourceNormalizerConfiguration {
+            runtime_profile: Some("   ".to_owned()),
+            ..base.clone()
+        };
+        let automatic = MobileSourceNormalizerConfiguration {
+            runtime_profile: None,
+            ..base.clone()
+        };
+
+        assert_eq!(
+            PreflightDiagnosticCacheKey::from_source(&source, &base),
+            PreflightDiagnosticCacheKey::from_source(
+                &source,
+                &MobileSourceNormalizerConfiguration {
+                    runtime_profile: Some("FLV".to_owned()),
+                    ..base.clone()
+                },
+            )
+        );
+        assert_ne!(
+            PreflightDiagnosticCacheKey::from_source(&source, &base),
+            PreflightDiagnosticCacheKey::from_source(&source, &normalized)
+        );
+        assert_eq!(
+            PreflightDiagnosticCacheKey::from_source(&source, &blank),
+            PreflightDiagnosticCacheKey::from_source(&source, &automatic)
+        );
     }
 
     #[test]
@@ -3182,6 +3744,7 @@ mod tests {
 
     #[test]
     fn normalized_resource_modes_are_not_served_from_preflight_cache() {
+        let _guard = lock_preflight_cache_for_test();
         SOURCE_NORMALIZER_PREFLIGHT_CACHE
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -3445,6 +4008,40 @@ mod tests {
             best_mobile_source_normalizer_resource(&registry, &configuration)
                 .and_then(|record| record.plugin_name.as_deref()),
             Some("flv-resource")
+        );
+    }
+
+    #[test]
+    fn mobile_packet_selection_uses_explicit_runtime_profile() {
+        let registry = PluginRegistry::from_records(vec![
+            mobile_resource_record("resource-only", &["flv"]),
+            mobile_packet_record("generic-packet", &["generic-fallback"]),
+            mobile_packet_record("flv-packet", &["flv"]),
+        ]);
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreflightOnly,
+            runtime_profile: Some(" FLV ".to_owned()),
+            plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+        };
+
+        assert_eq!(
+            best_mobile_source_normalizer_packet(&registry, &configuration)
+                .and_then(|record| record.plugin_name.as_deref()),
+            Some("flv-packet")
+        );
+    }
+
+    #[test]
+    fn mobile_packet_open_preserves_runtime_profile_identity() {
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreflightOnly,
+            runtime_profile: Some(" Fixture-Packet ".to_owned()),
+            plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+        };
+
+        assert_eq!(
+            canonical_runtime_profile(&configuration).as_deref(),
+            Some("Fixture-Packet")
         );
     }
 

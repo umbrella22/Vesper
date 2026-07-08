@@ -18,11 +18,11 @@ the Kotlin facade at
 `io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackController`.
 
 Use `VesperExternalRouteIconButton` inside a player-stage action slot on Android
-to surface the system Cast route picker as a full icon-sized native hit area.
-The Android platform view follows the surrounding Flutter `Theme` brightness by
-default and passes an opaque light or dark MediaRouter theme to Cast so route
-button and dialog contrast calculation never depends on a transparent host
-background.
+to surface the system Cast route picker through a Flutter icon button. The
+Android method channel opens the SDK-owned MediaRouter button with an opaque
+light or dark theme so route button and dialog contrast calculation never
+depends on a transparent host background. Route picker startup failures are
+handled as best-effort diagnostics instead of user-visible playback errors.
 `VesperExternalRouteButton` remains available for existing integrations.
 
 ## Android Host Requirements

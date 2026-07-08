@@ -5,7 +5,7 @@ import VesperPlayerKitBridgeShim
 extension VesperNativeFramePipelineSession {
     func runtimePresent(frame: VesperNativeFramePipelineFrame) async -> Bool {
         guard !isClosed else { return false }
-        return await nativeFramePresenter.presentNativeFrame(pixelBufferAddress: frame.pixelBufferAddress)
+        return await nativeFramePresenter.presentNativeFrame(pixelBuffer: frame.pixelBuffer)
     }
 
     func runtimeTimeline(framePresentationTimeUs presentationTimeUs: Int64) -> VesperNativeFramePipelineTimeline {

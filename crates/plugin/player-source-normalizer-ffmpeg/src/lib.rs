@@ -1,13 +1,16 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::ffi::{c_char, c_void};
+use std::ffi::{CString, c_char, c_void};
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
+use std::ptr;
 use std::sync::{
-    Arc, Condvar, Mutex,
+    Arc, Condvar, Mutex, OnceLock,
     atomic::{AtomicBool, AtomicU64, Ordering},
+    mpsc::{self, TrySendError},
 };
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ffmpeg_next::util::format::Pixel;
 use ffmpeg_next::{self as ffmpeg, codec, encoder, format, media};
@@ -33,13 +36,17 @@ use player_source_normalizer::{
     SourceNormalizerOutputContainer, SourceNormalizerProfile, SourceNormalizerProfileSet,
     SourceNormalizerSessionConfig, SourceRuntimeDetector, build_ffmpeg_command_plan,
 };
+use std::os::raw::c_int;
 
 static PLUGIN_NAME: &[u8] = b"player-source-normalizer-ffmpeg\0";
 const DEFAULT_PROFILE_TOML: &str =
     include_str!("../../../../scripts/source-normalizer-profiles.toml");
 const PROFILE_PATH_ENV: &str = "VESPER_SOURCE_NORMALIZER_PROFILE_PATH";
 const MAX_SKIPPED_NON_AV_PACKETS: usize = 10_000;
+const RESOURCE_CLOSE_JOIN_TIMEOUT: Duration = Duration::from_millis(500);
+const RESOURCE_CLEANUP_QUEUE_CAPACITY: usize = 64;
 static NEXT_SESSION_SUFFIX: AtomicU64 = AtomicU64::new(1);
+static RESOURCE_CLEANUP_QUEUE: OnceLock<mpsc::SyncSender<ResourceCleanupJob>> = OnceLock::new();
 
 struct ResourceWorkerConfig {
     profile_name: String,
@@ -49,6 +56,8 @@ struct ResourceWorkerConfig {
     output_path: PathBuf,
     route: SourceNormalizerOutputRoute,
     cache_policy: SourceNormalizerResourceCachePolicy,
+    startup_timeout_ms: Option<u64>,
+    read_idle_timeout_ms: Option<u64>,
     cancel_requested: Arc<AtomicBool>,
     shared: Arc<ResourceWorkerShared>,
 }
@@ -59,13 +68,31 @@ struct PluginBundle {
 }
 
 struct PacketNormalizerSession {
-    input: ffmpeg::format::context::Input,
+    input: TimedFfmpegInput,
     selected_video_stream_index: usize,
     selected_audio_stream_index: Option<usize>,
     tracks: Vec<SourceNormalizerPacketTrackInfo>,
     next_packet_handle: usize,
     leased_packet: Option<LeasedPacket>,
     closed: bool,
+}
+
+struct TimedFfmpegInput {
+    input: ffmpeg::format::context::Input,
+    interrupt: Box<FfmpegInterruptState>,
+    read_idle_timeout_ms: Option<u64>,
+}
+
+struct FfmpegInterruptState {
+    clock_started_at: Instant,
+    operation_started_ms: AtomicU64,
+    operation_timeout_ms: AtomicU64,
+    cancel_requested: Option<Arc<AtomicBool>>,
+}
+
+struct ResourceCleanupJob {
+    worker: JoinHandle<()>,
+    output_dir: PathBuf,
 }
 
 #[derive(Debug)]
@@ -89,11 +116,14 @@ struct ResourceWorkerShared {
 struct ResourceWorkerState {
     state: SourceNormalizerResourceSessionState,
     message: Option<String>,
+    tracks: Vec<SourceNormalizerPacketTrackInfo>,
     sequence: u64,
+    worker_finished: bool,
 }
 
 impl Drop for PacketNormalizerSession {
     fn drop(&mut self) {
+        self.input.cancel();
         // Leased packet data is owned Rust memory, and the FFmpeg input context
         // is released by its own Drop implementation after this session drops.
         self.leased_packet = None;
@@ -105,6 +135,178 @@ impl Drop for PacketNormalizerSession {
 struct LeasedPacket {
     handle: usize,
     data: Vec<u8>,
+}
+
+impl TimedFfmpegInput {
+    fn new(
+        input: ffmpeg::format::context::Input,
+        interrupt: Box<FfmpegInterruptState>,
+        read_idle_timeout_ms: Option<u64>,
+    ) -> Self {
+        Self {
+            input,
+            interrupt,
+            read_idle_timeout_ms,
+        }
+    }
+
+    fn cancel(&self) {
+        self.interrupt.request_cancel();
+    }
+
+    fn read_packet(
+        &mut self,
+    ) -> Result<Option<(ffmpeg::Stream<'_>, ffmpeg::Packet)>, SourceNormalizerError> {
+        let _operation = self.interrupt.begin_operation(self.read_idle_timeout_ms);
+        let mut packet = ffmpeg::Packet::empty();
+        match packet.read(&mut self.input) {
+            Ok(()) => {
+                let stream_index = packet.stream();
+                let stream = self.input.stream(stream_index).ok_or_else(|| {
+                    SourceNormalizerError::internal(format!(
+                        "packet referenced missing stream index {stream_index}"
+                    ))
+                })?;
+                Ok(Some((stream, packet)))
+            }
+            Err(ffmpeg::Error::Eof) => Ok(None),
+            Err(error) => {
+                if let Some(message) = self.interrupt.interrupt_message("read packet") {
+                    Err(SourceNormalizerError::internal(message))
+                } else {
+                    Err(SourceNormalizerError::internal(format!(
+                        "failed to read input packet: {error}"
+                    )))
+                }
+            }
+        }
+    }
+
+    fn seek_packet(&mut self, timestamp: i64) -> Result<(), SourceNormalizerError> {
+        let _operation = self.interrupt.begin_operation(self.read_idle_timeout_ms);
+        self.input.seek(timestamp, ..timestamp).map_err(|error| {
+            self.interrupt
+                .interrupt_message("seek packet input")
+                .map(SourceNormalizerError::internal)
+                .unwrap_or_else(|| {
+                    SourceNormalizerError::internal(format!("failed to seek packet input: {error}"))
+                })
+        })
+    }
+}
+
+impl Deref for TimedFfmpegInput {
+    type Target = ffmpeg::format::context::Input;
+
+    fn deref(&self) -> &Self::Target {
+        &self.input
+    }
+}
+
+impl DerefMut for TimedFfmpegInput {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.input
+    }
+}
+
+impl FfmpegInterruptState {
+    fn new(cancel_requested: Option<Arc<AtomicBool>>) -> Self {
+        Self {
+            clock_started_at: Instant::now(),
+            operation_started_ms: AtomicU64::new(0),
+            operation_timeout_ms: AtomicU64::new(0),
+            cancel_requested,
+        }
+    }
+
+    fn begin_operation(&self, timeout_ms: Option<u64>) -> FfmpegInterruptOperation<'_> {
+        let timeout_ms = timeout_ms.unwrap_or(0);
+        if timeout_ms == 0 {
+            self.operation_timeout_ms.store(0, Ordering::SeqCst);
+            self.operation_started_ms.store(0, Ordering::SeqCst);
+        } else {
+            let started_ms = self.elapsed_millis().saturating_add(1);
+            self.operation_started_ms
+                .store(started_ms, Ordering::SeqCst);
+            self.operation_timeout_ms
+                .store(timeout_ms.max(1), Ordering::SeqCst);
+        }
+        FfmpegInterruptOperation { state: self }
+    }
+
+    fn request_cancel(&self) {
+        if let Some(cancel_requested) = &self.cancel_requested {
+            cancel_requested.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn should_interrupt(&self) -> bool {
+        if self
+            .cancel_requested
+            .as_ref()
+            .map(|cancel_requested| cancel_requested.load(Ordering::SeqCst))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        self.operation_timed_out()
+    }
+
+    fn interrupt_message(&self, operation: &str) -> Option<String> {
+        if self
+            .cancel_requested
+            .as_ref()
+            .map(|cancel_requested| cancel_requested.load(Ordering::SeqCst))
+            .unwrap_or(false)
+        {
+            return Some(format!("FFmpeg {operation} cancelled"));
+        }
+        if self.operation_timed_out() {
+            return Some(format!("FFmpeg {operation} timed out"));
+        }
+        None
+    }
+
+    fn operation_timed_out(&self) -> bool {
+        let timeout_ms = self.operation_timeout_ms.load(Ordering::SeqCst);
+        let started_ms = self.operation_started_ms.load(Ordering::SeqCst);
+        if timeout_ms == 0 || started_ms == 0 {
+            return false;
+        }
+        self.elapsed_millis()
+            .saturating_sub(started_ms.saturating_sub(1))
+            >= timeout_ms
+    }
+
+    fn elapsed_millis(&self) -> u64 {
+        u64::try_from(self.clock_started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn clear_operation(&self) {
+        self.operation_timeout_ms.store(0, Ordering::SeqCst);
+        self.operation_started_ms.store(0, Ordering::SeqCst);
+    }
+}
+
+struct FfmpegInterruptOperation<'a> {
+    state: &'a FfmpegInterruptState,
+}
+
+impl Drop for FfmpegInterruptOperation<'_> {
+    fn drop(&mut self) {
+        self.state.clear_operation();
+    }
+}
+
+extern "C" fn ffmpeg_interrupt_callback(opaque: *mut c_void) -> c_int {
+    if opaque.is_null() {
+        return 0;
+    }
+    // SAFETY: `opaque` is set to a stable `FfmpegInterruptState` allocation
+    // owned by `TimedFfmpegInput` or by the resource worker while the FFmpeg
+    // context using this callback is alive.
+    let state = unsafe { &*(opaque.cast::<FfmpegInterruptState>()) };
+    if state.should_interrupt() { 1 } else { 0 }
 }
 
 #[unsafe(no_mangle)]
@@ -198,7 +400,13 @@ unsafe extern "C" fn normalizer_open_packet_session_json(
             return packet_open_error(error);
         }
 
-        let input = match open_ffmpeg_input(&config.input) {
+        let input = match open_ffmpeg_input(
+            &config.input,
+            &profile,
+            config.startup_timeout_ms,
+            config.session_timeout_ms,
+            None,
+        ) {
             Ok(input) => input,
             Err(error) => return packet_open_error(error),
         };
@@ -278,8 +486,8 @@ unsafe extern "C" fn normalizer_read_packet(
         let tracks = session.tracks.clone();
         let mut skipped_packets = 0usize;
         loop {
-            match session.input.packets().next() {
-                Some((stream, packet))
+            match session.input.read_packet() {
+                Ok(Some((stream, packet)))
                     if stream.index() == selected_video_stream_index
                         || selected_audio_stream_index == Some(stream.index()) =>
                 {
@@ -336,7 +544,7 @@ unsafe extern "C" fn normalizer_read_packet(
                         packet_handle: leased.handle,
                     };
                 }
-                Some((_stream, _packet)) => {
+                Ok(Some((_stream, _packet))) => {
                     skipped_packets = skipped_packets.saturating_add(1);
                     if skipped_packets > MAX_SKIPPED_NON_AV_PACKETS {
                         return read_packet_error(SourceNormalizerError::internal(format!(
@@ -344,7 +552,7 @@ unsafe extern "C" fn normalizer_read_packet(
                         )));
                     }
                 }
-                None => {
+                Ok(None) => {
                     return VesperSourceNormalizerReadPacketResult {
                         status: VesperPluginResultStatus::Success,
                         metadata: serialize_payload(
@@ -355,6 +563,7 @@ unsafe extern "C" fn normalizer_read_packet(
                         packet_handle: 0,
                     };
                 }
+                Err(error) => return read_packet_error(error),
             }
         }
     })
@@ -374,8 +583,9 @@ unsafe extern "C" fn normalizer_release_packet(
         if session.closed {
             return process_error(SourceNormalizerError::NotConfigured);
         }
-        match session.leased_packet.take() {
+        match session.leased_packet.as_ref() {
             Some(packet) if packet.handle == packet_handle => {
+                session.leased_packet = None;
                 process_success(&SourceNormalizerOperationStatus {
                     completed: true,
                     message: None,
@@ -415,14 +625,12 @@ unsafe extern "C" fn normalizer_seek_packet_session_json(
             .position_millis
             .saturating_mul(1_000)
             .min(i64::MAX as u64) as i64;
-        match session.input.seek(timestamp, ..timestamp) {
+        match session.input.seek_packet(timestamp) {
             Ok(()) => process_success(&SourceNormalizerOperationStatus {
                 completed: true,
                 message: Some(format!("seeked to {} ms", seek.position_millis)),
             }),
-            Err(error) => process_error(SourceNormalizerError::internal(format!(
-                "failed to seek packet input: {error}"
-            ))),
+            Err(error) => process_error(error),
         }
     })
 }
@@ -558,7 +766,9 @@ unsafe extern "C" fn normalizer_open_resource_session_json(
                     "resource session starting; argv={}",
                     command_plan.argv().join(" ")
                 )),
+                tracks: Vec::new(),
                 sequence: 1,
+                worker_finished: false,
             }),
             changed: Condvar::new(),
         });
@@ -572,6 +782,8 @@ unsafe extern "C" fn normalizer_open_resource_session_json(
         let worker_output_path = output_path.clone();
         let worker_route = route;
         let worker_cache_policy = config.cache_policy.clone();
+        let worker_startup_timeout_ms = config.startup_timeout_ms;
+        let worker_read_idle_timeout_ms = config.read_idle_timeout_ms;
         let worker = thread::spawn(move || {
             run_resource_worker(ResourceWorkerConfig {
                 profile_name: worker_profile_name,
@@ -581,6 +793,8 @@ unsafe extern "C" fn normalizer_open_resource_session_json(
                 output_path: worker_output_path,
                 route: worker_route,
                 cache_policy: worker_cache_policy,
+                startup_timeout_ms: worker_startup_timeout_ms,
+                read_idle_timeout_ms: worker_read_idle_timeout_ms,
                 cancel_requested: worker_cancel,
                 shared: worker_shared,
             });
@@ -631,6 +845,9 @@ unsafe extern "C" fn normalizer_poll_resource_session(
                     | SourceNormalizerResourceSessionState::Ready
             ),
         );
+        if !worker_state.tracks.is_empty() {
+            info.tracks = worker_state.tracks;
+        }
         info.disk_bytes_used = disk_usage_bytes(&session.output_dir);
         process_success(&SourceNormalizerResourceSessionStatus {
             state: worker_state.state,
@@ -706,26 +923,25 @@ unsafe extern "C" fn normalizer_close_resource_session(
         session.closed = true;
         session.cancel_requested.store(true, Ordering::SeqCst);
         notify_resource_worker_state(&session.shared);
-        let join_message = session
-            .worker
-            .take()
-            .and_then(|worker| match worker.join() {
-                Ok(()) => None,
-                Err(_) => Some("resource worker panicked".to_owned()),
-            });
-        let cleanup_message = match std::fs::remove_dir_all(&session.output_dir) {
-            Ok(()) => None,
-            Err(error) if !session.output_dir.exists() => {
-                let _ = error;
-                None
+        let message = match session.worker.take() {
+            Some(worker)
+                if wait_resource_worker_joinable(&session.shared, RESOURCE_CLOSE_JOIN_TIMEOUT) =>
+            {
+                let join_message = match worker.join() {
+                    Ok(()) => None,
+                    Err(_) => Some("resource worker panicked".to_owned()),
+                };
+                let cleanup_message = cleanup_resource_output_dir(&session.output_dir);
+                [join_message, cleanup_message]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join("; ")
             }
-            Err(error) => Some(format!("cleanup failed: {error}")),
+            Some(worker) => schedule_resource_cleanup(worker, session.output_dir.clone())
+                .unwrap_or_else(|| "resource worker cleanup deferred".to_owned()),
+            None => cleanup_resource_output_dir(&session.output_dir).unwrap_or_default(),
         };
-        let message = [join_message, cleanup_message]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join("; ");
         process_success(&SourceNormalizerOperationStatus {
             completed: true,
             message: if message.is_empty() {
@@ -753,6 +969,9 @@ fn packet_capabilities_from_profiles(
     let mut profiles = Vec::new();
     let mut required = SourceNormalizerRequiredCapabilities::default();
     for (name, profile) in profile_set.profiles_by_priority() {
+        if validate_packet_profile(name, profile).is_err() {
+            continue;
+        }
         profiles.push(name.to_owned());
         merge_required_capabilities(&mut required, &profile.required_capabilities);
     }
@@ -1030,6 +1249,35 @@ fn set_resource_worker_state(
     shared.changed.notify_all();
 }
 
+fn set_resource_worker_finished_state(
+    shared: &Arc<ResourceWorkerShared>,
+    new_state: SourceNormalizerResourceSessionState,
+    message: Option<String>,
+) {
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    state.state = new_state;
+    state.message = message;
+    state.worker_finished = true;
+    state.sequence = state.sequence.wrapping_add(1);
+    shared.changed.notify_all();
+}
+
+fn set_resource_worker_tracks(
+    shared: &Arc<ResourceWorkerShared>,
+    tracks: Vec<SourceNormalizerPacketTrackInfo>,
+) {
+    let mut state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    state.tracks = tracks;
+    state.sequence = state.sequence.wrapping_add(1);
+    shared.changed.notify_all();
+}
+
 fn notify_resource_worker_state(shared: &Arc<ResourceWorkerShared>) {
     let mut state = shared
         .state
@@ -1066,6 +1314,91 @@ fn wait_resource_worker_update(
     SourceNormalizerResourceSessionWaitStatus { updated }
 }
 
+fn wait_resource_worker_joinable(shared: &Arc<ResourceWorkerShared>, timeout: Duration) -> bool {
+    let state = shared
+        .state
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if resource_worker_state_is_joinable(&state) {
+        return true;
+    }
+    let (state, _wait_result) = shared
+        .changed
+        .wait_timeout_while(state, timeout, |state| {
+            !resource_worker_state_is_joinable(state)
+        })
+        .unwrap_or_else(|error| error.into_inner());
+    resource_worker_state_is_joinable(&state)
+}
+
+fn resource_worker_state_is_joinable(state: &ResourceWorkerState) -> bool {
+    state.worker_finished && resource_worker_state_is_terminal(state.state)
+}
+
+fn resource_worker_state_is_terminal(state: SourceNormalizerResourceSessionState) -> bool {
+    matches!(
+        state,
+        SourceNormalizerResourceSessionState::Ready
+            | SourceNormalizerResourceSessionState::Failed
+            | SourceNormalizerResourceSessionState::Cancelled
+    )
+}
+
+fn cleanup_resource_output_dir(output_dir: &Path) -> Option<String> {
+    match std::fs::remove_dir_all(output_dir) {
+        Ok(()) => None,
+        Err(error) if !output_dir.exists() => {
+            let _ = error;
+            None
+        }
+        Err(error) => Some(format!("cleanup failed: {error}")),
+    }
+}
+
+fn schedule_resource_cleanup(worker: JoinHandle<()>, output_dir: PathBuf) -> Option<String> {
+    let sender = RESOURCE_CLEANUP_QUEUE.get_or_init(|| {
+        let (sender, receiver) =
+            mpsc::sync_channel::<ResourceCleanupJob>(RESOURCE_CLEANUP_QUEUE_CAPACITY);
+        thread::Builder::new()
+            .name("vesper-source-normalizer-cleanup".to_owned())
+            .spawn(move || run_resource_cleanup_worker(receiver))
+            .ok();
+        sender
+    });
+    match sender.try_send(ResourceCleanupJob { worker, output_dir }) {
+        Ok(()) => Some("resource worker cleanup deferred".to_owned()),
+        Err(TrySendError::Full(job)) => cleanup_resource_job_without_join(
+            job,
+            "resource worker cleanup queue full; output directory cleanup attempted",
+        ),
+        Err(TrySendError::Disconnected(job)) => cleanup_resource_job_without_join(
+            job,
+            "resource worker cleanup queue unavailable; output directory cleanup attempted",
+        ),
+    }
+}
+
+fn cleanup_resource_job_without_join(job: ResourceCleanupJob, message: &str) -> Option<String> {
+    let cleanup_message = cleanup_resource_output_dir(&job.output_dir);
+    drop(job.worker);
+    Some(
+        cleanup_message
+            .map(|cleanup_message| format!("{message}; {cleanup_message}"))
+            .unwrap_or_else(|| message.to_owned()),
+    )
+}
+
+fn run_resource_cleanup_worker(receiver: mpsc::Receiver<ResourceCleanupJob>) {
+    while let Ok(job) = receiver.recv() {
+        cleanup_resource_job(job);
+    }
+}
+
+fn cleanup_resource_job(job: ResourceCleanupJob) {
+    let _ = job.worker.join();
+    let _ = cleanup_resource_output_dir(&job.output_dir);
+}
+
 fn run_resource_worker(config: ResourceWorkerConfig) {
     set_resource_worker_state(
         &config.shared,
@@ -1085,7 +1418,7 @@ fn run_resource_worker(config: ResourceWorkerConfig) {
             } else {
                 "resource worker produced disk-backed normalized output".to_owned()
             };
-            set_resource_worker_state(&config.shared, state, Some(message));
+            set_resource_worker_finished_state(&config.shared, state, Some(message));
         }
         Err(error) => {
             let state = if config.cancel_requested.load(Ordering::SeqCst) {
@@ -1093,7 +1426,7 @@ fn run_resource_worker(config: ResourceWorkerConfig) {
             } else {
                 SourceNormalizerResourceSessionState::Failed
             };
-            set_resource_worker_state(&config.shared, state, Some(error.to_string()));
+            set_resource_worker_finished_state(&config.shared, state, Some(error.to_string()));
         }
     }
 }
@@ -1114,7 +1447,13 @@ fn remux_resource_to_disk(config: &ResourceWorkerConfig) -> Result<(), SourceNor
     })?;
     let _ = std::fs::remove_file(&config.output_path);
 
-    let mut input_context = open_resource_input(&config.input, &config.profile)?;
+    let mut input_context = open_ffmpeg_input(
+        &config.input,
+        &config.profile,
+        config.startup_timeout_ms,
+        config.read_idle_timeout_ms,
+        Some(config.cancel_requested.clone()),
+    )?;
     let mut output_context = open_resource_output(&config.output_path, config.route)?;
     enable_incremental_output(&mut output_context);
 
@@ -1155,6 +1494,7 @@ fn remux_resource_to_disk(config: &ResourceWorkerConfig) -> Result<(), SourceNor
             "input does not contain audio or video streams that can be remuxed",
         ));
     }
+    set_resource_worker_tracks(&config.shared, tracks);
 
     output_context.set_metadata(input_context.metadata().to_owned());
     write_resource_header(
@@ -1184,10 +1524,13 @@ fn remux_resource_to_disk(config: &ResourceWorkerConfig) -> Result<(), SourceNor
         })
         .collect::<Vec<_>>();
 
-    for (stream, mut packet) in input_context.packets() {
+    loop {
         if config.cancel_requested.load(Ordering::SeqCst) {
             return Ok(());
         }
+        let Some((stream, mut packet)) = input_context.read_packet()? else {
+            break;
+        };
         let input_stream_index = stream.index();
         let mapped_stream_index = stream_mapping[input_stream_index];
         if mapped_stream_index < 0 {
@@ -1235,7 +1578,6 @@ fn remux_resource_to_disk(config: &ResourceWorkerConfig) -> Result<(), SourceNor
         &config.output_path,
         &mut primary_resource_ready_notified,
     );
-    let _ = tracks;
     Ok(())
 }
 
@@ -1256,27 +1598,159 @@ fn notify_if_primary_resource_has_bytes(
     }
 }
 
-fn open_resource_input(
+fn open_ffmpeg_input(
     input: &str,
     profile: &SourceNormalizerProfile,
-) -> Result<format::context::Input, SourceNormalizerError> {
+    startup_timeout_ms: Option<u64>,
+    read_idle_timeout_ms: Option<u64>,
+    cancel_requested: Option<Arc<AtomicBool>>,
+) -> Result<TimedFfmpegInput, SourceNormalizerError> {
     let mut options = ffmpeg::Dictionary::new();
-    let mut has_options = false;
     apply_dictionary_options(&mut options, &profile.input_options);
-    has_options |= !profile.input_options.is_empty();
     if should_apply_network_options(input) {
         apply_dictionary_options(&mut options, &profile.network);
-        has_options |= !profile.network.is_empty();
     }
-    let input_string = input.to_owned();
-    if !has_options {
-        ffmpeg::format::input(&input_string).map_err(|error| {
-            SourceNormalizerError::invalid_input(format!("failed to open input: {error}"))
-        })
-    } else {
-        ffmpeg::format::input_with_dictionary(&input_string, options).map_err(|error| {
-            SourceNormalizerError::invalid_input(format!("failed to open input: {error}"))
-        })
+    apply_timeout_dictionary_options(&mut options, startup_timeout_ms, read_idle_timeout_ms);
+    open_timed_ffmpeg_input(
+        input,
+        options,
+        startup_timeout_ms,
+        read_idle_timeout_ms,
+        cancel_requested,
+    )
+}
+
+fn open_timed_ffmpeg_input(
+    input: &str,
+    options: ffmpeg::Dictionary<'_>,
+    startup_timeout_ms: Option<u64>,
+    read_idle_timeout_ms: Option<u64>,
+    cancel_requested: Option<Arc<AtomicBool>>,
+) -> Result<TimedFfmpegInput, SourceNormalizerError> {
+    ffmpeg::init().map_err(|error| {
+        SourceNormalizerError::internal(format!("failed to initialize FFmpeg: {error}"))
+    })?;
+    let input = CString::new(input)
+        .map_err(|_| SourceNormalizerError::invalid_input("input must not contain NUL bytes"))?;
+    let mut interrupt = Box::new(FfmpegInterruptState::new(cancel_requested));
+    let interrupt_ptr = (&mut *interrupt) as *mut FfmpegInterruptState;
+    // SAFETY: ownership of the dictionary pointer is transferred to FFmpeg for
+    // the open call below, then reclaimed with `Dictionary::own` before return.
+    let mut raw_options = unsafe { options.disown() };
+    // SAFETY: FFmpeg returns either a valid newly allocated AVFormatContext or
+    // null; the pointer is checked before use and closed on every error path.
+    let mut context = unsafe { ffmpeg::ffi::avformat_alloc_context() };
+    if context.is_null() {
+        // SAFETY: `raw_options` still belongs to this function because no
+        // FFmpeg call has consumed it on this allocation-failure path.
+        let _ = unsafe { ffmpeg::Dictionary::own(raw_options) };
+        return Err(SourceNormalizerError::internal(
+            "failed to allocate FFmpeg input context",
+        ));
+    }
+    // SAFETY: `context` is a valid AVFormatContext from FFmpeg, and the opaque
+    // pointer targets the boxed interrupt state kept alive by TimedFfmpegInput.
+    unsafe {
+        (*context).interrupt_callback = ffmpeg::ffi::AVIOInterruptCB {
+            callback: Some(ffmpeg_interrupt_callback),
+            opaque: interrupt_ptr.cast::<c_void>(),
+        };
+    }
+
+    let open_result = {
+        let _operation = interrupt.begin_operation(startup_timeout_ms);
+        // SAFETY: `context`, `input`, and `raw_options` are valid FFmpeg values
+        // for the duration of the call; `context` is closed on failure.
+        unsafe {
+            ffmpeg::ffi::avformat_open_input(
+                &mut context,
+                input.as_ptr(),
+                ptr::null_mut(),
+                &mut raw_options,
+            )
+        }
+    };
+    // SAFETY: FFmpeg may update the dictionary pointer; reclaiming it here
+    // ensures any remaining entries are freed by the Rust wrapper.
+    let _ = unsafe { ffmpeg::Dictionary::own(raw_options) };
+    if open_result < 0 {
+        close_raw_input_context(&mut context);
+        return Err(ffmpeg_input_error(open_result, &interrupt, "open input"));
+    }
+
+    let stream_result = {
+        let _operation = interrupt.begin_operation(startup_timeout_ms);
+        // SAFETY: `context` is a successfully opened AVFormatContext and
+        // remains owned by this function until wrapped below or closed on error.
+        unsafe { ffmpeg::ffi::avformat_find_stream_info(context, ptr::null_mut()) }
+    };
+    if stream_result < 0 {
+        close_raw_input_context(&mut context);
+        return Err(ffmpeg_input_error(
+            stream_result,
+            &interrupt,
+            "find stream info",
+        ));
+    }
+
+    // SAFETY: `context` is a successfully opened input context; ownership is
+    // transferred to ffmpeg-next's Input wrapper exactly once.
+    let input = unsafe { ffmpeg::format::context::Input::wrap(context) };
+    Ok(TimedFfmpegInput::new(
+        input,
+        interrupt,
+        read_idle_timeout_ms,
+    ))
+}
+
+fn close_raw_input_context(context: &mut *mut ffmpeg::ffi::AVFormatContext) {
+    if (*context).is_null() {
+        return;
+    }
+    // SAFETY: `context` is either null or an AVFormatContext still owned by
+    // this function; FFmpeg nulls the pointer after closing it.
+    unsafe {
+        ffmpeg::ffi::avformat_close_input(context);
+    }
+}
+
+fn ffmpeg_input_error(
+    error_code: c_int,
+    interrupt: &FfmpegInterruptState,
+    operation: &str,
+) -> SourceNormalizerError {
+    if let Some(message) = interrupt.interrupt_message(operation) {
+        return SourceNormalizerError::internal(message);
+    }
+    SourceNormalizerError::invalid_input(format!(
+        "failed to {operation}: {}",
+        ffmpeg::Error::from(error_code)
+    ))
+}
+
+fn apply_timeout_dictionary_options(
+    dictionary: &mut ffmpeg::Dictionary<'_>,
+    startup_timeout_ms: Option<u64>,
+    read_idle_timeout_ms: Option<u64>,
+) {
+    if let Some(timeout_us) = timeout_millis_to_ffmpeg_microseconds(startup_timeout_ms) {
+        set_dictionary_default(dictionary, "timeout", &timeout_us);
+        set_dictionary_default(dictionary, "stimeout", &timeout_us);
+    }
+    if let Some(timeout_us) = timeout_millis_to_ffmpeg_microseconds(read_idle_timeout_ms) {
+        set_dictionary_default(dictionary, "rw_timeout", &timeout_us);
+    }
+}
+
+fn timeout_millis_to_ffmpeg_microseconds(timeout_ms: Option<u64>) -> Option<String> {
+    timeout_ms
+        .filter(|timeout_ms| *timeout_ms > 0)
+        .map(|timeout_ms| timeout_ms.saturating_mul(1_000).to_string())
+}
+
+fn set_dictionary_default(dictionary: &mut ffmpeg::Dictionary<'_>, key: &str, value: &str) {
+    if dictionary.get(key).is_none() {
+        dictionary.set(key, value);
     }
 }
 
@@ -1501,15 +1975,6 @@ fn mime_hint_for_input(input: &str) -> Option<&'static str> {
     } else {
         None
     }
-}
-
-fn open_ffmpeg_input(input: &str) -> Result<ffmpeg::format::context::Input, SourceNormalizerError> {
-    ffmpeg::init().map_err(|error| {
-        SourceNormalizerError::internal(format!("failed to initialize FFmpeg: {error}"))
-    })?;
-    ffmpeg::format::input(input).map_err(|error| {
-        SourceNormalizerError::invalid_input(format!("failed to open input: {error}"))
-    })
 }
 
 fn packet_track_info(
@@ -2061,32 +2526,37 @@ fn catch_process(
 #[cfg(test)]
 mod tests {
     use super::{
-        ResourceWorkerShared, ResourceWorkerState, detect_profile_name, free_plugin_bytes,
-        load_profile_set, normalizer_close_packet_session, normalizer_open_packet_session_json,
-        normalizer_packet_capabilities_json, normalizer_read_packet, normalizer_release_packet,
-        normalizer_seek_packet_session_json, notify_if_primary_resource_has_bytes,
-        packet_capabilities_from_profiles, pixel_format_component_depth, set_resource_worker_state,
-        unique_session_suffix, validate_packet_profile, video_dimensions_from_parameters,
-        wait_resource_worker_update,
+        ResourceNormalizerSession, ResourceWorkerShared, ResourceWorkerState, detect_profile_name,
+        free_plugin_bytes, load_profile_set, normalizer_cancel_resource_session,
+        normalizer_close_packet_session, normalizer_close_resource_session,
+        normalizer_open_packet_session_json, normalizer_packet_capabilities_json,
+        normalizer_read_packet, normalizer_release_packet, normalizer_seek_packet_session_json,
+        notify_if_primary_resource_has_bytes, packet_capabilities_from_profiles,
+        pixel_format_component_depth, set_resource_worker_state, unique_session_suffix,
+        validate_packet_profile, video_dimensions_from_parameters, wait_resource_worker_update,
     };
     use ffmpeg_next::util::format::Pixel;
     use player_plugin::{
-        SourceNormalizerError, SourceNormalizerOperationStatus, SourceNormalizerPacketCapabilities,
-        SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
-        SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
-        SourceNormalizerReadPacketMetadata, SourceNormalizerResourceSessionState,
+        SourceNormalizerError, SourceNormalizerOperationStatus, SourceNormalizerOutputRoute,
+        SourceNormalizerPacketCapabilities, SourceNormalizerPacketMediaKind,
+        SourceNormalizerPacketSeek, SourceNormalizerPacketSessionConfig,
+        SourceNormalizerPacketStreamInfo, SourceNormalizerReadPacketMetadata,
+        SourceNormalizerResourceSessionInfo, SourceNormalizerResourceSessionState,
         VesperPluginBytes, VesperPluginResultStatus,
     };
     use std::path::PathBuf;
-    use std::sync::{Arc, Condvar, Mutex};
+    use std::sync::{Arc, Condvar, Mutex, atomic::AtomicBool, mpsc};
     use std::thread;
+    use std::time::{Duration, Instant};
 
     fn test_resource_worker_shared() -> Arc<ResourceWorkerShared> {
         Arc::new(ResourceWorkerShared {
             state: Mutex::new(ResourceWorkerState {
                 state: SourceNormalizerResourceSessionState::Starting,
                 message: None,
+                tracks: Vec::new(),
                 sequence: 0,
+                worker_finished: false,
             }),
             changed: Condvar::new(),
         })
@@ -2100,6 +2570,16 @@ mod tests {
             capabilities
                 .supported_runtime_profiles
                 .contains(&"generic-fallback".to_owned())
+        );
+        assert!(
+            !capabilities
+                .supported_runtime_profiles
+                .contains(&"hls-nonstandard".to_owned())
+        );
+        assert!(
+            !capabilities
+                .supported_runtime_profiles
+                .contains(&"dash-weird".to_owned())
         );
         assert_eq!(
             capabilities.media_kinds,
@@ -2314,6 +2794,79 @@ mod tests {
     }
 
     #[test]
+    fn resource_close_after_cancel_defers_unfinished_worker_cleanup() {
+        let shared = test_resource_worker_shared();
+        let output_dir = std::env::temp_dir().join(format!(
+            "vesper-source-normalizer-cancel-close-test-{}",
+            unique_session_suffix()
+        ));
+        std::fs::create_dir_all(&output_dir).expect("create test output directory");
+        let cancel_requested = Arc::new(AtomicBool::new(false));
+        let (worker_entered_sender, worker_entered_receiver) = mpsc::channel();
+        let (release_worker_sender, release_worker_receiver) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            worker_entered_sender
+                .send(())
+                .expect("signal worker entered");
+            let _ = release_worker_receiver.recv_timeout(Duration::from_secs(5));
+        });
+        worker_entered_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker entered");
+        let session = Box::into_raw(Box::new(ResourceNormalizerSession {
+            info: SourceNormalizerResourceSessionInfo {
+                session_id: Some("cancel-close-test".to_owned()),
+                normalizer_name: Some("player-source-normalizer-ffmpeg".to_owned()),
+                runtime_profile: Some("generic-fallback".to_owned()),
+                selected_backend: Some("test".to_owned()),
+                output_route: SourceNormalizerOutputRoute::Fmp4LocalStream,
+                container: "fmp4".to_owned(),
+                primary_resource_path: None,
+                primary_content_type: None,
+                resources: Vec::new(),
+                tracks: Vec::new(),
+                duration_millis: None,
+                seekable: true,
+                disk_bytes_used: None,
+            },
+            output_dir: output_dir.clone(),
+            shared,
+            observed_sequence: 0,
+            cancel_requested,
+            worker: Some(worker),
+            closed: false,
+        }));
+
+        // SAFETY: the session pointer is owned by this test until close consumes it.
+        let cancel =
+            unsafe { normalizer_cancel_resource_session(std::ptr::null_mut(), session.cast()) };
+        assert_eq!(cancel.status, VesperPluginResultStatus::Success);
+        let _: SourceNormalizerOperationStatus = take_plugin_bytes(cancel.payload);
+        let started_at = Instant::now();
+        // SAFETY: close consumes the Box allocated above exactly once.
+        let close =
+            unsafe { normalizer_close_resource_session(std::ptr::null_mut(), session.cast()) };
+        let elapsed = started_at.elapsed();
+        release_worker_sender
+            .send(())
+            .expect("release deferred cleanup worker");
+
+        assert_eq!(close.status, VesperPluginResultStatus::Success);
+        let close_status: SourceNormalizerOperationStatus = take_plugin_bytes(close.payload);
+        assert!(
+            elapsed < Duration::from_millis(900),
+            "close blocked for {elapsed:?}"
+        );
+        assert!(
+            close_status
+                .message
+                .unwrap_or_default()
+                .contains("cleanup deferred")
+        );
+        let _ = std::fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
     fn resource_worker_wait_timeout_reports_no_update() {
         let shared = test_resource_worker_shared();
         let mut observed_sequence = super::resource_worker_state(&shared).sequence;
@@ -2428,7 +2981,7 @@ mod tests {
     }
 
     #[test]
-    fn fixture_packet_session_mismatched_release_invalidates_lease() {
+    fn fixture_packet_session_mismatched_release_keeps_lease_retryable() {
         let fixture = fixture_path();
         if !fixture.is_file() {
             eprintln!(
@@ -2466,13 +3019,15 @@ mod tests {
         let mismatch_error: SourceNormalizerError = take_plugin_bytes(mismatched_release.payload);
         assert!(format!("{mismatch_error}").contains("unknown packet handle"));
 
-        // SAFETY: the mismatched release poisons and clears the outstanding lease.
-        let stale_release = unsafe {
+        // SAFETY: the mismatched release must not clear the outstanding lease;
+        // the correct handle remains valid for retry.
+        let retry_release = unsafe {
             normalizer_release_packet(std::ptr::null_mut(), open.session, packet.packet_handle)
         };
-        assert_eq!(stale_release.status, VesperPluginResultStatus::Failure);
-        let stale_error: SourceNormalizerError = take_plugin_bytes(stale_release.payload);
-        assert!(format!("{stale_error}").contains("no packet lease is outstanding"));
+        assert_eq!(retry_release.status, VesperPluginResultStatus::Success);
+        let retry_status: SourceNormalizerOperationStatus =
+            take_plugin_bytes(retry_release.payload);
+        assert!(retry_status.completed);
 
         // SAFETY: the session pointer was returned by open and is closed once.
         let close = unsafe { normalizer_close_packet_session(std::ptr::null_mut(), open.session) };

@@ -1,6 +1,7 @@
 part of 'vesper_player_stage.dart';
 
 class _VesperPlayerStageState extends State<VesperPlayerStage> {
+  late VesperPlayerView _playerView;
   Timer? _controlsTimer;
   Timer? _gestureFeedbackTimer;
   bool _controlsVisible = true;
@@ -19,12 +20,16 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   @override
   void initState() {
     super.initState();
+    _playerView = VesperPlayerView(controller: widget.controller);
     _syncAutoHide();
   }
 
   @override
   void didUpdateWidget(covariant VesperPlayerStage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      _playerView = VesperPlayerView(controller: widget.controller);
+    }
     final playbackChanged =
         oldWidget.snapshot.playbackState != widget.snapshot.playbackState;
     final bufferingChanged =
@@ -89,7 +94,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           fit: StackFit.expand,
           children: <Widget>[
             Positioned.fill(
-              child: VesperPlayerView(controller: widget.controller),
+              child: _playerView,
             ),
             if (!pictureInPicturePresentation)
               Positioned.fill(

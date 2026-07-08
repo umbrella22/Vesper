@@ -94,6 +94,7 @@ import io.github.ikaros.vesper.player.android.VesperVideoSurfaceKind
 import java.io.File
 import java.util.UUID
 import java.util.WeakHashMap
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -104,10 +105,9 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
-import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 
 class VesperPlayerAndroidPlugin :
     PlatformViewFactory(StandardMessageCodec.INSTANCE),
@@ -383,14 +383,12 @@ class VesperPlayerAndroidPlugin :
                 session.viewport = viewportMap.toFlutterViewport()
                 session.viewportHint =
                     viewportHintMap?.toFlutterViewportHint() ?: FlutterViewportHint.hidden()
-                emitSnapshot(session)
                 null
             }
             "clearViewport" -> handleSessionCommand(call, result) { session ->
                 session.lastError = null
                 session.viewport = null
                 session.viewportHint = FlutterViewportHint.hidden()
-                emitSnapshot(session)
                 null
             }
             "configureSystemPlayback" -> handleSessionCommand(call, result) { session ->
@@ -866,15 +864,23 @@ class VesperPlayerAndroidPlugin :
     }
 
     private fun handleCreateDownloadManager(call: MethodCall, result: MethodChannel.Result) {
-        runCatching {
-            val arguments = call.argumentMap()
-            val configurationMap = requireNestedMap(arguments, "configuration")
-            val downloadId = UUID.randomUUID().toString()
-            val hasStaleResourceRecovery = arguments["hasStaleResourceRecovery"] as? Boolean ?: false
-            val session =
-                DownloadSession(
-                    id = downloadId,
-                    manager =
+        val arguments = call.argumentMap()
+        val configurationMap =
+            runCatching { requireNestedMap(arguments, "configuration") }
+                .getOrElse { error ->
+                    result.error(
+                        "vesper_download_create_failed",
+                        error.message,
+                        error.toDownloadErrorMap(),
+                    )
+                    return
+                }
+        val downloadId = UUID.randomUUID().toString()
+        val hasStaleResourceRecovery = arguments["hasStaleResourceRecovery"] as? Boolean ?: false
+        scope.launch {
+            runCatching {
+                val manager =
+                    withContext(Dispatchers.IO) {
                         VesperDownloadManager(
                             context = applicationContext,
                             configuration = configurationMap.toDownloadConfiguration(),
@@ -890,22 +896,28 @@ class VesperPlayerAndroidPlugin :
                                 } else {
                                     null
                                 },
-                        ),
+                        )
+                    }
+                val session =
+                    DownloadSession(
+                        id = downloadId,
+                        manager = manager,
+                    )
+                downloadSessions[session.id] = session
+                observeDownloadSession(session)
+                mapOf(
+                    "downloadId" to session.id,
+                    "snapshot" to buildDownloadSnapshotMap(session),
                 )
-            downloadSessions[session.id] = session
-            observeDownloadSession(session)
-            mapOf(
-                "downloadId" to session.id,
-                "snapshot" to buildDownloadSnapshotMap(session),
-            )
-        }.onSuccess(result::success)
-            .onFailure { error ->
-                result.error(
-                    "vesper_download_create_failed",
-                    error.message,
-                    error.toDownloadErrorMap(),
-                )
-            }
+            }.onSuccess(result::success)
+                .onFailure { error ->
+                    result.error(
+                        "vesper_download_create_failed",
+                        error.message,
+                        error.toDownloadErrorMap(),
+                    )
+                }
+        }
     }
 
     private suspend fun recoverDownloadTaskPlan(
@@ -913,8 +925,9 @@ class VesperPlayerAndroidPlugin :
         task: VesperDownloadTaskSnapshot,
         staleResource: VesperDownloadStaleResource,
     ): VesperDownloadRecoveredTaskPlan? =
-        withContext(Dispatchers.Main) {
-            suspendCoroutine { continuation ->
+        withTimeoutOrNull(DOWNLOAD_RECOVERY_TIMEOUT_MS) {
+            withContext(Dispatchers.Main) {
+                val deferred = CompletableDeferred<VesperDownloadRecoveredTaskPlan?>()
                 methodChannel.invokeMethod(
                     "recoverDownloadTaskPlan",
                     mapOf(
@@ -929,7 +942,7 @@ class VesperPlayerAndroidPlugin :
                                     ?.entries
                                     ?.associate { (key, value) -> key.toString() to value }
                                     ?.toDownloadRecoveredTaskPlan()
-                            continuation.resume(plan)
+                            deferred.complete(plan)
                         }
 
                         override fun error(
@@ -937,14 +950,15 @@ class VesperPlayerAndroidPlugin :
                             errorMessage: String?,
                             errorDetails: Any?,
                         ) {
-                            continuation.resume(null)
+                            deferred.complete(null)
                         }
 
                         override fun notImplemented() {
-                            continuation.resume(null)
+                            deferred.complete(null)
                         }
                     },
                 )
+                deferred.await()
             }
         }
 
@@ -1035,8 +1049,18 @@ class VesperPlayerAndroidPlugin :
         scope.launch {
             runCatching {
                 action(session)
-            }.onSuccess(result::success)
+            }.onSuccess { value ->
+                if (!isCurrentSession(session)) {
+                    result.success(null)
+                    return@onSuccess
+                }
+                result.success(value)
+            }
                 .onFailure { error ->
+                    if (!isCurrentSession(session)) {
+                        result.success(null)
+                        return@onFailure
+                    }
                     session.lastError = error.toErrorMap()
                     emitError(session, error)
                     result.error(
@@ -1096,6 +1120,8 @@ class VesperPlayerAndroidPlugin :
     }
 
     companion object {
+        private const val DOWNLOAD_RECOVERY_TIMEOUT_MS = 30_000L
+
         private val registeredPlugins =
             WeakHashMap<Activity, VesperPlayerAndroidPlugin>()
 
@@ -1299,46 +1325,28 @@ class VesperPlayerAndroidPlugin :
         result: MethodChannel.Result,
     ) {
         val resolved = resolveDownloadOutputRequest(call, result) ?: return
-        runCatching {
-            resolved.session.lastError = null
-            resolved.session.manager.shareTaskOutput(
-                context = activity ?: applicationContext,
-                taskId = resolved.taskId,
-                fileName = resolved.arguments["fileName"] as? String,
-                mimeType = resolved.arguments["mimeType"] as? String,
-            )
-        }.onSuccess {
-            result.success(null)
-        }.onFailure { error ->
-            resolved.session.lastError = error.toDownloadErrorMap()
-            emitDownloadError(resolved.session, error)
-            result.error(
-                "vesper_download_operation_failed",
-                error.message,
-                resolved.session.lastError,
-            )
-        }
-    }
-
-    private fun handleDownloadSaveTask(
-        call: MethodCall,
-        result: MethodChannel.Result,
-    ) {
-        val resolved = resolveDownloadOutputRequest(call, result) ?: return
-        runCatching {
-            resolved.session.lastError = null
-            resolved.session.manager.saveTaskOutput(
-                context = applicationContext,
-                taskId = resolved.taskId,
-                fileName = resolved.arguments["fileName"] as? String,
-                collection =
-                    when (resolved.arguments["collection"] as? String) {
-                        "movies" -> VesperDownloadPublicCollection.Movies
-                        else -> VesperDownloadPublicCollection.Downloads
-                    },
-            ).toString()
-        }.onSuccess(result::success)
-            .onFailure { error ->
+        scope.launch {
+            runCatching {
+                resolved.session.lastError = null
+                val context = activity ?: applicationContext
+                val fileName = resolved.arguments["fileName"] as? String
+                val mimeType = resolved.arguments["mimeType"] as? String
+                val sharedFile =
+                    withContext(Dispatchers.IO) {
+                        resolved.session.manager.prepareTaskOutputForSharing(
+                            context = context,
+                            taskId = resolved.taskId,
+                            fileName = fileName,
+                        )
+                    }
+                resolved.session.manager.sharePreparedTaskOutput(
+                    context = context,
+                    sharedFile = sharedFile,
+                    mimeType = mimeType,
+                )
+            }.onSuccess {
+                result.success(null)
+            }.onFailure { error ->
                 resolved.session.lastError = error.toDownloadErrorMap()
                 emitDownloadError(resolved.session, error)
                 result.error(
@@ -1347,6 +1355,40 @@ class VesperPlayerAndroidPlugin :
                     resolved.session.lastError,
                 )
             }
+        }
+    }
+
+    private fun handleDownloadSaveTask(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val resolved = resolveDownloadOutputRequest(call, result) ?: return
+        scope.launch {
+            runCatching {
+                resolved.session.lastError = null
+                withContext(Dispatchers.IO) {
+                    resolved.session.manager.saveTaskOutput(
+                        context = applicationContext,
+                        taskId = resolved.taskId,
+                        fileName = resolved.arguments["fileName"] as? String,
+                        collection =
+                            when (resolved.arguments["collection"] as? String) {
+                                "movies" -> VesperDownloadPublicCollection.Movies
+                                else -> VesperDownloadPublicCollection.Downloads
+                            },
+                    ).toString()
+                }
+            }.onSuccess(result::success)
+                .onFailure { error ->
+                    resolved.session.lastError = error.toDownloadErrorMap()
+                    emitDownloadError(resolved.session, error)
+                    result.error(
+                        "vesper_download_operation_failed",
+                        error.message,
+                        resolved.session.lastError,
+                    )
+                }
+        }
     }
 
     private data class ResolvedDownloadOutputRequest(
@@ -1437,6 +1479,9 @@ class VesperPlayerAndroidPlugin :
         session: PlayerSession,
         snapshot: Map<String, Any?>,
     ) {
+        if (!isCurrentSession(session)) {
+            return
+        }
         val sink = eventSink
         if (sink == null) {
             emitBenchmarkConsoleLog(session)
@@ -1456,6 +1501,9 @@ class VesperPlayerAndroidPlugin :
         )
         emitBenchmarkConsoleLog(session)
     }
+
+    private fun isCurrentSession(session: PlayerSession): Boolean =
+        sessions[session.id] === session
 
     private fun emitError(session: PlayerSession, error: Throwable) {
         emitEvent(
@@ -1708,6 +1756,7 @@ class VesperPlayerAndroidPlugin :
             "effectiveVideoTrackId" to effectiveVideoTrackId,
             "videoVariantObservation" to videoVariantObservation?.toMap(),
             "resiliencePolicy" to resiliencePolicy.toMap(),
+            "pluginDiagnostics" to session.controller.pluginDiagnostics,
             "lastError" to resolvedLastError,
         )
     }

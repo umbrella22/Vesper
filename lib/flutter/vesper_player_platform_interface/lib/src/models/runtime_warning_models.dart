@@ -1,6 +1,6 @@
 part of '../models.dart';
 
-enum VesperRuntimeWarningDomain { frameProcessor, capability }
+enum VesperRuntimeWarningDomain { frameProcessor, capability, unknown }
 
 enum VesperFrameProcessorWarningKind {
   slow,
@@ -43,13 +43,17 @@ final class VesperFrameProcessorWarning {
     this.deadlineOverrunUs,
     this.consecutiveMissCount,
     this.message,
+    this.kindRawValue,
+    this.policyActionRawValue,
   });
 
   factory VesperFrameProcessorWarning.fromMap(Map<Object?, Object?> map) {
+    final kindRawValue = map['kind'] as String?;
+    final policyActionRawValue = map['policyAction'] as String?;
     return VesperFrameProcessorWarning(
       kind: _decodeEnum(
         VesperFrameProcessorWarningKind.values,
-        map['kind'],
+        kindRawValue,
         VesperFrameProcessorWarningKind.unsupported,
       ),
       pluginName: map['pluginName'] as String? ?? '',
@@ -69,10 +73,12 @@ final class VesperFrameProcessorWarning {
       consecutiveMissCount: _decodeInt(map, 'consecutiveMissCount'),
       policyAction: _decodeEnum(
         VesperFrameProcessorPolicyAction.values,
-        map['policyAction'],
+        policyActionRawValue,
         VesperFrameProcessorPolicyAction.continuePlayback,
       ),
       message: map['message'] as String?,
+      kindRawValue: kindRawValue,
+      policyActionRawValue: policyActionRawValue,
     );
   }
 
@@ -94,10 +100,12 @@ final class VesperFrameProcessorWarning {
   final int? consecutiveMissCount;
   final VesperFrameProcessorPolicyAction policyAction;
   final String? message;
+  final String? kindRawValue;
+  final String? policyActionRawValue;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
-      'kind': kind.name,
+      'kind': kindRawValue ?? kind.name,
       'pluginName': pluginName,
       'processorIndex': processorIndex,
       if (frameId != null) 'frameId': frameId,
@@ -114,7 +122,7 @@ final class VesperFrameProcessorWarning {
       if (deadlineOverrunUs != null) 'deadlineOverrunUs': deadlineOverrunUs,
       if (consecutiveMissCount != null)
         'consecutiveMissCount': consecutiveMissCount,
-      'policyAction': policyAction.name,
+      'policyAction': policyActionRawValue ?? policyAction.name,
       if (message != null) 'message': message,
     };
   }
@@ -123,18 +131,26 @@ final class VesperFrameProcessorWarning {
 final class VesperRuntimeWarning {
   const VesperRuntimeWarning.frameProcessor(this.frameProcessor)
       : domain = VesperRuntimeWarningDomain.frameProcessor,
-        capability = null;
+        capability = null,
+        domainRawValue = null,
+        rawPayload = const <String, Object?>{};
 
   const VesperRuntimeWarning.capability(this.capability)
       : domain = VesperRuntimeWarningDomain.capability,
-        frameProcessor = null;
+        frameProcessor = null,
+        domainRawValue = null,
+        rawPayload = const <String, Object?>{};
+
+  const VesperRuntimeWarning.unknown({
+    required this.domainRawValue,
+    required this.rawPayload,
+  })  : domain = VesperRuntimeWarningDomain.unknown,
+        frameProcessor = null,
+        capability = null;
 
   factory VesperRuntimeWarning.fromMap(Map<Object?, Object?> map) {
-    final domain = _decodeEnum(
-      VesperRuntimeWarningDomain.values,
-      map['domain'],
-      VesperRuntimeWarningDomain.frameProcessor,
-    );
+    final domainRawValue = map['domain'] as String?;
+    final domain = _decodeRuntimeWarningDomain(domainRawValue);
     final rawFrameProcessor = _rawMap(map['frameProcessor']);
     final rawCapability = _rawMap(map['capability']);
     return switch (domain) {
@@ -149,18 +165,40 @@ final class VesperRuntimeWarning {
             rawCapability ?? const <Object?, Object?>{},
           ),
         ),
+      VesperRuntimeWarningDomain.unknown => VesperRuntimeWarning.unknown(
+          domainRawValue: domainRawValue,
+          rawPayload: Map<String, Object?>.unmodifiable(vesperDecodeMap(map)),
+        ),
     };
   }
 
   final VesperRuntimeWarningDomain domain;
   final VesperFrameProcessorWarning? frameProcessor;
   final VesperCapabilityWarning? capability;
+  final String? domainRawValue;
+  final Map<String, Object?> rawPayload;
 
   Map<String, Object?> toMap() {
+    if (domain == VesperRuntimeWarningDomain.unknown) {
+      return <String, Object?>{
+        ...rawPayload,
+        'domain': domainRawValue ?? domain.name,
+      };
+    }
     return <String, Object?>{
       'domain': domain.name,
       if (frameProcessor != null) 'frameProcessor': frameProcessor!.toMap(),
       if (capability != null) 'capability': capability!.toMap(),
     };
   }
+}
+
+VesperRuntimeWarningDomain _decodeRuntimeWarningDomain(String? raw) {
+  final known = _decodeEnumOrNull(VesperRuntimeWarningDomain.values, raw);
+  if (known != null) {
+    return known;
+  }
+  return raw == null
+      ? VesperRuntimeWarningDomain.frameProcessor
+      : VesperRuntimeWarningDomain.unknown;
 }

@@ -120,6 +120,64 @@ fn dynamic_source_normalizer_packet_plugin_flush_releases_outstanding_packet() {
 }
 
 #[test]
+fn dynamic_source_normalizer_packet_release_failure_keeps_outstanding_handle_for_retry() {
+    let _guard = source_normalizer_packet_test_guard();
+    reset_source_normalizer_packet_releases();
+    reset_source_normalizer_session_closes();
+    let api = VesperSourceNormalizerPluginApiV4 {
+        release_packet: Some(fixture_source_normalizer_release_packet_error),
+        ..fixture_source_normalizer_packet_api()
+    };
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
+    };
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load source normalizer packet plugin");
+    let factory = plugin
+        .source_normalizer_packet_plugin_factory()
+        .expect("packet factory should be available");
+    let mut session = factory
+        .open_packet_session(&SourceNormalizerPacketSessionConfig {
+            runtime_profile: "fixture-packet".to_owned(),
+            input: "file:///tmp/input.mp4".to_owned(),
+            headers: Vec::new(),
+            startup_timeout_ms: None,
+            session_timeout_ms: None,
+            preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
+        })
+        .expect("open packet session");
+
+    let packet = session.read_packet().expect("read first packet");
+    let handle = packet.handle;
+    drop(packet);
+
+    let error = session
+        .flush()
+        .expect_err("flush should fail when release fails");
+    assert!(error.to_string().contains("release packet failed"));
+    assert_eq!(source_normalizer_packet_releases(), vec![handle]);
+
+    let error = session
+        .release_packet(handle)
+        .expect_err("explicit retry should still see the outstanding handle");
+    assert!(error.to_string().contains("release packet failed"));
+    assert_eq!(source_normalizer_packet_releases(), vec![handle, handle]);
+
+    let error = session
+        .close()
+        .expect_err("close reports the retained release failure");
+    assert!(error.to_string().contains("release packet failed"));
+    assert_eq!(
+        source_normalizer_packet_releases(),
+        vec![handle, handle, handle]
+    );
+    assert_eq!(source_normalizer_packet_closes(), 1);
+}
+
+#[test]
 fn dynamic_source_normalizer_packet_plugin_drop_releases_outstanding_packet() {
     let _guard = source_normalizer_packet_test_guard();
     reset_source_normalizer_packet_releases();
@@ -131,6 +189,123 @@ fn dynamic_source_normalizer_packet_plugin_drop_releases_outstanding_packet() {
 
     drop(session);
     assert_eq!(source_normalizer_packet_releases(), vec![handle]);
+}
+
+#[test]
+fn dynamic_source_normalizer_packet_read_releases_handle_when_metadata_is_malformed() {
+    let _guard = source_normalizer_packet_test_guard();
+    reset_source_normalizer_packet_releases();
+    let api = VesperSourceNormalizerPluginApiV4 {
+        read_packet: Some(fixture_source_normalizer_read_packet_malformed_metadata),
+        ..fixture_source_normalizer_packet_api()
+    };
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
+    };
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load source normalizer packet plugin");
+    let factory = plugin
+        .source_normalizer_packet_plugin_factory()
+        .expect("packet factory should be available");
+    let mut session = factory
+        .open_packet_session(&SourceNormalizerPacketSessionConfig {
+            runtime_profile: "fixture-packet".to_owned(),
+            input: "file:///tmp/input.mp4".to_owned(),
+            headers: Vec::new(),
+            startup_timeout_ms: None,
+            session_timeout_ms: None,
+            preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
+        })
+        .expect("open packet session");
+
+    let error = session
+        .read_packet()
+        .expect_err("malformed packet metadata should fail");
+
+    assert!(error.to_string().contains("read_packet"));
+    assert_eq!(source_normalizer_packet_releases(), vec![0x52]);
+}
+
+#[test]
+fn dynamic_source_normalizer_packet_open_closes_session_when_success_payload_is_malformed() {
+    let _guard = source_normalizer_packet_test_guard();
+    reset_source_normalizer_session_closes();
+    let api = VesperSourceNormalizerPluginApiV4 {
+        open_packet_session_json: Some(
+            fixture_source_normalizer_open_packet_session_malformed_payload_json,
+        ),
+        ..fixture_source_normalizer_packet_api()
+    };
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
+    };
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load source normalizer packet plugin");
+    let factory = plugin
+        .source_normalizer_packet_plugin_factory()
+        .expect("packet factory should be available");
+
+    let error = match factory.open_packet_session(&SourceNormalizerPacketSessionConfig {
+        runtime_profile: "fixture-packet".to_owned(),
+        input: "file:///tmp/input.mp4".to_owned(),
+        headers: Vec::new(),
+        startup_timeout_ms: None,
+        session_timeout_ms: None,
+        preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
+    }) {
+        Ok(_) => panic!("malformed success payload should fail"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("open_packet_session"));
+    assert_eq!(source_normalizer_packet_closes(), 1);
+}
+
+#[test]
+fn dynamic_source_normalizer_resource_open_closes_session_when_success_payload_is_malformed() {
+    let _guard = source_normalizer_packet_test_guard();
+    reset_source_normalizer_session_closes();
+    let api = VesperSourceNormalizerPluginApiV4 {
+        open_resource_session_json: Some(
+            fixture_source_normalizer_open_resource_session_malformed_payload_json,
+        ),
+        ..fixture_source_normalizer_dual_api()
+    };
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
+    };
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load source normalizer resource plugin");
+    let factory = plugin
+        .source_normalizer_resource_plugin_factory()
+        .expect("resource factory should be available");
+
+    let error =
+        match factory.open_resource_session(&player_plugin::SourceNormalizerResourceSessionConfig {
+            runtime_profile: "fixture-resource".to_owned(),
+            input: "file:///tmp/input.mp4".to_owned(),
+            headers: Vec::new(),
+            output_root: "/tmp/vesper-source-normalizer-fixture".to_owned(),
+            cache_policy: SourceNormalizerResourceCachePolicy::default(),
+            preferred_route: Some(SourceNormalizerOutputRoute::Fmp4LocalStream),
+            startup_timeout_ms: Some(10),
+            read_idle_timeout_ms: Some(10),
+        }) {
+            Ok(_) => panic!("malformed success payload should fail"),
+            Err(error) => error,
+        };
+
+    assert!(error.to_string().contains("open_resource_session"));
+    assert_eq!(source_normalizer_resource_closes(), 1);
 }
 
 #[test]
@@ -405,6 +580,22 @@ fn plugin_registry_resource_profile_selection_ignores_packet_only_match() {
             .best_source_normalizer_resource_for_profile("flv")
             .is_none(),
         "mobile resource playback must not select a packet-only profile match"
+    );
+}
+
+#[test]
+fn plugin_registry_packet_profile_selection_ignores_resource_only_match() {
+    let registry = PluginRegistry::from_records(vec![
+        resource_source_normalizer_record("resource-only", &["flv"]),
+        packet_source_normalizer_record("packet-generic", &["generic-fallback"]),
+        packet_source_normalizer_record("packet-flv", &["flv"]),
+    ]);
+
+    assert_eq!(
+        registry
+            .best_source_normalizer_packet_for_profile("FLV")
+            .and_then(|record| record.plugin_name.as_deref()),
+        Some("packet-flv")
     );
 }
 

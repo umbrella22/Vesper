@@ -29,8 +29,7 @@ use player_runtime::{
     PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
     PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
     PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoInfo,
-    PresentationState,
-    register_default_runtime_adapter_factory,
+    PresentationState, register_default_runtime_adapter_factory,
 };
 use tracing::info;
 

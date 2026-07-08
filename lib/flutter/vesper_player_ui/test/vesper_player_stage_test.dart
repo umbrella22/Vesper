@@ -131,6 +131,31 @@ void main() {
     expect(find.text('On-demand asset'), findsOneWidget);
   });
 
+  testWidgets('snapshot-only updates keep the player view stable',
+      (tester) async {
+    await pumpStage(tester);
+    final viewportUpdatesAfterInitialLayout = platform.viewportUpdateCount;
+
+    await pumpStage(
+      tester,
+      snapshot: _playingSnapshot.copyWith(
+        timeline: const VesperTimeline(
+          kind: VesperTimelineKind.vod,
+          isSeekable: true,
+          seekableRange: null,
+          liveEdgeMs: null,
+          positionMs: 60000,
+          durationMs: 100000,
+        ),
+      ),
+    );
+
+    expect(
+      platform.viewportUpdateCount,
+      viewportUpdatesAfterInitialLayout,
+    );
+  });
+
   testWidgets('empty left-side vertical drags drive brightness controls',
       (tester) async {
     await pumpStage(tester);
@@ -176,7 +201,8 @@ void main() {
     expect(fullscreenToggleCount, 1);
   });
 
-  testWidgets('picture in picture presentation hides custom chrome and gestures',
+  testWidgets(
+      'picture in picture presentation hides custom chrome and gestures',
       (tester) async {
     await pumpStage(
       tester,
@@ -246,6 +272,7 @@ final class _FakeDeviceControls implements VesperPlayerDeviceControls {
 
 final class _FakeVesperPlayerPlatform extends VesperPlayerPlatform {
   var togglePauseCount = 0;
+  var viewportUpdateCount = 0;
   final seekRatios = <double>[];
 
   @override
@@ -291,7 +318,11 @@ final class _FakeVesperPlayerPlatform extends VesperPlayerPlatform {
 
   @override
   Future<void> updateViewport(
-      String playerId, VesperPlayerViewport viewport) async {}
+    String playerId,
+    VesperPlayerViewport viewport,
+  ) async {
+    viewportUpdateCount += 1;
+  }
 
   @override
   Future<void> clearViewport(String playerId) async {}

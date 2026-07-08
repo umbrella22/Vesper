@@ -23,17 +23,21 @@ extension VesperNativePlayerBridge {
             .appendingPathComponent("vesper-source-normalizer", isDirectory: true)
         let configuration = sourceNormalizerConfiguration
         let forceNormalized = sourceNormalizerConfiguration.mode == .requireNormalized
-        let outcome = await Task.detached(priority: .utility) {
+        let outcome = await VesperBoundedUtilityQueue.shared.run(
+            fallback: {
+                VesperSourceNormalizerResourceOpenOutcome(resource: nil, diagnostics: [])
+            }
+        ) {
             VesperMobileSourceNormalizerResource.open(
                 source: source,
                 configuration: configuration,
                 outputRoot: outputRoot,
                 forceNormalized: forceNormalized
             )
-        }.value
+        }
         guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else {
             if let resource = outcome.resource {
-                VesperMobileSourceNormalizerResource.dispose(handle: resource.handle)
+                disposeSourceNormalizerResourceOffMain(handle: resource.handle)
             }
             return nil
         }
@@ -127,7 +131,16 @@ extension VesperNativePlayerBridge {
         currentSourceNormalizerResource = nil
         sourceNormalizerResourceSession = nil
         sourceNormalizerResourceLoaderDelegate = nil
-        VesperMobileSourceNormalizerResource.dispose(handle: resource.handle)
+        disposeSourceNormalizerResourceOffMain(handle: resource.handle)
+    }
+
+    func disposeSourceNormalizerResourceOffMain(handle: UInt64) {
+        guard handle != 0 else { return }
+        Task {
+            await VesperBoundedUtilityQueue.shared.runRequiredVoid {
+                VesperMobileSourceNormalizerResource.dispose(handle: handle)
+            }
+        }
     }
 
     func normalizedPlaybackSource(

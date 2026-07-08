@@ -4,16 +4,21 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.ExecutorCoroutineDispatcher
-import kotlinx.coroutines.SupervisorJob
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.Executors
+
+private const val SOURCE_LOAD_QUEUE_CAPACITY = 8
 
 internal class VesperNativePlayerBridge(
     internal val bindings: VesperNativeBindings = MissingVesperNativeBindings(),
@@ -45,12 +50,21 @@ internal class VesperNativePlayerBridge(
     internal val nativeFramePipelineRuntimeLock = Any()
     internal val sourceLoadEpoch = AtomicLong(0L)
     internal val sourceLoadDispatcher: ExecutorCoroutineDispatcher =
-        Executors.newFixedThreadPool(2) { runnable ->
-            Thread(runnable, "vesper-source-load").apply {
-                isDaemon = true
-            }
-        }.asCoroutineDispatcher()
+        ThreadPoolExecutor(
+            2,
+            2,
+            0L,
+            TimeUnit.MILLISECONDS,
+            ArrayBlockingQueue(SOURCE_LOAD_QUEUE_CAPACITY),
+            { runnable ->
+                Thread(runnable, "vesper-source-load").apply {
+                    isDaemon = true
+                }
+            },
+            ThreadPoolExecutor.AbortPolicy(),
+        ).asCoroutineDispatcher()
     internal val sourceLoadScope = CoroutineScope(SupervisorJob() + sourceLoadDispatcher)
+    internal var sourceLoadJob: Job? = null
 
     internal val _uiState = MutableStateFlow(
         PlayerHostUiState(

@@ -1,6 +1,24 @@
 part of 'player_host_page.dart';
 
 extension _PlayerHostExternalPlaybackActions on _PlayerHostPageState {
+  void _handleExternalRoutePickerResult(VesperExternalPlaybackResult result) {
+    if (result.isSuccess) {
+      return;
+    }
+    _updateState(() {
+      _setExternalPlaybackMessage(
+        result.message ?? '外部投放入口暂不可用。',
+        diagnostic: true,
+        force: true,
+      );
+      _appendHostLog(
+        severity: ExampleHostLogSeverity.warning,
+        title: '外部投放入口不可用',
+        detail: result.message,
+      );
+    });
+  }
+
   void _handleExternalRoutes(List<VesperExternalPlaybackRoute> routes) {
     if (!mounted) {
       return;

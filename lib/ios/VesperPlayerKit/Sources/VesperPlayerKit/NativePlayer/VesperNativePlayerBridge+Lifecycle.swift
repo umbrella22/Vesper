@@ -63,6 +63,11 @@ extension VesperNativePlayerBridge {
         startSourceLoadTask(source: currentSource, shouldAutoPlay: shouldAutoPlay)
     }
 
+    func initializeAsync() async {
+        initialize()
+        await sourceLoadTask?.value
+    }
+
     func dispose() {
         clearLastError()
         recordBenchmark("dispose_command")
@@ -125,6 +130,11 @@ extension VesperNativePlayerBridge {
         initialize()
     }
 
+    func selectSourceAsync(_ source: VesperPlayerSource) async {
+        selectSource(source)
+        await sourceLoadTask?.value
+    }
+
     func startSourceLoadTask(source: VesperPlayerSource, shouldAutoPlay: Bool) {
         cancelSourceLoadTask()
         let epoch = nextSourceLoadEpoch()
@@ -147,7 +157,7 @@ extension VesperNativePlayerBridge {
                 self.refreshPlaybackState()
                 self.recordBenchmark("initialize_completed")
             } catch {
-                guard !Task.isCancelled, self.currentSource == source else { return }
+                guard !Task.isCancelled, self.isCurrentSourceLoad(epoch, source: source) else { return }
                 self.sourceLoadTask = nil
                 self.finishSourceLoadFailure(error)
             }
@@ -186,13 +196,13 @@ extension VesperNativePlayerBridge {
     func probeMobilePluginsAsync(for source: VesperPlayerSource) async -> [[String: Any]] {
         let sourceNormalizer = sourceNormalizerConfiguration
         let frameProcessor = frameProcessorConfiguration
-        return await Task.detached(priority: .utility) {
+        return await VesperBoundedUtilityQueue.shared.run(fallback: { [] }) {
             VesperMobilePluginDiagnosticsProbe.run(
                 source: source,
                 sourceNormalizer: sourceNormalizer,
                 frameProcessor: frameProcessor
             )
-        }.value
+        }
     }
 
     func pluginDiagnosticsWithNativeFramePipeline(_ diagnostics: [[String: Any]]) -> [[String: Any]] {

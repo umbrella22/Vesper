@@ -122,6 +122,11 @@ impl FrameProcessorPluginFactory for DynamicFrameProcessorPluginFactory {
                     self.inner.api.context,
                 )
                 .map_err(|error| {
+                    close_frame_processor_session_after_open_failure(
+                        &self.inner,
+                        result.session,
+                        "close_frame_processor_after_open_payload_error",
+                    );
                     map_frame_processor_payload_error(&self.inner.name, "open_session", error)
                 })?;
                 Ok(Box::new(DynamicFrameProcessorSession {
@@ -143,6 +148,25 @@ impl FrameProcessorPluginFactory for DynamicFrameProcessorPluginFactory {
                 Err(error)
             }
         }
+    }
+}
+
+fn close_frame_processor_session_after_open_failure(
+    factory: &DynamicFrameProcessorPluginFactoryInner,
+    session: *mut c_void,
+    operation: &'static str,
+) {
+    if session.is_null() {
+        return;
+    }
+    // SAFETY: the validated frame-processor API guarantees `close_session` is
+    // present and consumes the opaque session pointer returned by the matching
+    // successful open call.
+    let result = catch_frame_processor_plugin_call(&factory.name, operation, || unsafe {
+        (factory.api.close_session)(factory.api.context, session)
+    });
+    if let Ok(result) = result {
+        reclaim_plugin_payload(result.payload, factory.api.free_bytes, factory.api.context);
     }
 }
 
@@ -199,8 +223,8 @@ impl DynamicFrameProcessorSession {
     fn take_outstanding_frame(
         &mut self,
         frame: &NativeFrame,
-    ) -> Result<NativeFrame, FrameProcessorError> {
-        let index = self
+    ) -> Result<usize, FrameProcessorError> {
+        self
             .outstanding_frames
             .iter()
             .position(|candidate| candidate.handle == frame.handle)
@@ -209,8 +233,7 @@ impl DynamicFrameProcessorSession {
                     "frame processor plugin `{}` was asked to release an untracked output frame handle",
                     self.factory.name
                 ))
-            })?;
-        Ok(self.outstanding_frames.swap_remove(index))
+            })
     }
 
     fn release_tracked_frame(
@@ -246,11 +269,18 @@ impl DynamicFrameProcessorSession {
         operation: &'static str,
     ) -> Result<(), FrameProcessorError> {
         let mut first_error = None;
-        while let Some(frame) = self.outstanding_frames.pop() {
-            let release_result = self.release_tracked_frame(frame, operation);
-            if let Err(error) = release_result {
-                first_error = Some(error);
-                break;
+        while let Some(frame) = self.outstanding_frames.last().cloned() {
+            let release_result = self.release_tracked_frame(frame.clone(), operation);
+            match release_result {
+                Ok(()) => {
+                    if let Ok(index) = self.take_outstanding_frame(&frame) {
+                        let _released_frame = self.outstanding_frames.swap_remove(index);
+                    }
+                }
+                Err(error) => {
+                    first_error = Some(error);
+                    break;
+                }
             }
         }
         match first_error {
@@ -365,8 +395,20 @@ impl FrameProcessorSession for DynamicFrameProcessorSession {
                         };
                         if frame_processor_output_requires_release(&frame) {
                             if self.outstanding_frames.len() >= MAX_OUTSTANDING_FRAMES {
+                                self.outstanding_frames.push(frame.clone());
+                                let release_result = self.release_tracked_frame(
+                                    frame,
+                                    "release_frame_after_outstanding_limit",
+                                );
+                                if release_result.is_ok() {
+                                    let last_index =
+                                        self.outstanding_frames.len().saturating_sub(1);
+                                    let _released_frame =
+                                        self.outstanding_frames.swap_remove(last_index);
+                                }
+                                release_result?;
                                 return Err(FrameProcessorError::internal(format!(
-                                    "frame processor plugin `{}` exceeded outstanding frame limit ({MAX_OUTSTANDING_FRAMES})",
+                                    "frame processor plugin `{}` exceeded outstanding frame limit ({MAX_OUTSTANDING_FRAMES}); rejected frame was released",
                                     self.factory.name
                                 )));
                             }
@@ -400,8 +442,11 @@ impl FrameProcessorSession for DynamicFrameProcessorSession {
 
     fn release_frame(&mut self, frame: NativeFrame) -> Result<(), FrameProcessorError> {
         self.ensure_open()?;
-        let frame = self.take_outstanding_frame(&frame)?;
-        self.release_tracked_frame(frame, "release_frame")
+        let index = self.take_outstanding_frame(&frame)?;
+        let tracked = self.outstanding_frames[index].clone();
+        self.release_tracked_frame(tracked, "release_frame")?;
+        let _released_frame = self.outstanding_frames.swap_remove(index);
+        Ok(())
     }
 
     fn flush(&mut self) -> Result<(), FrameProcessorError> {

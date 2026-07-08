@@ -59,6 +59,7 @@ internal const val NATIVE_FRAME_PIPELINE_BACKPRESSURE_PUMP_DELAY_MS = 32L
 internal const val NATIVE_FRAME_PIPELINE_MAX_FRAME_DELAY_MS = 100L
 internal const val NATIVE_FRAME_PIPELINE_FIRST_FRAME_TIMEOUT_MS = 2_500L
 internal const val NATIVE_FRAME_PIPELINE_LOG_COUNTER_BUCKET_SIZE = 30L
+internal const val NATIVE_FRAME_PIPELINE_RUNTIME_COMMAND_QUEUE_CAPACITY = 32
 
 internal data class TimedNativeFrameRelease(
     val handle: Long,
@@ -70,9 +71,121 @@ internal interface NativeFramePipelinePumpScheduler {
         get() = false
     fun schedule(delayMs: Long, action: () -> Unit)
     fun execute(action: () -> Unit) = schedule(delayMs = 0L, action)
+    fun executeCommand(command: NativeFramePipelineRuntimeCommand) = execute(command.action)
     fun cancel()
     fun close() = cancel()
     fun quitLooperSafely() = Unit
+}
+
+internal data class NativeFramePipelineRuntimeCommand(
+    val operation: String,
+    val coalescingKey: String? = null,
+    val runsDuringClose: Boolean = false,
+    val replacesPendingCommands: Boolean = false,
+    val action: () -> Unit,
+    val onRejected: (() -> Unit)? = null,
+)
+
+internal class BoundedNativeFramePipelineRuntimeCommandQueue(
+    private val capacity: Int = NATIVE_FRAME_PIPELINE_RUNTIME_COMMAND_QUEUE_CAPACITY,
+) {
+    private val commands = ArrayDeque<NativeFramePipelineRuntimeCommand>()
+
+    init {
+        require(capacity > 0) { "native-frame runtime command queue capacity must be positive" }
+    }
+
+    val size: Int
+        get() = commands.size
+
+    fun enqueue(command: NativeFramePipelineRuntimeCommand): Boolean {
+        if (command.replacesPendingCommands) {
+            commands.clear()
+            commands.addLast(command)
+            return true
+        }
+        command.coalescingKey?.let { key ->
+            val replaced = replacePendingCoalescedCommand(key, command)
+            if (replaced) {
+                return true
+            }
+        }
+        if (commands.size < capacity) {
+            commands.addLast(command)
+            return true
+        }
+        if (evictOldestCoalescibleCommand()) {
+            commands.addLast(command)
+            return true
+        }
+        if (command.runsDuringClose && evictOldestNonCleanupCommand()) {
+            commands.addLast(command)
+            return true
+        }
+        return false
+    }
+
+    fun removeFirstOrNull(): NativeFramePipelineRuntimeCommand? =
+        commands.removeFirstOrNull()
+
+    fun retainCommandsAllowedDuringClose() {
+        if (commands.isEmpty()) {
+            return
+        }
+        val retained = commands.filter { it.runsDuringClose }
+        commands.clear()
+        retained.takeLast(capacity).forEach(commands::addLast)
+    }
+
+    fun clear() {
+        commands.clear()
+    }
+
+    private fun replacePendingCoalescedCommand(
+        key: String,
+        command: NativeFramePipelineRuntimeCommand,
+    ): Boolean {
+        if (commands.isEmpty()) {
+            return false
+        }
+        val retained = ArrayDeque<NativeFramePipelineRuntimeCommand>(commands.size)
+        var replaced = false
+        while (true) {
+            val next = commands.removeFirstOrNull() ?: break
+            if (!replaced && next.coalescingKey == key) {
+                retained.addLast(command)
+                replaced = true
+            } else {
+                retained.addLast(next)
+            }
+        }
+        commands.addAll(retained)
+        return replaced
+    }
+
+    private fun evictOldestCoalescibleCommand(): Boolean =
+        evictFirst { it.coalescingKey != null && !it.runsDuringClose }
+
+    private fun evictOldestNonCleanupCommand(): Boolean =
+        evictFirst { !it.runsDuringClose }
+
+    private fun evictFirst(predicate: (NativeFramePipelineRuntimeCommand) -> Boolean): Boolean {
+        if (commands.isEmpty()) {
+            return false
+        }
+        val retained = ArrayDeque<NativeFramePipelineRuntimeCommand>(commands.size)
+        var evicted = false
+        while (true) {
+            val next = commands.removeFirstOrNull() ?: break
+            if (!evicted && predicate(next)) {
+                evicted = true
+            } else {
+                retained.addLast(next)
+            }
+        }
+        commands.addAll(retained)
+        return evicted
+    }
 }
 
 internal class HandlerNativeFramePipelinePumpScheduler(
@@ -89,6 +202,9 @@ internal class HandlerNativeFramePipelinePumpScheduler(
     }
     private val handler: Handler by lazy { Handler(thread.looper) }
     private var scheduled: Runnable? = null
+    private val runtimeCommands = BoundedNativeFramePipelineRuntimeCommandQueue()
+    private var runtimeCommandDrainScheduled = false
+    private val runtimeCommandDrainRunnable = Runnable { drainRuntimeCommands() }
     private var started = false
     private var closed = false
 
@@ -115,23 +231,44 @@ internal class HandlerNativeFramePipelinePumpScheduler(
     }
 
     override fun execute(action: () -> Unit) {
+        executeCommand(
+            NativeFramePipelineRuntimeCommand(
+                operation = "generic",
+                action = action,
+            )
+        )
+    }
+
+    override fun executeCommand(command: NativeFramePipelineRuntimeCommand) {
         if (inlineRuntimeCommandsForLocalTests) {
-            action()
+            val shouldRun = synchronized(this) { !closed }
+            if (shouldRun) {
+                command.action()
+            } else {
+                command.onRejected?.invoke()
+            }
             return
         }
-        val shouldPost =
+        val accepted =
             synchronized(this) {
                 if (closed) {
                     false
                 } else {
                     started = true
-                    true
+                    runtimeCommands.enqueue(command).also { didEnqueue ->
+                        if (didEnqueue) {
+                            postRuntimeCommandDrainLocked()
+                        }
+                    }
                 }
             }
-        if (!shouldPost) {
-            return
+        if (!accepted) {
+            Log.w(
+                NATIVE_PLAYER_BRIDGE_TAG,
+                "native-frame runtime command queue rejected operation=${command.operation}",
+            )
+            command.onRejected?.invoke()
         }
-        handler.post(action)
     }
 
     @Synchronized
@@ -145,7 +282,8 @@ internal class HandlerNativeFramePipelinePumpScheduler(
         closed = true
         cancel()
         if (started) {
-            handler.removeCallbacksAndMessages(null)
+            runtimeCommands.retainCommandsAllowedDuringClose()
+            postRuntimeCommandDrainLocked()
         }
     }
 
@@ -154,6 +292,26 @@ internal class HandlerNativeFramePipelinePumpScheduler(
         // quitSafely() does not hold a lock (AGENTS.md rule).
         if (started && thread.isAlive) {
             thread.quitSafely()
+        }
+    }
+
+    private fun postRuntimeCommandDrainLocked() {
+        if (!runtimeCommandDrainScheduled) {
+            runtimeCommandDrainScheduled = handler.post(runtimeCommandDrainRunnable)
+        }
+    }
+
+    private fun drainRuntimeCommands() {
+        while (true) {
+            val command =
+                synchronized(this) {
+                    runtimeCommands.removeFirstOrNull()
+                        ?: run {
+                            runtimeCommandDrainScheduled = false
+                            return
+                        }
+                }
+            command.action()
         }
     }
 }

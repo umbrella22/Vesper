@@ -75,6 +75,8 @@ static FRAME_PROCESSOR_RELEASE_FAILURES: LazyLock<Mutex<Vec<usize>>> =
 static FRAME_PROCESSOR_CLOSES: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 static SOURCE_NORMALIZER_PACKET_RELEASES: LazyLock<Mutex<Vec<usize>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
+static SOURCE_NORMALIZER_PACKET_CLOSES: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
+static SOURCE_NORMALIZER_RESOURCE_CLOSES: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 static FRAME_PROCESSOR_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 static SOURCE_NORMALIZER_PACKET_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 static DECODER_NATIVE_FRAME_RELEASE_TEST_LOCK: LazyLock<Mutex<()>> =
@@ -105,10 +107,35 @@ fn reset_source_normalizer_packet_releases() {
         .unwrap_or_default();
 }
 
+fn reset_source_normalizer_session_closes() {
+    SOURCE_NORMALIZER_PACKET_CLOSES
+        .lock()
+        .map(|mut closes| *closes = 0)
+        .unwrap_or_default();
+    SOURCE_NORMALIZER_RESOURCE_CLOSES
+        .lock()
+        .map(|mut closes| *closes = 0)
+        .unwrap_or_default();
+}
+
 fn source_normalizer_packet_releases() -> Vec<usize> {
     SOURCE_NORMALIZER_PACKET_RELEASES
         .lock()
         .map(|releases| releases.clone())
+        .unwrap_or_default()
+}
+
+fn source_normalizer_packet_closes() -> usize {
+    SOURCE_NORMALIZER_PACKET_CLOSES
+        .lock()
+        .map(|closes| *closes)
+        .unwrap_or_default()
+}
+
+fn source_normalizer_resource_closes() -> usize {
+    SOURCE_NORMALIZER_RESOURCE_CLOSES
+        .lock()
+        .map(|closes| *closes)
         .unwrap_or_default()
 }
 
@@ -283,6 +310,14 @@ fn fixture_failing_release_frame_processor_api() -> VesperFrameProcessorPluginAp
     VesperFrameProcessorPluginApiV1 {
         submit_frame_json: Some(fixture_frame_processor_submit_static_output_frame_json),
         release_frame: Some(fixture_frame_processor_release_frame_error),
+        close_session: Some(fixture_frame_processor_recording_close_session),
+        ..fixture_frame_processor_api()
+    }
+}
+
+fn fixture_frame_processor_malformed_open_payload_api() -> VesperFrameProcessorPluginApiV1 {
+    VesperFrameProcessorPluginApiV1 {
+        open_session_json: Some(fixture_frame_processor_open_session_malformed_payload_json),
         close_session: Some(fixture_frame_processor_recording_close_session),
         ..fixture_frame_processor_api()
     }
@@ -661,6 +696,19 @@ unsafe extern "C" fn fixture_native_decoder_open_session_json(
         status: VesperPluginResultStatus::Success,
         session: session.cast::<c_void>(),
         payload: VesperPluginBytes::from_vec(serde_json::to_vec(&info).expect("serialize info")),
+    }
+}
+
+unsafe extern "C" fn fixture_native_decoder_open_session_malformed_payload_json(
+    _context: *mut c_void,
+    _config_json: *const u8,
+    _config_json_len: usize,
+) -> VesperDecoderOpenSessionResult {
+    let session = Box::into_raw(Box::new(FixtureDecoderSession::default()));
+    VesperDecoderOpenSessionResult {
+        status: VesperPluginResultStatus::Success,
+        session: session.cast::<c_void>(),
+        payload: VesperPluginBytes::from_vec(b"{".to_vec()),
     }
 }
 
@@ -1056,6 +1104,19 @@ unsafe extern "C" fn fixture_frame_processor_open_session_json(
     }
 }
 
+unsafe extern "C" fn fixture_frame_processor_open_session_malformed_payload_json(
+    _context: *mut c_void,
+    _config_json: *const u8,
+    _config_json_len: usize,
+) -> VesperFrameProcessorOpenSessionResult {
+    let session = Box::into_raw(Box::new(FixtureFrameProcessorSession::default()));
+    VesperFrameProcessorOpenSessionResult {
+        status: VesperPluginResultStatus::Success,
+        session: session.cast::<c_void>(),
+        payload: VesperPluginBytes::from_vec(b"{".to_vec()),
+    }
+}
+
 unsafe extern "C" fn fixture_frame_processor_submit_frame_json(
     _context: *mut c_void,
     session: *mut c_void,
@@ -1387,6 +1448,23 @@ unsafe extern "C" fn fixture_source_normalizer_open_packet_session_json(
     }
 }
 
+unsafe extern "C" fn fixture_source_normalizer_open_packet_session_malformed_payload_json(
+    _context: *mut c_void,
+    _config_json: *const u8,
+    _config_json_len: usize,
+) -> VesperSourceNormalizerOpenPacketSessionResult {
+    let session = Box::into_raw(Box::new(FixtureSourceNormalizerPacketSession {
+        emitted_packet: false,
+        leased_packet: None,
+        last_seek: None,
+    }));
+    VesperSourceNormalizerOpenPacketSessionResult {
+        status: VesperPluginResultStatus::Success,
+        session: session.cast::<c_void>(),
+        payload: VesperPluginBytes::from_vec(b"not-json".to_vec()),
+    }
+}
+
 unsafe extern "C" fn fixture_source_normalizer_open_resource_session_json(
     _context: *mut c_void,
     config_json: *const u8,
@@ -1435,6 +1513,19 @@ unsafe extern "C" fn fixture_source_normalizer_open_resource_session_json(
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(&info).expect("serialize source normalizer resource info"),
         ),
+    }
+}
+
+unsafe extern "C" fn fixture_source_normalizer_open_resource_session_malformed_payload_json(
+    _context: *mut c_void,
+    _config_json: *const u8,
+    _config_json_len: usize,
+) -> VesperSourceNormalizerOpenResourceSessionResult {
+    let session = Box::into_raw(Box::new(FixtureSourceNormalizerResourceSession));
+    VesperSourceNormalizerOpenResourceSessionResult {
+        status: VesperPluginResultStatus::Success,
+        session: session.cast::<c_void>(),
+        payload: VesperPluginBytes::from_vec(b"not-json".to_vec()),
     }
 }
 
@@ -1489,6 +1580,9 @@ unsafe extern "C" fn fixture_source_normalizer_close_resource_session(
 ) -> VesperPluginProcessResult {
     if session.is_null() {
         return source_normalizer_process_error(SourceNormalizerError::NotConfigured);
+    }
+    if let Ok(mut closes) = SOURCE_NORMALIZER_RESOURCE_CLOSES.lock() {
+        *closes += 1;
     }
     // SAFETY: the session pointer was allocated with `Box::into_raw` by the
     // matching fixture open-resource callback and close is called once.
@@ -1552,6 +1646,32 @@ unsafe extern "C" fn fixture_source_normalizer_read_packet(
     )
 }
 
+unsafe extern "C" fn fixture_source_normalizer_read_packet_malformed_metadata(
+    _context: *mut c_void,
+    session: *mut c_void,
+) -> VesperSourceNormalizerReadPacketResult {
+    let Some(session) = (unsafe {
+        session
+            .cast::<FixtureSourceNormalizerPacketSession>()
+            .as_mut()
+    }) else {
+        return source_normalizer_read_packet_error(SourceNormalizerError::NotConfigured);
+    };
+    let handle = 0x52;
+    session.leased_packet = Some(FixtureSourceNormalizerPacketLease {
+        handle,
+        data: vec![0, 0, 1, 10],
+    });
+    let packet = session.leased_packet.as_ref().expect("stored packet");
+    VesperSourceNormalizerReadPacketResult {
+        status: VesperPluginResultStatus::Success,
+        metadata: VesperPluginBytes::from_vec(b"not-json".to_vec()),
+        data: packet.data.as_ptr(),
+        data_len: packet.data.len(),
+        packet_handle: packet.handle,
+    }
+}
+
 unsafe extern "C" fn fixture_source_normalizer_release_packet(
     _context: *mut c_void,
     session: *mut c_void,
@@ -1584,6 +1704,35 @@ unsafe extern "C" fn fixture_source_normalizer_release_packet(
             "no packet is leased",
         )),
     }
+}
+
+unsafe extern "C" fn fixture_source_normalizer_release_packet_error(
+    _context: *mut c_void,
+    session: *mut c_void,
+    packet_handle: usize,
+) -> VesperPluginProcessResult {
+    let Some(session) = (unsafe {
+        session
+            .cast::<FixtureSourceNormalizerPacketSession>()
+            .as_ref()
+    }) else {
+        return source_normalizer_process_error(SourceNormalizerError::NotConfigured);
+    };
+    if session
+        .leased_packet
+        .as_ref()
+        .is_some_and(|packet| packet.handle == packet_handle)
+    {
+        if let Ok(mut releases) = SOURCE_NORMALIZER_PACKET_RELEASES.lock() {
+            releases.push(packet_handle);
+        }
+        return source_normalizer_process_error(SourceNormalizerError::abi_violation(
+            "release packet failed",
+        ));
+    }
+    source_normalizer_process_error(SourceNormalizerError::abi_violation(
+        "unexpected packet handle",
+    ))
 }
 
 unsafe extern "C" fn fixture_source_normalizer_seek_packet_session_json(
@@ -1640,6 +1789,9 @@ unsafe extern "C" fn fixture_source_normalizer_close_packet_session(
 ) -> VesperPluginProcessResult {
     if session.is_null() {
         return source_normalizer_process_error(SourceNormalizerError::NotConfigured);
+    }
+    if let Ok(mut closes) = SOURCE_NORMALIZER_PACKET_CLOSES.lock() {
+        *closes += 1;
     }
     // SAFETY: the session pointer was allocated with `Box::into_raw` by
     // the matching open-session callback and close is called once.

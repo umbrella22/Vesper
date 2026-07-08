@@ -27,7 +27,7 @@ import io.github.ikaros.vesper.player.android.VesperVideoSurfaceKind
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
-private const val DEFAULT_PROGRESS_REFRESH_INTERVAL_MS = 250L
+private const val DEFAULT_PROGRESS_REFRESH_INTERVAL_MS = 1_000L
 
 @Composable
 fun rememberVesperPlayerController(

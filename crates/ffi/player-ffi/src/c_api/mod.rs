@@ -180,7 +180,7 @@ pub unsafe extern "C" fn player_ffi_resolve_resilience_policy(
             cache_policy,
         );
 
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_policy, resolved.into());
         }
@@ -218,7 +218,7 @@ pub unsafe extern "C" fn player_ffi_resolve_preload_budget(
         };
 
         let resolved = resolve_preload_budget(preload_budget);
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_budget, resolved.into());
         }
@@ -256,7 +256,7 @@ pub unsafe extern "C" fn player_ffi_resolve_track_preferences(
         };
 
         let resolved = resolve_track_preferences(track_preferences);
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_preferences, resolved.into());
         }
@@ -321,7 +321,7 @@ pub unsafe extern "C" fn player_ffi_initializer_media_info(
             return PlayerFfiCallStatus::Error;
         };
 
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_media_info, initializer.into());
         }
@@ -356,7 +356,7 @@ pub unsafe extern "C" fn player_ffi_initializer_startup(
             return PlayerFfiCallStatus::Error;
         };
 
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_startup, startup.into());
         }
@@ -424,7 +424,7 @@ pub unsafe extern "C" fn player_ffi_initializer_initialize(
                     );
                     return PlayerFfiCallStatus::Error;
                 };
-// SAFETY: caller upholds the FFI contract for this pointer operation
+                // SAFETY: caller upholds the FFI contract for this pointer operation
                 unsafe {
                     ptr::write(out_player, player_handle);
                     ptr::write(out_has_initial_frame, has_initial_frame);
@@ -496,7 +496,7 @@ pub unsafe extern "C" fn player_ffi_player_snapshot(
             return PlayerFfiCallStatus::Error;
         };
 
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_snapshot, snapshot.into());
         }
@@ -545,7 +545,7 @@ pub unsafe extern "C" fn player_ffi_player_dispatch(
 
         match result {
             Ok(result) => {
-// SAFETY: caller upholds the FFI contract for this pointer operation
+                // SAFETY: caller upholds the FFI contract for this pointer operation
                 unsafe {
                     ptr::write(out_applied, result.applied);
                     ptr::write(out_snapshot, result.snapshot.into());
@@ -602,7 +602,7 @@ pub unsafe extern "C" fn player_ffi_player_set_playback_rate(
 
         match result {
             Ok(result) => {
-// SAFETY: caller upholds the FFI contract for this pointer operation
+                // SAFETY: caller upholds the FFI contract for this pointer operation
                 unsafe {
                     ptr::write(out_applied, result.applied);
                     ptr::write(out_snapshot, result.snapshot.into());
@@ -660,7 +660,7 @@ pub unsafe extern "C" fn player_ffi_player_set_video_track_selection(
 
         match result {
             Ok(result) => {
-// SAFETY: caller upholds the FFI contract for this pointer operation
+                // SAFETY: caller upholds the FFI contract for this pointer operation
                 unsafe {
                     ptr::write(out_applied, result.applied);
                     ptr::write(out_snapshot, result.snapshot.into());
@@ -718,7 +718,7 @@ pub unsafe extern "C" fn player_ffi_player_set_audio_track_selection(
 
         match result {
             Ok(result) => {
-// SAFETY: caller upholds the FFI contract for this pointer operation
+                // SAFETY: caller upholds the FFI contract for this pointer operation
                 unsafe {
                     ptr::write(out_applied, result.applied);
                     ptr::write(out_snapshot, result.snapshot.into());
@@ -776,7 +776,7 @@ pub unsafe extern "C" fn player_ffi_player_set_subtitle_track_selection(
 
         match result {
             Ok(result) => {
-// SAFETY: caller upholds the FFI contract for this pointer operation
+                // SAFETY: caller upholds the FFI contract for this pointer operation
                 unsafe {
                     ptr::write(out_applied, result.applied);
                     ptr::write(out_snapshot, result.snapshot.into());
@@ -832,7 +832,7 @@ pub unsafe extern "C" fn player_ffi_player_set_abr_policy(
 
         match result {
             Ok(result) => {
-// SAFETY: caller upholds the FFI contract for this pointer operation
+                // SAFETY: caller upholds the FFI contract for this pointer operation
                 unsafe {
                     ptr::write(out_applied, result.applied);
                     ptr::write(out_snapshot, result.snapshot.into());
@@ -881,7 +881,7 @@ pub unsafe extern "C" fn player_ffi_player_drain_events(
 
         let (ptr, len) = into_owned_struct_array(events);
 
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_events, PlayerFfiEventList { ptr, len });
         }
@@ -921,7 +921,7 @@ pub unsafe extern "C" fn player_ffi_player_advance(
 
         match result {
             Ok(frame) => {
-// SAFETY: caller upholds the FFI contract for this pointer operation
+                // SAFETY: caller upholds the FFI contract for this pointer operation
                 unsafe {
                     ptr::write(out_has_frame, frame.is_some());
                     ptr::write(
@@ -970,7 +970,7 @@ pub unsafe extern "C" fn player_ffi_player_next_deadline_delay_ms(
             return PlayerFfiCallStatus::Error;
         };
 
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             ptr::write(out_has_deadline, deadline.is_some());
             ptr::write(out_delay_ms, deadline.unwrap_or_default());
@@ -1076,7 +1076,7 @@ pub unsafe extern "C" fn player_ffi_event_list_free(events: *mut PlayerFfiEventL
                 // SAFETY: event lists are returned as boxed slices by this FFI
                 // layer with len as both length and capacity. Each event owns its
                 // nested allocations and is freed before dropping the slice.
-// SAFETY: caller upholds the FFI contract for this pointer operation
+                // SAFETY: caller upholds the FFI contract for this pointer operation
                 unsafe {
                     let mut boxed =
                         Box::from_raw(ptr::slice_from_raw_parts_mut(events.ptr, events.len));

@@ -41,6 +41,8 @@ internal class VesperForegroundDownloadExecutor(
         scope.launch {
             try {
                 reporter.completePreparation(task.taskId, prepareAssetIndexWithRecovery(task, reporter))
+            } catch (_: CancellationException) {
+                return@launch
             } catch (error: Exception) {
                 reporter.fail(
                     task.taskId,
@@ -192,6 +194,8 @@ internal class VesperForegroundDownloadExecutor(
                         ) {
                             return@launch
                         }
+                    } catch (_: CancellationException) {
+                        return@launch
                     } catch (recoveryError: Exception) {
                         reporter.fail(
                             task.taskId,

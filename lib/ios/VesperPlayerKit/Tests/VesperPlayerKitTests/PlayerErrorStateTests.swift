@@ -59,8 +59,7 @@ final class PlayerErrorStateTests: XCTestCase {
             )
         )
 
-        bridge.selectSource(source)
-        try await settleTrackCatalogRefresh()
+        await bridge.selectSourceAsync(source)
 
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)
@@ -81,8 +80,7 @@ final class PlayerErrorStateTests: XCTestCase {
             )
         )
 
-        bridge.selectSource(source)
-        try await settleTrackCatalogRefresh()
+        await bridge.selectSourceAsync(source)
 
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)
@@ -104,8 +102,7 @@ final class PlayerErrorStateTests: XCTestCase {
             )
         )
 
-        bridge.selectSource(source)
-        try await settleTrackCatalogRefresh()
+        await bridge.selectSourceAsync(source)
 
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)
@@ -127,8 +124,7 @@ final class PlayerErrorStateTests: XCTestCase {
             )
         )
 
-        bridge.selectSource(source)
-        try await settleTrackCatalogRefresh()
+        await bridge.selectSourceAsync(source)
 
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)

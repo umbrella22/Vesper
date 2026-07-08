@@ -35,7 +35,7 @@ pub(crate) fn read_optional_c_string(
         return Ok(None);
     }
 
-// SAFETY: caller validated the pointer is non-null and points to a null-terminated C string
+    // SAFETY: caller validated the pointer is non-null and points to a null-terminated C string
     let text = unsafe { CStr::from_ptr(value) };
     let text = text.to_str().map_err(|_| {
         owned_api_error(
@@ -70,7 +70,7 @@ pub(crate) fn read_abr_policy(
 pub(crate) fn read_preload_budget(
     budget: *const PlayerFfiPreloadBudgetPolicy,
 ) -> Result<PlayerPreloadBudgetPolicy, PlayerFfiError> {
-// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
+    // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(budget) = (unsafe { budget.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -135,7 +135,7 @@ pub(crate) fn read_preload_candidate(
 pub(crate) fn read_download_config(
     config: *const PlayerFfiDownloadConfig,
 ) -> Result<ResolvedDownloadConfig, PlayerFfiError> {
-// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
+    // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(config) = (unsafe { config.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -159,7 +159,7 @@ pub(crate) fn read_download_config(
 pub(crate) fn read_download_source(
     source: *const PlayerFfiDownloadSource,
 ) -> Result<DownloadSource, PlayerFfiError> {
-// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
+    // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(source) = (unsafe { source.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -210,7 +210,7 @@ pub(crate) fn read_string_list(
         ));
     }
 
-// SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
+    // SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
     let values = unsafe { slice::from_raw_parts(values, len) };
     values
         .iter()
@@ -236,7 +236,7 @@ pub(crate) fn read_string_list(
 pub(crate) fn read_download_profile(
     profile: *const PlayerFfiDownloadProfile,
 ) -> Result<DownloadProfile, PlayerFfiError> {
-// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
+    // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(profile) = (unsafe { profile.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -373,7 +373,7 @@ pub(crate) fn read_download_asset_stream(
 pub(crate) fn read_download_asset_index(
     asset_index: *const PlayerFfiDownloadAssetIndex,
 ) -> Result<DownloadAssetIndex, PlayerFfiError> {
-// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
+    // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(asset_index) = (unsafe { asset_index.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -390,7 +390,7 @@ pub(crate) fn read_download_asset_index(
                 "asset_index.resources was null",
             ));
         }
-// SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
+        // SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
         unsafe { slice::from_raw_parts(asset_index.resources, asset_index.resources_len) }
             .iter()
             .map(read_download_resource_record)
@@ -406,7 +406,7 @@ pub(crate) fn read_download_asset_index(
                 "asset_index.segments was null",
             ));
         }
-// SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
+        // SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
         unsafe { slice::from_raw_parts(asset_index.segments, asset_index.segments_len) }
             .iter()
             .map(read_download_segment_record)
@@ -422,7 +422,7 @@ pub(crate) fn read_download_asset_index(
                 "asset_index.streams was null",
             ));
         }
-// SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
+        // SAFETY: caller validated the pointer and length describe a valid initialized slice for the duration of the FFI call
         unsafe { slice::from_raw_parts(asset_index.streams, asset_index.streams_len) }
             .iter()
             .map(read_download_asset_stream)
@@ -497,7 +497,7 @@ pub(crate) fn read_download_task(
 pub(crate) fn read_playlist_config(
     config: *const PlayerFfiPlaylistConfig,
 ) -> Result<(String, PlaylistCoordinatorConfig), PlayerFfiError> {
-// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
+    // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(config) = (unsafe { config.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -1120,7 +1120,7 @@ pub(crate) fn preload_task_free(task: &mut PlayerFfiPreloadTask) {
 
 pub(crate) fn free_c_string_list(values: &mut *mut *mut c_char, len: &mut usize) {
     if !(*values).is_null() && *len > 0 {
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         let items = unsafe { Vec::from_raw_parts(*values, *len, *len) };
         for mut value in items {
             free_c_string(&mut value);
@@ -1189,7 +1189,7 @@ pub(crate) fn download_asset_index_free(asset_index: &mut PlayerFfiDownloadAsset
     free_c_string(&mut asset_index.completed_path);
 
     if !asset_index.resources.is_null() && asset_index.resources_len > 0 {
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         let resources = unsafe {
             Vec::from_raw_parts(
                 asset_index.resources,
@@ -1202,7 +1202,7 @@ pub(crate) fn download_asset_index_free(asset_index: &mut PlayerFfiDownloadAsset
         }
     }
     if !asset_index.segments.is_null() && asset_index.segments_len > 0 {
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         let segments = unsafe {
             Vec::from_raw_parts(
                 asset_index.segments,
@@ -1215,7 +1215,7 @@ pub(crate) fn download_asset_index_free(asset_index: &mut PlayerFfiDownloadAsset
         }
     }
     if !asset_index.streams.is_null() && asset_index.streams_len > 0 {
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         let streams = unsafe {
             Vec::from_raw_parts(
                 asset_index.streams,
@@ -1242,7 +1242,7 @@ pub(crate) fn download_task_free(task: &mut PlayerFfiDownloadTask) {
 pub(crate) fn read_track_preferences(
     preferences: *const PlayerFfiTrackPreferences,
 ) -> Result<PlayerTrackPreferencePolicy, PlayerFfiError> {
-// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
+    // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(preferences) = (unsafe { preferences.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -1270,7 +1270,7 @@ pub(crate) fn read_track_preferences(
 pub(crate) fn read_buffering_policy(
     policy: *const PlayerFfiBufferingPolicy,
 ) -> Result<PlayerBufferingPolicy, PlayerFfiError> {
-// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
+    // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(policy) = (unsafe { policy.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -1298,7 +1298,7 @@ pub(crate) fn read_buffering_policy(
 pub(crate) fn read_retry_policy(
     policy: *const PlayerFfiRetryPolicy,
 ) -> Result<PlayerRetryPolicy, PlayerFfiError> {
-// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
+    // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(policy) = (unsafe { policy.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -1335,7 +1335,7 @@ pub(crate) fn read_retry_policy(
 pub(crate) fn read_cache_policy(
     policy: *const PlayerFfiCachePolicy,
 ) -> Result<PlayerCachePolicy, PlayerFfiError> {
-// SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
+    // SAFETY: caller validated the raw pointer is non-null and valid for the duration of the FFI call
     let Some(policy) = (unsafe { policy.as_ref() }) else {
         return Err(owned_api_error(
             PlayerFfiErrorCode::NullPointer,
@@ -1426,7 +1426,7 @@ pub(crate) fn write_error(out_error: *mut PlayerFfiError, mut error: PlayerFfiEr
         return;
     }
 
-// SAFETY: caller upholds the FFI contract for this pointer operation
+    // SAFETY: caller upholds the FFI contract for this pointer operation
     unsafe {
         ptr::write(out_error, error);
     }
@@ -1437,7 +1437,7 @@ pub(crate) fn write_success(out_error: *mut PlayerFfiError) {
         return;
     }
 
-// SAFETY: caller upholds the FFI contract for this pointer operation
+    // SAFETY: caller upholds the FFI contract for this pointer operation
     unsafe {
         ptr::write(out_error, PlayerFfiError::default());
     }

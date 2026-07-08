@@ -1,5 +1,9 @@
 part of '../download_models.dart';
 
+String? _unknownEnumRawValue(Object? raw, {required bool isUnknown}) {
+  return isUnknown && raw is String ? raw : null;
+}
+
 VesperDownloadContentFormat _decodeContentFormat(Object? raw) {
   if (raw is String) {
     for (final value in VesperDownloadContentFormat.values) {
@@ -23,6 +27,9 @@ VesperDownloadOutputFormat? _decodeOutputFormat(Object? raw) {
 }
 
 VesperDownloadStreamKind _decodeStreamKind(Object? raw) {
+  if (raw == null) {
+    return VesperDownloadStreamKind.combined;
+  }
   if (raw is String) {
     for (final value in VesperDownloadStreamKind.values) {
       if (value.name == raw) {
@@ -30,7 +37,7 @@ VesperDownloadStreamKind _decodeStreamKind(Object? raw) {
       }
     }
   }
-  return VesperDownloadStreamKind.combined;
+  return VesperDownloadStreamKind.unknown;
 }
 
 VesperDownloadState _decodeDownloadState(Object? raw) {
@@ -41,7 +48,7 @@ VesperDownloadState _decodeDownloadState(Object? raw) {
       }
     }
   }
-  return VesperDownloadState.queued;
+  return VesperDownloadState.unknown;
 }
 
 VesperDownloadStaleResourcePhase _decodeStaleResourcePhase(Object? raw) {

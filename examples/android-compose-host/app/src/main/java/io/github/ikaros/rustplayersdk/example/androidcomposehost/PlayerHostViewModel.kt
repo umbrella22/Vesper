@@ -58,6 +58,7 @@ internal class PlayerHostViewModel(
             createController(
                 sourceNormalizerSetting = ExampleSourceNormalizerSetting.PreflightOnly,
                 nativeFramePipelineSetting = ExampleNativeFramePipelineSetting.DiagnosticsOnly,
+                videoSurfaceSetting = ExampleVideoSurfaceSetting.SurfaceView,
                 initialSource = null,
                 resiliencePolicy = ExampleResilienceProfile.Balanced.policy,
             ),
@@ -78,17 +79,18 @@ internal class PlayerHostViewModel(
             resiliencePolicy = ExampleResilienceProfile.Balanced.policy,
         )
 
+    private val downloadPluginLibraryPaths = bundledDownloadPluginLibraryPaths(application)
+
     val downloadManager =
         VesperDownloadManager(
             context = application.applicationContext,
             configuration =
                 VesperDownloadConfiguration(
+                    pluginLibraryPaths = downloadPluginLibraryPaths,
                     runPostProcessorsOnCompletion = false,
-                    pluginLibraryPaths = bundledDownloadPluginLibraryPaths(application),
                 ),
         )
-    val isDownloadExportPluginInstalled: Boolean =
-        bundledDownloadPluginLibraryPaths(application).isNotEmpty()
+    val isDownloadExportPluginInstalled: Boolean = downloadPluginLibraryPaths.isNotEmpty()
 
     val externalPlaybackController =
         VesperExternalPlaybackController(application.applicationContext)
@@ -96,6 +98,7 @@ internal class PlayerHostViewModel(
     fun rebuildController(
         sourceNormalizerSetting: ExampleSourceNormalizerSetting,
         nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
+        videoSurfaceSetting: ExampleVideoSurfaceSetting,
         initialSource: VesperPlayerSource?,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
         shouldResumePlayback: Boolean,
@@ -107,25 +110,29 @@ internal class PlayerHostViewModel(
             createController(
                 sourceNormalizerSetting = sourceNormalizerSetting,
                 nativeFramePipelineSetting = nativeFramePipelineSetting,
+                videoSurfaceSetting = videoSurfaceSetting,
                 initialSource = initialSource,
                 resiliencePolicy = resiliencePolicy,
+                onInitialized = { initialized ->
+                    if (_controller.value !== initialized || initialSource == null) {
+                        return@createController
+                    }
+                    restorePositionMs
+                        ?.takeIf { position -> position > 0L }
+                        ?.let { position ->
+                            val currentPositionMs = initialized.uiState.value.timeline.positionMs
+                            runCatching { initialized.seekBy(position - currentPositionMs) }
+                        }
+                    if (restorePlaybackRate != 1.0f) {
+                        runCatching { initialized.setPlaybackRate(restorePlaybackRate) }
+                    }
+                    if (shouldResumePlayback) {
+                        runCatching { initialized.play() }
+                    }
+                },
             )
         _controller.value = next
         runCatching { previous.dispose() }
-        if (initialSource != null) {
-            restorePositionMs
-                ?.takeIf { position -> position > 0L }
-                ?.let { position ->
-                    val currentPositionMs = next.uiState.value.timeline.positionMs
-                    runCatching { next.seekBy(position - currentPositionMs) }
-                }
-            if (restorePlaybackRate != 1.0f) {
-                runCatching { next.setPlaybackRate(restorePlaybackRate) }
-            }
-            if (shouldResumePlayback) {
-                runCatching { next.play() }
-            }
-        }
         return next
     }
 
@@ -141,16 +148,19 @@ internal class PlayerHostViewModel(
     private fun createController(
         sourceNormalizerSetting: ExampleSourceNormalizerSetting,
         nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
+        videoSurfaceSetting: ExampleVideoSurfaceSetting,
         initialSource: VesperPlayerSource?,
         resiliencePolicy: VesperPlaybackResiliencePolicy,
+        onInitialized: suspend (VesperPlayerController) -> Unit = {},
     ): VesperPlayerController =
         VesperPlayerControllerFactory.createDefault(
             context = application.applicationContext,
             initialSource = initialSource,
             resiliencePolicy = resiliencePolicy,
-            surfaceKind = exampleSurfaceKindForNativeFrameSetting(
-                nativeFramePipelineSetting,
-                initialSource,
+            surfaceKind = exampleSurfaceKindForSettings(
+                setting = nativeFramePipelineSetting,
+                surfaceSetting = videoSurfaceSetting,
+                source = initialSource,
             ),
             preloadBudgetPolicy = playerPreloadBudgetPolicy,
             sourceNormalizerConfiguration =
@@ -173,6 +183,7 @@ internal class PlayerHostViewModel(
         ).also { controller ->
             viewModelScope.launch {
                 controller.initializeAsync()
+                onInitialized(controller)
             }
         }
 

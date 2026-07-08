@@ -1,6 +1,7 @@
 package io.github.ikaros.vesper.player.android.external.internal.relay.ffmpeg
 
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -14,6 +15,8 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class HostInputCancelledException : IOException("Host input cancelled.")
+
+internal const val MAX_HOST_PREPARED_DASH_MANIFEST_BYTES = 4 * 1024 * 1024
 
 internal fun String.isRemoteDashUri(): Boolean =
     startsWith("http://", ignoreCase = true) || startsWith("https://", ignoreCase = true)
@@ -238,6 +241,29 @@ internal fun InputStream.copyToCancellable(
             return
         }
         output.write(buffer, 0, read)
+    }
+}
+
+internal fun InputStream.readUtf8Limited(
+    maxBytes: Int = MAX_HOST_PREPARED_DASH_MANIFEST_BYTES,
+): String {
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    val output = ByteArrayOutputStream(minOf(DEFAULT_BUFFER_SIZE, maxBytes))
+    var total = 0
+    while (true) {
+        val read = read(buffer)
+        if (read < 0) {
+            return output.toString(Charsets.UTF_8.name())
+        }
+        if (total + read > maxBytes) {
+            throw DashResourceException(
+                code = "dash_manifest_too_large",
+                status = 413,
+                message = "DASH manifest exceeds the $maxBytes byte host-prepared planning limit.",
+            )
+        }
+        output.write(buffer, 0, read)
+        total += read
     }
 }
 

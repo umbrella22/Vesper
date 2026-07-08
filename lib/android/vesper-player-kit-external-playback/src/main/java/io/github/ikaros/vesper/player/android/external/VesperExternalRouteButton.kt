@@ -1,5 +1,6 @@
 package io.github.ikaros.vesper.player.android.external
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Bundle
@@ -20,8 +21,9 @@ class VesperExternalRouteButton @JvmOverloads constructor(
     attrs: AttributeSet? = null,
 ) : MediaRouteButton(routeContext(context, null), attrs) {
     init {
-        CastButtonFactory.setUpMediaRouteButton(context, this)
-        dialogFactory = VesperExternalRouteButtonDialogFactory(routeTheme(context, null).buttonTheme)
+        val themedContext = getContext()
+        CastButtonFactory.setUpMediaRouteButton(themedContext, this)
+        dialogFactory = VesperExternalRouteButtonDialogFactory(routeTheme(themedContext, null).buttonTheme)
     }
 
     companion object {
@@ -95,6 +97,7 @@ class VesperExternalRouteChooserDialogFragment : MediaRouteChooserDialogFragment
     ): MediaRouteChooserDialog =
         MediaRouteChooserDialog(routeContext(context), routeDialogTheme())
 
+    @SuppressLint("RestrictedApi")
     override fun onCreateDynamicChooserDialog(context: Context): MediaRouteDynamicChooserDialog =
         MediaRouteDynamicChooserDialog(routeContext(context), routeDialogTheme())
 
@@ -123,6 +126,7 @@ class VesperExternalRouteControllerDialogFragment : MediaRouteControllerDialogFr
     ): MediaRouteControllerDialog =
         MediaRouteControllerDialog(routeContext(context), routeDialogTheme())
 
+    @SuppressLint("RestrictedApi")
     override fun onCreateDynamicControllerDialog(context: Context): MediaRouteDynamicControllerDialog =
         MediaRouteDynamicControllerDialog(routeContext(context), routeDialogTheme())
 

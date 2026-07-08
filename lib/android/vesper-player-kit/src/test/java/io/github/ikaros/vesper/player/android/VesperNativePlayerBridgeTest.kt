@@ -6,6 +6,10 @@ import androidx.media3.common.ColorInfo
 import androidx.media3.common.Format
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -47,6 +51,28 @@ class VesperNativePlayerBridgeTest {
         assertTrue(eventNames.contains("play_command"))
         assertTrue(bridge.drainBenchmarkEvents().isEmpty())
         assertEquals(events.size.toLong(), bridge.benchmarkSummary().acceptedEvents)
+    }
+
+    @Test
+    fun playBeforeInitializeDefersAutoplayWithoutPublishingPlaying() {
+        val bindings = FakeBindings()
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = VesperPlayerSource.hls("https://example.com/live.m3u8", "Live"),
+            )
+
+        bridge.play()
+
+        assertEquals(0, bindings.playCount)
+        assertTrue(bridge.pendingAutoPlay)
+        assertEquals(PlaybackStateUi.Ready, bridge.uiState.value.playbackState)
+
+        runBlocking { bridge.initializeAsync() }
+
+        assertEquals(1, bindings.playCount)
+        assertFalse(bridge.pendingAutoPlay)
+        assertEquals(PlaybackStateUi.Playing, bridge.uiState.value.playbackState)
     }
 
     @Test
@@ -1315,6 +1341,68 @@ class VesperNativePlayerBridgeTest {
     }
 
     @Test
+    fun preferNativeFramePipelineClosesStaleOpenWhenSourceEpochChanges() =
+        runBlocking {
+            val initialSource =
+                VesperPlayerSource.remote(
+                    uri = "https://example.com/video.mp4",
+                    label = "MP4",
+                    protocol = VesperPlayerSourceProtocol.Progressive,
+                )
+            val nextSource =
+                VesperPlayerSource.remote(
+                    uri = "https://example.com/next.mp4",
+                    label = "Next MP4",
+                    protocol = VesperPlayerSourceProtocol.Progressive,
+                )
+            val scheduler = QueuedNativeFramePipelinePumpScheduler()
+            val bindings = FakeBindings()
+            val bridge =
+                VesperNativePlayerBridge(
+                    bindings = bindings,
+                    initialSource = initialSource,
+                    sourceNormalizerConfiguration =
+                        VesperSourceNormalizerConfiguration(
+                            mode = VesperSourceNormalizerMode.PreflightOnly,
+                            pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        ),
+                    nativeFramePipelineConfiguration =
+                        VesperNativeFramePipelineConfiguration(
+                            mode = VesperNativeFramePipelineMode.PreferNativeFrame,
+                            decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                            frameProcessorPluginLibraryPaths = listOf("/tmp/libframe.so"),
+                            maxInFlightFrames = 2,
+                        ),
+                    nativeFramePipelinePumpScheduler = scheduler,
+            )
+
+            bridge.initializeAsync()
+            assertTrue(scheduler.hasPendingActions())
+            scheduler.runNext()
+            scheduler.runNext()
+            assertTrue(
+                "native-frame open should still be pending before the epoch changes",
+                bindings.openNativeFramePipelineCount == 0,
+            )
+            assertTrue(scheduler.hasPendingActions())
+
+            bridge.sourceLoadEpoch.incrementAndGet()
+            bridge.currentSource = nextSource
+            scheduler.runNext()
+
+            assertEquals(1, bindings.openNativeFramePipelineCount)
+            assertEquals(0, bindings.advanceNativeFramePipelineCount)
+            assertEquals(1, bindings.closeNativeFramePipelineCount)
+            assertTrue(bindings.releasedNativeFramePipelineFrames.isEmpty())
+            val diagnostic =
+                bridge.pluginDiagnostics.first {
+                    it["pluginKind"] == "native_frame_pipeline"
+                }
+            assertFalse(diagnostic["lifecycle"] == "open")
+            assertNull(diagnostic["lastAdvanceStatus"])
+        }
+
+    @Test
     fun preferNativeFramePipelineSkipsSystemSourceNormalizerResourcePlayback() {
         val initialSource =
             VesperPlayerSource.local(
@@ -1455,6 +1543,147 @@ class VesperNativePlayerBridgeTest {
 
         assertNull(diagnostics)
     }
+
+    @Test
+    fun preparedSourceNormalizerResourceIsPassedToMainApplyWithoutJsonReparse() {
+        val prepared =
+            NativeSourceNormalizerResourcePreparedOpenOutcome(
+                resource =
+                    NativeSourceNormalizerResource(
+                        handle = 42L,
+                        outputRoute = "fmp4LocalStream",
+                        loopbackToken = "prepared-token",
+                        playbackSource =
+                            VesperPlayerSource.remote(
+                                uri = "http://127.0.0.1:54321/normalized/prepared-token/primary",
+                                label = "Local MP4",
+                                protocol = VesperPlayerSourceProtocol.Progressive,
+                            ),
+                        diagnostics =
+                            listOf(
+                                mapOf(
+                                    "pluginKind" to "source_normalizer",
+                                    "participation" to "participated",
+                                )
+                            ),
+                    ),
+            )
+        val bindings = FakeBindings(sourceNormalizerPrepareOutcome = prepared)
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = VesperPlayerSource.local("file:///tmp/original.mp4", "Local MP4"),
+                sourceNormalizerConfiguration =
+                    VesperSourceNormalizerConfiguration(
+                        mode = VesperSourceNormalizerMode.RequireNormalized,
+                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                    ),
+            )
+
+        runBlocking { bridge.initializeAsync() }
+
+        assertTrue(bindings.lastPreparedSourceNormalizer === prepared)
+        assertEquals(1, bindings.prepareSourceNormalizerForPlaybackCount)
+        assertEquals(
+            "http://127.0.0.1:54321/normalized/prepared-token/primary",
+            bindings.lastPreparedSourceNormalizer?.resource?.playbackSource?.uri,
+        )
+    }
+
+    @Test
+    fun staleSourceNormalizerPrepareFailureIsIgnoredAfterEpochChanges() =
+        runBlocking {
+            val prepareEntered = CountDownLatch(1)
+            val releasePrepare = CountDownLatch(1)
+            val bindings =
+                FakeBindings().apply {
+                    onPrepareSourceNormalizerForPlayback = {
+                        prepareEntered.countDown()
+                        assertTrue(
+                            "test prepare hook should be released",
+                            releasePrepare.await(5, TimeUnit.SECONDS),
+                        )
+                        throw IllegalStateException("stale source normalizer failure")
+                    }
+                }
+            val bridge =
+                VesperNativePlayerBridge(
+                    bindings = bindings,
+                    initialSource = VesperPlayerSource.local("file:///tmp/old.mp4", "Old"),
+                    sourceNormalizerConfiguration =
+                        VesperSourceNormalizerConfiguration(
+                            mode = VesperSourceNormalizerMode.RequireNormalized,
+                            pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        ),
+                )
+
+            val result = async(Dispatchers.Default) { runCatching { bridge.initializeAsync() } }
+            assertTrue(
+                "source normalizer prepare should run in the background",
+                prepareEntered.await(5, TimeUnit.SECONDS),
+            )
+
+            bridge.sourceLoadEpoch.incrementAndGet()
+            bridge.currentSource = VesperPlayerSource.local("file:///tmp/new.mp4", "New")
+            releasePrepare.countDown()
+
+            assertNull(result.await().exceptionOrNull())
+            assertNull(bridge.uiState.value.lastError)
+            assertNull(bindings.lastInitializedSource)
+        }
+
+    @Test
+    fun canceledInitializeDisposesPreparedSourceNormalizerAfterBackgroundPrepareCompletes() =
+        runBlocking {
+            val prepareEntered = CountDownLatch(1)
+            val releasePrepare = CountDownLatch(1)
+            val prepared =
+                NativeSourceNormalizerResourcePreparedOpenOutcome(
+                    resource =
+                        NativeSourceNormalizerResource(
+                            handle = 42L,
+                            playbackSource = VesperPlayerSource.local("file:///tmp/normalized.mp4", "Normalized"),
+                            outputRoute = "fmp4LocalStream",
+                            loopbackToken = null,
+                            diagnostics = emptyList(),
+                        ),
+                )
+            val bindings =
+                FakeBindings(sourceNormalizerPrepareOutcome = prepared).apply {
+                    onPrepareSourceNormalizerForPlayback = {
+                        prepareEntered.countDown()
+                        assertTrue(
+                            "test prepare hook should be released",
+                            releasePrepare.await(5, TimeUnit.SECONDS),
+                        )
+                    }
+                }
+            val bridge =
+                VesperNativePlayerBridge(
+                    bindings = bindings,
+                    initialSource = VesperPlayerSource.local("file:///tmp/original.mp4", "Original"),
+                    sourceNormalizerConfiguration =
+                        VesperSourceNormalizerConfiguration(
+                            mode = VesperSourceNormalizerMode.RequireNormalized,
+                            pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        ),
+                )
+
+            val initializeJob = async(Dispatchers.Default) { bridge.initializeAsync() }
+            assertTrue(
+                "source normalizer prepare should run in the background",
+                prepareEntered.await(5, TimeUnit.SECONDS),
+            )
+
+            initializeJob.cancel(CancellationException("test cancellation"))
+            releasePrepare.countDown()
+
+            val result = runCatching { initializeJob.await() }
+            assertTrue(result.exceptionOrNull() is CancellationException)
+            assertEquals(1, bindings.prepareSourceNormalizerForPlaybackCount)
+            assertEquals(1, bindings.disposePreparedSourceNormalizerResourceCount)
+            assertNull(bindings.lastInitializedSource)
+        }
 
     @Test
     fun nativeFramePipelineDiagnosticsReportPresenterSurfaceState() {
@@ -1770,6 +1999,112 @@ class VesperNativePlayerBridgeTest {
         assertEquals("open", diagnostic["lifecycle"])
         assertEquals("seeked", diagnostic["lastAdvanceStatus"])
         assertEquals(true, diagnostic["pumpRunning"])
+    }
+
+    @Test
+    fun nativeFrameRuntimeCommandQueueCoalescesSeekStormAndPrioritizesClose() {
+        val queue = BoundedNativeFramePipelineRuntimeCommandQueue(capacity = 3)
+
+        repeat(100) { index ->
+            assertTrue(
+                queue.enqueue(
+                    NativeFramePipelineRuntimeCommand(
+                        operation = "seek",
+                        coalescingKey = "seek",
+                        action = {},
+                    )
+                )
+            )
+            assertTrue("seek command $index should be coalesced", queue.size <= 1)
+        }
+
+        assertTrue(
+            queue.enqueue(
+                NativeFramePipelineRuntimeCommand(
+                    operation = "status",
+                    coalescingKey = "status",
+                    action = {},
+                )
+            )
+        )
+        assertTrue(
+            queue.enqueue(
+                NativeFramePipelineRuntimeCommand(
+                    operation = "flush",
+                    coalescingKey = "flush",
+                    action = {},
+                )
+            )
+        )
+        assertEquals(3, queue.size)
+
+        assertTrue(
+            queue.enqueue(
+                NativeFramePipelineRuntimeCommand(
+                    operation = "close",
+                    runsDuringClose = true,
+                    replacesPendingCommands = true,
+                    action = {},
+                )
+            )
+        )
+
+        assertEquals("close", queue.removeFirstOrNull()?.operation)
+        assertNull(queue.removeFirstOrNull())
+    }
+
+    @Test
+    fun preferNativeFramePipelineCoalescesPendingSeekStormRuntimeCommands() {
+        val initialSource =
+            VesperPlayerSource.remote(
+                uri = "https://example.com/video.mp4",
+                label = "MP4",
+                protocol = VesperPlayerSourceProtocol.Progressive,
+            )
+        val scheduler = CoalescingQueuedNativeFramePipelinePumpScheduler()
+        val bindings =
+            FakeBindings(
+                nativeFramePipelineAdvanceStatuses =
+                    mutableListOf(
+                        mapOf(
+                            "status" to "pending",
+                            "message" to "initial warmup",
+                        )
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = initialSource,
+                sourceNormalizerConfiguration =
+                    VesperSourceNormalizerConfiguration(
+                        mode = VesperSourceNormalizerMode.PreflightOnly,
+                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                    ),
+                nativeFramePipelineConfiguration =
+                    VesperNativeFramePipelineConfiguration(
+                        mode = VesperNativeFramePipelineMode.PreferNativeFrame,
+                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                    ),
+                nativeFramePipelinePumpScheduler = scheduler,
+            )
+
+        runBlocking { bridge.initializeAsync() }
+        scheduler.runUntilIdle()
+        assertEquals(1, bindings.openNativeFramePipelineCount)
+
+        repeat(100) { index ->
+            assertTrue(bridge.seekBindingsTo(index.toLong()))
+        }
+
+        assertTrue(
+            "seek storm should stay bounded before runtime commands drain",
+            scheduler.pendingActionCount <= 3,
+        )
+        scheduler.runUntilIdle()
+
+        assertEquals(1, bindings.flushNativeFramePipelineCount)
+        assertEquals(listOf(99L), bindings.seekNativeFramePipelinePositions)
     }
 
     @Test
@@ -2623,7 +2958,7 @@ class VesperNativePlayerBridgeTest {
                 label = "MP4",
                 protocol = VesperPlayerSourceProtocol.Progressive,
             )
-        val scheduler = ThreadedNativeFramePipelinePumpScheduler()
+        val scheduler = ThreadedNativeFramePipelinePumpScheduler(expectedRuns = 4)
         val bindings =
             FakeBindings(
                 nativeFramePipelineAdvanceStatuses =
@@ -2655,8 +2990,8 @@ class VesperNativePlayerBridgeTest {
         bridge.play()
 
         assertTrue(scheduler.awaitRun())
+        assertTrue(waitUntil { bindings.advanceNativeFramePipelineCount >= 2 })
         assertNull(scheduler.lastError)
-        assertTrue(bindings.advanceNativeFramePipelineCount >= 2)
 
         bridge.dispose()
         scheduler.close()
@@ -4181,6 +4516,8 @@ private class FakeBindings(
     var videoVariantObservation: VesperVideoVariantObservation? = null,
     var mobilePluginDiagnostics: List<Map<String, Any?>> = emptyList(),
     var nativeStartupDiagnostics: List<Map<String, Any?>> = emptyList(),
+    var sourceNormalizerPrepareOutcome: NativeSourceNormalizerResourcePreparedOpenOutcome =
+        NativeSourceNormalizerResourcePreparedOpenOutcome(),
     var nativeFramePipelineOpenError: Throwable? = null,
     var nativeFramePipelineAdvanceError: Throwable? = null,
     var nativeFramePipelineReleaseError: Throwable? = null,
@@ -4220,6 +4557,7 @@ private class FakeBindings(
     var lastInitializedSource: VesperPlayerSource? = null
     var lastSystemPlaybackUsesSourceNormalizerResource: Boolean? = null
     var lastSystemPlaybackVideoEnabled: Boolean? = null
+    var lastPreparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome? = null
     var lastNativeFramePipelineSource: VesperPlayerSource? = null
     var lastNativeFramePipelineSourceNormalizerConfiguration:
         VesperSourceNormalizerConfiguration? = null
@@ -4245,7 +4583,7 @@ private class FakeBindings(
     ): NativeSourceNormalizerResourcePreparedOpenOutcome {
         prepareSourceNormalizerForPlaybackCount += 1
         onPrepareSourceNormalizerForPlayback?.invoke()
-        return NativeSourceNormalizerResourcePreparedOpenOutcome()
+        return sourceNormalizerPrepareOutcome
     }
 
     override fun disposePreparedSourceNormalizerResource(
@@ -4265,6 +4603,7 @@ private class FakeBindings(
         lastInitializedSource = source
         lastSystemPlaybackUsesSourceNormalizerResource = systemPlaybackUsesSourceNormalizerResource
         lastSystemPlaybackVideoEnabled = systemPlaybackVideoEnabled
+        lastPreparedSourceNormalizer = preparedSourceNormalizer
         onInitialize?.invoke()
         return NativeBridgeStartup(subtitle = null, pluginDiagnostics = nativeStartupDiagnostics)
     }
@@ -4492,7 +4831,7 @@ private class FakeBindings(
 
     fun currentUpdateListener(): (() -> Unit)? = updateListener
 
-    private fun nativeFramePipelineStatus(
+private fun nativeFramePipelineStatus(
         status: String,
         message: String,
         processedFrames: Long = 0L,
@@ -4530,6 +4869,17 @@ private class FakeBindings(
             message = overrides.firstOrNull { it.first == "message" }?.second?.toString()
                 ?: "test status",
         ) + overrides.toMap()
+}
+
+private fun waitUntil(timeoutMs: Long = 5_000L, predicate: () -> Boolean): Boolean {
+    val deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+    while (System.nanoTime() < deadlineNs) {
+        if (predicate()) {
+            return true
+        }
+        Thread.sleep(10L)
+    }
+    return predicate()
 }
 
 private class ManualNativeFramePipelinePumpScheduler(
@@ -4581,13 +4931,87 @@ private class ManualNativeFramePipelinePumpScheduler(
     }
 }
 
-private class ThreadedNativeFramePipelinePumpScheduler : NativeFramePipelinePumpScheduler {
+private class QueuedNativeFramePipelinePumpScheduler : NativeFramePipelinePumpScheduler {
+    override val inlineCallbacksForTests: Boolean = true
+    private val actions = ArrayDeque<() -> Unit>()
+
+    override fun schedule(delayMs: Long, action: () -> Unit) {
+        actions.addLast(action)
+    }
+
+    override fun execute(action: () -> Unit) {
+        actions.addLast(action)
+    }
+
+    override fun cancel() {
+        actions.clear()
+    }
+
+    fun hasPendingActions(): Boolean = actions.isNotEmpty()
+
+    fun runNext() {
+        actions.removeFirstOrNull()?.invoke()
+    }
+}
+
+private class CoalescingQueuedNativeFramePipelinePumpScheduler : NativeFramePipelinePumpScheduler {
+    override val inlineCallbacksForTests: Boolean = true
+    private val scheduledActions = ArrayDeque<() -> Unit>()
+    private val runtimeCommands = BoundedNativeFramePipelineRuntimeCommandQueue()
+
+    val pendingActionCount: Int
+        get() = scheduledActions.size + runtimeCommands.size
+
+    override fun schedule(delayMs: Long, action: () -> Unit) {
+        scheduledActions.addLast(action)
+    }
+
+    override fun execute(action: () -> Unit) {
+        executeCommand(
+            NativeFramePipelineRuntimeCommand(
+                operation = "generic",
+                action = action,
+            )
+        )
+    }
+
+    override fun executeCommand(command: NativeFramePipelineRuntimeCommand) {
+        assertTrue("test runtime command should be accepted", runtimeCommands.enqueue(command))
+    }
+
+    override fun cancel() {
+        scheduledActions.clear()
+    }
+
+    fun hasPendingActions(): Boolean = pendingActionCount > 0
+
+    fun runNext() {
+        runtimeCommands.removeFirstOrNull()?.let { command ->
+            command.action()
+            return
+        }
+        scheduledActions.removeFirstOrNull()?.invoke()
+    }
+
+    fun runUntilIdle() {
+        var guard = 256
+        while (hasPendingActions() && guard > 0) {
+            guard -= 1
+            runNext()
+        }
+        assertFalse("test scheduler did not drain", hasPendingActions())
+    }
+}
+
+private class ThreadedNativeFramePipelinePumpScheduler(
+    expectedRuns: Int = 2,
+) : NativeFramePipelinePumpScheduler {
     override val inlineCallbacksForTests: Boolean = true
     @Volatile
     var lastError: Throwable? = null
         private set
 
-    private var latch = CountDownLatch(2)
+    private var latch = CountDownLatch(expectedRuns)
     private var closed = false
 
     @Synchronized

@@ -110,4 +110,16 @@ extension VesperNativeFramePipelineSession {
             )
         )
     }
+
+    func runtimeDidFailPlayback(_ error: VesperNativeFramePipelineOperationError) {
+        guard !isClosed else { return }
+        isPlaying = false
+        audioOutput.pause()
+        onPlaybackFailed?(
+            VesperNativeFramePipelineIssue(
+                kind: .startupFailure,
+                message: "nativeFrameIssueKind=runtimeFailure; \(error.message)"
+            )
+        )
+    }
 }

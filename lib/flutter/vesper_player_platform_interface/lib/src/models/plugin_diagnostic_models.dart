@@ -12,7 +12,12 @@ enum VesperPluginDiagnosticStatus {
   sourceNormalizerUnsupported,
 }
 
-enum VesperPluginCapabilityKind { decoder, frameProcessor, sourceNormalizer }
+enum VesperPluginCapabilityKind {
+  decoder,
+  frameProcessor,
+  sourceNormalizer,
+  unknown,
+}
 
 enum VesperPluginParticipation {
   unknown,

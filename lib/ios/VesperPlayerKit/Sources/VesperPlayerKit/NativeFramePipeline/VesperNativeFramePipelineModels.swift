@@ -51,9 +51,10 @@ struct VesperNativeFrameAudioBridgeState: Equatable {
     }
 }
 
-struct VesperNativeFramePipelineFrame {
+struct VesperNativeFramePipelineFrame: @unchecked Sendable {
     let frameHandle: UInt64
     let pixelBufferAddress: UInt
+    let pixelBuffer: CVPixelBuffer
     let presentationTimeUs: Int64
     let durationUs: Int64?
     let width: Int

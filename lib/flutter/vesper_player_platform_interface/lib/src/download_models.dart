@@ -23,6 +23,7 @@ enum VesperDownloadOutputFormat {
 }
 
 enum VesperDownloadState {
+  unknown,
   queued,
   preparing,
   downloading,
@@ -117,6 +118,7 @@ final class VesperDownloadSource {
   const VesperDownloadSource({
     required this.source,
     required this.contentFormat,
+    this.contentFormatRawValue,
     this.manifestUri,
   });
 
@@ -134,21 +136,28 @@ final class VesperDownloadSource {
 
   factory VesperDownloadSource.fromMap(Map<Object?, Object?> map) {
     final normalized = vesperDecodeMap(map);
+    final rawContentFormat = normalized['contentFormat'];
+    final contentFormat = _decodeContentFormat(rawContentFormat);
     return VesperDownloadSource(
       source: VesperPlayerSource.fromMap(vesperDecodeMap(normalized['source'])),
-      contentFormat: _decodeContentFormat(normalized['contentFormat']),
+      contentFormat: contentFormat,
+      contentFormatRawValue: _unknownEnumRawValue(
+        rawContentFormat,
+        isUnknown: contentFormat == VesperDownloadContentFormat.unknown,
+      ),
       manifestUri: normalized['manifestUri'] as String?,
     );
   }
 
   final VesperPlayerSource source;
   final VesperDownloadContentFormat contentFormat;
+  final String? contentFormatRawValue;
   final String? manifestUri;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'source': source.toMap(),
-      'contentFormat': contentFormat.name,
+      'contentFormat': contentFormatRawValue ?? contentFormat.name,
       'manifestUri': manifestUri,
     };
   }
@@ -176,6 +185,7 @@ final class VesperDownloadProfile {
     this.preferredSubtitleLanguage,
     this.selectedTrackIds = const <String>[],
     this.targetOutputFormat,
+    this.targetOutputFormatRawValue,
     this.targetDirectory,
     this.allowMeteredNetwork = false,
   });
@@ -183,6 +193,8 @@ final class VesperDownloadProfile {
   factory VesperDownloadProfile.fromMap(Map<Object?, Object?> map) {
     final normalized = vesperDecodeMap(map);
     final rawSelectedTrackIds = normalized['selectedTrackIds'];
+    final rawTargetOutputFormat = normalized['targetOutputFormat'];
+    final targetOutputFormat = _decodeOutputFormat(rawTargetOutputFormat);
     return VesperDownloadProfile(
       variantId: normalized['variantId'] as String?,
       preferredAudioLanguage: normalized['preferredAudioLanguage'] as String?,
@@ -195,8 +207,10 @@ final class VesperDownloadProfile {
             .toList(growable: false),
         _ => const <String>[],
       },
-      targetOutputFormat: _decodeOutputFormat(
-        normalized['targetOutputFormat'],
+      targetOutputFormat: targetOutputFormat,
+      targetOutputFormatRawValue: _unknownEnumRawValue(
+        rawTargetOutputFormat,
+        isUnknown: targetOutputFormat == null,
       ),
       targetDirectory: normalized['targetDirectory'] as String?,
       allowMeteredNetwork: normalized['allowMeteredNetwork'] as bool? ?? false,
@@ -208,6 +222,7 @@ final class VesperDownloadProfile {
   final String? preferredSubtitleLanguage;
   final List<String> selectedTrackIds;
   final VesperDownloadOutputFormat? targetOutputFormat;
+  final String? targetOutputFormatRawValue;
   final String? targetDirectory;
   final bool allowMeteredNetwork;
 
@@ -217,7 +232,8 @@ final class VesperDownloadProfile {
       'preferredAudioLanguage': preferredAudioLanguage,
       'preferredSubtitleLanguage': preferredSubtitleLanguage,
       'selectedTrackIds': selectedTrackIds,
-      'targetOutputFormat': targetOutputFormat?.name,
+      'targetOutputFormat':
+          targetOutputFormatRawValue ?? targetOutputFormat?.name,
       'targetDirectory': targetDirectory,
       'allowMeteredNetwork': allowMeteredNetwork,
     };

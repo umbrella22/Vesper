@@ -153,6 +153,44 @@ class VesperRelayHostPreparedDashTest {
     }
 
     @Test
+    fun rejectsSegmentBaseWhenSidxExpandsPastSegmentCap() {
+        withBridgeApi(FakeOversizedSegmentBaseBridgeApi) {
+            val resolver = ByteArrayRangeResolver(
+                uri = "https://cdn.example/video/main.mp4",
+                payload = byteArrayOf(9, 8, 7),
+            )
+
+            val error = unsupported {
+                planHostPreparedDash(
+                    manifestText = """
+                        <MPD type="static" mediaPresentationDuration="PT10S">
+                          <Period>
+                            <AdaptationSet mimeType="video/mp4">
+                              <Representation id="v1" codecs="avc1.640028">
+                                <BaseURL>main.mp4</BaseURL>
+                                <SegmentBase indexRange="100-199">
+                                  <Initialization range="0-99" />
+                                </SegmentBase>
+                              </Representation>
+                            </AdaptationSet>
+                          </Period>
+                        </MPD>
+                    """.trimIndent(),
+                    manifestUri = "https://cdn.example/video/manifest.mpd",
+                    resolver = resolver,
+                )
+            }
+
+            assertEquals("unsupported_dash_layout", error.diagnostic.code)
+            assertTrue(error.diagnostic.message.contains("too many segments"))
+            assertEquals(
+                (MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK + 1).toString(),
+                error.diagnostic.details["segmentCount"],
+            )
+        }
+    }
+
+    @Test
     fun plansSegmentBaseWithRepresentationBaseUrlInheritance() {
         withBridgeApi(FakeSegmentBaseBridgeApi) {
             val mediaUri = "https://cdn.example/root/period/adaptation/representation/main.mp4"
@@ -634,6 +672,87 @@ class VesperRelayHostPreparedDashTest {
     }
 
     @Test
+    fun rejectsSegmentTemplatePlansThatExceedBoundedSegmentList() {
+        val error = unsupported {
+            planHostPreparedDash(
+                manifestText = """
+                    <MPD type="static" mediaPresentationDuration="PT9000S">
+                      <Period>
+                        <AdaptationSet mimeType="video/mp4">
+                          <Representation id="v1">
+                            <SegmentTemplate timescale="1" duration="1"
+                              initialization="init.mp4" media="v-${'$'}Number${'$'}.m4s" />
+                          </Representation>
+                        </AdaptationSet>
+                      </Period>
+                    </MPD>
+                """.trimIndent(),
+                manifestUri = "https://example.com/too-many-segments.mpd",
+            )
+        }
+
+        assertEquals("unsupported_dash_layout", error.diagnostic.code)
+        assertTrue(error.diagnostic.message.contains("too many segments"))
+        assertEquals("9000", error.diagnostic.details["segmentCount"])
+        assertEquals("8192", error.diagnostic.details["maxSegmentsPerTrack"])
+    }
+
+    @Test
+    fun remoteManifestResolverRejectsManifestPastByteLimit() {
+        val requests = Collections.synchronizedList(mutableListOf<RecordedRequest>())
+        val server = RangeHttpServer(
+            body = ByteArray(MAX_HOST_PREPARED_DASH_MANIFEST_BYTES + 1) { '<'.code.toByte() },
+            requests = requests,
+        )
+        server.start()
+        try {
+            val resolver = VesperRelayRemoteDashResourceClient(
+                headers = emptyMap(),
+                allowPrivateAddresses = true,
+            )
+
+            val error = try {
+                resolver.readUtf8("http://${server.address.hostAddress}:${server.port}/manifest.mpd")
+                fail("expected oversized manifest rejection")
+                return
+            } catch (error: DashResourceException) {
+                error
+            }
+
+            assertEquals("dash_manifest_too_large", error.code)
+            assertEquals(413, error.status)
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun fileManifestResolverRejectsManifestPastByteLimit() {
+        val root = Files.createTempDirectory("vesper-dash-large-manifest").toFile()
+        val manifest = File(root, "manifest.mpd").apply {
+            writeBytes(ByteArray(MAX_HOST_PREPARED_DASH_MANIFEST_BYTES + 1) { '<'.code.toByte() })
+        }
+        val resolver = VesperRelayFileDashResourceResolver(
+            origin = VesperRelayDashSourceOrigin(
+                kind = "file",
+                manifestUri = manifest.toURI().toString(),
+                rootUri = root.canonicalFile.toURI().toString(),
+            ),
+        )
+
+        val error = try {
+            resolver.readManifest()
+            fail("expected oversized manifest rejection")
+            return
+        } catch (error: DashResourceException) {
+            error
+        }
+
+        assertEquals("dash_manifest_too_large", error.code)
+        assertEquals(413, error.status)
+    }
+
+    @Test
     fun hybridFileResolverFetchesRemoteMediaWithHeaders() {
         val root = Files.createTempDirectory("vesper-dash-hybrid-range").toFile()
         val manifest = File(root, "manifest.mpd").apply { writeText("<MPD />") }
@@ -959,6 +1078,23 @@ private object FakeSegmentBaseBridgeApi : VesperRelayDashBridgeApi {
         )
 }
 
+private object FakeOversizedSegmentBaseBridgeApi : VesperRelayDashBridgeApi {
+    override fun parseSidx(data: ByteArray): VesperRelayDashSidxBox =
+        FakeSegmentBaseBridgeApi.parseSidx(data)
+
+    override fun mediaSegments(
+        segmentBase: VesperRelayDashByteRangeSegmentBase,
+        sidx: VesperRelayDashSidxBox,
+    ): List<VesperRelayDashMediaSegment> =
+        List(MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK + 1) { index ->
+            val start = 200L + index * 100L
+            VesperRelayDashMediaSegment(
+                duration = 4.0,
+                range = VesperRelayDashByteRange(start, start + 99L),
+            )
+        }
+}
+
 private data class RecordedRequest(
     val method: String,
     val headers: Map<String, String>,
@@ -1060,11 +1196,14 @@ private class RangeHttpServer(
                 append("Connection: close\r\n")
                 append("\r\n")
             }.toByteArray(Charsets.ISO_8859_1)
-            client.getOutputStream().use { output ->
-                output.write(response)
-                if (method != "HEAD") {
-                    output.write(responseBody)
+            try {
+                client.getOutputStream().use { output ->
+                    output.write(response)
+                    if (method != "HEAD") {
+                        output.write(responseBody)
+                    }
                 }
+            } catch (_: IOException) {
             }
         }
     }

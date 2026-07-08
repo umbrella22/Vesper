@@ -272,6 +272,7 @@ class VesperDownloadManager {
       if (existing != null) {
         _tasksById[patch.taskId] = existing.copyWith(
           state: patch.state,
+          stateRawValue: patch.stateRawValue,
           progress: patch.progress,
           assetIndex: _assetIndexWithCompletedPath(
             existing.assetIndex,

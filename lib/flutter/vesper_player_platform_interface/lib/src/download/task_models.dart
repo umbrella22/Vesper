@@ -7,6 +7,7 @@ final class VesperDownloadStaleResource {
     this.segmentId,
     this.uri,
     this.phase = VesperDownloadStaleResourcePhase.prepare,
+    this.phaseRawValue,
     this.statusCode,
     this.receivedBytes = 0,
     required this.message,
@@ -14,12 +15,21 @@ final class VesperDownloadStaleResource {
 
   factory VesperDownloadStaleResource.fromMap(Map<Object?, Object?> map) {
     final normalized = vesperDecodeMap(map);
+    final rawPhase = normalized['phase'];
+    final phase = _decodeStaleResourcePhase(rawPhase);
     return VesperDownloadStaleResource(
       taskId: _decodeInt(normalized['taskId']) ?? 0,
       resourceId: normalized['resourceId'] as String?,
       segmentId: normalized['segmentId'] as String?,
       uri: normalized['uri'] as String?,
-      phase: _decodeStaleResourcePhase(normalized['phase']),
+      phase: phase,
+      phaseRawValue: _unknownEnumRawValue(
+        rawPhase,
+        isUnknown: rawPhase is String &&
+            !VesperDownloadStaleResourcePhase.values.any(
+              (value) => value.name == rawPhase,
+            ),
+      ),
       statusCode: _decodeInt(normalized['statusCode']),
       receivedBytes: _decodeInt(normalized['receivedBytes']) ?? 0,
       message: normalized['message'] as String? ?? '',
@@ -31,6 +41,7 @@ final class VesperDownloadStaleResource {
   final String? segmentId;
   final String? uri;
   final VesperDownloadStaleResourcePhase phase;
+  final String? phaseRawValue;
   final int? statusCode;
   final int receivedBytes;
   final String message;
@@ -41,7 +52,7 @@ final class VesperDownloadStaleResource {
       'resourceId': resourceId,
       'segmentId': segmentId,
       'uri': uri,
-      'phase': phase.name,
+      'phase': phaseRawValue ?? phase.name,
       'statusCode': statusCode,
       'receivedBytes': receivedBytes,
       'message': message,
@@ -130,23 +141,31 @@ final class VesperDownloadError {
     required this.category,
     required this.retriable,
     required this.message,
+    this.codeRawValue,
+    this.categoryRawValue,
   });
 
   factory VesperDownloadError.fromMap(Map<Object?, Object?> map) {
     final normalized = vesperDecodeMap(map);
+    final rawCode = normalized['code'];
+    final rawCategory = normalized['category'];
+    final codeRawValue = rawCode is String ? rawCode : null;
+    final categoryRawValue = rawCategory is String ? rawCategory : null;
     return VesperDownloadError(
       code: _decodeRequiredDownloadEnum(
         VesperPlayerErrorCode.values,
-        normalized['code'],
+        rawCode,
         'code',
       ),
       category: _decodeRequiredDownloadEnum(
         VesperPlayerErrorCategory.values,
-        normalized['category'],
+        rawCategory,
         'category',
       ),
       retriable: normalized['retriable'] as bool? ?? false,
       message: normalized['message'] as String? ?? 'Unknown download error.',
+      codeRawValue: codeRawValue,
+      categoryRawValue: categoryRawValue,
     );
   }
 
@@ -154,11 +173,13 @@ final class VesperDownloadError {
   final VesperPlayerErrorCategory category;
   final bool retriable;
   final String message;
+  final String? codeRawValue;
+  final String? categoryRawValue;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
-      'code': code.name,
-      'category': category.name,
+      'code': codeRawValue ?? code.name,
+      'category': categoryRawValue ?? category.name,
       'retriable': retriable,
       'message': message,
     };
@@ -197,6 +218,7 @@ final class VesperDownloadTaskSnapshot {
     required this.state,
     required this.progress,
     required this.assetIndex,
+    this.stateRawValue,
     this.error,
   });
 
@@ -212,6 +234,7 @@ final class VesperDownloadTaskSnapshot {
         vesperDecodeMap(normalized['profile']),
       ),
       state: _decodeDownloadState(normalized['state']),
+      stateRawValue: normalized['state'] as String?,
       progress: VesperDownloadProgressSnapshot.fromMap(
         vesperDecodeMap(normalized['progress']),
       ),
@@ -229,6 +252,7 @@ final class VesperDownloadTaskSnapshot {
   final VesperDownloadSource source;
   final VesperDownloadProfile profile;
   final VesperDownloadState state;
+  final String? stateRawValue;
   final VesperDownloadProgressSnapshot progress;
   final VesperDownloadAssetIndex assetIndex;
   final VesperDownloadError? error;
@@ -239,7 +263,7 @@ final class VesperDownloadTaskSnapshot {
       'assetId': assetId,
       'source': source.toMap(),
       'profile': profile.toMap(),
-      'state': state.name,
+      'state': stateRawValue ?? state.name,
       'progress': progress.toMap(),
       'assetIndex': assetIndex.toMap(),
       'error': error?.toMap(),
@@ -248,6 +272,7 @@ final class VesperDownloadTaskSnapshot {
 
   VesperDownloadTaskSnapshot copyWith({
     VesperDownloadState? state,
+    String? stateRawValue,
     VesperDownloadProgressSnapshot? progress,
     VesperDownloadAssetIndex? assetIndex,
     Object? error = _vesperDownloadUnset,
@@ -258,6 +283,8 @@ final class VesperDownloadTaskSnapshot {
       source: source,
       profile: profile,
       state: state ?? this.state,
+      stateRawValue:
+          stateRawValue ?? (state == null ? this.stateRawValue : state.name),
       progress: progress ?? this.progress,
       assetIndex: assetIndex ?? this.assetIndex,
       error: identical(error, _vesperDownloadUnset)
@@ -272,6 +299,7 @@ final class VesperDownloadTaskStatePatch {
     required this.taskId,
     required this.state,
     required this.progress,
+    this.stateRawValue,
     this.error,
     this.completedPath,
   });
@@ -282,6 +310,7 @@ final class VesperDownloadTaskStatePatch {
     return VesperDownloadTaskStatePatch(
       taskId: _decodeInt(normalized['taskId']) ?? 0,
       state: _decodeDownloadState(normalized['state']),
+      stateRawValue: normalized['state'] as String?,
       progress: VesperDownloadProgressSnapshot.fromMap(
         vesperDecodeMap(normalized['progress']),
       ),
@@ -294,6 +323,7 @@ final class VesperDownloadTaskStatePatch {
 
   final int taskId;
   final VesperDownloadState state;
+  final String? stateRawValue;
   final VesperDownloadProgressSnapshot progress;
   final VesperDownloadError? error;
   final String? completedPath;
@@ -301,7 +331,7 @@ final class VesperDownloadTaskStatePatch {
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'taskId': taskId,
-      'state': state.name,
+      'state': stateRawValue ?? state.name,
       'progress': progress.toMap(),
       'error': error?.toMap(),
       'completedPath': completedPath,

@@ -238,6 +238,46 @@ enum ExampleNativeFramePipelineSetting: String, CaseIterable, Identifiable {
     }
 }
 
+struct ExamplePlaybackPluginConfiguration: Equatable {
+    let sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration
+    let frameProcessorConfiguration: VesperFrameProcessorConfiguration
+    let nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration
+}
+
+func makeExamplePlaybackPluginConfiguration(
+    sourceNormalizerSetting: ExampleSourceNormalizerSetting,
+    nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
+    sourceNormalizerPluginLibraryPaths: [String],
+    decoderPluginLibraryPaths: [String],
+    frameProcessorPluginLibraryPaths: [String],
+    directNativePlaybackRequired: Bool = false
+) -> ExamplePlaybackPluginConfiguration {
+    if directNativePlaybackRequired {
+        return ExamplePlaybackPluginConfiguration(
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(),
+            frameProcessorConfiguration: VesperFrameProcessorConfiguration(),
+            nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration()
+        )
+    }
+
+    return ExamplePlaybackPluginConfiguration(
+        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
+            mode: sourceNormalizerSetting.mode,
+            pluginLibraryPaths: sourceNormalizerPluginLibraryPaths
+        ),
+        frameProcessorConfiguration: VesperFrameProcessorConfiguration(
+            mode: frameProcessorPluginLibraryPaths.isEmpty ? .disabled : .diagnosticsOnly,
+            pluginLibraryPaths: frameProcessorPluginLibraryPaths
+        ),
+        nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
+            mode: nativeFramePipelineSetting.mode,
+            decoderPluginLibraryPaths: decoderPluginLibraryPaths,
+            frameProcessorPluginLibraryPaths: frameProcessorPluginLibraryPaths,
+            maxInFlightFrames: 2
+        )
+    )
+}
+
 struct ExampleHostPalette {
     let pageTop: Color
     let pageBottom: Color

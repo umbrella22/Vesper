@@ -2,6 +2,7 @@ package io.github.ikaros.vesper.player.android
 
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.Socket
 import java.net.URL
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
@@ -301,6 +302,47 @@ class VesperSourceNormalizerLoopbackServerTest {
             assertEquals(200, connection.responseCode)
             assertTrue(connection.contentType.startsWith("video/mp4"))
             assertEquals("segment", connection.inputStream.bufferedReader().readText())
+        } finally {
+            server.stop()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun loopbackServerRejectsTooManyHeaders() {
+        val directory = createTempDirectory(prefix = "vesper-normalized-loopback").toFile()
+        val file = File(directory, "normalized.mp4")
+        file.writeText("media")
+        val server = VesperSourceNormalizerLoopbackServer()
+        try {
+            val handle =
+                server.register(
+                    VesperNormalizedResourceRegistration(
+                        outputRoute = "fmp4LocalStream",
+                        primaryResourcePath = file.absolutePath,
+                        primaryContentType = "video/mp4",
+                        sessionReadBufferBytes = 4096,
+                    )
+                )
+            val url = URL(handle.playbackUri)
+            Socket("127.0.0.1", url.port).use { socket ->
+                val request =
+                    buildString {
+                        append("GET ${url.file} HTTP/1.1\r\n")
+                        append("Host: 127.0.0.1\r\n")
+                        repeat(65) { index ->
+                            append("X-Test-$index: value\r\n")
+                        }
+                        append("\r\n")
+                    }
+                socket.getOutputStream().write(request.toByteArray(Charsets.ISO_8859_1))
+                socket.getOutputStream().flush()
+
+                val statusLine = socket.getInputStream()
+                    .bufferedReader(Charsets.ISO_8859_1)
+                    .readLine()
+                assertTrue(statusLine?.contains("431") == true)
+            }
         } finally {
             server.stop()
             directory.deleteRecursively()

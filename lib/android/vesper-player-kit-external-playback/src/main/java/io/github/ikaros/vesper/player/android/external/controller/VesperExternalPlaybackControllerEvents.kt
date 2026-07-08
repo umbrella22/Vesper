@@ -2,11 +2,32 @@ package io.github.ikaros.vesper.player.android.external
 
 import com.google.android.gms.cast.framework.CastContext
 import io.github.ikaros.vesper.player.android.external.internal.dlna.matchesRouteId
+import io.github.ikaros.vesper.player.android.external.internal.relay.VesperExternalSourcePreparationResult
 import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayDiagnostic
 
 internal fun VesperExternalPlaybackController.invalidateActiveRelay() {
     activeRelayTokens.forEach(relayServer::invalidate)
     activeRelayTokens.clear()
+}
+
+internal fun replaceActiveRelayTokens(
+    activeRelayTokens: MutableSet<String>,
+    relayToken: String?,
+    invalidate: (String) -> Unit,
+) {
+    val previousTokens = activeRelayTokens.toList()
+    activeRelayTokens.clear()
+    relayToken?.let(activeRelayTokens::add)
+    previousTokens
+        .asSequence()
+        .filter { token -> token != relayToken }
+        .forEach(invalidate)
+}
+
+internal fun VesperExternalPlaybackController.activateRelayForLoadedSource(
+    prepared: VesperExternalSourcePreparationResult.Prepared,
+) {
+    replaceActiveRelayTokens(activeRelayTokens, prepared.relayToken, relayServer::invalidate)
 }
 
 internal fun VesperExternalPlaybackController.emitRoutes() {

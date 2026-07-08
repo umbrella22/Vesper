@@ -3,19 +3,21 @@ import CoreAudio
 import Foundation
 import VesperPlayerKitBridgeShim
 extension VesperNativeFramePipelineSession {
-    func close() {
+    func close(detachPresenter: Bool = true) {
         guard !isClosed else { return }
         isClosed = true
         isPlaying = false
         let runtime = runtime
         self.runtime = nil
         commandQueue.cancel()
-        commandQueue.submit { [runtime] _ in
+        Task { [runtime] in
             await runtime?.close()
         }
         audioOutput.close()
         onFramePresented = nil
-        nativeFramePresenter.setNativeFramePresentationEnabled(false)
+        if detachPresenter {
+            nativeFramePresenter.setNativeFramePresentationEnabled(false)
+        }
         onPlaybackFailed = nil
     }
 }

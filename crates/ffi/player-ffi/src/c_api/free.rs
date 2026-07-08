@@ -23,7 +23,7 @@ pub(crate) fn free_track_catalog(track_catalog: &mut PlayerFfiTrackCatalog) {
         // SAFETY: `tracks` is produced by `into_owned_struct_array` with len as
         // both length and capacity, and this free path runs at most once because
         // the catalog is reset below.
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(
                 track_catalog.tracks,
@@ -91,7 +91,7 @@ pub(crate) fn free_plugin_decoder_capability(
     if !capability.codecs.is_null() {
         // SAFETY: `codecs` is an owned boxed slice returned by this FFI layer.
         // Rebuilding the slice lets us free nested C strings before dropping it.
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(
                 capability.codecs,
@@ -195,7 +195,7 @@ pub(crate) fn free_plugin_diagnostics(startup: &mut PlayerFfiStartup) {
     if !startup.plugin_diagnostics.is_null() {
         // SAFETY: `plugin_diagnostics` is an owned boxed slice returned by this
         // FFI layer. The startup object is reset after nested fields are freed.
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(
                 startup.plugin_diagnostics,
@@ -246,7 +246,7 @@ pub(crate) fn free_video_frame(frame: &mut PlayerFfiVideoFrame) {
     if !frame.bytes.is_null() {
         // SAFETY: `bytes` is allocated as a boxed byte slice by `into_owned_bytes`
         // with len as both length and capacity, and the frame is reset below.
-// SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             drop(Box::from_raw(ptr::slice_from_raw_parts_mut(
                 frame.bytes,
@@ -264,7 +264,7 @@ pub(crate) fn free_event(event: &mut PlayerFfiEvent) {
     free_runtime_warning(&mut event.warning);
     // SAFETY: `event.error` is an embedded FFI error value owned by this event.
     // Freeing it here only releases nested allocations before the event reset.
-// SAFETY: caller upholds the FFI contract for this pointer operation
+    // SAFETY: caller upholds the FFI contract for this pointer operation
     unsafe { player_ffi_error_free(&mut event.error) };
     *event = PlayerFfiEvent::default();
 }

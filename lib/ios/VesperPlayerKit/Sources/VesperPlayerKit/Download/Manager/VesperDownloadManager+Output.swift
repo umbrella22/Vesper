@@ -52,6 +52,26 @@ extension VesperDownloadManager {
     }
 
     #if canImport(UIKit)
+    public func prepareTaskOutputURL(
+        taskId: VesperDownloadTaskId,
+        fileName: String? = nil
+    ) async throws -> URL {
+        let sourceURL = try outputURL(forTask: taskId)
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                do {
+                    let url = try prepareDownloadOutputURLFromSource(
+                        sourceURL: sourceURL,
+                        fileName: fileName
+                    )
+                    continuation.resume(returning: url)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     public func shareTaskOutput(
         taskId: VesperDownloadTaskId,
         fileName: String? = nil,
@@ -60,6 +80,15 @@ extension VesperDownloadManager {
     ) throws {
         _ = mimeType
         let url = try preparedDownloadOutputURL(taskId: taskId, fileName: fileName)
+        sharePreparedTaskOutput(url, mimeType: mimeType, from: presenter)
+    }
+
+    public func sharePreparedTaskOutput(
+        _ url: URL,
+        mimeType: String? = nil,
+        from presenter: UIViewController
+    ) {
+        _ = mimeType
         let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         if let popover = controller.popoverPresentationController {
             popover.sourceView = presenter.view
@@ -81,6 +110,14 @@ extension VesperDownloadManager {
         from presenter: UIViewController
     ) throws -> URL {
         let url = try preparedDownloadOutputURL(taskId: taskId, fileName: fileName)
+        return savePreparedTaskOutput(url, from: presenter)
+    }
+
+    @discardableResult
+    public func savePreparedTaskOutput(
+        _ url: URL,
+        from presenter: UIViewController
+    ) -> URL {
         let picker = UIDocumentPickerViewController(forExporting: [url], asCopy: true)
         presenter.present(picker, animated: true)
         return url

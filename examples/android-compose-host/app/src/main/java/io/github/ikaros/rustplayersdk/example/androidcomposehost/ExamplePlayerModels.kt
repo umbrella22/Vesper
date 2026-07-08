@@ -145,19 +145,70 @@ internal enum class ExampleNativeFramePipelineSetting(
     ),
 }
 
+internal enum class ExampleVideoSurfaceSetting(
+    @get:StringRes val titleRes: Int,
+    @get:StringRes val subtitleRes: Int,
+) {
+    Auto(
+        R.string.example_plugins_video_surface_auto,
+        R.string.example_plugins_video_surface_auto_subtitle,
+    ),
+    TextureView(
+        R.string.example_plugins_video_surface_texture,
+        R.string.example_plugins_video_surface_texture_subtitle,
+    ),
+    SurfaceView(
+        R.string.example_plugins_video_surface_surface,
+        R.string.example_plugins_video_surface_surface_subtitle,
+    ),
+}
+
+internal fun exampleSurfaceKindForSettings(
+    setting: ExampleNativeFramePipelineSetting,
+    surfaceSetting: ExampleVideoSurfaceSetting,
+    source: VesperPlayerSource? = null,
+): VesperVideoSurfaceKind {
+    val requiresSurfaceView =
+        source?.drmConfiguration != null ||
+            setting.mode == VesperNativeFramePipelineMode.PreferNativeFrame ||
+            setting.mode == VesperNativeFramePipelineMode.RequireNativeFrame
+    return when {
+        requiresSurfaceView -> VesperVideoSurfaceKind.SurfaceView
+        surfaceSetting == ExampleVideoSurfaceSetting.SurfaceView -> VesperVideoSurfaceKind.SurfaceView
+        surfaceSetting == ExampleVideoSurfaceSetting.TextureView -> VesperVideoSurfaceKind.TextureView
+        else ->
+            when (setting.mode) {
+                VesperNativeFramePipelineMode.PreferNativeFrame,
+                VesperNativeFramePipelineMode.RequireNativeFrame -> VesperVideoSurfaceKind.SurfaceView
+                VesperNativeFramePipelineMode.Disabled,
+                VesperNativeFramePipelineMode.DiagnosticsOnly -> VesperVideoSurfaceKind.TextureView
+            }
+    }
+}
+
+internal fun exampleVideoSurfaceSettingRequiresControllerRebuild(
+    previous: ExampleVideoSurfaceSetting,
+    next: ExampleVideoSurfaceSetting,
+): Boolean = previous != next
+
 internal fun exampleSurfaceKindForNativeFrameSetting(
     setting: ExampleNativeFramePipelineSetting,
     source: VesperPlayerSource? = null,
 ): VesperVideoSurfaceKind =
-    if (source?.drmConfiguration != null) {
-        VesperVideoSurfaceKind.SurfaceView
-    } else {
-        when (setting.mode) {
+    exampleSurfaceKindForSettings(
+        setting = setting,
+        surfaceSetting = ExampleVideoSurfaceSetting.Auto,
+        source = source,
+    )
+
+internal fun exampleAutoSurfaceKindForNativeFrameSetting(
+    setting: ExampleNativeFramePipelineSetting,
+): VesperVideoSurfaceKind =
+    when (setting.mode) {
             VesperNativeFramePipelineMode.PreferNativeFrame,
             VesperNativeFramePipelineMode.RequireNativeFrame -> VesperVideoSurfaceKind.SurfaceView
             VesperNativeFramePipelineMode.Disabled,
             VesperNativeFramePipelineMode.DiagnosticsOnly -> VesperVideoSurfaceKind.TextureView
-        }
     }
 
 internal fun exampleNativeFrameSettingRequiresControllerRebuild(

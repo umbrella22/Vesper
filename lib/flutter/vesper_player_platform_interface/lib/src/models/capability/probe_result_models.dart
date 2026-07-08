@@ -15,16 +15,26 @@ final class VesperPlaybackCapabilityProbeResult {
     this.hdrMetadata,
     this.missingCapabilities = const <String>[],
     this.diagnostics = const <String, Object?>{},
+    this.statusRawValue,
+    this.codecFamilyRawValue,
+    this.recommendedPlaybackPathRawValue,
+    this.outputFormatRawValue,
+    this.hdrKindRawValue,
+    this.dolbyVisionModeRawValue,
+    this.confidenceRawValue,
   });
 
   factory VesperPlaybackCapabilityProbeResult.fromMap(
     Map<Object?, Object?> map,
   ) {
-    final hdrKind = _decodeEnum(
-      VesperPlaybackCapabilityHdrKind.values,
-      map['hdrKind'],
-      VesperPlaybackCapabilityHdrKind.none,
-    );
+    final hdrKindRawValue = map['hdrKind'] as String?;
+    final hdrKind = _decodeEnumOrNull(
+          VesperPlaybackCapabilityHdrKind.values,
+          hdrKindRawValue,
+        ) ??
+        (hdrKindRawValue == null
+            ? VesperPlaybackCapabilityHdrKind.none
+            : VesperPlaybackCapabilityHdrKind.unknown);
     final dolbyVisionMode = _decodeEnum(
       VesperPlaybackCapabilityDolbyVisionMode.values,
       map['dolbyVisionMode'],
@@ -32,15 +42,22 @@ final class VesperPlaybackCapabilityProbeResult {
     );
     final diagnostics = vesperDecodeMap(map['diagnostics']);
     final explicitHdrMetadata = _rawMap(map['hdrMetadata']);
+    final statusRawValue = map['status'] as String?;
+    final codecFamilyRawValue = map['codecFamily'] as String?;
+    final recommendedPlaybackPathRawValue =
+        map['recommendedPlaybackPath'] as String?;
+    final outputFormatRawValue = map['outputFormat'] as String?;
+    final dolbyVisionModeRawValue = map['dolbyVisionMode'] as String?;
+    final confidenceRawValue = map['confidence'] as String?;
     return VesperPlaybackCapabilityProbeResult(
       status: _decodeEnum(
         VesperPlaybackCapabilityProbeStatus.values,
-        map['status'],
+        statusRawValue,
         VesperPlaybackCapabilityProbeStatus.unknown,
       ),
       codecFamily: _decodeEnum(
         VesperPlaybackCodecFamily.values,
-        map['codecFamily'],
+        codecFamilyRawValue,
         VesperPlaybackCodecFamily.unknown,
       ),
       systemPlaybackSupported: _decodeBool(map, 'systemPlaybackSupported'),
@@ -49,19 +66,19 @@ final class VesperPlaybackCapabilityProbeResult {
           _decodeBool(map, 'sdkManagedNativeFrameSupported'),
       recommendedPlaybackPath: _decodeEnum(
         VesperRecommendedPlaybackPath.values,
-        map['recommendedPlaybackPath'],
+        recommendedPlaybackPathRawValue,
         VesperRecommendedPlaybackPath.systemPlayer,
       ),
       outputFormat: _decodeEnum(
         VesperPlaybackCapabilityOutputFormat.values,
-        map['outputFormat'],
+        outputFormatRawValue,
         VesperPlaybackCapabilityOutputFormat.unknown,
       ),
       hdrKind: hdrKind,
       dolbyVisionMode: dolbyVisionMode,
       confidence: _decodeEnum(
         VesperPlaybackCapabilityConfidence.values,
-        map['confidence'],
+        confidenceRawValue,
         VesperPlaybackCapabilityConfidence.codecOnly,
       ),
       hdrMetadata: explicitHdrMetadata != null
@@ -73,6 +90,13 @@ final class VesperPlaybackCapabilityProbeResult {
             ),
       missingCapabilities: _decodeStringList(map['missingCapabilities']),
       diagnostics: diagnostics,
+      statusRawValue: statusRawValue,
+      codecFamilyRawValue: codecFamilyRawValue,
+      recommendedPlaybackPathRawValue: recommendedPlaybackPathRawValue,
+      outputFormatRawValue: outputFormatRawValue,
+      hdrKindRawValue: hdrKindRawValue,
+      dolbyVisionModeRawValue: dolbyVisionModeRawValue,
+      confidenceRawValue: confidenceRawValue,
     );
   }
 
@@ -89,19 +113,27 @@ final class VesperPlaybackCapabilityProbeResult {
   final VesperHdrMetadata? hdrMetadata;
   final List<String> missingCapabilities;
   final Map<String, Object?> diagnostics;
+  final String? statusRawValue;
+  final String? codecFamilyRawValue;
+  final String? recommendedPlaybackPathRawValue;
+  final String? outputFormatRawValue;
+  final String? hdrKindRawValue;
+  final String? dolbyVisionModeRawValue;
+  final String? confidenceRawValue;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
-      'status': status.name,
-      'codecFamily': codecFamily.name,
+      'status': statusRawValue ?? status.name,
+      'codecFamily': codecFamilyRawValue ?? codecFamily.name,
       'systemPlaybackSupported': systemPlaybackSupported,
       'hardwareDecodeSupported': hardwareDecodeSupported,
       'sdkManagedNativeFrameSupported': sdkManagedNativeFrameSupported,
-      'recommendedPlaybackPath': recommendedPlaybackPath.name,
-      'outputFormat': outputFormat.name,
-      'hdrKind': hdrKind.name,
-      'dolbyVisionMode': dolbyVisionMode.name,
-      'confidence': confidence.name,
+      'recommendedPlaybackPath':
+          recommendedPlaybackPathRawValue ?? recommendedPlaybackPath.name,
+      'outputFormat': outputFormatRawValue ?? outputFormat.name,
+      'hdrKind': hdrKindRawValue ?? hdrKind.name,
+      'dolbyVisionMode': dolbyVisionModeRawValue ?? dolbyVisionMode.name,
+      'confidence': confidenceRawValue ?? confidence.name,
       if (hdrMetadata != null) 'hdrMetadata': hdrMetadata?.toMap(),
       'missingCapabilities': missingCapabilities,
       'diagnostics': diagnostics,

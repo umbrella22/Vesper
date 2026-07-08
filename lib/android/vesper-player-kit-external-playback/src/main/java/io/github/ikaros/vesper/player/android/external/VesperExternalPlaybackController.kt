@@ -252,7 +252,7 @@ class VesperExternalPlaybackController(context: Context) {
             )
         }
         return when (activeRouteId) {
-            CAST_ROUTE_ID -> loadCast(item, startPositionMs, autoplay)
+            CAST_ROUTE_ID -> loadCastAsync(item, startPositionMs, autoplay)
             null -> VesperExternalPlaybackResult.Unavailable("No external playback route is connected.")
             else -> loadDlnaAsync(item, startPositionMs, autoplay)
         }

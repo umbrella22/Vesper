@@ -833,6 +833,100 @@ internal fun ExamplePlaylistSection(
 }
 
 @Composable
+internal fun ExampleFrameMetricsSection(
+    palette: ExampleHostPalette,
+    enabled: Boolean,
+    snapshot: ExampleFrameMetricsSnapshot?,
+    onEnabledChange: (Boolean) -> Unit,
+) {
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_frame_metrics_title),
+        subtitle = stringResource(R.string.example_frame_metrics_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.example_frame_metrics_collect),
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            color = palette.title,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
+                    Text(
+                        text = stringResource(R.string.example_frame_metrics_collect_subtitle),
+                        style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                    )
+                }
+                Switch(checked = enabled, onCheckedChange = onEnabledChange)
+            }
+            if (snapshot == null) {
+                Text(
+                    text =
+                        if (enabled) {
+                            stringResource(R.string.example_frame_metrics_waiting)
+                        } else {
+                            stringResource(R.string.example_frame_metrics_disabled)
+                        },
+                    style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text =
+                            stringResource(
+                                R.string.example_frame_metrics_summary,
+                                snapshot.sampleCount,
+                                snapshot.jankyFrameCount,
+                                snapshot.slowUiFrameCount,
+                                snapshot.slowDrawFrameCount,
+                                snapshot.slowGpuFrameCount,
+                            ),
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = palette.title,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
+                    Text(
+                        text =
+                            stringResource(
+                                R.string.example_frame_metrics_total,
+                                snapshot.totalP50Ms.formatFrameMetric(),
+                                snapshot.totalP95Ms.formatFrameMetric(),
+                                snapshot.totalMaxMs.formatFrameMetric(),
+                            ),
+                        style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                    )
+                    Text(
+                        text =
+                            stringResource(
+                                R.string.example_frame_metrics_breakdown,
+                                snapshot.inputP95Ms.formatFrameMetric(),
+                                snapshot.layoutP95Ms.formatFrameMetric(),
+                                snapshot.drawP95Ms.formatFrameMetric(),
+                                snapshot.syncP95Ms.formatFrameMetric(),
+                                snapshot.gpuP95Ms.formatFrameMetric(),
+                            ),
+                        style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun Double.formatFrameMetric(): String =
+    String.format(Locale.US, "%.2fms", this)
+
+@Composable
 internal fun ExampleQueuePanel(
     palette: ExampleHostPalette,
     playlistQueue: List<VesperPlaylistQueueItemState>,
@@ -1037,6 +1131,7 @@ internal fun ExamplePluginDiagnosticsSection(
     palette: ExampleHostPalette,
     sourceNormalizerSetting: ExampleSourceNormalizerSetting,
     nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
+    videoSurfaceSetting: ExampleVideoSurfaceSetting,
     sourceNormalizerPluginLibraryPaths: List<String>,
     decoderMediaCodecPluginLibraryPaths: List<String>,
     frameProcessorPluginLibraryPaths: List<String>,
@@ -1047,6 +1142,7 @@ internal fun ExamplePluginDiagnosticsSection(
     hdrEvidenceActiveSourceAvailable: Boolean,
     onSourceNormalizerSettingChange: (ExampleSourceNormalizerSetting) -> Unit,
     onNativeFramePipelineSettingChange: (ExampleNativeFramePipelineSetting) -> Unit,
+    onVideoSurfaceSettingChange: (ExampleVideoSurfaceSetting) -> Unit,
     onHdrEvidencePresetChange: (ExampleHdrEvidenceSamplePreset) -> Unit,
     onCaptureHdrEvidence: () -> Unit,
 ) {
@@ -1096,6 +1192,27 @@ internal fun ExamplePluginDiagnosticsSection(
 
             Text(
                 text = stringResource(nativeFramePipelineSetting.subtitleRes),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = palette.body,
+                    lineHeight = 22.sp,
+                ),
+            )
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                ExampleVideoSurfaceSetting.values().forEach { setting ->
+                    SelectionChip(
+                        label = stringResource(setting.titleRes),
+                        selected = setting == videoSurfaceSetting,
+                        onClick = { onVideoSurfaceSettingChange(setting) },
+                    )
+                }
+            }
+
+            Text(
+                text = stringResource(videoSurfaceSetting.subtitleRes),
                 style = MaterialTheme.typography.bodyMedium.copy(
                     color = palette.body,
                     lineHeight = 22.sp,
@@ -1206,6 +1323,7 @@ internal fun ExampleDiagnosticsSummarySection(
     playbackOrigin: ExamplePlaybackOrigin?,
     sourceNormalizerSetting: ExampleSourceNormalizerSetting,
     nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
+    videoSurfaceSetting: ExampleVideoSurfaceSetting,
 ) {
     ExampleSectionShell(
         palette = palette,
@@ -1241,6 +1359,11 @@ internal fun ExampleDiagnosticsSummarySection(
             ExampleFactRow(
                 label = stringResource(R.string.example_diagnostics_native_frame),
                 value = stringResource(nativeFramePipelineSetting.titleRes),
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_video_surface),
+                value = stringResource(videoSurfaceSetting.titleRes),
                 palette = palette,
             )
         }

@@ -10,9 +10,14 @@ sealed class VesperPlayerEvent {
     switch (type) {
       case 'pictureInPicture':
         final errorMap = vesperDecodeMap(map['error']);
+        final rawState = map['state'];
+        final state = _decodePictureInPictureStatus(rawState);
         return VesperPlayerPictureInPictureEvent(
           playerId: playerId,
-          state: _decodePictureInPictureStatus(map['state']),
+          state: state,
+          stateRawValue: rawState is String && rawState != state.name
+              ? rawState
+              : null,
           isActive: _decodeEventBool(map['isActive']),
           source: map['source'] as String? ?? 'system',
           error: errorMap.isNotEmpty
@@ -106,6 +111,7 @@ final class VesperPlayerPictureInPictureEvent extends VesperPlayerEvent {
     required super.playerId,
     required this.state,
     required this.isActive,
+    this.stateRawValue,
     this.source = 'system',
     this.error,
     this.canAutoEnter,
@@ -113,6 +119,7 @@ final class VesperPlayerPictureInPictureEvent extends VesperPlayerEvent {
   });
 
   final VesperPictureInPictureStatus state;
+  final String? stateRawValue;
   final bool isActive;
   final String source;
   final VesperPictureInPictureError? error;

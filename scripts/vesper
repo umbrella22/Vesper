@@ -16,7 +16,7 @@ Groups:
   mobile   verify-no-remux | verify-binary-names
   flutter  stage-pub | pub-dry-run | pub-publish | local-overrides | verify-android-plugin
   release  notes | set-version | prepare-from-tag | metadata-from-tag | verify-version | verify-current
-  contract verify
+  contract verify | boundary
 EOF
 }
 
@@ -169,6 +169,9 @@ case "$group:$command" in
     ;;
   contract:verify)
     exec "$SCRIPT_DIR/verify-contract-fixtures.sh" "$@"
+    ;;
+  contract:boundary)
+    exec ruby "$SCRIPT_DIR/contract/verify-boundary-invariants.rb" "$@"
     ;;
   *)
     usage

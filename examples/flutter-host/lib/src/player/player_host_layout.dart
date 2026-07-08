@@ -19,38 +19,32 @@ extension _PlayerHostLayout on _PlayerHostPageState {
         }
         final playlistItems = _buildPlaylistItems();
 
-        return ValueListenableBuilder<VesperPlayerSnapshot>(
-          valueListenable: controller.snapshotListenable,
-          builder: (context, snapshot, _) {
-            final content = immersivePlayer
-                ? _buildLandscapeLayout(controller, snapshot, asyncSnapshot)
-                : _buildPortraitLayout(
-                    context,
-                    controller,
-                    snapshot,
-                    playlistItems,
-                    palette,
-                    asyncSnapshot,
-                  );
+        final content = immersivePlayer
+            ? _buildLandscapeLayout(controller, asyncSnapshot)
+            : _buildPortraitLayout(
+                context,
+                controller,
+                playlistItems,
+                palette,
+                asyncSnapshot,
+              );
 
-            return Stack(
-              children: <Widget>[
-                Positioned.fill(child: content),
-                if (_isApplyingResilienceProfile)
-                  const Positioned(
-                    top: 18,
-                    right: 18,
-                    child: ExampleBusyPill(label: '正在应用策略'),
-                  ),
-                if (_isRebuildingController)
-                  const Positioned(
-                    top: 18,
-                    left: 18,
-                    child: ExampleBusyPill(label: '正在切换插件'),
-                  ),
-              ],
-            );
-          },
+        return Stack(
+          children: <Widget>[
+            Positioned.fill(child: content),
+            if (_isApplyingResilienceProfile)
+              const Positioned(
+                top: 18,
+                right: 18,
+                child: ExampleBusyPill(label: '正在应用策略'),
+              ),
+            if (_isRebuildingController)
+              const Positioned(
+                top: 18,
+                left: 18,
+                child: ExampleBusyPill(label: '正在切换插件'),
+              ),
+          ],
         );
       },
     );
@@ -121,7 +115,6 @@ extension _PlayerHostLayout on _PlayerHostPageState {
   Widget _buildPortraitLayout(
     BuildContext context,
     VesperPlayerController controller,
-    VesperPlayerSnapshot snapshot,
     List<ExamplePlaylistItemViewData> playlistItems,
     ExampleHostPalette palette,
     AsyncSnapshot<VesperPlayerController> asyncSnapshot,
@@ -133,12 +126,19 @@ extension _PlayerHostLayout on _PlayerHostPageState {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          ExamplePlayerHeader(
-            sourceLabel: snapshot.sourceLabel.isEmpty
-                ? snapshot.title
-                : snapshot.sourceLabel,
-            subtitle: snapshot.subtitle,
-            palette: palette,
+          _SnapshotSelector<({String sourceLabel, String subtitle})>(
+            listenable: controller.snapshotListenable,
+            selector: (snapshot) => (
+              sourceLabel: snapshot.sourceLabel.isEmpty
+                  ? snapshot.title
+                  : snapshot.sourceLabel,
+              subtitle: snapshot.subtitle,
+            ),
+            builder: (context, header) => ExamplePlayerHeader(
+              sourceLabel: header.sourceLabel,
+              subtitle: header.subtitle,
+              palette: palette,
+            ),
           ),
           const SizedBox(height: 14),
           ExampleThemeModeControl(
@@ -154,52 +154,64 @@ extension _PlayerHostLayout on _PlayerHostPageState {
           SizedBox(
             width: double.infinity,
             height: 248,
-            child: ExamplePlayerStage(
-              controller: controller,
-              snapshot: snapshot,
-              isPortrait: true,
-              sheetOpen: _sheetOpen,
-              deviceControls: _deviceControls,
-              topBarPrimaryAction: _buildStageRouteAction(controller),
-              onOpenSheet: (sheet) =>
-                  unawaited(_openToolSheet(controller, sheet)),
-              onToggleFullscreen: () =>
-                  unawaited(_toggleFullscreen(Orientation.portrait)),
-              pictureInPicturePresentation: _pictureInPicturePresentation,
+            child: ValueListenableBuilder<VesperPlayerSnapshot>(
+              valueListenable: controller.snapshotListenable,
+              builder: (context, snapshot, _) {
+                return ExamplePlayerStage(
+                  controller: controller,
+                  snapshot: snapshot,
+                  isPortrait: true,
+                  sheetOpen: _sheetOpen,
+                  deviceControls: _deviceControls,
+                  topBarPrimaryAction: _buildStageRouteAction(controller),
+                  onOpenSheet: (sheet) =>
+                      unawaited(_openToolSheet(controller, sheet)),
+                  onToggleFullscreen: () =>
+                      unawaited(_toggleFullscreen(Orientation.portrait)),
+                  pictureInPicturePresentation: _pictureInPicturePresentation,
+                );
+              },
             ),
           ),
           const SizedBox(height: 18),
-          ExampleQuickSourcePanel(
-            palette: palette,
-            remoteUrlController: _remoteUrlController,
-            localFilesEnabled: snapshot.capabilities.supportsLocalFiles,
-            dashEnabled: snapshot.capabilities.supportsDash,
-            dashUnavailableMessage: snapshot.capabilities.supportsDash
-                ? null
-                : '当前平台宿主暂不支持 DASH 演示。',
-            onPickVideo: () => unawaited(_pickLocalVideo(controller)),
-            onUseHlsDemo: () => unawaited(
-              _activatePlaylistSource(
-                controller,
-                itemId: flutterHlsPlaylistItemId,
-                source: flutterHlsDemoSource(),
-              ),
+          _SnapshotSelector<({bool localFilesEnabled, bool dashEnabled})>(
+            listenable: controller.snapshotListenable,
+            selector: (snapshot) => (
+              localFilesEnabled: snapshot.capabilities.supportsLocalFiles,
+              dashEnabled: snapshot.capabilities.supportsDash,
             ),
-            onUseDashDemo: () => unawaited(
-              _activatePlaylistSource(
-                controller,
-                itemId: flutterDashPlaylistItemId,
-                source: flutterDashDemoSource(),
+            builder: (context, capabilities) => ExampleQuickSourcePanel(
+              palette: palette,
+              remoteUrlController: _remoteUrlController,
+              localFilesEnabled: capabilities.localFilesEnabled,
+              dashEnabled: capabilities.dashEnabled,
+              dashUnavailableMessage: capabilities.dashEnabled
+                  ? null
+                  : '当前平台宿主暂不支持 DASH 演示。',
+              onPickVideo: () => unawaited(_pickLocalVideo(controller)),
+              onUseHlsDemo: () => unawaited(
+                _activatePlaylistSource(
+                  controller,
+                  itemId: flutterHlsPlaylistItemId,
+                  source: flutterHlsDemoSource(),
+                ),
               ),
-            ),
-            onUseLiveDvrAcceptance: () => unawaited(
-              _activatePlaylistSource(
-                controller,
-                itemId: flutterLiveDvrPlaylistItemId,
-                source: flutterLiveDvrAcceptanceSource(),
+              onUseDashDemo: () => unawaited(
+                _activatePlaylistSource(
+                  controller,
+                  itemId: flutterDashPlaylistItemId,
+                  source: flutterDashDemoSource(),
+                ),
               ),
+              onUseLiveDvrAcceptance: () => unawaited(
+                _activatePlaylistSource(
+                  controller,
+                  itemId: flutterLiveDvrPlaylistItemId,
+                  source: flutterLiveDvrAcceptanceSource(),
+                ),
+              ),
+              onOpenRemote: () => unawaited(_playCustomUrl(controller)),
             ),
-            onOpenRemote: () => unawaited(_playCustomUrl(controller)),
           ),
           const SizedBox(height: 18),
           ExampleQueuePanel(
@@ -226,6 +238,7 @@ extension _PlayerHostLayout on _PlayerHostPageState {
             controller: controller,
             permissionStatus: _systemPlaybackPermissionStatus,
             onRefreshExternalRoutes: () => unawaited(_refreshExternalRoutes()),
+            onExternalRoutePickerResult: _handleExternalRoutePickerResult,
             externalRoutes: _externalRoutes
                 .where(
                   (route) => route.kind == VesperExternalPlaybackRouteKind.dlna,
@@ -367,24 +380,28 @@ extension _PlayerHostLayout on _PlayerHostPageState {
 
   Widget _buildLandscapeLayout(
     VesperPlayerController controller,
-    VesperPlayerSnapshot snapshot,
     AsyncSnapshot<VesperPlayerController> asyncSnapshot,
   ) {
     return Stack(
       children: <Widget>[
         Positioned.fill(
-          child: ExamplePlayerStage(
-            controller: controller,
-            snapshot: snapshot,
-            isPortrait: false,
-            sheetOpen: _sheetOpen,
-            deviceControls: _deviceControls,
-            topBarPrimaryAction: _buildStageRouteAction(controller),
-            onOpenSheet: (sheet) =>
-                unawaited(_openToolSheet(controller, sheet)),
-            onToggleFullscreen: () =>
-                unawaited(_toggleFullscreen(Orientation.landscape)),
-            pictureInPicturePresentation: _pictureInPicturePresentation,
+          child: ValueListenableBuilder<VesperPlayerSnapshot>(
+            valueListenable: controller.snapshotListenable,
+            builder: (context, snapshot, _) {
+              return ExamplePlayerStage(
+                controller: controller,
+                snapshot: snapshot,
+                isPortrait: false,
+                sheetOpen: _sheetOpen,
+                deviceControls: _deviceControls,
+                topBarPrimaryAction: _buildStageRouteAction(controller),
+                onOpenSheet: (sheet) =>
+                    unawaited(_openToolSheet(controller, sheet)),
+                onToggleFullscreen: () =>
+                    unawaited(_toggleFullscreen(Orientation.landscape)),
+                pictureInPicturePresentation: _pictureInPicturePresentation,
+              );
+            },
           ),
         ),
         if (asyncSnapshot.hasError)
@@ -484,5 +501,64 @@ extension _PlayerHostLayout on _PlayerHostPageState {
         );
       },
     );
+  }
+}
+
+class _SnapshotSelector<T> extends StatefulWidget {
+  const _SnapshotSelector({
+    required this.listenable,
+    required this.selector,
+    required this.builder,
+  });
+
+  final ValueListenable<VesperPlayerSnapshot> listenable;
+  final T Function(VesperPlayerSnapshot snapshot) selector;
+  final Widget Function(BuildContext context, T value) builder;
+
+  @override
+  State<_SnapshotSelector<T>> createState() => _SnapshotSelectorState<T>();
+}
+
+class _SnapshotSelectorState<T> extends State<_SnapshotSelector<T>> {
+  late T _value;
+
+  @override
+  void initState() {
+    super.initState();
+    _value = widget.selector(widget.listenable.value);
+    widget.listenable.addListener(_handleSnapshotChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _SnapshotSelector<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.listenable, widget.listenable)) {
+      oldWidget.listenable.removeListener(_handleSnapshotChanged);
+      widget.listenable.addListener(_handleSnapshotChanged);
+    }
+    _syncSelectedValue();
+  }
+
+  @override
+  void dispose() {
+    widget.listenable.removeListener(_handleSnapshotChanged);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(context, _value);
+
+  void _handleSnapshotChanged() {
+    _syncSelectedValue();
+  }
+
+  void _syncSelectedValue() {
+    final nextValue = widget.selector(widget.listenable.value);
+    if (nextValue == _value) {
+      return;
+    }
+    setState(() {
+      _value = nextValue;
+    });
   }
 }

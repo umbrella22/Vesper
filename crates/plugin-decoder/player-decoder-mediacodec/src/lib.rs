@@ -893,9 +893,9 @@ mod android_media {
         android_color_range_label, android_color_standard_label,
         android_color_standard_matrix_label, android_color_transfer_label, codec_config_buffers,
         codec_mime, media_codec_close_result, mediacodec_hdr_metadata_from_color,
-        mediacodec_output_buffer_kind,
-        mediacodec_pending_output_eos_action, mediacodec_surface_texture_format,
-        merge_mediacodec_color_metadata, merge_mediacodec_hdr_metadata, nal_length_size_for_config,
+        mediacodec_output_buffer_kind, mediacodec_pending_output_eos_action,
+        mediacodec_surface_texture_format, merge_mediacodec_color_metadata,
+        merge_mediacodec_hdr_metadata, nal_length_size_for_config,
         packet_input_data_for_mediacodec,
     };
 

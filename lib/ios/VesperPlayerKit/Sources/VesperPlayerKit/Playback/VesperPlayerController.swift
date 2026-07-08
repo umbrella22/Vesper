@@ -69,9 +69,11 @@ public final class VesperPlayerController: ObservableObject {
 
     private var bridgeObservation: AnyCancellable?
     private let initializeImpl: () -> Void
+    private let initializeAsyncImpl: () async -> Void
     private let disposeImpl: () -> Void
     private let refreshImpl: () -> Void
     private let selectSourceImpl: (VesperPlayerSource) -> Void
+    private let selectSourceAsyncImpl: (VesperPlayerSource) async -> Void
     private let attachSurfaceHostImpl: (UIView) -> Void
     private let detachSurfaceHostImpl: () -> Void
     private let detachSurfaceHostForHostImpl: (UIView) -> Void
@@ -112,9 +114,11 @@ public final class VesperPlayerController: ObservableObject {
         publishedLastError = bridge.publishedLastError
         pluginDiagnostics = bridge.pluginDiagnostics
         initializeImpl = bridge.initialize
+        initializeAsyncImpl = bridge.initializeAsync
         disposeImpl = bridge.dispose
         refreshImpl = bridge.refresh
         selectSourceImpl = bridge.selectSource
+        selectSourceAsyncImpl = bridge.selectSourceAsync
         attachSurfaceHostImpl = { host in
             bridge.attachSurfaceHost(host)
         }
@@ -176,6 +180,11 @@ public final class VesperPlayerController: ObservableObject {
         initializeImpl()
     }
 
+    @_spi(VesperFlutter)
+    public func initializeAsync() async {
+        await initializeAsyncImpl()
+    }
+
     public func dispose() {
         VesperScreenSleepCoordinator.release(screenSleepToken)
         systemPlaybackCoordinator.clear()
@@ -188,6 +197,11 @@ public final class VesperPlayerController: ObservableObject {
 
     public func selectSource(_ source: VesperPlayerSource) {
         selectSourceImpl(source)
+    }
+
+    @_spi(VesperFlutter)
+    public func selectSourceAsync(_ source: VesperPlayerSource) async {
+        await selectSourceAsyncImpl(source)
     }
 
     public func attachSurfaceHost(_ host: UIView) {

@@ -38,3 +38,11 @@ fn frame_processor_plugin_panics_are_reported_as_abi_violations() {
     assert!(message.contains("submit_frame"));
     assert!(message.contains("processor exploded"));
 }
+
+#[test]
+fn dynamic_library_holder_is_process_lifetime() {
+    assert!(
+        !std::mem::needs_drop::<super::super::LibraryHolder>(),
+        "dynamic plugin libraries must not dlclose while plugin worker threads may still run TLS destructors",
+    );
+}

@@ -20,6 +20,20 @@ internal fun shareDownloadTaskOutput(
     authority: String,
 ) {
     val sharedFile = preparedShareFile(context, source, fileName)
+    sharePreparedDownloadTaskOutput(
+        context = context,
+        sharedFile = sharedFile,
+        mimeType = mimeType,
+        authority = authority,
+    )
+}
+
+internal fun sharePreparedDownloadTaskOutput(
+    context: Context,
+    sharedFile: File,
+    mimeType: String?,
+    authority: String,
+) {
     val uri = FileProvider.getUriForFile(context, authority, sharedFile)
     val intent =
         Intent(Intent.ACTION_SEND)

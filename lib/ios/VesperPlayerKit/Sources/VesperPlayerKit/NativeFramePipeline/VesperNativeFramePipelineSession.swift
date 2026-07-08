@@ -102,11 +102,26 @@ final class VesperNativeFramePipelineSession {
             return .success(self)
         }
 
-        let openResult = backend.open(
-            source: source,
-            configuration: configuration,
-            sourceNormalizer: sourceNormalizer
-        )
+        let backend = backend
+        let source = source
+        let configuration = configuration
+        let sourceNormalizer = sourceNormalizer
+        let openResult = await VesperBoundedUtilityQueue.shared.run(
+            fallback: { Result.failure(Self.utilityQueueSaturatedStartupError()) }
+        ) {
+            backend.open(
+                source: source,
+                configuration: configuration,
+                sourceNormalizer: sourceNormalizer
+            )
+        }
+        guard !Task.isCancelled, !isClosed else {
+            if case .success(let opened) = openResult {
+                await closeOpenedHandleOffMain(opened.handle)
+            }
+            didStart = false
+            return .failure(Self.closedStartupError())
+        }
         guard case .success(let opened) = openResult else {
             if case .failure(let error) = openResult {
                 return .failure(error)
@@ -130,7 +145,7 @@ final class VesperNativeFramePipelineSession {
         let audioState = await audioOutput.prepare(source: source, hasAudioTrack: hasAudioTrack)
         guard !Task.isCancelled, !isClosed else {
             runtime = nil
-            backend.close(handle: opened.handle)
+            await closeOpenedHandleOffMain(opened.handle)
             didStart = false
             return .failure(Self.closedStartupError())
         }
@@ -143,7 +158,7 @@ final class VesperNativeFramePipelineSession {
                 "native audio pipeline unavailable audioPipeline=\(audioPipelineKind); playback cannot start source=\(source.uri) reason=\(reason)"
             )
             runtime = nil
-            backend.close(handle: opened.handle)
+            await closeOpenedHandleOffMain(opened.handle)
             didStart = false
             let issue = VesperNativeFramePipelineIssue(
                 kind: .nativeAudioBridgeUnavailable,
@@ -159,11 +174,27 @@ final class VesperNativeFramePipelineSession {
         return .success(self)
     }
 
+    private func closeOpenedHandleOffMain(_ handle: UInt64) async {
+        let backend = backend
+        await VesperBoundedUtilityQueue.shared.runRequiredVoid {
+            backend.close(handle: handle)
+        }
+    }
+
     private static func closedStartupError() -> VesperNativeFramePipelineStartupError {
         VesperNativeFramePipelineStartupError(
             issue: VesperNativeFramePipelineIssue(
                 kind: .sessionClosed,
                 message: "iOS native-frame pipeline session closed before startup completed."
+            )
+        )
+    }
+
+    private static func utilityQueueSaturatedStartupError() -> VesperNativeFramePipelineStartupError {
+        VesperNativeFramePipelineStartupError(
+            issue: VesperNativeFramePipelineIssue(
+                kind: .startupFailure,
+                message: "iOS native-frame pipeline utility queue is saturated."
             )
         )
     }

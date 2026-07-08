@@ -8,26 +8,34 @@ final class VesperPlayerError {
     required this.retriable,
     this.details = const <String, Object?>{},
     this.hdrCapabilityEvidence,
+    this.codeRawValue,
+    this.categoryRawValue,
   });
 
   factory VesperPlayerError.fromMap(Map<Object?, Object?> map) {
     final details = _decodeObjectMap(map['details']);
+    final rawCode = map['code'];
+    final rawCategory = map['category'];
+    final codeRawValue = rawCode is String ? rawCode : null;
+    final categoryRawValue = rawCategory is String ? rawCategory : null;
     return VesperPlayerError(
       message: map['message'] as String? ?? 'Unknown Vesper player error.',
       code: _decodeRequiredEnum(
         VesperPlayerErrorCode.values,
-        map['code'],
+        rawCode,
         'code',
       ),
       category: _decodeRequiredEnum(
         VesperPlayerErrorCategory.values,
-        map['category'],
+        rawCategory,
         'category',
       ),
       retriable: _decodeBool(map, 'retriable'),
       details: details,
       hdrCapabilityEvidence:
           VesperHdrCapabilityEvidence.tryFromDetails(details),
+      codeRawValue: codeRawValue,
+      categoryRawValue: categoryRawValue,
     );
   }
 
@@ -37,12 +45,14 @@ final class VesperPlayerError {
   final bool retriable;
   final Map<String, Object?> details;
   final VesperHdrCapabilityEvidence? hdrCapabilityEvidence;
+  final String? codeRawValue;
+  final String? categoryRawValue;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'message': message,
-      'code': code.name,
-      'category': category.name,
+      'code': codeRawValue ?? code.name,
+      'category': categoryRawValue ?? category.name,
       'retriable': retriable,
       'details': details,
     };

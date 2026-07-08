@@ -64,6 +64,7 @@ internal data class NativeSourceNormalizerResourceOpenOutcome(
 )
 
 internal data class NativeSourceNormalizerResourcePreparedOpenOutcome(
+    val resource: NativeSourceNormalizerResource? = null,
     val resourceJson: String? = null,
     val diagnostics: List<Map<String, Any?>> = emptyList(),
 )
@@ -125,6 +126,12 @@ internal fun parseSourceNormalizerResource(
         if (handle == 0L) {
             return null
         }
+        val playbackProtocol =
+            when (route) {
+                "hlsShortWindow" -> VesperPlayerSourceProtocol.Hls
+                "fmp4LocalStream" -> VesperPlayerSourceProtocol.Progressive
+                else -> return null
+            }
         val cachePolicy = value.optJSONObject("cachePolicy")
         val loopbackHandle =
             loopbackServer.register(
@@ -137,12 +144,6 @@ internal fun parseSourceNormalizerResource(
                             ?: DEFAULT_NORMALIZED_READ_BUFFER_BYTES,
                 )
             )
-        val playbackProtocol =
-            when (route) {
-                "hlsShortWindow" -> VesperPlayerSourceProtocol.Hls
-                "fmp4LocalStream" -> VesperPlayerSourceProtocol.Progressive
-                else -> return null
-            }
         NativeSourceNormalizerResource(
             handle = handle,
             outputRoute = route,

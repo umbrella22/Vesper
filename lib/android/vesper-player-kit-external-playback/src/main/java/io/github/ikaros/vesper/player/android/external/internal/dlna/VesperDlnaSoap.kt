@@ -7,6 +7,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLConnection
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -266,6 +267,9 @@ class VesperDlnaSoapClient(
         runCatching {
             block()
         }.getOrElse { error ->
+            if (error is CancellationException) {
+                throw error
+            }
             VesperDlnaSoapResponse(
                 status = 0,
                 body = error.toDlnaControlFailureMessage(action, service.controlUrl.toString()),

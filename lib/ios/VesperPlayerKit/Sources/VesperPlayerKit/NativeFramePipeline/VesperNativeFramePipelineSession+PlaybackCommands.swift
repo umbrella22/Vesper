@@ -72,7 +72,12 @@ extension VesperNativeFramePipelineSession {
         isPlaying = false
         audioOutput.pause()
         guard let runtime else { return false }
-        commandQueue.submit { [self, runtime] token in
+        let submittedToken = commandQueue.submit(
+            policy: .replacingPending("seek"),
+            onDropped: {
+                completion?(false)
+            }
+        ) { [self, runtime] token in
             let result = await runtime.seek(positionMs: targetMs)
             await MainActor.run {
                 guard commandQueue.isLatest(token) else {
@@ -87,6 +92,6 @@ extension VesperNativeFramePipelineSession {
                 completion?(didApply)
             }
         }
-        return true
+        return submittedToken != nil
     }
 }

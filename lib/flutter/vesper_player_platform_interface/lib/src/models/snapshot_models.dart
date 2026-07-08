@@ -21,6 +21,7 @@ final class VesperPlayerSnapshot {
     this.videoVariantObservation,
     this.fixedTrackStatus,
     this.resiliencePolicy = const VesperPlaybackResiliencePolicy(),
+    this.pluginDiagnostics = const <VesperPluginDiagnostic>[],
     this.lastError,
   });
 
@@ -44,6 +45,7 @@ final class VesperPlayerSnapshot {
         videoVariantObservation = null,
         fixedTrackStatus = null,
         resiliencePolicy = const VesperPlaybackResiliencePolicy(),
+        pluginDiagnostics = const <VesperPluginDiagnostic>[],
         lastError = null;
 
   factory VesperPlayerSnapshot.fromMap(Map<Object?, Object?> map) {
@@ -55,6 +57,7 @@ final class VesperPlayerSnapshot {
     final rawVideoVariantObservation = map['videoVariantObservation'];
     final rawFixedTrackStatus = map['fixedTrackStatus'];
     final rawResiliencePolicy = map['resiliencePolicy'];
+    final rawPluginDiagnostics = map['pluginDiagnostics'];
     final rawViewport = map['viewport'];
     final rawViewportHint = map['viewportHint'];
     final rawLastError = map['lastError'];
@@ -120,6 +123,13 @@ final class VesperPlayerSnapshot {
               resiliencePolicy,
             )
           : const VesperPlaybackResiliencePolicy(),
+      pluginDiagnostics: rawPluginDiagnostics is Iterable
+          ? rawPluginDiagnostics
+              .map((value) => VesperPluginDiagnostic.fromMap(
+                    _rawMap(value) ?? const <Object?, Object?>{},
+                  ))
+              .toList(growable: false)
+          : const <VesperPluginDiagnostic>[],
       lastError:
           lastError != null ? VesperPlayerError.fromMap(lastError) : null,
     );
@@ -144,6 +154,7 @@ final class VesperPlayerSnapshot {
   final VesperVideoVariantObservation? videoVariantObservation;
   final VesperFixedTrackStatus? fixedTrackStatus;
   final VesperPlaybackResiliencePolicy resiliencePolicy;
+  final List<VesperPluginDiagnostic> pluginDiagnostics;
   final VesperPlayerError? lastError;
 
   VesperPlayerSnapshot copyWith({
@@ -169,6 +180,7 @@ final class VesperPlayerSnapshot {
     VesperFixedTrackStatus? fixedTrackStatus,
     bool clearFixedTrackStatus = false,
     VesperPlaybackResiliencePolicy? resiliencePolicy,
+    List<VesperPluginDiagnostic>? pluginDiagnostics,
     VesperPlayerError? lastError,
     bool clearLastError = false,
   }) {
@@ -198,6 +210,7 @@ final class VesperPlayerSnapshot {
           ? null
           : (fixedTrackStatus ?? this.fixedTrackStatus),
       resiliencePolicy: resiliencePolicy ?? this.resiliencePolicy,
+      pluginDiagnostics: pluginDiagnostics ?? this.pluginDiagnostics,
       lastError: clearLastError ? null : (lastError ?? this.lastError),
     );
   }
@@ -223,6 +236,8 @@ final class VesperPlayerSnapshot {
       'videoVariantObservation': videoVariantObservation?.toMap(),
       'fixedTrackStatus': fixedTrackStatus?.name,
       'resiliencePolicy': resiliencePolicy.toMap(),
+      'pluginDiagnostics':
+          pluginDiagnostics.map((diagnostic) => diagnostic.toMap()).toList(),
       'lastError': lastError?.toMap(),
     };
   }

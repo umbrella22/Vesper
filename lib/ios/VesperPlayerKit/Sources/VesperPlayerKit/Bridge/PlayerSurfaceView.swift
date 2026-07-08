@@ -225,26 +225,17 @@ public final class PlayerSurfaceView: UIView {
         }
     }
 
-    func presentNativeFrame(
-        pixelBufferAddress: UInt,
-        completion: @escaping (Bool) -> Void
-    ) {
+    func presentNativeFrame(pixelBuffer: CVPixelBuffer, completion: @escaping (Bool) -> Void) {
         guard
             let metalLayer,
             let commandQueue = metalCommandQueue,
             let ciContext,
-            let drawable = metalLayer.nextDrawable(),
-            pixelBufferAddress != 0
+            let drawable = metalLayer.nextDrawable()
         else {
             completion(false)
             return
         }
 
-        guard let pointer = UnsafeRawPointer(bitPattern: pixelBufferAddress) else {
-            completion(false)
-            return
-        }
-        let pixelBuffer = Unmanaged<CVPixelBuffer>.fromOpaque(pointer).takeUnretainedValue()
         let retainedPixelBuffer = Unmanaged.passRetained(pixelBuffer)
         let image = CIImage(cvPixelBuffer: pixelBuffer)
         let drawableBounds = CGRect(origin: .zero, size: metalLayer.drawableSize)

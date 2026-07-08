@@ -164,6 +164,11 @@ impl NativeDecoderPluginFactory for DynamicNativeDecoderPluginFactory {
                     self.inner.api.context,
                 )
                 .map_err(|error| {
+                    close_native_decoder_session_after_open_failure(
+                        &self.inner,
+                        result.session,
+                        "close_native_after_open_payload_error",
+                    );
                     map_decoder_payload_error(&self.inner.name, "open_native", error)
                 })?;
                 Ok(Box::new(DynamicNativeDecoderSession {
@@ -186,6 +191,22 @@ impl NativeDecoderPluginFactory for DynamicNativeDecoderPluginFactory {
             }
         }
     }
+}
+
+fn close_native_decoder_session_after_open_failure(
+    factory: &DynamicNativeDecoderPluginFactoryInner,
+    session: *mut c_void,
+    operation: &'static str,
+) {
+    if session.is_null() {
+        return;
+    }
+    // SAFETY: the validated decoder API guarantees `close_session` is present
+    // and consumes the opaque session pointer returned by the matching
+    // successful open call.
+    let _ = catch_decoder_plugin_call(&factory.name, operation, || unsafe {
+        (factory.api.close_session)(factory.api.context, session)
+    });
 }
 
 #[derive(Debug)]
@@ -236,12 +257,11 @@ impl DynamicNativeDecoderSession {
         }
     }
 
-    fn take_outstanding_native_frame(
-        &mut self,
+    fn outstanding_native_frame_index(
+        &self,
         frame: &DecoderNativeFrame,
-    ) -> Result<DecoderNativeFrame, DecoderError> {
-        let index = self
-            .outstanding_frames
+    ) -> Result<usize, DecoderError> {
+        self.outstanding_frames
             .iter()
             .position(|candidate| candidate.handle == frame.handle)
             .ok_or_else(|| {
@@ -249,8 +269,7 @@ impl DynamicNativeDecoderSession {
                     "native decoder plugin `{}` was asked to release an untracked native frame handle",
                     self.factory.name
                 ))
-            })?;
-        Ok(self.outstanding_frames.swap_remove(index))
+            })
     }
 
     fn release_tracked_native_frame(
@@ -313,11 +332,18 @@ impl DynamicNativeDecoderSession {
         operation: &'static str,
     ) -> Result<(), DecoderError> {
         let mut first_error = None;
-        while let Some(frame) = self.outstanding_frames.pop() {
-            let release_result = self.release_tracked_native_frame(frame, operation, false);
-            if let Err(error) = release_result {
-                first_error = Some(error);
-                break;
+        while let Some(frame) = self.outstanding_frames.last().cloned() {
+            let release_result = self.release_tracked_native_frame(frame.clone(), operation, false);
+            match release_result {
+                Ok(()) => {
+                    if let Ok(index) = self.outstanding_native_frame_index(&frame) {
+                        self.outstanding_frames.swap_remove(index);
+                    }
+                }
+                Err(error) => {
+                    first_error = Some(error);
+                    break;
+                }
             }
         }
         match first_error {
@@ -432,8 +458,19 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
                             handle: result.handle,
                         };
                         if self.outstanding_frames.len() >= MAX_OUTSTANDING_FRAMES {
+                            self.outstanding_frames.push(frame.clone());
+                            let release_result = self.release_tracked_native_frame(
+                                frame,
+                                "release_native_frame_after_outstanding_limit",
+                                false,
+                            );
+                            if release_result.is_ok() {
+                                let last_index = self.outstanding_frames.len().saturating_sub(1);
+                                self.outstanding_frames.swap_remove(last_index);
+                            }
+                            release_result?;
                             return Err(DecoderError::internal(format!(
-                                "native decoder plugin `{}` exceeded outstanding frame limit ({MAX_OUTSTANDING_FRAMES})",
+                                "native decoder plugin `{}` exceeded outstanding frame limit ({MAX_OUTSTANDING_FRAMES}); rejected frame was released",
                                 self.factory.name
                             )));
                         }
@@ -569,8 +606,11 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
 
     fn release_native_frame(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError> {
         self.ensure_open()?;
-        let frame = self.take_outstanding_native_frame(&frame)?;
-        self.release_tracked_native_frame(frame, "release_native_frame", false)
+        let index = self.outstanding_native_frame_index(&frame)?;
+        let tracked = self.outstanding_frames[index].clone();
+        self.release_tracked_native_frame(tracked, "release_native_frame", false)?;
+        self.outstanding_frames.swap_remove(index);
+        Ok(())
     }
 
     fn release_native_frame_with_presentation(
@@ -579,8 +619,11 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
         presented: bool,
     ) -> Result<(), DecoderError> {
         self.ensure_open()?;
-        let frame = self.take_outstanding_native_frame(&frame)?;
-        self.release_tracked_native_frame(frame, "release_native_frame", presented)
+        let index = self.outstanding_native_frame_index(&frame)?;
+        let tracked = self.outstanding_frames[index].clone();
+        self.release_tracked_native_frame(tracked, "release_native_frame", presented)?;
+        self.outstanding_frames.swap_remove(index);
+        Ok(())
     }
 
     fn flush(&mut self) -> Result<(), DecoderError> {

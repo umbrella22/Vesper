@@ -2,13 +2,48 @@ package io.github.ikaros.vesper.player.android
 
 import android.os.Looper
 import android.util.Log
+import java.util.concurrent.ArrayBlockingQueue
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+private const val SOURCE_LOAD_CLEANUP_QUEUE_CAPACITY = 64
+
+private object VesperSourceLoadCleanupDispatcher {
+    private val threadIndex = AtomicInteger(0)
+
+    val dispatcher: ExecutorCoroutineDispatcher =
+        ThreadPoolExecutor(
+            1,
+            1,
+            0L,
+            TimeUnit.MILLISECONDS,
+            ArrayBlockingQueue(SOURCE_LOAD_CLEANUP_QUEUE_CAPACITY),
+            { runnable ->
+                Thread(
+                    runnable,
+                    "vesper-source-load-cleanup-${threadIndex.incrementAndGet()}",
+                ).apply {
+                    isDaemon = true
+                }
+            },
+            ThreadPoolExecutor.AbortPolicy(),
+        ).asCoroutineDispatcher()
+}
 
 private data class NativeSourceLoadPreparation(
     val pluginDiagnostics: List<Map<String, Any?>>,
@@ -19,7 +54,7 @@ internal fun VesperNativePlayerBridge.initializeNativeBridge() {
     if (isDisposed.get()) {
         return
     }
-    sourceLoadScope.launchSourceLoad { initializeNativeBridgeAsync() }
+    launchSourceLoad { initializeNativeBridgeAsync() }
 }
 
 internal suspend fun VesperNativePlayerBridge.initializeNativeBridgeAsync() {
@@ -27,29 +62,44 @@ internal suspend fun VesperNativePlayerBridge.initializeNativeBridgeAsync() {
         return
     }
     val epoch = sourceLoadEpoch.incrementAndGet()
-    val source = runOnMainForSourceLoad { currentSource }
+    val source =
+        runOnMainForSourceLoad {
+            if (isCurrentSourceLoad(epoch)) currentSource else null
+        }
     if (source == null) {
-        runOnMainForSourceLoad { handleInitializeWithoutSource() }
+        runOnMainForSourceLoad {
+            if (isCurrentSourceLoad(epoch) && currentSource == null) {
+                handleInitializeWithoutSource()
+            }
+        }
         return
     }
     val nativeFrameDecision =
         runOnMainForSourceLoad {
-            prepareSourceLoadOnMain(source)
+            prepareSourceLoadOnMain(epoch, source)
         } ?: return
     if (nativeFrameDecision is NativeFramePipelineRoute.Fail) {
         return
     }
-    val preparation =
+    val preparation: NativeSourceLoadPreparation =
         try {
             withContext(sourceLoadDispatcher) {
-                NativeSourceLoadPreparation(
-                    pluginDiagnostics = probeMobilePluginsForSource(source),
-                    sourceNormalizer =
-                        bindings.prepareSourceNormalizerForPlayback(
-                            source,
-                            enabled = nativeFrameDecision != NativeFramePipelineRoute.SdkManaged,
-                        ),
-                )
+                val preparation =
+                    NativeSourceLoadPreparation(
+                        pluginDiagnostics = probeMobilePluginsForSource(source),
+                        sourceNormalizer =
+                            bindings.prepareSourceNormalizerForPlayback(
+                                source,
+                                enabled = nativeFrameDecision != NativeFramePipelineRoute.SdkManaged,
+                            ),
+                    )
+                val backgroundContext = currentCoroutineContext()
+                if (!isCurrentSourceLoad(epoch) || !backgroundContext.isActive) {
+                    bindings.disposePreparedSourceNormalizerResource(preparation.sourceNormalizer)
+                    backgroundContext.ensureActive()
+                    return@withContext null
+                }
+                preparation
             }
         } catch (error: Throwable) {
             if (error is CancellationException) {
@@ -61,19 +111,67 @@ internal suspend fun VesperNativePlayerBridge.initializeNativeBridgeAsync() {
                         handleInitializeFailureOnMain(source, error)
                     }
                 }
+            } else {
+                Log.i(
+                    NATIVE_PLAYER_BRIDGE_TAG,
+                    "ignored stale source load failure for source=${source.uri}",
+                )
+                return
             }
             throw error
-        }
+        } ?: return
     if (!isCurrentSourceLoad(epoch)) {
-        bindings.disposePreparedSourceNormalizerResource(preparation.sourceNormalizer)
+        disposePreparedSourceNormalizerOnBackground(preparation.sourceNormalizer)
         return
     }
-    runOnMainForSourceLoad {
-        if (!isCurrentSourceLoad(epoch)) {
-            bindings.disposePreparedSourceNormalizerResource(preparation.sourceNormalizer)
-            return@runOnMainForSourceLoad
+    val applied =
+        runOnMainForSourceLoad {
+            if (!isCurrentSourceLoad(epoch)) {
+                return@runOnMainForSourceLoad false
+            }
+            applyPreparedSourceLoadOnMain(epoch, source, nativeFrameDecision, preparation)
+            true
         }
-        applyPreparedSourceLoadOnMain(source, nativeFrameDecision, preparation)
+    if (!applied) {
+        disposePreparedSourceNormalizerOnBackground(preparation.sourceNormalizer)
+    }
+}
+
+private suspend fun VesperNativePlayerBridge.disposePreparedSourceNormalizerOnBackground(
+    prepared: NativeSourceNormalizerResourcePreparedOpenOutcome,
+) {
+    val disposedOnSourceLoadDispatcher =
+        runCatching {
+            withContext(NonCancellable + sourceLoadDispatcher) {
+                bindings.disposePreparedSourceNormalizerResource(prepared)
+            }
+        }.isSuccess
+    if (disposedOnSourceLoadDispatcher) {
+        return
+    }
+    val disposedOnCleanupDispatcher =
+        runCatching {
+            withContext(NonCancellable + VesperSourceLoadCleanupDispatcher.dispatcher) {
+                bindings.disposePreparedSourceNormalizerResource(prepared)
+            }
+        }.isSuccess
+    if (disposedOnCleanupDispatcher) {
+        return
+    }
+    if (Looper.myLooper() == Looper.getMainLooper()) {
+        Log.w(
+            NATIVE_PLAYER_BRIDGE_TAG,
+            "source load cleanup queues rejected stale SourceNormalizer disposal; running final fallback on the main thread",
+        )
+    }
+    runCatching {
+        bindings.disposePreparedSourceNormalizerResource(prepared)
+    }.onFailure { error ->
+        Log.w(
+            NATIVE_PLAYER_BRIDGE_TAG,
+            "failed to dispose stale SourceNormalizer resource on fallback path",
+            error,
+        )
     }
 }
 
@@ -93,9 +191,10 @@ private fun VesperNativePlayerBridge.handleInitializeWithoutSource() {
 }
 
 private fun VesperNativePlayerBridge.prepareSourceLoadOnMain(
+    epoch: Long,
     source: VesperPlayerSource,
 ): NativeFramePipelineRoute? {
-    if (isDisposed.get()) {
+    if (!isCurrentSourceLoad(epoch) || currentSource != source) {
         return null
     }
     recordBenchmark("initialize_start")
@@ -180,10 +279,14 @@ private fun VesperNativePlayerBridge.prepareSourceLoadOnMain(
 }
 
 private fun VesperNativePlayerBridge.applyPreparedSourceLoadOnMain(
+    epoch: Long,
     source: VesperPlayerSource,
     nativeFrameDecision: NativeFramePipelineRoute,
     preparation: NativeSourceLoadPreparation,
 ) {
+    if (!isCurrentSourceLoad(epoch) || currentSource != source) {
+        return
+    }
     currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(preparation.pluginDiagnostics)
     advanceNativeUpdateEpoch()
     runCatching {
@@ -200,7 +303,7 @@ private fun VesperNativePlayerBridge.applyPreparedSourceLoadOnMain(
     }
         .onSuccess {
             if (nativeFrameDecision == NativeFramePipelineRoute.SdkManaged &&
-                !openNativeFramePipelineAfterSystemStartup(source, it.pluginDiagnostics)
+                !openNativeFramePipelineAfterSystemStartup(epoch, source, it.pluginDiagnostics)
             ) {
                 return@onSuccess
             }
@@ -322,6 +425,8 @@ internal fun VesperNativePlayerBridge.disposeNativeBridge() {
     surfaceHost.setKeepScreenOn(false)
     surfaceHost.detach()
     bindings.dispose()
+    sourceLoadJob?.cancel()
+    sourceLoadScope.cancel()
     sourceLoadDispatcher.close()
     recordBenchmark("dispose_command")
     benchmarkRecorder.dispose()
@@ -339,7 +444,7 @@ internal fun VesperNativePlayerBridge.selectNativeSource(source: VesperPlayerSou
     if (isDisposed.get()) {
         return
     }
-    sourceLoadScope.launchSourceLoad { selectNativeSourceAsync(source) }
+    launchSourceLoad { selectNativeSourceAsync(source) }
 }
 
 internal suspend fun VesperNativePlayerBridge.selectNativeSourceAsync(source: VesperPlayerSource) {
@@ -380,16 +485,26 @@ internal suspend fun VesperNativePlayerBridge.selectNativeSourceAsync(source: Ve
     initializeNativeBridgeAsync()
 }
 
-internal fun CoroutineScope.launchSourceLoad(block: suspend () -> Unit) {
-    launch {
-        runCatching { block() }
-            .onFailure { error ->
-                Log.e(NATIVE_PLAYER_BRIDGE_TAG, "source load failed", error)
+internal fun VesperNativePlayerBridge.launchSourceLoad(block: suspend () -> Unit) {
+    sourceLoadJob?.cancel()
+    sourceLoadJob =
+        try {
+            sourceLoadScope.launch {
+                runCatching { block() }
+                    .onFailure { error ->
+                        if (error is CancellationException) {
+                            return@onFailure
+                        }
+                        Log.e(NATIVE_PLAYER_BRIDGE_TAG, "source load failed", error)
+                    }
             }
-    }
+        } catch (error: RejectedExecutionException) {
+            Log.w(NATIVE_PLAYER_BRIDGE_TAG, "source load queue rejected superseded work", error)
+            null
+        }
 }
 
-private fun VesperNativePlayerBridge.isCurrentSourceLoad(epoch: Long): Boolean =
+internal fun VesperNativePlayerBridge.isCurrentSourceLoad(epoch: Long): Boolean =
     !isDisposed.get() && sourceLoadEpoch.get() == epoch
 
 internal suspend fun <T> VesperNativePlayerBridge.runOnMainForSourceLoad(block: () -> T): T {

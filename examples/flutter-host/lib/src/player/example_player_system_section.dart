@@ -8,6 +8,7 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
     required this.permissionStatus,
     required this.onRequestPermission,
     required this.onRefreshExternalRoutes,
+    required this.onExternalRoutePickerResult,
     required this.externalRoutes,
     required this.onExternalRouteSelected,
     required this.pictureInPictureStatus,
@@ -23,6 +24,7 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
   final VesperSystemPlaybackPermissionStatus permissionStatus;
   final VoidCallback onRequestPermission;
   final VoidCallback onRefreshExternalRoutes;
+  final ValueChanged<VesperExternalPlaybackResult> onExternalRoutePickerResult;
   final List<VesperExternalPlaybackRoute> externalRoutes;
   final ValueChanged<VesperExternalPlaybackRoute> onExternalRouteSelected;
   final VesperPictureInPictureAvailability? pictureInPictureAvailability;
@@ -75,7 +77,9 @@ class ExampleSystemPlaybackSection extends StatelessWidget {
               ),
               _RouteButtonFrame(
                 palette: palette,
-                child: const VesperExternalRouteButton(),
+                child: VesperExternalRouteButton(
+                  onResult: onExternalRoutePickerResult,
+                ),
               ),
               OutlinedButton(
                 onPressed: onRequestPermission,

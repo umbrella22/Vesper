@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
-const Duration _progressRefreshInterval = Duration(milliseconds: 250);
+const Duration _progressRefreshInterval = Duration(seconds: 1);
 
 class VesperPlayerController {
   VesperPlayerController._({
@@ -12,7 +12,7 @@ class VesperPlayerController {
     required List<VesperPluginDiagnostic> pluginDiagnostics,
     required VesperPlayerPlatform platform,
   })  : _platform = platform,
-        pluginDiagnostics = List.unmodifiable(pluginDiagnostics),
+        _pluginDiagnostics = List.unmodifiable(pluginDiagnostics),
         snapshotListenable = ValueNotifier<VesperPlayerSnapshot>(
           initialSnapshot,
         ) {
@@ -70,7 +70,7 @@ class VesperPlayerController {
 
   final String playerId;
   final VesperPlayerPlatform _platform;
-  final List<VesperPluginDiagnostic> pluginDiagnostics;
+  List<VesperPluginDiagnostic> _pluginDiagnostics;
   final ValueNotifier<VesperPlayerSnapshot> snapshotListenable;
   final StreamController<VesperPlayerEvent> _eventsController =
       StreamController<VesperPlayerEvent>.broadcast();
@@ -86,6 +86,8 @@ class VesperPlayerController {
   bool _disposed = false;
 
   VesperPlayerSnapshot get snapshot => snapshotListenable.value;
+
+  List<VesperPluginDiagnostic> get pluginDiagnostics => _pluginDiagnostics;
 
   VesperPlayerCapabilities get capabilities => snapshot.capabilities;
 
@@ -240,8 +242,7 @@ class VesperPlayerController {
         ),
       );
 
-  Future<void> exitPictureInPicture() =>
-      _runPictureInPictureOperation(
+  Future<void> exitPictureInPicture() => _runPictureInPictureOperation(
         () => _platform.exitPictureInPicture(playerId),
       );
 
@@ -306,6 +307,7 @@ class VesperPlayerController {
     if (_disposed) {
       return;
     }
+    _syncPluginDiagnostics(snapshot.pluginDiagnostics);
     snapshotListenable.value = snapshot;
     _snapshotsController.add(snapshot);
     _eventsController.add(
@@ -321,6 +323,7 @@ class VesperPlayerController {
     final snapshot =
         event.snapshot ?? this.snapshot.copyWith(lastError: event.error);
     snapshotListenable.value = snapshot;
+    _syncPluginDiagnostics(snapshot.pluginDiagnostics);
     _snapshotsController.add(snapshot);
     _eventsController.add(
       VesperPlayerErrorEvent(
@@ -330,6 +333,10 @@ class VesperPlayerController {
       ),
     );
     _syncProgressRefreshTimer(snapshot);
+  }
+
+  void _syncPluginDiagnostics(List<VesperPluginDiagnostic> diagnostics) {
+    _pluginDiagnostics = List.unmodifiable(diagnostics);
   }
 
   void _syncProgressRefreshTimer([VesperPlayerSnapshot? nextSnapshot]) {

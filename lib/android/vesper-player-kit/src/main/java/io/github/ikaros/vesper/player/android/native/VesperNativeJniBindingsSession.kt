@@ -46,7 +46,12 @@ import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 import java.io.File
 import java.io.IOException
 import java.net.URI
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.absoluteValue
 import kotlin.math.pow
 import kotlin.math.roundToLong
@@ -55,6 +60,93 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
+
+private const val SOURCE_NORMALIZER_DISPOSE_QUEUE_CAPACITY = 64
+private const val SOURCE_NORMALIZER_DISPOSE_MAX_THREADS = 4
+private const val PRELOAD_WARMUP_QUEUE_CAPACITY = 64
+private const val PRELOAD_WARMUP_MAX_THREADS = 2
+
+private object VesperSourceNormalizerResourceDisposer {
+    private val threadIndex = AtomicInteger(0)
+    private val executor =
+        ThreadPoolExecutor(
+            1,
+            SOURCE_NORMALIZER_DISPOSE_MAX_THREADS,
+            15L,
+            TimeUnit.SECONDS,
+            ArrayBlockingQueue(SOURCE_NORMALIZER_DISPOSE_QUEUE_CAPACITY),
+            { runnable ->
+                Thread(
+                    runnable,
+                    "vesper-source-normalizer-close-${threadIndex.incrementAndGet()}",
+                ).apply {
+                    isDaemon = true
+                }
+            },
+            ThreadPoolExecutor.AbortPolicy(),
+        )
+
+    fun disposeAsync(handle: Long) {
+        if (handle == 0L) {
+            return
+        }
+        val task = Runnable {
+            disposeSourceNormalizerResourceHandle(handle, "source normalizer resource session")
+        }
+        try {
+            executor.execute(task)
+        } catch (error: RejectedExecutionException) {
+            disposeAfterRejectedExecution(task, error)
+        }
+    }
+
+    private fun disposeAfterRejectedExecution(
+        task: Runnable,
+        error: RejectedExecutionException,
+    ) {
+        Log.w(
+            NATIVE_JNI_BINDINGS_TAG,
+            "source normalizer dispose queue saturated; running fallback close path",
+            error,
+        )
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            Log.w(
+                NATIVE_JNI_BINDINGS_TAG,
+                "source normalizer fallback close is running on the main thread after bounded queues were exhausted",
+            )
+        }
+        task.run()
+    }
+}
+
+private object VesperPreloadWarmupDispatcher {
+    private val threadIndex = AtomicInteger(0)
+    private val executor =
+        ThreadPoolExecutor(
+            1,
+            PRELOAD_WARMUP_MAX_THREADS,
+            15L,
+            TimeUnit.SECONDS,
+            ArrayBlockingQueue(PRELOAD_WARMUP_QUEUE_CAPACITY),
+            { runnable ->
+                Thread(
+                    runnable,
+                    "vesper-preload-warmup-${threadIndex.incrementAndGet()}",
+                ).apply {
+                    isDaemon = true
+                }
+            },
+            ThreadPoolExecutor.AbortPolicy(),
+        )
+
+    fun execute(task: Runnable): Boolean =
+        try {
+            executor.execute(task)
+            true
+        } catch (_: RejectedExecutionException) {
+            false
+        }
+}
 
 internal fun VesperNativeJniBindings.dispatchRustCommand(action: (Long) -> Unit) {
     // Read sessionHandle first so that if dispose() has already nulled it we
@@ -785,9 +877,16 @@ internal fun VesperNativeJniBindings.pushSnapshotToRust() {
             (timelinePositionMs + it).coerceAtLeast(0L)
         } ?: C.TIME_UNSET
     }
-    Log.d(
-        NATIVE_JNI_BINDINGS_TAG,
-        "pushSnapshotToRust state=${exoPlaybackStateName(exoPlayer.playbackState)} live=$isLive seekable=$isSeekable windowPositionMs=${exoPlayer.currentPosition} timelinePositionMs=$timelinePositionMs durationMs=$durationMs seekableStartMs=$seekableStartMs seekableEndMs=$seekableEndMs liveEdgeMs=$liveEdgeMs",
+    logExoSnapshotToRust(
+        playbackState = exoPlayer.playbackState,
+        isLive = isLive,
+        isSeekable = isSeekable,
+        windowPositionMs = exoPlayer.currentPosition,
+        timelinePositionMs = timelinePositionMs,
+        durationMs = durationMs,
+        seekableStartMs = seekableStartMs,
+        seekableEndMs = seekableEndMs,
+        liveEdgeMs = liveEdgeMs,
     )
     VesperNativeJni.applyExoSnapshot(
         handle,
@@ -801,6 +900,31 @@ internal fun VesperNativeJniBindings.pushSnapshotToRust() {
         seekableStartMs,
         seekableEndMs,
         liveEdgeMs,
+    )
+}
+
+private fun VesperNativeJniBindings.logExoSnapshotToRust(
+    playbackState: Int,
+    isLive: Boolean,
+    isSeekable: Boolean,
+    windowPositionMs: Long,
+    timelinePositionMs: Long,
+    durationMs: Long,
+    seekableStartMs: Long,
+    seekableEndMs: Long,
+    liveEdgeMs: Long,
+) {
+    if (!Log.isLoggable(NATIVE_JNI_BINDINGS_TAG, Log.DEBUG)) {
+        return
+    }
+    val nowMs = SystemClock.elapsedRealtime()
+    if (nowMs - lastSnapshotLogElapsedMs < VesperNativeJniBindings.EXO_SNAPSHOT_LOG_INTERVAL_MS) {
+        return
+    }
+    lastSnapshotLogElapsedMs = nowMs
+    Log.d(
+        NATIVE_JNI_BINDINGS_TAG,
+        "pushSnapshotToRust state=${exoPlaybackStateName(playbackState)} live=$isLive seekable=$isSeekable windowPositionMs=$windowPositionMs timelinePositionMs=$timelinePositionMs durationMs=$durationMs seekableStartMs=$seekableStartMs seekableEndMs=$seekableEndMs liveEdgeMs=$liveEdgeMs",
     )
 }
 
@@ -830,9 +954,32 @@ internal fun VesperNativeJniBindings.pushTrackStateToRust() {
 internal fun VesperNativeJniBindings.executePreloadWarmupCommands(source: VesperPlayerSource) {
     preloadCoordinator.planCurrentSource(source).forEach { command ->
         when (command) {
-            is NativePreloadCommand.Start -> runWarmup(command.task, source)
+            is NativePreloadCommand.Start -> dispatchWarmup(command.task, source)
             is NativePreloadCommand.Cancel -> Unit
         }
+    }
+}
+
+private fun VesperNativeJniBindings.dispatchWarmup(
+    task: NativePreloadTask,
+    currentSource: VesperPlayerSource,
+) {
+    val submitted =
+        VesperPreloadWarmupDispatcher.execute(
+            Runnable {
+                runWarmup(task, currentSource)
+            }
+        )
+    if (!submitted) {
+        preloadCoordinator.fail(
+            task.taskId,
+            NativeBridgeEvent.Error(
+                message = "android preload warmup queue is full",
+                codeOrdinal = BACKEND_FAILURE_ORDINAL,
+                categoryOrdinal = PLATFORM_CATEGORY_ORDINAL,
+                retriable = true,
+            ),
+        )
     }
 }
 
@@ -984,7 +1131,16 @@ internal fun VesperNativeJniBindings.prepareSourceNormalizerResourceForPlayback(
         Log.i(NATIVE_JNI_BINDINGS_TAG, "source normalizer resource bypassed; route=native fallbackReason=$bypassReason")
         return NativeSourceNormalizerResourcePreparedOpenOutcome(diagnostics = diagnostics)
     }
-    return NativeSourceNormalizerResourcePreparedOpenOutcome(resourceJson = json)
+    val resource =
+        parseSourceNormalizerResource(json, source, sourceNormalizerLoopbackServer)
+            ?: run {
+                disposeSourceNormalizerResourceHandle(
+                    sourceNormalizerResourceHandle(json),
+                    "stale prepared source normalizer resource",
+                )
+                return NativeSourceNormalizerResourcePreparedOpenOutcome()
+            }
+    return NativeSourceNormalizerResourcePreparedOpenOutcome(resource = resource)
 }
 
 internal fun VesperNativeJniBindings.openPreparedSourceNormalizerResourceForPlayback(
@@ -992,15 +1148,8 @@ internal fun VesperNativeJniBindings.openPreparedSourceNormalizerResourceForPlay
     prepared: NativeSourceNormalizerResourcePreparedOpenOutcome,
 ): NativeSourceNormalizerResourceOpenOutcome {
     closeCurrentSourceNormalizerResource()
-    val json =
-        prepared.resourceJson
-            ?: return NativeSourceNormalizerResourceOpenOutcome(diagnostics = prepared.diagnostics)
-    val resource =
-        parseSourceNormalizerResource(json, source, sourceNormalizerLoopbackServer)
-            ?: run {
-                disposePreparedSourceNormalizerResourceForPlayback(prepared)
-                return NativeSourceNormalizerResourceOpenOutcome()
-            }
+    val resource = prepared.resource
+        ?: return NativeSourceNormalizerResourceOpenOutcome(diagnostics = prepared.diagnostics)
     currentSourceNormalizerResource = resource
     Log.i(
         NATIVE_JNI_BINDINGS_TAG,
@@ -1012,13 +1161,31 @@ internal fun VesperNativeJniBindings.openPreparedSourceNormalizerResourceForPlay
 internal fun VesperNativeJniBindings.disposePreparedSourceNormalizerResourceForPlayback(
     prepared: NativeSourceNormalizerResourcePreparedOpenOutcome,
 ) {
+    prepared.resource?.let { resource ->
+        resource.loopbackToken?.let(sourceNormalizerLoopbackServer::invalidate)
+        disposeSourceNormalizerResourceHandle(
+            resource.handle,
+            "stale prepared source normalizer resource",
+        )
+        return
+    }
     val handle = prepared.resourceJson?.let(::sourceNormalizerResourceHandle) ?: return
+    disposeSourceNormalizerResourceHandle(
+        handle,
+        "stale prepared source normalizer resource",
+    )
+}
+
+private fun disposeSourceNormalizerResourceHandle(
+    handle: Long,
+    context: String,
+) {
     if (handle == 0L) {
         return
     }
     runCatching { VesperNativeJni.disposeSourceNormalizerResource(handle) }
         .onFailure { error ->
-            Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose stale prepared source normalizer resource", error)
+            Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose $context", error)
         }
 }
 
@@ -1027,10 +1194,7 @@ internal fun VesperNativeJniBindings.closeCurrentSourceNormalizerResource() {
     currentSourceNormalizerResource = null
     detachPlayerFromSourceNormalizerResource(resource, player)
     resource.loopbackToken?.let(sourceNormalizerLoopbackServer::invalidate)
-    runCatching { VesperNativeJni.disposeSourceNormalizerResource(resource.handle) }
-        .onFailure { error ->
-            Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose source normalizer resource session", error)
-        }
+    VesperSourceNormalizerResourceDisposer.disposeAsync(resource.handle)
 }
 
 internal fun VesperNativeJniBindings.detachPlayerFromSourceNormalizerResource(

@@ -1,6 +1,8 @@
 package io.github.ikaros.vesper.player.android.external.internal.relay
 
 import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import kotlin.math.min
@@ -85,6 +87,35 @@ internal fun InputStream.skipFully(bytes: Long) {
     }
 }
 
+internal class VesperRelayHttpLimitExceeded(
+    val statusCode: Int,
+    val responseMessage: String,
+) : IOException(responseMessage)
+
+internal fun InputStream.readBoundedRelayHttpLine(
+    maxBytes: Int,
+    statusCode: Int,
+    message: String,
+): String? {
+    val buffer = ByteArrayOutputStream(min(maxBytes, 256))
+    while (true) {
+        val byte = read()
+        if (byte < 0) {
+            if (buffer.size() == 0) {
+                return null
+            }
+            return buffer.toString(Charsets.ISO_8859_1.name()).removeSuffix("\r")
+        }
+        if (byte == '\n'.code) {
+            return buffer.toString(Charsets.ISO_8859_1.name()).removeSuffix("\r")
+        }
+        if (buffer.size() >= maxBytes) {
+            throw VesperRelayHttpLimitExceeded(statusCode, message)
+        }
+        buffer.write(byte)
+    }
+}
+
 internal fun MutableMap<String, String>.addDlnaPlaybackHeaders() {
     put("Access-Control-Allow-Origin", "*")
     put("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
@@ -102,10 +133,16 @@ internal fun Int.reasonPhrase(): String =
         400 -> "Bad Request"
         404 -> "Not Found"
         405 -> "Method Not Allowed"
+        414 -> "URI Too Long"
         415 -> "Unsupported Media Type"
         416 -> "Range Not Satisfiable"
+        431 -> "Request Header Fields Too Large"
         503 -> "Service Unavailable"
         504 -> "Gateway Timeout"
         501 -> "Not Implemented"
         else -> "OK"
     }
+
+internal const val MAX_RELAY_HTTP_REQUEST_LINE_BYTES = 8 * 1024
+internal const val MAX_RELAY_HTTP_HEADER_LINE_BYTES = 8 * 1024
+internal const val MAX_RELAY_HTTP_HEADERS = 64

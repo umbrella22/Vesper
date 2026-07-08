@@ -23,8 +23,16 @@ internal class VesperRelayRemoteDashResourceClient(
             if (status >= 400) {
                 throw IOException("HTTP $status")
             }
+            val contentLength = connection.contentLengthLong
+            if (contentLength > MAX_HOST_PREPARED_DASH_MANIFEST_BYTES) {
+                throw DashResourceException(
+                    code = "dash_manifest_too_large",
+                    status = 413,
+                    message = "DASH manifest exceeds the $MAX_HOST_PREPARED_DASH_MANIFEST_BYTES byte host-prepared planning limit.",
+                )
+            }
             connection.inputStream.use { input ->
-                input.readBytes().toString(Charsets.UTF_8)
+                input.readUtf8Limited()
             }
         } finally {
             activeConnections -= connection

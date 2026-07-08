@@ -319,6 +319,30 @@ class VesperDownloadManager internal constructor(
         )
     }
 
+    fun prepareTaskOutputForSharing(
+        context: Context,
+        taskId: VesperDownloadTaskId,
+        fileName: String? = null,
+    ): File = preparedShareFile(
+        context = context,
+        source = outputFileForTask(taskId),
+        fileName = fileName,
+    )
+
+    fun sharePreparedTaskOutput(
+        context: Context,
+        sharedFile: File,
+        mimeType: String? = null,
+        authority: String = "${context.packageName}.vesper.player.fileprovider",
+    ) {
+        sharePreparedDownloadTaskOutput(
+            context = context,
+            sharedFile = sharedFile,
+            mimeType = mimeType,
+            authority = authority,
+        )
+    }
+
     fun saveTaskOutput(
         context: Context,
         taskId: VesperDownloadTaskId,

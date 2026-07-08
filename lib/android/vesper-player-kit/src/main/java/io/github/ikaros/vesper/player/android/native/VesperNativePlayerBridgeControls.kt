@@ -40,6 +40,12 @@ internal fun VesperNativePlayerBridge.playNativeBridge() {
             return
         }
     }
+    if (!hasInitializedSource) {
+        if (currentSource != null) {
+            pendingAutoPlay = true
+        }
+        return
+    }
     bindings.play()
     nativeFramePipelinePlaybackRequested = true
     updateState {
@@ -205,7 +211,7 @@ internal fun VesperNativePlayerBridge.setNativeResiliencePolicy(policy: VesperPl
         "apply resilience policy buffering=${policy.buffering.preset} retry=${policy.retry.backoff} cache=${policy.cache.preset}",
     )
     updateState { copy(isBuffering = true) }
-    sourceLoadScope.launchSourceLoad {
+    launchSourceLoad {
         initializeNativeBridgeAsync()
         runOnMainForSourceLoad {
             restorePlaybackState(source, preservedState)

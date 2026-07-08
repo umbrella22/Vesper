@@ -89,7 +89,9 @@ extension _PlayerHostDownloadActions on _PlayerHostPageState {
       VesperDownloadState.preparing ||
       VesperDownloadState.downloading => await manager.pauseTask(task.taskId),
       VesperDownloadState.paused => await manager.resumeTask(task.taskId),
-      VesperDownloadState.completed || VesperDownloadState.removed => true,
+      VesperDownloadState.completed ||
+      VesperDownloadState.removed ||
+      VesperDownloadState.unknown => true,
     };
     if (!mounted || succeeded) {
       return;

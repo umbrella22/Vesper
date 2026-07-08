@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:vesper_player/vesper_player.dart';
 
 part 'external_playback_route_buttons.dart';
@@ -163,6 +163,18 @@ class VesperExternalPlaybackController {
   Future<void> stopDiscovery() {
     _ensureActive();
     return _methodChannel.invokeMethod<void>('stopDiscovery');
+  }
+
+  Future<VesperExternalPlaybackResult> showRoutePicker({
+    Brightness? brightness,
+  }) {
+    _ensureActive();
+    return _invokeResult(
+      'showRoutePicker',
+      <String, Object?>{
+        if (brightness != null) 'brightness': brightness.name,
+      },
+    );
   }
 
   Future<VesperExternalPlaybackResult> connect(String routeId) {

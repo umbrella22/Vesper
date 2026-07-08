@@ -103,6 +103,7 @@ final class VesperDownloadSegmentRecord {
 }
 
 enum VesperDownloadStreamKind {
+  unknown,
   combined,
   video,
   audio,
@@ -115,6 +116,7 @@ final class VesperDownloadAssetStream {
   const VesperDownloadAssetStream({
     required this.streamId,
     this.kind = VesperDownloadStreamKind.combined,
+    this.kindRawValue,
     this.language,
     this.codec,
     this.label,
@@ -129,6 +131,7 @@ final class VesperDownloadAssetStream {
     return VesperDownloadAssetStream(
       streamId: normalized['streamId'] as String? ?? '',
       kind: _decodeStreamKind(normalized['kind']),
+      kindRawValue: normalized['kind'] as String?,
       language: normalized['language'] as String?,
       codec: normalized['codec'] as String?,
       label: normalized['label'] as String?,
@@ -141,6 +144,7 @@ final class VesperDownloadAssetStream {
 
   final String streamId;
   final VesperDownloadStreamKind kind;
+  final String? kindRawValue;
   final String? language;
   final String? codec;
   final String? label;
@@ -152,7 +156,7 @@ final class VesperDownloadAssetStream {
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'streamId': streamId,
-      'kind': kind.name,
+      'kind': kindRawValue ?? kind.name,
       'language': language,
       'codec': codec,
       'label': label,
@@ -167,6 +171,7 @@ final class VesperDownloadAssetStream {
 final class VesperDownloadAssetIndex {
   const VesperDownloadAssetIndex({
     this.contentFormat = VesperDownloadContentFormat.unknown,
+    this.contentFormatRawValue,
     this.version,
     this.etag,
     this.checksum,
@@ -182,8 +187,14 @@ final class VesperDownloadAssetIndex {
     final rawResources = normalized['resources'];
     final rawSegments = normalized['segments'];
     final rawStreams = normalized['streams'];
+    final rawContentFormat = normalized['contentFormat'];
+    final contentFormat = _decodeContentFormat(rawContentFormat);
     return VesperDownloadAssetIndex(
-      contentFormat: _decodeContentFormat(normalized['contentFormat']),
+      contentFormat: contentFormat,
+      contentFormatRawValue: _unknownEnumRawValue(
+        rawContentFormat,
+        isUnknown: contentFormat == VesperDownloadContentFormat.unknown,
+      ),
       version: normalized['version'] as String?,
       etag: normalized['etag'] as String?,
       checksum: normalized['checksum'] as String?,
@@ -226,6 +237,7 @@ final class VesperDownloadAssetIndex {
   }
 
   final VesperDownloadContentFormat contentFormat;
+  final String? contentFormatRawValue;
   final String? version;
   final String? etag;
   final String? checksum;
@@ -237,7 +249,7 @@ final class VesperDownloadAssetIndex {
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
-      'contentFormat': contentFormat.name,
+      'contentFormat': contentFormatRawValue ?? contentFormat.name,
       'version': version,
       'etag': etag,
       'checksum': checksum,

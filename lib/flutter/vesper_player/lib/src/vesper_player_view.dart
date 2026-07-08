@@ -12,6 +12,8 @@ import 'vesper_player_controller.dart';
 part 'view/viewport_binding_observer.dart';
 part 'view/platform_view_constants.dart';
 
+const Duration _scrollingViewportReportInterval = Duration(milliseconds: 160);
+
 class VesperPlayerView extends StatefulWidget {
   const VesperPlayerView({
     super.key,
@@ -31,7 +33,10 @@ class VesperPlayerView extends StatefulWidget {
 class _VesperPlayerViewState extends State<VesperPlayerView> {
   final GlobalKey _targetKey = GlobalKey();
   VesperPlayerViewport? _lastViewport;
+  VesperPlayerViewport? _lastReportedViewport;
+  VesperPlayerViewport? _pendingViewport;
   ScrollPosition? _scrollPosition;
+  Timer? _viewportThrottleTimer;
   bool _reportScheduled = false;
 
   bool get _usesPlatformView =>
@@ -55,6 +60,10 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
         'clear old viewport',
       );
       _lastViewport = null;
+      _lastReportedViewport = null;
+      _pendingViewport = null;
+      _viewportThrottleTimer?.cancel();
+      _viewportThrottleTimer = null;
     }
     _scheduleViewportReport();
   }
@@ -69,6 +78,7 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(_bindingObserver);
+    _viewportThrottleTimer?.cancel();
     _scrollPosition?.removeListener(_scheduleViewportReport);
     _scrollPosition = null;
     _runViewportOperation(widget.controller.clearViewport, 'clear viewport');
@@ -218,10 +228,7 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
     }
 
     _lastViewport = viewport;
-    _runViewportOperation(
-      () => widget.controller.updateViewport(viewport),
-      'update viewport',
-    );
+    _reportViewportChange(viewport);
   }
 
   void _clearViewportIfNeeded() {
@@ -229,6 +236,10 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
       return;
     }
     _lastViewport = null;
+    _lastReportedViewport = null;
+    _pendingViewport = null;
+    _viewportThrottleTimer?.cancel();
+    _viewportThrottleTimer = null;
     _runViewportOperation(widget.controller.clearViewport, 'clear viewport');
   }
 
@@ -257,6 +268,60 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
         (previous.top - next.top).abs() < 0.5 &&
         (previous.width - next.width).abs() < 0.5 &&
         (previous.height - next.height).abs() < 0.5;
+  }
+
+  void _reportViewportChange(VesperPlayerViewport viewport) {
+    if (!_isScrolling()) {
+      _pendingViewport = null;
+      _viewportThrottleTimer?.cancel();
+      _viewportThrottleTimer = null;
+      _sendViewportIfNeeded(viewport);
+      return;
+    }
+
+    _pendingViewport = viewport;
+    if (_viewportThrottleTimer != null) {
+      return;
+    }
+
+    _flushPendingViewport();
+    _viewportThrottleTimer =
+        Timer.periodic(_scrollingViewportReportInterval, (_) {
+      if (!mounted) {
+        _viewportThrottleTimer?.cancel();
+        _viewportThrottleTimer = null;
+        return;
+      }
+      if (!_isScrolling()) {
+        _flushPendingViewport();
+        _viewportThrottleTimer?.cancel();
+        _viewportThrottleTimer = null;
+        return;
+      }
+      _flushPendingViewport();
+    });
+  }
+
+  bool _isScrolling() => _scrollPosition?.isScrollingNotifier.value ?? false;
+
+  void _flushPendingViewport() {
+    final viewport = _pendingViewport;
+    if (viewport == null) {
+      return;
+    }
+    _pendingViewport = null;
+    _sendViewportIfNeeded(viewport);
+  }
+
+  void _sendViewportIfNeeded(VesperPlayerViewport viewport) {
+    if (_sameViewport(_lastReportedViewport, viewport)) {
+      return;
+    }
+    _lastReportedViewport = viewport;
+    _runViewportOperation(
+      () => widget.controller.updateViewport(viewport),
+      'update viewport',
+    );
   }
 
   void _runViewportOperation(

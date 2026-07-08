@@ -273,6 +273,37 @@ final class VesperDownloadManagerTests: XCTestCase {
         XCTAssertEqual(bindings.createdConfiguration?.runPostProcessorsOnCompletion, false)
     }
 
+    func testPreparedDownloadOutputURLUsesUniqueTempPathForSameFileName() throws {
+        let baseDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vesper-output-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: baseDirectory) }
+
+        let firstSource = baseDirectory.appendingPathComponent("first.bin")
+        let secondSource = baseDirectory.appendingPathComponent("second.bin")
+        try Data("first".utf8).write(to: firstSource)
+        try Data("second".utf8).write(to: secondSource)
+
+        let firstPrepared = try prepareDownloadOutputURLFromSource(
+            sourceURL: firstSource,
+            fileName: "shared-name.mp4"
+        )
+        let secondPrepared = try prepareDownloadOutputURLFromSource(
+            sourceURL: secondSource,
+            fileName: "shared-name.mp4"
+        )
+        defer {
+            try? FileManager.default.removeItem(at: firstPrepared.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: secondPrepared.deletingLastPathComponent())
+        }
+
+        XCTAssertEqual(firstPrepared.lastPathComponent, "shared-name.mp4")
+        XCTAssertEqual(secondPrepared.lastPathComponent, "shared-name.mp4")
+        XCTAssertNotEqual(firstPrepared, secondPrepared)
+        XCTAssertEqual(try Data(contentsOf: firstPrepared), Data("first".utf8))
+        XCTAssertEqual(try Data(contentsOf: secondPrepared), Data("second".utf8))
+    }
+
     func testNativeBridgeMaterializesGeneratedTextWithoutReturningBody() throws {
         let baseDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("vesper-native-download-\(UUID().uuidString)", isDirectory: true)

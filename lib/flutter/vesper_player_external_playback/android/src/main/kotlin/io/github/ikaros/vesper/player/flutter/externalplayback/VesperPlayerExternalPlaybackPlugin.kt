@@ -1,8 +1,13 @@
 package io.github.ikaros.vesper.player.flutter.externalplayback
 
+import android.app.Activity
 import android.content.Context
+import android.util.Log
 import android.view.View
+import android.view.ViewGroup
 import androidx.mediarouter.app.MediaRouteButton
+import io.flutter.embedding.engine.plugins.activity.ActivityAware
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -37,7 +42,8 @@ import kotlinx.coroutines.launch
 class VesperPlayerExternalPlaybackPlugin :
     PlatformViewFactory(StandardMessageCodec.INSTANCE),
     FlutterPlugin,
-    MethodChannel.MethodCallHandler {
+    MethodChannel.MethodCallHandler,
+    ActivityAware {
     private lateinit var applicationContext: Context
     private lateinit var methodChannel: MethodChannel
     private lateinit var routesEventChannel: EventChannel
@@ -47,6 +53,7 @@ class VesperPlayerExternalPlaybackPlugin :
 
     private var routesSink: EventChannel.EventSink? = null
     private var sessionSink: EventChannel.EventSink? = null
+    private var activity: Activity? = null
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         applicationContext = binding.applicationContext
@@ -91,6 +98,7 @@ class VesperPlayerExternalPlaybackPlugin :
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         scope.cancel()
         controller.release()
+        activity = null
         routesSink = null
         sessionSink = null
         routesEventChannel.setStreamHandler(null)
@@ -117,6 +125,12 @@ class VesperPlayerExternalPlaybackPlugin :
                     "stopDiscovery" -> {
                         controller.stopDiscovery()
                         result.success(null)
+                    }
+                    "showRoutePicker" -> {
+                        val brightness = call.argumentMap()["brightness"]
+                            ?.toString()
+                            ?.toRouteButtonBrightness()
+                        result.success(showRoutePicker(brightness).toMap())
                     }
                     "connect" -> {
                         val routeId = call.argumentMap()["routeId"] as? String
@@ -160,6 +174,80 @@ class VesperPlayerExternalPlaybackPlugin :
 
     private fun emitRoutes(routes: List<VesperExternalPlaybackRoute>) {
         routesSink?.success(routes.map { route -> route.toMap() })
+    }
+
+    private fun showRoutePicker(
+        brightness: VesperExternalRouteButtonBrightness?,
+    ): VesperExternalPlaybackResult {
+        val currentActivity = activity
+            ?: return handledRoutePickerFailure("No Android Activity is attached.")
+        return runCatching {
+            val decorView = currentActivity.window.decorView as? ViewGroup
+                ?: return handledRoutePickerFailure("Android Activity decor view is unavailable.")
+            val button = VesperExternalRouteButton.create(currentActivity, brightness).apply {
+                alpha = 0f
+                isFocusable = false
+                isClickable = false
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                layoutParams = ViewGroup.LayoutParams(1, 1)
+            }
+            var attached = false
+            val opened = try {
+                decorView.addView(button)
+                attached = true
+                button.showDialog()
+            } finally {
+                if (attached) {
+                    runCatching { decorView.removeView(button) }
+                }
+            }
+            if (!opened) {
+                handledRoutePickerFailure("Android route picker is already open or unavailable.")
+            } else {
+                VesperExternalPlaybackResult.Success()
+            }
+        }.getOrElse { error ->
+            handledRoutePickerFailure(
+                error.message ?: "Unable to open the Android route picker.",
+                error,
+            )
+        }
+    }
+
+    private fun handledRoutePickerFailure(
+        message: String,
+        error: Throwable? = null,
+    ): VesperExternalPlaybackResult.Success {
+        Log.i(TAG, message, error)
+        sessionSink?.success(
+            mapOf(
+                "kind" to "discoveryDiagnostic",
+                "message" to message,
+                "code" to "route_picker_unavailable",
+                "details" to mapOf(
+                    "severity" to "info",
+                    "surface" to "routePicker",
+                    "exception" to error?.javaClass?.name.orEmpty(),
+                ),
+            ),
+        )
+        return VesperExternalPlaybackResult.Success()
+    }
+
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        activity = binding.activity
+    }
+
+    override fun onDetachedFromActivityForConfigChanges() {
+        activity = null
+    }
+
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        activity = binding.activity
+    }
+
+    override fun onDetachedFromActivity() {
+        activity = null
     }
 }
 
@@ -338,3 +426,4 @@ private const val ROUTES_EVENT_CHANNEL_NAME = "io.github.ikaros.vesper_player_ex
 private const val SESSION_EVENT_CHANNEL_NAME = "io.github.ikaros.vesper_player_external_playback/events"
 private const val ROUTE_BUTTON_VIEW_TYPE =
     "io.github.ikaros.vesper_player_external_playback/route_button"
+private const val TAG = "VesperExternalPlayback"

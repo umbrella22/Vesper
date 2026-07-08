@@ -245,6 +245,26 @@ ExampleDolbyAcceptancePreset? exampleDolbyAcceptancePresetById(String id) {
   return null;
 }
 
+ExampleDolbyAcceptancePreset? exampleDolbyAcceptancePresetForSource(
+  VesperPlayerSource source,
+) {
+  for (final preset in exampleDolbyAcceptanceCatalog) {
+    if (preset.source.uri == source.uri &&
+        preset.source.protocol == source.protocol &&
+        preset.source.drmConfiguration?.keySystem ==
+            source.drmConfiguration?.keySystem) {
+      return preset;
+    }
+  }
+  return null;
+}
+
+bool exampleDolbyAcceptanceSourceRequiresDirectNativePlayback(
+  VesperPlayerSource source,
+) {
+  return exampleDolbyAcceptancePresetForSource(source) != null;
+}
+
 List<ExampleDolbyAcceptancePreset> filterDolbyAcceptancePresets({
   required List<ExampleDolbyAcceptancePreset> presets,
   required ExampleDolbyAcceptanceDrmKind drmKind,

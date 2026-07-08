@@ -1,9 +1,11 @@
 package io.github.ikaros.vesper.player.android
 
 import android.util.Log
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -11,10 +13,13 @@ import java.net.Socket
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.Locale
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
@@ -136,11 +141,20 @@ internal class VesperSourceNormalizerLoopbackServer(
         try {
             val startedSocket = ServerSocket(0, 50, InetAddress.getByName(LOOPBACK_HOST))
             socket = startedSocket
-            val startedRequest = Executors.newFixedThreadPool(DEFAULT_MAX_REQUEST_THREADS) { runnable ->
-                Thread(runnable, "vesper-source-normalizer-loopback-request").apply {
-                    isDaemon = true
-                }
-            }
+            val startedRequest =
+                ThreadPoolExecutor(
+                    DEFAULT_MAX_REQUEST_THREADS,
+                    DEFAULT_MAX_REQUEST_THREADS,
+                    0L,
+                    TimeUnit.MILLISECONDS,
+                    ArrayBlockingQueue(DEFAULT_MAX_QUEUED_REQUESTS),
+                    { runnable ->
+                        Thread(runnable, "vesper-source-normalizer-loopback-request").apply {
+                            isDaemon = true
+                        }
+                    },
+                    ThreadPoolExecutor.AbortPolicy(),
+                )
             request = startedRequest
             val startedAccept = Executors.newSingleThreadExecutor { runnable ->
                 Thread(runnable, "vesper-source-normalizer-loopback-accept").apply {
@@ -197,6 +211,12 @@ internal class VesperSourceNormalizerLoopbackServer(
                 }
                 continue
             }
+            try {
+                client.soTimeout = DEFAULT_REQUEST_IDLE_TIMEOUT_MILLIS
+            } catch (_: Exception) {
+                runCatching { client.close() }
+                continue
+            }
             val executor = requestExecutor
             if (executor == null || executor.isShutdown) {
                 runCatching { client.close() }
@@ -221,9 +241,19 @@ internal class VesperSourceNormalizerLoopbackServer(
     }
 
     private fun handleClient(client: Socket) {
-        val input = client.getInputStream().bufferedReader(Charsets.ISO_8859_1)
+        val input = client.getInputStream()
         val output = client.getOutputStream()
-        val requestLine = input.readLine() ?: return
+        val requestLine =
+            try {
+                input.readBoundedHttpLine(
+                    maxBytes = MAX_HTTP_REQUEST_LINE_BYTES,
+                    statusCode = 414,
+                    message = "URI Too Long",
+                )
+            } catch (error: LoopbackHttpLimitExceeded) {
+                output.writeSimpleResponse(error.statusCode, error.responseMessage)
+                return
+            } ?: return
         val parts = requestLine.split(' ')
         if (parts.size < 2) {
             output.writeSimpleResponse(400, "Bad Request")
@@ -232,10 +262,26 @@ internal class VesperSourceNormalizerLoopbackServer(
         val method = parts[0].uppercase(Locale.US)
         val path = parts[1].substringBefore('?')
         val headers = linkedMapOf<String, String>()
+        var headerCount = 0
         while (true) {
-            val line = input.readLine() ?: break
+            val line =
+                try {
+                    input.readBoundedHttpLine(
+                        maxBytes = MAX_HTTP_HEADER_LINE_BYTES,
+                        statusCode = 431,
+                        message = "Request Header Fields Too Large",
+                    )
+                } catch (error: LoopbackHttpLimitExceeded) {
+                    output.writeSimpleResponse(error.statusCode, error.responseMessage)
+                    return
+                } ?: break
             if (line.isEmpty()) {
                 break
+            }
+            headerCount += 1
+            if (headerCount > MAX_HTTP_HEADERS) {
+                output.writeSimpleResponse(431, "Request Header Fields Too Large")
+                return
             }
             val separator = line.indexOf(':')
             if (separator > 0) {
@@ -629,6 +675,35 @@ private fun FileInputStream.skipFully(bytes: Long) {
     }
 }
 
+private class LoopbackHttpLimitExceeded(
+    val statusCode: Int,
+    val responseMessage: String,
+) : IOException(responseMessage)
+
+private fun InputStream.readBoundedHttpLine(
+    maxBytes: Int,
+    statusCode: Int,
+    message: String,
+): String? {
+    val buffer = ByteArrayOutputStream(min(maxBytes, 256))
+    while (true) {
+        val byte = read()
+        if (byte < 0) {
+            if (buffer.size() == 0) {
+                return null
+            }
+            return buffer.toString(Charsets.ISO_8859_1.name()).removeSuffix("\r")
+        }
+        if (byte == '\n'.code) {
+            return buffer.toString(Charsets.ISO_8859_1.name()).removeSuffix("\r")
+        }
+        if (buffer.size() >= maxBytes) {
+            throw LoopbackHttpLimitExceeded(statusCode, message)
+        }
+        buffer.write(byte)
+    }
+}
+
 private fun Int.reasonPhrase(): String =
     when (this) {
         200 -> "OK"
@@ -636,7 +711,9 @@ private fun Int.reasonPhrase(): String =
         400 -> "Bad Request"
         404 -> "Not Found"
         405 -> "Method Not Allowed"
+        414 -> "URI Too Long"
         416 -> "Range Not Satisfiable"
+        431 -> "Request Header Fields Too Large"
         else -> "OK"
     }
 
@@ -650,5 +727,10 @@ private const val DEFAULT_GROWING_READ_WAIT_MILLIS = 2_000L
 private const val DEFAULT_GROWING_READ_POLL_MILLIS = 25L
 private const val DEFAULT_GROWING_READ_STABLE_WAIT_MILLIS = 250L
 private const val DEFAULT_MAX_REQUEST_THREADS = 8
+private const val DEFAULT_MAX_QUEUED_REQUESTS = 64
+private const val DEFAULT_REQUEST_IDLE_TIMEOUT_MILLIS = 5_000
+private const val MAX_HTTP_REQUEST_LINE_BYTES = 8 * 1024
+private const val MAX_HTTP_HEADER_LINE_BYTES = 8 * 1024
+private const val MAX_HTTP_HEADERS = 64
 private const val LOOPBACK_HOST = "127.0.0.1"
 private const val TAG = "VesperSourceNormalizer"

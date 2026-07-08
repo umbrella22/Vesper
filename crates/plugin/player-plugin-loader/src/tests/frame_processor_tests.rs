@@ -1,6 +1,45 @@
 use super::*;
 
 #[test]
+fn dynamic_frame_processor_plugin_open_closes_session_when_success_payload_is_malformed() {
+    let _guard = frame_processor_test_guard();
+    if let Ok(mut closes) = FRAME_PROCESSOR_CLOSES.lock() {
+        *closes = 0;
+    }
+    let api = fixture_frame_processor_malformed_open_payload_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
+    };
+    let plugin =
+        LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load frame processor");
+    let factory = plugin
+        .frame_processor_plugin_factory()
+        .expect("frame processor factory should be available");
+    let input = fixture_native_frame();
+
+    let error = match factory.open_session(&FrameProcessorSessionConfig {
+        processor_index: 0,
+        input_metadata: input.metadata,
+        max_in_flight_frames: Some(1),
+    }) {
+        Ok(_) => panic!("malformed success payload should fail"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("open_session"));
+    assert_eq!(
+        FRAME_PROCESSOR_CLOSES
+            .lock()
+            .map(|closes| *closes)
+            .unwrap_or_default(),
+        1
+    );
+}
+
+#[test]
 fn dynamic_frame_processor_plugin_adapter_round_trips_native_frame() {
     let _guard = frame_processor_test_guard();
     if let Ok(mut releases) = FRAME_PROCESSOR_RELEASES.lock() {
@@ -181,6 +220,124 @@ fn dynamic_frame_processor_plugin_close_stops_drain_when_output_release_fails() 
             .unwrap_or_default(),
         1
     );
+}
+
+#[test]
+fn dynamic_frame_processor_plugin_failed_output_release_remains_retryable() {
+    let _guard = frame_processor_test_guard();
+    if let Ok(mut failures) = FRAME_PROCESSOR_RELEASE_FAILURES.lock() {
+        failures.clear();
+    }
+    let api = fixture_failing_release_frame_processor_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
+    };
+    let plugin =
+        LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load frame processor");
+    let factory = plugin
+        .frame_processor_plugin_factory()
+        .expect("frame processor factory should be available");
+    let input = fixture_native_frame();
+    let mut session = factory
+        .open_session(&FrameProcessorSessionConfig {
+            processor_index: 0,
+            input_metadata: input.metadata.clone(),
+            max_in_flight_frames: Some(1),
+        })
+        .expect("open frame processor session");
+    session
+        .submit_frame(
+            &input,
+            &FrameProcessorSubmitFrame::new(input.metadata.clone()),
+        )
+        .expect("submit frame");
+    let output = match session.receive_frame().expect("receive output") {
+        FrameProcessorReceiveOutput::Frame(output) => output,
+        other => panic!("expected processed frame, got {other:?}"),
+    };
+    let retry = output.frame.clone();
+
+    let first = session
+        .release_frame(output.frame)
+        .expect_err("first release should surface plugin failure");
+    let second = session
+        .release_frame(retry)
+        .expect_err("retry should call the plugin again and surface plugin failure");
+
+    assert!(matches!(first, FrameProcessorError::AbiViolation { .. }));
+    assert!(matches!(second, FrameProcessorError::AbiViolation { .. }));
+    assert_eq!(
+        FRAME_PROCESSOR_RELEASE_FAILURES
+            .lock()
+            .map(|failures| failures.len())
+            .unwrap_or_default(),
+        2
+    );
+}
+
+#[test]
+fn dynamic_frame_processor_plugin_releases_output_returned_after_outstanding_limit() {
+    let _guard = frame_processor_test_guard();
+    if let Ok(mut releases) = FRAME_PROCESSOR_RELEASES.lock() {
+        releases.clear();
+    }
+    let api = fixture_frame_processor_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
+    };
+    let plugin =
+        LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load frame processor");
+    let factory = plugin
+        .frame_processor_plugin_factory()
+        .expect("frame processor factory should be available");
+    let input = fixture_native_frame();
+    let mut session = factory
+        .open_session(&FrameProcessorSessionConfig {
+            processor_index: 0,
+            input_metadata: input.metadata.clone(),
+            max_in_flight_frames: Some(1),
+        })
+        .expect("open frame processor session");
+
+    for _ in 0..64 {
+        session
+            .submit_frame(
+                &input,
+                &FrameProcessorSubmitFrame::new(input.metadata.clone()),
+            )
+            .expect("submit frame");
+        match session.receive_frame().expect("receive output") {
+            FrameProcessorReceiveOutput::Frame(output) => assert_ne!(output.frame.handle, 0),
+            other => panic!("expected processed frame, got {other:?}"),
+        }
+    }
+    session
+        .submit_frame(
+            &input,
+            &FrameProcessorSubmitFrame::new(input.metadata.clone()),
+        )
+        .expect("submit overflow frame");
+
+    let error = session
+        .receive_frame()
+        .expect_err("overflow output should be rejected after release");
+
+    assert!(format!("{error}").contains("exceeded outstanding frame limit"));
+    assert_eq!(
+        FRAME_PROCESSOR_RELEASES
+            .lock()
+            .map(|releases| releases.len())
+            .unwrap_or_default(),
+        1
+    );
+
+    session.close().expect("close frame processor");
 }
 
 #[test]

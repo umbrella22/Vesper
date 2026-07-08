@@ -35,11 +35,16 @@ internal fun planSegmentTemplateTrack(
     val segmentCount = kotlin.math.ceil(finiteDurationSeconds / segmentSeconds)
         .toLong()
         .coerceAtLeast(1L)
-    if (segmentCount > Int.MAX_VALUE) {
+    if (segmentCount > MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK.toLong()) {
         throw unsupportedDashLayout(
             baseDetails = baseDetails,
             message = "DASH SegmentTemplate expands to too many segments for relay remux v1.",
-            details = mapOf("trackKind" to context.kind, "mediaId" to context.representationId),
+            details = mapOf(
+                "trackKind" to context.kind,
+                "mediaId" to context.representationId,
+                "segmentCount" to segmentCount.toString(),
+                "maxSegmentsPerTrack" to MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK.toString(),
+            ),
         )
     }
     val initializationUri = template.initialization?.let { initialization ->
@@ -79,6 +84,11 @@ internal fun planSegmentBaseTrack(
             val sidxBytes = resolver.readRange(context.mediaBaseUri, segmentBase.indexRange)
             val sidx = VesperRelayDashBridgeApiProvider.parseSidx(sidxBytes)
             VesperRelayDashBridgeApiProvider.mediaSegments(segmentBase.toBridgeModel(), sidx)
+                .also { segments ->
+                    if (segments.size > MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK) {
+                        throw VesperRelayDashSegmentLimitException(segments.size)
+                    }
+                }
         } catch (error: IOException) {
             throw VesperRelayHostInputException(
                 status = error.dashResourceHttpStatus(),
@@ -88,6 +98,17 @@ internal fun planSegmentBaseTrack(
                     details = baseDetails
                         .withSegmentHash(context.mediaBaseUri)
                         .withHostError(error.message ?: error.javaClass.simpleName),
+                ),
+            )
+        } catch (error: VesperRelayDashSegmentLimitException) {
+            throw unsupportedDashLayout(
+                baseDetails = baseDetails,
+                message = "DASH SegmentBase expands to too many segments for relay remux v1.",
+                details = mapOf(
+                    "trackKind" to context.kind,
+                    "mediaId" to context.mediaId,
+                    "segmentCount" to error.segmentCount.toString(),
+                    "maxSegmentsPerTrack" to MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK.toString(),
                 ),
             )
         } catch (error: Exception) {

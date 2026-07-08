@@ -16,6 +16,9 @@ final class VesperCapabilityWarning {
     this.hdrMetadata,
     this.diagnostics = const <String, Object?>{},
     this.message,
+    this.reasonRawValue,
+    this.recommendedPlaybackPathRawValue,
+    this.hdrKindRawValue,
   });
 
   factory VesperCapabilityWarning.fromMap(Map<Object?, Object?> map) {
@@ -28,20 +31,24 @@ final class VesperCapabilityWarning {
       diagnostics[key] = entry.value;
     }
     final explicitHdrMetadata = _rawMap(map['hdrMetadata']);
+    final reasonRawValue = map['reason'] as String?;
+    final recommendedPlaybackPathRawValue =
+        map['recommendedPlaybackPath'] as String?;
+    final hdrKindRawValue = map['hdrKind'] as String?;
     final hdrKind = _decodeEnum(
       VesperPlaybackCapabilityHdrKind.values,
-      map['hdrKind'],
+      hdrKindRawValue,
       VesperPlaybackCapabilityHdrKind.unknown,
     );
     return VesperCapabilityWarning(
       reason: _decodeEnum(
         VesperCapabilityWarningReason.values,
-        map['reason'],
+        reasonRawValue,
         VesperCapabilityWarningReason.hdrNativeFrameUnsupported,
       ),
       recommendedPlaybackPath: _decodeEnum(
         VesperRecommendedPlaybackPath.values,
-        map['recommendedPlaybackPath'],
+        recommendedPlaybackPathRawValue,
         VesperRecommendedPlaybackPath.systemPlayer,
       ),
       hdrKind: hdrKind,
@@ -59,6 +66,9 @@ final class VesperCapabilityWarning {
           : VesperHdrMetadata.fromDiagnostics(map, hdrKind: hdrKind),
       diagnostics: Map<String, Object?>.unmodifiable(diagnostics),
       message: map['message'] as String?,
+      reasonRawValue: reasonRawValue,
+      recommendedPlaybackPathRawValue: recommendedPlaybackPathRawValue,
+      hdrKindRawValue: hdrKindRawValue,
     );
   }
 
@@ -74,12 +84,16 @@ final class VesperCapabilityWarning {
   final VesperHdrMetadata? hdrMetadata;
   final Map<String, Object?> diagnostics;
   final String? message;
+  final String? reasonRawValue;
+  final String? recommendedPlaybackPathRawValue;
+  final String? hdrKindRawValue;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
-      'reason': reason.name,
-      'recommendedPlaybackPath': recommendedPlaybackPath.name,
-      'hdrKind': hdrKind.name,
+      'reason': reasonRawValue ?? reason.name,
+      'recommendedPlaybackPath':
+          recommendedPlaybackPathRawValue ?? recommendedPlaybackPath.name,
+      'hdrKind': hdrKindRawValue ?? hdrKind.name,
       if (likelyHdrCapabilityIssue)
         'likelyHdrCapabilityIssue': likelyHdrCapabilityIssue,
       if (confidence != null) 'confidence': confidence,
@@ -123,33 +137,46 @@ final class VesperAppProbeConvergence {
     this.codecFormatWidth,
     this.codecFormatHeight,
     this.codecFormatFrameRate,
+    this.statusRawValue,
+    this.recommendedPlaybackPathRawValue,
+    this.confidenceRawValue,
+    this.hdrKindRawValue,
+    this.dolbyVisionModeRawValue,
+    this.sourceProtocolRawValue,
   });
 
   factory VesperAppProbeConvergence.fromMap(Map<Object?, Object?> map) {
+    final statusRawValue = map['appProbeStatus'] as String?;
+    final recommendedPlaybackPathRawValue =
+        map['appProbeRecommendedPlaybackPath'] as String?;
+    final confidenceRawValue = map['appProbeConfidence'] as String?;
+    final hdrKindRawValue = map['appProbeHdrKind'] as String?;
+    final dolbyVisionModeRawValue = map['appProbeDolbyVisionMode'] as String?;
+    final sourceProtocolRawValue = map['appProbeSourceProtocol'] as String?;
     return VesperAppProbeConvergence(
       status: _decodeEnum(
         VesperPlaybackCapabilityProbeStatus.values,
-        map['appProbeStatus'],
+        statusRawValue,
         VesperPlaybackCapabilityProbeStatus.unknown,
       ),
       recommendedPlaybackPath: _decodeEnum(
         VesperRecommendedPlaybackPath.values,
-        map['appProbeRecommendedPlaybackPath'],
+        recommendedPlaybackPathRawValue,
         VesperRecommendedPlaybackPath.systemPlayer,
       ),
       confidence: _decodeEnum(
         VesperPlaybackCapabilityConfidence.values,
-        map['appProbeConfidence'],
+        confidenceRawValue,
         VesperPlaybackCapabilityConfidence.codecOnly,
       ),
       hdrKind: _decodeEnum(
         VesperPlaybackCapabilityHdrKind.values,
-        map['appProbeHdrKind'],
+        hdrKindRawValue,
         VesperPlaybackCapabilityHdrKind.unknown,
       ),
       dolbyVisionMode: _decodeEnum(
         VesperPlaybackCapabilityDolbyVisionMode.values,
-        map['appProbeDolbyVisionMode'],
+        dolbyVisionModeRawValue,
         VesperPlaybackCapabilityDolbyVisionMode.none,
       ),
       missingCapabilities:
@@ -157,7 +184,7 @@ final class VesperAppProbeConvergence {
       sourceUri: map['appProbeSourceUri'] as String?,
       sourceProtocol: _decodeEnumOrNull(
         VesperPlayerSourceProtocol.values,
-        map['appProbeSourceProtocol'],
+        sourceProtocolRawValue,
       ),
       sourceMatchesRuntime:
           _decodeOptionalFlexibleBool(map['appProbeSourceMatchesRuntime']),
@@ -195,6 +222,12 @@ final class VesperAppProbeConvergence {
       codecFormatHeight: _decodeFlexibleInt(map['appProbeCodecFormatHeight']),
       codecFormatFrameRate:
           _decodeFlexibleDouble(map['appProbeCodecFormatFrameRate']),
+      statusRawValue: statusRawValue,
+      recommendedPlaybackPathRawValue: recommendedPlaybackPathRawValue,
+      confidenceRawValue: confidenceRawValue,
+      hdrKindRawValue: hdrKindRawValue,
+      dolbyVisionModeRawValue: dolbyVisionModeRawValue,
+      sourceProtocolRawValue: sourceProtocolRawValue,
     );
   }
 
@@ -232,19 +265,28 @@ final class VesperAppProbeConvergence {
   final int? codecFormatWidth;
   final int? codecFormatHeight;
   final double? codecFormatFrameRate;
+  final String? statusRawValue;
+  final String? recommendedPlaybackPathRawValue;
+  final String? confidenceRawValue;
+  final String? hdrKindRawValue;
+  final String? dolbyVisionModeRawValue;
+  final String? sourceProtocolRawValue;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
-      'appProbeStatus': status.name,
-      'appProbeRecommendedPlaybackPath': recommendedPlaybackPath.name,
-      'appProbeConfidence': confidence.name,
-      'appProbeHdrKind': hdrKind.name,
-      'appProbeDolbyVisionMode': dolbyVisionMode.name,
+      'appProbeStatus': statusRawValue ?? status.name,
+      'appProbeRecommendedPlaybackPath':
+          recommendedPlaybackPathRawValue ?? recommendedPlaybackPath.name,
+      'appProbeConfidence': confidenceRawValue ?? confidence.name,
+      'appProbeHdrKind': hdrKindRawValue ?? hdrKind.name,
+      'appProbeDolbyVisionMode':
+          dolbyVisionModeRawValue ?? dolbyVisionMode.name,
       if (missingCapabilities.isNotEmpty)
         'appProbeMissingCapabilities': missingCapabilities,
       if (sourceUri != null) 'appProbeSourceUri': sourceUri,
-      if (sourceProtocol != null)
-        'appProbeSourceProtocol': sourceProtocol?.name,
+      if (sourceProtocol != null || sourceProtocolRawValue != null)
+        'appProbeSourceProtocol':
+            sourceProtocolRawValue ?? sourceProtocol?.name,
       if (sourceMatchesRuntime != null)
         'appProbeSourceMatchesRuntime': sourceMatchesRuntime,
       if (sourceMatchBasis != null)

@@ -14,7 +14,9 @@ import java.net.Socket
 import java.net.URL
 import java.util.Collections
 import java.util.concurrent.Callable
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -109,6 +111,139 @@ class VesperRelayServerTest {
         val invalid = request(handle.url, headers = mapOf("Range" to "bytes=100-200"))
         assertEquals(416, invalid.status)
         assertEquals("bytes */10", invalid.headers["Content-Range"]?.firstOrNull())
+    }
+
+    @Test
+    fun rejectsOversizedRelayHttpRequestBoundaries() {
+        val file = File.createTempFile("vesper-relay", ".mp4")
+        file.writeText("0123456789")
+        file.deleteOnExit()
+        val handle = relay.register(
+            VesperPlayerSource.local(uri = file.absolutePath, label = "Local"),
+        )
+        val path = URL(handle.url).path
+
+        val oversizedPath = "/media/${handle.token}/" + "a".repeat(9 * 1024)
+        assertEquals(
+            414,
+            rawRelayRequestStatus(
+                handle.url,
+                "GET $oversizedPath HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            ),
+        )
+
+        assertEquals(
+            431,
+            rawRelayRequestStatus(
+                handle.url,
+                "GET $path HTTP/1.1\r\nHost: localhost\r\nX-Long: ${"b".repeat(9 * 1024)}\r\n\r\n",
+            ),
+        )
+
+        val tooManyHeaders = buildString {
+            append("GET $path HTTP/1.1\r\n")
+            repeat(MAX_RELAY_HTTP_HEADERS + 1) { index ->
+                append("X-Test-").append(index).append(": value\r\n")
+            }
+            append("\r\n")
+        }
+        assertEquals(431, rawRelayRequestStatus(handle.url, tooManyHeaders))
+    }
+
+    @Test
+    fun stopDuringStartPreventsLateRelayPublish() {
+        val bindEntered = CountDownLatch(1)
+        val releaseBind = CountDownLatch(1)
+        val racingRelay = VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = {
+                bindEntered.countDown()
+                assertTrue(
+                    "test bind provider should be released",
+                    releaseBind.await(5, TimeUnit.SECONDS),
+                )
+                loopback
+            },
+            allowPrivateRemoteSources = true,
+        )
+        additionalRelays += racingRelay
+        val executor = Executors.newSingleThreadExecutor()
+        val file = File.createTempFile("vesper-relay-race", ".mp4")
+        file.writeText("race")
+        file.deleteOnExit()
+        try {
+            val result =
+                executor.submit(
+                    Callable<Throwable?> {
+                        try {
+                            racingRelay.register(
+                                VesperPlayerSource.local(uri = file.absolutePath, label = "Race"),
+                            )
+                            null
+                        } catch (error: Throwable) {
+                            error
+                        }
+                    },
+                )
+            assertTrue(bindEntered.await(5, TimeUnit.SECONDS))
+            racingRelay.stop()
+            releaseBind.countDown()
+
+            val error = result.get(5, TimeUnit.SECONDS)
+            assertNotNull(error)
+            assertTrue(error is IllegalStateException)
+        } finally {
+            releaseBind.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun stopDuringRegisterAddressSelectionPreventsLateTokenPublish() {
+        val addressSelectionEntered = CountDownLatch(1)
+        val releaseAddressSelection = CountDownLatch(1)
+        val racingRelay = VesperRelayServer(
+            advertisedAddressProvider = {
+                addressSelectionEntered.countDown()
+                assertTrue(
+                    "test advertised address provider should be released",
+                    releaseAddressSelection.await(5, TimeUnit.SECONDS),
+                )
+                loopback
+            },
+            bindAddressProvider = { InetAddress.getByName("0.0.0.0") },
+            allowPrivateRemoteSources = true,
+        )
+        additionalRelays += racingRelay
+        val executor = Executors.newSingleThreadExecutor()
+        val file = File.createTempFile("vesper-relay-register-race", ".mp4")
+        file.writeText("race")
+        file.deleteOnExit()
+        try {
+            val result =
+                executor.submit(
+                    Callable<Throwable?> {
+                        try {
+                            racingRelay.register(
+                                VesperPlayerSource.local(uri = file.absolutePath, label = "Race"),
+                            )
+                            null
+                        } catch (error: Throwable) {
+                            error
+                        }
+                    },
+                )
+            assertTrue(addressSelectionEntered.await(5, TimeUnit.SECONDS))
+            racingRelay.stop()
+            releaseAddressSelection.countDown()
+
+            val error = result.get(5, TimeUnit.SECONDS)
+            assertNotNull(error)
+            assertTrue(error is IllegalStateException)
+        } finally {
+            releaseAddressSelection.countDown()
+            executor.shutdownNow()
+        }
     }
 
     @Test
@@ -277,6 +412,27 @@ class VesperRelayServerTest {
             ),
         )
         assertTrue(rejected is VesperExternalSourcePreparationResult.Unsupported)
+    }
+
+    @Test
+    fun preparedRelayTokenIsInvalidatedWhenRouteLoadFails() {
+        val preparer = VesperExternalPlaybackSourcePreparer(relay)
+        val file = File.createTempFile("vesper-relay-failed-load", ".mp4")
+        file.writeText("video")
+        file.deleteOnExit()
+        val prepared = preparer.prepare(
+            VesperExternalSourcePreparationRequest(
+                target = VesperExternalPlaybackTarget.Dlna,
+                sources = listOf(VesperPlayerSource.local(uri = file.absolutePath, label = "Local")),
+                capabilities = VesperExternalRouteCapabilities(supportsProgressive = true),
+            ),
+        ) as VesperExternalSourcePreparationResult.Prepared
+
+        assertEquals(200, request(prepared.source.uri).status)
+
+        prepared.releaseRelayIfLoadFailed(relay, loadSucceeded = false)
+
+        assertEquals(404, request(prepared.source.uri).status)
     }
 
     @Test
@@ -571,7 +727,7 @@ class VesperRelayServerTest {
     }
 
     @Test
-    fun relayServerDoesNotCloseAdaptedSessionCloseableForHeadResponse() {
+    fun relayServerClosesAdaptedSessionCloseableAfterHeadResponseCompletes() {
         val adapter = CloseableHeadFormatAdapter()
         val adaptedRelay = VesperRelayServer(
             advertisedAddressProvider = { loopback },
@@ -595,7 +751,38 @@ class VesperRelayServerTest {
             assertEquals(200, response.status)
             assertEquals("", response.body)
             assertTrue(adapter.openRequests.single().headOnly)
-            assertFalse(adapter.closed.get())
+            assertTrue(adapter.closed.get())
+        } finally {
+            adaptedRelay.stop()
+        }
+    }
+
+    @Test
+    fun relayServerClosesAdaptedSessionCloseableAfterGetResponseCompletes() {
+        val adapter = CloseableHeadFormatAdapter()
+        val adaptedRelay = VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = { loopback },
+            formatAdapter = adapter,
+        )
+        try {
+            val handle = adaptedRelay.register(
+                VesperPlayerSource.dash(
+                    uri = "https://example.com/video.mpd",
+                    label = "Episode",
+                ),
+                VesperRelayFormatAdaptationRegistration(
+                    fallbackFormat = VesperRelayFallbackFormat.MpegTs,
+                    config = VesperRelayFormatAdaptationConfig(enabled = true),
+                ),
+            )
+
+            val response = request(handle.url)
+
+            assertEquals(200, response.status)
+            assertEquals("ok", response.body)
+            assertFalse(adapter.openRequests.single().headOnly)
+            assertTrue(adapter.closed.get())
         } finally {
             adaptedRelay.stop()
         }
@@ -925,4 +1112,30 @@ private fun request(
             .mapKeys { it.key!! },
         body = body,
     )
+}
+
+private fun rawRelayRequestStatus(
+    url: String,
+    request: String,
+): Int {
+    val parsed = URL(url)
+    Socket(parsed.host, parsed.port).use { socket ->
+        socket.soTimeout = 2_000
+        val output = socket.getOutputStream()
+        output.write(request.toByteArray(Charsets.ISO_8859_1))
+        output.flush()
+        val statusLine = socket.getInputStream()
+            .bufferedReader(Charsets.ISO_8859_1)
+            .readLine()
+        if (statusLine == null) {
+            fail("relay did not return an HTTP status line")
+            return -1
+        }
+        val status = statusLine.split(' ').getOrNull(1)?.toIntOrNull()
+        if (status == null) {
+            fail("relay returned malformed HTTP status line: $statusLine")
+            return -1
+        }
+        return status
+    }
 }

@@ -157,23 +157,7 @@ extension _PlayerHostPlaylistActions on _PlayerHostPageState {
       _showMessage('当前平台宿主暂不支持 DASH Dolby 验收流。');
       return;
     }
-    if (_sourceNormalizerSetting != ExampleSourceNormalizerSetting.disabled &&
-        _sourceNormalizerSetting !=
-            ExampleSourceNormalizerSetting.diagnosticsOnly) {
-      _updateState(() {
-        _sourceNormalizerSetting = ExampleSourceNormalizerSetting.disabled;
-        _activeDirectSource = preset.source;
-        _playbackOrigin = origin;
-      });
-      _showMessage('Dolby 验收已切回 direct native 路径，SourceNormalizer 已关闭。');
-      await _rebuildControllerForSource(
-        preset.source,
-        shouldResumePlayback:
-            controller.snapshot.playbackState == VesperPlaybackState.playing,
-      );
-    } else {
-      await _selectSource(controller, preset.source, origin: origin);
-    }
+    await _selectSource(controller, preset.source, origin: origin);
     if (!mounted) {
       return;
     }

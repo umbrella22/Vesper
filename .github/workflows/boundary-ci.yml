@@ -1,0 +1,46 @@
+name: Vesper Boundary CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/boundary-ci.yml"
+      - "scripts/**"
+      - "crates/ffi/**"
+      - "crates/plugin/**"
+      - "lib/android/**"
+      - "lib/ios/VesperPlayerKit/**"
+      - "lib/flutter/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/boundary-ci.yml"
+      - "scripts/**"
+      - "crates/ffi/**"
+      - "crates/plugin/**"
+      - "lib/android/**"
+      - "lib/ios/VesperPlayerKit/**"
+      - "lib/flutter/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: boundary-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  boundary-invariants:
+    name: Boundary Invariant Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Ruby version
+        run: ruby --version
+
+      - name: Verify boundary invariants
+        run: ./scripts/vesper contract boundary

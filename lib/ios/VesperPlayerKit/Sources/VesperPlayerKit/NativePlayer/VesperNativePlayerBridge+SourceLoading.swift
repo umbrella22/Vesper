@@ -37,11 +37,15 @@ extension VesperNativePlayerBridge {
                 userInfo: [NSLocalizedDescriptionKey: issue.message]
             )
         case .nativeFrame:
+            let startupSession = nativeFramePipelineCoordinator.activeSession
             switch await nativeFramePipelineCoordinator.startActiveSession() {
             case .success(let session):
-                try Task.checkCancellation()
-                guard currentSource == source else {
-                    nativeFramePipelineCoordinator.closeActiveSession()
+                guard !Task.isCancelled else {
+                    nativeFramePipelineCoordinator.closeSession(session)
+                    throw CancellationError()
+                }
+                guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else {
+                    nativeFramePipelineCoordinator.closeSession(session)
                     throw NSError(
                         domain: "io.github.ikaros.vesper.host.ios",
                         code: -1,
@@ -51,15 +55,27 @@ extension VesperNativePlayerBridge {
                 configureNativeFramePlayback(source: source, session: session)
                 return
             case .failure(let error):
+                guard !Task.isCancelled else {
+                    nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
+                    throw CancellationError()
+                }
+                guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else {
+                    nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
+                    throw NSError(
+                        domain: "io.github.ikaros.vesper.host.ios",
+                        code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "Selected source changed before native-frame startup completed."]
+                    )
+                }
                 if nativeFramePipelineConfiguration.mode == .preferNativeFrame {
                     nativeFramePipelineFallbackIssue = error.issue
-                    nativeFramePipelineCoordinator.closeActiveSession()
+                    nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
                     currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
                     iosHostLog("native-frame pipeline fallback: \(error.message)")
                     break
                 }
                 currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
-                nativeFramePipelineCoordinator.closeActiveSession()
+                nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
                 throw NSError(
                     domain: "io.github.ikaros.vesper.host.ios",
                     code: -3,

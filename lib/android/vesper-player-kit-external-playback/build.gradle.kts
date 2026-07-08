@@ -122,6 +122,10 @@ val buildRelayFfmpegAndroidJni = tasks.register<Exec>("buildRelayFfmpegAndroidJn
     }
 }
 
+tasks.matching { task -> task.name == "verifyVesperNativeBinaryNames" }.configureEach {
+    dependsOn(buildRelayFfmpegAndroidJni)
+}
+
 tasks.matching { task ->
     (task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")) ||
         (task.name.startsWith("generate") && task.name.contains("Lint") && task.name.endsWith("Model"))

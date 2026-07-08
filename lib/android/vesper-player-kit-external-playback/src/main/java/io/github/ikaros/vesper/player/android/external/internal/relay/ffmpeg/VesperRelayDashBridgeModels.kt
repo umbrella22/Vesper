@@ -4,6 +4,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import org.json.JSONArray
 import org.json.JSONObject
 
+internal const val MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK = 8_192
+
 @Volatile
 internal var VesperRelayDashBridgeExecutor: (String) -> String = { requestJson ->
     VesperRelayDashBridgeNative.ensureLoaded()
@@ -62,8 +64,8 @@ internal object JniVesperRelayDashBridgeApi : VesperRelayDashBridgeApi {
     override fun mediaSegments(
         segmentBase: VesperRelayDashByteRangeSegmentBase,
         sidx: VesperRelayDashSidxBox,
-    ): List<VesperRelayDashMediaSegment> =
-        VesperRelayDashMediaSegment.fromJsonArray(
+    ): List<VesperRelayDashMediaSegment> {
+        val response =
             JSONArray(
                 VesperRelayDashBridgeNative.executeJson(
                     JSONObject()
@@ -71,10 +73,20 @@ internal object JniVesperRelayDashBridgeApi : VesperRelayDashBridgeApi {
                         .put("segmentBase", segmentBase.toJson())
                         .put("sidx", sidx.toJson())
                         .toString(),
-                ),
-            ),
-        )
+                )
+            )
+        if (response.length() > MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK) {
+            throw VesperRelayDashSegmentLimitException(response.length())
+        }
+        return VesperRelayDashMediaSegment.fromJsonArray(response)
+    }
 }
+
+internal class VesperRelayDashSegmentLimitException(
+    val segmentCount: Int,
+) : IllegalArgumentException(
+    "DASH SegmentBase expands to $segmentCount segments, max is $MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK.",
+)
 
 internal data class VesperRelayDashByteRangeSegmentBase(
     val initialization: VesperRelayDashByteRange,

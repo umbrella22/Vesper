@@ -86,6 +86,43 @@ void main() {
     expect(diagnostic.message, contains('softwareDecoder'));
   });
 
+  test('plugin diagnostic preserves unknown wire values', () {
+    final diagnostic = VesperPluginDiagnostic.fromMap(<Object?, Object?>{
+      'path': '/tmp/player-future-plugin.dylib',
+      'pluginName': 'player-future-plugin',
+      'pluginKind': 'future',
+      'status': 'futureStatus',
+      'participation': 'futureParticipation',
+      'capability': <Object?, Object?>{
+        'kind': 'futureCapability',
+        'futureCapability': <Object?, Object?>{
+          'feature': 'packetHints',
+        },
+      },
+    });
+
+    expect(diagnostic.status, VesperPluginDiagnosticStatus.unsupportedKind);
+    expect(diagnostic.statusRawValue, 'futureStatus');
+    expect(diagnostic.participation, VesperPluginParticipation.unknown);
+    expect(diagnostic.participationRawValue, 'futureParticipation');
+    expect(diagnostic.capability?.kind, VesperPluginCapabilityKind.unknown);
+    expect(diagnostic.capability?.rawKind, 'futureCapability');
+    expect(diagnostic.capability?.decoder, isNull);
+    expect(diagnostic.capability?.frameProcessor, isNull);
+    expect(diagnostic.capability?.sourceNormalizer, isNull);
+
+    final encoded = diagnostic.toMap();
+    expect(encoded['status'], 'futureStatus');
+    expect(encoded['participation'], 'futureParticipation');
+    final capability = Map<Object?, Object?>.from(encoded['capability'] as Map);
+    expect(capability['kind'], 'futureCapability');
+    expect(
+      Map<Object?, Object?>.from(
+          capability['futureCapability'] as Map)['feature'],
+      'packetHints',
+    );
+  });
+
   test('download task update event decodes prepared task', () {
     final event = VesperDownloadManagerEvent.fromMap(<Object?, Object?>{
       'downloadId': 'downloads',
@@ -135,14 +172,17 @@ void main() {
     );
   });
 
-  test('download manager event requires the breaking incremental type', () {
-    expect(
-      () => VesperDownloadManagerEvent.fromMap(<Object?, Object?>{
-        'downloadId': 'downloads',
-        'snapshot': const VesperDownloadSnapshot.initial().toMap(),
-      }),
-      throwsA(isA<FormatException>()),
-    );
+  test('download manager event preserves unknown payloads', () {
+    final event = VesperDownloadManagerEvent.fromMap(<Object?, Object?>{
+      'downloadId': 'downloads',
+      'snapshot': const VesperDownloadSnapshot.initial().toMap(),
+    });
+
+    expect(event, isA<VesperDownloadUnknownEvent>());
+    final unknown = event as VesperDownloadUnknownEvent;
+    expect(unknown.downloadId, 'downloads');
+    expect(unknown.type, '<missing>');
+    expect(unknown.payload['snapshot'], isA<Map>());
   });
 
   test('player snapshot event decodes embedded host lastError', () {
@@ -230,6 +270,61 @@ void main() {
     expect(
       warningEvent.warning.frameProcessor?.policyAction,
       VesperFrameProcessorPolicyAction.bypassOriginalFrame,
+    );
+  });
+
+  test('player warning event preserves unknown frame processor wire values',
+      () {
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'macos-player',
+      'type': 'warning',
+      'warning': <Object?, Object?>{
+        'domain': 'frameProcessor',
+        'frameProcessor': <Object?, Object?>{
+          'kind': 'futureFrameWarning',
+          'pluginName': 'future-processor',
+          'processorIndex': 3,
+          'policyAction': 'futureAction',
+          'message': 'future warning payload',
+        },
+      },
+    });
+
+    final warningEvent = event as VesperPlayerWarningEvent;
+    final frameProcessor = warningEvent.warning.frameProcessor!;
+    expect(frameProcessor.kind, VesperFrameProcessorWarningKind.unsupported);
+    expect(frameProcessor.policyAction,
+        VesperFrameProcessorPolicyAction.continuePlayback);
+    expect(frameProcessor.kindRawValue, 'futureFrameWarning');
+    expect(frameProcessor.policyActionRawValue, 'futureAction');
+    expect(frameProcessor.toMap()['kind'], 'futureFrameWarning');
+    expect(frameProcessor.toMap()['policyAction'], 'futureAction');
+  });
+
+  test('player warning event preserves unknown runtime warning payloads', () {
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'ios-player',
+      'type': 'warning',
+      'warning': <Object?, Object?>{
+        'domain': 'sourceNormalizer',
+        'sourceNormalizer': <Object?, Object?>{
+          'status': 'futureStatus',
+          'cached': true,
+        },
+      },
+    });
+
+    final warningEvent = event as VesperPlayerWarningEvent;
+    expect(warningEvent.warning.domain, VesperRuntimeWarningDomain.unknown);
+    expect(warningEvent.warning.domainRawValue, 'sourceNormalizer');
+    expect(warningEvent.warning.frameProcessor, isNull);
+    expect(warningEvent.warning.capability, isNull);
+    expect(warningEvent.warning.rawPayload['sourceNormalizer'], isA<Map>());
+    final encoded = warningEvent.warning.toMap();
+    expect(encoded['domain'], 'sourceNormalizer');
+    expect(
+      (encoded['sourceNormalizer'] as Map<Object?, Object?>)['status'],
+      'futureStatus',
     );
   });
 
@@ -440,6 +535,71 @@ void main() {
         'displayHdrCapability',
       ],
     );
+  });
+
+  test('capability warning preserves unknown wire values', () {
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'ios-player',
+      'type': 'warning',
+      'warning': <Object?, Object?>{
+        'domain': 'capability',
+        'capability': <Object?, Object?>{
+          'reason': 'futureReason',
+          'recommendedPlaybackPath': 'futurePath',
+          'hdrKind': 'futureHdr',
+          'appProbeStatus': 'futureStatus',
+          'appProbeRecommendedPlaybackPath': 'futureAppPath',
+          'appProbeConfidence': 'futureConfidence',
+          'appProbeHdrKind': 'futureAppHdr',
+          'appProbeDolbyVisionMode': 'futureDolbyVision',
+          'appProbeSourceProtocol': 'futureProtocol',
+        },
+      },
+    });
+
+    final warningEvent = event as VesperPlayerWarningEvent;
+    final capability = warningEvent.warning.capability!;
+    expect(
+      capability.reason,
+      VesperCapabilityWarningReason.hdrNativeFrameUnsupported,
+    );
+    expect(
+      capability.recommendedPlaybackPath,
+      VesperRecommendedPlaybackPath.systemPlayer,
+    );
+    expect(capability.hdrKind, VesperPlaybackCapabilityHdrKind.unknown);
+    expect(capability.reasonRawValue, 'futureReason');
+    expect(capability.recommendedPlaybackPathRawValue, 'futurePath');
+    expect(capability.hdrKindRawValue, 'futureHdr');
+    expect(capability.toMap()['reason'], 'futureReason');
+    expect(capability.toMap()['recommendedPlaybackPath'], 'futurePath');
+    expect(capability.toMap()['hdrKind'], 'futureHdr');
+
+    final appProbe = capability.appProbeConvergence!;
+    expect(appProbe.status, VesperPlaybackCapabilityProbeStatus.unknown);
+    expect(
+      appProbe.recommendedPlaybackPath,
+      VesperRecommendedPlaybackPath.systemPlayer,
+    );
+    expect(appProbe.confidence, VesperPlaybackCapabilityConfidence.codecOnly);
+    expect(appProbe.hdrKind, VesperPlaybackCapabilityHdrKind.unknown);
+    expect(
+      appProbe.dolbyVisionMode,
+      VesperPlaybackCapabilityDolbyVisionMode.none,
+    );
+    expect(appProbe.sourceProtocol, isNull);
+    expect(appProbe.toMap()['appProbeStatus'], 'futureStatus');
+    expect(
+      appProbe.toMap()['appProbeRecommendedPlaybackPath'],
+      'futureAppPath',
+    );
+    expect(appProbe.toMap()['appProbeConfidence'], 'futureConfidence');
+    expect(appProbe.toMap()['appProbeHdrKind'], 'futureAppHdr');
+    expect(
+      appProbe.toMap()['appProbeDolbyVisionMode'],
+      'futureDolbyVision',
+    );
+    expect(appProbe.toMap()['appProbeSourceProtocol'], 'futureProtocol');
   });
 
   test('player warning event decodes iOS runtime HDR capability hint', () {
@@ -742,7 +902,7 @@ void main() {
 
     expect(
       VesperSourceNormalizerConfiguration.fromMap(sourceNormalizer.toMap())
-      .mode,
+          .mode,
       VesperSourceNormalizerMode.requireNormalized,
     );
     expect(preferBundled.toMap(), <String, Object?>{
@@ -810,6 +970,21 @@ void main() {
     );
     expect(pip.error?.diagnostics['route'], 'nativeFramePipeline');
     expect(pip.diagnostics['platform'], 'android');
+  });
+
+  test('picture-in-picture event preserves unknown state raw value', () {
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'ios-player',
+      'type': 'pictureInPicture',
+      'state': 'suspendedBySystem',
+      'isActive': true,
+    });
+
+    expect(event, isA<VesperPlayerPictureInPictureEvent>());
+    final pip = event as VesperPlayerPictureInPictureEvent;
+    expect(pip.state, VesperPictureInPictureStatus.inactive);
+    expect(pip.stateRawValue, 'suspendedBySystem');
+    expect(pip.isActive, isTrue);
   });
 
   test('unknown player event does not decode as snapshot', () {

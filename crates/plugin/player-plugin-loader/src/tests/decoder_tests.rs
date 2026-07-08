@@ -53,6 +53,48 @@ fn dynamic_decoder_plugin_surfaces_error_payloads() {
 }
 
 #[test]
+fn dynamic_native_decoder_plugin_open_closes_session_when_success_payload_is_malformed() {
+    let _guard = decoder_native_frame_release_test_guard();
+    if let Ok(mut closes) = NATIVE_DECODER_CLOSES.lock() {
+        closes.clear();
+    }
+    let api = VesperDecoderPluginApiV5 {
+        open_session_json: Some(fixture_native_decoder_open_session_malformed_payload_json),
+        close_session: Some(fixture_decoder_recording_close_session),
+        ..fixture_native_decoder_api()
+    };
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::Decoder,
+        plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
+    };
+    let plugin =
+        LoadedDynamicPlugin::from_descriptor(None, &descriptor).expect("load decoder plugin");
+    let factory = plugin
+        .native_decoder_plugin_factory()
+        .expect("decoder factory should be available");
+
+    let error = match factory.open_native_session(&DecoderSessionConfig {
+        codec: "fixture-video".to_owned(),
+        media_kind: DecoderMediaKind::Video,
+        ..DecoderSessionConfig::default()
+    }) {
+        Ok(_) => panic!("malformed success payload should fail"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("open_native"));
+    assert_eq!(
+        NATIVE_DECODER_CLOSES
+            .lock()
+            .map(|closes| closes.len())
+            .unwrap_or_default(),
+        1
+    );
+}
+
+#[test]
 fn dynamic_native_decoder_plugin_adapter_round_trips_native_frame() {
     let api = fixture_native_decoder_api();
     let descriptor = VesperPluginDescriptor {
@@ -553,6 +595,74 @@ fn dynamic_native_decoder_plugin_close_releases_unreturned_native_frames() {
 }
 
 #[test]
+fn dynamic_native_decoder_plugin_releases_frame_returned_after_outstanding_limit() {
+    let _guard = decoder_native_frame_release_test_guard();
+    if let Ok(mut releases) = NATIVE_FRAME_RELEASES.lock() {
+        releases.clear();
+    }
+    let api = fixture_native_decoder_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::Decoder,
+        plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
+    };
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load native decoder plugin");
+    let factory = plugin
+        .native_decoder_plugin_factory()
+        .expect("native decoder factory should be available");
+    let mut session = factory
+        .open_native_session(&DecoderSessionConfig {
+            codec: "fixture-video".to_owned(),
+            media_kind: DecoderMediaKind::Video,
+            prefer_hardware: true,
+            require_cpu_output: false,
+            ..DecoderSessionConfig::default()
+        })
+        .expect("open native decoder session");
+
+    for index in 0..64 {
+        session
+            .send_packet(
+                &DecoderPacket {
+                    pts_us: Some(index),
+                    key_frame: true,
+                    ..DecoderPacket::default()
+                },
+                &[index as u8],
+            )
+            .expect("send native packet");
+        match session
+            .receive_native_frame()
+            .expect("receive tracked native frame")
+        {
+            DecoderReceiveNativeFrameOutput::Frame(frame) => assert_ne!(frame.handle, 0),
+            other => panic!("expected native frame, got {other:?}"),
+        }
+    }
+    session
+        .send_packet(
+            &DecoderPacket {
+                pts_us: Some(64),
+                key_frame: true,
+                ..DecoderPacket::default()
+            },
+            &[64],
+        )
+        .expect("send overflow native packet");
+
+    let error = session
+        .receive_native_frame()
+        .expect_err("overflow frame should be rejected after release");
+
+    assert!(format!("{error}").contains("exceeded outstanding frame limit"));
+    assert_eq!(native_frame_releases().len(), 1);
+
+    session.close().expect("close native session");
+}
+
+#[test]
 fn dynamic_native_decoder_plugin_close_stops_drain_when_native_frame_release_fails() {
     let _guard = decoder_native_frame_release_test_guard();
     if let Ok(mut failures) = NATIVE_FRAME_RELEASE_FAILURES.lock() {
@@ -621,6 +731,72 @@ fn dynamic_native_decoder_plugin_close_stops_drain_when_native_frame_release_fai
             .map(|closes| closes.len())
             .unwrap_or_default(),
         1
+    );
+}
+
+#[test]
+fn dynamic_native_decoder_plugin_failed_native_frame_release_remains_retryable() {
+    let _guard = decoder_native_frame_release_test_guard();
+    if let Ok(mut failures) = NATIVE_FRAME_RELEASE_FAILURES.lock() {
+        failures.clear();
+    }
+    let api = fixture_failing_release_native_decoder_api();
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::Decoder,
+        plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperDecoderPluginApiV5).cast(),
+    };
+
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load native decoder plugin");
+    let factory = plugin
+        .native_decoder_plugin_factory()
+        .expect("native decoder factory should be available");
+    let mut session = factory
+        .open_native_session(&DecoderSessionConfig {
+            codec: "fixture-video".to_owned(),
+            media_kind: DecoderMediaKind::Video,
+            prefer_hardware: true,
+            require_cpu_output: false,
+            ..DecoderSessionConfig::default()
+        })
+        .expect("open native decoder session");
+
+    session
+        .send_packet(
+            &DecoderPacket {
+                pts_us: Some(4_000),
+                key_frame: true,
+                ..DecoderPacket::default()
+            },
+            &[5, 6, 7, 8],
+        )
+        .expect("send native packet");
+    let frame = match session
+        .receive_native_frame()
+        .expect("receive native frame")
+    {
+        DecoderReceiveNativeFrameOutput::Frame(frame) => frame,
+        other => panic!("expected native frame, got {other:?}"),
+    };
+    let retry = frame.clone();
+
+    let first = session
+        .release_native_frame(frame)
+        .expect_err("first release should surface plugin failure");
+    let second = session
+        .release_native_frame(retry)
+        .expect_err("retry should call the plugin again and surface plugin failure");
+
+    assert!(matches!(first, DecoderError::AbiViolation { .. }));
+    assert!(matches!(second, DecoderError::AbiViolation { .. }));
+    assert_eq!(
+        NATIVE_FRAME_RELEASE_FAILURES
+            .lock()
+            .map(|failures| failures.len())
+            .unwrap_or_default(),
+        2
     );
 }
 

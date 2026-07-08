@@ -5,19 +5,10 @@ extension VesperDownloadManager {
         taskId: VesperDownloadTaskId,
         fileName: String?
     ) throws -> URL {
-        let sourceURL = try outputURL(forTask: taskId)
-        guard let fileName, !fileName.isEmpty else {
-            return sourceURL
-        }
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vesper-download-share", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let targetURL = directory.appendingPathComponent(sanitizedOutputFileName(fileName))
-        if FileManager.default.fileExists(atPath: targetURL.path) {
-            try FileManager.default.removeItem(at: targetURL)
-        }
-        try FileManager.default.copyItem(at: sourceURL, to: targetURL)
-        return targetURL
+        try prepareDownloadOutputURLFromSource(
+            sourceURL: outputURL(forTask: taskId),
+            fileName: fileName
+        )
     }
 
     func downloadOutputURL(from path: String) -> URL {
@@ -26,6 +17,22 @@ extension VesperDownloadManager {
         }
         return URL(fileURLWithPath: path)
     }
+}
+
+func prepareDownloadOutputURLFromSource(
+    sourceURL: URL,
+    fileName: String?
+) throws -> URL {
+    guard let fileName, !fileName.isEmpty else {
+        return sourceURL
+    }
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("vesper-download-share", isDirectory: true)
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let targetURL = directory.appendingPathComponent(sanitizedOutputFileName(fileName))
+    try FileManager.default.copyItem(at: sourceURL, to: targetURL)
+    return targetURL
 }
 
 func sanitizedOutputFileName(_ value: String) -> String {

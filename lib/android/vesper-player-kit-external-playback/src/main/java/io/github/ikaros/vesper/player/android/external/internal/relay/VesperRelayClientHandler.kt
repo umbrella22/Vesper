@@ -7,6 +7,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 internal class VesperRelayClientHandler(
     private val running: AtomicBoolean,
@@ -15,9 +16,12 @@ internal class VesperRelayClientHandler(
     private val entryForToken: (String) -> RelayEntry?,
     private val relaySource: VesperRelaySourceRelay,
 ) {
+    private val activeClientCount = AtomicInteger(0)
+
     fun closeActiveClients() {
         activeClients.forEach { client -> runCatching { client.close() } }
         activeClients.clear()
+        activeClientCount.set(0)
     }
 
     fun acceptClient(
@@ -28,24 +32,34 @@ internal class VesperRelayClientHandler(
             runCatching { client.close() }
             return
         }
-        if (activeClients.size >= maxActiveClients.coerceAtLeast(1)) {
+        if (activeClientCount.incrementAndGet() > maxActiveClients.coerceAtLeast(1)) {
+            activeClientCount.decrementAndGet()
             runCatching { client.close() }
             return
         }
+        activeClients.add(client)
         val executor = requestExecutor
         if (executor == null || executor.isShutdown) {
+            releaseClient(client)
+            runCatching { client.close() }
+            return
+        }
+        try {
+            client.soTimeout = DEFAULT_RELAY_REQUEST_IDLE_TIMEOUT_MILLIS
+        } catch (_: Exception) {
+            releaseClient(client)
             runCatching { client.close() }
             return
         }
         try {
             executor.execute { handleClientSafely(client) }
         } catch (_: RejectedExecutionException) {
+            releaseClient(client)
             runCatching { client.close() }
         }
     }
 
     private fun handleClientSafely(socket: Socket) {
-        activeClients.add(socket)
         try {
             if (running.get()) {
                 handleClient(socket)
@@ -58,15 +72,31 @@ internal class VesperRelayClientHandler(
             }
         } finally {
             runCatching { socket.close() }
-            activeClients.remove(socket)
+            releaseClient(socket)
+        }
+    }
+
+    private fun releaseClient(socket: Socket) {
+        if (activeClients.remove(socket)) {
+            activeClientCount.updateAndGet { count -> (count - 1).coerceAtLeast(0) }
         }
     }
 
     private fun handleClient(socket: Socket) {
         socket.use { client ->
-            val input = client.getInputStream().bufferedReader(Charsets.ISO_8859_1)
+            val input = client.getInputStream()
             val output = client.getOutputStream()
-            val requestLine = input.readLine() ?: return
+            val requestLine =
+                try {
+                    input.readBoundedRelayHttpLine(
+                        maxBytes = MAX_RELAY_HTTP_REQUEST_LINE_BYTES,
+                        statusCode = 414,
+                        message = "URI Too Long",
+                    )
+                } catch (error: VesperRelayHttpLimitExceeded) {
+                    output.writeSimpleResponse(error.statusCode, error.responseMessage)
+                    return
+                } ?: return
             val parts = requestLine.split(' ')
             if (parts.size < 2) {
                 output.writeSimpleResponse(400, "Bad Request")
@@ -75,10 +105,26 @@ internal class VesperRelayClientHandler(
             val method = parts[0].uppercase(Locale.US)
             val path = parts[1].substringBefore('?')
             val headers = linkedMapOf<String, String>()
+            var headerCount = 0
             while (true) {
-                val line = input.readLine() ?: break
+                val line =
+                    try {
+                        input.readBoundedRelayHttpLine(
+                            maxBytes = MAX_RELAY_HTTP_HEADER_LINE_BYTES,
+                            statusCode = 431,
+                            message = "Request Header Fields Too Large",
+                        )
+                    } catch (error: VesperRelayHttpLimitExceeded) {
+                        output.writeSimpleResponse(error.statusCode, error.responseMessage)
+                        return
+                    } ?: break
                 if (line.isEmpty()) {
                     break
+                }
+                headerCount += 1
+                if (headerCount > MAX_RELAY_HTTP_HEADERS) {
+                    output.writeSimpleResponse(431, "Request Header Fields Too Large")
+                    return
                 }
                 val separator = line.indexOf(':')
                 if (separator > 0) {
@@ -145,6 +191,8 @@ internal fun runRelayAcceptLoop(
     }
 }
 
+private const val DEFAULT_RELAY_REQUEST_IDLE_TIMEOUT_MILLIS = 5_000
+
 internal class VesperRelaySourceRelay(
     private val appContext: android.content.Context?,
     private val formatAdapter: VesperRelayFormatAdapter,
@@ -193,41 +241,36 @@ internal class VesperRelaySourceRelay(
             }
             is VesperRelayFormatAdaptationResult.Stream -> {
                 val adapted = result.stream
-                val responseHeaders = linkedMapOf(
-                    "Content-Type" to adapted.contentType,
-                    "Accept-Ranges" to "bytes",
-                )
-                adapted.contentLength?.let { responseHeaders["Content-Length"] = it.toString() }
-                responseHeaders.putAll(adapted.headers)
-                responseHeaders.addDlnaPlaybackHeaders()
-                output.writeStatusAndHeaders(
-                    adapted.status,
-                    adapted.status.reasonPhrase(),
-                    responseHeaders,
-                )
-                var clientCancelled = false
-                if (!headOnly) {
-                    try {
-                        adapted.input.use { input -> input.copyTo(output) }
-                    } catch (error: java.io.IOException) {
-                        clientCancelled = true
-                        emitDiagnostic(
-                            VesperRelayDiagnostic(
-                                code = "client_cancelled",
-                                severity = "info",
-                                message = error.message ?: "Relay client disconnected while receiving adapted media.",
-                                details = mapOf("sessionId" to token),
-                            ),
-                        )
-                    } finally {
-                        if (clientCancelled) {
-                            runCatching { adapted.closeable?.close() }
-                        }
+                try {
+                    val responseHeaders = linkedMapOf(
+                        "Content-Type" to adapted.contentType,
+                        "Accept-Ranges" to "bytes",
+                    )
+                    adapted.contentLength?.let { responseHeaders["Content-Length"] = it.toString() }
+                    responseHeaders.putAll(adapted.headers)
+                    responseHeaders.addDlnaPlaybackHeaders()
+                    output.writeStatusAndHeaders(
+                        adapted.status,
+                        adapted.status.reasonPhrase(),
+                        responseHeaders,
+                    )
+                    if (!headOnly) {
+                        adapted.input.copyTo(output)
                     }
-                } else {
+                    output.flush()
+                } catch (error: java.io.IOException) {
+                    emitDiagnostic(
+                        VesperRelayDiagnostic(
+                            code = "client_cancelled",
+                            severity = "info",
+                            message = error.message ?: "Relay client disconnected while receiving adapted media.",
+                            details = mapOf("sessionId" to token),
+                        ),
+                    )
+                } finally {
                     runCatching { adapted.input.close() }
+                    runCatching { adapted.closeable?.close() }
                 }
-                output.flush()
             }
         }
     }
@@ -263,44 +306,46 @@ internal class VesperRelaySourceRelay(
                 validateRelayRemoteHost(currentUri)
             }
             val connection = (java.net.URL(currentUri).openConnection() as java.net.HttpURLConnection)
-            connection.instanceFollowRedirects = false
-            connection.connectTimeout = 10_000
-            connection.readTimeout = 20_000
-            connection.requestMethod = if (headOnly) "HEAD" else "GET"
-            source.headers.forEach { (name, value) ->
-                if (name.isNotBlank() && value.isNotBlank() && !name.isHopByHopHeader()) {
-                    connection.setRequestProperty(name, value)
+            try {
+                connection.instanceFollowRedirects = false
+                connection.connectTimeout = 10_000
+                connection.readTimeout = 20_000
+                connection.requestMethod = if (headOnly) "HEAD" else "GET"
+                source.headers.forEach { (name, value) ->
+                    if (name.isNotBlank() && value.isNotBlank() && !name.isHopByHopHeader()) {
+                        connection.setRequestProperty(name, value)
+                    }
                 }
-            }
-            range?.toHeaderValue()?.let { connection.setRequestProperty("Range", it) }
+                range?.toHeaderValue()?.let { connection.setRequestProperty("Range", it) }
 
-            val status = connection.responseCode
-            if (status in 301..308 && redirectsRemaining > 0) {
-                val location = connection.getHeaderField("Location")
+                val status = connection.responseCode
+                if (status in 301..308 && redirectsRemaining > 0) {
+                    val location = connection.getHeaderField("Location")
+                    if (location.isNullOrBlank()) {
+                        output.writeSimpleResponse(502, "Bad Gateway: redirect without Location")
+                        return
+                    }
+                    redirectsRemaining--
+                    currentUri = location
+                    continue
+                }
+
+                val responseHeaders = linkedMapOf<String, String>()
+                connection.contentType?.let { responseHeaders["Content-Type"] = it }
+                connection.getHeaderField("Content-Length")?.let { responseHeaders["Content-Length"] = it }
+                connection.getHeaderField("Content-Range")?.let { responseHeaders["Content-Range"] = it }
+                responseHeaders["Accept-Ranges"] = connection.getHeaderField("Accept-Ranges") ?: "bytes"
+                responseHeaders.addDlnaPlaybackHeaders()
+                output.writeStatusAndHeaders(status, connection.responseMessage ?: status.reasonPhrase(), responseHeaders)
+                if (!headOnly) {
+                    val stream = runCatching { connection.inputStream }.getOrElse { connection.errorStream }
+                    stream?.use { it.copyTo(output) }
+                }
+                output.flush()
+                return
+            } finally {
                 connection.disconnect()
-                if (location.isNullOrBlank()) {
-                    output.writeSimpleResponse(502, "Bad Gateway: redirect without Location")
-                    return
-                }
-                redirectsRemaining--
-                currentUri = location
-                continue
             }
-
-            val responseHeaders = linkedMapOf<String, String>()
-            connection.contentType?.let { responseHeaders["Content-Type"] = it }
-            connection.getHeaderField("Content-Length")?.let { responseHeaders["Content-Length"] = it }
-            connection.getHeaderField("Content-Range")?.let { responseHeaders["Content-Range"] = it }
-            responseHeaders["Accept-Ranges"] = connection.getHeaderField("Accept-Ranges") ?: "bytes"
-            responseHeaders.addDlnaPlaybackHeaders()
-            output.writeStatusAndHeaders(status, connection.responseMessage ?: status.reasonPhrase(), responseHeaders)
-            if (!headOnly) {
-                val stream = runCatching { connection.inputStream }.getOrElse { connection.errorStream }
-                stream?.use { it.copyTo(output) }
-            }
-            output.flush()
-            connection.disconnect()
-            return
         }
     }
 

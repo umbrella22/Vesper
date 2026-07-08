@@ -23,13 +23,13 @@ protocol VesperNativeFrameAudioOutputing: AnyObject {
 @MainActor
 protocol VesperNativeFramePresenting: AnyObject {
     func setNativeFramePresentationEnabled(_ enabled: Bool)
-    func presentNativeFrame(pixelBufferAddress: UInt) async -> Bool
+    func presentNativeFrame(pixelBuffer: CVPixelBuffer) async -> Bool
 }
 
 extension PlayerSurfaceView: VesperNativeFramePresenting {
-    func presentNativeFrame(pixelBufferAddress: UInt) async -> Bool {
+    func presentNativeFrame(pixelBuffer: CVPixelBuffer) async -> Bool {
         await withCheckedContinuation { continuation in
-            presentNativeFrame(pixelBufferAddress: pixelBufferAddress) { succeeded in
+            presentNativeFrame(pixelBuffer: pixelBuffer) { succeeded in
                 continuation.resume(returning: succeeded)
             }
         }

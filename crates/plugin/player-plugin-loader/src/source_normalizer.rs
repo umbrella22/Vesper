@@ -192,6 +192,11 @@ impl SourceNormalizerPacketPluginFactory for DynamicSourceNormalizerPacketPlugin
                     self.inner.api.context,
                 )
                 .map_err(|error| {
+                    close_source_normalizer_packet_session_after_open_failure(
+                        &self.inner,
+                        result.session,
+                        "close_packet_after_open_payload_error",
+                    );
                     map_source_normalizer_payload_error(
                         &self.inner.name,
                         "open_packet_session",
@@ -204,6 +209,7 @@ impl SourceNormalizerPacketPluginFactory for DynamicSourceNormalizerPacketPlugin
                     stream_info,
                     outstanding_packet: None,
                     closed: false,
+                    poisoned: false,
                 }))
             }
             VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
@@ -271,6 +277,11 @@ impl SourceNormalizerResourcePluginFactory for DynamicSourceNormalizerResourcePl
                     self.inner.api.context,
                 )
                 .map_err(|error| {
+                    close_source_normalizer_resource_session_after_open_failure(
+                        &self.inner,
+                        result.session,
+                        "close_resource_after_open_payload_error",
+                    );
                     map_source_normalizer_payload_error(
                         &self.inner.name,
                         "open_resource_session",
@@ -282,6 +293,7 @@ impl SourceNormalizerResourcePluginFactory for DynamicSourceNormalizerResourcePl
                     session: result.session,
                     session_info,
                     closed: false,
+                    poisoned: false,
                 }))
             }
             VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
@@ -295,6 +307,44 @@ impl SourceNormalizerResourcePluginFactory for DynamicSourceNormalizerResourcePl
     }
 }
 
+fn close_source_normalizer_packet_session_after_open_failure(
+    factory: &DynamicSourceNormalizerPacketPluginFactoryInner,
+    session: *mut c_void,
+    operation: &'static str,
+) {
+    if session.is_null() {
+        return;
+    }
+    // SAFETY: the validated packet API guarantees `close_packet_session` is
+    // present and consumes the opaque session pointer returned by the matching
+    // successful open call.
+    let result = catch_source_normalizer_plugin_call(&factory.name, operation, || unsafe {
+        (factory.api.close_packet_session)(factory.api.context, session)
+    });
+    if let Ok(result) = result {
+        reclaim_plugin_payload(result.payload, factory.api.free_bytes, factory.api.context);
+    }
+}
+
+fn close_source_normalizer_resource_session_after_open_failure(
+    factory: &DynamicSourceNormalizerResourcePluginFactoryInner,
+    session: *mut c_void,
+    operation: &'static str,
+) {
+    if session.is_null() {
+        return;
+    }
+    // SAFETY: the validated resource API guarantees `close_resource_session`
+    // is present and consumes the opaque session pointer returned by the
+    // matching successful open call.
+    let result = catch_source_normalizer_plugin_call(&factory.name, operation, || unsafe {
+        (factory.api.close_resource_session)(factory.api.context, session)
+    });
+    if let Ok(result) = result {
+        reclaim_plugin_payload(result.payload, factory.api.free_bytes, factory.api.context);
+    }
+}
+
 #[derive(Debug)]
 struct DynamicSourceNormalizerPacketSession {
     factory: Arc<DynamicSourceNormalizerPacketPluginFactoryInner>,
@@ -302,6 +352,7 @@ struct DynamicSourceNormalizerPacketSession {
     stream_info: SourceNormalizerPacketStreamInfo,
     outstanding_packet: Option<usize>,
     closed: bool,
+    poisoned: bool,
 }
 
 // SAFETY: the dynamic source normalizer packet session is only exposed through
@@ -316,6 +367,7 @@ struct DynamicSourceNormalizerResourceSession {
     session: *mut c_void,
     session_info: SourceNormalizerResourceSessionInfo,
     closed: bool,
+    poisoned: bool,
 }
 
 // SAFETY: the dynamic source normalizer resource session is only exposed
@@ -328,6 +380,11 @@ impl DynamicSourceNormalizerPacketSession {
     fn ensure_open(&self) -> Result<(), SourceNormalizerError> {
         if self.closed || self.session.is_null() {
             Err(SourceNormalizerError::NotConfigured)
+        } else if self.poisoned {
+            Err(SourceNormalizerError::abi_violation(format!(
+                "source normalizer packet plugin `{}` session is poisoned after a plugin panic",
+                self.factory.name
+            )))
         } else {
             Ok(())
         }
@@ -363,7 +420,7 @@ impl DynamicSourceNormalizerPacketSession {
         &mut self,
         operation: &'static str,
     ) -> Result<(), SourceNormalizerError> {
-        let Some(packet_handle) = self.outstanding_packet.take() else {
+        let Some(packet_handle) = self.outstanding_packet else {
             return Ok(());
         };
 
@@ -379,11 +436,13 @@ impl DynamicSourceNormalizerPacketSession {
             }) {
                 Ok(result) => result,
                 Err(error) => {
-                    self.closed = true;
+                    self.poisoned = true;
                     return Err(error);
                 }
             };
-        self.decode_operation_result(result, operation).map(|_| ())
+        self.decode_operation_result(result, operation).map(|_| {
+            self.outstanding_packet = None;
+        })
     }
 
     fn release_packet_result(
@@ -441,6 +500,11 @@ impl DynamicSourceNormalizerResourceSession {
     fn ensure_open(&self) -> Result<(), SourceNormalizerError> {
         if self.closed || self.session.is_null() {
             Err(SourceNormalizerError::NotConfigured)
+        } else if self.poisoned {
+            Err(SourceNormalizerError::abi_violation(format!(
+                "source normalizer resource plugin `{}` session is poisoned after a plugin panic",
+                self.factory.name
+            )))
         } else {
             Ok(())
         }
@@ -497,21 +561,28 @@ impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
         ) {
             Ok(result) => result,
             Err(error) => {
-                self.closed = true;
+                self.poisoned = true;
                 return Err(error);
             }
         };
 
         match result.status {
             VesperPluginResultStatus::Success => {
-                let metadata = decode_plugin_bytes::<SourceNormalizerReadPacketMetadata>(
+                let metadata = match decode_plugin_bytes::<SourceNormalizerReadPacketMetadata>(
                     result.metadata,
                     self.factory.api.free_bytes,
                     self.factory.api.context,
-                )
-                .map_err(|error| {
-                    map_source_normalizer_payload_error(&self.factory.name, "read_packet", error)
-                })?;
+                ) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        self.reclaim_unexpected_packet_handle(result.packet_handle);
+                        return Err(map_source_normalizer_payload_error(
+                            &self.factory.name,
+                            "read_packet",
+                            error,
+                        ));
+                    }
+                };
 
                 if metadata.status != SourceNormalizerReadPacketStatus::Packet {
                     if !result.data.is_null() || result.data_len != 0 || result.packet_handle != 0 {
@@ -630,7 +701,7 @@ impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
         ) {
             Ok(result) => result,
             Err(error) => {
-                self.closed = true;
+                self.poisoned = true;
                 return Err(error);
             }
         };
@@ -651,7 +722,7 @@ impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
         ) {
             Ok(result) => result,
             Err(error) => {
-                self.closed = true;
+                self.poisoned = true;
                 return Err(error);
             }
         };
@@ -707,7 +778,7 @@ impl SourceNormalizerResourceSession for DynamicSourceNormalizerResourceSession 
         ) {
             Ok(result) => result,
             Err(error) => {
-                self.closed = true;
+                self.poisoned = true;
                 return Err(error);
             }
         };
@@ -754,7 +825,7 @@ impl SourceNormalizerResourceSession for DynamicSourceNormalizerResourceSession 
         ) {
             Ok(result) => result,
             Err(error) => {
-                self.closed = true;
+                self.poisoned = true;
                 return Err(error);
             }
         };
@@ -796,7 +867,7 @@ impl SourceNormalizerResourceSession for DynamicSourceNormalizerResourceSession 
         ) {
             Ok(result) => result,
             Err(error) => {
-                self.closed = true;
+                self.poisoned = true;
                 return Err(error);
             }
         };
@@ -828,6 +899,204 @@ impl SourceNormalizerResourceSession for DynamicSourceNormalizerResourceSession 
         self.session = std::ptr::null_mut();
         self.decode_operation_result(result, "close_resource")
             .map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static PACKET_CLOSES: AtomicUsize = AtomicUsize::new(0);
+    static RESOURCE_CLOSES: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn lifecycle_free_bytes(_context: *mut c_void, _bytes: VesperPluginBytes) {}
+
+    unsafe extern "C" fn lifecycle_packet_capabilities(_context: *mut c_void) -> VesperPluginBytes {
+        VesperPluginBytes::null()
+    }
+
+    unsafe extern "C" fn lifecycle_open_packet_session(
+        _context: *mut c_void,
+        _config_json: *const u8,
+        _config_json_len: usize,
+    ) -> VesperSourceNormalizerOpenPacketSessionResult {
+        VesperSourceNormalizerOpenPacketSessionResult::default()
+    }
+
+    unsafe extern "C" fn lifecycle_read_packet(
+        _context: *mut c_void,
+        _session: *mut c_void,
+    ) -> VesperSourceNormalizerReadPacketResult {
+        VesperSourceNormalizerReadPacketResult::default()
+    }
+
+    unsafe extern "C" fn lifecycle_packet_operation(
+        _context: *mut c_void,
+        _session: *mut c_void,
+    ) -> VesperPluginProcessResult {
+        VesperPluginProcessResult::default()
+    }
+
+    unsafe extern "C" fn lifecycle_release_packet(
+        _context: *mut c_void,
+        _session: *mut c_void,
+        _packet_handle: usize,
+    ) -> VesperPluginProcessResult {
+        VesperPluginProcessResult::default()
+    }
+
+    unsafe extern "C" fn lifecycle_close_packet(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperPluginProcessResult {
+        PACKET_CLOSES.fetch_add(1, Ordering::SeqCst);
+        if !session.is_null() {
+            // SAFETY: the test session pointer is allocated with `Box::into_raw`
+            // in the matching test case and this close callback consumes it once.
+            let _ = unsafe { Box::from_raw(session.cast::<u8>()) };
+        }
+        VesperPluginProcessResult::default()
+    }
+
+    unsafe extern "C" fn lifecycle_resource_capabilities(
+        _context: *mut c_void,
+    ) -> VesperPluginBytes {
+        VesperPluginBytes::null()
+    }
+
+    unsafe extern "C" fn lifecycle_open_resource_session(
+        _context: *mut c_void,
+        _config_json: *const u8,
+        _config_json_len: usize,
+    ) -> VesperSourceNormalizerOpenResourceSessionResult {
+        VesperSourceNormalizerOpenResourceSessionResult::default()
+    }
+
+    unsafe extern "C" fn lifecycle_wait_resource_update(
+        _context: *mut c_void,
+        _session: *mut c_void,
+        _timeout_ms: u64,
+    ) -> VesperPluginProcessResult {
+        VesperPluginProcessResult::default()
+    }
+
+    unsafe extern "C" fn lifecycle_resource_operation(
+        _context: *mut c_void,
+        _session: *mut c_void,
+    ) -> VesperPluginProcessResult {
+        VesperPluginProcessResult::default()
+    }
+
+    unsafe extern "C" fn lifecycle_close_resource(
+        _context: *mut c_void,
+        session: *mut c_void,
+    ) -> VesperPluginProcessResult {
+        RESOURCE_CLOSES.fetch_add(1, Ordering::SeqCst);
+        if !session.is_null() {
+            // SAFETY: the test session pointer is allocated with `Box::into_raw`
+            // in the matching test case and this close callback consumes it once.
+            let _ = unsafe { Box::from_raw(session.cast::<u8>()) };
+        }
+        VesperPluginProcessResult::default()
+    }
+
+    fn packet_factory_inner() -> Arc<DynamicSourceNormalizerPacketPluginFactoryInner> {
+        Arc::new(DynamicSourceNormalizerPacketPluginFactoryInner {
+            _library_holder: None,
+            name: "lifecycle-packet".to_owned(),
+            api: CheckedSourceNormalizerPacketPluginApi {
+                context: std::ptr::null_mut(),
+                destroy: None,
+                name: None,
+                packet_capabilities_json: lifecycle_packet_capabilities,
+                free_bytes: lifecycle_free_bytes,
+                open_packet_session_json: lifecycle_open_packet_session,
+                read_packet: lifecycle_read_packet,
+                release_packet: lifecycle_release_packet,
+                seek_packet_session_json: None,
+                flush_packet_session: lifecycle_packet_operation,
+                close_packet_session: lifecycle_close_packet,
+            },
+            capabilities: SourceNormalizerPacketCapabilities::default(),
+        })
+    }
+
+    fn resource_factory_inner() -> Arc<DynamicSourceNormalizerResourcePluginFactoryInner> {
+        Arc::new(DynamicSourceNormalizerResourcePluginFactoryInner {
+            _library_holder: None,
+            name: "lifecycle-resource".to_owned(),
+            api: CheckedSourceNormalizerResourcePluginApi {
+                context: std::ptr::null_mut(),
+                destroy: None,
+                name: None,
+                resource_capabilities_json: lifecycle_resource_capabilities,
+                free_bytes: lifecycle_free_bytes,
+                open_resource_session_json: lifecycle_open_resource_session,
+                poll_resource_session: lifecycle_resource_operation,
+                wait_resource_session_update: lifecycle_wait_resource_update,
+                cancel_resource_session: lifecycle_resource_operation,
+                close_resource_session: lifecycle_close_resource,
+            },
+            capabilities: SourceNormalizerResourceCapabilities::default(),
+        })
+    }
+
+    #[test]
+    fn poisoned_packet_session_drop_still_closes_opaque_session() {
+        PACKET_CLOSES.store(0, Ordering::SeqCst);
+        let session_ptr = Box::into_raw(Box::new(1_u8)).cast::<c_void>();
+        let session = DynamicSourceNormalizerPacketSession {
+            factory: packet_factory_inner(),
+            session: session_ptr,
+            stream_info: SourceNormalizerPacketStreamInfo::default(),
+            outstanding_packet: None,
+            closed: false,
+            poisoned: true,
+        };
+
+        let error = session
+            .ensure_open()
+            .expect_err("poisoned session should reject further operations");
+        assert!(error.to_string().contains("poisoned"));
+        drop(session);
+
+        assert_eq!(PACKET_CLOSES.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn poisoned_resource_session_drop_still_closes_opaque_session() {
+        RESOURCE_CLOSES.store(0, Ordering::SeqCst);
+        let session_ptr = Box::into_raw(Box::new(1_u8)).cast::<c_void>();
+        let session = DynamicSourceNormalizerResourceSession {
+            factory: resource_factory_inner(),
+            session: session_ptr,
+            session_info: SourceNormalizerResourceSessionInfo {
+                session_id: None,
+                normalizer_name: None,
+                runtime_profile: None,
+                selected_backend: None,
+                output_route: player_plugin::SourceNormalizerOutputRoute::Fmp4LocalStream,
+                container: "mp4".to_owned(),
+                primary_resource_path: None,
+                primary_content_type: None,
+                resources: Vec::new(),
+                tracks: Vec::new(),
+                duration_millis: None,
+                seekable: false,
+                disk_bytes_used: None,
+            },
+            closed: false,
+            poisoned: true,
+        };
+
+        let error = session
+            .ensure_open()
+            .expect_err("poisoned session should reject further operations");
+        assert!(error.to_string().contains("poisoned"));
+        drop(session);
+
+        assert_eq!(RESOURCE_CLOSES.load(Ordering::SeqCst), 1);
     }
 }
 

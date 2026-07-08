@@ -39,6 +39,67 @@ void main() {
     expect(task.toMap()['state'], payload['state']);
   });
 
+  test('download DTOs preserve unknown enum wire values', () {
+    final task = VesperDownloadTaskSnapshot.fromMap(<Object?, Object?>{
+      'taskId': 7,
+      'assetId': 'asset-future',
+      'source': const VesperDownloadSource(
+        source: VesperPlayerSource(
+          uri: 'https://example.com/video.mp4',
+          label: 'Future',
+          kind: VesperPlayerSourceKind.remote,
+          protocol: VesperPlayerSourceProtocol.progressive,
+        ),
+        contentFormat: VesperDownloadContentFormat.singleFile,
+      ).toMap()
+        ..['contentFormat'] = 'cmafSegments',
+      'profile': const VesperDownloadProfile().toMap()
+        ..['targetOutputFormat'] = 'webm',
+      'state': 'retrying',
+      'progress': const VesperDownloadProgressSnapshot().toMap(),
+      'assetIndex': const VesperDownloadAssetIndex(
+        streams: <VesperDownloadAssetStream>[
+          VesperDownloadAssetStream(
+            streamId: 'future-stream',
+            kind: VesperDownloadStreamKind.unknown,
+            kindRawValue: 'immersiveAudio',
+          ),
+        ],
+      ).toMap()
+        ..['contentFormat'] = 'cmafSegments',
+    });
+    final staleResource = VesperDownloadStaleResource.fromMap(
+      <Object?, Object?>{
+        'taskId': 7,
+        'phase': 'refresh',
+        'message': 'future phase',
+      },
+    );
+
+    expect(task.source.contentFormat, VesperDownloadContentFormat.unknown);
+    expect(task.source.contentFormatRawValue, 'cmafSegments');
+    expect(task.source.toMap()['contentFormat'], 'cmafSegments');
+    expect(task.profile.targetOutputFormat, isNull);
+    expect(task.profile.targetOutputFormatRawValue, 'webm');
+    expect(task.profile.toMap()['targetOutputFormat'], 'webm');
+    expect(task.state, VesperDownloadState.unknown);
+    expect(task.stateRawValue, 'retrying');
+    expect(task.toMap()['state'], 'retrying');
+    expect(task.assetIndex.contentFormat, VesperDownloadContentFormat.unknown);
+    expect(task.assetIndex.contentFormatRawValue, 'cmafSegments');
+    expect(task.assetIndex.toMap()['contentFormat'], 'cmafSegments');
+    expect(
+        task.assetIndex.streams.single.kind, VesperDownloadStreamKind.unknown);
+    expect(task.assetIndex.streams.single.kindRawValue, 'immersiveAudio');
+    expect(
+      task.assetIndex.streams.single.toMap()['kind'],
+      'immersiveAudio',
+    );
+    expect(staleResource.phase, VesperDownloadStaleResourcePhase.prepare);
+    expect(staleResource.phaseRawValue, 'refresh');
+    expect(staleResource.toMap()['phase'], 'refresh');
+  });
+
   test('shared system playback contract decodes stable fields', () {
     final payload = _readContractMap('system_playback_configuration.json');
     final configuration = VesperSystemPlaybackConfiguration.fromMap(payload);
@@ -233,6 +294,51 @@ void main() {
     expect(result.toMap().containsKey('hdrNativeFrameSupported'), isFalse);
   });
 
+  test('playback capability probe DTOs preserve unknown enum wire values', () {
+    final result = VesperPlaybackCapabilityProbeResult.fromMap(
+      <Object?, Object?>{
+        'status': 'futureStatus',
+        'codecFamily': 'futureCodec',
+        'systemPlaybackSupported': false,
+        'hardwareDecodeSupported': false,
+        'sdkManagedNativeFrameSupported': true,
+        'recommendedPlaybackPath': 'futurePath',
+        'outputFormat': 'futureFormat',
+        'hdrKind': 'futureHdr',
+        'dolbyVisionMode': 'futureDolbyVision',
+        'confidence': 'futureConfidence',
+      },
+    );
+
+    expect(result.status, VesperPlaybackCapabilityProbeStatus.unknown);
+    expect(result.codecFamily, VesperPlaybackCodecFamily.unknown);
+    expect(
+      result.recommendedPlaybackPath,
+      VesperRecommendedPlaybackPath.systemPlayer,
+    );
+    expect(result.outputFormat, VesperPlaybackCapabilityOutputFormat.unknown);
+    expect(result.hdrKind, VesperPlaybackCapabilityHdrKind.unknown);
+    expect(
+      result.dolbyVisionMode,
+      VesperPlaybackCapabilityDolbyVisionMode.none,
+    );
+    expect(result.confidence, VesperPlaybackCapabilityConfidence.codecOnly);
+    expect(result.statusRawValue, 'futureStatus');
+    expect(result.codecFamilyRawValue, 'futureCodec');
+    expect(result.recommendedPlaybackPathRawValue, 'futurePath');
+    expect(result.outputFormatRawValue, 'futureFormat');
+    expect(result.hdrKindRawValue, 'futureHdr');
+    expect(result.dolbyVisionModeRawValue, 'futureDolbyVision');
+    expect(result.confidenceRawValue, 'futureConfidence');
+    expect(result.toMap()['status'], 'futureStatus');
+    expect(result.toMap()['codecFamily'], 'futureCodec');
+    expect(result.toMap()['recommendedPlaybackPath'], 'futurePath');
+    expect(result.toMap()['outputFormat'], 'futureFormat');
+    expect(result.toMap()['hdrKind'], 'futureHdr');
+    expect(result.toMap()['dolbyVisionMode'], 'futureDolbyVision');
+    expect(result.toMap()['confidence'], 'futureConfidence');
+  });
+
   test('download DTOs encode FLV byte ranges and target output', () {
     const source = VesperDownloadSource(
       source: VesperPlayerSource(
@@ -327,12 +433,25 @@ void main() {
       }),
       throwsA(isA<FormatException>()),
     );
+    final unknownCategory = VesperDownloadError.fromMap(<Object?, Object?>{
+      'code': 'backendFailure',
+      'category': 'doesNotExist',
+    });
+    expect(unknownCategory.code, VesperPlayerErrorCode.backendFailure);
+    expect(unknownCategory.category, VesperPlayerErrorCategory.unknown);
+    expect(unknownCategory.categoryRawValue, 'doesNotExist');
+    expect(unknownCategory.toMap()['category'], 'doesNotExist');
+
+    final unknownCode = VesperDownloadError.fromMap(<Object?, Object?>{
+      'code': 'doesNotExist',
+      'category': 'network',
+    });
+    expect(unknownCode.code, VesperPlayerErrorCode.unknown);
+    expect(unknownCode.codeRawValue, 'doesNotExist');
+    expect(unknownCode.toMap()['code'], 'doesNotExist');
     expect(
-      () => VesperDownloadError.fromMap(<Object?, Object?>{
-        'code': 'backendFailure',
-        'category': 'doesNotExist',
-      }),
-      throwsA(isA<FormatException>()),
+      unknownCode.category,
+      VesperPlayerErrorCategory.network,
     );
   });
 
@@ -1154,21 +1273,27 @@ void main() {
       }),
       throwsA(isA<FormatException>()),
     );
+    final unknownCode = VesperPlayerError.fromMap(<Object?, Object?>{
+      'message': 'unknown code',
+      'code': 'doesNotExist',
+      'category': 'platform',
+    });
+    expect(unknownCode.code, VesperPlayerErrorCode.unknown);
+    expect(unknownCode.category, VesperPlayerErrorCategory.platform);
+    expect(unknownCode.codeRawValue, 'doesNotExist');
+    expect(unknownCode.toMap()['code'], 'doesNotExist');
+
+    final unknownCategory = VesperPlayerError.fromMap(<Object?, Object?>{
+      'message': 'unknown category',
+      'code': 'unsupported',
+      'category': 'doesNotExist',
+    });
+    expect(unknownCategory.code, VesperPlayerErrorCode.unsupported);
+    expect(unknownCategory.categoryRawValue, 'doesNotExist');
+    expect(unknownCategory.toMap()['category'], 'doesNotExist');
     expect(
-      () => VesperPlayerError.fromMap(<Object?, Object?>{
-        'message': 'unknown code',
-        'code': 'doesNotExist',
-        'category': 'platform',
-      }),
-      throwsA(isA<FormatException>()),
-    );
-    expect(
-      () => VesperPlayerError.fromMap(<Object?, Object?>{
-        'message': 'unknown category',
-        'code': 'unsupported',
-        'category': 'doesNotExist',
-      }),
-      throwsA(isA<FormatException>()),
+      unknownCategory.category,
+      VesperPlayerErrorCategory.unknown,
     );
   });
 

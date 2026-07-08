@@ -429,6 +429,7 @@ String _downloadStateLabel(VesperDownloadState state) {
     VesperDownloadState.completed => '已完成',
     VesperDownloadState.failed => '失败',
     VesperDownloadState.removed => '已移除',
+    VesperDownloadState.unknown => '未知状态',
   };
 }
 
@@ -437,7 +438,9 @@ String? _downloadPrimaryActionLabel(VesperDownloadState state) {
     VesperDownloadState.queued || VesperDownloadState.failed => '开始',
     VesperDownloadState.preparing || VesperDownloadState.downloading => '暂停',
     VesperDownloadState.paused => '恢复',
-    VesperDownloadState.completed || VesperDownloadState.removed => null,
+    VesperDownloadState.completed ||
+    VesperDownloadState.removed ||
+    VesperDownloadState.unknown => null,
   };
 }
 

@@ -185,6 +185,9 @@ actor VesperNativeFramePipelineRuntime {
         case .failure(let error):
             iosHostLog("native-frame advance failed: \(error.message)")
             isPlaying = false
+            Task { @MainActor [weak owner] in
+                owner?.runtimeDidFailPlayback(error)
+            }
             return .pending
         }
         Task { @MainActor [weak owner] in
@@ -197,14 +200,16 @@ actor VesperNativeFramePipelineRuntime {
         guard
             status == "frame",
             let frameHandle = (object["handle"] as? NSNumber)?.uint64Value,
-            let pixelBuffer = (object["pixelBuffer"] as? NSNumber)?.uintValue
+            let pixelBufferAddress = (object["pixelBuffer"] as? NSNumber)?.uintValue,
+            let pixelBuffer = retainedPixelBuffer(from: pixelBufferAddress)
         else {
             return .pending
         }
         return .frame(
             VesperNativeFramePipelineFrame(
                 frameHandle: frameHandle,
-                pixelBufferAddress: pixelBuffer,
+                pixelBufferAddress: pixelBufferAddress,
+                pixelBuffer: pixelBuffer,
                 presentationTimeUs: (object["presentationTimeUs"] as? NSNumber)?.int64Value ?? 0,
                 durationUs: (object["durationUs"] as? NSNumber)?.int64Value,
                 width: (object["width"] as? NSNumber)?.intValue ?? 0,
@@ -241,6 +246,14 @@ actor VesperNativeFramePipelineRuntime {
     private func frameLeaseIsCurrent(_ frame: VesperNativeFramePipelineFrame) -> Bool {
         !isClosed && handle != 0 && frame.leaseGeneration == frameLeaseGeneration
     }
+
+    private func retainedPixelBuffer(from address: UInt) -> CVPixelBuffer? {
+        guard address != 0,
+              let pointer = UnsafeRawPointer(bitPattern: address) else {
+            return nil
+        }
+        return Unmanaged<CVPixelBuffer>.fromOpaque(pointer).retain().takeRetainedValue()
+    }
 }
 
 @MainActor
@@ -250,38 +263,78 @@ final class VesperNativeFramePipelineCommandQueue {
         let sequence: UInt64
     }
 
-    private var tail: Task<Void, Never>?
+    enum SubmissionPolicy: Equatable {
+        case ordered
+        case replacingPending(String)
+    }
+
+    private struct PendingCommand {
+        let token: Token
+        let policy: SubmissionPolicy
+        let operation: @Sendable (Token) async -> Void
+        let onDropped: (@MainActor @Sendable () -> Void)?
+    }
+
+    private let maximumPendingCommands: Int
+    private var pendingCommands: [PendingCommand] = []
+    private var drainTask: Task<Void, Never>?
+    private var drainGeneration: UInt64 = 1
     private var generation: UInt64 = 1
     private var nextSequence: UInt64 = 1
     private var latestSequence: UInt64 = 0
 
+    init(maximumPendingCommands: Int = 32) {
+        self.maximumPendingCommands = max(maximumPendingCommands, 1)
+    }
+
     @discardableResult
-    func submit(_ operation: @escaping @Sendable (Token) async -> Void) -> Token {
+    func submit(
+        policy: SubmissionPolicy = .ordered,
+        onDropped: (@MainActor @Sendable () -> Void)? = nil,
+        _ operation: @escaping @Sendable (Token) async -> Void
+    ) -> Token? {
         let token = Token(generation: generation, sequence: nextSequence)
-        latestSequence = token.sequence
         nextSequence &+= 1
         if nextSequence == 0 {
             nextSequence = 1
         }
-        let previous = tail
-        tail = Task {
-            await previous?.value
-            guard !Task.isCancelled else { return }
-            guard self.isCurrentGeneration(token) else { return }
-            await operation(token)
+
+        if pendingCommands.count >= maximumPendingCommands {
+            removeReplacedPendingCommands(for: policy)
         }
+        guard pendingCommands.count < maximumPendingCommands else {
+            onDropped?()
+            return nil
+        }
+
+        latestSequence = token.sequence
+        pendingCommands.append(
+            PendingCommand(
+                token: token,
+                policy: policy,
+                operation: operation,
+                onDropped: onDropped
+            )
+        )
+        startDrainIfNeeded()
         return token
     }
 
     func cancel() {
+        let droppedCommands = takeAllPendingCommands()
         generation &+= 1
         if generation == 0 {
             generation = 1
         }
         nextSequence = 1
         latestSequence = 0
-        tail?.cancel()
-        tail = nil
+        drainGeneration &+= 1
+        if drainGeneration == 0 {
+            drainGeneration = 1
+        }
+        drainTask?.cancel()
+        drainTask = nil
+        notifyDroppedCommands(droppedCommands)
     }
 
     func isLatest(_ token: Token) -> Bool {
@@ -290,5 +343,65 @@ final class VesperNativeFramePipelineCommandQueue {
 
     private func isCurrentGeneration(_ token: Token) -> Bool {
         token.generation == generation
+    }
+
+    private func startDrainIfNeeded() {
+        guard drainTask == nil else { return }
+        let workerGeneration = drainGeneration
+        drainTask = Task { @MainActor [weak self] in
+            await self?.drainPendingCommands(workerGeneration: workerGeneration)
+        }
+    }
+
+    private func drainPendingCommands(workerGeneration: UInt64) async {
+        while !Task.isCancelled {
+            guard !pendingCommands.isEmpty else {
+                finishDrainIfCurrent(workerGeneration)
+                return
+            }
+            let command = pendingCommands.removeFirst()
+            guard isCurrentGeneration(command.token) else {
+                command.onDropped?()
+                continue
+            }
+            await command.operation(command.token)
+        }
+        finishDrainIfCurrent(workerGeneration)
+    }
+
+    private func finishDrainIfCurrent(_ workerGeneration: UInt64) {
+        if drainGeneration == workerGeneration {
+            drainTask = nil
+        }
+    }
+
+    private func removeReplacedPendingCommands(for policy: SubmissionPolicy) {
+        guard case .replacingPending(let replacementGroup) = policy else { return }
+        var keptCommands: [PendingCommand] = []
+        var droppedCommands: [PendingCommand] = []
+        for command in pendingCommands {
+            if case .replacingPending(let commandGroup) = command.policy,
+               commandGroup == replacementGroup {
+                droppedCommands.append(command)
+            } else {
+                keptCommands.append(command)
+            }
+        }
+        pendingCommands = keptCommands
+        for command in droppedCommands {
+            command.onDropped?()
+        }
+    }
+
+    private func takeAllPendingCommands() -> [PendingCommand] {
+        let droppedCommands = pendingCommands
+        pendingCommands.removeAll()
+        return droppedCommands
+    }
+
+    private func notifyDroppedCommands(_ droppedCommands: [PendingCommand]) {
+        for command in droppedCommands {
+            command.onDropped?()
+        }
     }
 }

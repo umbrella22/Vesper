@@ -8,11 +8,13 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLConnection
 import java.net.URLStreamHandler
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class VesperDlnaProtocolTest {
@@ -254,6 +256,39 @@ class VesperDlnaProtocolTest {
         assertEquals(0, syncRenderingControl.status)
         assertEquals(syncRenderingControl, asyncRenderingControl)
         assertEquals("RenderingControl service is not available.", syncRenderingControl.body)
+    }
+
+    @Test
+    fun asyncSoapPostPropagatesCancellation() = runBlocking {
+        val connection = CancellingSoapConnection(URL("http://192.168.1.10/control/av"))
+        val controlUrl = URL(null, "http://192.168.1.10/control/av", RecordingUrlHandler(connection))
+        val device = VesperDlnaDevice(
+            routeId = "uuid:device-1",
+            location = URL("http://192.168.1.10/description.xml"),
+            usn = "uuid:device-1",
+            friendlyName = "Living Room TV",
+            avTransport = VesperDlnaService(
+                serviceType = "urn:schemas-upnp-org:service:AVTransport:1",
+                serviceId = "urn:upnp-org:serviceId:AVTransport",
+                controlUrl = controlUrl,
+                eventSubUrl = null,
+                scpdUrl = null,
+            ),
+        )
+
+        try {
+            VesperDlnaSoapClient(timeoutMs = 100).setAvTransportUriAsync(
+                device = device,
+                source = VesperPlayerSource.remote(
+                    uri = "http://192.168.1.2:9000/media.mp4",
+                    label = "Episode",
+                ),
+                metadata = null,
+            )
+            fail("cancelled SOAP call should not return a status-0 DLNA response")
+        } catch (_: CancellationException) {
+            // Expected.
+        }
     }
 
     @Test
@@ -518,7 +553,7 @@ private class RecordingUrlHandler(
     override fun openConnection(url: URL): URLConnection = connection
 }
 
-private class RecordingSoapConnection(url: URL) : HttpURLConnection(url) {
+private open class RecordingSoapConnection(url: URL) : HttpURLConnection(url) {
     val requestProperties = linkedMapOf<String, String>()
     val output = ByteArrayOutputStream()
     var fixedLength: Int = -1
@@ -555,6 +590,11 @@ private class RecordingSoapConnection(url: URL) : HttpURLConnection(url) {
     override fun getInputStream(): InputStream =
         "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body /></s:Envelope>"
             .byteInputStream()
+}
+
+private class CancellingSoapConnection(url: URL) : RecordingSoapConnection(url) {
+    override fun getOutputStream(): ByteArrayOutputStream =
+        throw CancellationException("test cancellation")
 }
 
 private val DEVICE_XML = """

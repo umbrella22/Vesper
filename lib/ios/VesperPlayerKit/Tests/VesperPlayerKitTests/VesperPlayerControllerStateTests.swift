@@ -839,7 +839,32 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.setPlaybackRate(1.5)
         bridge.seek(toRatio: 0.5)
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
-            backend.seekRequests == [30_000]
+            backend.seekRequests == [30_000] &&
+                bridge.uiState.playbackState == .playing &&
+                bridge.uiState.playbackRate == 1.5 &&
+                bridge.uiState.timeline.positionMs == 30_000 &&
+                bridge.uiState.timeline.isSeekable &&
+                bridge.pluginDiagnostics.contains { diagnostic in
+                    diagnostic["pluginKind"] as? String == "native_frame_pipeline" &&
+                        diagnostic["route"] as? String == "sdkManagedNativeFrame" &&
+                        diagnostic["participation"] as? String == "participated" &&
+                        diagnostic["clockSource"] as? String == "swiftNativeAudioBridge" &&
+                        diagnostic["audioDecoder"] as? String == "swiftNativeAudioBridge" &&
+                        diagnostic["audioOutput"] as? String == "swiftNativeAudioBridge" &&
+                        diagnostic["audioPipeline"] as? String == "swiftNativeAudioBridgeV1" &&
+                        diagnostic["audioRateControl"] as? String == "swiftNativeAudioBridgeTimePitch" &&
+                        diagnostic["selectedVideoStreamIndex"] as? Int == 0 &&
+                        diagnostic["selectedVideoMediaKind"] as? String == "video" &&
+                        diagnostic["audioStreamIndex"] as? Int == 1 &&
+                        diagnostic["audioMediaKind"] as? String == "audio" &&
+                        diagnostic["skippedAudioPackets"] as? Int == 2 &&
+                        diagnostic["skippedVideoPackets"] as? Int == 1 &&
+                        diagnostic["skippedOtherPackets"] as? Int == 3 &&
+                        diagnostic["seekable"] as? Bool == true
+                } &&
+                audioOutput.events.contains("rate:1.5") &&
+                audioOutput.events.contains("seek:30000") &&
+                audioOutput.events.last == "play:1.5"
         }
 
         XCTAssertNil(bridge.lastError)
@@ -964,7 +989,10 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
-            backend.seekRequests == [30_000]
+            backend.seekRequests == [30_000] &&
+                bridge.uiState.timeline.positionMs == 30_000 &&
+                audioOutput.events.contains("seek:30000") &&
+                audioOutput.events.last == "play:1.0"
         }
 
         XCTAssertEqual(backend.seekRequests, [30_000])
@@ -1064,7 +1092,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
-            backend.openSourceUris == ["file:///tmp/second.mov"]
+            backend.openSourceUris == ["file:///tmp/second.mov"] &&
+                bridge.uiState.sourceLabel == "Second MOV" &&
+                bridge.uiState.timeline.durationMs == 60_000
         }
 
         XCTAssertEqual(backend.openSourceUris, ["file:///tmp/second.mov"])
@@ -1119,7 +1149,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.seek(toRatio: 0.5)
         bridge.selectSource(secondSource)
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
-            backend.closeHandles == [42] && backend.openSourceUris.count == 2
+            backend.closeHandles == [42] &&
+                backend.openSourceUris.count == 2 &&
+                bridge.uiState.sourceLabel == "Second MOV" &&
+                bridge.uiState.timeline.durationMs == 60_000 &&
+                bridge.uiState.playbackState == .playing
         }
 
         XCTAssertEqual(backend.openSourceUris, [
@@ -1131,6 +1165,77 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(bridge.uiState.sourceLabel, "Second MOV")
         XCTAssertEqual(bridge.uiState.timeline.positionMs, 0)
         XCTAssertEqual(bridge.uiState.timeline.durationMs, 60_000)
+        XCTAssertEqual(bridge.uiState.playbackState, .playing)
+    }
+
+    func testNativeFramePipelineStaleStartupDoesNotCloseNewSourceSession() async {
+        let firstSource = try! VesperPlayerSource(
+            uri: "file:///tmp/first.mov",
+            label: "First MOV",
+            kind: .local,
+            protocol: .file
+        )
+        let secondSource = try! VesperPlayerSource(
+            uri: "file:///tmp/second.mov",
+            label: "Second MOV",
+            kind: .local,
+            protocol: .file
+        )
+        let firstOpenEntered = ThreadSafeFlag()
+        let releaseFirstOpen = DispatchSemaphore(value: 0)
+        let backend = TestNativeFramePipelineBackend()
+        backend.onOpen = { sourceUri in
+            if sourceUri == firstSource.uri {
+                firstOpenEntered.set()
+                _ = releaseFirstOpen.wait(timeout: .now() + 5)
+            }
+        }
+        let audioOutput = TestNativeFrameAudioOutput()
+        let coordinator = VesperNativeFramePipelineCoordinator { source, configuration, sourceNormalizer, surfaceHost in
+            VesperNativeFramePipelineSession(
+                source: source,
+                configuration: configuration,
+                sourceNormalizer: sourceNormalizer,
+                surfaceHost: surfaceHost,
+                backend: backend,
+                audioOutput: audioOutput
+            )
+        }
+        let bridge = VesperNativePlayerBridge(
+            initialSource: firstSource,
+            sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
+                mode: .preflightOnly,
+                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+            ),
+            nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
+                mode: .preferNativeFrame,
+                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+            ),
+            nativeFramePipelineCoordinator: coordinator
+        )
+
+        let surface = PlayerSurfaceView()
+        bridge.attachSurfaceHost(surface)
+        bridge.initialize()
+        let firstOpenStarted = await waitForNativeFrameSmoke(timeout: 5.0) {
+            firstOpenEntered.isSet
+        }
+        XCTAssertTrue(firstOpenStarted)
+        bridge.selectSource(secondSource)
+        bridge.attachSurfaceHost(surface)
+        releaseFirstOpen.signal()
+        let secondStarted = await waitForNativeFrameSmoke(timeout: 1.0) {
+            backend.openSourceUris == [
+                "file:///tmp/first.mov",
+                "file:///tmp/second.mov",
+            ] &&
+                coordinator.activeSession?.source == secondSource &&
+                coordinator.activeSession?.didStart == true
+        }
+
+        XCTAssertTrue(secondStarted)
+        XCTAssertEqual(backend.closeHandles, [42])
+        XCTAssertEqual(bridge.uiState.sourceLabel, "Second MOV")
         XCTAssertEqual(bridge.uiState.playbackState, .playing)
     }
 
@@ -1230,7 +1335,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             backend.openSourceUris == [
                 "file:///tmp/example.mov",
                 "file:///tmp/example.mov",
-            ]
+            ] &&
+                bridge.uiState.playbackState == .playing &&
+                bridge.uiState.playbackRate == 1.5 &&
+                bridge.uiState.timeline.durationMs == 60_000 &&
+                audioOutput.events.last == "play:1.5"
         }
 
         XCTAssertEqual(backend.openSourceUris, [
@@ -1282,6 +1391,51 @@ final class VesperPlayerControllerStateTests: XCTestCase {
                     diagnostic["sourceInput"] as? String == "sourceNormalizerPacket"
             }
         )
+    }
+
+    func testNativeFramePipelineStartupOpensBackendOffMainThread() async {
+        let source = try! VesperPlayerSource(
+            uri: "file:///tmp/example.mov",
+            label: "Local MOV",
+            kind: .local,
+            protocol: .file
+        )
+        let backend = TestNativeFramePipelineBackend()
+        let coordinator = VesperNativeFramePipelineCoordinator { source, configuration, sourceNormalizer, surfaceHost in
+            VesperNativeFramePipelineSession(
+                source: source,
+                configuration: configuration,
+                sourceNormalizer: sourceNormalizer,
+                surfaceHost: surfaceHost,
+                backend: backend,
+                audioOutput: TestNativeFrameAudioOutput()
+            )
+        }
+        let surface = PlayerSurfaceView()
+        let configuration = VesperNativeFramePipelineConfiguration(
+            mode: .preferNativeFrame,
+            decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+        )
+        let sourceNormalizer = VesperSourceNormalizerConfiguration(
+            mode: .preflightOnly,
+            pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+        )
+
+        XCTAssertEqual(
+            coordinator.evaluateRoute(
+                for: source,
+                configuration: configuration,
+                sourceNormalizer: sourceNormalizer,
+                surfaceHost: surface
+            ),
+            .nativeFrame
+        )
+        let startup = await coordinator.startActiveSession()
+
+        if case .failure(let error) = startup {
+            XCTFail("expected native-frame startup to succeed, got \(error.message)")
+        }
+        XCTAssertEqual(backend.openWasMainThread, [false])
     }
 
     func testNativeFramePipelineCoordinatorReportsMissingSurfaceAsPendingIssue() {
@@ -1859,11 +2013,13 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             protocol: .file
         )
         let backend = TestNativeFramePipelineBackend()
+        let pixelBuffer = makeTestPixelBuffer()
+        let pixelBufferAddress = testPixelBufferAddress(pixelBuffer)
         backend.advanceResults = [
             .success([
                 "status": "frame",
                 "handle": NSNumber(value: UInt64(7)),
-                "pixelBuffer": NSNumber(value: UInt(0x1234)),
+                "pixelBuffer": NSNumber(value: pixelBufferAddress),
                 "presentationTimeUs": NSNumber(value: Int64(12_000_000)),
                 "durationUs": NSNumber(value: Int64(33_333)),
                 "width": NSNumber(value: 320),
@@ -1913,7 +2069,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         session.close()
 
         XCTAssertFalse(backend.advanceRequests.isEmpty)
-        XCTAssertEqual(presenter.presentedPixelBufferAddresses, [0x1234])
+        XCTAssertEqual(presenter.presentedPixelBufferAddresses, [pixelBufferAddress])
         XCTAssertEqual(backend.releasedFrameHandles, [7])
         XCTAssertEqual(backend.releasePresentedFlags, [true])
         XCTAssertEqual(
@@ -1926,7 +2082,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(presenter.enabledStates.last, false)
     }
 
-    func testNativeFramePipelineEndOfStreamStopsLoopAndReportsPlaybackEnded() async {
+    func testNativeFramePipelineRuntimeAdvanceFailureReportsPlaybackFailure() async {
         let source = try! VesperPlayerSource(
             uri: "file:///tmp/example.mov",
             label: "Local MOV",
@@ -1935,10 +2091,65 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
         let backend = TestNativeFramePipelineBackend()
         backend.advanceResults = [
+            .failure(
+                VesperNativeFramePipelineOperationError(
+                    message: "advance failed in fake backend"
+                )
+            ),
+        ]
+        let audioOutput = TestNativeFrameAudioOutput()
+        let session = VesperNativeFramePipelineSession(
+            source: source,
+            configuration: VesperNativeFramePipelineConfiguration(
+                mode: .preferNativeFrame,
+                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+            ),
+            sourceNormalizer: VesperSourceNormalizerConfiguration(
+                mode: .preflightOnly,
+                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+            ),
+            surfaceHost: PlayerSurfaceView(),
+            backend: backend,
+            audioOutput: audioOutput,
+            nativeFramePresenter: TestNativeFramePresenter()
+        )
+        let playbackFailed = expectation(description: "native-frame advance failure reported playback failure")
+        var failedIssue: VesperNativeFramePipelineIssue?
+        session.onPlaybackFailed = { issue in
+            failedIssue = issue
+            playbackFailed.fulfill()
+        }
+
+        guard case .success = await session.start() else {
+            XCTFail("expected fake native-frame session to start")
+            return
+        }
+        session.play(rate: 1.0)
+
+        await fulfillment(of: [playbackFailed], timeout: 1.0)
+        session.close()
+
+        XCTAssertFalse(session.isPlaying)
+        XCTAssertFalse(backend.advanceRequests.isEmpty)
+        XCTAssertEqual(failedIssue?.kind, .startupFailure)
+        XCTAssertTrue(failedIssue?.message.contains("advance failed in fake backend") == true)
+        XCTAssertTrue(audioOutput.events.contains("pause"))
+    }
+
+    func testNativeFramePipelineEndOfStreamStopsLoopAndReportsPlaybackEnded() async {
+        let source = try! VesperPlayerSource(
+            uri: "file:///tmp/example.mov",
+            label: "Local MOV",
+            kind: .local,
+            protocol: .file
+        )
+        let backend = TestNativeFramePipelineBackend()
+        let pixelBuffer = makeTestPixelBuffer()
+        backend.advanceResults = [
             .success([
                 "status": "frame",
                 "handle": NSNumber(value: UInt64(7)),
-                "pixelBuffer": NSNumber(value: UInt(0x1234)),
+                "pixelBuffer": NSNumber(value: testPixelBufferAddress(pixelBuffer)),
                 "presentationTimeUs": NSNumber(value: Int64(59_000_000)),
                 "durationUs": NSNumber(value: Int64(33_333)),
                 "width": NSNumber(value: 320),
@@ -1995,11 +2206,13 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             protocol: .file
         )
         let backend = TestNativeFramePipelineBackend()
+        var pixelBuffer: CVPixelBuffer? = makeTestPixelBuffer()
+        let pixelBufferAddress = testPixelBufferAddress(pixelBuffer!)
         backend.advanceResults = [
             .success([
                 "status": "frame",
                 "handle": NSNumber(value: UInt64(7)),
-                "pixelBuffer": NSNumber(value: UInt(0x1234)),
+                "pixelBuffer": NSNumber(value: pixelBufferAddress),
                 "presentationTimeUs": NSNumber(value: Int64(12_000_000)),
                 "durationUs": NSNumber(value: Int64(33_333)),
                 "width": NSNumber(value: 320),
@@ -2038,19 +2251,21 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         presenter.holdPresentation = true
         session.play()
         let presentationStarted = await waitForNativeFrameSmoke(timeout: 1.0) {
-            presenter.presentedPixelBufferAddresses == [0x1234]
+            presenter.presentedPixelBufferAddresses == [pixelBufferAddress]
         }
         XCTAssertTrue(presentationStarted, "display loop did not pick up the fake frame")
 
+        pixelBuffer = nil
         XCTAssertTrue(session.seek(toMs: 12_345))
         presenter.resumePresentation()
         _ = await waitForNativeFrameSmoke(timeout: 1.0) {
             backend.seekRequests == [12_345] &&
-                backend.releasedFrameHandles == [7] &&
-                backend.releasePresentedFlags == [false]
+                presenter.presentedPixelBufferWidths == [2] &&
+                backend.releasedFrameHandles == [7]
         }
 
         XCTAssertEqual(backend.seekRequests, [12_345])
+        XCTAssertEqual(presenter.presentedPixelBufferWidths, [2])
         XCTAssertEqual(backend.releasedFrameHandles, [7])
         XCTAssertEqual(backend.releasePresentedFlags, [false])
         XCTAssertEqual(session.counters.presentedFrames, 0)
@@ -2280,6 +2495,98 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
     }
 
+    func testUtilityQueueRequiredVoidWaitsForBoundedSlotWhenQueueIsFull() async {
+        let queue = VesperBoundedUtilityQueue(maxConcurrentOperations: 1, maxPendingOperations: 1)
+        let firstEntered = ThreadSafeFlag()
+        let releaseFirst = DispatchSemaphore(value: 0)
+        let firstTask = Task {
+            await queue.run(fallback: { false }) {
+                firstEntered.set()
+                _ = releaseFirst.wait(timeout: .now() + 5)
+                return true
+            }
+        }
+        let started = await waitForNativeFrameSmoke(timeout: 1.0) {
+            firstEntered.isSet
+        }
+        XCTAssertTrue(started)
+
+        let optionalResult = await queue.run(fallback: { "fallback" }) {
+            "unexpected"
+        }
+        XCTAssertEqual(optionalResult, "fallback")
+
+        let cleanupRan = ThreadSafeFlag()
+        let cleanupTask = Task {
+            await queue.runRequiredVoid {
+                cleanupRan.set()
+            }
+        }
+        let ranWhileFull = await waitForNativeFrameSmoke(timeout: 0.2) {
+            cleanupRan.isSet
+        }
+        XCTAssertFalse(ranWhileFull)
+        releaseFirst.signal()
+        let firstCompleted = await firstTask.value
+        XCTAssertTrue(firstCompleted)
+        await cleanupTask.value
+        XCTAssertTrue(cleanupRan.isSet)
+    }
+
+    func testNativeFrameCommandQueueReplacesPendingSeekCommands() async {
+        let queue = VesperNativeFramePipelineCommandQueue(maximumPendingCommands: 2)
+        let firstEntered = ThreadSafeFlag()
+        let releaseFirst = DispatchSemaphore(value: 0)
+        let executed = ThreadSafeIntList()
+        let dropped = ThreadSafeIntList()
+
+        XCTAssertNotNil(
+            queue.submit { _ in
+                firstEntered.set()
+                _ = releaseFirst.wait(timeout: .now() + 5)
+                executed.append(0)
+            }
+        )
+        let started = await waitForNativeFrameSmoke(timeout: 1.0) {
+            firstEntered.isSet
+        }
+        XCTAssertTrue(started)
+
+        XCTAssertNotNil(
+            queue.submit(
+                policy: .replacingPending("seek"),
+                onDropped: { dropped.append(1) }
+            ) { _ in
+                executed.append(1)
+            }
+        )
+        XCTAssertNotNil(
+            queue.submit(
+                policy: .replacingPending("seek"),
+                onDropped: { dropped.append(2) }
+            ) { _ in
+                executed.append(2)
+            }
+        )
+        XCTAssertNotNil(
+            queue.submit(
+                policy: .replacingPending("seek"),
+                onDropped: { dropped.append(3) }
+            ) { _ in
+                executed.append(3)
+            }
+        )
+
+        XCTAssertEqual(dropped.values, [1, 2])
+        releaseFirst.signal()
+        let drained = await waitForNativeFrameSmoke(timeout: 1.0) {
+            executed.values == [0, 3]
+        }
+        XCTAssertTrue(drained)
+        XCTAssertEqual(executed.values, [0, 3])
+        XCTAssertEqual(dropped.values, [1, 2])
+    }
+
     private func settleControllerObservation() async {
         await Task.yield()
         await Task.yield()
@@ -2427,6 +2734,40 @@ private struct NativeFrameSmokeConfiguration {
     let runtimeProfile: String?
 }
 
+private final class ThreadSafeFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isSet: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func set() {
+        lock.lock()
+        value = true
+        lock.unlock()
+    }
+}
+
+private final class ThreadSafeIntList: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValues: [Int] = []
+
+    var values: [Int] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedValues
+    }
+
+    func append(_ value: Int) {
+        lock.lock()
+        storedValues.append(value)
+        lock.unlock()
+    }
+}
+
 @MainActor
 private final class TestObservablePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published var publishedUiState = PlayerHostUiState(
@@ -2512,7 +2853,9 @@ private final class TestNativeFramePipelineBackend: VesperNativeFramePipelineBac
     var advanceResults: [Result<[String: Any], VesperNativeFramePipelineOperationError>] = []
     var releaseResult: [String: Any] = ["counters": [:]]
     var openResult: Result<VesperNativeFramePipelineOpenResult, VesperNativeFramePipelineStartupError>?
+    var onOpen: ((String) -> Void)?
     private var storedOpenSourceUris: [String] = []
+    private var storedOpenWasMainThread: [Bool] = []
     private var storedCloseHandles: [UInt64] = []
     private var nextHandle: UInt64 = 42
 
@@ -2540,6 +2883,10 @@ private final class TestNativeFramePipelineBackend: VesperNativeFramePipelineBac
         withLock { storedOpenSourceUris }
     }
 
+    var openWasMainThread: [Bool] {
+        withLock { storedOpenWasMainThread }
+    }
+
     var closeHandles: [UInt64] {
         withLock { storedCloseHandles }
     }
@@ -2551,10 +2898,12 @@ private final class TestNativeFramePipelineBackend: VesperNativeFramePipelineBac
     ) -> Result<VesperNativeFramePipelineOpenResult, VesperNativeFramePipelineStartupError> {
         let handle = withLock {
             storedOpenSourceUris.append(source.uri)
+            storedOpenWasMainThread.append(Thread.isMainThread)
             let handle = nextHandle
             nextHandle += 1
             return handle
         }
+        onOpen?(source.uri)
         if let openResult {
             return openResult
         }
@@ -2659,10 +3008,34 @@ private final class TestNativeFramePipelineBackend: VesperNativeFramePipelineBac
     }
 }
 
+private func makeTestPixelBuffer(width: Int = 2, height: Int = 2) -> CVPixelBuffer {
+    var pixelBuffer: CVPixelBuffer?
+    let status = CVPixelBufferCreate(
+        kCFAllocatorDefault,
+        width,
+        height,
+        kCVPixelFormatType_32BGRA,
+        [
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+        ] as CFDictionary,
+        &pixelBuffer
+    )
+    guard status == kCVReturnSuccess, let pixelBuffer else {
+        XCTFail("failed to create test CVPixelBuffer status=\(status)")
+        fatalError("failed to create test CVPixelBuffer")
+    }
+    return pixelBuffer
+}
+
+private func testPixelBufferAddress(_ pixelBuffer: CVPixelBuffer) -> UInt {
+    UInt(bitPattern: Unmanaged.passUnretained(pixelBuffer).toOpaque())
+}
+
 @MainActor
 private final class TestNativeFramePresenter: VesperNativeFramePresenting {
     private(set) var enabledStates: [Bool] = []
     private(set) var presentedPixelBufferAddresses: [UInt] = []
+    private(set) var presentedPixelBufferWidths: [Int] = []
     var presentResult = true
     var holdPresentation = false
     private var heldContinuations: [CheckedContinuation<Bool, Never>] = []
@@ -2671,13 +3044,17 @@ private final class TestNativeFramePresenter: VesperNativeFramePresenting {
         enabledStates.append(enabled)
     }
 
-    func presentNativeFrame(pixelBufferAddress: UInt) async -> Bool {
+    func presentNativeFrame(pixelBuffer: CVPixelBuffer) async -> Bool {
+        let pixelBufferAddress = testPixelBufferAddress(pixelBuffer)
         presentedPixelBufferAddresses.append(pixelBufferAddress)
         if holdPresentation {
-            return await withCheckedContinuation { continuation in
+            let result = await withCheckedContinuation { continuation in
                 heldContinuations.append(continuation)
             }
+            presentedPixelBufferWidths.append(CVPixelBufferGetWidth(pixelBuffer))
+            return result
         }
+        presentedPixelBufferWidths.append(CVPixelBufferGetWidth(pixelBuffer))
         return presentResult
     }
 
@@ -2706,9 +3083,10 @@ private final class RecordingNativeFramePresenter: VesperNativeFramePresenting {
         wrapped.setNativeFramePresentationEnabled(enabled)
     }
 
-    func presentNativeFrame(pixelBufferAddress: UInt) async -> Bool {
+    func presentNativeFrame(pixelBuffer: CVPixelBuffer) async -> Bool {
+        let pixelBufferAddress = testPixelBufferAddress(pixelBuffer)
         presentedPixelBufferAddresses.append(pixelBufferAddress)
-        let result = await wrapped.presentNativeFrame(pixelBufferAddress: pixelBufferAddress)
+        let result = await wrapped.presentNativeFrame(pixelBuffer: pixelBuffer)
         presentedResults.append(result)
         return result
     }

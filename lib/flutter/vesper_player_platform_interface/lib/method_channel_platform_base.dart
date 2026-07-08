@@ -9,6 +9,8 @@ import 'src/models.dart';
 import 'src/platform_error_mapping.dart';
 import 'src/vesper_player_platform.dart';
 
+const Duration _vesperDownloadRecoveryTimeout = Duration(seconds: 30);
+
 abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
   VesperMethodChannelPlatformBase({
     required this.methodChannel,
@@ -537,12 +539,14 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
     if (handler == null) {
       return null;
     }
-    final plan = await handler(
-      VesperDownloadTaskSnapshot.fromMap(vesperDecodeMap(arguments['task'])),
-      VesperDownloadStaleResource.fromMap(
-        vesperDecodeMap(arguments['staleResource']),
+    final plan = await Future<VesperDownloadRecoveredTaskPlan?>.sync(
+      () => handler(
+        VesperDownloadTaskSnapshot.fromMap(vesperDecodeMap(arguments['task'])),
+        VesperDownloadStaleResource.fromMap(
+          vesperDecodeMap(arguments['staleResource']),
+        ),
       ),
-    );
+    ).timeout(_vesperDownloadRecoveryTimeout, onTimeout: () => null);
     return plan?.toMap();
   }
 }

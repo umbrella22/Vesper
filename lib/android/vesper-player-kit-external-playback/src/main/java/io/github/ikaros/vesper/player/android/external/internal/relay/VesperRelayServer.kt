@@ -6,9 +6,13 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.security.SecureRandom
 import java.util.Base64
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -37,6 +41,7 @@ class VesperRelayServer @JvmOverloads constructor(
     private val appContext = context?.applicationContext
     private val random = SecureRandom()
     private val running = AtomicBoolean(false)
+    private val lifecycleEpoch = AtomicLong(0L)
     private val entries = VesperRelayEntryStore(
         tokenTtlMillis = tokenTtlMillis,
         nowMillisProvider = nowMillisProvider,
@@ -103,6 +108,8 @@ class VesperRelayServer @JvmOverloads constructor(
             stop()
         }
 
+        val startEpoch = lifecycleEpoch.get()
+
         // Bind + executor construction are blocking network/OS operations;
         // perform them outside the monitor.
         val bindAddress = preferredBindAddress?.takeIf { it.isBindableLanAddress() }
@@ -111,9 +118,17 @@ class VesperRelayServer @JvmOverloads constructor(
             ?: throw IllegalStateException("No Wi-Fi LAN address is available for relay.")
         val socket = ServerSocket(0, 50, bindAddress)
         val requestExecutor =
-            Executors.newFixedThreadPool(maxRequestThreads.coerceAtLeast(1)) { runnable ->
-                Thread(runnable, "vesper-relay-request").apply { isDaemon = true }
-            }
+            ThreadPoolExecutor(
+                maxRequestThreads.coerceAtLeast(1),
+                maxRequestThreads.coerceAtLeast(1),
+                0L,
+                TimeUnit.MILLISECONDS,
+                ArrayBlockingQueue(DEFAULT_MAX_QUEUED_REQUESTS),
+                { runnable ->
+                    Thread(runnable, "vesper-relay-request").apply { isDaemon = true }
+                },
+                ThreadPoolExecutor.AbortPolicy(),
+            )
         val acceptExecutor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "vesper-relay-accept").apply { isDaemon = true }
         }
@@ -123,7 +138,7 @@ class VesperRelayServer @JvmOverloads constructor(
         // off-lock, tear down what we just built without touching running
         // (the winner owns it now).
         val lostTheRace = stateLock.withLock {
-            if (!running.compareAndSet(false, true)) {
+            if (lifecycleEpoch.get() != startEpoch || !running.compareAndSet(false, true)) {
                 true
             } else {
                 serverSocket = socket
@@ -155,6 +170,7 @@ class VesperRelayServer @JvmOverloads constructor(
      */
     fun stop() {
         val state = stateLock.withLock {
+            lifecycleEpoch.incrementAndGet()
             running.set(false)
             entries.invalidateAll()
             val captured = RunningState(
@@ -206,11 +222,22 @@ class VesperRelayServer @JvmOverloads constructor(
             }
         }
         start(preferredAddress)
+        val registerEpoch = lifecycleEpoch.get()
         val socket = serverSocket ?: throw IllegalStateException("Relay server is not running.")
-        val host = advertisedHost(preferredAddress)
+        val activeBind = boundAddress
+        val host = advertisedHost(preferredAddress, activeBind)
             ?: throw IllegalStateException("No LAN address is available for relay.")
         val relayPath = source.relayPath(token, adaptation)
-        entries.put(token, source, adaptation)
+        stateLock.withLock {
+            if (
+                lifecycleEpoch.get() != registerEpoch ||
+                    !running.get() ||
+                    serverSocket !== socket
+            ) {
+                throw IllegalStateException("Relay server stopped during registration.")
+            }
+            entries.put(token, source, adaptation)
+        }
         try {
             adaptation?.let { registration ->
                 val prewarmRequest = source.toFormatAdaptationRequest(
@@ -236,14 +263,26 @@ class VesperRelayServer @JvmOverloads constructor(
             formatAdapter.invalidate(token)
             throw error
         }
+        val stillRegistered = stateLock.withLock {
+            lifecycleEpoch.get() == registerEpoch &&
+                running.get() &&
+                serverSocket === socket
+        }
+        if (!stillRegistered) {
+            entries.remove(token)
+            formatAdapter.invalidate(token)
+            throw IllegalStateException("Relay server stopped during registration.")
+        }
         return VesperRelayHandle(
             token = token,
             url = "http://$host:${socket.localPort}$relayPath",
         )
     }
 
-    private fun advertisedHost(preferredAddress: InetAddress?): String? {
-        val activeBind = boundAddress
+    private fun advertisedHost(
+        preferredAddress: InetAddress?,
+        activeBind: InetAddress? = boundAddress,
+    ): String? {
         val preferred = preferredAddress?.takeIf { it.isAdvertisableLanAddress() }
         val address = when {
             preferred != null &&
@@ -281,4 +320,5 @@ class VesperRelayServer @JvmOverloads constructor(
 
 private const val DEFAULT_TOKEN_TTL_MILLIS = 30 * 60 * 1000L
 private const val DEFAULT_MAX_REQUEST_THREADS = 16
+private const val DEFAULT_MAX_QUEUED_REQUESTS = 64
 private const val DEFAULT_MAX_ACTIVE_CLIENTS = 32

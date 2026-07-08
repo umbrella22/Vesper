@@ -19,9 +19,11 @@ protocol PlayerBridge: AnyObject {
     var routePickerPlayer: AVPlayer? { get }
 
     func initialize()
+    func initializeAsync() async
     func dispose()
     func refresh()
     func selectSource(_ source: VesperPlayerSource)
+    func selectSourceAsync(_ source: VesperPlayerSource) async
 
     func attachSurfaceHost(_ host: UIView)
     func detachSurfaceHost()
@@ -60,6 +62,14 @@ protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
 extension PlayerBridge {
     var routePickerPlayer: AVPlayer? {
         nil
+    }
+
+    func initializeAsync() async {
+        initialize()
+    }
+
+    func selectSourceAsync(_ source: VesperPlayerSource) async {
+        selectSource(source)
     }
 
     func detachSurfaceHost(_ host: UIView) {

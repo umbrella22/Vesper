@@ -304,6 +304,32 @@ void main() {
     expect(calls.single.method, 'connect');
   });
 
+  test('show route picker is invoked only when requested', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return <String, Object?>{
+        'status': 'unavailable',
+        'message': 'No Activity is attached.',
+      };
+    });
+    final controller = VesperExternalPlaybackController(methodChannel: channel);
+
+    expect(calls, isEmpty);
+
+    final result = await controller.showRoutePicker(
+      brightness: Brightness.dark,
+    );
+
+    expect(result.status, VesperExternalPlaybackResultStatus.unavailable);
+    expect(result.message, 'No Activity is attached.');
+    expect(calls.single.method, 'showRoutePicker');
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      <Object?, Object?>{'brightness': 'dark'},
+    );
+  });
+
   test('dispose clears cached routes and rejects later operations', () async {
     const customRoutesChannel = EventChannel(
       'io.github.ikaros.vesper_player_external_playback_test/routes',
@@ -357,12 +383,20 @@ void main() {
 
   testWidgets('route button wrapper preserves requested icon hit area',
       (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return <String, Object?>{
+        'status': 'success',
+      };
+    });
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     try {
-      await tester.pumpWidget(const MaterialApp(
+      await tester.pumpWidget(MaterialApp(
         home: VesperExternalRouteButton(
           size: 42,
           brightness: Brightness.dark,
+          controller: VesperExternalPlaybackController(methodChannel: channel),
         ),
       ));
 
@@ -372,6 +406,75 @@ void main() {
 
       expect(iconButton.size, 42);
       expect(iconButton.brightness, Brightness.dark);
+      expect(find.byType(AndroidView), findsNothing);
+      expect(calls, isEmpty);
+
+      await tester.tap(find.byIcon(Icons.cast));
+      await tester.pump();
+
+      expect(calls.single.method, 'showRoutePicker');
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('route button treats picker failures as handled',
+      (tester) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return <String, Object?>{
+        'status': 'failed',
+        'message': 'background can not be translucent: #0',
+      };
+    });
+    final results = <VesperExternalPlaybackResult>[];
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      await tester.pumpWidget(MaterialApp(
+        home: VesperExternalRouteButton(
+          controller: VesperExternalPlaybackController(methodChannel: channel),
+          onResult: results.add,
+        ),
+      ));
+
+      await tester.tap(find.byIcon(Icons.cast));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(calls.single.method, 'showRoutePicker');
+      expect(results.single.status, VesperExternalPlaybackResultStatus.success);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('route button swallows picker channel exceptions',
+      (tester) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      throw PlatformException(
+        code: 'vesper_external_playback_error',
+        message: 'Route picker failed.',
+      );
+    });
+    final results = <VesperExternalPlaybackResult>[];
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      await tester.pumpWidget(MaterialApp(
+        home: VesperExternalRouteButton(
+          controller: VesperExternalPlaybackController(methodChannel: channel),
+          onResult: results.add,
+        ),
+      ));
+
+      await tester.tap(find.byIcon(Icons.cast));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(calls.single.method, 'showRoutePicker');
+      expect(results.single.status, VesperExternalPlaybackResultStatus.success);
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }

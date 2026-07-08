@@ -180,6 +180,12 @@
     <string name="example_plugins_native_frame_prefer_subtitle">Prefer the Android SDK-managed native-frame route and fall back to the system player if the MediaCodec packet lane is unavailable.</string>
     <string name="example_plugins_native_frame_require">Require native frame</string>
     <string name="example_plugins_native_frame_require_subtitle">Require the Android SDK-managed native-frame route and surface an error if the MediaCodec packet lane is unavailable.</string>
+    <string name="example_plugins_video_surface_auto">Auto surface</string>
+    <string name="example_plugins_video_surface_auto_subtitle">Use TextureView for the normal scrolling host and SurfaceView when DRM or native-frame playback requires it.</string>
+    <string name="example_plugins_video_surface_texture">TextureView</string>
+    <string name="example_plugins_video_surface_texture_subtitle">Prefer the scroll-friendly Android video surface for clipped, moving, or animation-heavy player stages.</string>
+    <string name="example_plugins_video_surface_surface">SurfaceView</string>
+    <string name="example_plugins_video_surface_surface_subtitle">Prefer the high-fidelity Android video surface for fixed HDR, high frame rate, and lower-power playback.</string>
     <string name="example_plugins_source_normalizer_path">source</string>
     <string name="example_plugins_decoder_mediacodec_path">decoder</string>
     <string name="example_plugins_frame_processor_path">frame</string>
@@ -214,10 +220,20 @@
     <string name="example_diagnostics_origin">origin</string>
     <string name="example_diagnostics_source_normalizer">normalizer</string>
     <string name="example_diagnostics_native_frame">native frame</string>
+    <string name="example_diagnostics_video_surface">video surface</string>
     <string name="example_diagnostics_origin_queue">Queue: %1$s</string>
     <string name="example_diagnostics_origin_dolby">Dolby ad-hoc: %1$s</string>
     <string name="example_diagnostics_origin_none">None</string>
     <string name="example_diagnostics_none">None</string>
+    <string name="example_frame_metrics_title">Frame Metrics</string>
+    <string name="example_frame_metrics_subtitle">Collect Android frame timing windows while you scroll or interact with playback.</string>
+    <string name="example_frame_metrics_collect">Collect frame timing</string>
+    <string name="example_frame_metrics_collect_subtitle">Reports every 120 frames and logs the same summary with tag VesperHostFrameMetrics.</string>
+    <string name="example_frame_metrics_waiting">Collecting frames...</string>
+    <string name="example_frame_metrics_disabled">Frame metrics collection is off.</string>
+    <string name="example_frame_metrics_summary">frames=%1$d · janky=%2$d · slowUi=%3$d · slowDraw=%4$d · slowGpu=%5$d</string>
+    <string name="example_frame_metrics_total">total p50=%1$s · p95=%2$s · max=%3$s</string>
+    <string name="example_frame_metrics_breakdown">p95 input=%1$s · layout=%2$s · draw=%3$s · sync=%4$s · gpu=%5$s</string>
 
     <string name="example_event_log_title">Event Log</string>
     <string name="example_event_log_subtitle">Recent host actions and diagnostics captured inside the sample app.</string>
@@ -231,6 +247,7 @@
     <string name="example_log_controller_rebuilt">Controller rebuilt</string>
     <string name="example_log_source_normalizer_changed">SourceNormalizer mode changed</string>
     <string name="example_log_native_frame_changed">Native-frame mode changed</string>
+    <string name="example_log_video_surface_changed">Video surface changed</string>
     <string name="example_log_hdr_evidence_written">HDR evidence written</string>
     <string name="example_log_hdr_evidence_failed">HDR evidence failed</string>
     <string name="example_log_download_create_failed">Download task creation failed</string>

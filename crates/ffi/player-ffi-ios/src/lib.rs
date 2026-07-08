@@ -3279,7 +3279,16 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_advance(
         };
         let (frame_handle, json) = match frame {
             Some(frame) => {
-                let frame_handle = session.store_frame(frame);
+                let frame_handle = match session.store_frame(frame) {
+                    Ok(frame_handle) => frame_handle,
+                    Err(error) => {
+                        write_error(
+                            out_error,
+                            owned_api_error(PlayerFfiErrorCode::InvalidState, &error),
+                        );
+                        return PlayerFfiCallStatus::Error;
+                    }
+                };
                 let Some(stored) = session.pending_frame(frame_handle) else {
                     write_error(
                         out_error,

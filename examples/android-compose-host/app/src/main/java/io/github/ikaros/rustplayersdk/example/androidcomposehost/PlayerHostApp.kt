@@ -20,7 +20,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,6 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -108,6 +108,7 @@ internal fun PlayerHostApp(
     onRebuildController: (
         ExampleSourceNormalizerSetting,
         ExampleNativeFramePipelineSetting,
+        ExampleVideoSurfaceSetting,
         VesperPlayerSource?,
         VesperPlaybackResiliencePolicy,
         Boolean,
@@ -140,6 +141,9 @@ internal fun PlayerHostApp(
     }
     var nativeFramePipelineSetting by rememberSaveable {
         mutableStateOf(ExampleNativeFramePipelineSetting.DiagnosticsOnly)
+    }
+    var videoSurfaceSetting by rememberSaveable {
+        mutableStateOf(ExampleVideoSurfaceSetting.SurfaceView)
     }
     var selectedHdrEvidencePreset by remember {
         mutableStateOf(exampleHdrEvidenceP0Presets[1])
@@ -180,11 +184,7 @@ internal fun PlayerHostApp(
 
     val palette = remember(useDarkTheme) { exampleHostPalette(useDarkTheme) }
     val uiState = rememberVesperPlayerUiState(controller)
-    val trackCatalog by controller.trackCatalog.collectAsState()
-    val trackSelection by controller.trackSelection.collectAsState()
     val playlistSnapshot by playlistCoordinator.snapshot.collectAsState()
-    val downloadSnapshot by downloadManager.snapshot.collectAsState()
-    val externalRoutes by externalPlaybackController.routes.collectAsState()
 
     var remoteStreamUrl by rememberSaveable { mutableStateOf(ANDROID_HLS_DEMO_URL) }
     var downloadRemoteUrl by rememberSaveable { mutableStateOf(ANDROID_HLS_DEMO_URL) }
@@ -215,6 +215,8 @@ internal fun PlayerHostApp(
     var isCastRoutePickerOpening by remember { mutableStateOf(false) }
     var castRoutePickerRequestId by remember { mutableStateOf(0L) }
     var externalNowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    var frameMetricsEnabled by rememberSaveable { mutableStateOf(false) }
+    var frameMetricsSnapshot by remember { mutableStateOf<ExampleFrameMetricsSnapshot?>(null) }
     var hasNearbyWifiPermission by remember {
         mutableStateOf(context.hasNearbyWifiPermission())
     }
@@ -245,7 +247,6 @@ internal fun PlayerHostApp(
         }
     val controllerRebuildSource =
         exampleControllerRebuildSource(activePlaybackSource, activePlaylistSource)
-    val latestExternalRoutes by rememberUpdatedState(externalRoutes)
     val latestActivePlaybackSource by rememberUpdatedState(controllerRebuildSource)
     val latestUiState by rememberUpdatedState(uiState)
 
@@ -313,6 +314,19 @@ internal fun PlayerHostApp(
             hostActivity.setPictureInPictureParams(
                 buildExamplePictureInPictureParams(autoEnter = pictureInPictureEnabled),
             )
+        }
+    }
+
+    DisposableEffect(activity, frameMetricsEnabled) {
+        if (activity == null || !frameMetricsEnabled) {
+            onDispose { }
+        } else {
+            val probe =
+                ExampleFrameMetricsProbe(activity) { snapshot ->
+                    frameMetricsSnapshot = snapshot
+                }
+            probe.start()
+            onDispose { probe.stop() }
         }
     }
 
@@ -649,6 +663,7 @@ internal fun PlayerHostApp(
                     onRebuildController(
                         nextSourceNormalizerSetting,
                         nextNativeFramePipelineSetting,
+                        videoSurfaceSetting,
                         preset.source,
                         selectedResilienceProfile.policy,
                         rebuildSnapshot.shouldResumePlayback,
@@ -725,6 +740,7 @@ internal fun PlayerHostApp(
             onRebuildController(
                 setting,
                 nativeFramePipelineSetting,
+                videoSurfaceSetting,
                 activeSource,
                 selectedResilienceProfile.policy,
                 rebuildSnapshot.shouldResumePlayback,
@@ -788,6 +804,7 @@ internal fun PlayerHostApp(
             onRebuildController(
                 sourceNormalizerSetting,
                 setting,
+                videoSurfaceSetting,
                 activeSource,
                 selectedResilienceProfile.policy,
                 rebuildSnapshot.shouldResumePlayback,
@@ -797,6 +814,82 @@ internal fun PlayerHostApp(
         recordHostLog(
             severity = ExampleHostLogSeverity.Info,
             title = context.getString(R.string.example_log_native_frame_changed),
+            detail = context.getString(setting.titleRes),
+        )
+        if (activeSource != null) {
+            nextController.configureSystemPlayback(
+                VesperSystemPlaybackConfiguration(
+                    metadata =
+                        VesperSystemPlaybackMetadata(
+                            title = activeSource.label.ifBlank { activeSource.uri },
+                            contentUri = activeSource.uri,
+                        ),
+                    backgroundMode = VesperBackgroundPlaybackMode.Disabled,
+                    controls = VesperSystemPlaybackControls.videoDefault(),
+                ),
+            )
+        }
+        controlsVisible = true
+    }
+
+    fun applyVideoSurfaceSetting(setting: ExampleVideoSurfaceSetting) {
+        if (setting == videoSurfaceSetting) {
+            return
+        }
+        val activeSource = latestActivePlaybackSource
+        val rebuildSnapshot = exampleControllerRebuildSnapshot(latestUiState)
+        val previousSetting = videoSurfaceSetting
+        val previousSurfaceKind =
+            exampleSurfaceKindForSettings(
+                setting = nativeFramePipelineSetting,
+                surfaceSetting = previousSetting,
+                source = activeSource,
+            )
+        val nextSurfaceKind =
+            exampleSurfaceKindForSettings(
+                setting = nativeFramePipelineSetting,
+                surfaceSetting = setting,
+                source = activeSource,
+            )
+        val requiresControllerRebuild = previousSurfaceKind != nextSurfaceKind
+        Log.i(
+            PLAYER_HOST_EXAMPLE_TAG,
+            "video-surface setting previous=$previousSetting next=$setting " +
+                "effective=$previousSurfaceKind->$nextSurfaceKind " +
+                "rebuild=$requiresControllerRebuild source=${activeSource?.uri ?: "none"} " +
+                "resume=${rebuildSnapshot.shouldResumePlayback} " +
+                "positionMs=${rebuildSnapshot.restorePositionMs}",
+        )
+        videoSurfaceSetting = setting
+        if (!requiresControllerRebuild) {
+            recordHostLog(
+                severity = ExampleHostLogSeverity.Info,
+                title = context.getString(R.string.example_log_video_surface_changed),
+                detail = context.getString(setting.titleRes),
+            )
+            controlsVisible = true
+            return
+        }
+        if (externalSession != null) {
+            scope.launch {
+                runCatching { externalPlaybackController.disconnectAsync() }
+            }
+            externalSession = null
+        }
+        val nextController =
+            onRebuildController(
+                sourceNormalizerSetting,
+                nativeFramePipelineSetting,
+                setting,
+                activeSource,
+                selectedResilienceProfile.policy,
+                rebuildSnapshot.shouldResumePlayback,
+                rebuildSnapshot.restorePositionMs,
+                rebuildSnapshot.restorePlaybackRate,
+            )
+        recordHostLog(
+            severity = ExampleHostLogSeverity.Info,
+            title = context.getString(R.string.example_log_video_surface_changed),
             detail = context.getString(setting.titleRes),
         )
         if (activeSource != null) {
@@ -976,7 +1069,7 @@ internal fun PlayerHostApp(
             )
             return
         }
-        val activeRoute = externalRoutes.firstOrNull { route -> route.active }
+        val activeRoute = externalPlaybackController.routes.value.firstOrNull { route -> route.active }
         if (activeRoute != null) {
             connectExternalRoute(activeRoute)
         } else {
@@ -1155,11 +1248,13 @@ internal fun PlayerHostApp(
                         )
                         saveVideoToGallery(context, exportFile.absolutePath)
                     } else {
-                        downloadManager.saveTaskOutput(
-                            context = context,
-                            taskId = task.taskId,
-                            collection = VesperDownloadPublicCollection.Movies,
-                        )
+                        withContext(Dispatchers.IO) {
+                            downloadManager.saveTaskOutput(
+                                context = context,
+                                taskId = task.taskId,
+                                collection = VesperDownloadPublicCollection.Movies,
+                            )
+                        }
                     }
                 }.fold(
                     onSuccess = {
@@ -1343,7 +1438,8 @@ internal fun PlayerHostApp(
                     val routeId = event.routeId ?: return@collect
                     val routeName = event.routeName ?: "External route"
                     val route =
-                        latestExternalRoutes.firstOrNull { candidate -> candidate.routeId == routeId }
+                        externalPlaybackController.routes.value
+                            .firstOrNull { candidate -> candidate.routeId == routeId }
                     val resolvedRouteKind = route?.kind ?: VesperExternalPlaybackRouteKind.Cast
                     val resolvedRouteName = route?.name ?: routeName
                     val currentSession = externalSession
@@ -1500,14 +1596,12 @@ internal fun PlayerHostApp(
                 modifier = Modifier.fillMaxSize(),
                 color = palette.pageBottom,
             ) {
-                ExamplePlayerStage(
+                ExamplePlayerStageWithTracks(
                     controller = controller,
                     uiState = displayedUiState,
                     controlsVisible = false,
                     pendingSeekRatio = null,
                     isPortrait = false,
-                    trackCatalog = trackCatalog,
-                    trackSelection = trackSelection,
                     modifier = Modifier.fillMaxSize(),
                     pictureInPicturePresentation = true,
                     onControlsVisibilityChange = { _ -> },
@@ -1588,14 +1682,12 @@ internal fun PlayerHostApp(
                 ) {
                     when {
                         immersivePlayer -> {
-                            ExamplePlayerStage(
+                            ExamplePlayerStageWithTracks(
                                 controller = controller,
                                 uiState = displayedUiState,
                                 controlsVisible = controlsVisible,
                                 pendingSeekRatio = pendingSeekRatio,
                                 isPortrait = false,
-                                trackCatalog = trackCatalog,
-                                trackSelection = trackSelection,
                                 modifier = Modifier.fillMaxSize(),
                                 pictureInPicturePresentation = pictureInPicturePresentation,
                                 onControlsVisibilityChange = { controlsVisible = it },
@@ -1644,14 +1736,12 @@ internal fun PlayerHostApp(
                                     )
                                 },
                                 playerStage = {
-                                    ExamplePlayerStage(
+                                    ExamplePlayerStageWithTracks(
                                         controller = controller,
                                         uiState = displayedUiState,
                                         controlsVisible = controlsVisible,
                                         pendingSeekRatio = pendingSeekRatio,
                                         isPortrait = true,
-                                        trackCatalog = trackCatalog,
-                                        trackSelection = trackSelection,
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .height(248.dp),
@@ -1760,9 +1850,9 @@ internal fun PlayerHostApp(
                                     }
 
                                     item {
-                                        ExampleExternalPlaybackSection(
+                                        ExampleExternalPlaybackSectionState(
+                                            externalPlaybackController = externalPlaybackController,
                                             palette = palette,
-                                            routes = externalRoutes,
                                             session = externalSession,
                                             isDiscovering = isExternalDiscoveryRunning,
                                             isCastRoutePickerOpening = isCastRoutePickerOpening,
@@ -1835,12 +1925,26 @@ internal fun PlayerHostApp(
                                         playbackOrigin = playbackOrigin,
                                         sourceNormalizerSetting = sourceNormalizerSetting,
                                         nativeFramePipelineSetting = nativeFramePipelineSetting,
+                                        videoSurfaceSetting = videoSurfaceSetting,
                                     )
                                 }
                                 item {
                                     ExampleEventLogSection(
                                         palette = palette,
                                         entries = hostLogEntries,
+                                    )
+                                }
+                                item {
+                                    ExampleFrameMetricsSection(
+                                        palette = palette,
+                                        enabled = frameMetricsEnabled,
+                                        snapshot = frameMetricsSnapshot,
+                                        onEnabledChange = { enabled ->
+                                            frameMetricsEnabled = enabled
+                                            if (!enabled) {
+                                                frameMetricsSnapshot = null
+                                            }
+                                        },
                                     )
                                 }
                                 item {
@@ -1873,6 +1977,7 @@ internal fun PlayerHostApp(
                                         palette = palette,
                                         sourceNormalizerSetting = sourceNormalizerSetting,
                                         nativeFramePipelineSetting = nativeFramePipelineSetting,
+                                        videoSurfaceSetting = videoSurfaceSetting,
                                         sourceNormalizerPluginLibraryPaths = sourceNormalizerPluginLibraryPaths,
                                         decoderMediaCodecPluginLibraryPaths =
                                             decoderMediaCodecPluginLibraryPaths,
@@ -1886,6 +1991,7 @@ internal fun PlayerHostApp(
                                         hdrEvidenceActiveSourceAvailable = controllerRebuildSource != null,
                                         onSourceNormalizerSettingChange = ::applySourceNormalizerSetting,
                                         onNativeFramePipelineSettingChange = ::applyNativeFramePipelineSetting,
+                                        onVideoSurfaceSettingChange = ::applyVideoSurfaceSetting,
                                         onHdrEvidencePresetChange = { preset ->
                                             selectedHdrEvidencePreset = preset
                                         },
@@ -1976,9 +2082,9 @@ internal fun PlayerHostApp(
                                     )
                                 }
                                 item {
-                                    ExampleDownloadTasksSection(
+                                    ExampleDownloadTasksSectionState(
+                                        downloadManager = downloadManager,
                                         palette = palette,
-                                        tasks = downloadSnapshot.tasks,
                                         pendingTasks = pendingDownloadTasks,
                                         isDownloadExportPluginInstalled = isDownloadExportPluginInstalled,
                                         savingTaskIds = savingTaskIds,
@@ -1995,11 +2101,10 @@ internal fun PlayerHostApp(
                     }
 
                     activeSheet?.let { sheet ->
-                        ExampleSelectionSheet(
+                        ExampleSelectionSheetWithTracks(
                             sheet = sheet,
+                            controller = controller,
                             uiState = displayedUiState,
-                            trackCatalog = trackCatalog,
-                            trackSelection = trackSelection,
                             onDismiss = { activeSheet = null },
                             playbackRateControlsEnabled = !externalSession.isActiveRemotePlayback(),
                             onOpenSheet = {
@@ -2045,27 +2150,25 @@ private fun ExamplePlayScreen(
     playerStage: @Composable () -> Unit,
     content: LazyListScope.() -> Unit,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 18.dp, vertical = 18.dp),
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        ExamplePlayerHeader(
-            sourceLabel = sourceLabel,
-            subtitle = subtitle,
-            palette = palette,
-        )
-        themeSelector()
-        playerStage()
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            contentPadding = PaddingValues(bottom = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
-            content = content,
-        )
+        item {
+            ExamplePlayerHeader(
+                sourceLabel = sourceLabel,
+                subtitle = subtitle,
+                palette = palette,
+            )
+        }
+        item {
+            themeSelector()
+        }
+        item {
+            playerStage()
+        }
+        content()
     }
 }
 
@@ -2090,6 +2193,149 @@ private fun ExampleDownloadsScreen(
         contentPadding = PaddingValues(horizontal = 18.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
         content = content,
+    )
+}
+
+@Composable
+private fun ExamplePlayerStageWithTracks(
+    controller: VesperPlayerController,
+    uiState: io.github.ikaros.vesper.player.android.PlayerHostUiState,
+    controlsVisible: Boolean,
+    pendingSeekRatio: Float?,
+    isPortrait: Boolean,
+    modifier: Modifier,
+    pictureInPicturePresentation: Boolean,
+    onControlsVisibilityChange: (Boolean) -> Unit,
+    onPendingSeekRatioChange: (Float?) -> Unit,
+    onOpenSheet: (ExamplePlayerSheet) -> Unit,
+    onToggleFullscreen: () -> Unit,
+    onTogglePlayback: () -> Unit,
+    onSeekToRatio: (Float) -> Unit,
+    onSeekToLiveEdge: () -> Unit,
+    onSetPlaybackRate: (Float) -> Unit,
+    playbackRateControlsEnabled: Boolean,
+    currentBrightnessRatio: () -> Float? = { null },
+    onSetBrightnessRatio: (Float) -> Float? = { null },
+    currentVolumeRatio: () -> Float? = { null },
+    onSetVolumeRatio: (Float) -> Float? = { null },
+) {
+    val trackCatalog by controller.trackCatalog.collectAsState()
+    val trackSelection by controller.trackSelection.collectAsState()
+    ExamplePlayerStage(
+        controller = controller,
+        uiState = uiState,
+        controlsVisible = controlsVisible,
+        pendingSeekRatio = pendingSeekRatio,
+        isPortrait = isPortrait,
+        trackCatalog = trackCatalog,
+        trackSelection = trackSelection,
+        modifier = modifier,
+        pictureInPicturePresentation = pictureInPicturePresentation,
+        onControlsVisibilityChange = onControlsVisibilityChange,
+        onPendingSeekRatioChange = onPendingSeekRatioChange,
+        onOpenSheet = onOpenSheet,
+        onToggleFullscreen = onToggleFullscreen,
+        onTogglePlayback = onTogglePlayback,
+        onSeekToRatio = onSeekToRatio,
+        onSeekToLiveEdge = onSeekToLiveEdge,
+        onSetPlaybackRate = onSetPlaybackRate,
+        playbackRateControlsEnabled = playbackRateControlsEnabled,
+        currentBrightnessRatio = currentBrightnessRatio,
+        onSetBrightnessRatio = onSetBrightnessRatio,
+        currentVolumeRatio = currentVolumeRatio,
+        onSetVolumeRatio = onSetVolumeRatio,
+    )
+}
+
+@Composable
+private fun ExampleSelectionSheetWithTracks(
+    sheet: ExamplePlayerSheet,
+    controller: VesperPlayerController,
+    uiState: io.github.ikaros.vesper.player.android.PlayerHostUiState,
+    onDismiss: () -> Unit,
+    playbackRateControlsEnabled: Boolean,
+    onOpenSheet: (ExamplePlayerSheet) -> Unit,
+    onSelectQuality: (io.github.ikaros.vesper.player.android.VesperAbrPolicy) -> Unit,
+    onSelectAudio: (io.github.ikaros.vesper.player.android.VesperTrackSelection) -> Unit,
+    onSelectSubtitle: (io.github.ikaros.vesper.player.android.VesperTrackSelection) -> Unit,
+    onSelectSpeed: (Float) -> Unit,
+) {
+    val trackCatalog by controller.trackCatalog.collectAsState()
+    val trackSelection by controller.trackSelection.collectAsState()
+    ExampleSelectionSheet(
+        sheet = sheet,
+        uiState = uiState,
+        trackCatalog = trackCatalog,
+        trackSelection = trackSelection,
+        onDismiss = onDismiss,
+        playbackRateControlsEnabled = playbackRateControlsEnabled,
+        onOpenSheet = onOpenSheet,
+        onSelectQuality = onSelectQuality,
+        onSelectAudio = onSelectAudio,
+        onSelectSubtitle = onSelectSubtitle,
+        onSelectSpeed = onSelectSpeed,
+    )
+}
+
+@Composable
+private fun ExampleExternalPlaybackSectionState(
+    externalPlaybackController: VesperExternalPlaybackController,
+    palette: ExampleHostPalette,
+    session: ExampleExternalPlaybackSession?,
+    isDiscovering: Boolean,
+    isCastRoutePickerOpening: Boolean,
+    castRoutePickerRequestId: Long,
+    hasDlnaPermission: Boolean,
+    onOpenCastRoutes: () -> Unit,
+    onRequestDlnaPermission: () -> Unit,
+    onStartDiscovery: () -> Unit,
+    onStopDiscovery: () -> Unit,
+    onConnectRoute: (VesperExternalPlaybackRoute) -> Unit,
+    onLoadCurrent: () -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    val externalRoutes by externalPlaybackController.routes.collectAsState()
+    ExampleExternalPlaybackSection(
+        palette = palette,
+        routes = externalRoutes,
+        session = session,
+        isDiscovering = isDiscovering,
+        isCastRoutePickerOpening = isCastRoutePickerOpening,
+        castRoutePickerRequestId = castRoutePickerRequestId,
+        hasDlnaPermission = hasDlnaPermission,
+        onOpenCastRoutes = onOpenCastRoutes,
+        onRequestDlnaPermission = onRequestDlnaPermission,
+        onStartDiscovery = onStartDiscovery,
+        onStopDiscovery = onStopDiscovery,
+        onConnectRoute = onConnectRoute,
+        onLoadCurrent = onLoadCurrent,
+        onDisconnect = onDisconnect,
+    )
+}
+
+@Composable
+private fun ExampleDownloadTasksSectionState(
+    downloadManager: VesperDownloadManager,
+    palette: ExampleHostPalette,
+    pendingTasks: List<ExamplePendingDownloadTask>,
+    isDownloadExportPluginInstalled: Boolean,
+    savingTaskIds: Set<Long>,
+    exportProgressByTaskId: Map<Long, Float>,
+    onPrimaryAction: (VesperDownloadTaskSnapshot) -> Unit,
+    onSaveToGallery: (VesperDownloadTaskSnapshot) -> Unit,
+    onRemoveTask: (VesperDownloadTaskSnapshot) -> Unit,
+) {
+    val downloadSnapshot by downloadManager.snapshot.collectAsState()
+    ExampleDownloadTasksSection(
+        palette = palette,
+        tasks = downloadSnapshot.tasks,
+        pendingTasks = pendingTasks,
+        isDownloadExportPluginInstalled = isDownloadExportPluginInstalled,
+        savingTaskIds = savingTaskIds,
+        exportProgressByTaskId = exportProgressByTaskId,
+        onPrimaryAction = onPrimaryAction,
+        onSaveToGallery = onSaveToGallery,
+        onRemoveTask = onRemoveTask,
     )
 }
 

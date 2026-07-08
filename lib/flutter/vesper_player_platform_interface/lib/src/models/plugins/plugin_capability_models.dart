@@ -290,24 +290,44 @@ final class VesperPluginCapability {
   const VesperPluginCapability.decoder(this.decoder)
       : kind = VesperPluginCapabilityKind.decoder,
         frameProcessor = null,
-        sourceNormalizer = null;
+        sourceNormalizer = null,
+        rawKind = null,
+        rawMap = const <String, Object?>{};
 
   const VesperPluginCapability.frameProcessor(this.frameProcessor)
       : kind = VesperPluginCapabilityKind.frameProcessor,
         decoder = null,
-        sourceNormalizer = null;
+        sourceNormalizer = null,
+        rawKind = null,
+        rawMap = const <String, Object?>{};
 
   const VesperPluginCapability.sourceNormalizer(this.sourceNormalizer)
       : kind = VesperPluginCapabilityKind.sourceNormalizer,
         decoder = null,
-        frameProcessor = null;
+        frameProcessor = null,
+        rawKind = null,
+        rawMap = const <String, Object?>{};
+
+  const VesperPluginCapability._unknown({
+    required this.rawKind,
+    required this.rawMap,
+  })  : kind = VesperPluginCapabilityKind.unknown,
+        decoder = null,
+        frameProcessor = null,
+        sourceNormalizer = null;
 
   factory VesperPluginCapability.fromMap(Map<Object?, Object?> map) {
-    final kind = _decodeEnum(
+    final rawKind = map['kind'] as String?;
+    final kind = _decodeEnumOrNull(
       VesperPluginCapabilityKind.values,
-      map['kind'],
-      VesperPluginCapabilityKind.decoder,
+      rawKind,
     );
+    if (kind == null) {
+      return VesperPluginCapability._unknown(
+        rawKind: rawKind,
+        rawMap: _toStringKeyedMap(map),
+      );
+    }
     return switch (kind) {
       VesperPluginCapabilityKind.decoder => VesperPluginCapability.decoder(
           VesperPluginDecoderCapabilitySummary.fromMap(
@@ -326,6 +346,10 @@ final class VesperPluginCapability {
             _rawMap(map['sourceNormalizer']) ?? const <Object?, Object?>{},
           ),
         ),
+      VesperPluginCapabilityKind.unknown => VesperPluginCapability._unknown(
+          rawKind: rawKind,
+          rawMap: _toStringKeyedMap(map),
+        ),
     };
   }
 
@@ -333,8 +357,17 @@ final class VesperPluginCapability {
   final VesperPluginDecoderCapabilitySummary? decoder;
   final VesperPluginFrameProcessorCapabilitySummary? frameProcessor;
   final VesperPluginSourceNormalizerCapabilitySummary? sourceNormalizer;
+  final String? rawKind;
+  final Map<String, Object?> rawMap;
 
   Map<String, Object?> toMap() {
+    final rawKind = this.rawKind;
+    if (rawKind != null || rawMap.isNotEmpty) {
+      return <String, Object?>{
+        ...rawMap,
+        if (rawKind != null) 'kind': rawKind,
+      };
+    }
     return <String, Object?>{
       'kind': kind.name,
       if (decoder != null) 'decoder': decoder!.toMap(),
@@ -354,11 +387,15 @@ final class VesperPluginDiagnostic {
     this.message,
     this.capability,
     this.participation = VesperPluginParticipation.unknown,
+    this.statusRawValue,
+    this.participationRawValue,
     this.extra = const <String, Object?>{},
   });
 
   factory VesperPluginDiagnostic.fromMap(Map<Object?, Object?> map) {
     final rawCapability = _rawMap(map['capability']);
+    final statusRawValue = map['status'] as String?;
+    final participationRawValue = map['participation'] as String?;
     final knownKeys = <Object?>{
       'path',
       'pluginName',
@@ -374,7 +411,7 @@ final class VesperPluginDiagnostic {
       pluginKind: map['pluginKind'] as String?,
       status: _decodeEnum(
         VesperPluginDiagnosticStatus.values,
-        map['status'],
+        statusRawValue,
         VesperPluginDiagnosticStatus.unsupportedKind,
       ),
       message: map['message'] as String?,
@@ -383,9 +420,11 @@ final class VesperPluginDiagnostic {
           : VesperPluginCapability.fromMap(rawCapability),
       participation: _decodeEnum(
         VesperPluginParticipation.values,
-        map['participation'],
+        participationRawValue,
         VesperPluginParticipation.unknown,
       ),
+      statusRawValue: statusRawValue,
+      participationRawValue: participationRawValue,
       extra: <String, Object?>{
         for (final entry in map.entries)
           if (entry.key is String && !knownKeys.contains(entry.key))
@@ -401,17 +440,22 @@ final class VesperPluginDiagnostic {
   final String? message;
   final VesperPluginCapability? capability;
   final VesperPluginParticipation participation;
+  final String? statusRawValue;
+  final String? participationRawValue;
   final Map<String, Object?> extra;
 
   Map<String, Object?> toMap() {
+    final participationRawValue = this.participationRawValue;
     return <String, Object?>{
       'path': path,
       if (pluginName != null) 'pluginName': pluginName,
       if (pluginKind != null) 'pluginKind': pluginKind,
-      'status': status.name,
+      'status': statusRawValue ?? status.name,
       if (message != null) 'message': message,
       if (capability != null) 'capability': capability!.toMap(),
-      if (participation != VesperPluginParticipation.unknown)
+      if (participationRawValue != null)
+        'participation': participationRawValue
+      else if (participation != VesperPluginParticipation.unknown)
         'participation': participation.name,
       ...extra,
     };
@@ -419,15 +463,7 @@ final class VesperPluginDiagnostic {
 }
 
 T _decodeEnum<T extends Enum>(Iterable<T> values, Object? raw, T fallback) {
-  if (raw is! String) {
-    return fallback;
-  }
-  for (final value in values) {
-    if (value.name == raw) {
-      return value;
-    }
-  }
-  return fallback;
+  return _decodeEnumOrNull(values, raw) ?? fallback;
 }
 
 T _decodeRequiredEnum<T extends Enum>(

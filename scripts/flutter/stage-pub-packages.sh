@@ -35,6 +35,26 @@ case "${VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS:-0}" in
     ;;
 esac
 
+staging_excludes=(
+  '.dart_tool'
+  '.gradle'
+  '.idea'
+  '.kotlin'
+  '.swiftpm'
+  '.build'
+  'build'
+  'Pods'
+  '.symlinks'
+  'Flutter/ephemeral'
+  'pubspec.lock'
+  'pubspec_overrides.yaml'
+  'local.properties'
+  '*.iml'
+  '*.xcworkspace'
+  '*.xcuserdata'
+  '*.xcuserstate'
+)
+
 rm -rf "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR"
 
@@ -117,28 +137,70 @@ let package = Package(
 EOF
 }
 
+validate_staged_package() {
+  local package_dir="$1"
+  local leaked_paths
+
+  leaked_paths="$(
+    find "$package_dir" \
+      \( \
+        -type d \( \
+          -name '.dart_tool' -o \
+          -name '.gradle' -o \
+          -name '.idea' -o \
+          -name '.kotlin' -o \
+          -name '.swiftpm' -o \
+          -name '.build' -o \
+          -name 'build' -o \
+          -name 'Pods' -o \
+          -name '.symlinks' -o \
+          -name 'xcode-derived' -o \
+          -name 'ModuleCache.noindex' -o \
+          -name 'Intermediates.noindex' \
+        \) \
+      \) -o \
+      \( \
+        -type f \( \
+          -name 'pubspec.lock' -o \
+          -name 'pubspec_overrides.yaml' -o \
+          -name 'local.properties' -o \
+          -name '*.iml' -o \
+          -name '*.xcuserstate' \
+        \) \
+      \) \
+      -print | sed -n '1,50p'
+  )"
+
+  if [[ -n "$leaked_paths" ]]; then
+    echo "Refusing to stage Flutter pub package with generated local artifacts:" >&2
+    printf '%s\n' "$leaked_paths" >&2
+    exit 1
+  fi
+}
+
 for package in "${packages[@]}"; do
   source_dir="$ROOT_DIR/lib/flutter/$package"
   stage_dir="$OUTPUT_DIR/$package"
+  rsync_excludes=()
 
   if [[ ! -f "$source_dir/pubspec.yaml" ]]; then
     echo "Missing Flutter package pubspec: $source_dir/pubspec.yaml" >&2
     exit 1
   fi
 
+  for pattern in "${staging_excludes[@]}"; do
+    rsync_excludes+=(--exclude "$pattern")
+  done
+
   mkdir -p "$(dirname "$stage_dir")"
-  rsync -a \
-    --exclude '.dart_tool' \
-    --exclude 'build' \
-    --exclude 'pubspec.lock' \
-    --exclude 'pubspec_overrides.yaml' \
-    "$source_dir/" "$stage_dir/"
+  rsync -a "${rsync_excludes[@]}" "$source_dir/" "$stage_dir/"
 
   cp "$ROOT_DIR/LICENSE" "$stage_dir/LICENSE"
   rewrite_pubspec "$stage_dir/pubspec.yaml"
   if [[ "$package" == "vesper_player_source_normalizer_ffmpeg" ]]; then
     rewrite_source_normalizer_ios_package "$stage_dir"
   fi
+  validate_staged_package "$stage_dir"
 done
 
 echo "Staged Flutter pub packages into:"

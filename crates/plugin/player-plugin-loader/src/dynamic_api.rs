@@ -1,3 +1,5 @@
+use std::mem::ManuallyDrop;
+
 use super::*;
 
 #[derive(Debug, Error)]
@@ -71,7 +73,9 @@ impl LoadedDynamicPlugin {
             // SAFETY: `descriptor_ptr` came from `vesper_plugin_entry`; the ABI
             // guarantees it points to a valid descriptor or null on failure.
             unsafe { descriptor_ptr.as_ref() }.ok_or(PluginLoadError::NullDescriptor)?;
-        let library = Arc::new(LibraryHolder { library });
+        let library = Arc::new(LibraryHolder {
+            library: ManuallyDrop::new(library),
+        });
         Self::from_descriptor(Some(library), descriptor)
     }
 
@@ -336,8 +340,12 @@ impl LoadedDynamicPlugin {
 
 #[derive(Debug)]
 pub(crate) struct LibraryHolder {
+    // Dynamic media plugins can register thread-local destructors through
+    // FFmpeg or platform libraries. Keep the mapped library alive for the
+    // process lifetime so source-load worker threads never exit through
+    // destructor pointers that were invalidated by dlclose.
     #[allow(dead_code)]
-    library: Library,
+    library: ManuallyDrop<Library>,
 }
 
 pub(crate) type DestroyFn = unsafe extern "C" fn(context: *mut c_void);

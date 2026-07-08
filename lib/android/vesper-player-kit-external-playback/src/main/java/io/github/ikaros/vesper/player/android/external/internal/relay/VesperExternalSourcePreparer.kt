@@ -49,6 +49,15 @@ sealed class VesperExternalSourcePreparationResult {
     ) : VesperExternalSourcePreparationResult()
 }
 
+internal fun VesperExternalSourcePreparationResult.Prepared.releaseRelayIfLoadFailed(
+    relayServer: VesperRelayServer,
+    loadSucceeded: Boolean,
+) {
+    if (!loadSucceeded) {
+        relayToken?.let(relayServer::invalidate)
+    }
+}
+
 class VesperExternalPlaybackSourcePreparer(
     private val relayServer: VesperRelayServer,
 ) {

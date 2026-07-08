@@ -16,10 +16,17 @@ private func makeExampleController(
     sourceNormalizerSetting: ExampleSourceNormalizerSetting,
     nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
     initialSource: VesperPlayerSource?,
-    resiliencePolicy: VesperPlaybackResiliencePolicy
+    resiliencePolicy: VesperPlaybackResiliencePolicy,
+    directNativePlaybackRequired: Bool = false
 ) -> VesperPlayerController {
-    let decoderPaths = bundledDecoderPluginLibraryPaths()
-    let frameProcessorPaths = bundledFrameProcessorPluginLibraryPaths()
+    let pluginConfiguration = makeExamplePlaybackPluginConfiguration(
+        sourceNormalizerSetting: sourceNormalizerSetting,
+        nativeFramePipelineSetting: nativeFramePipelineSetting,
+        sourceNormalizerPluginLibraryPaths: bundledSourceNormalizerPluginLibraryPaths(),
+        decoderPluginLibraryPaths: bundledDecoderPluginLibraryPaths(),
+        frameProcessorPluginLibraryPaths: bundledFrameProcessorPluginLibraryPaths(),
+        directNativePlaybackRequired: directNativePlaybackRequired
+    )
     return VesperPlayerControllerFactory.makeDefault(
         initialSource: initialSource,
         resiliencePolicy: resiliencePolicy,
@@ -29,20 +36,9 @@ private func makeExampleController(
             maxDiskBytes: 0,
             warmupWindowMs: 0
         ),
-        sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
-            mode: sourceNormalizerSetting.mode,
-            pluginLibraryPaths: bundledSourceNormalizerPluginLibraryPaths()
-        ),
-        frameProcessorConfiguration: VesperFrameProcessorConfiguration(
-            mode: frameProcessorPaths.isEmpty ? .disabled : .diagnosticsOnly,
-            pluginLibraryPaths: frameProcessorPaths
-        ),
-        nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
-            mode: nativeFramePipelineSetting.mode,
-            decoderPluginLibraryPaths: decoderPaths,
-            frameProcessorPluginLibraryPaths: frameProcessorPaths,
-            maxInFlightFrames: 2
-        )
+        sourceNormalizerConfiguration: pluginConfiguration.sourceNormalizerConfiguration,
+        frameProcessorConfiguration: pluginConfiguration.frameProcessorConfiguration,
+        nativeFramePipelineConfiguration: pluginConfiguration.nativeFramePipelineConfiguration
     )
 }
 
@@ -976,45 +972,29 @@ struct PlayerHostView: View {
             return
         }
 
-        var nextSourceNormalizerSetting = sourceNormalizerSetting
-        var nextNativeFramePipelineSetting = nativeFramePipelineSetting
-        var needsControllerRebuild = false
-        if sourceNormalizerSetting == .requireNormalized {
-            nextSourceNormalizerSetting = .disabled
-            needsControllerRebuild = true
-        }
-        if nativeFramePipelineSetting == .requireNativeFrame {
-            nextNativeFramePipelineSetting = .disabled
-            needsControllerRebuild = true
-        }
-
-        if needsControllerRebuild {
-            let previousController = controller
-            let previousUiState = previousController.uiState
-            activeDirectSource = preset.source
-            playbackOrigin = origin
-            sourceNormalizerSetting = nextSourceNormalizerSetting
-            nativeFramePipelineSetting = nextNativeFramePipelineSetting
-            let nextController = makeExampleController(
-                sourceNormalizerSetting: nextSourceNormalizerSetting,
-                nativeFramePipelineSetting: nextNativeFramePipelineSetting,
-                initialSource: preset.source,
-                resiliencePolicy: selectedResilienceProfile.policy
-            )
-            _ = controllerStore.replace(with: nextController)
-            previousController.dispose()
-            configureSystemPlayback(for: preset.source, controller: nextController)
-            initializeReplacementController(
-                nextController,
-                activeSource: preset.source,
-                previousUiState: previousUiState,
-                nativeFramePipelineSetting: nextNativeFramePipelineSetting
-            )
-            hostMessage = ExampleI18n.dolbyAcceptanceDirectRouteMessage
-        } else {
-            selectSourceForPlayback(preset.source, origin: origin)
-            hostMessage = nil
-        }
+        let previousController = controller
+        let previousUiState = previousController.uiState
+        activeDirectSource = preset.source
+        playbackOrigin = origin
+        sourceNormalizerSetting = .disabled
+        nativeFramePipelineSetting = .disabled
+        let nextController = makeExampleController(
+            sourceNormalizerSetting: .disabled,
+            nativeFramePipelineSetting: .disabled,
+            initialSource: preset.source,
+            resiliencePolicy: selectedResilienceProfile.policy,
+            directNativePlaybackRequired: true
+        )
+        _ = controllerStore.replace(with: nextController)
+        previousController.dispose()
+        configureSystemPlayback(for: preset.source, controller: nextController)
+        initializeReplacementController(
+            nextController,
+            activeSource: preset.source,
+            previousUiState: previousUiState,
+            nativeFramePipelineSetting: .disabled
+        )
+        hostMessage = ExampleI18n.dolbyAcceptanceDirectRouteMessage
         selectedHdrEvidencePreset = preset.toHdrEvidencePreset()
         controlsVisible = true
         appendHostLog(

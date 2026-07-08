@@ -248,8 +248,25 @@ final class VesperNativeFramePipelineCoordinator {
     }
 
     func closeActiveSession() {
-        activeSession?.close()
-        activeSession = nil
+        closeSession(activeSession)
+    }
+
+    func closeActiveSession(ifSameAs session: VesperNativeFramePipelineSession?) {
+        guard let session, activeSession === session else {
+            return
+        }
+        closeSession(session)
+    }
+
+    func closeSession(_ session: VesperNativeFramePipelineSession?) {
+        guard let session else {
+            return
+        }
+        let isActiveSession = activeSession === session
+        session.close(detachPresenter: isActiveSession)
+        if isActiveSession {
+            activeSession = nil
+        }
     }
 
     private func unavailableIssue(

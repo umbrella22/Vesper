@@ -163,6 +163,42 @@ final class ExampleTimelineRegressionTests: XCTestCase {
         XCTAssertTrue(canQueueDolbyAcceptancePreset(fairPlay))
     }
 
+    func testPlayableDolbyPresetsUseDirectNativePluginConfiguration() {
+        let config = ExampleFairPlayLocalConfiguration(
+            licenseUri: "https://license.example.com/fps",
+            certificateUri: "https://license.example.com/fps.cer",
+            certificateBase64: nil,
+            licenseHeaders: [:]
+        )
+        let catalog = buildExampleDolbyAcceptanceCatalog(fairPlayConfiguration: config)
+        let playable = catalog.filter(\.isPlayable)
+
+        XCTAssertFalse(playable.isEmpty)
+        XCTAssertEqual(Set(playable.map(\.profile)), Set(ExampleDolbyAcceptanceProfile.allCases))
+        XCTAssertEqual(Set(playable.map(\.drmKind)), [.clear, .fairPlay])
+        XCTAssertTrue(playable.allSatisfy { $0.sourceProtocol == .hls })
+
+        for preset in playable {
+            let pluginConfiguration = makeExamplePlaybackPluginConfiguration(
+                sourceNormalizerSetting: .requireNormalized,
+                nativeFramePipelineSetting: .requireNativeFrame,
+                sourceNormalizerPluginLibraryPaths: ["/tmp/source-normalizer.dylib"],
+                decoderPluginLibraryPaths: ["/tmp/decoder.dylib"],
+                frameProcessorPluginLibraryPaths: ["/tmp/frame-processor.dylib"],
+                directNativePlaybackRequired: true
+            )
+
+            XCTAssertEqual(pluginConfiguration.sourceNormalizerConfiguration.mode, .disabled, preset.id)
+            XCTAssertTrue(pluginConfiguration.sourceNormalizerConfiguration.pluginLibraryPaths.isEmpty, preset.id)
+            XCTAssertEqual(pluginConfiguration.frameProcessorConfiguration.mode, .disabled, preset.id)
+            XCTAssertTrue(pluginConfiguration.frameProcessorConfiguration.pluginLibraryPaths.isEmpty, preset.id)
+            XCTAssertEqual(pluginConfiguration.nativeFramePipelineConfiguration.mode, .disabled, preset.id)
+            XCTAssertTrue(pluginConfiguration.nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty, preset.id)
+            XCTAssertTrue(pluginConfiguration.nativeFramePipelineConfiguration.frameProcessorPluginLibraryPaths.isEmpty, preset.id)
+            XCTAssertNil(pluginConfiguration.nativeFramePipelineConfiguration.maxInFlightFrames, preset.id)
+        }
+    }
+
     func testDolbyAdHocOriginDoesNotAdvancePlaylistOnFinished() {
         XCTAssertFalse(
             shouldAdvancePlaylistOnFinished(
