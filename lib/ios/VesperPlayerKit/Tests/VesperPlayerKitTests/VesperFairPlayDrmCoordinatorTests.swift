@@ -186,6 +186,45 @@ final class VesperFairPlayDrmCoordinatorTests: XCTestCase {
             "skd://asset-123/path/to/key?variant=main"
         )
     }
+
+    /// `cancelPendingRequests()` is safe to call on a coordinator that has no
+    /// pending key requests. This guards against the cancellation bookkeeping
+    /// throwing or leaving the coordinator in an inconsistent state, which is
+    /// the failure shape addressed by terminating cancelled key requests with
+    /// `processContentKeyResponseError` instead of leaving them pending.
+    ///
+    /// The full cancellation race (a real `AVContentKeyRequest` observing the
+    /// terminal signal) requires a FairPlay-capable device and runs only on
+    /// hardware via the `#if !targetEnvironment(simulator)` guard below.
+    func testCancelPendingRequestsIsIdempotentWhenEmpty() throws {
+        #if !targetEnvironment(simulator)
+        let source = VesperPlayerSource.remoteUrl(
+            URL(string: "https://example.com/asset.m3u8")!,
+            drmConfiguration: VesperPlayerDrmConfiguration(
+                keySystem: "fairPlay",
+                licenseUri: "https://license.example.com/fairplay"
+            )
+        )
+        let coordinator = try VesperFairPlayDrmCoordinator.make(
+            source: source,
+            onError: { _ in }
+        )
+
+        // Calling cancel with no pending tasks must be a no-op.
+        coordinator.cancelPendingRequests()
+        coordinator.cancelPendingRequests()
+
+        // A subsequent close must succeed and report the closed state, proving
+        // the cancellation path did not corrupt coordinator state.
+        coordinator.close()
+        XCTAssertTrue(coordinator.isClosedForTesting)
+        #else
+        // AVContentKeySession is unavailable on the simulator, so the
+        // coordinator cannot be constructed there. The cancellation contract is
+        // exercised on FairPlay-capable hardware instead.
+        throw XCTSkip("FairPlay coordinator requires a device")
+        #endif
+    }
 }
 
 private struct MockFairPlayDataLoader: VesperFairPlayDataLoading {

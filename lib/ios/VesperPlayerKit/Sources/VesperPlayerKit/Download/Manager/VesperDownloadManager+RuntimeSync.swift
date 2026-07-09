@@ -15,10 +15,7 @@ extension VesperDownloadManager {
         var events: [VesperDownloadEvent] = []
         if bindings.drainDownloadEvents(sessionHandle: sessionHandle, outEvents: &runtimeEvents) {
             events = runtimeEvents.toPublic()
-            eventBuffer.append(contentsOf: events)
-            if eventBuffer.count > maxEventBufferCapacity {
-                eventBuffer.removeFirst(eventBuffer.count - maxEventBufferCapacity)
-            }
+            appendEventsCapped(events)
             bindings.freeDownloadEventList(&runtimeEvents)
         }
 
@@ -141,5 +138,29 @@ extension VesperDownloadManager {
 
     var runtimeReporter: any VesperDownloadExecutionReporter {
         RuntimeReporter(manager: self)
+    }
+
+    /// Appends a batch of drained download events to `eventBuffer` while
+    /// enforcing `maxEventBufferCapacity`.
+    ///
+    /// This runs on the `@MainActor` (download manager is main-actor-isolated),
+    /// so the truncation must not stall the UI. A pathological drain that
+    /// returns more events than the buffer can hold is handled by keeping only
+    /// the newest `maxEventBufferCapacity` events of the batch via a slice
+    /// replacement (O(batch size), no shifting of the existing buffer), instead
+    /// of growing the buffer and then shifting it with `removeFirst`.
+    func appendEventsCapped(_ events: [VesperDownloadEvent]) {
+        let capacity = maxEventBufferCapacity
+        if events.count >= capacity {
+            // The batch alone fills the buffer; drop its older tail and replace
+            // the buffer outright so we never shift a large existing array.
+            eventBuffer = Array(events.suffix(capacity))
+            return
+        }
+        eventBuffer.append(contentsOf: events)
+        let excess = eventBuffer.count - capacity
+        if excess > 0 {
+            eventBuffer.removeFirst(excess)
+        }
     }
 }

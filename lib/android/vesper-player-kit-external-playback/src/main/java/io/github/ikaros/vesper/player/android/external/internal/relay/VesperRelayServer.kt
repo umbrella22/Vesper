@@ -165,14 +165,18 @@ class VesperRelayServer @JvmOverloads constructor(
 
     /**
      * Tears the relay server down. The monitor is held only long enough to
-     * detach the running-state fields; socket close, executor shutdown, and
-     * active-client teardown all run *outside* [stateLock].
+     * detach the running-state fields; socket close, executor shutdown,
+     * active-client teardown, and entry invalidation (which may call blocking
+     * format-adapter I/O / JNI) all run *outside* [stateLock].
      */
     fun stop() {
-        val state = stateLock.withLock {
+        val (state, invalidatedTokens) = stateLock.withLock {
             lifecycleEpoch.incrementAndGet()
             running.set(false)
-            entries.invalidateAll()
+            // Detach entries under the lock (cheap map clear) but defer the
+            // per-token format-adapter invalidation, which can block, until we
+            // have released the monitor.
+            val tokens = entries.detachAllForInvalidation()
             val captured = RunningState(
                 socket = serverSocket ?: return@withLock null,
                 boundAddress = boundAddress ?: return@withLock null,
@@ -183,11 +187,12 @@ class VesperRelayServer @JvmOverloads constructor(
             boundAddress = null
             this.acceptExecutor = null
             this.requestExecutor = null
-            captured
+            captured to tokens
         } ?: run {
             // Nothing was running; still ensure clients/entries are cleared so
-            // callers see a clean quiescent state. closeActiveClients is the
-            // only potentially blocking call here and runs without the lock.
+            // callers see a clean quiescent state. closeActiveClients and entry
+            // invalidation are the only potentially blocking calls here and run
+            // without the lock.
             clientHandler.closeActiveClients()
             return
         }
@@ -196,6 +201,7 @@ class VesperRelayServer @JvmOverloads constructor(
         clientHandler.closeActiveClients()
         state.acceptExecutor.shutdownNow()
         state.requestExecutor.shutdownNow()
+        invalidatedTokens.forEach { token -> entries.invalidateDetached(token) }
     }
 
     @JvmOverloads

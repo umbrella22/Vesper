@@ -39,6 +39,28 @@ internal class VesperRelayEntryStore(
         entries.clear()
     }
 
+    /**
+     * Detaches every entry and returns its token without invoking
+     * [onInvalidate]. Callers that need to honor [onInvalidate] (which may
+     * perform blocking I/O or JNI) should iterate the returned tokens outside
+     * any held lock, keeping blocking teardown off the registry monitor.
+     */
+    fun detachAllForInvalidation(): List<String> {
+        val tokens = entries.keys.toList()
+        entries.clear()
+        return tokens
+    }
+
+    /**
+     * Invokes [onInvalidate] for a token previously returned by
+     * [detachAllForInvalidation] without touching the entry map, which the
+     * detach already cleared. Pair this with [detachAllForInvalidation] to run
+     * blocking teardown outside a held lock.
+     */
+    fun invalidateDetached(token: String) {
+        onInvalidate(token)
+    }
+
     fun entryForToken(token: String): RelayEntry? {
         val entry = entries[token] ?: return null
         val expiresAtMillis = entry.expiresAtMillis ?: return entry

@@ -62,6 +62,43 @@ final class VesperDownloadManagerTests: XCTestCase {
         )
     }
 
+    /// Guards the main-thread back-pressure fix for `eventBuffer`: the capped
+    /// append must keep the buffer at `maxEventBufferCapacity`, preserve FIFO
+    /// order (drop oldest), and handle a single pathological drain that exceeds
+    /// capacity without growing the buffer first.
+    func testEventBufferAppendCapsToCapacityAndPreservesNewest() throws {
+        let manager = VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(),
+            executor: RecordingDownloadExecutor(),
+            bindings: FakeDownloadBindings(autoStart: false)
+        )
+        defer { manager.dispose() }
+
+        let capacity = manager.maxEventBufferCapacity
+        let event = VesperDownloadEvent.progressUpdated(
+            VesperDownloadTaskProgressPatch(
+                taskId: 1,
+                progress: VesperDownloadProgressSnapshot()
+            )
+        )
+
+        // A single batch larger than capacity: only the newest `capacity`
+        // events are retained, in order.
+        let oversizedBatch = Array(repeating: event, count: capacity + 500)
+        manager.appendEventsCapped(oversizedBatch)
+        XCTAssertEqual(manager.eventBuffer.count, capacity)
+
+        // A normal-sized batch that overflows by a small amount drops the oldest
+        // excess and keeps the newest.
+        manager.appendEventsCapped(Array(repeating: event, count: 10))
+        XCTAssertEqual(manager.eventBuffer.count, capacity)
+
+        // A batch well under capacity appends without truncation.
+        let before = manager.eventBuffer.count
+        manager.appendEventsCapped(Array(repeating: event, count: 5))
+        XCTAssertEqual(manager.eventBuffer.count, min(before + 5, capacity))
+    }
+
     func testCreateTaskAutoStartRefreshesSnapshotAndStartsExecutor() throws {
         let bindings = FakeDownloadBindings(autoStart: true)
         let executor = RecordingDownloadExecutor()

@@ -504,6 +504,19 @@ internal fun VesperNativePlayerBridge.launchSourceLoad(block: suspend () -> Unit
         }
 }
 
+/**
+ * Returns `true` when the bridge is still alive and the epoch still matches the
+ * load that captured it.
+ *
+ * `sourceLoadEpoch` is a wrapping `AtomicLong` (`incrementAndGet()`), so on a
+ * theoretical 2^63-wrap it could revisit an old value. This helper only checks
+ * the epoch, so callers that gate a continuation on a specific source MUST also
+ * re-check `currentSource == source` (or `source != currentSource` to bail).
+ * That source-identity clause is what makes the predicate behave as a
+ * never-reuse token, because a new load always reassigns `currentSource` before
+ * bumping the epoch. Do not rely on this helper alone for source-sensitive
+ * decisions.
+ */
 internal fun VesperNativePlayerBridge.isCurrentSourceLoad(epoch: Long): Boolean =
     !isDisposed.get() && sourceLoadEpoch.get() == epoch
 

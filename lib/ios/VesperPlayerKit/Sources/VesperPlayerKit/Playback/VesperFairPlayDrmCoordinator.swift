@@ -319,6 +319,12 @@ final class VesperFairPlayDrmCoordinator:
                 )
                 removePendingTask(requestId)
             } catch is CancellationError {
+                // Mark the key request as terminated so AVContentKeySession does
+                // not leave it hanging. `cancelPendingRequests()` itself only
+                // cancels the Task; without an explicit terminal signal the
+                // session would keep the request pending and could block later
+                // key reuse for the same initialization data.
+                keyRequest.processContentKeyResponseError(CancellationError() as NSError)
                 removePendingTask(requestId)
                 return
             } catch {

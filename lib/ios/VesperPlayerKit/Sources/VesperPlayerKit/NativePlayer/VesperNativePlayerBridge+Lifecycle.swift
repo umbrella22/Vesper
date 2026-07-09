@@ -216,6 +216,15 @@ extension VesperNativePlayerBridge {
         return sourceLoadEpoch
     }
 
+    /// Returns `true` only when both the epoch and the source identity still match
+    /// the load that captured them.
+    ///
+    /// The `&& currentSource == source` check is load-bearing: `sourceLoadEpoch`
+    /// is a wrapping `UInt64` counter (`&+= 1`), so on a theoretical 2^64-wrap it
+    /// could revisit an old value. The source-identity clause makes the predicate
+    /// behave as a never-reuse token even in that case, because a new load always
+    /// reassigns `currentSource` before bumping the epoch. Do not simplify this to
+    /// an epoch-only comparison.
     func isCurrentSourceLoad(_ epoch: UInt64, source: VesperPlayerSource) -> Bool {
         sourceLoadEpoch == epoch && currentSource == source
     }

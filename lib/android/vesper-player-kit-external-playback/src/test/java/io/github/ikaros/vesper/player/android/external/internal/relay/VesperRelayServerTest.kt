@@ -260,6 +260,53 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun stopInvalidatesAllRegisteredTokens() {
+        // Guards the lock-boundary fix: stop() must detach entries under the
+        // monitor but run each format-adapter invalidation (which can block)
+        // outside it. The observable contract is that every token registered
+        // before stop() is reported as invalidated exactly once.
+        val invalidated = Collections.synchronizedList(mutableListOf<String>())
+        val trackingRelay = VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = { loopback },
+            allowPrivateRemoteSources = true,
+            formatAdapter = object : VesperRelayFormatAdapter {
+                override fun open(
+                    request: VesperRelayFormatAdaptationRequest,
+                ): VesperRelayFormatAdaptationResult =
+                    VesperRelayFormatAdaptationResult.Stream(
+                        VesperRelayAdaptedStream(
+                            input = ByteArrayInputStream(ByteArray(0)),
+                            contentType = request.fallbackFormat.contentType(),
+                            contentLength = 0L,
+                            closeable = null,
+                        ),
+                    )
+
+                override fun invalidate(sessionId: String) {
+                    invalidated += sessionId
+                }
+            },
+        )
+        additionalRelays += trackingRelay
+
+        val file = File.createTempFile("vesper-relay-stop", ".mp4")
+        file.writeText("data")
+        file.deleteOnExit()
+        val source = VesperPlayerSource.local(uri = file.absolutePath, label = "Local")
+        val firstHandle = trackingRelay.register(source)
+        val secondHandle = trackingRelay.register(source)
+
+        trackingRelay.stop()
+
+        assertEquals(
+            "stop() must invalidate every registered token exactly once",
+            sortedSetOf(firstHandle.token, secondHandle.token),
+            invalidated.toSortedSet(),
+        )
+    }
+
+    @Test
     fun expiresTokensByTtlLazily() {
         var nowMillis = 1_000L
         val ttlRelay = VesperRelayServer(

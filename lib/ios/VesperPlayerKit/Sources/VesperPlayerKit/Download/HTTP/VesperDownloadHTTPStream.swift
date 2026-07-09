@@ -96,7 +96,18 @@ final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         guard !data.isEmpty else { return }
         markActivity()
-        chunksContinuation.yield(data)
+        // These chunks are a lossless byte payload that the consumer writes
+        // sequentially to the download file. `bufferingNewest(256)` drops the
+        // oldest pending chunk when the consumer falls behind, which would
+        // silently corrupt the downloaded file (a hole in the middle of the
+        // byte stream). Detect the drop and fail the download loudly instead.
+        if case .dropped = chunksContinuation.yield(data) {
+            let error = VesperForegroundDownloadPreparationError.invalidSource(
+                "download stream buffer overflowed for \(sourceDescription); consumer fell behind and a chunk would have been dropped"
+            )
+            finish(throwing: error)
+            session.invalidateAndCancel()
+        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
