@@ -282,6 +282,14 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 emitSnapshot(for: session)
                 return nil
             }
+        case "setSubtitleStyle":
+            handleSessionCommand(call, result: result) { session in
+                let styleMap = try requireNestedMap(
+                    arguments: arguments(of: call), key: "style")
+                session.lastError = nil
+                session.controller.setSubtitleStyle(try styleMap.toVesperSubtitleStyle())
+                return nil
+            }
         case "setAbrPolicy":
             handleSessionCommand(call, result: result) { session in
                 let policyMap = try requireNestedMap(arguments: arguments(of: call), key: "policy")

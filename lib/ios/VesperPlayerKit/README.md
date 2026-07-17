@@ -33,6 +33,10 @@ package names and artifact-selection notes.
 - Apple Silicon Mac for Simulator builds
 - Rust toolchain with iOS targets installed (when consuming as a local Swift Package)
 
+These requirements define the supported product boundary. The package does not
+plan to add older iOS deployment targets or Intel Simulator slices without a
+separate product-direction change.
+
 ## Installation
 
 ### Swift Package (local)
@@ -79,6 +83,7 @@ builds, or any other working directory.
 - `VesperBufferingPolicy`, `VesperRetryPolicy`, `VesperCachePolicy`
 - `VesperPreloadBudgetPolicy` — caps for concurrent preload tasks, memory, disk, warm-up window
 - `VesperTrackPreferencePolicy` — preferred audio / subtitle languages
+- `VesperSubtitleSideLoad` and `VesperSubtitleStyle` — bounded external SRT / WebVTT / SSA parsing, visibility, and font scaling
 - `VesperCodecSupport` — hardware decode capability probe
 - `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput / shareTaskOutput / saveTaskOutput / drainEvents`
 
@@ -233,6 +238,23 @@ Private encryption that is not FairPlay should be handled by a separate
 host-owned or future SDK pre-decryption adapter before a normal source is handed
 to AVPlayer. That is outside the current DRM contract.
 
+## Subtitle Baseline
+
+AVPlayer remains responsible for embedded legible tracks. The host kit applies
+`VesperSubtitleStyle` through AVPlayer text style rules and supports external
+UTF-8 SRT, WebVTT, and SSA/ASS files through a native overlay driven by the
+player timeline. External subtitle input is bounded to eight tracks, 2 MiB per
+track, 10,000 cues, and 16,384 characters per cue; unsupported URI schemes,
+encodings, MIME types, and oversized inputs fail explicitly.
+
+External tracks appear in the normal subtitle track catalog with stable
+`subtitle-side-load:<index>` identifiers and use the existing
+`setSubtitleTrackSelection` API. Per-cue typography, animation fidelity, and
+subtitle synchronization offsets are outside the stable contract. RTMP, RTSP,
+and HTTP-FLV direct playback remain explicit capability errors on iOS. HTTP
+`.flv` URLs infer progressive VOD unless callers set the live protocol
+explicitly.
+
 ## Download Manager
 
 `VesperDownloadManager` supports single-file and segmented downloads. For remote
@@ -316,7 +338,7 @@ corresponding source, configure flags, and LGPL relinking rights. See
 [THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md) before publishing such
 an artifact.
 
-## Optional Mobile Plugin Diagnostics
+## Optional Mobile Plugin Routes
 
 `VesperSourceNormalizerConfiguration` and `VesperFrameProcessorConfiguration`
 are disabled by default. When enabled, their `pluginLibraryPaths` must point to

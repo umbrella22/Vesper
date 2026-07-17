@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added side-loaded SRT, WebVTT, and SSA/ASS subtitle configurations, Media3 cue
+  rendering in the native surface host, and `VesperSubtitleStyle` visibility /
+  font scaling.
+- Added explicit RTMP, RTSP, and HTTP-FLV source protocol DTOs; RTMP remains an
+  explicit unsupported operation in the stable host kit.
+
+### Changed
+
+- HTTP `.flv` URLs infer progressive playback; use `VesperPlayerSource.flvLive`
+  when the source is explicitly an HTTP-FLV live stream.
+
 ## 0.3.0 - 2026-05-18
 
 ### Breaking Changes

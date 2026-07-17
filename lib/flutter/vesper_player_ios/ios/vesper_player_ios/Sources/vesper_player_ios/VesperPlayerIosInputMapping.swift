@@ -22,19 +22,27 @@ extension Dictionary where Key == String, Value == Any {
             `protocol` = .hls
         case "dash":
             `protocol` = .dash
+        case "rtmp":
+            `protocol` = .rtmp
+        case "rtsp":
+            `protocol` = .rtsp
+        case "flv":
+            `protocol` = .flv
         default:
             `protocol` = .unknown
         }
         let headers = stringMap(self["headers"])
         let drmConfiguration = try nestedMap(self["drmConfiguration"])?
             .toVesperPlayerDrmConfiguration()
+        let subtitleConfigurations = try subtitleSideLoads(self["subtitleConfigurations"])
         return try VesperPlayerSource(
             uri: uri,
             label: label,
             kind: kind,
             protocol: `protocol`,
             headers: headers,
-            drmConfiguration: drmConfiguration
+            drmConfiguration: drmConfiguration,
+            subtitleConfigurations: subtitleConfigurations
         )
         .validatedForIosBackend()
     }
@@ -59,19 +67,38 @@ extension Dictionary where Key == String, Value == Any {
             `protocol` = .hls
         case "dash":
             `protocol` = .dash
+        case "rtmp":
+            `protocol` = .rtmp
+        case "rtsp":
+            `protocol` = .rtsp
+        case "flv":
+            `protocol` = .flv
         default:
             `protocol` = .unknown
         }
         let headers = stringMap(self["headers"])
         let drmConfiguration = try nestedMap(self["drmConfiguration"])?
             .toVesperPlayerDrmConfiguration()
+        let subtitleConfigurations = try subtitleSideLoads(self["subtitleConfigurations"])
         return try VesperPlayerSource(
             uri: uri,
             label: label,
             kind: kind,
             protocol: `protocol`,
             headers: headers,
-            drmConfiguration: drmConfiguration
+            drmConfiguration: drmConfiguration,
+            subtitleConfigurations: subtitleConfigurations
+        )
+    }
+
+    func toVesperSubtitleStyle() throws -> VesperSubtitleStyle {
+        let fontScale = (self["fontScale"] as? NSNumber)?.floatValue ?? 1.0
+        guard fontScale.isFinite, (0.5...3.0).contains(fontScale) else {
+            throw PluginError.invalidSource("Subtitle fontScale must be between 0.5 and 3.0.")
+        }
+        return VesperSubtitleStyle(
+            fontScale: fontScale,
+            visible: self["visible"] as? Bool ?? true
         )
     }
 
@@ -527,6 +554,38 @@ extension Dictionary where Key == String, Value == Any {
             preset: preset,
             maxMemoryBytes: (self["maxMemoryBytes"] as? NSNumber)?.int64Value,
             maxDiskBytes: (self["maxDiskBytes"] as? NSNumber)?.int64Value
+        )
+    }
+}
+
+
+private func subtitleSideLoads(_ value: Any?) throws -> [VesperSubtitleSideLoad] {
+    guard let values = value as? [Any] else { return [] }
+    return try values.map { value in
+        guard let map = value as? [String: Any],
+              let uri = map["uri"] as? String,
+              !uri.isEmpty
+        else {
+            throw PluginError.invalidSource("Invalid subtitleConfigurations entry.")
+        }
+        let rawMime = (map["mimeType"] as? String)?.lowercased()
+            ?? VesperSubtitleMimeType.subrip.rawMime
+        let mimeType: VesperSubtitleMimeType
+        switch rawMime {
+        case "application/x-subrip", "application/srt":
+            mimeType = .subrip
+        case "text/vtt":
+            mimeType = .webvtt
+        case "text/x-ssa", "text/x-ass":
+            mimeType = .ssa
+        default:
+            throw PluginError.invalidSource("Unsupported subtitle MIME type: \(rawMime).")
+        }
+        return VesperSubtitleSideLoad(
+            uri: uri,
+            mimeType: mimeType,
+            language: map["language"] as? String,
+            label: map["label"] as? String
         )
     }
 }

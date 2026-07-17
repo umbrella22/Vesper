@@ -53,6 +53,9 @@ pub enum PlayerFfiMediaSourceProtocol {
     Progressive = 3,
     Hls = 4,
     Dash = 5,
+    Rtmp = 6,
+    Rtsp = 7,
+    Flv = 8,
 }
 
 #[repr(C)]

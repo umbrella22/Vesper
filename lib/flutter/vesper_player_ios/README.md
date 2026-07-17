@@ -17,6 +17,8 @@ does not need to depend on it directly.
 | Live streams                        | ✅                                                                                                 |
 | Live DVR                            | ✅                                                                                                 |
 | Track selection (audio / subtitles) | ✅                                                                                                 |
+| External text subtitles            | ✅ bounded UTF-8 SRT / WebVTT / SSA native overlay                                                  |
+| Subtitle visibility / font scale    | ✅ AVPlayer text style rules plus native overlay                                                     |
 | Track selection (video)             | ⚠️ Not exact AVPlayer track switching; use ABR variant pinning and the track catalog               |
 | Adaptive bitrate (ABR)              | ✅ `constrained`; `fixedTrack` is best-effort variant pinning on iOS 15+                           |
 | Buffering / retry / cache policy    | ✅                                                                                                 |
@@ -197,7 +199,7 @@ exact corresponding FFmpeg source and configure flags, and preserve LGPL
 relinking rights. The repository-level release checklist is in
 [THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md).
 
-## Optional Mobile Plugin Diagnostics
+## Optional Mobile Plugin Routes
 
 `createPlayer` forwards
 `VesperSourceNormalizerConfiguration` and
@@ -215,11 +217,15 @@ sign the matching `VesperPlayerFfmpegRuntime.xcframework.zip`; both artifacts
 must have matching `profile-hash.txt` values. The shared runtime framework is
 not a plugin path.
 
-For FrameProcessor v1,
-`VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip` is a diagnostics
-shell only. It can report capability diagnostics, but it never opens frame
-sessions, processes frames, or participates in iOS playback. Mobile Decoder
-artifacts remain deferred.
+For FrameProcessor v1, `diagnosticsOnly` reports availability without opening
+frame sessions or marking playback participation. iOS playback participation
+requires the explicit SDK-managed native-frame route: pass
+`VesperNativeFramePipelineConfiguration` with `preferNativeFrame` or
+`requireNativeFrame` so the host kit can route SourceNormalizer packet input
+through VideoToolbox, the optional FrameProcessor chain, and MetalLayer
+presentation. Default AVPlayer playback remains unchanged; HDR and Dolby Vision
+stay on AVPlayer / system playback, and the SDK-managed native-frame route is
+SDR-only today.
 
 ## Minimum Requirements
 
@@ -231,3 +237,10 @@ artifacts remain deferred.
 - Main package: `vesper_player`
 - Platform contract: `vesper_player_platform_interface`
 - iOS host kit source: `lib/ios/VesperPlayerKit`
+
+## Subtitle Notes
+
+The Flutter package maps external subtitle configurations and subtitle style
+commands to `VesperPlayerKit`. External input uses the host kit's eight-track,
+2 MiB-per-track, and 10,000-cue limits. Unsupported formats and sources return
+platform errors instead of succeeding as no-ops.

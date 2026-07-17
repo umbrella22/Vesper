@@ -4,6 +4,7 @@ import android.graphics.Matrix
 import android.graphics.Color
 import android.graphics.SurfaceTexture
 import android.util.Log
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -12,6 +13,8 @@ import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.TextView
+import androidx.media3.common.text.Cue
 
 internal class VesperNativeSurfaceHost(
     private val bindings: VesperNativeBindings,
@@ -24,6 +27,9 @@ internal class VesperNativeSurfaceHost(
     private var attachedSurfaceKind: NativeVideoSurfaceKind? = null
     private var videoLayoutInfo: NativeVideoLayoutInfo? = null
     private var keepScreenOn = false
+    private var subtitleView: TextView? = null
+    private var subtitleStyle = VesperSubtitleStyle.Default
+    private var subtitleText = ""
 
     private val hostLayoutListener =
         View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
@@ -51,8 +57,7 @@ internal class VesperNativeSurfaceHost(
         if (existingView != null) {
             Log.d(TAG, "surfaceHost moving existing $surfaceKind render view to new host")
             (existingView.parent as? ViewGroup)?.removeView(existingView)
-            host.removeAllViews()
-            host.addView(existingView, matchParentLayoutParams())
+            attachRenderAndSubtitleViews(host, existingView)
             hostView = host
             host.addOnLayoutChangeListener(hostLayoutListener)
             applyVideoTransform()
@@ -66,8 +71,7 @@ internal class VesperNativeSurfaceHost(
             NativeVideoSurfaceKind.TextureView -> createTextureView(host)
         }
 
-        host.removeAllViews()
-        host.addView(view, matchParentLayoutParams())
+        attachRenderAndSubtitleViews(host, view)
         hostView = host
         renderView = view
         applyKeepScreenOn()
@@ -103,6 +107,27 @@ internal class VesperNativeSurfaceHost(
     fun setKeepScreenOn(active: Boolean) {
         keepScreenOn = active
         applyKeepScreenOn()
+    }
+
+    fun updateSubtitleCues(cues: List<Cue>) {
+        subtitleText =
+            cues.mapNotNull { cue -> cue.text?.toString()?.trim()?.takeIf(String::isNotEmpty) }
+                .joinToString("\n")
+        applySubtitleState()
+    }
+
+    fun updateSubtitleStyle(style: VesperSubtitleStyle) {
+        require(style.fontScale.isFinite() && style.fontScale in 0.5f..3.0f) {
+            "Subtitle fontScale must be finite and between 0.5 and 3.0."
+        }
+        subtitleStyle = style
+        applySubtitleState()
+    }
+
+    fun close() {
+        bindings.setOnSubtitleCuesListener(null)
+        subtitleText = ""
+        subtitleView?.text = ""
     }
 
     fun detach(expectedHost: ViewGroup? = null) {
@@ -145,9 +170,54 @@ internal class VesperNativeSurfaceHost(
         surface = null
         hostView?.removeOnLayoutChangeListener(hostLayoutListener)
         hostView?.removeAllViews()
+        subtitleView = null
         renderView = null
         hostView = null
     }
+
+    private fun attachRenderAndSubtitleViews(host: ViewGroup, view: View) {
+        (subtitleView?.parent as? ViewGroup)?.removeView(subtitleView)
+        host.removeAllViews()
+        host.addView(view, matchParentLayoutParams())
+        val overlay = subtitleView ?: createSubtitleView(host).also { subtitleView = it }
+        host.addView(overlay, subtitleLayoutParams(host))
+        applySubtitleState()
+    }
+
+    private fun createSubtitleView(host: ViewGroup): TextView =
+        TextView(host.context).apply {
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.TRANSPARENT)
+            gravity = Gravity.CENTER
+            setShadowLayer(4f, 0f, 2f, Color.BLACK)
+            setPadding(dp(host, 16), dp(host, 8), dp(host, 16), dp(host, 8))
+            maxLines = 4
+            isClickable = false
+            isFocusable = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+
+    private fun subtitleLayoutParams(host: ViewGroup): FrameLayout.LayoutParams =
+        FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+        ).apply {
+            leftMargin = dp(host, 16)
+            rightMargin = dp(host, 16)
+            bottomMargin = dp(host, 32)
+        }
+
+    private fun applySubtitleState() {
+        val view = subtitleView ?: return
+        view.text = subtitleText
+        view.visibility =
+            if (subtitleStyle.visible && subtitleText.isNotEmpty()) View.VISIBLE else View.GONE
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f * subtitleStyle.fontScale)
+    }
+
+    private fun dp(host: ViewGroup, value: Int): Int =
+        (value * host.resources.displayMetrics.density).toInt()
 
     // ── SurfaceView ─────────────────────────────────────────────────────
 

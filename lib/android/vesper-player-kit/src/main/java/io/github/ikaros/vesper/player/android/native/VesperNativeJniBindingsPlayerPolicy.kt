@@ -202,10 +202,54 @@ internal fun buildMediaItem(source: VesperPlayerSource): MediaItem {
     when (source.protocol) {
         VesperPlayerSourceProtocol.Hls -> builder.setMimeType(MimeTypes.APPLICATION_M3U8)
         VesperPlayerSourceProtocol.Dash -> builder.setMimeType(MimeTypes.APPLICATION_MPD)
+        // FLV streams are handled by the built-in FlvExtractor (media3-extractor)
+        // via ProgressiveMediaSource. ExoPlayer auto-detects the container from the
+        // `.flv` extension, so no explicit MIME type is needed; setting it to null
+        // keeps the auto-detection path intact.
+        VesperPlayerSourceProtocol.Flv -> Unit
+        // RTMP requires the optional media3-exoplayer-rtmp extension. When the host
+        // has not bundled it, reject explicitly instead of letting ExoPlayer fall
+        // through to an unsupported-source error deep inside the pipeline.
+        VesperPlayerSourceProtocol.Rtmp -> throw VesperPlayerUnsupportedOperation(
+            "RTMP playback is not implemented by the stable Android host kit.",
+            mapOf(
+                "reason" to "rtmpUnsupported",
+                "route" to "direct",
+                "protocol" to "rtmp",
+            ),
+        )
+        VesperPlayerSourceProtocol.Rtsp -> throw VesperPlayerUnsupportedOperation(
+            "RTSP playback requires the optional media3-exoplayer-rtsp extension. " +
+                "Add it to your app's dependencies; Vesper does not bundle it by default.",
+            mapOf(
+                "reason" to "rtspExtensionRequired",
+                "route" to "direct",
+                "protocol" to "rtsp",
+            ),
+        )
         else -> Unit
     }
 
     buildWidevineDrmConfiguration(source)?.let(builder::setDrmConfiguration)
+
+    // Side-loaded external subtitles (SRT/ASS/WebVTT). ExoPlayer's TextRenderer
+    // parses and renders them; Vesper only forwards the URIs and MIME types.
+    if (source.subtitleConfigurations.isNotEmpty()) {
+        builder.setSubtitleConfigurations(
+            source.subtitleConfigurations.mapIndexed { index, sideLoad ->
+                MediaItem.SubtitleConfiguration.Builder(Uri.parse(sideLoad.uri))
+                    .setMimeType(sideLoad.mimeType)
+                    .apply {
+                        if (index == 0) {
+                            setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                        }
+                        sideLoad.language?.let { setLanguage(it) }
+                        sideLoad.label?.let { setLabel(it) }
+                    }
+                    .build()
+            }
+        )
+    }
 
     return builder.build()
 }

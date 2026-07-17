@@ -119,7 +119,7 @@ extension VesperPlayerErrorCategory {
     }
 }
 
-public struct VesperPlayerError: Equatable {
+public struct VesperPlayerError: Error, Equatable {
     public let message: String
     public let code: VesperPlayerErrorCode
     public let category: VesperPlayerErrorCategory

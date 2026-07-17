@@ -857,6 +857,218 @@ impl PlayerPluginParticipation {
     }
 }
 
+/// Resource limits applied to a plugin to defend the host against misbehaving
+/// or slow plugins. This is the "circuit breaker" tier of plugin defense
+/// (plan: `plugin-defense-budget-circuit-breaker-2026-07-09.md`).
+///
+/// Vesper deliberately does **not** do signature verification or sandboxing:
+/// the host that `dlopen`s a plugin already has full process rights, so
+/// signature checks add little, and true sandboxing is incompatible with the
+/// native-decode resource access (GPU textures / CVPixelBuffer / D3D11) that
+/// decoder and frame-processor plugins require. Instead Vesper caps the
+/// observable resource consumption and trips a breaker when a plugin exceeds
+/// the budget, downgrading to bypass / fallback rather than crashing playback.
+///
+/// All limits are optional; missing fields fall back to the associated
+/// `DEFAULT_PLUGIN_*` constant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PluginBudgetPolicy {
+    /// Maximum frames a processor may queue before backpressure is reported.
+    pub max_queue_depth: Option<u32>,
+    /// Maximum frames a processor may have in flight simultaneously.
+    pub max_in_flight_frames: Option<u32>,
+    /// Per-frame processing time budget in microseconds. Exceeding it counts
+    /// as a deadline miss.
+    pub max_process_time_us: Option<u64>,
+    /// Number of consecutive failures before the processor is disabled and the
+    /// chain falls back to bypass / system decode.
+    pub max_consecutive_failures: Option<u32>,
+}
+
+impl PluginBudgetPolicy {
+    /// Effective queue-depth limit, falling back to the default when unset.
+    pub fn effective_max_queue_depth(self) -> u32 {
+        self.max_queue_depth
+            .unwrap_or(DEFAULT_PLUGIN_MAX_QUEUE_DEPTH)
+    }
+
+    /// Effective in-flight frame limit, falling back to the default when unset.
+    pub fn effective_max_in_flight_frames(self) -> u32 {
+        self.max_in_flight_frames
+            .unwrap_or(DEFAULT_PLUGIN_MAX_IN_FLIGHT_FRAMES)
+    }
+
+    /// Effective per-frame processing budget in microseconds.
+    pub fn effective_max_process_time_us(self) -> u64 {
+        self.max_process_time_us
+            .unwrap_or(DEFAULT_PLUGIN_MAX_PROCESS_TIME_US)
+    }
+
+    /// Effective consecutive-failure threshold before the breaker trips.
+    pub fn effective_max_consecutive_failures(self) -> u32 {
+        self.max_consecutive_failures
+            .unwrap_or(DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES)
+    }
+}
+
+impl Default for PluginBudgetPolicy {
+    fn default() -> Self {
+        Self {
+            max_queue_depth: None,
+            max_in_flight_frames: None,
+            max_process_time_us: None,
+            max_consecutive_failures: None,
+        }
+    }
+}
+
+/// Default frame queue depth before backpressure is reported.
+pub const DEFAULT_PLUGIN_MAX_QUEUE_DEPTH: u32 = 16;
+/// Default in-flight frame cap.
+pub const DEFAULT_PLUGIN_MAX_IN_FLIGHT_FRAMES: u32 = 4;
+/// Default per-frame processing budget (roughly 1.5 frames at 60fps).
+pub const DEFAULT_PLUGIN_MAX_PROCESS_TIME_US: u64 = 16_600;
+/// Default consecutive-failure threshold before a processor is disabled.
+pub const DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES: u32 = 5;
+
+/// Tracks per-plugin breaker state so a plugin call site can decide whether to
+/// keep invoking a plugin, downgrade it to bypass, or disable it outright.
+///
+/// The state machine is intentionally small and synchronous: each observation
+/// (`record_success` / `record_deadline_miss` / `record_failure`) updates the
+/// internal counters and returns the policy action the caller should apply.
+/// Callers must not hold any lock while invoking the plugin itself.
+#[derive(Debug, Clone)]
+pub struct PluginBreakerState {
+    budget: PluginBudgetPolicy,
+    consecutive_failures: u32,
+    consecutive_deadline_misses: u32,
+    disabled: bool,
+}
+
+impl PluginBreakerState {
+    /// Creates a breaker tracking the given budget.
+    pub fn new(budget: PluginBudgetPolicy) -> Self {
+        Self {
+            budget,
+            consecutive_failures: 0,
+            consecutive_deadline_misses: 0,
+            disabled: false,
+        }
+    }
+
+    /// Whether the breaker has tripped and the plugin should be skipped.
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
+    }
+
+    /// Current consecutive failure counter (for diagnostics).
+    pub fn consecutive_failures(&self) -> u32 {
+        self.consecutive_failures
+    }
+
+    /// Current consecutive deadline-miss counter (for warning diagnostics).
+    pub fn consecutive_deadline_misses(&self) -> u32 {
+        self.consecutive_deadline_misses
+    }
+
+    /// Records a successful plugin invocation; clears failure counters.
+    pub fn record_success(&mut self) {
+        self.consecutive_failures = 0;
+        self.consecutive_deadline_misses = 0;
+    }
+
+    /// Records a deadline miss. Returns the policy action to apply; once the
+    /// miss counter reaches the budget the breaker trips.
+    pub fn record_deadline_miss(&mut self) -> FrameProcessorPolicyAction {
+        if self.disabled {
+            return FrameProcessorPolicyAction::BypassOriginalFrame;
+        }
+        self.consecutive_deadline_misses = self.consecutive_deadline_misses.saturating_add(1);
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        if self.consecutive_failures >= self.budget.effective_max_consecutive_failures() {
+            self.disabled = true;
+            FrameProcessorPolicyAction::DisableProcessor
+        } else {
+            FrameProcessorPolicyAction::Continue
+        }
+    }
+
+    /// Records an outright plugin failure (panic-mapped error, bad output, ...).
+    pub fn record_failure(&mut self) -> FrameProcessorPolicyAction {
+        if self.disabled {
+            return FrameProcessorPolicyAction::BypassOriginalFrame;
+        }
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        if self.consecutive_failures >= self.budget.effective_max_consecutive_failures() {
+            self.disabled = true;
+            FrameProcessorPolicyAction::DisableProcessor
+        } else {
+            FrameProcessorPolicyAction::DropOutput
+        }
+    }
+
+    /// Evaluates an observed queue depth against the budget, returning the
+    /// policy action (backpressure -> drop / bypass) without touching failure
+    /// counters. Backpressure alone does not trip the breaker.
+    pub fn evaluate_queue_depth(&self, queue_depth: u32) -> FrameProcessorPolicyAction {
+        if self.disabled {
+            return FrameProcessorPolicyAction::BypassOriginalFrame;
+        }
+        if queue_depth > self.budget.effective_max_queue_depth() {
+            FrameProcessorPolicyAction::DropOutput
+        } else {
+            FrameProcessorPolicyAction::Continue
+        }
+    }
+
+    /// Evaluates observed in-flight frames against the budget without touching
+    /// failure counters. In-flight pressure alone does not trip the breaker.
+    pub fn evaluate_in_flight_frames(&self, in_flight_frames: u32) -> FrameProcessorPolicyAction {
+        if self.disabled {
+            return FrameProcessorPolicyAction::BypassOriginalFrame;
+        }
+        if in_flight_frames > self.budget.effective_max_in_flight_frames() {
+            FrameProcessorPolicyAction::DropOutput
+        } else {
+            FrameProcessorPolicyAction::Continue
+        }
+    }
+
+    /// Evaluates queue depth and in-flight pressure together. Missing values
+    /// are ignored so call sites can pass only the counters they observed.
+    pub fn evaluate_load(
+        &self,
+        queue_depth: Option<u32>,
+        in_flight_frames: Option<u32>,
+    ) -> FrameProcessorPolicyAction {
+        if self.disabled {
+            return FrameProcessorPolicyAction::BypassOriginalFrame;
+        }
+        if let Some(queue_depth) = queue_depth {
+            if self.evaluate_queue_depth(queue_depth) == FrameProcessorPolicyAction::DropOutput {
+                return FrameProcessorPolicyAction::DropOutput;
+            }
+        }
+        if let Some(in_flight_frames) = in_flight_frames {
+            if self.evaluate_in_flight_frames(in_flight_frames)
+                == FrameProcessorPolicyAction::DropOutput
+            {
+                return FrameProcessorPolicyAction::DropOutput;
+            }
+        }
+        FrameProcessorPolicyAction::Continue
+    }
+
+    /// Resets the breaker after a manual recovery (for diagnostics / host
+    /// override). The breaker starts counting failures from zero again.
+    pub fn reset(&mut self) {
+        self.consecutive_failures = 0;
+        self.consecutive_deadline_misses = 0;
+        self.disabled = false;
+    }
+}
+
 /// Stable key/value detail attached to a plugin diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerPluginDiagnosticDetail {
@@ -2178,6 +2390,11 @@ fn default_runtime_adapter_factory() -> PlayerResult<&'static dyn PlayerRuntimeA
 #[cfg(test)]
 mod tests {
     use super::{
+        DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES, DEFAULT_PLUGIN_MAX_IN_FLIGHT_FRAMES,
+        DEFAULT_PLUGIN_MAX_PROCESS_TIME_US, DEFAULT_PLUGIN_MAX_QUEUE_DEPTH, PluginBreakerState,
+        PluginBudgetPolicy,
+    };
+    use super::{
         DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
         DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW, FrameProcessorMode,
         FrameProcessorPolicy, FrameProcessorPolicyAction, FrameProcessorWarning,
@@ -2902,5 +3119,188 @@ mod tests {
         assert_eq!(metrics.retry_count, 2);
         assert_eq!(metrics.last_retry_delay, Some(Duration::from_millis(1_500)));
         assert!(metrics.total_buffering_duration >= Duration::from_millis(2));
+    }
+
+    #[test]
+    fn plugin_budget_defaults_kick_in_when_limits_are_unset() {
+        let policy = PluginBudgetPolicy::default();
+        assert_eq!(
+            policy.effective_max_queue_depth(),
+            DEFAULT_PLUGIN_MAX_QUEUE_DEPTH
+        );
+        assert_eq!(
+            policy.effective_max_in_flight_frames(),
+            DEFAULT_PLUGIN_MAX_IN_FLIGHT_FRAMES
+        );
+        assert_eq!(
+            policy.effective_max_process_time_us(),
+            DEFAULT_PLUGIN_MAX_PROCESS_TIME_US
+        );
+        assert_eq!(
+            policy.effective_max_consecutive_failures(),
+            DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES
+        );
+    }
+
+    #[test]
+    fn plugin_budget_respects_explicit_overrides() {
+        let policy = PluginBudgetPolicy {
+            max_queue_depth: Some(32),
+            max_in_flight_frames: Some(8),
+            max_process_time_us: Some(5_000),
+            max_consecutive_failures: Some(2),
+        };
+        assert_eq!(policy.effective_max_queue_depth(), 32);
+        assert_eq!(policy.effective_max_in_flight_frames(), 8);
+        assert_eq!(policy.effective_max_process_time_us(), 5_000);
+        assert_eq!(policy.effective_max_consecutive_failures(), 2);
+    }
+
+    #[test]
+    fn breaker_trips_after_consecutive_failures() {
+        let mut breaker = PluginBreakerState::new(PluginBudgetPolicy {
+            max_consecutive_failures: Some(3),
+            ..PluginBudgetPolicy::default()
+        });
+
+        // First two failures drop output but keep the chain alive.
+        assert_eq!(
+            breaker.record_failure(),
+            FrameProcessorPolicyAction::DropOutput
+        );
+        assert!(!breaker.is_disabled());
+        assert_eq!(
+            breaker.record_failure(),
+            FrameProcessorPolicyAction::DropOutput
+        );
+        assert!(!breaker.is_disabled());
+
+        // Third failure trips the breaker.
+        assert_eq!(
+            breaker.record_failure(),
+            FrameProcessorPolicyAction::DisableProcessor
+        );
+        assert!(breaker.is_disabled());
+        assert_eq!(breaker.consecutive_failures(), 3);
+
+        // Subsequent observations bypass the plugin instead of re-tripping.
+        assert_eq!(
+            breaker.record_failure(),
+            FrameProcessorPolicyAction::BypassOriginalFrame
+        );
+        assert_eq!(
+            breaker.evaluate_queue_depth(100),
+            FrameProcessorPolicyAction::BypassOriginalFrame
+        );
+    }
+
+    #[test]
+    fn breaker_counts_deadline_misses_towards_failure_threshold() {
+        let mut breaker = PluginBreakerState::new(PluginBudgetPolicy {
+            max_consecutive_failures: Some(2),
+            ..PluginBudgetPolicy::default()
+        });
+
+        assert_eq!(
+            breaker.record_deadline_miss(),
+            FrameProcessorPolicyAction::Continue
+        );
+        assert_eq!(breaker.consecutive_deadline_misses(), 1);
+        // Deadline misses count towards consecutive failures and trip too.
+        assert_eq!(
+            breaker.record_deadline_miss(),
+            FrameProcessorPolicyAction::DisableProcessor
+        );
+        assert!(breaker.is_disabled());
+        assert_eq!(breaker.consecutive_deadline_misses(), 2);
+    }
+
+    #[test]
+    fn breaker_record_success_clears_failure_counters() {
+        let mut breaker = PluginBreakerState::new(PluginBudgetPolicy {
+            max_consecutive_failures: Some(4),
+            ..PluginBudgetPolicy::default()
+        });
+
+        breaker.record_failure();
+        breaker.record_failure();
+        breaker.record_deadline_miss();
+        breaker.record_success();
+        assert_eq!(breaker.consecutive_failures(), 0);
+        assert_eq!(breaker.consecutive_deadline_misses(), 0);
+        assert!(!breaker.is_disabled());
+
+        // Two more failures after reset should not trip yet (threshold is 4).
+        breaker.record_failure();
+        breaker.record_failure();
+        assert!(!breaker.is_disabled());
+    }
+
+    #[test]
+    fn breaker_load_evaluates_pressure_without_tripping() {
+        let breaker = PluginBreakerState::new(PluginBudgetPolicy {
+            max_queue_depth: Some(8),
+            max_in_flight_frames: Some(2),
+            max_consecutive_failures: Some(3),
+            ..PluginBudgetPolicy::default()
+        });
+
+        // Within budget: continue.
+        assert_eq!(
+            breaker.evaluate_queue_depth(8),
+            FrameProcessorPolicyAction::Continue
+        );
+        // Over budget: drop output but do not touch failure counters.
+        assert_eq!(
+            breaker.evaluate_queue_depth(9),
+            FrameProcessorPolicyAction::DropOutput
+        );
+        // In-flight pressure uses its own cap.
+        assert_eq!(
+            breaker.evaluate_in_flight_frames(3),
+            FrameProcessorPolicyAction::DropOutput
+        );
+        assert_eq!(
+            breaker.evaluate_load(Some(8), Some(2)),
+            FrameProcessorPolicyAction::Continue
+        );
+        assert_eq!(
+            breaker.evaluate_load(Some(9), Some(2)),
+            FrameProcessorPolicyAction::DropOutput
+        );
+        assert_eq!(
+            breaker.evaluate_load(Some(8), Some(3)),
+            FrameProcessorPolicyAction::DropOutput
+        );
+        assert_eq!(breaker.consecutive_failures(), 0);
+        assert!(!breaker.is_disabled());
+
+        // Backpressure alone does not trip the breaker even when sustained.
+        for _ in 0..10 {
+            assert_eq!(
+                breaker.evaluate_queue_depth(100),
+                FrameProcessorPolicyAction::DropOutput
+            );
+        }
+        assert!(!breaker.is_disabled());
+    }
+
+    #[test]
+    fn breaker_reset_recovers_a_disabled_plugin() {
+        let mut breaker = PluginBreakerState::new(PluginBudgetPolicy {
+            max_consecutive_failures: Some(1),
+            ..PluginBudgetPolicy::default()
+        });
+
+        breaker.record_failure();
+        assert!(breaker.is_disabled());
+
+        breaker.reset();
+        assert!(!breaker.is_disabled());
+        assert_eq!(breaker.consecutive_failures(), 0);
+        assert_eq!(
+            breaker.evaluate_queue_depth(1),
+            FrameProcessorPolicyAction::Continue
+        );
     }
 }

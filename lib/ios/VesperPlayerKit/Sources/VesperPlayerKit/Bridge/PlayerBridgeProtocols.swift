@@ -40,6 +40,7 @@ protocol PlayerBridge: AnyObject {
     func setVideoTrackSelection(_ selection: VesperTrackSelection)
     func setAudioTrackSelection(_ selection: VesperTrackSelection)
     func setSubtitleTrackSelection(_ selection: VesperTrackSelection)
+    func setSubtitleStyle(_ style: VesperSubtitleStyle)
     func setAbrPolicy(_ policy: VesperAbrPolicy)
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy)
     func setAudioSessionInterrupted(_ interrupted: Bool)

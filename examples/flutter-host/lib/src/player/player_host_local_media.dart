@@ -83,7 +83,10 @@ extension _PlayerHostLocalMediaActions on _PlayerHostPageState {
       VesperPlayerSourceProtocol.content => 'file',
       VesperPlayerSourceProtocol.hls => 'hls',
       VesperPlayerSourceProtocol.dash => 'progressive',
-      VesperPlayerSourceProtocol.progressive => 'progressive',
+      VesperPlayerSourceProtocol.progressive ||
+      VesperPlayerSourceProtocol.rtmp ||
+      VesperPlayerSourceProtocol.rtsp ||
+      VesperPlayerSourceProtocol.flv => 'progressive',
       VesperPlayerSourceProtocol.unknown =>
         source.kind == VesperPlayerSourceKind.local ? 'file' : 'progressive',
     };

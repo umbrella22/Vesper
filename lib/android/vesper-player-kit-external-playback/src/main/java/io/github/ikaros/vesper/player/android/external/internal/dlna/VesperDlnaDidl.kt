@@ -35,6 +35,9 @@ fun VesperPlayerSource.dlnaMimeType(): String =
     when (protocol) {
         VesperPlayerSourceProtocol.Hls -> "application/x-mpegURL"
         VesperPlayerSourceProtocol.Dash -> "application/dash+xml"
+        VesperPlayerSourceProtocol.Flv -> "video/x-flv"
+        VesperPlayerSourceProtocol.Rtmp,
+        VesperPlayerSourceProtocol.Rtsp,
         VesperPlayerSourceProtocol.Progressive,
         VesperPlayerSourceProtocol.File,
         VesperPlayerSourceProtocol.Content,

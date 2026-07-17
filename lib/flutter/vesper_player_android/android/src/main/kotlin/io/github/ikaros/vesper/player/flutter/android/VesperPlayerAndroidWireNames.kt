@@ -64,6 +64,9 @@ internal fun VesperPlayerSourceProtocol.toWireName(): String =
         VesperPlayerSourceProtocol.Progressive -> "progressive"
         VesperPlayerSourceProtocol.Hls -> "hls"
         VesperPlayerSourceProtocol.Dash -> "dash"
+        VesperPlayerSourceProtocol.Rtmp -> "rtmp"
+        VesperPlayerSourceProtocol.Rtsp -> "rtsp"
+        VesperPlayerSourceProtocol.Flv -> "flv"
     }
 
 internal fun VesperBufferingPreset.toWireName(): String =

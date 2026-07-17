@@ -206,6 +206,14 @@ private fun VesperPlayerSource.unsupportedProtocolReason(
         VesperPlayerSourceProtocol.File,
         VesperPlayerSourceProtocol.Content,
         -> if (capabilities.supportsProgressive) null else UnsupportedSourceReason("Local media relay is not supported by this route.")
+        VesperPlayerSourceProtocol.Rtmp,
+        VesperPlayerSourceProtocol.Rtsp,
+        VesperPlayerSourceProtocol.Flv,
+        -> UnsupportedSourceReason(
+            message = "${protocol.name} is not supported by external playback routes.",
+            code = "unsupported_protocol",
+            details = mapOf("protocol" to protocol.name.lowercase()) + request.routeDetails(),
+        )
     }
 }
 

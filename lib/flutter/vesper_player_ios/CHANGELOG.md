@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Added MethodChannel mapping for external subtitle configurations and
+  `setSubtitleStyle`, backed by the iOS host-kit subtitle overlay.
+- Added complete RTMP, RTSP, and HTTP-FLV protocol wire mapping with explicit
+  iOS unsupported playback errors.
+
 ### Breaking Changes
 
 - The iOS Flutter implementation now requires Flutter 3.44.0 or newer.

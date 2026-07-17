@@ -59,6 +59,10 @@ source module and as a release AAR.
 - Kotlin 2.x
 - arm64 device or arm64 emulator
 
+These requirements define the supported product boundary. The Android package
+does not plan to add 32-bit or Intel ABIs, or compatibility behavior for older
+Android versions, without a separate product-direction change.
+
 ## Building From Source
 
 From the repository root:
@@ -83,6 +87,23 @@ Optional plugin and extension modules can still be assembled explicitly:
 - `:vesper-player-kit-source-normalizer-ffmpeg:assembleRelease`
 - `:vesper-player-kit-frame-processor-diagnostic:assembleRelease`
 
+## Subtitle Baseline
+
+The Android host kit forwards external SRT (`application/x-subrip`), WebVTT
+(`text/vtt`), and SSA/ASS (`text/x-ssa`) tracks through Media3
+`MediaItem.SubtitleConfiguration`. Text cues are rendered by a native overlay in
+the same surface host as the video, so `SurfaceView` remains the default video
+path and subtitle text does not cross Dart. `VesperSubtitleStyle` supports
+visibility and a validated `fontScale` range of `0.5...3.0`. Per-cue typography,
+animations, and subtitle synchronization offsets are not part of the stable
+contract.
+
+HTTP URLs ending in `.flv` are inferred as progressive VOD. Use
+`VesperPlayerSource.flvLive(...)` only when the caller explicitly knows that the
+source is an HTTP-FLV live stream. RTMP remains explicitly unsupported by the
+stable Android host kit; RTSP and HTTP-FLV require real-device validation before
+release support claims.
+
 ## Public API
 
 Core (`vesper-player-kit`):
@@ -90,7 +111,8 @@ Core (`vesper-player-kit`):
 - `VesperPlayerController` — playback control surface (`play / pause / seek / selectSource / setPlaybackRate / setAbrPolicy / setResiliencePolicy / set*TrackSelection`)
 - `VesperPlayerControllerFactory` — `createDefault(...)` for production bridge, `createPreview(...)` for a Fake bridge
 - `VesperPlayerBackendFamily` — public backend family snapshot exposed through `VesperPlayerController.backendFamily`
-- `VesperPlayerSource` — media source DTO with `local / remote / hls / dash` factories
+- `VesperPlayerSource` — media source DTO with `local / remote / hls / dash / rtmp / rtsp / flvLive` factories
+- `VesperSubtitleSideLoad` and `VesperSubtitleStyle` — external SRT / WebVTT / SSA attachment plus visibility and bounded font scaling
 - `VesperPlayerDrmConfiguration` — Widevine license metadata for direct Media3 playback
 - `VesperTrackSelection` — audio / subtitle / video track selection (`auto`, `disabled`, `track(id)`)
 - Reactive state on the controller: `uiState`, `trackCatalog`, `trackSelection`, `effectiveVideoTrackId`, `videoVariantObservation`, `resiliencePolicy` (all `StateFlow<...>`)

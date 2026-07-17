@@ -13,13 +13,24 @@ use player_plugin::{
 use player_runtime::{
     FrameProcessorMode, FrameProcessorPolicy, FrameProcessorPolicyAction, FrameProcessorWarning,
     FrameProcessorWarningKind, PlayerFrameProcessingMetrics, PlayerRuntimeEvent,
-    PlayerRuntimeWarning,
+    PlayerRuntimeWarning, PluginBreakerState, PluginBudgetPolicy,
 };
 
 /// Maximum number of pending runtime events the frame processor chain buffers
 /// before discarding oldest events. Hosts must call `drain_events()` regularly
 /// to consume events and stay within this bound.
 const MAX_PENDING_EVENTS: usize = 256;
+
+fn plugin_budget_from_frame_processor_policy(policy: &FrameProcessorPolicy) -> PluginBudgetPolicy {
+    PluginBudgetPolicy {
+        max_queue_depth: Some(policy.max_in_flight_frames_per_processor),
+        max_in_flight_frames: Some(policy.max_in_flight_frames_per_processor),
+        max_process_time_us: Some(
+            u64::try_from(policy.frame_deadline.as_micros()).unwrap_or(u64::MAX),
+        ),
+        max_consecutive_failures: None,
+    }
+}
 
 #[derive(Debug)]
 pub struct NativeFrameProcessorChainCore {
@@ -37,6 +48,11 @@ impl NativeFrameProcessorChainCore {
         mode: FrameProcessorMode,
         policy: FrameProcessorPolicy,
     ) -> Self {
+        let budget = plugin_budget_from_frame_processor_policy(&policy);
+        let processors = processors
+            .into_iter()
+            .map(|node| node.with_budget(budget))
+            .collect();
         Self {
             processors,
             mode,
@@ -111,20 +127,29 @@ impl NativeFrameProcessorChainCore {
         state: &mut NativeFrameProcessorProcessState,
         observer: &mut impl NativeFrameProcessorObserver,
     ) -> Result<(), NativeFrameProcessorProcessError> {
+        if self.processors[node_index].breaker.is_disabled() {
+            return self.handle_disabled_node(node_index, decoder_frame, state, observer);
+        }
+
         let submit_result = match self.submit_to_node(node_index, &state.current_frame) {
             Ok(result) => result,
             Err(error) => {
-                let _ = self.release_processor_outputs_best_effort(std::mem::take(
-                    &mut state.processor_outputs,
-                ));
-                return Err(NativeFrameProcessorProcessError {
+                return self.handle_processor_failure(
+                    node_index,
                     error,
-                    decoder_frame: decoder_frame.clone(),
-                });
+                    decoder_frame,
+                    state,
+                    observer,
+                );
             }
         };
 
         observer.observe_submit(submit_result.queue_depth, submit_result.in_flight_frames);
+        let load_action = self.observe_node_load(
+            node_index,
+            submit_result.queue_depth,
+            submit_result.in_flight_frames,
+        );
         match submit_result.status {
             FrameProcessorSubmitStatus::Accepted => observer.observe_submitted_node(),
             FrameProcessorSubmitStatus::Bypassed | FrameProcessorSubmitStatus::Backpressure => {
@@ -152,23 +177,151 @@ impl NativeFrameProcessorChainCore {
         let receive = match self.receive_from_node(node_index) {
             Ok(output) => output,
             Err(error) => {
-                let _ = self.release_processor_outputs_best_effort(std::mem::take(
-                    &mut state.processor_outputs,
-                ));
-                return Err(NativeFrameProcessorProcessError {
+                return self.handle_processor_failure(
+                    node_index,
                     error,
-                    decoder_frame: decoder_frame.clone(),
-                });
+                    decoder_frame,
+                    state,
+                    observer,
+                );
             }
         };
         match receive {
             FrameProcessorReceiveOutput::Frame(output) => {
-                self.handle_ready_output(node_index, output, decoder_frame, state, observer)
+                if load_action == FrameProcessorPolicyAction::DropOutput {
+                    self.handle_over_budget_output(
+                        node_index,
+                        output,
+                        submit_result.queue_depth,
+                        submit_result.in_flight_frames,
+                        decoder_frame,
+                        state,
+                        observer,
+                    )
+                } else {
+                    self.handle_ready_output(node_index, output, decoder_frame, state, observer)
+                }
             }
             FrameProcessorReceiveOutput::Pending | FrameProcessorReceiveOutput::EndOfStream => {
                 self.handle_pending_output(node_index, decoder_frame, state, observer)
             }
         }
+    }
+
+    fn handle_over_budget_output(
+        &mut self,
+        node_index: usize,
+        output: FrameProcessorOutputFrame,
+        queue_depth: Option<u32>,
+        in_flight_frames: Option<u32>,
+        decoder_frame: &DecoderNativeFrame,
+        state: &mut NativeFrameProcessorProcessState,
+        observer: &mut impl NativeFrameProcessorObserver,
+    ) -> Result<(), NativeFrameProcessorProcessError> {
+        self.handle_ready_output(node_index, output, decoder_frame, state, observer)?;
+        self.reset_to_decoder_frame(decoder_frame, state);
+        self.metrics.bypassed_frame_count = self.metrics.bypassed_frame_count.saturating_add(1);
+        self.metrics.backpressure_count = self.metrics.backpressure_count.saturating_add(1);
+        self.metrics.dropped_output_count = self.metrics.dropped_output_count.saturating_add(1);
+        observer.observe_bypass();
+        observer.observe_backpressure();
+        observer.observe_timing(false, true);
+        let node_snapshot = self.node_snapshot(node_index);
+        self.push_warning(
+            FrameProcessorWarningKind::OutputDropped,
+            &node_snapshot,
+            &state.current_frame,
+            FrameProcessorWarningDetails {
+                queue_depth,
+                in_flight_frames,
+                ..FrameProcessorWarningDetails::default()
+            },
+            FrameProcessorPolicyAction::DropOutput,
+            Some("processor output dropped because queue or in-flight load exceeded the configured budget".to_owned()),
+        );
+        if self.mode == FrameProcessorMode::RequireProcessed {
+            return Err(NativeFrameProcessorProcessError {
+                error: NativeFrameProcessorError::strict(
+                    node_snapshot.processor_index,
+                    &node_snapshot.plugin_name,
+                    "exceeded the configured queue or in-flight budget",
+                ),
+                decoder_frame: decoder_frame.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn handle_disabled_node(
+        &mut self,
+        node_index: usize,
+        decoder_frame: &DecoderNativeFrame,
+        state: &mut NativeFrameProcessorProcessState,
+        observer: &mut impl NativeFrameProcessorObserver,
+    ) -> Result<(), NativeFrameProcessorProcessError> {
+        self.reset_to_decoder_frame(decoder_frame, state);
+        self.metrics.bypassed_frame_count = self.metrics.bypassed_frame_count.saturating_add(1);
+        observer.observe_bypass();
+        let node_snapshot = self.node_snapshot(node_index);
+        if self.mode == FrameProcessorMode::RequireProcessed {
+            return Err(NativeFrameProcessorProcessError {
+                error: NativeFrameProcessorError::strict(
+                    node_snapshot.processor_index,
+                    &node_snapshot.plugin_name,
+                    "is disabled by policy",
+                ),
+                decoder_frame: decoder_frame.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn handle_processor_failure(
+        &mut self,
+        node_index: usize,
+        error: NativeFrameProcessorError,
+        decoder_frame: &DecoderNativeFrame,
+        state: &mut NativeFrameProcessorProcessState,
+        observer: &mut impl NativeFrameProcessorObserver,
+    ) -> Result<(), NativeFrameProcessorProcessError> {
+        self.reset_to_decoder_frame(decoder_frame, state);
+        self.metrics.bypassed_frame_count = self.metrics.bypassed_frame_count.saturating_add(1);
+        observer.observe_bypass();
+
+        let breaker_action = self.processors[node_index].breaker.record_failure();
+        if breaker_action == FrameProcessorPolicyAction::DisableProcessor {
+            self.emit_disabled_warning_once(
+                node_index,
+                &state.current_frame,
+                FrameProcessorWarningDetails::default(),
+                Some(format!(
+                    "processor failed repeatedly and was disabled: {}",
+                    error.message
+                )),
+            );
+        } else {
+            let node_snapshot = self.node_snapshot(node_index);
+            self.push_warning(
+                FrameProcessorWarningKind::OutputDropped,
+                &node_snapshot,
+                &state.current_frame,
+                FrameProcessorWarningDetails::default(),
+                if self.mode == FrameProcessorMode::RequireProcessed {
+                    FrameProcessorPolicyAction::FailPlayback
+                } else {
+                    breaker_action
+                },
+                Some(format!("processor call failed: {}", error.message)),
+            );
+        }
+
+        if self.mode == FrameProcessorMode::RequireProcessed {
+            return Err(NativeFrameProcessorProcessError {
+                error,
+                decoder_frame: decoder_frame.clone(),
+            });
+        }
+        Ok(())
     }
 
     fn submit_to_node(
@@ -271,22 +424,35 @@ impl NativeFrameProcessorChainCore {
         self.reset_to_decoder_frame(decoder_frame, state);
         observer.observe_bypass();
         let node_snapshot = self.node_snapshot(node_index);
-        self.push_warning(
-            FrameProcessorWarningKind::Unsupported,
-            &node_snapshot,
-            &state.current_frame,
-            FrameProcessorWarningDetails {
-                queue_depth: submit_result.queue_depth,
-                in_flight_frames: submit_result.in_flight_frames,
-                ..FrameProcessorWarningDetails::default()
-            },
-            if self.mode == FrameProcessorMode::RequireProcessed {
-                FrameProcessorPolicyAction::FailPlayback
-            } else {
-                FrameProcessorPolicyAction::BypassOriginalFrame
-            },
-            submit_result.message,
-        );
+        let details = FrameProcessorWarningDetails {
+            queue_depth: submit_result.queue_depth,
+            in_flight_frames: submit_result.in_flight_frames,
+            ..FrameProcessorWarningDetails::default()
+        };
+        let breaker_action = self.processors[node_index].breaker.record_failure();
+        if breaker_action == FrameProcessorPolicyAction::DisableProcessor {
+            self.emit_disabled_warning_once(
+                node_index,
+                &state.current_frame,
+                details,
+                submit_result
+                    .message
+                    .or_else(|| Some("processor rejected frames repeatedly".to_owned())),
+            );
+        } else {
+            self.push_warning(
+                FrameProcessorWarningKind::Unsupported,
+                &node_snapshot,
+                &state.current_frame,
+                details,
+                if self.mode == FrameProcessorMode::RequireProcessed {
+                    FrameProcessorPolicyAction::FailPlayback
+                } else {
+                    FrameProcessorPolicyAction::BypassOriginalFrame
+                },
+                submit_result.message,
+            );
+        }
         if self.mode == FrameProcessorMode::RequireProcessed {
             return Err(NativeFrameProcessorProcessError {
                 error: NativeFrameProcessorError::strict(
@@ -310,7 +476,7 @@ impl NativeFrameProcessorChainCore {
     ) -> Result<(), NativeFrameProcessorProcessError> {
         observer.observe_processed_node();
         let node_snapshot = self.node_snapshot(node_index);
-        let timing = self.record_output_timing(&node_snapshot, &state.current_frame, &output);
+        let timing = self.record_output_timing(node_index, &state.current_frame, &output);
         observer.observe_timing(timing.deadline_missed, timing.should_drop_output);
         if timing.should_drop_output || timing.should_fail_playback {
             if output_frame_requires_processor_release(&output.frame)
@@ -529,7 +695,7 @@ impl NativeFrameProcessorChainCore {
 
     fn record_output_timing(
         &mut self,
-        node: &NativeFrameProcessorNodeSnapshot,
+        node_index: usize,
         input: &NativeFrame,
         output: &FrameProcessorOutputFrame,
     ) -> NativeFrameProcessorTimingDecision {
@@ -538,6 +704,7 @@ impl NativeFrameProcessorChainCore {
         self.metrics.last_process_time_us = output.timings.process_time_us;
         self.metrics.last_submit_to_ready_us = output.timings.submit_to_ready_us;
         let mut decision = NativeFrameProcessorTimingDecision::default();
+        let node = self.node_snapshot(node_index);
         if output
             .timings
             .submit_to_ready_us
@@ -545,38 +712,66 @@ impl NativeFrameProcessorChainCore {
         {
             self.metrics.deadline_miss_count = self.metrics.deadline_miss_count.saturating_add(1);
             decision.deadline_missed = true;
+            let breaker_action = self.processors[node_index].breaker.record_deadline_miss();
+            let consecutive_miss_count = self.processors[node_index]
+                .breaker
+                .consecutive_deadline_misses();
             let action = if self.mode == FrameProcessorMode::RequireProcessed {
                 FrameProcessorPolicyAction::FailPlayback
+            } else if breaker_action == FrameProcessorPolicyAction::DisableProcessor {
+                FrameProcessorPolicyAction::DisableProcessor
             } else {
                 FrameProcessorPolicyAction::BypassOriginalFrame
             };
-            self.push_warning(
-                FrameProcessorWarningKind::DeadlineMissed,
-                node,
-                input,
-                FrameProcessorWarningDetails::from_output_timing(
+            let details = FrameProcessorWarningDetails {
+                consecutive_miss_count: Some(consecutive_miss_count),
+                ..FrameProcessorWarningDetails::from_output_timing(
                     output,
                     self.policy.frame_deadline,
-                ),
+                )
+            };
+            self.push_warning(
+                FrameProcessorWarningKind::DeadlineMissed,
+                &node,
+                input,
+                details.clone(),
                 action,
                 Some("processor output missed frame deadline".to_owned()),
             );
+            if breaker_action == FrameProcessorPolicyAction::DisableProcessor {
+                self.emit_disabled_warning_once(
+                    node_index,
+                    input,
+                    details,
+                    Some("processor missed frame deadlines repeatedly".to_owned()),
+                );
+            }
             if self.mode == FrameProcessorMode::RequireProcessed {
                 decision.should_fail_playback = true;
+            } else if breaker_action == FrameProcessorPolicyAction::DisableProcessor {
+                decision.should_drop_output = true;
+                self.metrics.dropped_output_count =
+                    self.metrics.dropped_output_count.saturating_add(1);
             }
+        } else {
+            self.processors[node_index].breaker.record_success();
         }
         if output.timings.submit_to_ready_us.is_some_and(|elapsed| {
             elapsed
                 > (self.policy.frame_deadline + self.policy.late_output_tolerance).as_micros()
                     as u64
         }) {
+            let was_already_dropping = decision.should_drop_output;
             decision.should_drop_output = true;
-            self.metrics.dropped_output_count = self.metrics.dropped_output_count.saturating_add(1);
+            if !was_already_dropping {
+                self.metrics.dropped_output_count =
+                    self.metrics.dropped_output_count.saturating_add(1);
+            }
             self.metrics.late_output_drop_count =
                 self.metrics.late_output_drop_count.saturating_add(1);
             self.push_warning(
                 FrameProcessorWarningKind::LateOutputDropped,
-                node,
+                &node,
                 input,
                 FrameProcessorWarningDetails::from_output_timing(
                     output,
@@ -625,11 +820,60 @@ impl NativeFrameProcessorChainCore {
                     self.policy.frame_deadline,
                 ),
                 deadline_overrun_us: details.deadline_overrun_us,
-                consecutive_miss_count: None,
+                consecutive_miss_count: details.consecutive_miss_count,
                 policy_action,
                 message,
             }),
         ));
+    }
+
+    fn observe_node_load(
+        &mut self,
+        node_index: usize,
+        queue_depth: Option<u32>,
+        in_flight_frames: Option<u32>,
+    ) -> FrameProcessorPolicyAction {
+        if let Some(queue_depth) = queue_depth {
+            self.metrics.max_queue_depth = Some(
+                self.metrics
+                    .max_queue_depth
+                    .map_or(queue_depth, |current| current.max(queue_depth)),
+            );
+        }
+        if let Some(in_flight_frames) = in_flight_frames {
+            self.metrics.max_in_flight_frames = Some(
+                self.metrics
+                    .max_in_flight_frames
+                    .map_or(in_flight_frames, |current| current.max(in_flight_frames)),
+            );
+        }
+        self.processors[node_index]
+            .breaker
+            .evaluate_load(queue_depth, in_flight_frames)
+    }
+
+    fn emit_disabled_warning_once(
+        &mut self,
+        node_index: usize,
+        input: &NativeFrame,
+        details: FrameProcessorWarningDetails,
+        message: Option<String>,
+    ) {
+        if self.processors[node_index].disabled_warning_emitted {
+            return;
+        }
+        self.processors[node_index].disabled_warning_emitted = true;
+        self.metrics.disabled_processor_count =
+            self.metrics.disabled_processor_count.saturating_add(1);
+        let node_snapshot = self.node_snapshot(node_index);
+        self.push_warning(
+            FrameProcessorWarningKind::Disabled,
+            &node_snapshot,
+            input,
+            details,
+            FrameProcessorPolicyAction::DisableProcessor,
+            message,
+        );
     }
 
     fn node_snapshot(&self, node_index: usize) -> NativeFrameProcessorNodeSnapshot {
@@ -668,6 +912,8 @@ pub struct NativeFrameProcessorNode {
     pub plugin_name: String,
     pub processor_index: usize,
     pub session: Box<dyn FrameProcessorSession>,
+    breaker: PluginBreakerState,
+    disabled_warning_emitted: bool,
 }
 
 impl std::fmt::Debug for NativeFrameProcessorNode {
@@ -689,7 +935,15 @@ impl NativeFrameProcessorNode {
             plugin_name: plugin_name.into(),
             processor_index,
             session,
+            breaker: PluginBreakerState::new(PluginBudgetPolicy::default()),
+            disabled_warning_emitted: false,
         }
+    }
+
+    pub fn with_budget(mut self, budget: PluginBudgetPolicy) -> Self {
+        self.breaker = PluginBreakerState::new(budget);
+        self.disabled_warning_emitted = false;
+        self
     }
 }
 
@@ -795,6 +1049,7 @@ struct FrameProcessorWarningDetails {
     process_time_us: Option<u64>,
     submit_to_ready_us: Option<u64>,
     deadline_overrun_us: Option<u64>,
+    consecutive_miss_count: Option<u32>,
 }
 
 impl FrameProcessorWarningDetails {
@@ -1077,6 +1332,181 @@ pub trait NativeFrameDecoderAdapter: Send {
     fn close(&mut self) -> Result<(), NativeFramePipelineError>;
 }
 
+pub fn protect_native_frame_packet_source_adapter(
+    inner: Box<dyn NativeFramePacketSourceAdapter>,
+) -> Box<dyn NativeFramePacketSourceAdapter> {
+    Box::new(ProtectedNativeFramePacketSourceAdapter::new(inner))
+}
+
+pub fn protect_native_frame_decoder_adapter(
+    inner: Box<dyn NativeFrameDecoderAdapter>,
+) -> Box<dyn NativeFrameDecoderAdapter> {
+    Box::new(ProtectedNativeFrameDecoderAdapter::new(inner))
+}
+
+struct ProtectedNativeFramePacketSourceAdapter {
+    inner: Box<dyn NativeFramePacketSourceAdapter>,
+    breaker: PluginBreakerState,
+}
+
+impl ProtectedNativeFramePacketSourceAdapter {
+    fn new(inner: Box<dyn NativeFramePacketSourceAdapter>) -> Self {
+        Self {
+            inner,
+            breaker: PluginBreakerState::new(PluginBudgetPolicy::default()),
+        }
+    }
+
+    fn disabled_error(operation: &'static str) -> NativeFramePipelineError {
+        NativeFramePipelineError::new(
+            operation,
+            "native-frame packet source disabled after repeated adapter failures",
+        )
+    }
+
+    fn ensure_enabled(&self, operation: &'static str) -> Result<(), NativeFramePipelineError> {
+        if self.breaker.is_disabled() {
+            Err(Self::disabled_error(operation))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn record_failure(&mut self, error: NativeFramePipelineError) -> NativeFramePipelineError {
+        let _ = self.breaker.record_failure();
+        error
+    }
+}
+
+impl NativeFramePacketSourceAdapter for ProtectedNativeFramePacketSourceAdapter {
+    fn selected_video_stream_index(&self) -> Option<u32> {
+        self.inner.selected_video_stream_index()
+    }
+
+    fn read_packet(&mut self) -> Result<NativeFramePacketRead, NativeFramePipelineError> {
+        self.ensure_enabled("readPacket")?;
+        let read = self
+            .inner
+            .read_packet()
+            .map_err(|error| self.record_failure(error))?;
+        self.breaker.record_success();
+        Ok(read)
+    }
+
+    fn flush(&mut self) -> Result<(), NativeFramePipelineError> {
+        self.ensure_enabled("flushPacketSource")?;
+        self.inner
+            .flush()
+            .map(|()| {
+                self.breaker.record_success();
+            })
+            .map_err(|error| self.record_failure(error))
+    }
+
+    fn seek(&mut self, position: Duration) -> Result<(), NativeFramePipelineError> {
+        self.ensure_enabled("seekPacketSource")?;
+        self.inner
+            .seek(position)
+            .map(|()| {
+                self.breaker.record_success();
+            })
+            .map_err(|error| self.record_failure(error))
+    }
+
+    fn close(&mut self) -> Result<(), NativeFramePipelineError> {
+        self.inner.close()
+    }
+}
+
+struct ProtectedNativeFrameDecoderAdapter {
+    inner: Box<dyn NativeFrameDecoderAdapter>,
+    breaker: PluginBreakerState,
+}
+
+impl ProtectedNativeFrameDecoderAdapter {
+    fn new(inner: Box<dyn NativeFrameDecoderAdapter>) -> Self {
+        Self {
+            inner,
+            breaker: PluginBreakerState::new(PluginBudgetPolicy::default()),
+        }
+    }
+
+    fn disabled_error(operation: &'static str) -> NativeFramePipelineError {
+        NativeFramePipelineError::new(
+            operation,
+            "native-frame decoder disabled after repeated adapter failures",
+        )
+    }
+
+    fn ensure_enabled(&self, operation: &'static str) -> Result<(), NativeFramePipelineError> {
+        if self.breaker.is_disabled() {
+            Err(Self::disabled_error(operation))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn record_failure(&mut self, error: NativeFramePipelineError) -> NativeFramePipelineError {
+        let _ = self.breaker.record_failure();
+        error
+    }
+}
+
+impl NativeFrameDecoderAdapter for ProtectedNativeFrameDecoderAdapter {
+    fn send_packet(
+        &mut self,
+        packet: &DecoderPacket,
+        data: &[u8],
+    ) -> Result<DecoderPacketResult, NativeFramePipelineError> {
+        self.ensure_enabled("sendDecoderPacket")?;
+        self.inner
+            .send_packet(packet, data)
+            .map(|result| {
+                self.breaker.record_success();
+                result
+            })
+            .map_err(|error| self.record_failure(error))
+    }
+
+    fn receive_native_frame(
+        &mut self,
+    ) -> Result<DecoderReceiveNativeFrameOutput, NativeFramePipelineError> {
+        self.ensure_enabled("receiveDecoderFrame")?;
+        let output = self
+            .inner
+            .receive_native_frame()
+            .map_err(|error| self.record_failure(error))?;
+        self.breaker.record_success();
+        Ok(output)
+    }
+
+    fn release_native_frame(
+        &mut self,
+        frame: DecoderNativeFrame,
+        presented: bool,
+    ) -> Result<(), NativeFramePipelineError> {
+        self.inner
+            .release_native_frame(frame, presented)
+            .map(|()| {
+                self.breaker.record_success();
+            })
+            .map_err(|error| self.record_failure(error))
+    }
+
+    fn flush(&mut self) -> Result<(), NativeFramePipelineError> {
+        self.inner
+            .flush()
+            .map(|()| {
+                self.breaker.record_success();
+            })
+            .map_err(|error| self.record_failure(error))
+    }
+
+    fn close(&mut self) -> Result<(), NativeFramePipelineError> {
+        self.inner.close()
+    }
+}
+
 pub trait NativeFramePresenterAdapter: Send {
     fn submit_frame(
         &mut self,
@@ -1259,8 +1689,8 @@ impl NativeFramePipelineCore {
         presenter: Option<Box<dyn NativeFramePresenterAdapter>>,
     ) -> Self {
         let mut core = Self::new(config);
-        core.packet_source = packet_source;
-        core.decoder = decoder;
+        core.packet_source = packet_source.map(protect_native_frame_packet_source_adapter);
+        core.decoder = decoder.map(protect_native_frame_decoder_adapter);
         core.processor_chain = processor_chain;
         core.presenter = presenter;
         core.refresh_lifecycle_state();
@@ -1336,12 +1766,12 @@ impl NativeFramePipelineCore {
     }
 
     pub fn set_packet_source(&mut self, packet_source: Box<dyn NativeFramePacketSourceAdapter>) {
-        self.packet_source = Some(packet_source);
+        self.packet_source = Some(protect_native_frame_packet_source_adapter(packet_source));
         self.refresh_lifecycle_state();
     }
 
     pub fn set_decoder(&mut self, decoder: Box<dyn NativeFrameDecoderAdapter>) {
-        self.decoder = Some(decoder);
+        self.decoder = Some(protect_native_frame_decoder_adapter(decoder));
         self.refresh_lifecycle_state();
     }
 
@@ -2063,6 +2493,10 @@ mod tests {
         submitted_handles: Vec<usize>,
         flush_count: usize,
         close_count: usize,
+        submit_error: Option<String>,
+        submit_queue_depth: Option<u32>,
+        submit_in_flight_frames: Option<u32>,
+        receive_error: Option<String>,
         release_error: Option<String>,
         close_error: Option<String>,
     }
@@ -2090,12 +2524,15 @@ mod tests {
         ) -> Result<FrameProcessorSubmitResult, player_plugin::FrameProcessorError> {
             let mut state = self.state.lock().expect("state");
             state.submitted_handles.push(frame.handle);
+            if let Some(message) = state.submit_error.clone() {
+                return Err(player_plugin::FrameProcessorError::internal(message));
+            }
             Ok(FrameProcessorSubmitResult {
                 status: state
                     .submit_status
                     .unwrap_or(FrameProcessorSubmitStatus::Accepted),
-                queue_depth: Some(3),
-                in_flight_frames: Some(2),
+                queue_depth: state.submit_queue_depth.or(Some(1)),
+                in_flight_frames: state.submit_in_flight_frames.or(Some(1)),
                 message: Some("test submit".to_owned()),
             })
         }
@@ -2103,10 +2540,11 @@ mod tests {
         fn receive_frame(
             &mut self,
         ) -> Result<FrameProcessorReceiveOutput, player_plugin::FrameProcessorError> {
-            Ok(self
-                .state
-                .lock()
-                .expect("state")
+            let mut state = self.state.lock().expect("state");
+            if let Some(message) = state.receive_error.clone() {
+                return Err(player_plugin::FrameProcessorError::internal(message));
+            }
+            Ok(state
                 .receive_outputs
                 .pop_front()
                 .unwrap_or(FrameProcessorReceiveOutput::Pending))
@@ -2306,6 +2744,23 @@ mod tests {
         })
     }
 
+    fn frame_processor_warnings(
+        events: &[PlayerRuntimeEvent],
+        kind: FrameProcessorWarningKind,
+    ) -> Vec<&FrameProcessorWarning> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                PlayerRuntimeEvent::Warning(PlayerRuntimeWarning::FrameProcessor(warning))
+                    if warning.kind == kind =>
+                {
+                    Some(warning)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn prefer_mode_uses_processed_frame_and_releases_output() {
         let input = decoder_frame(10, Some(33_000));
@@ -2378,6 +2833,8 @@ mod tests {
     fn backpressure_bypasses_and_reports_queue_state() {
         let state = Arc::new(Mutex::new(TestState {
             submit_status: Some(FrameProcessorSubmitStatus::Backpressure),
+            submit_queue_depth: Some(3),
+            submit_in_flight_frames: Some(2),
             ..TestState::default()
         }));
         let mut chain = chain(FrameProcessorMode::PreferProcessed, state);
@@ -2400,6 +2857,75 @@ mod tests {
                     && warning.queue_depth == Some(3)
                     && warning.in_flight_frames == Some(2)
         )));
+    }
+
+    #[test]
+    fn repeated_processor_failures_disable_and_prefer_bypasses_once() {
+        let state = Arc::new(Mutex::new(TestState {
+            submit_error: Some("submit exploded".to_owned()),
+            ..TestState::default()
+        }));
+        let mut chain = chain(FrameProcessorMode::PreferProcessed, state.clone());
+
+        for index in 0..5 {
+            let input = decoder_frame(30 + index, Some(300_000 + index as i64));
+            let processed = chain
+                .process(input.clone(), &mut TestObserver::default())
+                .expect("prefer mode should bypass plugin failures");
+            assert_eq!(processed.presentation_frame.handle, input.handle);
+        }
+        let after_disabled = decoder_frame(40, Some(400_000));
+        let processed = chain
+            .process(after_disabled.clone(), &mut TestObserver::default())
+            .expect("disabled processor should bypass without another plugin call");
+
+        assert_eq!(processed.presentation_frame.handle, after_disabled.handle);
+        assert_eq!(
+            state.lock().expect("state").submitted_handles.len(),
+            5,
+            "disabled pre-check should skip the sixth submit"
+        );
+        assert_eq!(chain.metrics().disabled_processor_count, 1);
+        let events = chain.drain_events();
+        let disabled = frame_processor_warnings(&events, FrameProcessorWarningKind::Disabled);
+        assert_eq!(disabled.len(), 1);
+        assert_eq!(
+            disabled[0].policy_action,
+            FrameProcessorPolicyAction::DisableProcessor
+        );
+    }
+
+    #[test]
+    fn disabled_processor_fails_require_mode_before_next_submit() {
+        let state = Arc::new(Mutex::new(TestState {
+            submit_error: Some("submit exploded".to_owned()),
+            ..TestState::default()
+        }));
+        let mut chain = chain(FrameProcessorMode::RequireProcessed, state.clone());
+
+        for index in 0..5 {
+            let error = chain
+                .process(
+                    decoder_frame(50 + index, Some(500_000 + index as i64)),
+                    &mut TestObserver::default(),
+                )
+                .expect_err("require mode should fail plugin errors");
+            assert!(error.error.to_string().contains("submit exploded"));
+        }
+        let error = chain
+            .process(
+                decoder_frame(60, Some(600_000)),
+                &mut TestObserver::default(),
+            )
+            .expect_err("disabled strict processor should fail before submit");
+
+        assert!(error.error.to_string().contains("disabled by policy"));
+        assert_eq!(state.lock().expect("state").submitted_handles.len(), 5);
+        let events = chain.drain_events();
+        assert_eq!(
+            frame_processor_warnings(&events, FrameProcessorWarningKind::Disabled).len(),
+            1
+        );
     }
 
     #[test]
@@ -2473,6 +2999,38 @@ mod tests {
     }
 
     #[test]
+    fn over_budget_output_is_released_and_bypassed() {
+        let input = decoder_frame(21, Some(120_000));
+        let state = Arc::new(Mutex::new(TestState {
+            submit_queue_depth: Some(2),
+            receive_outputs: VecDeque::from([output_frame(&input, 4_000, true, None)]),
+            ..TestState::default()
+        }));
+        let mut chain = chain(FrameProcessorMode::PreferProcessed, state.clone());
+        let mut observer = TestObserver::default();
+
+        let processed = chain
+            .process(input, &mut observer)
+            .expect("over-budget output should fall back to the decoder frame");
+
+        assert_eq!(processed.presentation_frame.handle, 21);
+        assert!(processed.processor_outputs.is_empty());
+        assert_eq!(chain.metrics().backpressure_count, 1);
+        assert_eq!(chain.metrics().dropped_output_count, 1);
+        assert_eq!(observer.backpressure, 1);
+        assert_eq!(observer.dropped_outputs, 1);
+        assert_eq!(state.lock().expect("state").released_handles, vec![4_021]);
+        let events = chain.drain_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PlayerRuntimeEvent::Warning(PlayerRuntimeWarning::FrameProcessor(warning))
+                if warning.kind == FrameProcessorWarningKind::OutputDropped
+                    && warning.policy_action == FrameProcessorPolicyAction::DropOutput
+                    && warning.queue_depth == Some(2)
+        )));
+    }
+
+    #[test]
     fn strict_deadline_failure_releases_output_and_returns_decoder_frame() {
         let input = decoder_frame(12, Some(99_000));
         let state = Arc::new(Mutex::new(TestState {
@@ -2487,6 +3045,62 @@ mod tests {
 
         assert_eq!(error.decoder_frame.handle, 12);
         assert_eq!(state.lock().expect("state").released_handles, vec![3_012]);
+    }
+
+    #[test]
+    fn repeated_deadline_misses_disable_and_skip_later_submits() {
+        let mut receive_outputs = VecDeque::new();
+        for index in 0..5 {
+            let input = decoder_frame(70 + index, Some(700_000 + index as i64));
+            receive_outputs.push_back(output_frame(&input, 1_000, false, Some(17_000)));
+        }
+        receive_outputs.push_back(output_frame(
+            &decoder_frame(80, Some(800_000)),
+            1_000,
+            false,
+            Some(17_000),
+        ));
+        let state = Arc::new(Mutex::new(TestState {
+            receive_outputs,
+            ..TestState::default()
+        }));
+        let mut chain = chain(FrameProcessorMode::PreferProcessed, state.clone());
+
+        for index in 0..5 {
+            let input = decoder_frame(70 + index, Some(700_000 + index as i64));
+            let processed = chain
+                .process(input.clone(), &mut TestObserver::default())
+                .expect("deadline miss should remain recoverable in prefer mode");
+            if index < 4 {
+                assert_ne!(processed.presentation_frame.handle, input.handle);
+            } else {
+                assert_eq!(
+                    processed.presentation_frame.handle, input.handle,
+                    "the miss that trips the breaker should bypass original"
+                );
+            }
+        }
+        let after_disabled = decoder_frame(81, Some(810_000));
+        let processed = chain
+            .process(after_disabled.clone(), &mut TestObserver::default())
+            .expect("disabled processor should bypass later frames");
+
+        assert_eq!(processed.presentation_frame.handle, after_disabled.handle);
+        assert_eq!(state.lock().expect("state").submitted_handles.len(), 5);
+        assert_eq!(chain.metrics().deadline_miss_count, 5);
+        assert_eq!(chain.metrics().disabled_processor_count, 1);
+
+        let events = chain.drain_events();
+        let deadline = frame_processor_warnings(&events, FrameProcessorWarningKind::DeadlineMissed);
+        assert_eq!(deadline.len(), 5);
+        assert_eq!(deadline[4].consecutive_miss_count, Some(5));
+        assert_eq!(
+            deadline[4].policy_action,
+            FrameProcessorPolicyAction::DisableProcessor
+        );
+        let disabled = frame_processor_warnings(&events, FrameProcessorWarningKind::Disabled);
+        assert_eq!(disabled.len(), 1);
+        assert_eq!(disabled[0].consecutive_miss_count, Some(5));
     }
 
     #[test]
@@ -2541,6 +3155,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct PipelineTestState {
         packet_reads: VecDeque<NativeFramePacketRead>,
+        packet_read_error: Option<String>,
         selected_video_stream_index: Option<u32>,
         sent_packet_streams: Vec<u32>,
         released_frames: Vec<(usize, bool)>,
@@ -2552,6 +3167,9 @@ mod tests {
         presenter_accepts: bool,
         presenter_requires_host_release: bool,
         decoder_accepts_packets: bool,
+        decoder_send_error: Option<String>,
+        decoder_receive_error: Option<String>,
+        decoder_release_error: Option<String>,
     }
 
     #[derive(Debug)]
@@ -2568,10 +3186,11 @@ mod tests {
         }
 
         fn read_packet(&mut self) -> Result<NativeFramePacketRead, NativeFramePipelineError> {
-            Ok(self
-                .state
-                .lock()
-                .expect("pipeline state")
+            let mut state = self.state.lock().expect("pipeline state");
+            if let Some(message) = state.packet_read_error.clone() {
+                return Err(NativeFramePipelineError::new("readPacket", message));
+            }
+            Ok(state
                 .packet_reads
                 .pop_front()
                 .unwrap_or(NativeFramePacketRead::NeedMoreData { message: None }))
@@ -2618,6 +3237,9 @@ mod tests {
         ) -> Result<DecoderPacketResult, NativeFramePipelineError> {
             let mut state = self.state.lock().expect("pipeline state");
             state.sent_packet_streams.push(packet.stream_index);
+            if let Some(message) = state.decoder_send_error.clone() {
+                return Err(NativeFramePipelineError::new("sendDecoderPacket", message));
+            }
             Ok(DecoderPacketResult {
                 accepted: state.decoder_accepts_packets,
             })
@@ -2626,10 +3248,14 @@ mod tests {
         fn receive_native_frame(
             &mut self,
         ) -> Result<DecoderReceiveNativeFrameOutput, NativeFramePipelineError> {
-            Ok(self
-                .state
-                .lock()
-                .expect("pipeline state")
+            let mut state = self.state.lock().expect("pipeline state");
+            if let Some(message) = state.decoder_receive_error.clone() {
+                return Err(NativeFramePipelineError::new(
+                    "receiveDecoderFrame",
+                    message,
+                ));
+            }
+            Ok(state
                 .receive_outputs
                 .pop_front()
                 .unwrap_or(DecoderReceiveNativeFrameOutput::NeedMoreInput))
@@ -2640,11 +3266,14 @@ mod tests {
             frame: DecoderNativeFrame,
             presented: bool,
         ) -> Result<(), NativeFramePipelineError> {
-            self.state
-                .lock()
-                .expect("pipeline state")
-                .released_frames
-                .push((frame.handle, presented));
+            let mut state = self.state.lock().expect("pipeline state");
+            if let Some(message) = state.decoder_release_error.clone() {
+                return Err(NativeFramePipelineError::new(
+                    "releaseDecoderFrame",
+                    message,
+                ));
+            }
+            state.released_frames.push((frame.handle, presented));
             Ok(())
         }
 
@@ -2857,5 +3486,163 @@ mod tests {
             state.lock().expect("pipeline state").released_frames,
             vec![(42, false)]
         );
+    }
+
+    #[test]
+    fn protected_packet_source_need_more_data_does_not_trip_breaker() {
+        let state = Arc::new(Mutex::new(PipelineTestState {
+            packet_reads: VecDeque::from([
+                NativeFramePacketRead::NeedMoreData {
+                    message: Some("warming".to_owned()),
+                },
+                NativeFramePacketRead::NeedMoreData {
+                    message: Some("still warming".to_owned()),
+                },
+                NativeFramePacketRead::NeedMoreData { message: None },
+                NativeFramePacketRead::NeedMoreData { message: None },
+                NativeFramePacketRead::NeedMoreData { message: None },
+                NativeFramePacketRead::NeedMoreData { message: None },
+            ]),
+            presenter_accepts: true,
+            decoder_accepts_packets: true,
+            ..PipelineTestState::default()
+        }));
+        let mut core = pipeline_core(state);
+
+        for _ in 0..6 {
+            let output = core.advance().expect("need-more-data is recoverable");
+            assert_eq!(output.status, NativeFramePipelineFrameStatus::Pending);
+        }
+    }
+
+    #[test]
+    fn protected_packet_source_disables_after_repeated_read_errors() {
+        let state = Arc::new(Mutex::new(PipelineTestState {
+            packet_read_error: Some("read exploded".to_owned()),
+            presenter_accepts: true,
+            decoder_accepts_packets: true,
+            ..PipelineTestState::default()
+        }));
+        let mut core = pipeline_core(state);
+
+        for _ in 0..5 {
+            let error = core.advance().expect_err("read error should propagate");
+            assert!(error.message.contains("read exploded"));
+        }
+        let error = core
+            .advance()
+            .expect_err("disabled packet source should short-circuit");
+
+        assert_eq!(error.operation, "readPacket");
+        assert!(error.message.contains("packet source disabled"));
+    }
+
+    #[test]
+    fn protected_decoder_disables_after_repeated_send_errors() {
+        let state = Arc::new(Mutex::new(PipelineTestState {
+            packet_reads: VecDeque::from([source_packet(
+                SourceNormalizerPacketMediaKind::Video,
+                0,
+            )]),
+            presenter_accepts: true,
+            decoder_accepts_packets: true,
+            decoder_send_error: Some("send exploded".to_owned()),
+            ..PipelineTestState::default()
+        }));
+        let mut core = pipeline_core(state.clone());
+        core.set_output_target_attached(true);
+
+        for _ in 0..5 {
+            let error = core.advance().expect_err("send error should propagate");
+            assert!(error.message.contains("send exploded"));
+        }
+        let error = core
+            .advance()
+            .expect_err("disabled decoder should short-circuit sends");
+
+        assert_eq!(error.operation, "sendDecoderPacket");
+        assert!(error.message.contains("decoder disabled"));
+        assert_eq!(
+            state
+                .lock()
+                .expect("pipeline state")
+                .sent_packet_streams
+                .len(),
+            5
+        );
+    }
+
+    #[test]
+    fn successful_decoder_sends_reset_receive_failures() {
+        let packets = (0..6)
+            .map(|_| source_packet(SourceNormalizerPacketMediaKind::Video, 0))
+            .collect();
+        let state = Arc::new(Mutex::new(PipelineTestState {
+            packet_reads: packets,
+            presenter_accepts: true,
+            decoder_accepts_packets: true,
+            decoder_receive_error: Some("receive exploded".to_owned()),
+            ..PipelineTestState::default()
+        }));
+        let mut core = pipeline_core(state.clone());
+        core.set_output_target_attached(true);
+
+        for _ in 0..6 {
+            let error = core.advance().expect_err("receive error should propagate");
+            assert!(error.message.contains("receive exploded"));
+        }
+
+        assert_eq!(
+            state
+                .lock()
+                .expect("pipeline state")
+                .sent_packet_streams
+                .len(),
+            6
+        );
+    }
+
+    #[test]
+    fn protected_decoder_successes_reset_consecutive_failure_count() {
+        let state = Arc::new(Mutex::new(PipelineTestState {
+            decoder_accepts_packets: true,
+            ..PipelineTestState::default()
+        }));
+        let mut decoder = ProtectedNativeFrameDecoderAdapter::new(Box::new(PipelineDecoder {
+            state: state.clone(),
+        }));
+        let packet = DecoderPacket::default();
+
+        for _ in 0..6 {
+            state.lock().expect("pipeline state").decoder_send_error =
+                Some("send exploded".to_owned());
+            let error = decoder
+                .send_packet(&packet, &[])
+                .expect_err("send error should propagate");
+            assert!(error.message.contains("send exploded"));
+
+            state.lock().expect("pipeline state").decoder_send_error = None;
+            decoder
+                .send_packet(&packet, &[])
+                .expect("successful send should reset failures");
+
+            state.lock().expect("pipeline state").decoder_receive_error =
+                Some("receive exploded".to_owned());
+            let error = decoder
+                .receive_native_frame()
+                .expect_err("receive error should propagate");
+            assert!(error.message.contains("receive exploded"));
+
+            state.lock().expect("pipeline state").decoder_receive_error = None;
+            assert_eq!(
+                decoder
+                    .receive_native_frame()
+                    .expect("need-more-input should reset failures"),
+                DecoderReceiveNativeFrameOutput::NeedMoreInput
+            );
+        }
+
+        assert!(!decoder.breaker.is_disabled());
+        assert_eq!(decoder.breaker.consecutive_failures(), 0);
     }
 }

@@ -18,6 +18,8 @@ directly.
 | Live streams                                | ✅                                 |
 | Live DVR                                    | ✅                                 |
 | Track selection (video / audio / subtitles) | ✅                                 |
+| External text subtitles                       | ✅ SRT / WebVTT / SSA through Media3 |
+| Subtitle visibility / font scale             | ✅ Native overlay; scale `0.5...3.0` |
 | Adaptive bitrate (ABR)                      | ✅ Auto / Constrained / FixedTrack |
 | Buffering / retry / cache policy            | ✅                                 |
 | Download management                         | ✅                                 |
@@ -163,7 +165,7 @@ rights, and track OpenSSL / libxml2 notices when those libraries are included.
 The repository-level release checklist is in
 [THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md).
 
-## Optional Mobile Plugin Diagnostics
+## Optional Mobile Plugin Routes
 
 `createPlayer` forwards
 `VesperSourceNormalizerConfiguration` and
@@ -180,11 +182,14 @@ package `vesper-player-kit-source-normalizer-ffmpeg` must also package the
 matching `vesper-player-kit-ffmpeg-runtime`; the SourceNormalizer AAR carries
 plugin metadata/profile hash but must not contain FFmpeg runtime `.so` files.
 
-For FrameProcessor v1,
-`VesperPlayerKitFrameProcessorDiagnostic-android-<abi>.aar` is a diagnostics
-shell only. It can report capability diagnostics, but it never opens frame
-sessions, processes frames, or participates in Android playback. Mobile Decoder
-artifacts remain deferred.
+For FrameProcessor v1, `diagnosticsOnly` reports availability without opening
+frame sessions or marking playback participation. Android playback participation
+requires the explicit SDK-managed native-frame route: pass
+`VesperNativeFramePipelineConfiguration` with `preferNativeFrame` or
+`requireNativeFrame`, package the SourceNormalizer packet input, the
+`vesper-player-kit-decoder-mediacodec` decoder plugin, and any optional
+FrameProcessor plugin paths. The normal ExoPlayer / system-player route remains
+unchanged and does not expose decoded frames to FrameProcessor plugins.
 
 ## Minimum Requirements
 
@@ -197,3 +202,10 @@ artifacts remain deferred.
 - Main package: `vesper_player`
 - Platform contract: `vesper_player_platform_interface`
 - Android host kit source: `lib/android/vesper-player-kit`
+
+## Subtitle Notes
+
+`VesperPlayerSource.subtitleConfigurations` is mapped to the Android host kit,
+and `setSubtitleStyle` is a real MethodChannel command rather than a no-op. Text
+cues render in the native surface host; frames are never sent through Dart.
+HTTP `.flv` URLs remain progressive unless `VesperPlayerSource.flvLive` is used.

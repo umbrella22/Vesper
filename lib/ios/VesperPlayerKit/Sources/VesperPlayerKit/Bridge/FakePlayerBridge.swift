@@ -327,6 +327,8 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func setSubtitleTrackSelection(_ selection: VesperTrackSelection) {}
 
+    func setSubtitleStyle(_ style: VesperSubtitleStyle) {}
+
     func setAbrPolicy(_ policy: VesperAbrPolicy) {}
 
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {

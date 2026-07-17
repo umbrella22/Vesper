@@ -14,6 +14,12 @@ pub enum MediaSourceProtocol {
     Progressive,
     Hls,
     Dash,
+    /// Real-Time Messaging Protocol live stream.
+    Rtmp,
+    /// Real-Time Streaming Protocol live stream.
+    Rtsp,
+    /// HTTP-FLV live stream.
+    Flv,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +201,39 @@ pub enum VideoPixelFormat {
     Yuv420p,
 }
 
+/// Minimal subtitle styling options.
+///
+/// The stable cross-platform contract is intentionally small: font scale and
+/// visibility. Per-cue typography, animation, and layout remain platform- or
+/// content-specific concerns.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MediaSubtitleStyle {
+    /// Text scale factor relative to the platform default. `1.0` keeps the
+    /// platform default; `0.0` is treated as `1.0`.
+    pub font_scale: f32,
+    /// Whether subtitle rendering is visible.
+    pub visible: bool,
+}
+
+impl Default for MediaSubtitleStyle {
+    fn default() -> Self {
+        Self {
+            font_scale: 1.0,
+            visible: true,
+        }
+    }
+}
+
+impl MediaSubtitleStyle {
+    /// Builds a style with the given font scale and visibility enabled.
+    pub fn with_scale(font_scale: f32) -> Self {
+        Self {
+            font_scale,
+            visible: true,
+        }
+    }
+}
+
 fn classify_media_source_kind(uri: &str) -> MediaSourceKind {
     if is_loopback_http_uri(uri)
         || uri.starts_with("file://")
@@ -232,6 +271,14 @@ fn classify_media_source_protocol(uri: &str) -> MediaSourceProtocol {
 
     if is_likely_local_file_path(uri) {
         return MediaSourceProtocol::File;
+    }
+
+    if lower.starts_with("rtmp://") || lower.starts_with("rtmps://") {
+        return MediaSourceProtocol::Rtmp;
+    }
+
+    if lower.starts_with("rtsp://") || lower.starts_with("rtsps://") {
+        return MediaSourceProtocol::Rtsp;
     }
 
     if lower_path.ends_with(".m3u8") {
@@ -287,8 +334,8 @@ fn is_likely_local_file_path(uri: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MediaAbrMode, MediaSource, MediaSourceKind, MediaSourceProtocol, MediaTrackSelection,
-        MediaTrackSelectionMode, MediaTrackSelectionSnapshot,
+        MediaAbrMode, MediaSource, MediaSourceKind, MediaSourceProtocol, MediaSubtitleStyle,
+        MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot,
     };
 
     #[test]
@@ -332,6 +379,35 @@ mod tests {
 
         let progressive = MediaSource::new("https://example.com/video.mp4");
         assert_eq!(progressive.protocol(), MediaSourceProtocol::Progressive);
+    }
+
+    #[test]
+    fn classifies_live_streaming_protocols() {
+        let rtmp = MediaSource::new("rtmp://example.com/live/stream");
+        assert_eq!(rtmp.protocol(), MediaSourceProtocol::Rtmp);
+
+        let rtmps = MediaSource::new("rtmps://example.com/live/stream");
+        assert_eq!(rtmps.protocol(), MediaSourceProtocol::Rtmp);
+
+        let rtsp = MediaSource::new("rtsp://example.com/live/stream");
+        assert_eq!(rtsp.protocol(), MediaSourceProtocol::Rtsp);
+
+        let flv = MediaSource::new("https://example.com/video/movie.flv");
+        assert_eq!(flv.protocol(), MediaSourceProtocol::Progressive);
+
+        let flv_with_query = MediaSource::new("https://example.com/video/movie.flv?token=abc");
+        assert_eq!(flv_with_query.protocol(), MediaSourceProtocol::Progressive);
+    }
+
+    #[test]
+    fn subtitle_style_defaults_and_helpers() {
+        let default = MediaSubtitleStyle::default();
+        assert_eq!(default.font_scale, 1.0);
+        assert!(default.visible);
+
+        let scaled = MediaSubtitleStyle::with_scale(1.5);
+        assert_eq!(scaled.font_scale, 1.5);
+        assert!(scaled.visible);
     }
 
     #[test]

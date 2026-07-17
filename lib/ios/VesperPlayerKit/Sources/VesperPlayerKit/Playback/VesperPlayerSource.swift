@@ -12,6 +12,9 @@ public enum VesperPlayerSourceProtocol: String, Equatable, Codable {
     case progressive
     case hls
     case dash
+    case rtmp
+    case rtsp
+    case flv
 }
 
 public struct VesperPlayerDrmConfiguration: Equatable, Codable {
@@ -46,6 +49,13 @@ public struct VesperPlayerSource: Equatable, Codable {
     public let `protocol`: VesperPlayerSourceProtocol
     public let headers: [String: String]
     public let drmConfiguration: VesperPlayerDrmConfiguration?
+    /// Optional side-loaded external subtitle tracks (SRT/ASS/WebVTT URIs).
+    ///
+    /// Unlike Android (where ExoPlayer's TextRenderer consumes them
+    /// natively), AVPlayer does not parse standalone SRT files. The iOS host
+    /// kit renders side-loaded subtitles through a dedicated overlay; see
+    /// `VesperSubtitleOverlayRenderer`.
+    public let subtitleConfigurations: [VesperSubtitleSideLoad]
 
     public init(
         uri: String,
@@ -54,6 +64,7 @@ public struct VesperPlayerSource: Equatable, Codable {
         protocol: VesperPlayerSourceProtocol,
         headers: [String: String] = [:],
         drmConfiguration: VesperPlayerDrmConfiguration? = nil,
+        subtitleConfigurations: [VesperSubtitleSideLoad] = []
     ) {
         self.uri = uri
         self.label = label
@@ -61,6 +72,7 @@ public struct VesperPlayerSource: Equatable, Codable {
         self.protocol = `protocol`
         self.headers = headers
         self.drmConfiguration = drmConfiguration
+        self.subtitleConfigurations = subtitleConfigurations
     }
 
     public static func localFile(url: URL, label: String? = nil) -> VesperPlayerSource {
@@ -140,6 +152,14 @@ public struct VesperPlayerSource: Equatable, Codable {
             .split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
             .first
             .map(String.init) ?? lowercasedPath
+        if let scheme = url.scheme?.lowercased() {
+            if scheme == "rtmp" || scheme == "rtmps" {
+                return .rtmp
+            }
+            if scheme == "rtsp" || scheme == "rtsps" {
+                return .rtsp
+            }
+        }
         if normalizedPath.hasSuffix(".m3u8") {
             return .hls
         }

@@ -21,6 +21,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     var currentSource: VesperPlayerSource?
     var player: AVPlayer?
+    let subtitleOverlayRenderer = VesperSubtitleOverlayRenderer()
+    var currentSubtitleStyle = VesperSubtitleStyle.default
     var currentDashSession: VesperDashSession?
     var dashResourceLoaderDelegate: VesperDashResourceLoaderDelegate?
     var currentSourceNormalizerResource: VesperSourceNormalizerResourceOpenResult?

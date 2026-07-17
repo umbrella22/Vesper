@@ -173,7 +173,11 @@ final class VesperDownloadSource {
       VesperPlayerSourceProtocol.content ||
       VesperPlayerSourceProtocol.progressive =>
         VesperDownloadContentFormat.singleFile,
-      VesperPlayerSourceProtocol.unknown => VesperDownloadContentFormat.unknown,
+      VesperPlayerSourceProtocol.rtmp ||
+      VesperPlayerSourceProtocol.rtsp ||
+      VesperPlayerSourceProtocol.flv ||
+      VesperPlayerSourceProtocol.unknown =>
+        VesperDownloadContentFormat.unknown,
     };
   }
 }

@@ -1472,6 +1472,9 @@ impl From<PlayerFfiMediaSourceProtocol> for MediaSourceProtocol {
             PlayerFfiMediaSourceProtocol::Progressive => Self::Progressive,
             PlayerFfiMediaSourceProtocol::Hls => Self::Hls,
             PlayerFfiMediaSourceProtocol::Dash => Self::Dash,
+            PlayerFfiMediaSourceProtocol::Rtmp => Self::Rtmp,
+            PlayerFfiMediaSourceProtocol::Rtsp => Self::Rtsp,
+            PlayerFfiMediaSourceProtocol::Flv => Self::Flv,
         }
     }
 }
@@ -1496,6 +1499,13 @@ pub(crate) fn media_source_protocol_from_u32(
         value if value == PlayerFfiMediaSourceProtocol::Dash as u32 => {
             Ok(MediaSourceProtocol::Dash)
         }
+        value if value == PlayerFfiMediaSourceProtocol::Rtmp as u32 => {
+            Ok(MediaSourceProtocol::Rtmp)
+        }
+        value if value == PlayerFfiMediaSourceProtocol::Rtsp as u32 => {
+            Ok(MediaSourceProtocol::Rtsp)
+        }
+        value if value == PlayerFfiMediaSourceProtocol::Flv as u32 => Ok(MediaSourceProtocol::Flv),
         _ => Err(owned_api_error(
             PlayerFfiErrorCode::InvalidArgument,
             &format!("source_protocol had invalid value {value}"),

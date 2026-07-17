@@ -8,6 +8,7 @@ final class VesperPlayerSource {
     required this.protocol,
     this.headers = const <String, String>{},
     this.drmConfiguration,
+    this.subtitleConfigurations = const <VesperSubtitleSideLoad>[],
   });
 
   factory VesperPlayerSource.local({
@@ -89,6 +90,59 @@ final class VesperPlayerSource {
     );
   }
 
+  /// RTMP / RTMPS live stream.
+  ///
+  /// On iOS this protocol is not supported by AVPlayer and the host kit will
+  /// surface a capability error. On Android it is routed through the Media3
+  /// live source once available.
+  factory VesperPlayerSource.rtmp({
+    required String uri,
+    String? label,
+    Map<String, String> headers = const <String, String>{},
+  }) {
+    return VesperPlayerSource.remote(
+      uri: uri,
+      label: label,
+      protocol: VesperPlayerSourceProtocol.rtmp,
+      headers: headers,
+    );
+  }
+
+  /// RTSP / RTSPS live stream.
+  ///
+  /// On iOS this protocol is not supported by AVPlayer and the host kit will
+  /// surface a capability error.
+  factory VesperPlayerSource.rtsp({
+    required String uri,
+    String? label,
+    Map<String, String> headers = const <String, String>{},
+  }) {
+    return VesperPlayerSource.remote(
+      uri: uri,
+      label: label,
+      protocol: VesperPlayerSourceProtocol.rtsp,
+      headers: headers,
+    );
+  }
+
+  /// HTTP-FLV live stream.
+  ///
+  /// On iOS this protocol is not supported by AVPlayer and the host kit will
+  /// surface a capability error. On Android it is routed through the Media3
+  /// FLV source.
+  factory VesperPlayerSource.flvLive({
+    required String uri,
+    String? label,
+    Map<String, String> headers = const <String, String>{},
+  }) {
+    return VesperPlayerSource.remote(
+      uri: uri,
+      label: label,
+      protocol: VesperPlayerSourceProtocol.flv,
+      headers: headers,
+    );
+  }
+
   factory VesperPlayerSource.fromMap(Map<Object?, Object?> map) {
     final uri = map['uri'] as String? ?? '';
     return VesperPlayerSource(
@@ -110,6 +164,8 @@ final class VesperPlayerSource {
       drmConfiguration: VesperPlayerDrmConfiguration.tryFromMap(
         _rawMap(map['drmConfiguration']),
       ),
+      subtitleConfigurations:
+          _decodeSubtitleSideLoads(map['subtitleConfigurations']),
     );
   }
 
@@ -120,6 +176,9 @@ final class VesperPlayerSource {
   final Map<String, String> headers;
   final VesperPlayerDrmConfiguration? drmConfiguration;
 
+  /// Optional side-loaded external subtitle tracks (SRT/ASS/WebVTT URIs).
+  final List<VesperSubtitleSideLoad> subtitleConfigurations;
+
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'uri': uri,
@@ -129,6 +188,10 @@ final class VesperPlayerSource {
       'headers': headers,
       if (drmConfiguration != null)
         'drmConfiguration': drmConfiguration?.toMap(),
+      if (subtitleConfigurations.isNotEmpty)
+        'subtitleConfigurations': subtitleConfigurations
+            .map((VesperSubtitleSideLoad sideLoad) => sideLoad.toMap())
+            .toList(),
     };
   }
 
@@ -146,6 +209,12 @@ final class VesperPlayerSource {
   static VesperPlayerSourceProtocol _inferRemoteProtocol(String uri) {
     final normalized = uri.toLowerCase();
     final withoutQuery = normalized.split('#').first.split('?').first;
+    if (normalized.startsWith('rtmp://') || normalized.startsWith('rtmps://')) {
+      return VesperPlayerSourceProtocol.rtmp;
+    }
+    if (normalized.startsWith('rtsp://') || normalized.startsWith('rtsps://')) {
+      return VesperPlayerSourceProtocol.rtsp;
+    }
     if (withoutQuery.endsWith('.m3u8')) {
       return VesperPlayerSourceProtocol.hls;
     }
@@ -208,4 +277,14 @@ final class VesperPlayerDrmConfiguration {
       'multiSession': multiSession,
     };
   }
+}
+
+List<VesperSubtitleSideLoad> _decodeSubtitleSideLoads(
+  Object? raw,
+) {
+  final list = raw is List ? raw : const <Object>[];
+  return list
+      .whereType<Map<Object?, Object?>>()
+      .map(VesperSubtitleSideLoad.fromMap)
+      .toList(growable: false);
 }

@@ -15,6 +15,19 @@ coordination, preload and download planning, DASH bridging, and the public C ABI
 Platform host kits stay responsible for the rendering surface, lifecycle, native
 media stack integration, and platform-specific capability reporting.
 
+## Product Boundary
+
+Vesper targets modern arm64 mobile platforms: Android API 26+ on `arm64-v8a`,
+and iOS 17+ on arm64 devices and Apple Silicon Simulator. This platform floor is
+a product boundary, not a compatibility backlog; older mobile OS versions,
+32-bit Android, Intel Android ABIs, and Intel iOS Simulator are not planned.
+
+The mobile production path remains Media3 on Android and AVPlayer on iOS. Vesper
+does not aim to become a universal FFmpeg-first mobile engine or an ijkplayer
+compatibility layer. Desktop FFmpeg playback, native-frame routes, decoder
+plugins, FrameProcessor, and SourceNormalizer are experimental or optional
+surfaces and do not define mobile release readiness.
+
 ## Start Here
 
 Choose the integration path that matches your app. Read the first document for
@@ -76,6 +89,7 @@ check before exposing advanced controls.
 | DASH (`.mpd`)              | ✅ native                         | ✅ DASH-to-HLS bridge for VOD / live fMP4  | ⚠️ backend-dependent FFmpeg demuxer                                                                                                                 | ✅ Android native / iOS bridge                       |
 | Live / DVR                 | ✅                                | ✅                                         | ✅                                                                                                                                                  | ✅ Android / iOS                                     |
 | Track selection            | ✅ video / audio / subtitles      | ✅ audio / subtitles                       | ✅                                                                                                                                                  | ✅ per-platform semantics                            |
+| External text subtitles    | ⚠️ SRT / WebVTT / SSA via Media3 | ⚠️ bounded SRT / WebVTT / SSA host overlay | ❌ not part of the experimental desktop contract                                                                                                    | ✅ Android / iOS channels                            |
 | ABR `constrained` policy   | ✅                                | ✅ HLS + DASH bridge variant catalogs      | ⚠️ policy DTO only for desktop FFmpeg HLS                                                                                                           | ✅ per-platform semantics                            |
 | ABR `fixedTrack` policy    | ✅ exact                          | ✅ best-effort HLS/DASH pinning on iOS 15+ | ⚠️ policy DTO only for desktop FFmpeg HLS                                                                                                           | ✅ per-platform semantics                            |
 | Resilience policy          | ✅                                | ✅                                         | ✅                                                                                                                                                  | ✅ Android / iOS                                     |
@@ -445,11 +459,11 @@ generation tasks during their own Gradle / Xcode build.
 ## Current Status
 
 Vesper is still evolving and has not yet shipped as a stable 1.0 public SDK.
-Android and iOS host kits have releasable package paths, while the Flutter
-federated packages are still source-distributed from this repository. Desktop
-Flutter packages are not shipped in the current package set. The macOS native
-VideoToolbox native-frame decoder path remains opt-in experimental; FFmpeg
-software fallback is the default desktop route.
+Android and iOS host kits have releasable package paths for the deliberate
+modern arm64 platform boundary, while the Flutter federated packages are still
+source-distributed from this repository. Desktop Flutter packages are not
+shipped in the current package set. Desktop and SDK-managed native-frame paths
+remain experimental and do not block mobile release readiness.
 
 ## License
 

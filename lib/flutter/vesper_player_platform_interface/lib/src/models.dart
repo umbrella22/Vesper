@@ -18,6 +18,7 @@ part 'models/capability/hdr_models.dart';
 part 'models/capability/probe_result_models.dart';
 part 'models/capability/timeline_track_models.dart';
 part 'models/capability/resilience_policy_models.dart';
+part 'models/subtitle_models.dart';
 part 'models/viewport_models.dart';
 part 'models/error_models.dart';
 part 'models/snapshot_models.dart';
@@ -31,6 +32,9 @@ enum VesperPlayerSourceProtocol {
   progressive,
   hls,
   dash,
+  rtmp,
+  rtsp,
+  flv,
 }
 
 enum VesperPlaybackState { ready, playing, paused, finished }

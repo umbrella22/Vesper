@@ -7,6 +7,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
+import androidx.media3.common.text.Cue
 import android.view.ViewGroup
 import androidx.media3.common.C
 import androidx.media3.common.ColorInfo
@@ -405,6 +406,7 @@ internal interface VesperNativeBindings {
     fun currentVideoVariantObservation(): VesperVideoVariantObservation?
     fun currentVideoLayoutInfo(): NativeVideoLayoutInfo?
     fun setOnNativeUpdateListener(listener: (() -> Unit)?)
+    fun setOnSubtitleCuesListener(listener: ((List<Cue>) -> Unit)?) = Unit
     fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind)
     fun detachSurface()
     fun pollSnapshot(): NativeBridgeSnapshot?

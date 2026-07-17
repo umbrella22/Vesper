@@ -134,6 +134,7 @@ internal class VesperNativePlayerBridge(
 
     init {
         installNativeUpdateListener()
+        bindings.setOnSubtitleCuesListener(surfaceHost::updateSubtitleCues)
     }
 
     override fun initialize() = initializeNativeBridge()
@@ -177,6 +178,11 @@ internal class VesperNativePlayerBridge(
 
     override fun setSubtitleTrackSelection(selection: VesperTrackSelection) =
         setNativeSubtitleTrackSelection(selection)
+
+
+    override fun setSubtitleStyle(style: VesperSubtitleStyle) {
+        surfaceHost.updateSubtitleStyle(style)
+    }
 
     override fun setAbrPolicy(policy: VesperAbrPolicy) = setNativeAbrPolicy(policy)
 

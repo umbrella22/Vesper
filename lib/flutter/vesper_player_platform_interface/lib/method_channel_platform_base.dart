@@ -221,6 +221,17 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
   }
 
   @override
+  Future<void> setSubtitleStyle(
+    String playerId,
+    VesperSubtitleStyle style,
+  ) {
+    return _invokeVoid('setSubtitleStyle', <String, Object?>{
+      'playerId': playerId,
+      'style': style.toMap(),
+    });
+  }
+
+  @override
   Future<void> setAbrPolicy(String playerId, VesperAbrPolicy policy) {
     return _invokeVoid('setAbrPolicy', <String, Object?>{
       'playerId': playerId,

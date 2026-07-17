@@ -162,6 +162,16 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
     VesperTrackSelection selection,
   );
 
+  /// Applies minimal subtitle styling (font scale, visibility).
+  ///
+  /// Platforms without subtitle styling must fail explicitly instead of
+  /// silently accepting the request.
+  Future<void> setSubtitleStyle(
+    String playerId,
+    VesperSubtitleStyle style,
+  ) async =>
+      throw VesperUnsupportedError('Subtitle styling is not supported.');
+
   Future<void> setAbrPolicy(String playerId, VesperAbrPolicy policy);
 
   Future<void> setResiliencePolicy(

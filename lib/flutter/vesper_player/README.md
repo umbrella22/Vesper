@@ -28,9 +28,10 @@ across platforms.
 | System playback controls | ✅ MediaSession notification + FGS           | ✅ Now Playing / RemoteCommand                      |
 | External playback        | ✅ Optional `vesper_player_external_playback` package | ✅ AirPlay route picker via `vesper_player_ui`      |
 
-The main package currently registers Android and iOS implementations only.
-Desktop Flutter implementations, including macOS, are intentionally not shipped
-while the Flutter desktop integration model settles.
+The main package registers Android and iOS implementations only. It inherits the
+deliberate native product boundary: Android API 26+ on `arm64-v8a`, and iOS 17+
+on arm64 devices and Apple Silicon Simulator. Older OS versions and legacy ABIs
+are not a compatibility backlog. Desktop Flutter implementations are not shipped.
 
 ## Installation
 
@@ -363,6 +364,25 @@ await controller.setAudioTrackSelection(
 await controller.setAudioTrackSelection(const VesperTrackSelection.auto());
 await controller.setSubtitleTrackSelection(
   const VesperTrackSelection.disabled(),
+);
+
+await controller.setSubtitleStyle(
+  const VesperSubtitleStyle(fontScale: 1.25, visible: true),
+);
+
+final sourceWithSubtitles = VesperPlayerSource(
+  uri: 'https://example.com/video.mp4',
+  label: 'Video',
+  kind: VesperPlayerSourceKind.remote,
+  protocol: VesperPlayerSourceProtocol.progressive,
+  subtitleConfigurations: const <VesperSubtitleSideLoad>[
+    VesperSubtitleSideLoad(
+      uri: 'https://example.com/subtitles/en.srt',
+      mimeType: VesperSubtitleSideLoad.mimeSubrip,
+      language: 'en',
+      label: 'English',
+    ),
+  ],
 );
 
 await controller.setAbrPolicy(

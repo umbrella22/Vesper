@@ -353,6 +353,12 @@ class VesperPlayerAndroidPlugin :
                 emitSnapshot(session)
                 null
             }
+            "setSubtitleStyle" -> handleSessionCommand(call, result) { session ->
+                val styleMap = requireNestedMap(call.argumentMap(), "style")
+                session.lastError = null
+                session.controller.setSubtitleStyle(styleMap.toVesperSubtitleStyle())
+                null
+            }
             "setAbrPolicy" -> handleSessionCommand(call, result) { session ->
                 val policyMap = requireNestedMap(call.argumentMap(), "policy")
                 session.lastError = null

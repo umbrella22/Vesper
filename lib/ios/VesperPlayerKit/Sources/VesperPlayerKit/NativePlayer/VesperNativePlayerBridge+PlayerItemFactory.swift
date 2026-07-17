@@ -5,6 +5,28 @@ import VesperPlayerKitBridgeShim
 
 extension VesperNativePlayerBridge {
     func makePlayerItem(for source: VesperPlayerSource, url: URL) throws -> AVPlayerItem {
+        // Live streaming protocols (RTMP/RTSP/FLV) are not supported by AVPlayer
+        // on iOS. Supporting them would require a software demux/remux pipeline
+        // (FFmpeg), which conflicts with the native-first boundary. Reject
+        // explicitly with a capability error instead of letting AVURLAsset
+        // silently fail to load.
+        switch source.protocol {
+        case .rtmp, .rtsp, .flv:
+            throw VesperPlayerError(
+                message: "iOS does not support \(source.protocol.rawValue.uppercased()) live streams; use HLS live instead.",
+                code: .unsupported,
+                category: .capability,
+                retriable: false,
+                details: [
+                    "reason": "liveProtocolUnsupportedOnIos",
+                    "route": "direct",
+                    "protocol": source.protocol.rawValue,
+                ]
+            )
+        case .unknown, .file, .content, .progressive, .hls, .dash:
+            break
+        }
+
         if isVesperSourceNormalizerURL(url) {
             currentDashSession = nil
             dashResourceLoaderDelegate = nil

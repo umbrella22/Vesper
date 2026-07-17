@@ -2,7 +2,9 @@ package io.github.ikaros.vesper.player.android
 
 import android.content.Context
 import android.view.ViewGroup
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class VesperPlayerController internal constructor(
     private val bridge: PlayerBridge,
@@ -30,6 +32,14 @@ class VesperPlayerController internal constructor(
 
     val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy>
         get() = bridge.resiliencePolicy
+
+    /**
+     * Current subtitle styling (font scale, visibility). Hosts observe this to
+     * drive a [androidx.media3.ui.SubtitleView] or equivalent overlay; it does
+     * not flow through the player bridge because it only affects rendering.
+     */
+    private val _subtitleStyle = MutableStateFlow(VesperSubtitleStyle.Default)
+    val subtitleStyle: StateFlow<VesperSubtitleStyle> = _subtitleStyle.asStateFlow()
 
     val pluginDiagnostics: List<Map<String, Any?>>
         get() = bridge.pluginDiagnostics
@@ -88,6 +98,15 @@ class VesperPlayerController internal constructor(
 
     fun setSubtitleTrackSelection(selection: VesperTrackSelection) =
         bridge.setSubtitleTrackSelection(selection)
+
+    /**
+     * Updates subtitle styling (font scale, visibility). Hosts observing
+     * [subtitleStyle] should apply the new value to their subtitle view.
+     */
+    fun setSubtitleStyle(style: VesperSubtitleStyle) {
+        bridge.setSubtitleStyle(style)
+        _subtitleStyle.value = style
+    }
 
     fun setAbrPolicy(policy: VesperAbrPolicy) = bridge.setAbrPolicy(policy)
 

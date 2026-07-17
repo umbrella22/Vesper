@@ -145,7 +145,9 @@ extension VesperNativePlayerBridge {
         preloadCoordinator.configure(cachePolicy: cachePolicy)
         preloadCoordinator.warmCurrentSource(source: source, url: url)
         releaseDashStartupAbrLimitIfNeeded(reason: "sourceReload", item: player?.currentItem)
+        try await subtitleOverlayRenderer.configure(playbackSource.subtitleConfigurations)
         let item = try makePlayerItem(for: playbackSource, url: url)
+        applySubtitleStyle(currentSubtitleStyle, to: item)
         refreshCurrentHdrFailureEvidence(for: playbackSource, item: item)
         let bufferingPolicy = resolvedBufferingPolicy(resolvedResiliencePolicy.buffering)
         item.preferredForwardBufferDuration = bufferingPolicy.preferredForwardBufferDuration
@@ -164,6 +166,7 @@ extension VesperNativePlayerBridge {
         applyDashStartupAbrLimitIfNeeded(for: playbackSource, to: item)
         self.player = player
         surfaceHost?.attach(player: player)
+        subtitleOverlayRenderer.attach(surfaceHost: surfaceHost)
         installObservers(for: player, item: item, playbackEpoch: playbackEpoch)
         recordBenchmark("source_load_configured")
 

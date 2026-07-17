@@ -249,6 +249,8 @@ internal class FakePlayerBridge(
 
     override fun setSubtitleTrackSelection(selection: VesperTrackSelection) = Unit
 
+    override fun setSubtitleStyle(style: VesperSubtitleStyle) = Unit
+
     override fun setAbrPolicy(policy: VesperAbrPolicy) = Unit
 
     override fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) {

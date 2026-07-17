@@ -12,6 +12,7 @@ extension VesperNativePlayerBridge {
         dashStartupAbrLimitPin = nil
         audioOptionsByTrackId = [:]
         subtitleOptionsByTrackId = [:]
+        subtitleOverlayRenderer.reset()
         hasAppliedDefaultTrackPreferences = false
         fixedTrackConvergenceState = nil
         publishedTrackCatalog = .empty

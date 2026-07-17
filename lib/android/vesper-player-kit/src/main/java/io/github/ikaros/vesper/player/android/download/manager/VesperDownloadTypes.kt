@@ -103,7 +103,15 @@ data class VesperDownloadSource(
                 VesperPlayerSourceProtocol.File,
                 VesperPlayerSourceProtocol.Content,
                 -> VesperDownloadContentFormat.SingleFile
-                VesperPlayerSourceProtocol.Unknown -> VesperDownloadContentFormat.Unknown
+                VesperPlayerSourceProtocol.Unknown,
+                // Live streaming protocols (RTMP/RTSP/FLV) are continuous
+                // streams, not segment-based downloads. The planner treats them
+                // as Unknown and rejects download attempts with a capability
+                // error rather than silently producing an empty task.
+                VesperPlayerSourceProtocol.Rtmp,
+                VesperPlayerSourceProtocol.Rtsp,
+                VesperPlayerSourceProtocol.Flv,
+                -> VesperDownloadContentFormat.Unknown
             }
     }
 }

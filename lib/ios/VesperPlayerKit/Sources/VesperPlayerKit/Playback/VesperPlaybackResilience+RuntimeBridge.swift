@@ -26,6 +26,12 @@ extension VesperPlayerSourceProtocol {
             4
         case .dash:
             5
+        case .rtmp:
+            6
+        case .rtsp:
+            7
+        case .flv:
+            8
         }
     }
 }

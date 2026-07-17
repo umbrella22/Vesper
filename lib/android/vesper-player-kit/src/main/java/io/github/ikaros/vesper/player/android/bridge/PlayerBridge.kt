@@ -307,6 +307,7 @@ internal interface PlayerBridge {
     fun setVideoTrackSelection(selection: VesperTrackSelection)
     fun setAudioTrackSelection(selection: VesperTrackSelection)
     fun setSubtitleTrackSelection(selection: VesperTrackSelection)
+    fun setSubtitleStyle(style: VesperSubtitleStyle)
     fun setAbrPolicy(policy: VesperAbrPolicy)
     fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy)
     fun setKeepScreenOnDuringPlayback(enabled: Boolean)

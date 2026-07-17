@@ -67,11 +67,54 @@ extension VesperNativePlayerBridge {
     }
 
     func applyDefaultSubtitleTrackPreferenceIfPossible(item: AVPlayerItem) {
+        let policy = resolvedTrackPreferencePolicy
+        if subtitleOverlayRenderer.hasTracks {
+            let sideLoadTrackId: String?
+            switch policy.subtitleSelection.mode {
+            case .disabled:
+                sideLoadTrackId = nil
+            case .track:
+                sideLoadTrackId = policy.subtitleSelection.trackId.flatMap { trackId in
+                    subtitleOverlayRenderer.containsTrack(trackId) ? trackId : nil
+                }
+                if sideLoadTrackId == nil, subtitleGroup != nil {
+                    break
+                }
+            case .auto:
+                let preferredLanguage = policy.preferredSubtitleLanguage?.lowercased()
+                let preferredIndex = currentSource?.subtitleConfigurations.firstIndex { configuration in
+                    configuration.language?.lowercased() == preferredLanguage
+                }
+                if let preferredIndex {
+                    sideLoadTrackId = VesperSubtitleOverlayRenderer.trackId(for: preferredIndex)
+                } else if policy.selectSubtitlesByDefault {
+                    sideLoadTrackId = subtitleOverlayRenderer.firstTrackId()
+                } else {
+                    sideLoadTrackId = nil
+                }
+            }
+            if policy.subtitleSelection.mode != .track || sideLoadTrackId != nil || subtitleGroup == nil {
+                if let group = subtitleGroup {
+                    item.select(nil, in: group)
+                }
+                _ = subtitleOverlayRenderer.select(trackId: sideLoadTrackId)
+                updateTrackSelection { current in
+                    VesperTrackSelectionSnapshot(
+                        video: current.video,
+                        audio: current.audio,
+                        subtitle: sideLoadTrackId == nil ? .disabled() : policy.subtitleSelection,
+                        abrPolicy: current.abrPolicy
+                    )
+                }
+                return
+            }
+        }
+
         guard let group = subtitleGroup else {
             return
         }
+        _ = subtitleOverlayRenderer.select(trackId: nil)
 
-        let policy = resolvedTrackPreferencePolicy
         switch policy.subtitleSelection.mode {
         case .disabled:
             item.select(nil, in: group)

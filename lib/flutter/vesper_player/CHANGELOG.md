@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- Added controller-level subtitle styling through `setSubtitleStyle`.
+- Added external subtitle source configurations and explicit RTMP, RTSP, and
+  HTTP-FLV source factories from the shared platform interface.
+
 ### Breaking Changes
 
 - The Flutter package family now requires Flutter 3.44.0 or newer.

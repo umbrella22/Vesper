@@ -43,8 +43,8 @@ use player_runtime::{
     PlayerRuntime, PlayerRuntimeAdapter, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
     PlayerRuntimeBootstrap, PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions,
-    PlayerRuntimeStartup, PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
-    register_default_runtime_adapter_factory,
+    PlayerRuntimeStartup, PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PluginBreakerState,
+    PluginBudgetPolicy, register_default_runtime_adapter_factory,
 };
 use std::collections::VecDeque;
 
@@ -124,6 +124,7 @@ struct WindowsNativeFrameVideoSource {
     session: Box<dyn NativeDecoderSession>,
     presenter: Box<dyn WindowsNativeFramePresenter>,
     surface_target: WindowsSurfaceAttachTarget,
+    decoder_breaker: PluginBreakerState,
     pending_packet: Option<CompressedVideoPacket>,
     end_of_input_sent: bool,
 }
@@ -1190,6 +1191,7 @@ impl DesktopVideoSourceFactory for WindowsNativeFrameVideoSourceFactory {
                 session,
                 presenter,
                 surface_target,
+                decoder_breaker: PluginBreakerState::new(PluginBudgetPolicy::default()),
                 pending_packet: None,
                 end_of_input_sent: false,
             }),
@@ -1218,9 +1220,7 @@ impl DesktopVideoSource for WindowsNativeFrameVideoSource {
         &mut self,
         position: std::time::Duration,
     ) -> anyhow::Result<Option<DesktopVideoFrame>> {
-        self.session
-            .flush()
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        flush_windows_native_decoder(self.session.as_mut(), &mut self.decoder_breaker)?;
         self.presenter.reset()?;
         self.presenter.attach(self.surface_target)?;
         self.packet_source.seek_to(position)?;
@@ -1240,14 +1240,11 @@ impl WindowsNativeFrameVideoSource {
     fn poll_frame(&mut self, blocking: bool) -> anyhow::Result<DesktopVideoFramePoll> {
         let mut packets_submitted = 0usize;
         loop {
-            match self
-                .session
-                .receive_native_frame()
-                .map_err(|error| anyhow::anyhow!(error.to_string()))?
-            {
+            match receive_windows_native_frame(self.session.as_mut(), &mut self.decoder_breaker)? {
                 DecoderReceiveNativeFrameOutput::Frame(frame) => {
-                    return windows_native_frame_poll_with_presenter(
+                    return windows_native_frame_poll_with_presenter_protected(
                         self.session.as_mut(),
+                        &mut self.decoder_breaker,
                         self.presenter.as_mut(),
                         &self.stream_info,
                         frame,
@@ -1292,21 +1289,19 @@ impl WindowsNativeFrameVideoSource {
     }
 
     fn send_packet(&mut self, packet: &CompressedVideoPacket) -> anyhow::Result<bool> {
-        send_windows_native_packet(self.session.as_mut(), packet)
+        send_windows_native_packet_protected(
+            self.session.as_mut(),
+            &mut self.decoder_breaker,
+            packet,
+        )
     }
 
     fn send_end_of_stream(&mut self) -> anyhow::Result<()> {
-        self.session
-            .send_packet(
-                &DecoderPacket {
-                    stream_index: u32::try_from(self.stream_info.stream_index).unwrap_or(u32::MAX),
-                    end_of_stream: true,
-                    ..DecoderPacket::default()
-                },
-                &[],
-            )
-            .map(|_| ())
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+        send_windows_native_end_of_stream(
+            self.session.as_mut(),
+            &mut self.decoder_breaker,
+            u32::try_from(self.stream_info.stream_index).unwrap_or(u32::MAX),
+        )
     }
 }
 
@@ -1318,6 +1313,105 @@ fn send_windows_native_packet(
         .send_packet(&decoder_packet_from_compressed_packet(packet), &packet.data)
         .map(|result| result.accepted)
         .map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
+fn send_windows_native_packet_protected(
+    session: &mut dyn NativeDecoderSession,
+    breaker: &mut PluginBreakerState,
+    packet: &CompressedVideoPacket,
+) -> anyhow::Result<bool> {
+    windows_native_decoder_ensure_enabled(breaker, "sendDecoderPacket")?;
+    match send_windows_native_packet(session, packet) {
+        Ok(accepted) => {
+            breaker.record_success();
+            Ok(accepted)
+        }
+        Err(error) => {
+            let _ = breaker.record_failure();
+            Err(error)
+        }
+    }
+}
+
+fn send_windows_native_end_of_stream(
+    session: &mut dyn NativeDecoderSession,
+    breaker: &mut PluginBreakerState,
+    stream_index: u32,
+) -> anyhow::Result<()> {
+    windows_native_decoder_ensure_enabled(breaker, "sendDecoderPacket")?;
+    match session
+        .send_packet(
+            &DecoderPacket {
+                stream_index,
+                end_of_stream: true,
+                ..DecoderPacket::default()
+            },
+            &[],
+        )
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+    {
+        Ok(()) => {
+            breaker.record_success();
+            Ok(())
+        }
+        Err(error) => {
+            let _ = breaker.record_failure();
+            Err(error)
+        }
+    }
+}
+
+fn receive_windows_native_frame(
+    session: &mut dyn NativeDecoderSession,
+    breaker: &mut PluginBreakerState,
+) -> anyhow::Result<DecoderReceiveNativeFrameOutput> {
+    windows_native_decoder_ensure_enabled(breaker, "receiveDecoderFrame")?;
+    match session
+        .receive_native_frame()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+    {
+        Ok(output) => {
+            breaker.record_success();
+            Ok(output)
+        }
+        Err(error) => {
+            let _ = breaker.record_failure();
+            Err(error)
+        }
+    }
+}
+
+fn flush_windows_native_decoder(
+    session: &mut dyn NativeDecoderSession,
+    breaker: &mut PluginBreakerState,
+) -> anyhow::Result<()> {
+    windows_native_decoder_ensure_enabled(breaker, "flushDecoder")?;
+    match session
+        .flush()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+    {
+        Ok(()) => {
+            breaker.record_success();
+            Ok(())
+        }
+        Err(error) => {
+            let _ = breaker.record_failure();
+            Err(error)
+        }
+    }
+}
+
+fn windows_native_decoder_ensure_enabled(
+    breaker: &PluginBreakerState,
+    operation: &'static str,
+) -> anyhow::Result<()> {
+    if breaker.is_disabled() {
+        anyhow::bail!(
+            "{operation} failed: windows native-frame decoder disabled after repeated plugin failures"
+        );
+    }
+    Ok(())
 }
 
 fn decoder_packet_from_compressed_packet(packet: &CompressedVideoPacket) -> DecoderPacket {
@@ -1333,8 +1427,26 @@ fn decoder_packet_from_compressed_packet(packet: &CompressedVideoPacket) -> Deco
     }
 }
 
+#[cfg(test)]
 fn windows_native_frame_poll_with_presenter(
     session: &mut dyn NativeDecoderSession,
+    presenter: &mut dyn WindowsNativeFramePresenter,
+    _stream_info: &VideoPacketStreamInfo,
+    frame: player_plugin::DecoderNativeFrame,
+) -> anyhow::Result<DesktopVideoFramePoll> {
+    let mut breaker = PluginBreakerState::new(PluginBudgetPolicy::default());
+    windows_native_frame_poll_with_presenter_protected(
+        session,
+        &mut breaker,
+        presenter,
+        _stream_info,
+        frame,
+    )
+}
+
+fn windows_native_frame_poll_with_presenter_protected(
+    session: &mut dyn NativeDecoderSession,
+    breaker: &mut PluginBreakerState,
     presenter: &mut dyn WindowsNativeFramePresenter,
     _stream_info: &VideoPacketStreamInfo,
     frame: player_plugin::DecoderNativeFrame,
@@ -1347,7 +1459,7 @@ fn windows_native_frame_poll_with_presenter(
     let width = frame.metadata.width;
     let height = frame.metadata.height;
     if frame.metadata.handle_kind != presenter.accepted_handle_kind() {
-        let _ = session.release_native_frame(frame);
+        let _ = release_windows_native_frame(session, breaker, frame);
         anyhow::bail!(
             "windows {:?} native-frame presenter only accepts {:?} handles",
             presenter.backend_kind(),
@@ -1357,13 +1469,31 @@ fn windows_native_frame_poll_with_presenter(
     let present_result = presenter
         .present(frame.handle)
         .map_err(|error| anyhow::anyhow!(error.message().to_owned()));
-    let release_result = session
-        .release_native_frame(frame)
-        .map_err(|error| anyhow::anyhow!(error.to_string()));
+    let release_result = release_windows_native_frame(session, breaker, frame);
     present_result.and(release_result)?;
     Ok(DesktopVideoFramePoll::Ready(
         DesktopVideoFrame::native_presented(presentation_time, width, height),
     ))
+}
+
+fn release_windows_native_frame(
+    session: &mut dyn NativeDecoderSession,
+    breaker: &mut PluginBreakerState,
+    frame: player_plugin::DecoderNativeFrame,
+) -> anyhow::Result<()> {
+    match session
+        .release_native_frame(frame)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+    {
+        Ok(()) => {
+            breaker.record_success();
+            Ok(())
+        }
+        Err(error) => {
+            let _ = breaker.record_failure();
+            Err(error)
+        }
+    }
 }
 
 fn duration_from_micros(value: i64) -> Option<std::time::Duration> {
@@ -1891,10 +2021,10 @@ mod tests {
         WindowsNativeFrameBackendKind, WindowsNativeFramePresenter, WindowsRuntimeActiveFallback,
         WindowsRuntimeAdapter, WindowsSoftwarePlayerRuntimeAdapterFactory,
         WindowsSurfaceAttachTarget, open_windows_host_runtime_source_with_options,
-        probe_windows_host_runtime_source_with_options,
+        probe_windows_host_runtime_source_with_options, receive_windows_native_frame,
         select_windows_native_frame_candidate_from_registry, send_windows_native_packet,
-        windows_native_frame_poll_with_presenter, windows_native_frame_roadmap,
-        windows_runtime_diagnostics,
+        send_windows_native_packet_protected, windows_native_frame_poll_with_presenter,
+        windows_native_frame_roadmap, windows_runtime_diagnostics,
     };
     use player_backend_ffmpeg::{CompressedVideoPacket, VideoPacketStreamInfo};
     use player_model::MediaSource;
@@ -1915,7 +2045,7 @@ mod tests {
         PlayerResult, PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily,
         PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeCommand,
         PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
-        PlayerVideoDecodeInfo, PlayerVideoDecodeMode,
+        PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PluginBreakerState, PluginBudgetPolicy,
     };
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -2656,6 +2786,55 @@ mod tests {
         assert_eq!(data, &[1, 2, 3]);
     }
 
+    #[test]
+    fn windows_protected_native_packet_send_disables_after_repeated_errors() {
+        let mut session = FailingWindowsNativeSession {
+            fail_send: true,
+            ..FailingWindowsNativeSession::default()
+        };
+        let mut breaker = PluginBreakerState::new(PluginBudgetPolicy::default());
+        let packet = CompressedVideoPacket {
+            pts_us: Some(12),
+            dts_us: Some(9),
+            duration_us: Some(3),
+            stream_index: 4,
+            key_frame: true,
+            discontinuity: true,
+            data: vec![1, 2, 3],
+        };
+
+        for _ in 0..5 {
+            let error = send_windows_native_packet_protected(&mut session, &mut breaker, &packet)
+                .expect_err("send failure should propagate");
+            assert!(error.to_string().contains("send exploded"));
+        }
+        let error = send_windows_native_packet_protected(&mut session, &mut breaker, &packet)
+            .expect_err("disabled decoder should short-circuit");
+
+        assert!(error.to_string().contains("decoder disabled"));
+        assert_eq!(session.send_calls, 5);
+    }
+
+    #[test]
+    fn windows_protected_native_receive_disables_after_repeated_errors() {
+        let mut session = FailingWindowsNativeSession {
+            fail_receive: true,
+            ..FailingWindowsNativeSession::default()
+        };
+        let mut breaker = PluginBreakerState::new(PluginBudgetPolicy::default());
+
+        for _ in 0..5 {
+            let error = receive_windows_native_frame(&mut session, &mut breaker)
+                .expect_err("receive failure should propagate");
+            assert!(error.to_string().contains("receive exploded"));
+        }
+        let error = receive_windows_native_frame(&mut session, &mut breaker)
+            .expect_err("disabled decoder should short-circuit");
+
+        assert!(error.to_string().contains("decoder disabled"));
+        assert_eq!(session.receive_calls, 5);
+    }
+
     struct FakeWindowsRuntime {
         capabilities: PlayerRuntimeAdapterCapabilities,
         media_info: player_runtime::PlayerMediaInfo,
@@ -2675,6 +2854,14 @@ mod tests {
     struct BackpressureWindowsNativeSession {
         accepted: bool,
         sent_packets: Vec<(player_plugin::DecoderPacket, Vec<u8>)>,
+    }
+
+    #[derive(Default)]
+    struct FailingWindowsNativeSession {
+        fail_send: bool,
+        fail_receive: bool,
+        send_calls: usize,
+        receive_calls: usize,
     }
 
     impl NativeDecoderSession for FakeWindowsNativeSession {
@@ -2775,6 +2962,49 @@ mod tests {
         fn receive_native_frame(
             &mut self,
         ) -> Result<DecoderReceiveNativeFrameOutput, player_plugin::DecoderError> {
+            Ok(DecoderReceiveNativeFrameOutput::NeedMoreInput)
+        }
+
+        fn release_native_frame(
+            &mut self,
+            _frame: DecoderNativeFrame,
+        ) -> Result<(), player_plugin::DecoderError> {
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), player_plugin::DecoderError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), player_plugin::DecoderError> {
+            Ok(())
+        }
+    }
+
+    impl NativeDecoderSession for FailingWindowsNativeSession {
+        fn session_info(&self) -> DecoderSessionInfo {
+            DecoderSessionInfo::default()
+        }
+
+        fn send_packet(
+            &mut self,
+            _packet: &player_plugin::DecoderPacket,
+            _data: &[u8],
+        ) -> Result<player_plugin::DecoderPacketResult, player_plugin::DecoderError> {
+            self.send_calls = self.send_calls.saturating_add(1);
+            if self.fail_send {
+                return Err(player_plugin::DecoderError::internal("send exploded"));
+            }
+            Ok(player_plugin::DecoderPacketResult { accepted: true })
+        }
+
+        fn receive_native_frame(
+            &mut self,
+        ) -> Result<DecoderReceiveNativeFrameOutput, player_plugin::DecoderError> {
+            self.receive_calls = self.receive_calls.saturating_add(1);
+            if self.fail_receive {
+                return Err(player_plugin::DecoderError::internal("receive exploded"));
+            }
             Ok(DecoderReceiveNativeFrameOutput::NeedMoreInput)
         }
 

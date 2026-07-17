@@ -99,6 +99,7 @@ public final class PlayerSurfaceView: UIView {
     private var metalDevice: MTLDevice?
     private var metalCommandQueue: MTLCommandQueue?
     private var ciContext: CIContext?
+    private let subtitleLabel = UILabel()
     var onReadyForDisplay: (() -> Void)?
 
     public override init(frame: CGRect) {
@@ -107,6 +108,7 @@ public final class PlayerSurfaceView: UIView {
         layer.cornerRadius = 24
         layer.masksToBounds = true
         configurePlayerLayer()
+        configureSubtitleLabel()
     }
 
     public required init?(coder: NSCoder) {
@@ -115,12 +117,26 @@ public final class PlayerSurfaceView: UIView {
         layer.cornerRadius = 24
         layer.masksToBounds = true
         configurePlayerLayer()
+        configureSubtitleLabel()
     }
 
     public override func layoutSubviews() {
         super.layoutSubviews()
         playerLayer.frame = bounds
         metalLayer?.frame = bounds
+        let horizontalInset: CGFloat = 24
+        let bottomInset: CGFloat = 32
+        let maximumWidth = max(bounds.width - horizontalInset * 2, 0)
+        let fittingSize = subtitleLabel.sizeThatFits(
+            CGSize(width: maximumWidth, height: bounds.height)
+        )
+        subtitleLabel.frame = CGRect(
+            x: horizontalInset,
+            y: max(bounds.height - bottomInset - fittingSize.height, 0),
+            width: maximumWidth,
+            height: fittingSize.height
+        )
+        bringSubviewToFront(subtitleLabel)
         if let metalLayer {
             let scale = window?.screen.scale ?? UIScreen.main.scale
             metalLayer.drawableSize = CGSize(
@@ -128,6 +144,26 @@ public final class PlayerSurfaceView: UIView {
                 height: bounds.height * scale
             )
         }
+    }
+
+    func updateSubtitleOverlay(text: String, style: VesperSubtitleStyle) {
+        subtitleLabel.text = text
+        subtitleLabel.font = UIFont.systemFont(ofSize: 18 * CGFloat(style.fontScale), weight: .semibold)
+        subtitleLabel.isHidden = !style.visible || text.isEmpty
+        setNeedsLayout()
+    }
+
+    private func configureSubtitleLabel() {
+        subtitleLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        subtitleLabel.textColor = .white
+        subtitleLabel.textAlignment = .center
+        subtitleLabel.numberOfLines = 0
+        subtitleLabel.layer.cornerRadius = 6
+        subtitleLabel.layer.masksToBounds = true
+        subtitleLabel.isAccessibilityElement = false
+        subtitleLabel.isUserInteractionEnabled = false
+        subtitleLabel.isHidden = true
+        addSubview(subtitleLabel)
     }
 
     var isReadyForDisplay: Bool {
@@ -217,6 +253,7 @@ public final class PlayerSurfaceView: UIView {
                 layer.frame = bounds
                 self.layer.addSublayer(layer)
                 metalLayer = layer
+                bringSubviewToFront(subtitleLabel)
             }
             metalLayer?.isHidden = false
         } else {

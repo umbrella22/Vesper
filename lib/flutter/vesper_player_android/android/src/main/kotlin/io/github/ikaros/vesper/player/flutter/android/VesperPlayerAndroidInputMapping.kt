@@ -33,6 +33,8 @@ import io.github.ikaros.vesper.player.android.VesperRetryBackoff
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
 import io.github.ikaros.vesper.player.android.VesperSourceNormalizerConfiguration
 import io.github.ikaros.vesper.player.android.VesperSourceNormalizerMode
+import io.github.ikaros.vesper.player.android.VesperSubtitleSideLoad
+import io.github.ikaros.vesper.player.android.VesperSubtitleStyle
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControlButton
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControlKind
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackConfiguration
@@ -167,6 +169,9 @@ internal fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
             "progressive" -> VesperPlayerSourceProtocol.Progressive
             "hls" -> VesperPlayerSourceProtocol.Hls
             "dash" -> VesperPlayerSourceProtocol.Dash
+            "rtmp" -> VesperPlayerSourceProtocol.Rtmp
+            "rtsp" -> VesperPlayerSourceProtocol.Rtsp
+            "flv" -> VesperPlayerSourceProtocol.Flv
             else -> VesperPlayerSourceProtocol.Unknown
         },
         headers = this["headers"].stringStringMap(),
@@ -174,6 +179,42 @@ internal fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
             (this["drmConfiguration"] as? Map<*, *>)
                 ?.stringMap()
                 ?.let(::vesperPlayerDrmConfigurationFromWireMap),
+        subtitleConfigurations =
+            (this["subtitleConfigurations"] as? List<*>)
+                ?.map { value ->
+                    (value as? Map<*, *>)?.stringMap()?.toVesperSubtitleSideLoad()
+                        ?: throw IllegalArgumentException("Invalid subtitleConfigurations entry.")
+                }
+                ?: emptyList(),
+    )
+}
+
+internal fun Map<String, Any?>.toVesperSubtitleStyle(): VesperSubtitleStyle {
+    val fontScale = (this["fontScale"] as? Number)?.toFloat() ?: 1.0f
+    require(fontScale.isFinite() && fontScale in 0.5f..3.0f) {
+        "Subtitle fontScale must be finite and between 0.5 and 3.0."
+    }
+    return VesperSubtitleStyle(
+        fontScale = fontScale,
+        visible = this["visible"] as? Boolean ?: true,
+    )
+}
+
+private fun Map<String, Any?>.toVesperSubtitleSideLoad(): VesperSubtitleSideLoad {
+    val uri = this["uri"] as? String
+        ?: throw IllegalArgumentException("Missing subtitle uri.")
+    require(uri.isNotBlank()) { "Subtitle uri must not be blank." }
+    val mimeType = this["mimeType"] as? String ?: VesperSubtitleSideLoad.MIME_SUBRIP
+    require(
+        mimeType == VesperSubtitleSideLoad.MIME_SUBRIP ||
+            mimeType == VesperSubtitleSideLoad.MIME_WEBVTT ||
+            mimeType == VesperSubtitleSideLoad.MIME_SSA
+    ) { "Unsupported subtitle MIME type: $mimeType." }
+    return VesperSubtitleSideLoad(
+        uri = uri,
+        mimeType = mimeType,
+        language = this["language"] as? String,
+        label = this["label"] as? String,
     )
 }
 

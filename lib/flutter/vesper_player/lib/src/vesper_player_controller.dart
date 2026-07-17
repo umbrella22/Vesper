@@ -188,6 +188,14 @@ class VesperPlayerController {
         () => _platform.setSubtitleTrackSelection(playerId, selection),
       );
 
+  /// Applies minimal subtitle styling (font scale, visibility).
+  ///
+  /// Platforms without subtitle styling fail explicitly instead of accepting
+  /// the request as a no-op.
+  Future<void> setSubtitleStyle(VesperSubtitleStyle style) => _runVoidOperation(
+        () => _platform.setSubtitleStyle(playerId, style),
+      );
+
   Future<void> setAbrPolicy(VesperAbrPolicy policy) =>
       _runVoidOperation(() => _platform.setAbrPolicy(playerId, policy));
 

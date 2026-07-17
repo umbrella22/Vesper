@@ -106,6 +106,9 @@ pub enum FfiMediaSourceProtocol {
     Progressive,
     Hls,
     Dash,
+    Rtmp,
+    Rtsp,
+    Flv,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -769,6 +772,9 @@ impl From<MediaSourceProtocol> for FfiMediaSourceProtocol {
             MediaSourceProtocol::Progressive => Self::Progressive,
             MediaSourceProtocol::Hls => Self::Hls,
             MediaSourceProtocol::Dash => Self::Dash,
+            MediaSourceProtocol::Rtmp => Self::Rtmp,
+            MediaSourceProtocol::Rtsp => Self::Rtsp,
+            MediaSourceProtocol::Flv => Self::Flv,
         }
     }
 }
@@ -791,6 +797,9 @@ impl From<FfiMediaSourceProtocol> for MediaSourceProtocol {
             FfiMediaSourceProtocol::Progressive => Self::Progressive,
             FfiMediaSourceProtocol::Hls => Self::Hls,
             FfiMediaSourceProtocol::Dash => Self::Dash,
+            FfiMediaSourceProtocol::Rtmp => Self::Rtmp,
+            FfiMediaSourceProtocol::Rtsp => Self::Rtsp,
+            FfiMediaSourceProtocol::Flv => Self::Flv,
         }
     }
 }

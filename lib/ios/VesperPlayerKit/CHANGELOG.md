@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added bounded side-loaded SRT, WebVTT, and SSA/ASS parsing with UTF-8, 2 MiB,
+  eight-track, and 10,000-cue limits, plus a native subtitle overlay integrated
+  with track selection.
+- Added `VesperSubtitleStyle` visibility and font scaling for side-loaded and
+  embedded AVPlayer subtitles.
+
+### Changed
+
+- RTMP, RTSP, and HTTP-FLV direct playback fail with explicit capability errors.
+- HTTP `.flv` URLs remain progressive unless the protocol is set explicitly.
+
 ## 0.3.0 - 2026-05-18
 
 ### Added

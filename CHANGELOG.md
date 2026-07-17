@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- Raised the Rust workspace MSRV and dedicated CI check from 1.94 to 1.97.
+
+### Added
+
+- Added a mobile subtitle baseline across Android, iOS, and Flutter: external
+  SRT, WebVTT, and SSA/ASS attachment, track selection, visibility, and bounded
+  font scaling. Android renders Media3 cues in the native surface host; iOS uses
+  a bounded UTF-8 parser and native overlay while AVPlayer text style rules
+  cover embedded subtitles.
+- Added explicit RTMP, RTSP, and HTTP-FLV protocol DTO values across Rust, C,
+  Android, iOS, and Flutter boundaries. Unsupported host routes fail with
+  capability errors instead of falling through silently.
+
+### Changed
+
+- HTTP URLs ending in `.flv` remain progressive VOD sources unless callers use
+  the explicit `flvLive` source factory.
+- Native-frame plugin breakers now enforce queue/in-flight load decisions and
+  reset consecutive failure counters after every successful adapter call.
+
 ## 0.3.1 - 2026-06-09
 
 ### Breaking Changes

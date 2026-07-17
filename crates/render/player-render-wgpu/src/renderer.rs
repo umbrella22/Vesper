@@ -52,6 +52,7 @@ impl VideoRenderer {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
+                apply_limit_buckets: false,
             })
             .await
             .with_context(|| {
@@ -547,7 +548,7 @@ impl VideoRenderer {
         }
 
         self.queue.submit([encoder.finish()]);
-        frame.present();
+        self.queue.present(frame);
         Ok(RenderFrameOutcome::Presented)
     }
 }

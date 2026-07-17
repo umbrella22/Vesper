@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Added `VesperSubtitleStyle`, `VesperSubtitleSideLoad`, source subtitle
+  configurations, and the `setSubtitleStyle` platform contract.
+- Added RTMP, RTSP, and HTTP-FLV source protocol values. HTTP `.flv` inference
+  remains progressive; explicit live sources use `VesperPlayerSource.flvLive`.
+
 ### Breaking Changes
 
 - The shared platform interface now requires Flutter 3.44.0 or newer.

@@ -21,6 +21,7 @@ import androidx.media3.common.TrackGroup
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
+import androidx.media3.common.text.CueGroup
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
@@ -289,6 +290,10 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
             pushSnapshotToRust()
             pushTrackStateToRust()
             notifyNativeUpdate()
+        }
+
+        override fun onCues(cueGroup: CueGroup) {
+            subtitleCuesListener?.invoke(cueGroup.cues)
         }
 
         override fun onTracksChanged(tracks: Tracks) {

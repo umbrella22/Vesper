@@ -300,6 +300,7 @@ extension VesperNativePlayerBridge {
 
         let durationMs = currentDurationMs()
         let positionMs = player.currentTime().milliseconds
+        subtitleOverlayRenderer.render(positionMs: positionMs)
         let buffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
         let playbackState = derivePlaybackState(
             currentState: publishedUiState.playbackState,

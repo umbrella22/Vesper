@@ -12,6 +12,9 @@ enum class VesperPlayerSourceProtocol {
     Progressive,
     Hls,
     Dash,
+    Rtmp,
+    Rtsp,
+    Flv,
 }
 
 data class VesperPlayerDrmConfiguration(
@@ -50,6 +53,8 @@ data class VesperPlayerSource(
     val protocol: VesperPlayerSourceProtocol,
     val headers: Map<String, String> = emptyMap(),
     val drmConfiguration: VesperPlayerDrmConfiguration? = null,
+    /** Optional external side-loaded subtitle tracks (SRT/ASS/WebVTT URIs). */
+    val subtitleConfigurations: List<VesperSubtitleSideLoad> = emptyList(),
 ) {
     companion object {
         fun local(
@@ -126,6 +131,55 @@ data class VesperPlayerSource(
                 drmConfiguration = drmConfiguration,
             )
 
+        /**
+         * RTMP / RTMPS live stream. The stable mobile host kits reject this
+         * protocol explicitly until a concrete playback route is selected.
+         */
+        fun rtmp(
+            uri: String,
+            label: String,
+            headers: Map<String, String> = emptyMap(),
+        ): VesperPlayerSource =
+            remote(
+                uri = uri,
+                label = label,
+                protocol = VesperPlayerSourceProtocol.Rtmp,
+                headers = headers,
+            )
+
+        /**
+         * RTSP / RTSPS live stream. On iOS this protocol is rejected with a
+         * capability error by AVPlayer.
+         */
+        fun rtsp(
+            uri: String,
+            label: String,
+            headers: Map<String, String> = emptyMap(),
+        ): VesperPlayerSource =
+            remote(
+                uri = uri,
+                label = label,
+                protocol = VesperPlayerSourceProtocol.Rtsp,
+                headers = headers,
+            )
+
+        /**
+         * HTTP-FLV live stream. On iOS this protocol is rejected with a
+         * capability error by AVPlayer; on Android it is routed through the
+         * Media3 FLV source.
+         */
+        fun flvLive(
+            uri: String,
+            label: String,
+            headers: Map<String, String> = emptyMap(),
+        ): VesperPlayerSource =
+            remote(
+                uri = uri,
+                label = label,
+                protocol = VesperPlayerSourceProtocol.Flv,
+                headers = headers,
+            )
+
         private fun inferLocalProtocol(uri: String): VesperPlayerSourceProtocol =
             when {
                 uri.startsWith("content://", ignoreCase = true) -> VesperPlayerSourceProtocol.Content
@@ -139,6 +193,10 @@ data class VesperPlayerSource(
                 .substringBefore('#')
                 .substringBefore('?')
             return when {
+                normalized.startsWith("rtmp://") || normalized.startsWith("rtmps://") ->
+                    VesperPlayerSourceProtocol.Rtmp
+                normalized.startsWith("rtsp://") || normalized.startsWith("rtsps://") ->
+                    VesperPlayerSourceProtocol.Rtsp
                 normalizedPath.endsWith(".m3u8") -> VesperPlayerSourceProtocol.Hls
                 normalizedPath.endsWith(".mpd") -> VesperPlayerSourceProtocol.Dash
                 normalized.startsWith("http://") || normalized.startsWith("https://") ->

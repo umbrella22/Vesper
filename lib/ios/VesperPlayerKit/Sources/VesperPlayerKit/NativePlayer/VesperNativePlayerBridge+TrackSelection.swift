@@ -50,6 +50,37 @@ extension VesperNativePlayerBridge {
             return
         }
 
+        if subtitleOverlayRenderer.hasTracks {
+            let selectedSideLoadId: String?
+            switch selection.mode {
+            case .disabled:
+                selectedSideLoadId = nil
+            case .auto:
+                selectedSideLoadId = subtitleOverlayRenderer.firstTrackId()
+            case .track:
+                selectedSideLoadId = selection.trackId.flatMap { trackId in
+                    subtitleOverlayRenderer.containsTrack(trackId) ? trackId : nil
+                }
+            }
+            if selection.mode != .track || selectedSideLoadId != nil {
+                if let group = subtitleGroup {
+                    item.select(nil, in: group)
+                }
+                _ = subtitleOverlayRenderer.select(trackId: selectedSideLoadId)
+                updateTrackSelection { current in
+                    VesperTrackSelectionSnapshot(
+                        video: current.video,
+                        audio: current.audio,
+                        subtitle: selection,
+                        abrPolicy: current.abrPolicy
+                    )
+                }
+                enforceSubtitleVisibility(for: item)
+                return
+            }
+            _ = subtitleOverlayRenderer.select(trackId: nil)
+        }
+
         guard let group = subtitleGroup else {
             iosHostLog("setSubtitleTrackSelection ignored: no legible media selection group")
             return
@@ -62,6 +93,7 @@ extension VesperNativePlayerBridge {
             optionsByTrackId: subtitleOptionsByTrackId,
             item: item
         )
+        enforceSubtitleVisibility(for: item)
     }
 
     func setAbrPolicy(_ policy: VesperAbrPolicy) {

@@ -16,6 +16,7 @@ extension VesperNativePlayerBridge {
             self.subtitleOptionsByTrackId = trackState.subtitleOptionsByTrackId
             self.publishedTrackCatalog = trackState.catalog
             self.applyDefaultTrackPreferencesIfNeeded(for: item)
+            self.enforceSubtitleVisibility(for: item)
             self.applyPendingResilienceRestore(ifNeededFor: item, phase: .trackSelection)
             self.refreshEffectiveVideoTrackObservation(for: item)
         }
@@ -98,6 +99,28 @@ extension VesperNativePlayerBridge {
             }
         } else if let dashManifestCatalog {
             tracks.append(contentsOf: dashManifestCatalog.subtitleTracks)
+        }
+
+        if let currentSource {
+            for (index, configuration) in currentSource.subtitleConfigurations.enumerated() {
+                tracks.append(
+                    VesperMediaTrack(
+                        id: VesperSubtitleOverlayRenderer.trackId(for: index),
+                        kind: .subtitle,
+                        label: configuration.label ?? "External Subtitle \(index + 1)",
+                        language: configuration.language,
+                        codec: configuration.mimeType.rawMime,
+                        bitRate: nil,
+                        width: nil,
+                        height: nil,
+                        frameRate: nil,
+                        channels: nil,
+                        sampleRate: nil,
+                        isDefault: index == 0,
+                        isForced: false
+                    )
+                )
+            }
         }
 
         return LoadedTrackCatalogState(

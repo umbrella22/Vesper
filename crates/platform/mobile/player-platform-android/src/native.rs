@@ -3347,6 +3347,9 @@ fn media_source_protocol_wire_name(protocol: MediaSourceProtocol) -> &'static st
         MediaSourceProtocol::Progressive => "progressive",
         MediaSourceProtocol::Hls => "hls",
         MediaSourceProtocol::Dash => "dash",
+        MediaSourceProtocol::Rtmp => "rtmp",
+        MediaSourceProtocol::Rtsp => "rtsp",
+        MediaSourceProtocol::Flv => "flv",
     }
 }
 

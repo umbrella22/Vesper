@@ -21,6 +21,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
+import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
@@ -73,6 +74,7 @@ internal class VesperNativeJniBindings(
     internal var attachedSurface: Surface? = null
     internal var nativeFramePipelineOwnsSurface = false
     internal var updateListener: (() -> Unit)? = null
+    internal var subtitleCuesListener: ((List<Cue>) -> Unit)? = null
     internal var currentTrackCatalogState: VesperTrackCatalog = VesperTrackCatalog.Empty
     internal var currentTrackSelectionState: VesperTrackSelectionSnapshot =
         VesperTrackSelectionSnapshot()
@@ -422,6 +424,13 @@ internal class VesperNativeJniBindings(
         }
     }
 
+    override fun setOnSubtitleCuesListener(listener: ((List<Cue>) -> Unit)?) {
+        subtitleCuesListener = listener
+        if (listener != null) {
+            listener(player?.currentCues?.cues.orEmpty())
+        }
+    }
+
     override fun dispose() {
         dispose(stopSourceNormalizerLoopbackServer = true)
     }
@@ -438,6 +447,7 @@ internal class VesperNativeJniBindings(
             player?.removeListener(listener)
         }
         playerListener = null
+        subtitleCuesListener = null
         analyticsListener?.let { listener ->
             player?.removeAnalyticsListener(listener)
         }

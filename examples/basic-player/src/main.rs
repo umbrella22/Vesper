@@ -932,6 +932,10 @@ impl DesktopPlayerApp {
         let asset_prefix = match MediaSource::new(source_uri.clone()).protocol() {
             player_model::MediaSourceProtocol::Hls => "hls",
             player_model::MediaSourceProtocol::Dash => "dash",
+            // Live streaming protocols (RTMP/RTSP/FLV) are not downloadable via
+            // the segment-based planner; fall back to the generic file bucket
+            // so the desktop download UI reports an unsupported shape instead
+            // of crashing.
             _ => "file",
         };
         let asset_id = make_asset_id(asset_prefix);
@@ -3513,6 +3517,9 @@ fn active_source_subtitle(snapshot: &player_runtime::PlayerSnapshot) -> String {
         player_model::MediaSourceProtocol::Progressive => "FILE",
         player_model::MediaSourceProtocol::File => "LOCAL",
         player_model::MediaSourceProtocol::Content => "CONTENT",
+        player_model::MediaSourceProtocol::Rtmp => "RTMP",
+        player_model::MediaSourceProtocol::Rtsp => "RTSP",
+        player_model::MediaSourceProtocol::Flv => "FLV",
         player_model::MediaSourceProtocol::Unknown => "SOURCE",
     };
     let resolution = snapshot

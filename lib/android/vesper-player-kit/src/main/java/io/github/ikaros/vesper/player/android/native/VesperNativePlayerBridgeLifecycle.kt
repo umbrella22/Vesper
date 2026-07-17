@@ -423,6 +423,7 @@ internal fun VesperNativePlayerBridge.disposeNativeBridge() {
     resetNativeFramePipelineRuntimeMarkers()
     bindings.clearSystemPlayback()
     surfaceHost.setKeepScreenOn(false)
+    surfaceHost.close()
     surfaceHost.detach()
     bindings.dispose()
     sourceLoadJob?.cancel()

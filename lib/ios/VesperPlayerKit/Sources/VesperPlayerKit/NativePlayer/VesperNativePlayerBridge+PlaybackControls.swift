@@ -29,6 +29,7 @@ extension VesperNativePlayerBridge {
             return
         }
         let activeNativeSession = nativeFramePipelineCoordinator.activeSession
+        subtitleOverlayRenderer.attach(surfaceHost: host)
         if surfaceHost === host {
             host.onReadyForDisplay = { [weak self] in
                 Task { @MainActor in
@@ -98,6 +99,7 @@ extension VesperNativePlayerBridge {
         }
         surfaceHost?.onReadyForDisplay = nil
         surfaceHost?.attach(player: nil)
+        subtitleOverlayRenderer.attach(surfaceHost: nil)
         surfaceHost = nil
     }
 

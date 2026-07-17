@@ -324,6 +324,13 @@ final class VesperNativeFramePipelineCoordinator {
                     "iOS native-frame pipeline v1 requires a known file or progressive VOD source; " +
                     "unknown sources remain on AVFoundation system playback."
             )
+        case .rtmp, .rtsp, .flv:
+            return VesperNativeFramePipelineIssue(
+                kind: .unsupportedSource,
+                message:
+                    "iOS native-frame pipeline v1 does not handle \(source.protocol.rawValue.uppercased()) " +
+                    "live streaming sources; AVFoundation system HLS playback remains the supported route."
+            )
         case .file, .progressive:
             return nil
         }

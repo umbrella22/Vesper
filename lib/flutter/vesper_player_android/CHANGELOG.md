@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- Added MethodChannel mapping for external subtitle configurations and
+  `setSubtitleStyle`, backed by the Android host-kit cue overlay.
+- Added complete RTMP, RTSP, and HTTP-FLV protocol wire mapping.
+
 ### Breaking Changes
 
 - The Android Flutter implementation now requires Flutter 3.44.0 or newer.

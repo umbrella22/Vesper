@@ -726,6 +726,130 @@ void main() {
     expect(restored.protocol, VesperPlayerSourceProtocol.dash);
   });
 
+  test('subtitle side loads round-trip through source wire map', () {
+    final source = VesperPlayerSource(
+      uri: 'https://example.com/video.mp4',
+      label: 'Video',
+      kind: VesperPlayerSourceKind.remote,
+      protocol: VesperPlayerSourceProtocol.progressive,
+      subtitleConfigurations: const <VesperSubtitleSideLoad>[
+        VesperSubtitleSideLoad(
+          uri: 'https://example.com/sub.en.srt',
+          mimeType: VesperSubtitleSideLoad.mimeSubrip,
+          language: 'en',
+          label: 'English',
+        ),
+        VesperSubtitleSideLoad(
+          uri: 'https://example.com/sub.zh.vtt',
+          mimeType: VesperSubtitleSideLoad.mimeWebvtt,
+          language: 'zh',
+        ),
+      ],
+    );
+
+    final restored = VesperPlayerSource.fromMap(source.toMap());
+    expect(restored.subtitleConfigurations.length, 2);
+    expect(restored.subtitleConfigurations.first.uri,
+        'https://example.com/sub.en.srt');
+    expect(restored.subtitleConfigurations.first.mimeType,
+        VesperSubtitleSideLoad.mimeSubrip);
+    expect(restored.subtitleConfigurations.first.label, 'English');
+    expect(restored.subtitleConfigurations[1].language, 'zh');
+  });
+
+  test('source without subtitle side loads omits the wire field', () {
+    final source = VesperPlayerSource.dash(
+      uri: 'https://example.com/video.mpd',
+      label: 'DASH',
+    );
+    expect(source.toMap().containsKey('subtitleConfigurations'), isFalse);
+
+    final restored = VesperPlayerSource.fromMap(source.toMap());
+    expect(restored.subtitleConfigurations, isEmpty);
+  });
+
+  test('live streaming protocol factories set the right protocol', () {
+    final rtmp = VesperPlayerSource.rtmp(
+      uri: 'rtmp://example.com/live/stream',
+    );
+    expect(rtmp.protocol, VesperPlayerSourceProtocol.rtmp);
+    expect(rtmp.kind, VesperPlayerSourceKind.remote);
+
+    final rtsp = VesperPlayerSource.rtsp(
+      uri: 'rtsp://example.com/live/stream',
+    );
+    expect(rtsp.protocol, VesperPlayerSourceProtocol.rtsp);
+
+    final flv = VesperPlayerSource.flvLive(
+      uri: 'https://example.com/live/stream.flv',
+    );
+    expect(flv.protocol, VesperPlayerSourceProtocol.flv);
+  });
+
+  test('remote protocol inference recognizes live streaming uris', () {
+    expect(
+      VesperPlayerSource.remote(uri: 'rtmp://example.com/live').protocol,
+      VesperPlayerSourceProtocol.rtmp,
+    );
+    expect(
+      VesperPlayerSource.remote(uri: 'rtmps://example.com/live').protocol,
+      VesperPlayerSourceProtocol.rtmp,
+    );
+    expect(
+      VesperPlayerSource.remote(uri: 'rtsp://example.com/live').protocol,
+      VesperPlayerSourceProtocol.rtsp,
+    );
+    expect(
+      VesperPlayerSource.remote(uri: 'https://example.com/live.flv').protocol,
+      VesperPlayerSourceProtocol.progressive,
+    );
+    // A .flv extension is a container hint, not an implicit live protocol.
+    expect(
+      VesperPlayerSource.remote(uri: 'https://example.com/live.flv?t=1')
+          .protocol,
+      VesperPlayerSourceProtocol.progressive,
+    );
+  });
+
+  test('subtitle style round-trips through wire map', () {
+    const style = VesperSubtitleStyle(fontScale: 1.5, visible: false);
+
+    final restored = VesperSubtitleStyle.fromMap(style.toMap());
+    expect(restored.fontScale, 1.5);
+    expect(restored.visible, isFalse);
+    expect(restored, style);
+    expect(restored.hashCode, style.hashCode);
+  });
+
+  test('subtitle style rejects invalid scale from the wire', () {
+    expect(
+      () => VesperSubtitleStyle.fromMap(<String, Object?>{'fontScale': 4.0}),
+      throwsArgumentError,
+    );
+  });
+
+  test('subtitle style defaults to scale 1.0 and visible', () {
+    const style = VesperSubtitleStyle();
+    expect(style.fontScale, 1.0);
+    expect(style.visible, isTrue);
+  });
+
+  test('subtitle style fromMap falls back to defaults for missing fields', () {
+    final restored = VesperSubtitleStyle.fromMap(const <Object?, Object?>{});
+    expect(restored.fontScale, 1.0);
+    expect(restored.visible, isTrue);
+  });
+
+  test('subtitle style copyWith overrides only requested fields', () {
+    const style = VesperSubtitleStyle(fontScale: 1.25, visible: true);
+    final scaled = style.copyWith(fontScale: 2.0);
+    expect(scaled.fontScale, 2.0);
+    expect(scaled.visible, isTrue);
+    final hidden = style.copyWith(visible: false);
+    expect(hidden.fontScale, 1.25);
+    expect(hidden.visible, isFalse);
+  });
+
   test('live dvr timeline helpers fall back to seekable window end', () {
     const timeline = VesperTimeline(
       kind: VesperTimelineKind.liveDvr,

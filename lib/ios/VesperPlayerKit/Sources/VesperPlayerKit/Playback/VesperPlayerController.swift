@@ -15,6 +15,10 @@ public final class VesperPlayerController: ObservableObject {
     @Published private(set) var publishedFixedTrackStatus: VesperFixedTrackStatus?
     @Published private(set) var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
     @Published private(set) var publishedLastError: VesperPlayerError?
+    /// Current subtitle styling (font scale, visibility). Hosts observe this
+    /// to drive a subtitle overlay; it does not flow through the player bridge
+    /// because it only affects rendering.
+    @Published private(set) var publishedSubtitleStyle: VesperSubtitleStyle
 
     public var uiState: PlayerHostUiState {
         publishedUiState
@@ -65,6 +69,10 @@ public final class VesperPlayerController: ObservableObject {
         publishedLastError
     }
 
+    public var subtitleStyle: VesperSubtitleStyle {
+        publishedSubtitleStyle
+    }
+
     public private(set) var pluginDiagnostics: [[String: Any]]
 
     private var bridgeObservation: AnyCancellable?
@@ -88,6 +96,7 @@ public final class VesperPlayerController: ObservableObject {
     private let setVideoTrackSelectionImpl: (VesperTrackSelection) -> Void
     private let setAudioTrackSelectionImpl: (VesperTrackSelection) -> Void
     private let setSubtitleTrackSelectionImpl: (VesperTrackSelection) -> Void
+    private let setSubtitleStyleImpl: (VesperSubtitleStyle) -> Void
     private let setAbrPolicyImpl: (VesperAbrPolicy) -> Void
     private let setResiliencePolicyImpl: (VesperPlaybackResiliencePolicy) -> Void
     private let setAudioSessionInterruptedImpl: (Bool) -> Void
@@ -112,6 +121,7 @@ public final class VesperPlayerController: ObservableObject {
         publishedFixedTrackStatus = bridge.publishedFixedTrackStatus
         publishedResiliencePolicy = bridge.publishedResiliencePolicy
         publishedLastError = bridge.publishedLastError
+        publishedSubtitleStyle = .default
         pluginDiagnostics = bridge.pluginDiagnostics
         initializeImpl = bridge.initialize
         initializeAsyncImpl = bridge.initializeAsync
@@ -141,6 +151,7 @@ public final class VesperPlayerController: ObservableObject {
         setVideoTrackSelectionImpl = bridge.setVideoTrackSelection
         setAudioTrackSelectionImpl = bridge.setAudioTrackSelection
         setSubtitleTrackSelectionImpl = bridge.setSubtitleTrackSelection
+        setSubtitleStyleImpl = bridge.setSubtitleStyle
         setAbrPolicyImpl = bridge.setAbrPolicy
         setResiliencePolicyImpl = bridge.setResiliencePolicy
         setAudioSessionInterruptedImpl = bridge.setAudioSessionInterrupted
@@ -258,6 +269,16 @@ public final class VesperPlayerController: ObservableObject {
 
     public func setSubtitleTrackSelection(_ selection: VesperTrackSelection) {
         setSubtitleTrackSelectionImpl(selection)
+    }
+
+    /// Updates subtitle styling (font scale, visibility). Hosts observing
+    /// `subtitleStyle` should apply the new value to their subtitle overlay.
+    public func setSubtitleStyle(_ style: VesperSubtitleStyle) {
+        guard style.fontScale.isFinite, (0.5...3.0).contains(style.fontScale) else {
+            return
+        }
+        setSubtitleStyleImpl(style)
+        publishedSubtitleStyle = style
     }
 
     /// Applies adaptive bitrate behavior for the active source.

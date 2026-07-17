@@ -365,6 +365,9 @@ internal val VesperPlayerSourceProtocol.wireName: String
             VesperPlayerSourceProtocol.Progressive -> "progressive"
             VesperPlayerSourceProtocol.Hls -> "hls"
             VesperPlayerSourceProtocol.Dash -> "dash"
+            VesperPlayerSourceProtocol.Rtmp -> "rtmp"
+            VesperPlayerSourceProtocol.Rtsp -> "rtsp"
+            VesperPlayerSourceProtocol.Flv -> "flv"
         }
 
 internal const val DISPLAY_HDR_PROBE_AVAILABLE_KEY = "displayHdrProbeAvailable"
