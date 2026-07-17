@@ -24,6 +24,12 @@
 - Native-frame plugin breakers now enforce queue/in-flight load decisions and
   reset consecutive failure counters after every successful adapter call.
 
+### Fixed
+
+- Aligned Android CI and release jobs with the Gradle 9.6.0 wrapper, corrected
+  the Flutter Android minimum requirement to 3.44.0, and synchronized Android
+  source-build toolchain documentation.
+
 ## 0.3.1 - 2026-06-09
 
 ### Breaking Changes

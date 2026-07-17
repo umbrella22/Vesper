@@ -129,7 +129,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.4.0"
+          gradle-version: "9.6.0"
 
       - name: Prepare release version metadata
         run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
@@ -229,7 +229,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.4.0"
+          gradle-version: "9.6.0"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2

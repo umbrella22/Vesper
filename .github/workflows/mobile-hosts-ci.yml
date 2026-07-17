@@ -110,7 +110,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.4.0"
+          gradle-version: "9.6.0"
 
       - name: Verify current version metadata
         run: ./scripts/vesper release verify-current

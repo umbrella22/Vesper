@@ -194,7 +194,7 @@ unchanged and does not expose decoded frames to FrameProcessor plugins.
 ## Minimum Requirements
 
 - Android API Level 26+
-- Flutter 3.24.0+
+- Flutter 3.44.0+
 - arm64 device or arm64 emulator when running Android host builds
 
 ## Related Resources

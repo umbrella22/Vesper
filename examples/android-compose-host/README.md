@@ -97,8 +97,9 @@ and only accepts generic `VesperPlayerSource` values.
 
 ## Requirements
 
-- Android Studio (Ladybug or newer)
-- Android SDK 36 / minSdk 26
+- Android Studio with Android Gradle Plugin 9.1 support
+- JDK 21 for Gradle
+- Android SDK 36, Build Tools 36.0.0, and minSdk 26
 - NDK `29.0.14206865`
 - Rust toolchain with `aarch64-linux-android` target
 - arm64 device or arm64 emulator
@@ -130,9 +131,8 @@ and only accepts generic `VesperPlayerSource` values.
 ## Build From CLI
 
 ```sh
-GRADLE_USER_HOME=$PWD/.gradle/gradle-user-home \
-examples/android-compose-host/.gradle/wrapper/dists/gradle-9.6.0-bin/42k10rwplmzkhuboz9kdazi7s/gradle-9.6.0/bin/gradle \
-  -p examples/android-compose-host \
+cd examples/android-compose-host
+GRADLE_USER_HOME=$PWD/.gradle/gradle-user-home ./gradlew \
   -Pvesper.player.android.abis=arm64-v8a \
   assembleRelease
 ```
@@ -141,9 +141,8 @@ examples/android-compose-host/.gradle/wrapper/dists/gradle-9.6.0-bin/42k10rwplmz
 
 ```sh
 ./scripts/vesper android jni release arm64-v8a
-GRADLE_USER_HOME=$PWD/.gradle/gradle-user-home \
-examples/android-compose-host/.gradle/wrapper/dists/gradle-9.6.0-bin/42k10rwplmzkhuboz9kdazi7s/gradle-9.6.0/bin/gradle \
-  -p examples/android-compose-host \
+cd examples/android-compose-host
+GRADLE_USER_HOME=$PWD/.gradle/gradle-user-home ./gradlew \
   -Pvesper.player.android.abis=arm64-v8a \
   :app:testDebugUnitTest
 ```
@@ -154,8 +153,11 @@ The project is pinned to:
 
 - Android Gradle Plugin `9.1.0`
 - Gradle Wrapper `9.6.0`
+- Gradle runtime JDK `21`
+- Java / Kotlin bytecode target `17`
 - Kotlin `2.3.10`
 - Compose BOM `2026.02.01`
+- Android SDK `36` with Build Tools `36.0.0`
 - Android NDK `29.0.14206865`
 
 With AGP 9.x, the `org.jetbrains.kotlin.android` plugin is built in and is not
@@ -166,6 +168,10 @@ cache:
 
 - wrapper distributions: `examples/android-compose-host/.gradle/wrapper/dists`
 - Gradle service home: `.gradle/gradle-user-home`
+
+The wrapper is the user-facing CLI entry point. Repository automation and
+offline agent work resolve an already cached distribution that matches
+`gradle-wrapper.properties` through `scripts/lib/android.sh`.
 
 References:
 

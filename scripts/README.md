@@ -67,6 +67,8 @@ VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper flutter pub-dry-run /
 
 Android helper scripts use a CI-provisioned `gradle` executable when `CI=true`.
 GitHub Actions jobs install that executable with `gradle/actions/setup-gradle`.
+The CI-provisioned version must match the project's
+`gradle-wrapper.properties` declaration.
 Local agent work remains offline-safe: scripts look for a project-local cached
 Gradle distribution under `.gradle/wrapper/dists/**/bin/gradle` and do not
 invoke `gradlew` when that cache is missing.
@@ -209,7 +211,10 @@ tarballs somewhere else.
 ## Conventions
 
 - The default Android ABI is `arm64-v8a`; override it with command arguments or `RUST_ANDROID_ABIS`.
-- The default Android NDK version is `29.0.14206865`. Scripts prefer `ANDROID_NDK_ROOT`, then resolve from `ANDROID_SDK_ROOT` / `ANDROID_HOME`.
+- The default Android NDK version is `29.0.14206865`. Gradle and CI pin that
+  version. Shell helpers honor explicit overrides and otherwise resolve a
+  complete installation from `ANDROID_SDK_ROOT` / `ANDROID_HOME`, including a
+  fallback installed NDK when the default version is unavailable.
 - The default Apple/iOS slices are `ios-arm64` and `ios-simulator-arm64`; do not reintroduce x86 / x86_64 distribution slices.
 - iOS Rust build scripts pass `--manifest-path "$ROOT_DIR/Cargo.toml"` to
   Cargo so they can be run from Xcode build phases, Flutter plugin builds, CI

@@ -63,6 +63,20 @@ These requirements define the supported product boundary. The Android package
 does not plan to add 32-bit or Intel ABIs, or compatibility behavior for older
 Android versions, without a separate product-direction change.
 
+## Source Build Toolchain
+
+- Gradle Wrapper `9.6.0`
+- Android Gradle Plugin `9.1.0`
+- Gradle runtime JDK `21`
+- Java / Kotlin bytecode target `17`
+- Kotlin `2.3.10`
+- Android SDK `36` with Build Tools `36.0.0`
+- Android NDK `29.0.14206865`
+
+Gradle and CI pin the listed NDK version. Shell build helpers allow an explicit
+NDK override and can fall back to another complete installed NDK when the
+default installation is unavailable.
+
 ## Building From Source
 
 From the repository root:
