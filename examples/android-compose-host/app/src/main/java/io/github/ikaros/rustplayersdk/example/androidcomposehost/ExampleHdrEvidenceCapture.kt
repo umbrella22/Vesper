@@ -798,7 +798,7 @@ private fun exampleHdrEvidencePlatformLog(
 private fun exampleHdrEvidenceCaptureDate(): String =
     SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 
-private fun VesperPlayerSource.evidenceSourceKind(): String =
+internal fun VesperPlayerSource.evidenceSourceKind(): String =
     when (kind) {
         VesperPlayerSourceKind.Local -> "local"
         VesperPlayerSourceKind.Remote ->
@@ -808,15 +808,25 @@ private fun VesperPlayerSource.evidenceSourceKind(): String =
                 VesperPlayerSourceProtocol.Progressive -> "progressive"
                 VesperPlayerSourceProtocol.Content -> "content"
                 VesperPlayerSourceProtocol.File -> "file"
+                VesperPlayerSourceProtocol.Rtmp -> "rtmp"
+                VesperPlayerSourceProtocol.Rtsp -> "rtsp"
+                VesperPlayerSourceProtocol.Flv -> "flv"
                 VesperPlayerSourceProtocol.Unknown -> "remote"
             }
     }
 
-private fun VesperPlayerSource.evidenceManifestKind(): String =
+internal fun VesperPlayerSource.evidenceManifestKind(): String =
     when (protocol) {
         VesperPlayerSourceProtocol.Hls -> "hls"
         VesperPlayerSourceProtocol.Dash -> "dash"
-        else -> "none"
+        VesperPlayerSourceProtocol.Unknown,
+        VesperPlayerSourceProtocol.File,
+        VesperPlayerSourceProtocol.Content,
+        VesperPlayerSourceProtocol.Progressive,
+        VesperPlayerSourceProtocol.Rtmp,
+        VesperPlayerSourceProtocol.Rtsp,
+        VesperPlayerSourceProtocol.Flv,
+        -> "none"
     }
 
 private fun VesperPlaybackCapabilityProbeResult.toEvidenceMap(): Map<String, Any?> =

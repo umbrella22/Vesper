@@ -1980,26 +1980,26 @@ private func exampleDisplayGamutName(_ gamut: UIDisplayGamut) -> String {
     }
 }
 
-private func exampleHdrEvidenceSourceKind(_ source: VesperPlayerSource) -> String {
+internal func exampleHdrEvidenceSourceKind(_ source: VesperPlayerSource) -> String {
     switch source.protocol {
     case .file, .content:
         return "file"
     case .hls:
         return "hls"
-    case .dash, .progressive:
+    case .dash, .progressive, .rtmp, .rtsp, .flv:
         return "progressive"
     case .unknown:
         return source.kind == .local ? "file" : "progressive"
     }
 }
 
-private func exampleHdrEvidenceManifestKind(_ source: VesperPlayerSource) -> String {
+internal func exampleHdrEvidenceManifestKind(_ source: VesperPlayerSource) -> String {
     switch source.protocol {
     case .hls:
         return "hls"
     case .dash:
         return "dash"
-    case .unknown, .file, .content, .progressive:
+    case .unknown, .file, .content, .progressive, .rtmp, .rtsp, .flv:
         return "none"
     }
 }

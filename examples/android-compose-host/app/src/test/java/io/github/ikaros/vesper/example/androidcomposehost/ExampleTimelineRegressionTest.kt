@@ -27,6 +27,28 @@ class ExampleTimelineRegressionTest {
     }
 
     @Test
+    fun `live protocols preserve hdr evidence classification`() {
+        val expectedSourceKinds =
+            mapOf(
+                VesperPlayerSourceProtocol.Rtmp to "rtmp",
+                VesperPlayerSourceProtocol.Rtsp to "rtsp",
+                VesperPlayerSourceProtocol.Flv to "flv",
+            )
+
+        expectedSourceKinds.forEach { (protocol, expectedSourceKind) ->
+            val source =
+                VesperPlayerSource.remote(
+                    uri = "https://example.invalid/live",
+                    label = protocol.name,
+                    protocol = protocol,
+                )
+
+            assertEquals(expectedSourceKind, source.evidenceSourceKind())
+            assertEquals("none", source.evidenceManifestKind())
+        }
+    }
+
+    @Test
     fun `dolby acceptance urls follow browser test kit patterns`() {
         assertEquals(
             "https://ott.dolby.com/browser_test_kit/clear/p5/24/dash.mpd",

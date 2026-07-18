@@ -13,6 +13,32 @@ final class ExampleTimelineRegressionTests: XCTestCase {
         XCTAssertEqual(queue.first?.source.uri, IOS_LIVE_DVR_ACCEPTANCE_URL)
     }
 
+    func testLiveProtocolsUseProgressiveHdrEvidenceClassification() {
+        for sourceProtocol in [
+            VesperPlayerSourceProtocol.rtmp,
+            .rtsp,
+            .flv,
+        ] {
+            let source = VesperPlayerSource(
+                uri: "https://example.invalid/live",
+                label: sourceProtocol.rawValue,
+                kind: .remote,
+                protocol: sourceProtocol
+            )
+
+            XCTAssertEqual(
+                exampleHdrEvidenceSourceKind(source),
+                "progressive",
+                sourceProtocol.rawValue
+            )
+            XCTAssertEqual(
+                exampleHdrEvidenceManifestKind(source),
+                "none",
+                sourceProtocol.rawValue
+            )
+        }
+    }
+
     func testDolbyAcceptanceUrlsFollowBrowserTestKitPatterns() {
         XCTAssertEqual(
             exampleDolbyAcceptanceUrl(
