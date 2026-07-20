@@ -147,6 +147,7 @@ internal class NativeTrackCatalog(
     @JvmField val tracks: Array<NativeTrackInfo>,
     @JvmField val adaptiveVideo: Boolean,
     @JvmField val adaptiveAudio: Boolean,
+    @JvmField val subtitleIdentityFailure: NativeTrackSelectionFailure? = null,
 )
 
 internal class NativeTrackSelectionPayload(

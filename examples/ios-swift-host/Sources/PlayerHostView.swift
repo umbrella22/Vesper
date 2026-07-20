@@ -438,9 +438,18 @@ struct PlayerHostView: View {
                     controller.setAudioTrackSelection($0)
                     activeSheet = nil
                 },
-                onSelectSubtitle: {
-                    controller.setSubtitleTrackSelection($0)
-                    activeSheet = nil
+                onSelectSubtitle: { selection in
+                    do {
+                        try controller.setSubtitleTrackSelection(selection)
+                        activeSheet = nil
+                    } catch {
+                        hostMessage = error.localizedDescription
+                        appendHostLog(
+                            severity: .error,
+                            title: ExampleI18n.subtitles,
+                            detail: error.localizedDescription
+                        )
+                    }
                 },
                 onSelectSpeed: {
                     controller.setPlaybackRate($0)

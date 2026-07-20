@@ -281,6 +281,13 @@ internal interface PlayerBridge {
     val uiState: StateFlow<PlayerHostUiState>
     val trackCatalog: StateFlow<VesperTrackCatalog>
     val trackSelection: StateFlow<VesperTrackSelectionSnapshot>
+    /**
+     * First-class subtitle lifecycle state. Mirrors the iOS
+     * `publishedSubtitleState`. Driven by catalog refresh, structured JNI
+     * failures, and source-switch reset
+     * This state is emitted directly rather than derived from warnings.
+     */
+    val subtitleState: StateFlow<VesperSubtitleState>
     val effectiveVideoTrackId: StateFlow<String?>
     val videoVariantObservation: StateFlow<VesperVideoVariantObservation?>
     val resiliencePolicy: StateFlow<VesperPlaybackResiliencePolicy>

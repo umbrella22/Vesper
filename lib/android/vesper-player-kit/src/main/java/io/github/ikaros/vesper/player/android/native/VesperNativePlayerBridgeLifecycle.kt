@@ -468,6 +468,12 @@ internal suspend fun VesperNativePlayerBridge.selectNativeSourceAsync(source: Ve
         currentSource = source
         pendingAutoPlay = true
         clearTrackState()
+        // Subtitle state and runtime warnings must atomically reset on source
+        // epoch change so a stale `subtitle_track_not_found`
+        // from the previous source does not bleed into the new source's
+        // snapshot.
+        synchronized(runtimeWarnings) { runtimeWarnings.clear() }
+        _subtitleState.value = VesperSubtitleState.loading(advertisedTrackCount = 0)
         Log.i(
             NATIVE_PLAYER_BRIDGE_TAG,
             "selecting source=${source.uri} label=${source.label} kind=${source.kind} protocol=${source.protocol}",

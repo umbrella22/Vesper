@@ -9,6 +9,9 @@ struct LoadedTrackCatalogState {
     let videoVariantPinsByTrackId: [String: LoadedVideoVariantPin]
     let audioOptionsByTrackId: [String: AVMediaSelectionOption]
     let subtitleOptionsByTrackId: [String: AVMediaSelectionOption]
+    /// Subtitle lifecycle state derived during catalog loading. Drives the
+    /// Flutter subtitle state channel.
+    let subtitleState: VesperSubtitleState
 }
 
 struct LoadedVideoVariantState {

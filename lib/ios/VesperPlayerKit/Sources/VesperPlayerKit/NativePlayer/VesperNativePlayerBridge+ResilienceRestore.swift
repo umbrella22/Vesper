@@ -76,7 +76,7 @@ extension VesperNativePlayerBridge {
     ) -> Bool {
         if state.audioSelection.mode != .auto {
             if let group = audioGroup {
-                applyTrackSelection(
+                try? applyTrackSelection(
                     state.audioSelection,
                     kind: .audio,
                     group: group,
@@ -87,13 +87,38 @@ extension VesperNativePlayerBridge {
         }
 
         if state.subtitleSelection.mode != .auto {
+            // A resilience restore must not silently drop a preserved subtitle
+            // selection when the legible group
+            // or option lookup fails. Surface a structured
+            // `subtitle_platform_track_unavailable` /
+            // `subtitle_track_not_found` failure so the host can show the
+            // user that subtitles could not be restored.
             if let group = subtitleGroup {
-                applyTrackSelection(
-                    state.subtitleSelection,
-                    kind: .subtitle,
-                    group: group,
-                    optionsByTrackId: subtitleOptionsByTrackId,
-                    item: item
+                if state.subtitleSelection.mode == .track,
+                   let trackId = state.subtitleSelection.trackId,
+                   subtitleOptionsByTrackId[trackId] == nil
+                {
+                    reportSubtitleFailure(
+                        code: "subtitle_track_not_found",
+                        phase: .selection,
+                        trackId: trackId,
+                        message: "resilience restore could not locate preserved subtitle trackId=\(trackId)"
+                    )
+                } else {
+                    try? applyTrackSelection(
+                        state.subtitleSelection,
+                        kind: .subtitle,
+                        group: group,
+                        optionsByTrackId: subtitleOptionsByTrackId,
+                        item: item
+                    )
+                }
+            } else if state.subtitleSelection.mode == .track {
+                reportSubtitleFailure(
+                    code: "subtitle_platform_track_unavailable",
+                    phase: .selection,
+                    trackId: state.subtitleSelection.trackId,
+                    message: "resilience restore rejected: no legible media selection group for preserved subtitle selection"
                 )
             }
         }

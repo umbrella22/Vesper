@@ -15,6 +15,11 @@ public final class VesperPlayerController: ObservableObject {
     @Published private(set) var publishedFixedTrackStatus: VesperFixedTrackStatus?
     @Published private(set) var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
     @Published private(set) var publishedLastError: VesperPlayerError?
+    /// Subtitle lifecycle state for the active source. Mirrors the bridge's
+    /// `publishedSubtitleState` so Flutter can observe subtitle
+    /// loading/ready/failed transitions independently of the generic
+    /// `lastError` channel.
+    @Published private(set) var publishedSubtitleState: VesperSubtitleState
     /// Current subtitle styling (font scale, visibility). Hosts observe this
     /// to drive a subtitle overlay; it does not flow through the player bridge
     /// because it only affects rendering.
@@ -69,6 +74,42 @@ public final class VesperPlayerController: ObservableObject {
         publishedLastError
     }
 
+    /// Subtitle lifecycle state for the active source. Exposed so Flutter
+    /// can render loading / ready / failed states without coupling to the
+    /// generic `lastError` channel.
+    public var subtitleState: VesperSubtitleState {
+        publishedSubtitleState
+    }
+
+    /// Flutter wire shape for `subtitleState`. Keys are stable across
+    /// iOS/Android and must match the Dart enum names in
+    /// `subtitle_state_models.dart`.
+    public func subtitleStateWireMap() -> [String: Any] {
+        let state = publishedSubtitleState
+        var map: [String: Any] = [
+            "status": state.status.rawValue,
+            "advertisedTrackCount": state.advertisedTrackCount,
+            "selectableTrackCount": state.selectableTrackCount,
+        ]
+        if let error = state.error {
+            // `trackId` may be nil; bridge it to `NSNull()` explicitly so
+            // the wire shape matches the rest of the plugin (which uses
+            // `flutterValue(...)` for nullable values) instead of relying
+            // on Optional<String>.none-as-Any serialization.
+            let trackIdWire: Any = error.trackId ?? NSNull()
+            map["error"] = [
+                "code": error.code,
+                "phase": error.phase.rawValue,
+                "trackId": trackIdWire,
+                "retriable": error.retriable,
+                "message": error.message,
+            ] as [String: Any]
+        } else {
+            map["error"] = NSNull()
+        }
+        return map
+    }
+
     public var subtitleStyle: VesperSubtitleStyle {
         publishedSubtitleStyle
     }
@@ -95,7 +136,7 @@ public final class VesperPlayerController: ObservableObject {
     private let setPlaybackRateImpl: (Float) -> Void
     private let setVideoTrackSelectionImpl: (VesperTrackSelection) -> Void
     private let setAudioTrackSelectionImpl: (VesperTrackSelection) -> Void
-    private let setSubtitleTrackSelectionImpl: (VesperTrackSelection) -> Void
+    private let setSubtitleTrackSelectionImpl: (VesperTrackSelection) throws -> Void
     private let setSubtitleStyleImpl: (VesperSubtitleStyle) -> Void
     private let setAbrPolicyImpl: (VesperAbrPolicy) -> Void
     private let setResiliencePolicyImpl: (VesperPlaybackResiliencePolicy) -> Void
@@ -116,6 +157,7 @@ public final class VesperPlayerController: ObservableObject {
         publishedUiState = bridge.publishedUiState
         publishedTrackCatalog = bridge.publishedTrackCatalog
         publishedTrackSelection = bridge.publishedTrackSelection
+        publishedSubtitleState = bridge.publishedSubtitleState
         publishedEffectiveVideoTrackId = bridge.publishedEffectiveVideoTrackId
         publishedVideoVariantObservation = bridge.publishedVideoVariantObservation
         publishedFixedTrackStatus = bridge.publishedFixedTrackStatus
@@ -169,6 +211,7 @@ public final class VesperPlayerController: ObservableObject {
                 self.publishedFixedTrackStatus = bridge.publishedFixedTrackStatus
                 self.publishedResiliencePolicy = bridge.publishedResiliencePolicy
                 self.publishedLastError = bridge.publishedLastError
+                self.publishedSubtitleState = bridge.publishedSubtitleState
                 self.pluginDiagnostics = bridge.pluginDiagnostics
                 self.systemPlaybackCoordinator.updatePlaybackState(self.publishedUiState)
                 self.updateScreenSleepPolicy()
@@ -267,8 +310,8 @@ public final class VesperPlayerController: ObservableObject {
         setAudioTrackSelectionImpl(selection)
     }
 
-    public func setSubtitleTrackSelection(_ selection: VesperTrackSelection) {
-        setSubtitleTrackSelectionImpl(selection)
+    public func setSubtitleTrackSelection(_ selection: VesperTrackSelection) throws {
+        try setSubtitleTrackSelectionImpl(selection)
     }
 
     /// Updates subtitle styling (font scale, visibility). Hosts observing

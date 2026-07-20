@@ -337,7 +337,43 @@ fn playable_representations(manifest: &DashManifest) -> DashHlsResult<Vec<Playab
         }
     };
 
-    let mut used_ids: HashMap<String, u32> = HashMap::new();
+    let mut subtitle_ids = std::collections::HashSet::new();
+    let mut default_subtitle_renditions = 0_u32;
+    for adaptation_set in &period.adaptation_sets {
+        if !matches!(adaptation_set.kind, DashAdaptationKind::Subtitle) {
+            continue;
+        }
+        for representation in &adaptation_set.representations {
+            if representation.segment_base.is_none() && representation.segment_template.is_none() {
+                continue;
+            }
+            if representation.id.trim().is_empty() {
+                return Err(DashHlsError::InvalidMpd(
+                    "subtitle_track_identity_ambiguous: missing Representation@id in subtitle adaptation set"
+                        .to_owned(),
+                ));
+            }
+            if !subtitle_ids.insert(representation.id.clone()) {
+                return Err(DashHlsError::InvalidMpd(format!(
+                    "subtitle_track_identity_ambiguous: duplicate DASH representation id {}",
+                    representation.id
+                )));
+            }
+            if adaptation_set.is_default {
+                default_subtitle_renditions += 1;
+            }
+        }
+    }
+    if default_subtitle_renditions > 1 {
+        return Err(DashHlsError::InvalidMpd(format!(
+            "subtitle_default_track_ambiguous: {default_subtitle_renditions} default subtitle renditions",
+        )));
+    }
+
+    // Rendition ids are dictionary keys in the Apple host. Reserve stable
+    // subtitle ids first, then suffix colliding audio/video ids without
+    // changing subtitle identity.
+    let mut used_ids = subtitle_ids;
     let mut playable = Vec::new();
     for (adaptation_index, adaptation_set) in period.adaptation_sets.iter().enumerate() {
         if !matches!(
@@ -356,17 +392,15 @@ fn playable_representations(manifest: &DashManifest) -> DashHlsResult<Vec<Playab
                 "{}-{adaptation_index}-{representation_index}",
                 adaptation_kind_id(adaptation_set.kind)
             );
-            let base_id = if representation.id.is_empty() {
-                fallback_id
-            } else {
+            let rendition_id = if matches!(adaptation_set.kind, DashAdaptationKind::Subtitle) {
                 representation.id.clone()
-            };
-            let seen_count = used_ids.get(&base_id).copied().unwrap_or(0);
-            used_ids.insert(base_id.clone(), seen_count + 1);
-            let rendition_id = if seen_count == 0 {
-                base_id
             } else {
-                format!("{}-{}", base_id, seen_count + 1)
+                let base_id = if representation.id.is_empty() {
+                    fallback_id
+                } else {
+                    representation.id.clone()
+                };
+                allocate_unique_rendition_id(base_id, &mut used_ids)
             };
             playable.push(PlayableRepresentation {
                 rendition_id,
@@ -385,6 +419,23 @@ fn playable_representations(manifest: &DashManifest) -> DashHlsResult<Vec<Playab
         ));
     }
     Ok(playable)
+}
+
+fn allocate_unique_rendition_id(
+    base_id: String,
+    used_ids: &mut std::collections::HashSet<String>,
+) -> String {
+    if used_ids.insert(base_id.clone()) {
+        return base_id;
+    }
+    let mut suffix = 2_u32;
+    loop {
+        let candidate = format!("{base_id}-{suffix}");
+        if used_ids.insert(candidate.clone()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 fn adaptation_kind_id(kind: DashAdaptationKind) -> &'static str {
@@ -555,17 +606,34 @@ fn build_master_playlist(
 
     if !selected.subtitles.is_empty() {
         for (index, item) in selected.subtitles.iter().enumerate() {
+            // NAME preference: <Label> / @label -> language -> adaptation
+            // set id -> positional index. This keeps host-visible naming
+            // stable when the host migrates from legacy `@label` to the
+            // standard `<Label>` element.
             let name = item
                 .adaptation_set
-                .language
+                .label
                 .as_deref()
+                .or(item.adaptation_set.language.as_deref())
                 .or(item.adaptation_set.id.as_deref())
                 .map(str::to_owned)
                 .unwrap_or_else(|| format!("subtitles-{}", index + 1));
             let media_url = required_media_url(media_urls, &item.rendition_id)?;
+            let default_flag = if item.adaptation_set.is_default {
+                "YES"
+            } else {
+                "NO"
+            };
+            let forced_flag = if item.adaptation_set.is_forced {
+                "YES"
+            } else {
+                "NO"
+            };
             let mut attrs = format!(
-                "TYPE=SUBTITLES,GROUP-ID=\"subtitles\",NAME=\"{}\",DEFAULT=NO,AUTOSELECT=YES,FORCED=NO,URI=\"{}\"",
+                "TYPE=SUBTITLES,GROUP-ID=\"subtitles\",NAME=\"{}\",DEFAULT={},AUTOSELECT=YES,FORCED={},URI=\"{}\"",
                 escape_attribute(&name),
+                default_flag,
+                forced_flag,
                 escape_attribute(media_url)
             );
             if let Some(language) = &item.adaptation_set.language {
@@ -1781,6 +1849,9 @@ mod tests {
                 kind: DashAdaptationKind::Video,
                 mime_type: Some("video/mp4".to_owned()),
                 language: None,
+                label: None,
+                is_default: false,
+                is_forced: false,
                 representations: Vec::new(),
             },
             representation: DashRepresentation {

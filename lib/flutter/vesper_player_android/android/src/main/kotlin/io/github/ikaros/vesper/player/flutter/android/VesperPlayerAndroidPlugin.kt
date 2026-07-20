@@ -103,6 +103,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -1454,15 +1455,33 @@ class VesperPlayerAndroidPlugin :
     }
 
     private fun observeSession(session: PlayerSession) {
+        session.warningDrainJob?.cancel()
+        session.warningDrainJob = scope.launch {
+            while (isActive) {
+                delay(250L)
+                if (isCurrentSession(session)) {
+                    emitRuntimeWarnings(session)
+                }
+            }
+        }
         session.observerJob = scope.launch {
             combine(
                 session.controller.uiState,
                 session.controller.trackCatalog,
                 session.controller.trackSelection,
-            ) { _, _, _ ->
-                buildSnapshotMap(session)
-            }.collect { snapshot ->
-                emitRuntimeWarnings(session)
+                session.controller.subtitleState,
+            ) { _, _, _, _ ->
+                // Drain runtime warnings once per snapshot tick and feed
+                // them to the warning event stream. Subtitle state is now
+                // first-class on the controller (read directly in
+                // buildSnapshotMap), so warnings no longer need to
+                // accumulate for state derivation. This fixes the
+                // previous double-drain that starved the warning channel
+                // and the unbounded accumulated list.
+                val drained = session.controller.drainRuntimeWarnings()
+                buildSnapshotMap(session) to drained
+            }.collect { (snapshot, drained) ->
+                emitRuntimeWarnings(session, drained)
                 emitHostTerminalErrorIfNeeded(session, snapshot)
                 emitSnapshot(session, snapshot)
             }
@@ -1589,8 +1608,12 @@ class VesperPlayerAndroidPlugin :
         )
     }
 
-    private fun emitRuntimeWarnings(session: PlayerSession) {
-        session.controller.drainRuntimeWarnings().forEach { warning ->
+    private fun emitRuntimeWarnings(
+        session: PlayerSession,
+        drained: List<io.github.ikaros.vesper.player.android.VesperRuntimeWarning> =
+            session.controller.drainRuntimeWarnings(),
+    ) {
+        drained.forEach { warning ->
             val payload =
                 if (warning.domain == "capability") {
                     warning.payload.withAppProbeConvergence(session.recentCapabilityProbe)
@@ -1764,6 +1787,12 @@ class VesperPlayerAndroidPlugin :
             "resiliencePolicy" to resiliencePolicy.toMap(),
             "pluginDiagnostics" to session.controller.pluginDiagnostics,
             "lastError" to resolvedLastError,
+            // Read the first-class subtitle state directly from the
+            // controller. This replaces the previous derive-from-catalog-
+            // and-warnings logic that (a) could not produce `loading`,
+            // (b) always set advertised == selectable, and (c) permanently
+            // polluted the state across source switches.
+            "subtitleState" to session.controller.subtitleState.value.toMap(),
         )
     }
 
@@ -1814,6 +1843,7 @@ class VesperPlayerAndroidPlugin :
 
     private fun disposeSession(session: PlayerSession) {
         session.observerJob?.cancel()
+        session.warningDrainJob?.cancel()
         surfaceHostLifecycle.detachSession(session)
         session.controller.dispose()
         emitBenchmarkConsoleLog(session, force = true)

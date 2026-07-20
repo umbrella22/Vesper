@@ -278,7 +278,13 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 let selectionMap = try requireNestedMap(
                     arguments: arguments(of: call), key: "selection")
                 session.lastError = nil
-                session.controller.setSubtitleTrackSelection(try selectionMap.toTrackSelection())
+                // `setSubtitleTrackSelection` now throws on immediate
+                // validation failures (missing group, unknown id, no auto
+                // candidate). The existing `handleSessionCommand` catch
+                // converts the throw into a `FlutterError`, so the Dart
+                // `Future<void>` actually fails instead of completing
+                // successfully.
+                try session.controller.setSubtitleTrackSelection(try selectionMap.toTrackSelection())
                 emitSnapshot(for: session)
                 return nil
             }
@@ -1800,6 +1806,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "resiliencePolicy": resiliencePolicy.toMap(),
             "pluginDiagnostics": session.controller.pluginDiagnostics,
             "lastError": flutterValue(lastError),
+            "subtitleState": session.controller.subtitleStateWireMap(),
         ]
     }
 

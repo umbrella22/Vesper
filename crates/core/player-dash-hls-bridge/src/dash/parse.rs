@@ -109,13 +109,36 @@ fn parse_adaptation_set(
     );
     let inherited_segment_base = parse_segment_base(node)?;
     let inherited_segment_template = parse_segment_template(node, requires_initialization)?;
+    // Subtitle metadata:
+    // - prefer a standard `<Label>` child element, fall back to the
+    //   compatibility `AdaptationSet@label` attribute so existing host
+    //   output keeps working until it migrates to standard elements.
+    // - the DASH role scheme `urn:mpeg:dash:role:2011` defines `main`
+    //   (default selection) and `forced-subtitle` (forced narrative).
+    let label = child_text(node, "Label")
+        .map(str::to_owned)
+        .or_else(|| node.attr("label").map(str::to_owned));
+    let (is_default, is_forced) = parse_subtitle_roles(node);
     let mut representations = Vec::new();
 
     for representation in node.children_named("Representation") {
-        let id = representation
-            .attr("id")
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("representation-{}", representations.len()));
+        // Subtitle `Representation@id` is the source of stable track
+        // identity, so a missing id must surface
+        // `subtitle_track_identity_ambiguous` rather than being silently
+        // synthesized. Audio/video keep the legacy `representation-{index}`
+        // fallback because their identity is not part of this contract.
+        let id = match representation.attr("id") {
+            Some(value) if !value.trim().is_empty() => value.to_owned(),
+            _ => {
+                if matches!(kind, DashAdaptationKind::Subtitle) {
+                    return Err(DashHlsError::InvalidMpd(
+                        "subtitle_track_identity_ambiguous: missing Representation@id in subtitle adaptation set"
+                            .to_owned(),
+                    ));
+                }
+                format!("representation-{}", representations.len())
+            }
+        };
         let base_url = child_text(representation, "BaseURL")
             .map(|base| resolve_uri(&adaptation_base, base))
             .unwrap_or_else(|| adaptation_base.clone());
@@ -154,8 +177,37 @@ fn parse_adaptation_set(
         kind,
         mime_type,
         language: node.attr("lang").map(str::to_owned),
+        label,
+        is_default,
+        is_forced,
         representations,
     })
+}
+
+/// Reads subtitle selection flags from DASH `<Role>` children.
+///
+/// Only the standard role scheme `urn:mpeg:dash:role:2011` is interpreted
+/// for default/forced semantics. `main` marks the default subtitle rendition
+/// for selection; `forced-subtitle` and the snake-spelled
+/// `forced_subtitle` alias both mark a forced narrative. Other schemes or
+/// role values are ignored without raising so future role vocabularies do
+/// not break parsing.
+fn parse_subtitle_roles(node: &XmlNode) -> (bool, bool) {
+    const STANDARD_ROLE_SCHEME: &str = "urn:mpeg:dash:role:2011";
+    let mut is_default = false;
+    let mut is_forced = false;
+    for role in node.children_named("Role") {
+        let scheme = role.attr("schemeIdUri").unwrap_or(STANDARD_ROLE_SCHEME);
+        if scheme != STANDARD_ROLE_SCHEME {
+            continue;
+        }
+        match role.attr("value").unwrap_or_default() {
+            "main" => is_default = true,
+            "forced-subtitle" | "forced_subtitle" => is_forced = true,
+            _ => {}
+        }
+    }
+    (is_default, is_forced)
 }
 
 fn adaptation_kind(

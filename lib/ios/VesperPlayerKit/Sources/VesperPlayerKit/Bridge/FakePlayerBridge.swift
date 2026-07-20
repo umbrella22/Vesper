@@ -14,6 +14,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published private(set) var publishedFixedTrackStatus: VesperFixedTrackStatus?
     @Published private(set) var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
     @Published private(set) var publishedLastError: VesperPlayerError?
+    @Published private(set) var publishedSubtitleState: VesperSubtitleState
 
     let backend: PlayerBridgeBackend = .fakeDemo
     private let benchmarkRecorder: VesperBenchmarkRecorder
@@ -100,6 +101,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedFixedTrackStatus = nil
         publishedResiliencePolicy = resiliencePolicy
         publishedLastError = nil
+        publishedSubtitleState = .empty
     }
 
     func initialize() {
@@ -325,7 +327,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func setAudioTrackSelection(_ selection: VesperTrackSelection) {}
 
-    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) {}
+    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) throws {}
 
     func setSubtitleStyle(_ style: VesperSubtitleStyle) {}
 

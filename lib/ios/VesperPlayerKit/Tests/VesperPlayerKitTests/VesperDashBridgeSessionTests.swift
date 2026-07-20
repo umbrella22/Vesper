@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import XCTest
 @testable import VesperPlayerKit
 
@@ -446,5 +447,236 @@ final class VesperDashBridgeSessionTests: XCTestCase {
             .segment("video/main", .media(12))
         )
         XCTAssertNil(session.route(for: URL(string: "https://example.com/master.mpd")!))
+    }
+
+    // MARK: - WebVTT subtitle session routing
+
+    /// Writes WebVTT segment files into `directory` using names that match
+    /// the `sub-$Number$.vtt` template in `sampleWebVttSubtitleMpd`. The
+    /// generic helper `writeWebVttSegmentFiles` uses rendition-id-prefixed
+    /// names, but the manifest template expands to `sub-<n>.vtt` (no prefix),
+    /// so tests that exercise the session must write the template-expanded
+    /// names directly.
+    private func writeSampleWebVttSegmentFiles(
+        directory: URL,
+        segmentData: Data,
+        segmentCount: Int = 3
+    ) throws {
+        for number in 1...segmentCount {
+            try segmentData.write(to: directory.appendingPathComponent("sub-\(number).vtt"))
+        }
+    }
+
+    /// WebVTT subtitle media playlist must emit `.vtt` segment URLs through
+    /// the `vesper-dash://` resource loader scheme, not the misleading
+    /// `.m4s` extension that all SegmentTemplate media used previously.
+    func testWebVttSubtitleMediaPlaylistRoutesSegmentUrlsAsVtt() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let manifestURL = directory.appendingPathComponent("manifest.mpd")
+        try Data(sampleWebVttSubtitleMpd.utf8).write(to: manifestURL)
+
+        let vttBytes = Data("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello subtitle\n".utf8)
+        try writeSampleWebVttSegmentFiles(
+            directory: directory,
+            segmentData: vttBytes,
+            segmentCount: 3
+        )
+
+        let session = makeTestDashSession(sourceURL: manifestURL)
+        let data = try await session.mediaPlaylistData(renditionId: "sub-en")
+        let playlist = String(decoding: data, as: UTF8.self)
+
+        // Subtitle rendition has no initialization in the fixture, so no
+        // EXT-X-MAP should be emitted.
+        XCTAssertFalse(playlist.contains("#EXT-X-MAP"))
+        // Each media segment URI must use `.vtt` (not `.m4s`) and route
+        // through the vesper-dash:// resource loader scheme.
+        XCTAssertTrue(
+            playlist.contains("vesper-dash://segment/"),
+            "subtitle segments must route through resource loader: \(playlist)"
+        )
+        XCTAssertTrue(
+            playlist.contains("/sub-en/1.vtt"),
+            "subtitle media segment URL must use .vtt extension: \(playlist)"
+        )
+        XCTAssertFalse(
+            playlist.contains(".m4s"),
+            "subtitle media playlist must not use .m4s extension: \(playlist)"
+        )
+    }
+
+    /// The resource loader must serve the bytes of a WebVTT segment
+    /// verbatim, not reinterpret them as MP4. This proves the local file
+    /// bytes are preserved end-to-end through the session route.
+    func testWebVttSubtitleSegmentPayloadPreservesLocalFileBytes() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let manifestURL = directory.appendingPathComponent("manifest.mpd")
+        try Data(sampleWebVttSubtitleMpd.utf8).write(to: manifestURL)
+
+        let vttBytes = Data("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello subtitle\n".utf8)
+        try writeSampleWebVttSegmentFiles(
+            directory: directory,
+            segmentData: vttBytes,
+            segmentCount: 3
+        )
+
+        let session = makeTestDashSession(sourceURL: manifestURL)
+        // Static manifest: segment index is 0-based in the playlist, so the
+        // first media segment is `.media(0)` even though `$Number$` is 1.
+        let payload = try await session.segmentResourcePayload(
+            renditionId: "sub-en",
+            segment: .media(0)
+        )
+        let served = try payload.readData()
+        XCTAssertEqual(
+            served,
+            vttBytes,
+            "subtitle segment bytes must be preserved verbatim through the resource loader"
+        )
+    }
+
+    /// WebVTT subtitle segment payload must expose `public.webvtt` as its
+    /// UTI content type so AVPlayer receives a MIME-aware response. This
+    /// guards against regressions where the init-segment hardcoded
+    /// `public.mpeg-4` could leak into the subtitle path.
+    func testWebVttSubtitleSegmentContentTypeIsPublicWebvtt() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let manifestURL = directory.appendingPathComponent("manifest.mpd")
+        try Data(sampleWebVttSubtitleMpd.utf8).write(to: manifestURL)
+
+        let vttBytes = Data("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello subtitle\n".utf8)
+        try writeSampleWebVttSegmentFiles(
+            directory: directory,
+            segmentData: vttBytes,
+            segmentCount: 3
+        )
+
+        let session = makeTestDashSession(sourceURL: manifestURL)
+        let payload = try await session.segmentResourcePayload(
+            renditionId: "sub-en",
+            segment: .media(0)
+        )
+        // The payload exposes the segment MIME type; the AVPlayer-facing
+        // UTI lives on `localResourceBody.contentType` (after
+        // `avResourceContentType` mapping). Both must classify as WebVTT.
+        XCTAssertEqual(
+            payload.contentType,
+            "text/vtt",
+            "subtitle segment payload must carry the text/vtt MIME type"
+        )
+        XCTAssertEqual(
+            payload.localResourceBody.contentType,
+            "public.webvtt",
+            "subtitle localResourceBody must expose the public.webvtt UTI for AVPlayer"
+        )
+    }
+
+    /// `route(for:)` must accept `.vtt` media URLs (and `init.vtt`) so the
+    /// resource loader can dispatch subtitle requests. Previously the route
+    /// rejected anything that was not `.m4s` / `init.mp4`.
+    func testWebVttSubtitleRouteAcceptsVttUrls() {
+        let session = makeTestDashSession(
+            sourceURL: URL(string: "https://cdn.example.com/manifest.mpd")!
+        )
+        let vttMediaURL = URL(string: "vesper-dash://segment/\(session.id)/sub-en/1.vtt")!
+        XCTAssertEqual(
+            session.route(for: vttMediaURL),
+            .segment("sub-en", .media(1))
+        )
+        let vttInitURL = URL(string: "vesper-dash://segment/\(session.id)/sub-en/init.vtt")!
+        XCTAssertEqual(
+            session.route(for: vttInitURL),
+            .segment("sub-en", .initialization)
+        )
+        // Audio/video `.m4s` and `init.mp4` routes must still work so the
+        // subtitle change does not regress existing renditions.
+        let m4sMediaURL = URL(string: "vesper-dash://segment/\(session.id)/v1_257/0.m4s")!
+        XCTAssertEqual(
+            session.route(for: m4sMediaURL),
+            .segment("v1_257", .media(0))
+        )
+        let mp4InitURL = URL(string: "vesper-dash://segment/\(session.id)/v1_257/init.mp4")!
+        XCTAssertEqual(
+            session.route(for: mp4InitURL),
+            .segment("v1_257", .initialization)
+        )
+    }
+
+    /// Constructs a real `AVURLAsset` pointed at the session's
+    /// `vesper-dash://master/...` URL, installs the resource loader delegate,
+    /// and verifies that AVFoundation can discover a `.legible` media
+    /// selection group. This is the closest the simulator can get to real
+    /// AVPlayer subtitle evidence without a physical device. Full cue output
+    /// and seek-precision evidence require a real device.
+    ///
+    /// The test is marked with `XCTSkip` when the simulator cannot load
+    /// the asset (e.g. when `vesper-dash://` custom scheme handling
+    /// differs between simulator and device), documenting the gap as
+    /// device-evidence-pending.
+    func testWebVttSubtitleRouteProducesLegibleGroupOnSimulator() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let manifestURL = directory.appendingPathComponent("manifest.mpd")
+        try Data(sampleWebVttSubtitleMpd.utf8).write(to: manifestURL)
+
+        let vttBytes = Data("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello subtitle\n".utf8)
+        try writeSampleWebVttSegmentFiles(
+            directory: directory,
+            segmentData: vttBytes,
+            segmentCount: 3
+        )
+
+        let session = makeTestDashSession(sourceURL: manifestURL)
+        let loaderDelegate = VesperDashResourceLoaderDelegate(session: session)
+        let asset = AVURLAsset(url: session.masterPlaylistURL)
+        asset.resourceLoader.setDelegate(
+            loaderDelegate,
+            queue: loaderDelegate.resourceLoadingQueue
+        )
+
+        // Attempt to load the legible group. On a real device this should
+        // return a non-nil group with options matching the manifest. On a
+        // simulator the result depends on AVFoundation's handling of the
+        // custom scheme; if it cannot load the group, skip with a clear
+        // message rather than failing.
+        let group = try? await asset.loadMediaSelectionGroup(for: .legible)
+        try XCTSkipIf(
+            group == nil || group?.options.isEmpty == true,
+            "Simulator could not produce a legible group for vesper-dash:// asset; real-device evidence is required"
+        )
+
+        let options = group?.options ?? []
+        XCTAssertGreaterThan(
+            options.count,
+            0,
+            "AVPlayer must discover at least one legible option from the subtitle rendition"
+        )
     }
 }

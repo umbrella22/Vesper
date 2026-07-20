@@ -87,6 +87,16 @@ struct VesperDashAdaptationSet: Codable, Equatable {
     let kind: VesperDashAdaptationKind
     let mimeType: String?
     let language: String?
+    /// Display label from a `<Label>` child element or a compatibility
+    /// `AdaptationSet@label` attribute. Mirrors the Rust
+    /// `DashAdaptationSet.label` field populated by the bridge JSON.
+    let label: String?
+    /// True when the adaptation set carries a DASH `<Role value="main"/>`
+    /// role under `urn:mpeg:dash:role:2011`. Drives HLS `DEFAULT=YES`.
+    let isDefault: Bool
+    /// True when the adaptation set carries a DASH
+    /// `<Role value="forced-subtitle"/>` role. Drives HLS `FORCED=YES`.
+    let isForced: Bool
     let representations: [VesperDashRepresentation]
 }
 

@@ -402,11 +402,21 @@ internal interface VesperNativeBindings {
     fun refreshSnapshot()
     fun currentTrackCatalog(): VesperTrackCatalog
     fun currentTrackSelection(): VesperTrackSelectionSnapshot
+    fun isTrackCatalogReady(): Boolean = true
+    fun currentSubtitleCatalogFailure(): NativeTrackSelectionFailure? = null
     fun currentEffectiveVideoTrackId(): String?
     fun currentVideoVariantObservation(): VesperVideoVariantObservation?
     fun currentVideoLayoutInfo(): NativeVideoLayoutInfo?
     fun setOnNativeUpdateListener(listener: (() -> Unit)?)
     fun setOnSubtitleCuesListener(listener: ((List<Cue>) -> Unit)?) = Unit
+    /**
+     * Installs the structured track-selection failure callback. Default
+     * no-op so test stubs and `MissingVesperNativeBindings` do not need to
+     * override it. See `VesperNativeJniBindings.setOnTrackSelectionFailureListener`.
+     */
+    fun setOnTrackSelectionFailureListener(
+        listener: ((NativeTrackSelectionFailure) -> Unit)?,
+    ) = Unit
     fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind)
     fun detachSurface()
     fun pollSnapshot(): NativeBridgeSnapshot?
@@ -489,6 +499,7 @@ internal class MissingVesperNativeBindings : VesperNativeBindings {
     override fun currentTrackCatalog(): VesperTrackCatalog = VesperTrackCatalog.Empty
     override fun currentTrackSelection(): VesperTrackSelectionSnapshot =
         VesperTrackSelectionSnapshot()
+    override fun currentSubtitleCatalogFailure(): NativeTrackSelectionFailure? = null
     override fun currentEffectiveVideoTrackId(): String? = null
     override fun currentVideoVariantObservation(): VesperVideoVariantObservation? = null
     override fun currentVideoLayoutInfo(): NativeVideoLayoutInfo? = null

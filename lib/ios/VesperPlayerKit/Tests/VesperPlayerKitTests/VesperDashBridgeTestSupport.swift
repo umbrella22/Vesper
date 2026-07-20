@@ -175,6 +175,121 @@ let sampleWebVttSubtitleMpd = #"""
 </MPD>
 """#
 
+/// Two WebVTT subtitle adaptation sets with different languages and unique
+/// representation ids. Used to verify stable identity across multi-subtitle
+/// manifests and reorder-resilient catalog publishing.
+let sampleWebVttMultiSubtitleMpd = #"""
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD type="static" mediaPresentationDuration="PT6S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true">
+      <SegmentTemplate timescale="1000" initialization="init-$RepresentationID$.mp4" media="video-$Number$.m4s" startNumber="1" duration="2000"/>
+      <Representation id="v1" bandwidth="800000" codecs="avc1.64001f" width="1280" height="720"/>
+    </AdaptationSet>
+    <AdaptationSet id="subs-en" contentType="text" mimeType="text/vtt" lang="en">
+      <SegmentTemplate timescale="1000" media="sub-en-$Number$.vtt" startNumber="1" duration="2000"/>
+      <Representation id="sub-en" bandwidth="1200" codecs="wvtt"/>
+    </AdaptationSet>
+    <AdaptationSet id="subs-zh" contentType="text" mimeType="text/vtt" lang="zh">
+      <SegmentTemplate timescale="1000" media="sub-zh-$Number$.vtt" startNumber="1" duration="2000"/>
+      <Representation id="sub-zh" bandwidth="1200" codecs="wvtt"/>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"""#
+
+/// Two subtitle representations sharing the same `Representation@id`.
+///
+/// The subtitle improvement plan (section 3.2) requires this to surface a
+/// structured identity failure rather than mask the collision with a
+/// sequential `-2` suffix.
+let sampleWebVttDuplicateIdMpd = #"""
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD type="static" mediaPresentationDuration="PT6S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true">
+      <SegmentTemplate timescale="1000" initialization="init-$RepresentationID$.mp4" media="video-$Number$.m4s" startNumber="1" duration="2000"/>
+      <Representation id="v1" bandwidth="800000" codecs="avc1.64001f" width="1280" height="720"/>
+    </AdaptationSet>
+    <AdaptationSet id="subs-en" contentType="text" mimeType="text/vtt" lang="en">
+      <SegmentTemplate timescale="1000" media="sub-en-$Number$.vtt" startNumber="1" duration="2000"/>
+      <Representation id="sub-en" bandwidth="1200" codecs="wvtt"/>
+    </AdaptationSet>
+    <AdaptationSet id="subs-zh" contentType="text" mimeType="text/vtt" lang="zh">
+      <SegmentTemplate timescale="1000" media="sub-zh-$Number$.vtt" startNumber="1" duration="2000"/>
+      <Representation id="sub-en" bandwidth="1200" codecs="wvtt"/>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"""#
+
+/// Subtitle adaptation sets using standard `<Label>` and `<Role>` elements
+/// for both default (`main`) and forced (`forced-subtitle`) narratives.
+let sampleWebVttWithLabelAndRoleMpd = #"""
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD type="static" mediaPresentationDuration="PT6S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true">
+      <SegmentTemplate timescale="1000" initialization="init-$RepresentationID$.mp4" media="video-$Number$.m4s" startNumber="1" duration="2000"/>
+      <Representation id="v1" bandwidth="800000" codecs="avc1.64001f" width="1280" height="720"/>
+    </AdaptationSet>
+    <AdaptationSet id="subs-en" contentType="text" mimeType="text/vtt" lang="en">
+      <Label>English</Label>
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="main"/>
+      <SegmentTemplate timescale="1000" media="sub-en-$Number$.vtt" startNumber="1" duration="2000"/>
+      <Representation id="sub-en" bandwidth="1200" codecs="wvtt"/>
+    </AdaptationSet>
+    <AdaptationSet id="subs-en-forced" contentType="text" mimeType="text/vtt" lang="en">
+      <Label>English (Forced)</Label>
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="forced-subtitle"/>
+      <SegmentTemplate timescale="1000" media="sub-en-forced-$Number$.vtt" startNumber="1" duration="2000"/>
+      <Representation id="sub-en-forced" bandwidth="1200" codecs="wvtt"/>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"""#
+
+/// Subtitle adaptation set using the legacy `AdaptationSet@label` attribute
+/// only (no `<Label>` child, no `<Role>`). The plan (section 3.3) requires
+/// the SDK to keep reading this compatibility attribute so existing host
+/// output keeps working until the host migrates to standard elements.
+let sampleWebVttLegacyLabelAttrMpd = #"""
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD type="static" mediaPresentationDuration="PT6S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true">
+      <SegmentTemplate timescale="1000" initialization="init-$RepresentationID$.mp4" media="video-$Number$.m4s" startNumber="1" duration="2000"/>
+      <Representation id="v1" bandwidth="800000" codecs="avc1.64001f" width="1280" height="720"/>
+    </AdaptationSet>
+    <AdaptationSet id="subs" contentType="text" mimeType="text/vtt" lang="en" label="English">
+      <SegmentTemplate timescale="1000" media="sub-$Number$.vtt" startNumber="1" duration="2000"/>
+      <Representation id="sub-en" bandwidth="1200" codecs="wvtt"/>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"""#
+
+/// Subtitle adaptation set whose `<Representation>` lacks an `id`
+/// attribute. The plan (section 3.2) requires this to surface a structured
+/// `subtitle_track_identity_ambiguous` failure rather than synthesizing a
+/// positional id, so catalog and selection ids stay stable across
+/// source refresh.
+let sampleWebVttMissingRepresentationIdMpd = #"""
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD type="static" mediaPresentationDuration="PT6S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true">
+      <SegmentTemplate timescale="1000" initialization="init-$RepresentationID$.mp4" media="video-$Number$.m4s" startNumber="1" duration="2000"/>
+      <Representation id="v1" bandwidth="800000" codecs="avc1.64001f" width="1280" height="720"/>
+    </AdaptationSet>
+    <AdaptationSet id="subs" contentType="text" mimeType="text/vtt" lang="en">
+      <SegmentTemplate timescale="1000" media="sub-$Number$.vtt" startNumber="1" duration="2000"/>
+      <Representation bandwidth="1200" codecs="wvtt"/>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"""#
+
 func sidxPayloadV0() -> Data {
     var payload = Data()
     payload.append(contentsOf: [0, 0, 0, 0])
@@ -339,6 +454,23 @@ func writeSegmentTemplateFiles(
     for number in 1...segmentCount {
         try mediaData.write(
             to: directory.appendingPathComponent("\(renditionId)-270146-i-\(number).m4s")
+        )
+    }
+}
+
+/// Writes WebVTT subtitle segment files into `directory` using the same
+/// naming convention the iOS DASH session emits
+/// (`<renditionId>-<n>.vtt`). Subtitle SegmentTemplates in the host MPD
+/// have no `initialization`, so no init file is written.
+func writeWebVttSegmentFiles(
+    directory: URL,
+    renditionId: String,
+    segmentData: Data,
+    segmentCount: Int = 3
+) throws {
+    for number in 1...segmentCount {
+        try segmentData.write(
+            to: directory.appendingPathComponent("\(renditionId)-\(number).vtt")
         )
     }
 }

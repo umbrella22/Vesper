@@ -172,8 +172,29 @@ internal fun VesperNativePlayerBridge.setNativeSubtitleTrackSelection(selection:
     if (isRequiredNativeFramePipelineFailureActive()) {
         return
     }
+    clearPreviousSubtitleSelectionFailure()
     bindings.setSubtitleTrackSelection(selection)
     refreshFromNative()
+}
+
+private fun VesperNativePlayerBridge.clearPreviousSubtitleSelectionFailure() {
+    val currentState = _subtitleState.value
+    if (currentState.error?.phase != VesperSubtitleErrorPhase.Selection) {
+        return
+    }
+    val subtitleCount = _trackCatalog.value.subtitleTracks.size
+    _subtitleState.value =
+        when {
+            currentSource?.protocol == VesperPlayerSourceProtocol.Dash &&
+                !bindings.isTrackCatalogReady() ->
+                VesperSubtitleState.loading(currentState.advertisedTrackCount)
+            subtitleCount > 0 ->
+                VesperSubtitleState.ready(
+                    advertisedTrackCount = subtitleCount,
+                    selectableTrackCount = subtitleCount,
+                )
+            else -> VesperSubtitleState.unavailable()
+        }
 }
 
 internal fun VesperNativePlayerBridge.setNativeAbrPolicy(policy: VesperAbrPolicy) {

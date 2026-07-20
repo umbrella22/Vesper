@@ -23,6 +23,7 @@ final class VesperPlayerSnapshot {
     this.resiliencePolicy = const VesperPlaybackResiliencePolicy(),
     this.pluginDiagnostics = const <VesperPluginDiagnostic>[],
     this.lastError,
+    this.subtitleState = VesperSubtitleState.empty,
   });
 
   const VesperPlayerSnapshot.initial()
@@ -46,7 +47,8 @@ final class VesperPlayerSnapshot {
         fixedTrackStatus = null,
         resiliencePolicy = const VesperPlaybackResiliencePolicy(),
         pluginDiagnostics = const <VesperPluginDiagnostic>[],
-        lastError = null;
+        lastError = null,
+        subtitleState = VesperSubtitleState.empty;
 
   factory VesperPlayerSnapshot.fromMap(Map<Object?, Object?> map) {
     final rawTimeline = map['timeline'];
@@ -61,6 +63,7 @@ final class VesperPlayerSnapshot {
     final rawViewport = map['viewport'];
     final rawViewportHint = map['viewportHint'];
     final rawLastError = map['lastError'];
+    final rawSubtitleState = map['subtitleState'];
     final timeline = _rawMap(rawTimeline);
     final viewport = _rawMap(rawViewport);
     final viewportHint = _rawMap(rawViewportHint);
@@ -70,6 +73,7 @@ final class VesperPlayerSnapshot {
     final videoVariantObservation = _rawMap(rawVideoVariantObservation);
     final resiliencePolicy = _rawMap(rawResiliencePolicy);
     final lastError = _rawMap(rawLastError);
+    final subtitleStateWire = _rawMap(rawSubtitleState);
     return VesperPlayerSnapshot(
       title: map['title'] as String? ?? 'Vesper',
       subtitle: map['subtitle'] as String? ?? '',
@@ -132,6 +136,9 @@ final class VesperPlayerSnapshot {
           : const <VesperPluginDiagnostic>[],
       lastError:
           lastError != null ? VesperPlayerError.fromMap(lastError) : null,
+      subtitleState: subtitleStateWire != null
+          ? VesperSubtitleState.fromMap(subtitleStateWire)
+          : VesperSubtitleState.empty,
     );
   }
 
@@ -156,6 +163,11 @@ final class VesperPlayerSnapshot {
   final VesperPlaybackResiliencePolicy resiliencePolicy;
   final List<VesperPluginDiagnostic> pluginDiagnostics;
   final VesperPlayerError? lastError;
+
+  /// Subtitle lifecycle state (loading / ready / failed) shared by iOS and
+  /// Android host kits. Older host payloads that omit this field decode
+  /// to [VesperSubtitleState.empty] so the snapshot remains decodable.
+  final VesperSubtitleState subtitleState;
 
   VesperPlayerSnapshot copyWith({
     String? title,
@@ -183,6 +195,7 @@ final class VesperPlayerSnapshot {
     List<VesperPluginDiagnostic>? pluginDiagnostics,
     VesperPlayerError? lastError,
     bool clearLastError = false,
+    VesperSubtitleState? subtitleState,
   }) {
     return VesperPlayerSnapshot(
       title: title ?? this.title,
@@ -212,6 +225,7 @@ final class VesperPlayerSnapshot {
       resiliencePolicy: resiliencePolicy ?? this.resiliencePolicy,
       pluginDiagnostics: pluginDiagnostics ?? this.pluginDiagnostics,
       lastError: clearLastError ? null : (lastError ?? this.lastError),
+      subtitleState: subtitleState ?? this.subtitleState,
     );
   }
 
@@ -239,6 +253,7 @@ final class VesperPlayerSnapshot {
       'pluginDiagnostics':
           pluginDiagnostics.map((diagnostic) => diagnostic.toMap()).toList(),
       'lastError': lastError?.toMap(),
+      'subtitleState': subtitleState.toMap(),
     };
   }
 }

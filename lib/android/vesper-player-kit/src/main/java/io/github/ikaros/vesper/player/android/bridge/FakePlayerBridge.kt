@@ -45,6 +45,7 @@ internal class FakePlayerBridge(
     )
     private val _trackCatalog = MutableStateFlow(VesperTrackCatalog.Empty)
     private val _trackSelection = MutableStateFlow(VesperTrackSelectionSnapshot())
+    private val _subtitleState = MutableStateFlow(VesperSubtitleState.EMPTY)
     private val _effectiveVideoTrackId = MutableStateFlow<String?>(null)
     private val _videoVariantObservation = MutableStateFlow<VesperVideoVariantObservation?>(null)
     private val _resiliencePolicy = MutableStateFlow(resiliencePolicy)
@@ -54,6 +55,7 @@ internal class FakePlayerBridge(
     override val trackCatalog: StateFlow<VesperTrackCatalog> = _trackCatalog.asStateFlow()
     override val trackSelection: StateFlow<VesperTrackSelectionSnapshot> =
         _trackSelection.asStateFlow()
+    override val subtitleState: StateFlow<VesperSubtitleState> = _subtitleState.asStateFlow()
     override val effectiveVideoTrackId: StateFlow<String?> =
         _effectiveVideoTrackId.asStateFlow()
     override val videoVariantObservation: StateFlow<VesperVideoVariantObservation?> =

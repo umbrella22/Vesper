@@ -58,8 +58,13 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - Tests/VesperPlayerHostDemoTests
+      - path: ../../fixtures/media/tiny-h264-aac.m4v
+        buildPhase: resources
     dependencies:
       - target: VesperPlayerHostDemo
+      - package: VesperPlayerKit
+        product: VesperPlayerKit
+        link: false
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true

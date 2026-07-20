@@ -65,6 +65,22 @@ pub struct DashAdaptationSet {
     pub kind: DashAdaptationKind,
     pub mime_type: Option<String>,
     pub language: Option<String>,
+    /// Display label from a `<Label>` child element or a compatibility
+    /// `AdaptationSet@label` attribute. Used as the HLS `EXT-X-MEDIA` NAME
+    /// for subtitles before falling back to language.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// True when the adaptation set carries a DASH `<Role value="main"/>`
+    /// role under the standard `urn:mpeg:dash:role:2011` scheme. Maps to
+    /// HLS `EXT-X-MEDIA` `DEFAULT=YES` for subtitles.
+    #[serde(default)]
+    pub is_default: bool,
+    /// True when the adaptation set carries a DASH
+    /// `<Role value="forced-subtitle"/>` (or the snake-spelled
+    /// `forced_subtitle` alias) under the standard role scheme. Maps to
+    /// HLS `EXT-X-MEDIA` `FORCED=YES`.
+    #[serde(default)]
+    pub is_forced: bool,
     pub representations: Vec<DashRepresentation>,
 }
 

@@ -210,6 +210,7 @@ internal fun VesperNativeJniBindings.drainAndApplyNativeCommands() {
                     exoPlayer = exoPlayer,
                     kind = NativeTrackKind.Video,
                     selection = command.selection,
+                    onTrackSelectionFailure = trackSelectionFailureListener?.let { cb -> { f -> cb(f) } },
                 )
             }
             is NativePlayerCommand.SetAudioTrackSelection -> {
@@ -221,6 +222,7 @@ internal fun VesperNativeJniBindings.drainAndApplyNativeCommands() {
                     exoPlayer = exoPlayer,
                     kind = NativeTrackKind.Audio,
                     selection = command.selection,
+                    onTrackSelectionFailure = trackSelectionFailureListener?.let { cb -> { f -> cb(f) } },
                 )
             }
             is NativePlayerCommand.SetSubtitleTrackSelection -> {
@@ -232,6 +234,8 @@ internal fun VesperNativeJniBindings.drainAndApplyNativeCommands() {
                     exoPlayer = exoPlayer,
                     kind = NativeTrackKind.Subtitle,
                     selection = command.selection,
+                    onTrackSelectionFailure = trackSelectionFailureListener?.let { cb -> { f -> cb(f) } },
+                    sourceProtocol = currentSourceProtocol,
                 )
             }
             is NativePlayerCommand.SetAbrPolicy -> {
@@ -299,6 +303,7 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
         override fun onTracksChanged(tracks: Tracks) {
             Log.d(NATIVE_JNI_BINDINGS_TAG, "onTracksChanged groups=${tracks.groups.size}")
             recordBenchmark("tracks_changed", mapOf("groups" to tracks.groups.size.toString()))
+            hasObservedTrackCatalog = true
             player?.let { exoPlayer ->
                 pendingTrackOverrides
                     ?.takeIf { !nativeFramePipelineOwnsSurface }
@@ -936,10 +941,15 @@ private fun VesperNativeJniBindings.logExoSnapshotToRust(
 internal fun VesperNativeJniBindings.pushTrackStateToRust() {
     val handle = sessionHandle ?: return
     val exoPlayer = player ?: return
-    val trackCatalog = collectTrackCatalog(exoPlayer.currentTracks)
+    val trackCatalog = collectTrackCatalog(exoPlayer.currentTracks, currentSourceProtocol)
     val trackSelection =
-        collectTrackSelection(exoPlayer.currentTracks, exoPlayer.trackSelectionParameters)
+        collectTrackSelection(
+            exoPlayer.currentTracks,
+            exoPlayer.trackSelectionParameters,
+            currentSourceProtocol,
+        )
     val publicTrackCatalog = trackCatalog.toPublicTrackCatalog()
+    currentSubtitleCatalogFailure = trackCatalog.subtitleIdentityFailure
     val videoVariantObservation = resolveVideoVariantObservation(exoPlayer.videoFormat)
     val effectiveVideoTrackId = resolveEffectiveVideoTrackId(
         publicTrackCatalog.videoTracks,

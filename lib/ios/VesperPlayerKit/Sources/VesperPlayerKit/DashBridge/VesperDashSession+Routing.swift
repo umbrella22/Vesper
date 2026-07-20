@@ -11,13 +11,22 @@ extension VesperDashSession {
         Self.localURL(host: "media", pathComponents: [id, renditionId + ".m3u8"])
     }
 
-    nonisolated func segmentURL(for renditionId: String, segment: VesperDashSegmentRequest) -> URL {
+    nonisolated func segmentURL(
+        for renditionId: String,
+        segment: VesperDashSegmentRequest,
+        fileExtension: String? = nil
+    ) -> URL {
+        // When `fileExtension` is provided (e.g. `"vtt"` for WebVTT subtitle
+        // renditions), use it instead of the default `.m4s`/`init.mp4` so
+        // the AVPlayer resource loader receives a MIME-aware URL. This is
+        // required for WebVTT subtitle segments where `.m4s` would mislabel
+        // the payload.
         let segmentName: String
         switch segment {
         case .initialization:
-            segmentName = "init.mp4"
+            segmentName = fileExtension.map { "init.\($0)" } ?? "init.mp4"
         case let .media(index):
-            segmentName = "\(index).m4s"
+            segmentName = fileExtension.map { "\(index).\($0)" } ?? "\(index).m4s"
         }
         return Self.localURL(host: "segment", pathComponents: [id, renditionId, segmentName])
     }
@@ -59,11 +68,17 @@ extension VesperDashSession {
             guard components.count >= 3 else { return nil }
             let renditionId = components[1].removingPercentEncoding ?? components[1]
             let segmentName = components[2]
-            if segmentName == "init.mp4" {
+            if segmentName == "init.mp4" || segmentName == "init.vtt" {
                 return .segment(renditionId, .initialization)
             }
-            guard segmentName.hasSuffix(".m4s") else { return nil }
-            let indexText = String(segmentName.dropLast(".m4s".count))
+            // Media segments may use either `.m4s` (audio/video) or `.vtt`
+            // (WebVTT subtitle renditions). The route must accept both so
+            // the resource loader can serve MIME-aware subtitle URLs.
+            let knownSuffixes = [".m4s", ".vtt"]
+            guard let suffix = knownSuffixes.first(where: { segmentName.hasSuffix($0) }) else {
+                return nil
+            }
+            let indexText = String(segmentName.dropLast(suffix.count))
             guard let index = Int(indexText), index >= 0 else { return nil }
             return .segment(renditionId, .media(index))
         default:

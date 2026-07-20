@@ -37,7 +37,7 @@ extension VesperNativePlayerBridge {
                 )
             }
         case .track:
-            applyTrackSelection(
+            try? applyTrackSelection(
                 policy.audioSelection,
                 kind: .audio,
                 group: group,
@@ -127,7 +127,7 @@ extension VesperNativePlayerBridge {
                 )
             }
         case .track:
-            applyTrackSelection(
+            try? applyTrackSelection(
                 policy.subtitleSelection,
                 kind: .subtitle,
                 group: group,
@@ -135,15 +135,10 @@ extension VesperNativePlayerBridge {
                 item: item
             )
         case .auto:
-            let option =
-                matchingMediaOption(
-                    language: policy.preferredSubtitleLanguage,
-                    optionsByTrackId: subtitleOptionsByTrackId
-                )?.option
-                ?? (policy.selectUndeterminedSubtitleLanguage
-                    ? firstUndeterminedMediaOption(optionsByTrackId: subtitleOptionsByTrackId)
-                    : nil)
-                ?? (policy.selectSubtitlesByDefault ? group.defaultOption : nil)
+            let option = automaticSubtitleOption(
+                in: group,
+                optionsByTrackId: subtitleOptionsByTrackId
+            )
             item.select(option, in: group)
             updateTrackSelection { current in
                 VesperTrackSelectionSnapshot(
@@ -154,6 +149,21 @@ extension VesperNativePlayerBridge {
                 )
             }
         }
+    }
+
+    func automaticSubtitleOption(
+        in group: AVMediaSelectionGroup,
+        optionsByTrackId: [String: AVMediaSelectionOption]
+    ) -> AVMediaSelectionOption? {
+        let policy = resolvedTrackPreferencePolicy
+        return matchingMediaOption(
+            language: policy.preferredSubtitleLanguage,
+            optionsByTrackId: optionsByTrackId
+        )?.option
+            ?? (policy.selectUndeterminedSubtitleLanguage
+                ? firstUndeterminedMediaOption(optionsByTrackId: optionsByTrackId)
+                : nil)
+            ?? (policy.selectSubtitlesByDefault ? group.defaultOption : nil)
     }
 
     func matchingMediaOption(

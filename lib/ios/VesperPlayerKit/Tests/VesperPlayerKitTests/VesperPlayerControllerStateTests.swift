@@ -2794,6 +2794,7 @@ private final class TestObservablePlayerBridge: ObservableObject, ObservablePlay
     @Published var publishedFixedTrackStatus: VesperFixedTrackStatus?
     @Published var publishedResiliencePolicy = VesperPlaybackResiliencePolicy()
     @Published var publishedLastError: VesperPlayerError?
+    @Published var publishedSubtitleState: VesperSubtitleState = .empty
 
     let backend: PlayerBridgeBackend = .fakeDemo
 
@@ -2823,7 +2824,7 @@ private final class TestObservablePlayerBridge: ObservableObject, ObservablePlay
     func setPlaybackRate(_ rate: Float) {}
     func setVideoTrackSelection(_ selection: VesperTrackSelection) {}
     func setAudioTrackSelection(_ selection: VesperTrackSelection) {}
-    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) {}
+    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) throws {}
     func setSubtitleStyle(_ style: VesperSubtitleStyle) {}
     func setAbrPolicy(_ policy: VesperAbrPolicy) {}
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {}

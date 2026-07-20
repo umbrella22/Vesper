@@ -66,10 +66,9 @@ actor VesperDashSession {
     }
 
     deinit {
-        do {
-            try FileManager.default.removeItem(at: segmentCacheDirectory)
-        } catch {
-            iosHostLog("failed to remove DASH segment cache directory: \(error.localizedDescription)")
-        }
+        removeFileIfPresent(
+            segmentCacheDirectory,
+            context: "DASH segment cache directory"
+        )
     }
 }

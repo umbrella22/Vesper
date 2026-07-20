@@ -385,6 +385,9 @@ mod tests {
                         kind: DashAdaptationKind::Video,
                         mime_type: Some("video/mp4".to_owned()),
                         language: None,
+                        label: None,
+                        is_default: false,
+                        is_forced: false,
                         representations: vec![DashRepresentation {
                             id: "v1".to_owned(),
                             base_url: "video.m4s".to_owned(),
@@ -407,6 +410,9 @@ mod tests {
                         kind: DashAdaptationKind::Audio,
                         mime_type: Some("audio/mp4".to_owned()),
                         language: Some("ja".to_owned()),
+                        label: None,
+                        is_default: false,
+                        is_forced: false,
                         representations: vec![DashRepresentation {
                             id: "a1".to_owned(),
                             base_url: "audio.m4s".to_owned(),

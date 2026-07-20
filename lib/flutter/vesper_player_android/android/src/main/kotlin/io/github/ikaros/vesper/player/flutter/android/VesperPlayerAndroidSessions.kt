@@ -29,6 +29,7 @@ internal data class PlayerSession(
     var pendingHostDetachJob: Job? = null,
     var hostDetachGeneration: Long = 0L,
     var observerJob: Job? = null,
+    var warningDrainJob: Job? = null,
     var lastError: Map<String, Any?>? = null,
     var lastEmittedTerminalError: Map<String, Any?>? = null,
     var lastEmittedSnapshot: Map<String, Any?>? = null,

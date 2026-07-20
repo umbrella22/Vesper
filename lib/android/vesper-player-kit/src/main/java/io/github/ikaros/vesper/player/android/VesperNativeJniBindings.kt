@@ -75,9 +75,21 @@ internal class VesperNativeJniBindings(
     internal var nativeFramePipelineOwnsSurface = false
     internal var updateListener: (() -> Unit)? = null
     internal var subtitleCuesListener: ((List<Cue>) -> Unit)? = null
+    /**
+     * Optional callback invoked when a JNI track-selection command cannot
+     * resolve the requested track id against the current Media3 [Tracks]
+     * state. Wired by [VesperNativePlayerBridge] to push a structured
+     * runtime warning so Flutter observes `subtitle_track_not_found`
+     * instead of a silent `Log.w`.
+     */
+    internal var trackSelectionFailureListener:
+        ((NativeTrackSelectionFailure) -> Unit)? = null
     internal var currentTrackCatalogState: VesperTrackCatalog = VesperTrackCatalog.Empty
     internal var currentTrackSelectionState: VesperTrackSelectionSnapshot =
         VesperTrackSelectionSnapshot()
+    @Volatile
+    internal var hasObservedTrackCatalog = false
+    internal var currentSubtitleCatalogFailure: NativeTrackSelectionFailure? = null
     internal var currentEffectiveVideoTrackIdState: String? = null
     internal var currentVideoVariantObservationState: VesperVideoVariantObservation? = null
     internal var currentVideoLayoutState: NativeVideoLayoutInfo? = null
@@ -114,6 +126,14 @@ internal class VesperNativeJniBindings(
     internal val systemPlaybackCoordinator = VesperAndroidSystemPlaybackCoordinator(appContext)
     internal val sourceNormalizerLoopbackServer = VesperSourceNormalizerLoopbackServer()
     internal var currentBenchmarkSourceProtocol: VesperPlayerSourceProtocol? = null
+    /**
+     * Protocol of the source currently loaded by the player. Used by
+     * `collectTrackCatalog` to gate subtitle stable-id generation on DASH
+     * sources only — non-DASH subtitle tracks keep the legacy positional
+     * id so HLS/MP4 embedded captions are not mislabeled as
+     * `subtitle:dash:*`.
+     */
+    internal var currentSourceProtocol: VesperPlayerSourceProtocol? = null
     internal var currentSourceNormalizerResource: NativeSourceNormalizerResource? = null
     internal var currentNativeFramePacketSource: NativeFramePacketSource? = null
     internal val firstFrameGate = VesperPlaybackEpochFirstFrameGate()
@@ -157,11 +177,22 @@ internal class VesperNativeJniBindings(
         preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
     ): NativeBridgeStartup {
         Log.i(NATIVE_JNI_BINDINGS_TAG, "initialize source=${source.uri} kind=${source.kind} protocol=${source.protocol}")
+        val existingSubtitleCuesListener = subtitleCuesListener
+        val existingTrackSelectionFailureListener = trackSelectionFailureListener
         dispose(stopSourceNormalizerLoopbackServer = preparedSourceNormalizer.resource == null)
+        // initialize() reuses the binding object across source epochs. The
+        // callbacks belong to the bridge, so restore them after dispose()
+        // clears player-owned listeners; otherwise the next source silently
+        // drops cue delivery and JNI selection warnings.
+        subtitleCuesListener = existingSubtitleCuesListener
+        trackSelectionFailureListener = existingTrackSelectionFailureListener
         isDisposed.set(false)
         var preparedSourceNormalizerConsumed = false
         try {
             currentBenchmarkSourceProtocol = source.protocol
+            currentSourceProtocol = source.protocol
+            hasObservedTrackCatalog = false
+            currentSubtitleCatalogFailure = null
             terminalErrorReportedForCurrentSource = false
             currentDrmRuntimeErrorCount = 0
             cancelFirstFrameWatchdog()
@@ -431,6 +462,16 @@ internal class VesperNativeJniBindings(
         }
     }
 
+    /**
+     * Installs the structured track-selection failure callback. Set to `null`
+     * to clear. See [trackSelectionFailureListener].
+     */
+    override fun setOnTrackSelectionFailureListener(
+        listener: ((NativeTrackSelectionFailure) -> Unit)?,
+    ) {
+        trackSelectionFailureListener = listener
+    }
+
     override fun dispose() {
         dispose(stopSourceNormalizerLoopbackServer = true)
     }
@@ -448,6 +489,8 @@ internal class VesperNativeJniBindings(
         }
         playerListener = null
         subtitleCuesListener = null
+        trackSelectionFailureListener = null
+        currentSubtitleCatalogFailure = null
         analyticsListener?.let { listener ->
             player?.removeAnalyticsListener(listener)
         }
@@ -478,6 +521,7 @@ internal class VesperNativeJniBindings(
         }
         currentTrackCatalogState = VesperTrackCatalog.Empty
         currentTrackSelectionState = VesperTrackSelectionSnapshot()
+        hasObservedTrackCatalog = false
         currentEffectiveVideoTrackIdState = null
         currentVideoVariantObservationState = null
         currentVideoLayoutState = null
@@ -503,6 +547,10 @@ internal class VesperNativeJniBindings(
     override fun currentTrackCatalog(): VesperTrackCatalog = currentTrackCatalogState
 
     override fun currentTrackSelection(): VesperTrackSelectionSnapshot = currentTrackSelectionState
+
+    override fun isTrackCatalogReady(): Boolean = hasObservedTrackCatalog
+
+    override fun currentSubtitleCatalogFailure(): NativeTrackSelectionFailure? = currentSubtitleCatalogFailure
 
     override fun currentEffectiveVideoTrackId(): String? = currentEffectiveVideoTrackIdState
 

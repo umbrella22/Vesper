@@ -791,6 +791,35 @@ func errorMap(from error: Error) -> [String: Any] {
             ) { current, _ in current },
         ]
     }
+    if let subtitleError = error as? VesperSubtitleSelectionError {
+        let code: String
+        let trackId: String?
+        switch subtitleError {
+        case let .platformTrackUnavailable(id):
+            code = "subtitle_platform_track_unavailable"
+            trackId = id
+        case let .trackNotFound(id):
+            code = "subtitle_track_not_found"
+            trackId = id
+        case .autoCandidateUnavailable:
+            code = "subtitle_auto_candidate_unavailable"
+            trackId = nil
+        case let .selectionDidNotConverge(id):
+            code = "subtitle_selection_failed"
+            trackId = id
+        }
+        return [
+            "message": error.localizedDescription,
+            "code": code,
+            "category": "capability",
+            "retriable": false,
+            "details": [
+                "subtitleCode": code,
+                "subtitlePhase": "selection",
+                "trackId": flutterValue(trackId),
+            ],
+        ]
+    }
     let code: String
     let category: String
     if let pluginError = error as? PluginError {

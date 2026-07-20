@@ -46,6 +46,7 @@ android {
 
     defaultConfig {
         minSdk = 26
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
     }
 
@@ -57,6 +58,8 @@ android {
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
+
+    sourceSets.getByName("androidTest").assets.srcDir(repoRoot.resolve("fixtures/media"))
 
     publishing {
         singleVariant("release") {
@@ -81,6 +84,10 @@ dependencies {
     implementation("androidx.media3:media3-session:$media3Version")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:rules:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:core:1.7.0")
 }
 
 val checkPublicApiSurface = tasks.register("checkPublicApiSurface") {

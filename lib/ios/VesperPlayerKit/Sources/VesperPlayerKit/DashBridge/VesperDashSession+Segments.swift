@@ -3,13 +3,24 @@ import Foundation
 import VesperPlayerKitBridgeShim
 
 extension VesperDashSession {
+    func isSubtitleRendition(renditionId: String) async -> Bool {
+        guard let playable = try? await playableRepresentation(renditionId: renditionId) else {
+            return false
+        }
+        return playable.adaptationSet.kind == .subtitle
+    }
+
     func dashSegmentContentType(
         for playable: VesperDashPlayableRepresentation,
         segment: VesperDashSegmentRequest
     ) -> String {
-        if segment == .initialization {
-            return "video/mp4"
-        }
+        // Initialization segments historically returned `video/mp4`
+        // unconditionally. Subtitle adaptation sets typically have no
+        // init segment, but if one exists (e.g. an MP4-wrapped wvtt init),
+        // return the rendition MIME type so AVPlayer does not mislabel it.
+        // The body of `dashSegmentContentType` for `.media` segments already
+        // routes by representation MIME type, so this brings the
+        // initialization branch in line.
         let mimeType = playable.representation.mimeType
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -17,6 +28,24 @@ extension VesperDashSession {
             return "text/vtt"
         }
         return "video/mp4"
+    }
+
+    /// Returns `"vtt"` when the rendition is a WebVTT subtitle (so segment
+    /// URLs use a MIME-aware extension), otherwise `nil` so the caller keeps
+    /// the default `.m4s`/`init.mp4` audio/video naming. Used by
+    /// `buildMediaPlaylistData` to emit subtitle-aware HLS media playlist
+    /// URIs.
+    func subtitleSegmentFileExtension(
+        for playable: VesperDashPlayableRepresentation
+    ) -> String? {
+        guard playable.adaptationSet.kind == .subtitle else { return nil }
+        let mimeType = playable.representation.mimeType
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if mimeType == "text/vtt" || mimeType == "text/webvtt" || mimeType.contains("vtt") {
+            return "vtt"
+        }
+        return nil
     }
 
     func segmentData(renditionId: String, segment: VesperDashSegmentRequest) async throws -> Data {

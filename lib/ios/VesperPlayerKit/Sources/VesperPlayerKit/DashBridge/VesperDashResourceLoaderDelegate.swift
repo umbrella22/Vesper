@@ -3,13 +3,20 @@ import Foundation
 import VesperPlayerKitBridgeShim
 
 final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
+    typealias SubtitleResourceFailureHandler = @MainActor @Sendable () -> Void
+
     let resourceLoadingQueue: DispatchQueue
 
     private let session: VesperDashSession
+    private let subtitleResourceFailureHandler: SubtitleResourceFailureHandler?
     private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
 
-    init(session: VesperDashSession) {
+    init(
+        session: VesperDashSession,
+        subtitleResourceFailureHandler: SubtitleResourceFailureHandler? = nil
+    ) {
         self.session = session
+        self.subtitleResourceFailureHandler = subtitleResourceFailureHandler
         resourceLoadingQueue = DispatchQueue(
             label: "io.github.ikaros.vesper.player.dash.resource-loader.\(session.id)"
         )
@@ -47,34 +54,42 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
                         )
                     )
                 case let .segment(renditionId, segment):
-                    switch segment {
-                    case .initialization:
-                        // Init segments are small and AVPlayer normally fetches them once, so
-                        // return the raw bytes through the resource loader. This keeps init
-                        // delivery visible to benchmark events and avoids relying on local HTTP
-                        // behavior for EXT-X-MAP.
-                        let initData = try await session.segmentData(
-                            renditionId: renditionId,
-                            segment: .initialization
-                        )
+                    // Both initialization and media segments route through
+                    // `segmentResourcePayload(...).localResourceBody`, which
+                    // applies `dashSegmentContentType` + `avResourceContentType`.
+                    // This ensures subtitle init/media segments receive
+                    // `public.webvtt` rather than the hardcoded
+                    // `public.mpeg-4` previously applied to init only.
+                    let payload = try await session.segmentResourcePayload(
+                        renditionId: renditionId,
+                        segment: segment
+                    )
 #if DEBUG
+                    if segment == .initialization {
                         iosHostLog(
-                            "dashResourceInit rendition=\(renditionId) bytes=\(initData.count)"
-                        )
-#endif
-                        // contentType must be a UTI, not a MIME type. fMP4 / ISO BMFF maps to public.mpeg-4.
-                        response = .resource(.data(initData, contentType: "public.mpeg-4"))
-                    case .media:
-                        response = .resource(
-                            try await session.segmentResourcePayload(
-                                renditionId: renditionId,
-                                segment: segment
-                            ).localResourceBody
+                            "dashResourceInit rendition=\(renditionId) bytes=\(payload.size)"
                         )
                     }
+#endif
+                    response = .resource(payload.localResourceBody)
                 }
                 self?.finish(loadingRequest, requestId: requestId, response: response)
             } catch {
+                let subtitleRenditionId: String?
+                switch route {
+                case let .media(renditionId), let .segment(renditionId, _):
+                    subtitleRenditionId = renditionId
+                case .master:
+                    subtitleRenditionId = nil
+                }
+                if let subtitleRenditionId,
+                   await session.isSubtitleRendition(renditionId: subtitleRenditionId),
+                   let subtitleResourceFailureHandler = self?.subtitleResourceFailureHandler
+                {
+                    Task { @MainActor in
+                        subtitleResourceFailureHandler()
+                    }
+                }
                 self?.finish(loadingRequest, requestId: requestId, error: error)
             }
         }

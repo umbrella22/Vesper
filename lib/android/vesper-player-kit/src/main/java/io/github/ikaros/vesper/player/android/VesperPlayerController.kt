@@ -24,6 +24,15 @@ class VesperPlayerController internal constructor(
     val trackSelection: StateFlow<VesperTrackSelectionSnapshot>
         get() = bridge.trackSelection
 
+    /**
+     * First-class subtitle lifecycle state. Mirrors the iOS
+     * `subtitleState` getter. Flutter observes this to render
+     * loading / ready / failed states without coupling to the generic
+     * `lastError` channel.
+     */
+    val subtitleState: StateFlow<VesperSubtitleState>
+        get() = bridge.subtitleState
+
     val effectiveVideoTrackId: StateFlow<String?>
         get() = bridge.effectiveVideoTrackId
 
@@ -96,8 +105,41 @@ class VesperPlayerController internal constructor(
     fun setAudioTrackSelection(selection: VesperTrackSelection) =
         bridge.setAudioTrackSelection(selection)
 
-    fun setSubtitleTrackSelection(selection: VesperTrackSelection) =
+    fun setSubtitleTrackSelection(selection: VesperTrackSelection) {
+        // Validate the requested track id against the current catalog
+        // before forwarding to the JNI bridge so an
+        // unknown id surfaces `subtitle_track_not_found` immediately as a
+        // structured failure. The JNI race-failure path
+        // (applyTrackSelectionCommand) additionally reports native-stage
+        // races, but the common case of "host issued a stale id" should
+        // not wait for a JNI round trip.
+        if (selection.mode == VesperTrackSelectionMode.Track) {
+            val trackId = selection.trackId
+            if (trackId.isNullOrBlank()) {
+                throw VesperPlayerUnsupportedOperation(
+                    "setSubtitleTrackSelection rejected: trackId must not be null or blank in Track mode",
+                    mapOf(
+                        "subtitleCode" to "subtitle_track_not_found",
+                        "subtitlePhase" to "selection",
+                        "trackId" to trackId,
+                    ),
+                )
+            }
+            val knownSubtitleIds =
+                bridge.trackCatalog.value.subtitleTracks.map { it.id }.toSet()
+            if (trackId !in knownSubtitleIds) {
+                throw VesperPlayerUnsupportedOperation(
+                    "setSubtitleTrackSelection rejected: trackId=$trackId is not in the current subtitle catalog",
+                    mapOf(
+                        "subtitleCode" to "subtitle_track_not_found",
+                        "subtitlePhase" to "selection",
+                        "trackId" to trackId,
+                    ),
+                )
+            }
+        }
         bridge.setSubtitleTrackSelection(selection)
+    }
 
     /**
      * Updates subtitle styling (font scale, visibility). Hosts observing

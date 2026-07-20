@@ -103,6 +103,11 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
         index: Int
     ) -> VesperMediaTrack {
         let representation = item.representation
+        // Default/forced semantics come from the shared DASH adaptation set
+        // model (populated by the Rust bridge from `<Role>` elements). Plan
+        // section 3.3 requires these to surface on `VesperMediaTrack` so the
+        // host catalog and HLS master playlist agree on which rendition is
+        // default/forced rather than hardcoding both to false.
         return VesperMediaTrack(
             id: "subtitle:dash:\(item.renditionId)",
             kind: .subtitle,
@@ -115,8 +120,8 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
             frameRate: nil,
             channels: nil,
             sampleRate: nil,
-            isDefault: false,
-            isForced: false
+            isDefault: item.adaptationSet.isDefault,
+            isForced: item.adaptationSet.isForced
         )
     }
 
@@ -153,6 +158,14 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
         item: VesperDashPlayableRepresentation,
         index: Int
     ) -> String {
+        // NAME preference is `<Label>` / `@label` first, then language,
+        // adaptation set id, and finally a positional
+        // fallback. This mirrors the HLS master playlist NAME ordering in
+        // `ops.rs::build_master_playlist` so the catalog and playlist agree
+        // on host-visible naming.
+        if let label = item.adaptationSet.label, !label.isEmpty {
+            return label
+        }
         if let language = item.adaptationSet.language, !language.isEmpty {
             return language
         }

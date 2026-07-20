@@ -2572,10 +2572,41 @@ fn native_first_source_normalizer_bypass(
             // Only ordinary MP4/M4V/MOV sources without an explicit runtime
             // profile stay native-first. A configured profile such as `flv` or
             // `generic-fallback` is caller intent to try the normalized route.
-            configuration.runtime_profile.is_none() && is_standard_progressive_mp4_source(source)
+            //
+            // Local manifest files (`.mpd` / `.m3u8`) materialized by the host
+            // also stay native-first when no explicit profile is set: the host
+            // intends Media3 / AVPlayer to consume them directly, and the
+            // normalizer remux pipeline does not preserve text adaptation
+            // sets. Without this carve-out, `file://.../manifest.mpd` would route to
+            // TryNormalized and silently drop subtitles.
+            is_local_manifest_for_native_playback(source)
+                || (configuration.runtime_profile.is_none()
+                    && is_standard_progressive_mp4_source(source))
         }
         _ => false,
     }
+}
+
+/// Returns true when the source URI is a local HLS or DASH manifest
+/// (`.m3u8` / `.mpd` extension). Used by `native_first_source_normalizer_bypass`
+/// to keep host-materialized manifests on the direct native route.
+fn is_local_manifest_for_native_playback(source: &MediaSource) -> bool {
+    let lower = source.uri().to_ascii_lowercase();
+    if !lower.starts_with("file:") {
+        return false;
+    }
+    let lower_without_fragment = lower
+        .split_once('#')
+        .map(|(path, _)| path)
+        .unwrap_or(lower.as_str());
+    let lower_path = lower_without_fragment
+        .split_once('?')
+        .map(|(path, _)| path)
+        .unwrap_or(lower_without_fragment);
+    matches!(
+        lower_path.rsplit_once('.').map(|(_, extension)| extension),
+        Some("mpd" | "m3u8")
+    )
 }
 
 fn configured_runtime_profile(configuration: &MobileSourceNormalizerConfiguration) -> Option<&str> {
@@ -3972,6 +4003,65 @@ mod tests {
             decision.action,
             MobileSourceNormalizerPlaybackAction::BypassNativeFirst
         );
+    }
+
+    /// Regression: a local `file://...manifest.mpd` source under
+    /// PreferNormalized + NativeFirst must stay native-first. The host
+    /// materializes DASH MPDs in its tmp dir and feeds them to Media3
+    /// directly; if SourceNormalizer took over, subtitle adaptation sets
+    /// would be dropped because the normalizer pipeline does not preserve
+    /// text tracks.
+    #[test]
+    fn prefer_normalized_native_first_bypasses_local_file_mpd_sources() {
+        let decision = mobile_source_normalizer_playback_decision(
+            &MediaSource::new("file:///tmp/host-materialized/manifest.mpd"),
+            &MobileSourceNormalizerConfiguration {
+                mode: SourceNormalizerMode::PreferNormalized,
+                runtime_profile: None,
+                plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+            },
+            MobileSourceNormalizerRouteDecision::NativeFirst,
+        );
+
+        assert_eq!(
+            decision.action,
+            MobileSourceNormalizerPlaybackAction::BypassNativeFirst,
+            "local file:// DASH MPD must stay native-first under PreferNormalized"
+        );
+    }
+
+    #[test]
+    fn explicit_profile_does_not_normalize_local_manifest_sources() {
+        for uri in [
+            "file:///tmp/host-materialized/manifest.mpd?token=abc",
+            "file:///tmp/host-materialized/master.m3u8#playlist",
+        ] {
+            let decision = mobile_source_normalizer_playback_decision(
+                &MediaSource::new(uri),
+                &MobileSourceNormalizerConfiguration {
+                    mode: SourceNormalizerMode::PreferNormalized,
+                    runtime_profile: Some("generic-fallback".to_owned()),
+                    plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+                },
+                MobileSourceNormalizerRouteDecision::NativeFirst,
+            );
+
+            assert_eq!(
+                decision.action,
+                MobileSourceNormalizerPlaybackAction::BypassNativeFirst,
+                "local adaptive manifests must stay on the native host route: {uri}"
+            );
+        }
+    }
+
+    #[test]
+    fn local_manifest_detection_requires_file_uri_scheme() {
+        assert!(is_local_manifest_for_native_playback(&MediaSource::new(
+            "file:///tmp/host-materialized/manifest.mpd"
+        )));
+        assert!(!is_local_manifest_for_native_playback(&MediaSource::new(
+            "https://cdn.example.test/manifest.mpd"
+        )));
     }
 
     #[test]

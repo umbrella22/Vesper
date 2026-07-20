@@ -226,8 +226,19 @@ extension VesperDashSession {
         // every DASH-derived HLS resource goes through AVAssetResourceLoaderDelegate.
         // Missing init bytes surface as 'frmt', so the custom scheme keeps
         // delivery deterministic and visible to benchmark events.
+        //
+        // WebVTT subtitle renditions use the `.vtt` extension so AVPlayer
+        // sees a MIME-aware URL instead of a misleading `.m4s`. The flag is
+        // derived from the rendition content type (text/vtt family); audio
+        // and video renditions keep `.m4s`/`init.mp4` for backward
+        // compatibility with the existing SegmentTemplate golden tests.
+        let subtitleFileExtension = subtitleSegmentFileExtension(for: playable)
         let initializationURL = segmentTemplate.initialization.map { _ in
-            self.segmentURL(for: playable.renditionId, segment: .initialization).absoluteString
+            self.segmentURL(
+                for: playable.renditionId,
+                segment: .initialization,
+                fileExtension: subtitleFileExtension
+            ).absoluteString
         }
         let playlistKind: VesperDashHlsPlaylistKind = manifest.type == .dynamic ? .live : .vod
         let mediaSequence = manifest.type == .dynamic ? segments.first?.number : nil
@@ -241,7 +252,11 @@ extension VesperDashSession {
                     segment: segment,
                     fallbackIndex: index
                 )
-                let segmentURL = self.segmentURL(for: playable.renditionId, segment: .media(segmentIndex))
+                let segmentURL = self.segmentURL(
+                    for: playable.renditionId,
+                    segment: .media(segmentIndex),
+                    fileExtension: subtitleFileExtension
+                )
                 return VesperDashHlsSegment(
                     duration: segment.duration,
                     uri: segmentURL.absoluteString,

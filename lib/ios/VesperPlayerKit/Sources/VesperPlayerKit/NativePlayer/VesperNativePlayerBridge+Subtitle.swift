@@ -20,7 +20,10 @@ extension VesperNativePlayerBridge {
             applySubtitleStyle(style, to: item)
             if style.visible {
                 if !wasVisible {
-                    setSubtitleTrackSelection(publishedTrackSelection.subtitle)
+                    // Style toggles are best-effort: if the previous
+                    // subtitle selection is no longer valid (e.g. source
+                    // switched underneath), don't fail the style call.
+                    try? setSubtitleTrackSelection(publishedTrackSelection.subtitle)
                 }
             } else {
                 enforceSubtitleVisibility(for: item)

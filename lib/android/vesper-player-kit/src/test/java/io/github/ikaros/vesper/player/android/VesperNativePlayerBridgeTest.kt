@@ -20,6 +20,86 @@ import org.junit.Test
 
 class VesperNativePlayerBridgeTest {
     @Test
+    fun dashSubtitleStateStaysLoadingUntilMedia3ReportsTracks() {
+        val bindings = FakeBindings().apply { trackCatalogReady = false }
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = VesperPlayerSource.dash("https://example.com/video.mpd", "DASH"),
+            )
+
+        bridge.refreshFromNative()
+
+        assertEquals(VesperSubtitleStatus.Loading, bridge.subtitleState.value.status)
+
+        bindings.trackCatalogReady = true
+        bridge.refreshFromNative()
+
+        assertEquals(VesperSubtitleStatus.Unavailable, bridge.subtitleState.value.status)
+    }
+
+    @Test
+    fun validSubtitleCommandClearsPreviousSelectionFailure() {
+        val bindings =
+            FakeBindings(
+                trackCatalog =
+                    VesperTrackCatalog(
+                        tracks =
+                            listOf(
+                                VesperMediaTrack(
+                                    id = "subtitle:dash:sub-en",
+                                    kind = VesperMediaTrackKind.Subtitle,
+                                ),
+                            ),
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = VesperPlayerSource.dash("https://example.com/video.mpd", "DASH"),
+            )
+        bridge.refreshFromNative()
+        bridge._subtitleState.value =
+            VesperSubtitleState.failed(
+                advertisedTrackCount = 1,
+                code = "subtitle_track_not_found",
+                phase = VesperSubtitleErrorPhase.Selection,
+                message = "stale selection",
+            )
+
+        bridge.setSubtitleTrackSelection(VesperTrackSelection.disabled())
+
+        assertEquals(VesperSubtitleStatus.Ready, bridge.subtitleState.value.status)
+        assertNull(bridge.subtitleState.value.error)
+    }
+
+    @Test
+    fun dashIdentityFailurePreservesAdvertisedTrackCount() {
+        val bindings =
+            FakeBindings().apply {
+                subtitleCatalogFailure =
+                    NativeTrackSelectionFailure(
+                        kind = NativeTrackKind.Subtitle,
+                        trackId = "sub-en",
+                        code = "subtitle_track_identity_ambiguous",
+                        phase = "identity",
+                        message = "duplicate representation id",
+                        advertisedTrackCount = 2,
+                    )
+            }
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = VesperPlayerSource.dash("https://example.com/video.mpd", "DASH"),
+            )
+
+        bridge.refreshFromNative()
+
+        assertEquals(VesperSubtitleStatus.Failed, bridge.subtitleState.value.status)
+        assertEquals(2, bridge.subtitleState.value.advertisedTrackCount)
+    }
+
+    @Test
     fun benchmarkRecorderDefaultsDisabled() {
         val bridge = VesperNativePlayerBridge(bindings = FakeBindings())
 
@@ -4544,6 +4624,8 @@ private class FakeBindings(
     var updateSystemPlaybackMetadataCount = 0
     var clearSystemPlaybackCount = 0
     var refreshSnapshotCount = 0
+    var trackCatalogReady = true
+    var subtitleCatalogFailure: NativeTrackSelectionFailure? = null
     var prepareSourceNormalizerForPlaybackCount = 0
     var disposePreparedSourceNormalizerResourceCount = 0
     var onPrepareSourceNormalizerForPlayback: (() -> Unit)? = null
@@ -4761,6 +4843,11 @@ private class FakeBindings(
     override fun currentTrackCatalog(): VesperTrackCatalog = trackCatalog
 
     override fun currentTrackSelection(): VesperTrackSelectionSnapshot = trackSelection
+
+    override fun isTrackCatalogReady(): Boolean = trackCatalogReady
+
+    override fun currentSubtitleCatalogFailure(): NativeTrackSelectionFailure? =
+        subtitleCatalogFailure
 
     override fun currentEffectiveVideoTrackId(): String? = effectiveVideoTrackId
 

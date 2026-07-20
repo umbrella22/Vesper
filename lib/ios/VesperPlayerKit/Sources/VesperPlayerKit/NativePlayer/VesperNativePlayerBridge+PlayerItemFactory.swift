@@ -76,7 +76,15 @@ extension VesperNativePlayerBridge {
             headers: source.headers,
             benchmarkEventRecorder: dashBenchmarkEventRecorder
         )
-        let loaderDelegate = VesperDashResourceLoaderDelegate(session: session)
+        let loaderDelegate = VesperDashResourceLoaderDelegate(
+            session: session,
+            subtitleResourceFailureHandler: { [weak self, session] in
+                self?.reportDashSubtitleResourceFailure(
+                    session: session,
+                    source: source
+                )
+            }
+        )
         let asset = source.headers.isEmpty
             ? AVURLAsset(url: session.masterPlaylistURL)
             : AVURLAsset(
@@ -93,6 +101,22 @@ extension VesperNativePlayerBridge {
         iosHostLog("configured DASH bridge master=\(session.masterPlaylistURL.absoluteString)")
         recordBenchmark("dash_bridge_configured")
         return AVPlayerItem(asset: asset)
+    }
+
+    func reportDashSubtitleResourceFailure(
+        session: VesperDashSession,
+        source: VesperPlayerSource
+    ) {
+        guard currentDashSession === session, currentSource == source else {
+            iosHostLog("ignored stale DASH subtitle resource failure")
+            return
+        }
+        reportSubtitleFailure(
+            code: "subtitle_resource_load_failed",
+            phase: .resource,
+            retriable: true,
+            message: "DASH subtitle resource loading failed"
+        )
     }
 
     func configureFairPlayIfNeeded(for source: VesperPlayerSource, asset: AVURLAsset) throws {

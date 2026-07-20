@@ -39,7 +39,15 @@ protocol PlayerBridge: AnyObject {
     func setPlaybackRate(_ rate: Float)
     func setVideoTrackSelection(_ selection: VesperTrackSelection)
     func setAudioTrackSelection(_ selection: VesperTrackSelection)
-    func setSubtitleTrackSelection(_ selection: VesperTrackSelection)
+    /// Applies a subtitle selection.
+    ///
+    /// Immediate (synchronous) validation failures — missing legible
+    /// group, unknown track id, no auto candidate — `throw` so the iOS
+    /// Flutter plugin surfaces them through `FlutterError` and the Dart
+    /// `Future<void>` fails. Race failures after the platform `select` still
+    /// surface through `publishedSubtitleState` because they cannot be
+    /// observed synchronously.
+    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) throws
     func setSubtitleStyle(_ style: VesperSubtitleStyle)
     func setAbrPolicy(_ policy: VesperAbrPolicy)
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy)
@@ -58,6 +66,7 @@ protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
     var publishedFixedTrackStatus: VesperFixedTrackStatus? { get }
     var publishedResiliencePolicy: VesperPlaybackResiliencePolicy { get }
     var publishedLastError: VesperPlayerError? { get }
+    var publishedSubtitleState: VesperSubtitleState { get }
 }
 
 extension PlayerBridge {

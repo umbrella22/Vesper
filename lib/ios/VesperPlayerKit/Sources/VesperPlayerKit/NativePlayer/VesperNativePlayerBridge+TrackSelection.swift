@@ -16,10 +16,7 @@ extension VesperNativePlayerBridge {
 
     func setAudioTrackSelection(_ selection: VesperTrackSelection) {
         clearLastError()
-        let trackIdText = selection.trackId ?? "nil"
-        iosHostLog(
-            "setAudioTrackSelection mode=\(selection.mode.rawValue) trackId=\(trackIdText)"
-        )
+        iosHostLog("setAudioTrackSelection mode=\(selection.mode.rawValue)")
         guard let item = player?.currentItem else {
             iosHostLog("setAudioTrackSelection ignored: no current item")
             return
@@ -30,7 +27,7 @@ extension VesperNativePlayerBridge {
             return
         }
 
-        applyTrackSelection(
+        try? applyTrackSelection(
             selection,
             kind: .audio,
             group: group,
@@ -39,15 +36,12 @@ extension VesperNativePlayerBridge {
         )
     }
 
-    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) {
+    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) throws {
         clearLastError()
-        let trackIdText = selection.trackId ?? "nil"
-        iosHostLog(
-            "setSubtitleTrackSelection mode=\(selection.mode.rawValue) trackId=\(trackIdText)"
-        )
+        clearSubtitleFailure()
+        iosHostLog("setSubtitleTrackSelection mode=\(selection.mode.rawValue)")
         guard let item = player?.currentItem else {
-            iosHostLog("setSubtitleTrackSelection ignored: no current item")
-            return
+            throw VesperSubtitleSelectionError.platformTrackUnavailable(trackId: nil)
         }
 
         if subtitleOverlayRenderer.hasTracks {
@@ -66,7 +60,11 @@ extension VesperNativePlayerBridge {
                 if let group = subtitleGroup {
                     item.select(nil, in: group)
                 }
-                _ = subtitleOverlayRenderer.select(trackId: selectedSideLoadId)
+                guard subtitleOverlayRenderer.select(trackId: selectedSideLoadId) else {
+                    throw VesperSubtitleSelectionError.trackNotFound(
+                        trackId: selection.trackId ?? ""
+                    )
+                }
                 updateTrackSelection { current in
                     VesperTrackSelectionSnapshot(
                         video: current.video,
@@ -79,14 +77,34 @@ extension VesperNativePlayerBridge {
                 return
             }
             _ = subtitleOverlayRenderer.select(trackId: nil)
+            if selection.mode == .track, subtitleGroup == nil {
+                throw VesperSubtitleSelectionError.trackNotFound(
+                    trackId: selection.trackId ?? ""
+                )
+            }
         }
 
+        // Immediate validation failures must throw so the iOS Flutter plugin
+        // surfaces them through `FlutterError` and
+        // the Dart `Future<void>` actually fails. Race failures after
+        // `item.select` still surface through `reportSubtitleFailure`
+        // because they cannot be observed synchronously.
         guard let group = subtitleGroup else {
-            iosHostLog("setSubtitleTrackSelection ignored: no legible media selection group")
-            return
+            throw VesperSubtitleSelectionError.platformTrackUnavailable(trackId: selection.trackId)
         }
 
-        applyTrackSelection(
+        // For .track mode, validate the id against the current catalog
+        // before applying so an unknown id throws
+        // `subtitle_track_not_found` instead of a silent no-op in
+        // `applyTrackSelection`.
+        if selection.mode == .track,
+           let trackId = selection.trackId,
+           subtitleOptionsByTrackId[trackId] == nil
+        {
+            throw VesperSubtitleSelectionError.trackNotFound(trackId: trackId)
+        }
+
+        try applyTrackSelection(
             selection,
             kind: .subtitle,
             group: group,

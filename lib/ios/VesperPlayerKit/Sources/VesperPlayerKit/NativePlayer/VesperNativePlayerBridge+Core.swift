@@ -18,6 +18,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published var publishedFixedTrackStatus: VesperFixedTrackStatus?
     @Published var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
     @Published var publishedLastError: VesperPlayerError?
+    @Published var publishedSubtitleState: VesperSubtitleState = .empty
 
     var currentSource: VesperPlayerSource?
     var player: AVPlayer?
@@ -183,6 +184,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedFixedTrackStatus = nil
         publishedResiliencePolicy = resiliencePolicy
         publishedLastError = nil
+        publishedSubtitleState = .empty
         currentPluginDiagnostics = nativeFramePipelineDiagnostics()
     }
 }

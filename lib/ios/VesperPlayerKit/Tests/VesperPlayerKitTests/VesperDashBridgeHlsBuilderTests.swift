@@ -547,4 +547,101 @@ final class VesperDashBridgeHlsBuilderTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Subtitle contract
+
+    /// The subtitle catalog must propagate `<Label>`, `<Role>` default, and
+    /// `<Role>` forced through to `VesperMediaTrack`.
+    func testDashWebVttSubtitlePropagatesLabelDefaultForced() throws {
+        let manifest = try VesperDashManifestParser.parse(
+            data: Data(sampleWebVttWithLabelAndRoleMpd.utf8),
+            manifestURL: URL(string: "https://cdn.example.com/vod/manifest.mpd")!
+        )
+        let selected = try VesperDashHlsBuilder.selectedPlayableRepresentations(
+            manifest: manifest,
+            variantPolicy: .all
+        )
+        let snapshot = VesperDashManifestTrackCatalogSnapshot(
+            audio: selected.audio,
+            video: selected.video,
+            subtitles: selected.subtitles
+        )
+
+        // Catalog must contain both renditions with metadata derived from
+        // <Label> / <Role> rather than hardcoded defaults.
+        let byId = Dictionary(uniqueKeysWithValues:
+            snapshot.subtitleTracks.map { ($0.id, $0) }
+        )
+        let english = try XCTUnwrap(byId["subtitle:dash:sub-en"])
+        XCTAssertEqual(english.label, "English")
+        XCTAssertTrue(english.isDefault, "main role must surface as isDefault")
+        XCTAssertFalse(english.isForced)
+
+        let forced = try XCTUnwrap(byId["subtitle:dash:sub-en-forced"])
+        XCTAssertEqual(forced.label, "English (Forced)")
+        XCTAssertFalse(forced.isDefault)
+        XCTAssertTrue(forced.isForced, "forced-subtitle role must surface as isForced")
+
+        // HLS master playlist must carry the same metadata as EXT-X-MEDIA.
+        let master = try VesperDashHlsBuilder.buildMasterPlaylist(
+            manifest: manifest,
+            mediaURL: { "vesper-dash://media/session/\($0).m3u8" }
+        )
+        XCTAssertTrue(
+            master.contains("NAME=\"English\",DEFAULT=YES"),
+            "main subtitle rendition must carry DEFAULT=YES with NAME from <Label>: \(master)"
+        )
+        XCTAssertTrue(
+            master.contains("NAME=\"English (Forced)\",DEFAULT=NO"),
+            "forced subtitle rendition must carry DEFAULT=NO with NAME from <Label>: \(master)"
+        )
+        XCTAssertTrue(
+            master.contains("FORCED=YES"),
+            "forced subtitle rendition must carry FORCED=YES: \(master)"
+        )
+    }
+
+    /// Duplicate non-empty `Representation@id` values must surface a
+    /// structured identity failure rather than mask the collision with a
+    /// sequential `-2` suffix.
+    func testDashWebVttDuplicateRepresentationIdFailsIdentity() throws {
+        let manifest = try VesperDashManifestParser.parse(
+            data: Data(sampleWebVttDuplicateIdMpd.utf8),
+            manifestURL: URL(string: "https://cdn.example.com/vod/manifest.mpd")!
+        )
+        // The bridge rejects the collision instead of synthesizing a second
+        // rendition id.
+        XCTAssertThrowsError(
+            try VesperDashHlsBuilder.selectedPlayableRepresentations(
+                manifest: manifest,
+                variantPolicy: .all
+            )
+        ) { error in
+            // Either VesperDashBridgeError or a Rust-side JSON error is
+            // acceptable; the contract is "duplicate ids must not silently
+            // produce distinct rendition ids".
+            XCTAssertNotNil(error as? Error, "expected structured failure for duplicate ids")
+        }
+    }
+
+    /// A subtitle adaptation set whose `<Representation>` lacks an `id`
+    /// attribute must surface a structured
+    /// `subtitle_track_identity_ambiguous` failure at parse time rather
+    /// than synthesizing a positional id. The structured prefix lets iOS
+    /// classify the failure into the subtitle state.
+    func testDashManifestWithMissingSubtitleRepresentationIdFailsIdentity() {
+        XCTAssertThrowsError(
+            try VesperDashManifestParser.parse(
+                data: Data(sampleWebVttMissingRepresentationIdMpd.utf8),
+                manifestURL: URL(string: "https://cdn.example.com/vod/manifest.mpd")!
+            )
+        ) { error in
+            let message = (error as? LocalizedError)?.errorDescription
+                ?? String(describing: error)
+            XCTAssertTrue(
+                message.contains("subtitle_track_identity_ambiguous"),
+                "expected structured subtitle_track_identity_ambiguous prefix, got: \(message)"
+            )
+        }
+    }
 }

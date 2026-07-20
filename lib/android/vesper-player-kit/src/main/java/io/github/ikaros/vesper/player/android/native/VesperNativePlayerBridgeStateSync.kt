@@ -157,6 +157,40 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
     _trackSelection.value = bindings.currentTrackSelection()
     _effectiveVideoTrackId.value = bindings.currentEffectiveVideoTrackId()
     _videoVariantObservation.value = bindings.currentVideoVariantObservation()
+    // Derive the first-class subtitle state from the refreshed catalog and
+    // preserve structured command failures. Identity failures are produced
+    // by the DASH catalog owner and must not be hidden by an empty catalog.
+    val subtitleCount = _trackCatalog.value.subtitleTracks.size
+    val currentSubtitleState = _subtitleState.value
+    val catalogFailure = bindings.currentSubtitleCatalogFailure()
+    if (catalogFailure != null) {
+        _subtitleState.value =
+            VesperSubtitleState.failed(
+                advertisedTrackCount = catalogFailure.advertisedTrackCount ?: 0,
+                code = catalogFailure.code,
+                phase = VesperSubtitleErrorPhase.Identity,
+                trackId = catalogFailure.trackId,
+                message = catalogFailure.message,
+            )
+    } else if (
+        currentSource?.protocol == VesperPlayerSourceProtocol.Dash &&
+        !bindings.isTrackCatalogReady()
+    ) {
+        _subtitleState.value =
+            VesperSubtitleState.loading(
+                advertisedTrackCount = currentSubtitleState.advertisedTrackCount,
+            )
+    } else if (currentSubtitleState.status != VesperSubtitleStatus.Failed) {
+        _subtitleState.value =
+            if (subtitleCount > 0) {
+                VesperSubtitleState.ready(
+                    advertisedTrackCount = subtitleCount,
+                    selectableTrackCount = subtitleCount,
+                )
+            } else {
+                VesperSubtitleState.unavailable()
+            }
+    }
     currentNativeFramePipelineStatusOnRuntime()
 
     bindings.pollSnapshot()?.let { snapshot ->
@@ -264,10 +298,18 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
                 }
             }
             is NativeBridgeEvent.Warning -> {
-                if (runtimeWarnings.size >= VesperNativePlayerBridge.MAX_RUNTIME_WARNINGS) {
-                    runtimeWarnings.removeFirst()
+                // Synchronize on `runtimeWarnings` to match the producer
+                // paths: the JNI track-selection failure listener added in
+                // The native selection callback can fire from any thread that drives
+                // `setSubtitleTrackSelection`, and this branch historically
+                // ran only on the main thread. Without the lock the two
+                // producers can corrupt the ArrayDeque concurrently.
+                synchronized(runtimeWarnings) {
+                    if (runtimeWarnings.size >= VesperNativePlayerBridge.MAX_RUNTIME_WARNINGS) {
+                        runtimeWarnings.removeFirst()
+                    }
+                    runtimeWarnings += event.warning
                 }
-                runtimeWarnings += event.warning
             }
             is NativeBridgeEvent.Error -> {
                 recordBenchmark(
@@ -324,6 +366,7 @@ internal fun VesperNativePlayerBridge.clearTrackState() {
     _trackSelection.value = VesperTrackSelectionSnapshot()
     _effectiveVideoTrackId.value = null
     _videoVariantObservation.value = null
+    _subtitleState.value = VesperSubtitleState.EMPTY
 }
 
 internal fun VesperNativePlayerBridge.sourceSubtitle(source: VesperPlayerSource): String = i18n.sourceSubtitle(source)

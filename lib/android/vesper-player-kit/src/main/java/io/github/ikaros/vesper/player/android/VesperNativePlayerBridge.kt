@@ -87,6 +87,13 @@ internal class VesperNativePlayerBridge(
     )
     internal val _trackCatalog = MutableStateFlow(VesperTrackCatalog.Empty)
     internal val _trackSelection = MutableStateFlow(VesperTrackSelectionSnapshot())
+    /**
+     * First-class subtitle lifecycle state. Driven by catalog refresh
+     * (ready/unavailable counts), structured JNI failures (failed), and
+     * source-switch reset (empty). Exposed to the Flutter plugin so it
+     * does not have to derive the state from catalog + drained warnings.
+     */
+    internal val _subtitleState = MutableStateFlow(VesperSubtitleState.EMPTY)
     internal val _effectiveVideoTrackId = MutableStateFlow<String?>(null)
     internal val _videoVariantObservation = MutableStateFlow<VesperVideoVariantObservation?>(null)
     internal val _resiliencePolicy = MutableStateFlow(currentResiliencePolicy)
@@ -120,6 +127,7 @@ internal class VesperNativePlayerBridge(
     override val trackCatalog: StateFlow<VesperTrackCatalog> = _trackCatalog.asStateFlow()
     override val trackSelection: StateFlow<VesperTrackSelectionSnapshot> =
         _trackSelection.asStateFlow()
+    override val subtitleState: StateFlow<VesperSubtitleState> = _subtitleState.asStateFlow()
     override val effectiveVideoTrackId: StateFlow<String?> =
         _effectiveVideoTrackId.asStateFlow()
     override val videoVariantObservation: StateFlow<VesperVideoVariantObservation?> =
@@ -135,6 +143,43 @@ internal class VesperNativePlayerBridge(
     init {
         installNativeUpdateListener()
         bindings.setOnSubtitleCuesListener(surfaceHost::updateSubtitleCues)
+        // Structured JNI track-selection failures (e.g. a stale subtitle id
+        // arriving after a source refresh) surface as runtime warnings so
+        // Flutter observes a `subtitle_track_not_found` warning alongside
+        // the next snapshot.
+        bindings.setOnTrackSelectionFailureListener { failure ->
+            synchronized(runtimeWarnings) {
+                if (runtimeWarnings.size >= MAX_RUNTIME_WARNINGS) {
+                    runtimeWarnings.removeFirst()
+                }
+                runtimeWarnings.add(
+                    VesperRuntimeWarning(
+                        domain = "io.github.ikaros.vesper.player.trackSelection",
+                        payload = mapOf(
+                            "kind" to failure.kind.name,
+                            "trackId" to failure.trackId,
+                            "code" to failure.code,
+                            "phase" to failure.phase,
+                            "message" to failure.message,
+                        ),
+                    ),
+                )
+            }
+            // Mirror subtitle-domain failures into the first-class
+            // subtitleState so the Flutter plugin can read it directly
+            // instead of deriving from drained warnings.
+            if (failure.kind == NativeTrackKind.Subtitle) {
+                val advertised = _subtitleState.value.advertisedTrackCount
+                _subtitleState.value =
+                    VesperSubtitleState.failed(
+                        advertisedTrackCount = advertised,
+                        code = failure.code,
+                        phase = VesperSubtitleErrorPhase.Selection,
+                        trackId = failure.trackId,
+                        message = failure.message,
+                    )
+            }
+        }
     }
 
     override fun initialize() = initializeNativeBridge()
@@ -207,12 +252,14 @@ internal class VesperNativePlayerBridge(
         benchmarkRecorder.drainEvents()
 
     override fun drainRuntimeWarnings(): List<VesperRuntimeWarning> {
-        if (runtimeWarnings.isEmpty()) {
-            return emptyList()
+        synchronized(runtimeWarnings) {
+            if (runtimeWarnings.isEmpty()) {
+                return emptyList()
+            }
+            val warnings = runtimeWarnings.toList()
+            runtimeWarnings.clear()
+            return warnings
         }
-        val warnings = runtimeWarnings.toList()
-        runtimeWarnings.clear()
-        return warnings
     }
 
     override fun benchmarkSummary(): VesperBenchmarkSummary =
