@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/apple.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ios-framework.sh"
 
 ROOT_DIR="$VESPER_REPO_ROOT"
 PROJECT_DIR="$ROOT_DIR/lib/ios/VesperPlayerKit"
@@ -91,26 +91,6 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
-framework_info_plist() {
-  local output_path="$1"
-  local platform_name="$2"
-  local minimum_os_version="$3"
-
-  /usr/libexec/PlistBuddy -c "Clear dict" "$output_path" >/dev/null 2>&1 || true
-  /usr/libexec/PlistBuddy -c "Add :CFBundleDevelopmentRegion string en" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string $FRAMEWORK_NAME" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string io.github.ikaros.vesper.player.frame-processor-diagnostic-plugin" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleInfoDictionaryVersion string 6.0" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleName string $FRAMEWORK_NAME" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string FMWK" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $VESPER_RELEASE_VERSION" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms array" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleSupportedPlatforms:0 string $platform_name" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VESPER_RELEASE_BUILD" "$output_path"
-  /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string $minimum_os_version" "$output_path"
-  vesper_apple_add_framework_install_metadata "$output_path" "$platform_name"
-}
-
 create_framework() {
   local source_dir="$1"
   local platform_name="$2"
@@ -120,44 +100,28 @@ create_framework() {
   local binary_path="$framework_dir/$FRAMEWORK_NAME"
 
   rm -rf "$framework_dir"
-  mkdir -p "$framework_dir/Headers" "$framework_dir/Modules" "$framework_dir/Resources"
+  mkdir -p "$framework_dir/Headers" "$framework_dir/Modules"
 
   cp "$source_dir/libvesper_frame_processor_diagnostic.dylib" "$binary_path"
-  install_name_tool -id "@rpath/$FRAMEWORK_BUNDLE/$FRAMEWORK_NAME" "$binary_path"
-
-  printf '%s\n' \
-    'void VesperPlayerFrameProcessorDiagnosticPluginLinkAnchor(void);' \
-    >"$framework_dir/Headers/VesperPlayerFrameProcessorDiagnosticPlugin.h"
-  printf '%s\n' \
-    'framework module VesperPlayerFrameProcessorDiagnosticPlugin {' \
-    '  umbrella header "VesperPlayerFrameProcessorDiagnosticPlugin.h"' \
-    '  export *' \
-    '  module * { export * }' \
-    '}' \
-    >"$framework_dir/Modules/module.modulemap"
-  framework_info_plist "$framework_dir/Info.plist" "$platform_name" "$minimum_os_version"
-}
-
-verify_no_runtime_dylibs() {
-  local framework_dir="$1"
-  local unexpected
-
-  unexpected="$(
-    find "$framework_dir" -type f \
-      \( -name 'libav*.dylib*' -o -name 'libsw*.dylib*' -o -name 'libxml2*.dylib*' -o -name 'libssl*.dylib*' -o -name 'libcrypto*.dylib*' \) \
-      -print -quit
-  )"
-  if [[ -n "$unexpected" ]]; then
-    echo "iOS frame processor diagnostic plugin must not bundle FFmpeg runtime dylibs:" >&2
-    echo "  $unexpected" >&2
-    exit 1
-  fi
+  vesper_ios_prepare_framework_binary "$binary_path" "$FRAMEWORK_NAME"
+  vesper_ios_write_binary_framework_module "$framework_dir" "$FRAMEWORK_NAME"
+  vesper_ios_framework_info_plist \
+    "$framework_dir/Info.plist" \
+    "$FRAMEWORK_NAME" \
+    "io.github.ikaros.vesper.player.frame-processor-diagnostic-plugin" \
+    "$platform_name" \
+    "$minimum_os_version" \
+    "$VESPER_RELEASE_VERSION" \
+    "$VESPER_RELEASE_BUILD"
+  vesper_ios_verify_flat_framework "$framework_dir" "$FRAMEWORK_NAME"
 }
 
 vesper_require_command xcodebuild
 vesper_require_command install_name_tool
 vesper_require_command otool
 vesper_require_command lipo
+vesper_require_command plutil
+vesper_require_command ditto
 
 rm -rf "$RAW_OUTPUT_DIR" "$FRAMEWORK_STAGING_DIR" "$XCFRAMEWORK_PATH"
 mkdir -p "$OUTPUT_DIR" "$FRAMEWORK_STAGING_DIR"
@@ -191,7 +155,6 @@ for slice in "${SELECTED_SLICES[@]}"; do
 
   slice_framework_root="$FRAMEWORK_STAGING_DIR/$slice"
   create_framework "$source_dir" "$platform_name" "$(vesper_apple_ios_deployment_target)" "$slice_framework_root"
-  verify_no_runtime_dylibs "$slice_framework_root/$FRAMEWORK_BUNDLE"
   lipo "$slice_framework_root/$FRAMEWORK_BUNDLE/$FRAMEWORK_NAME" -verify_arch arm64
   FRAMEWORK_ARGS+=(-framework "$slice_framework_root/$FRAMEWORK_BUNDLE")
 done

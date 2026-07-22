@@ -22,6 +22,7 @@ on:
       - "crates/platform/jni/**"
       - "lib/android/**"
       - "lib/ios/VesperPlayerKit/**"
+      - "lib/ios/VesperPlayerOptionalPlugins/**"
       - "lib/flutter/**"
       - "examples/flutter-host/**"
   push:
@@ -47,6 +48,7 @@ on:
       - "crates/platform/jni/**"
       - "lib/android/**"
       - "lib/ios/VesperPlayerKit/**"
+      - "lib/ios/VesperPlayerOptionalPlugins/**"
       - "lib/flutter/**"
       - "examples/flutter-host/**"
   workflow_dispatch:
@@ -306,6 +308,9 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install iOS build tools
+        run: brew install pkg-config
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -318,6 +323,9 @@ jobs:
         with:
           minimum-major: "16"
 
+      - name: Stage canonical optional iOS plugin XCFrameworks
+        run: ./scripts/vesper ios stage-optional-plugins-release /tmp/vesper-flutter-ios-optional-plugins-release --profile source-normalizer ios-arm64 ios-simulator-arm64
+
       - name: Show Flutter version
         run: flutter --version
 
@@ -329,6 +337,12 @@ jobs:
       - name: Install Flutter dependencies
         working-directory: examples/flutter-host
         run: flutter pub get
+
+      - name: Configure Flutter iOS SwiftPM deployment target
+        working-directory: examples/flutter-host
+        run: |
+          flutter build ios --release --config-only --no-codesign
+          rg -F '.iOS("17.0")' ios/Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage/Package.swift
 
       - name: Check iOS bridge crates
         run: cargo check -p player-platform-ios -p player-ffi-ios
@@ -373,9 +387,5 @@ jobs:
         working-directory: examples/flutter-host
         run: flutter build ios --release --no-codesign
 
-      - name: Upload Flutter iOS release app
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: flutter-host-ios-arm64-release-app
-          path: examples/flutter-host/build/ios/iphoneos/Runner.app
+      - name: Verify Flutter iOS host App Store framework layout
+        run: ./scripts/vesper ios verify-app-store-layout examples/flutter-host/build/ios/iphoneos/Runner.app

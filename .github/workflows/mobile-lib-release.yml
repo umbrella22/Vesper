@@ -313,63 +313,19 @@ jobs:
         run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
 
       - name: Build VesperPlayerKit iOS release assets
+        env:
+          VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS: "1"
         run: ./scripts/vesper ios stage-release release-assets/ios
 
-      - name: Verify VesperPlayerKit iOS assets are arm64-only
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if find release-assets/ios -type f \( -name '*x86_64*' -o -name '*i386*' \) | grep -q .; then
-            echo "Unexpected x86/i386 iOS asset was staged." >&2
-            find release-assets/ios -type f \( -name '*x86_64*' -o -name '*i386*' \)
-            exit 1
-          fi
-          if find release-assets/ios -maxdepth 1 -type f -name '*.dylib' | grep -q .; then
-            echo "iOS release assets must not publish bare dylibs." >&2
-            find release-assets/ios -maxdepth 1 -type f -name '*.dylib'
-            exit 1
-          fi
-
-          temp_dir="$(mktemp -d)"
-          trap 'rm -rf "$temp_dir"' EXIT
-          optional_artifacts=(
-            "release-assets/ios/VesperPlayerFfmpegRuntime.xcframework.zip"
-            "release-assets/ios/VesperPlayerRemuxFfmpegPlugin.xcframework.zip"
-            "release-assets/ios/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip"
-            "release-assets/ios/VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip"
-            "release-assets/ios/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip"
-          )
-          for unexpected in "${optional_artifacts[@]}"; do
-            if [[ -f "$unexpected" ]]; then
-              echo "Default iOS release must not stage optional plugin artifact: $unexpected" >&2
-              exit 1
-            fi
-          done
-
-          unzip -q release-assets/ios/VesperPlayerKit.xcframework.zip -d "$temp_dir"
-
-          while IFS= read -r -d '' binary; do
-            info="$(lipo -info "$binary")"
-            echo "$info"
-
-            if [[ "$info" == *"x86_64"* || "$info" == *"i386"* ]]; then
-              echo "Found unexpected non-arm64 slice in $binary" >&2
-              exit 1
-            fi
-          done < <(
-            find "$temp_dir" \
-              \( \
-                -path '*VesperPlayerKit.framework/VesperPlayerKit' \
-              \) \
-              -print0
-          )
+      - name: Verify VesperPlayerKit iOS release assets
+        run: ./scripts/vesper ios verify-release release-assets/ios --scope complete
 
       - name: Upload VesperPlayerKit iOS release assets
         uses: actions/upload-artifact@v4
         with:
           name: VesperPlayerKit-ios-arm64
           path: release-assets/ios/*
+          if-no-files-found: error
 
   publish-release:
     name: Publish VesperPlayerKit Release
@@ -425,7 +381,7 @@ jobs:
         run: |
           cd release-assets
           shopt -s nullglob
-          shasum -a 256 *.aar *.zip *.apk > SHA256SUMS.txt
+          shasum -a 256 *.aar *.zip *.apk *.tar.xz > SHA256SUMS.txt
 
       - name: Publish VesperPlayerKit GitHub release
         uses: softprops/action-gh-release@v2
@@ -434,8 +390,49 @@ jobs:
           name: VesperPlayerKit ${{ env.RELEASE_TAG }}
           body_path: release-assets/RELEASE_NOTES.md
           prerelease: ${{ steps.release-meta.outputs.prerelease }}
+          overwrite_files: true
           files: |
             release-assets/*.aar
             release-assets/*.zip
             release-assets/*.apk
+            release-assets/*.tar.xz
             release-assets/SHA256SUMS.txt
+
+      - name: Reconcile VesperPlayerKit GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+          expected_assets="$temp_dir/expected-assets.txt"
+          actual_assets="$temp_dir/actual-assets.txt"
+
+          shopt -s nullglob
+          release_asset_paths=(
+            release-assets/*.aar
+            release-assets/*.zip
+            release-assets/*.apk
+            release-assets/*.tar.xz
+            release-assets/SHA256SUMS.txt
+          )
+          shopt -u nullglob
+          printf '%s\n' "${release_asset_paths[@]##*/}" | LC_ALL=C sort -u > "$expected_assets"
+
+          while IFS= read -r remote_asset; do
+            [[ -n "$remote_asset" ]] || continue
+            if ! grep -Fqx -- "$remote_asset" "$expected_assets"; then
+              gh release delete-asset "$RELEASE_TAG" "$remote_asset" --yes
+            fi
+          done < <(
+            gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'
+          )
+
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' \
+            | LC_ALL=C sort -u > "$actual_assets"
+          if ! diff -u "$expected_assets" "$actual_assets"; then
+            echo "GitHub Release assets do not match the locally verified release set." >&2
+            exit 1
+          fi

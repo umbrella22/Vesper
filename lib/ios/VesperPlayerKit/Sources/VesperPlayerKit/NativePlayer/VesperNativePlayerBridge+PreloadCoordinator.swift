@@ -1,5 +1,5 @@
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 final class VesperNativePreloadCoordinator {
     private let budgetPolicy: VesperPreloadBudgetPolicy

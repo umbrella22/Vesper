@@ -10,7 +10,7 @@ scripts/
   lib/        Shared Bash functions and platform constants
   android/    Android private FFmpeg implementation details, JNI, AAR, release staging, optional plugins
   apple/      Apple private FFmpeg prebuilt implementation details
-  ios/        iOS FFI, XCFramework, FFmpeg runtime, optional plugins, embed phase, release staging
+  ios/        iOS FFI, XCFramework, optional framework packages, layout verification, release staging
   desktop/    desktop FFmpeg, pkg-config wrapper, desktop plugin verification
   ffi/        C header generation / verification and C host smoke tests
   flutter/    Flutter pub staging, dry-run, and automated publish helpers
@@ -39,13 +39,15 @@ VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper android stage-release
 
 ./scripts/vesper ios ffi release
 ./scripts/vesper ios verify-bridge-shim
-./scripts/vesper ios ffmpeg-runtime-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
-./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
-./scripts/vesper ios stage-source-normalizer-plugin-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
-./scripts/vesper ios stage-frame-processor-plugin-release /tmp/vesper-ios-release ios-arm64 ios-simulator-arm64
+./scripts/vesper ios stage-optional-plugins-release /tmp/vesper-ios-release --profile source-normalizer ios-arm64 ios-simulator-arm64
+./scripts/vesper ios verify-optional-plugins-release /tmp/vesper-ios-release
+./scripts/vesper ios verify-app-store-layout /path/to/App.app
+bash scripts/ios/test-player-optional-plugins-release.sh /tmp/vesper-ios-release
 ./scripts/vesper ios kit-xcframework
-./scripts/vesper ios stage-release
-VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper ios stage-release
+./scripts/vesper ios stage-release /tmp/vesper-ios-release
+./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope core
+VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper ios stage-release /tmp/vesper-ios-release
+./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope complete
 
 ./scripts/vesper desktop ensure-ffmpeg
 ./scripts/vesper desktop verify-decoder-diagnostics
@@ -137,51 +139,47 @@ The external-playback relay FFmpeg JNI library is built by the Android
 `buildRelayFfmpegAndroidJni` task. Release and example builds use the `default`
 profile so the shared runtime and relay JNI profile hashes match.
 
-iOS core kit packaging does not include FFmpeg. Default iOS release staging
-publishes only `VesperPlayerKit` framework artifacts. Set
-`VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1`, or run dedicated plugin release
-commands, when you intentionally want optional FFmpeg runtime, remux,
-SourceNormalizer, decoder, or FrameProcessor XCFrameworks. Optional remux
-support is staged as two signable XCFrameworks: one shared FFmpeg runtime and
-one remux plugin:
+iOS core kit packaging does not include FFmpeg. Local `stage-release` calls are
+core-only unless `VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1` is set. Tagged release
+CI enables that option and publishes the optional FFmpeg runtime, remux,
+SourceNormalizer, decoder, and FrameProcessor XCFrameworks. Repository native
+and Flutter hosts use one canonical optional staging entrypoint:
 
 ```sh
-./scripts/vesper ios ffmpeg-runtime-release /tmp/vesper-ios-release \
-  --profile default \
-  ios-arm64 ios-simulator-arm64
-
-./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-release \
-  --profile default \
+./scripts/vesper ios stage-optional-plugins-release /tmp/vesper-ios-release \
+  --profile source-normalizer \
   ios-arm64 ios-simulator-arm64
 ```
 
-The remux plugin release depends on the shared iOS FFmpeg runtime release and
-will stage it automatically when needed. The runtime and plugin artifacts both
-write `profile-hash.txt`; staging fails if the hashes do not match. The plugin
-XCFramework must not contain `libav*`, `libsw*`, `libxml2*`, `libssl*`, or
-`libcrypto*` dylibs.
-
-The SourceNormalizer FFmpeg plugin follows the same shared-runtime boundary:
-
-```sh
-./scripts/vesper ios stage-source-normalizer-plugin-release /tmp/vesper-ios-release \
-  --profile default \
-  ios-arm64 ios-simulator-arm64
-```
-
-It writes profile metadata, verifies the runtime/plugin profile hashes, and
-must not contain FFmpeg dylibs. The mobile v1 behavior is diagnostics/preflight
-only; it does not replace Android or iOS playback sources. The FrameProcessor
-diagnostic release command stages a non-FFmpeg plugin shell:
+This produces three FFmpeg component XCFrameworks (`VesperFFmpegAVCodec`,
+`VesperFFmpegAVFormat`, and `VesperFFmpegAVUtil`) plus Remux,
+SourceNormalizer, VideoToolbox Decoder, and diagnostic FrameProcessor plugin
+XCFrameworks. The App target embeds and signs them as seven top-level sibling
+frameworks. Flat dylibs, nested frameworks, and the legacy umbrella runtime are
+not distributable layouts. The release verifier also requires exactly one
+device framework slice and one Simulator framework slice, each with exactly one
+`arm64` architecture and matching bundle, SDK, and Mach-O platform metadata.
+Extra top-level release assets and extra XCFramework slices fail verification.
+Optional staging also emits
+`VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip` and exactly one versioned
+corresponding-source tarball. Verification compares the packaged LGPL and
+FFmpeg license files with that source, compares the Vesper notices with the
+checkout, and checks the rebuild and relinking instructions. Release staging
+forces a fresh FFmpeg source build instead of reusing cached dylibs. Run the
+verifier or its release regressions directly with:
 
 ```sh
-./scripts/vesper ios stage-frame-processor-plugin-release /tmp/vesper-ios-release \
-  ios-arm64 ios-simulator-arm64
+./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope complete
+bash scripts/ios/test-framework-platform-validation.sh
+bash scripts/ios/test-player-optional-plugins-release.sh /tmp/vesper-ios-release
 ```
 
-That artifact exists for packaging and capability diagnostics only. It does not
-process frames or participate in default mobile playback. Decoder mobile
-artifacts remain deferred.
+Every FFmpeg-backed framework writes `profile-hash.txt`; staging and app-layout
+verification fail if the hashes do not match. Plugin XCFrameworks must not
+contain duplicate `libav*`, `libsw*`, `libxml2*`, `libssl*`, or `libcrypto*`
+libraries. SourceNormalizer can participate through an explicit normalized
+resource route. Decoder and FrameProcessor participation remains opt-in through
+the SDK-managed native-frame route; default AVPlayer playback is unchanged.
 
 Supported overlays are:
 
@@ -202,8 +200,8 @@ consume the resolved artifacts produced by that command.
 Resolved profile outputs are written under
 `third_party/ffmpeg/<platform>/profiles/` by default. Every prebuilt slice writes
 `vesper-ffmpeg-build-metadata.txt` with the declared profile, profile hash,
-external dependencies, license-sensitive flags, source archive, and full
-configure line.
+external dependencies, license-sensitive flags, source archive SHA-256, and
+full configure line.
 Source archives are cached under `third_party/_cache` by default; override this
 with `VESPER_THIRD_PARTY_SOURCE_CACHE_DIR` when local automation keeps third-party
 tarballs somewhere else.

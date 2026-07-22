@@ -1,6 +1,6 @@
 import Combine
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 @MainActor
 public final class VesperPlaylistCoordinator: ObservableObject {

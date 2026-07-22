@@ -3,6 +3,7 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/apple.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg-validate.sh"
 
 ROOT_DIR="$VESPER_REPO_ROOT"
 FFMPEG_VERSION="$(vesper_ffmpeg_resolve_version apple)"
@@ -62,6 +63,15 @@ vesper_require_command xcrun
 
 mkdir -p "$(vesper_ffmpeg_source_cache_dir)"
 vesper_download_if_missing "$FFMPEG_SOURCE_ARCHIVE" "$FFMPEG_SOURCE_URL"
+if [[ -n "${VESPER_APPLE_FFMPEG_EXPECTED_SOURCE_SHA256:-}" ]]; then
+  ACTUAL_SOURCE_SHA256="$(vesper_ffmpeg_sha256_file "$FFMPEG_SOURCE_ARCHIVE")"
+  if [[ "$ACTUAL_SOURCE_SHA256" != "$VESPER_APPLE_FFMPEG_EXPECTED_SOURCE_SHA256" ]]; then
+    echo "Apple FFmpeg source archive does not match the release-pinned SHA-256:" >&2
+    echo "  expected: $VESPER_APPLE_FFMPEG_EXPECTED_SOURCE_SHA256" >&2
+    echo "  actual:   $ACTUAL_SOURCE_SHA256" >&2
+    exit 1
+  fi
+fi
 
 MAKE_JOBS="$(vesper_make_jobs)"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vesper-apple-ffmpeg.XXXXXX")"
@@ -84,6 +94,7 @@ for slice in "${selected_slices[@]}"; do
   install_dir="$WORK_DIR/install-$slice"
   pkgconfig_dir="$WORK_DIR/pkgconfig-$slice"
   metadata_path="$output_root/vesper-ffmpeg-build-metadata.txt"
+  library_checksums_path="$output_root/vesper-ffmpeg-library-sha256.txt"
   metadata_expected="$WORK_DIR/metadata-$slice.txt"
   local_pkg_config_paths=()
   pkg_config_command=""
@@ -124,6 +135,7 @@ EOF
     "-isysroot $sdk_path"
     "-L$sdk_path/usr/lib"
     "-lz"
+    "-Wl,-headerpad_max_install_names"
   )
 
   configure_args=(
@@ -163,9 +175,32 @@ EOF
     ./configure \
     "${configure_args[@]}" >"$metadata_expected"
 
-  if [[ "$VESPER_FFMPEG_FORCE" != "1" && -f "$metadata_path" && -f "$output_root/lib/$output_libdir/libavformat.a" ]] && cmp -s "$metadata_path" "$metadata_expected"; then
-    echo "Apple FFmpeg prebuilt for $slice is up to date for profile $VESPER_FFMPEG_PROFILE."
-    continue
+  cached_libraries_match=true
+  if [[ ! -f "$library_checksums_path" ]]; then
+    cached_libraries_match=false
+  else
+    for library_name in ${VESPER_FFMPEG_FINAL_LIBRARIES[@]+"${VESPER_FFMPEG_FINAL_LIBRARIES[@]}"}; do
+      cached_library_path="$output_root/lib/$output_libdir/lib$library_name.dylib"
+      cached_library_sha256="$(
+        vesper_ffmpeg_metadata_value "$library_checksums_path" "${library_name}_sha256" 2>/dev/null || true
+      )"
+      if [[ ! -f "$cached_library_path" || \
+        -z "$cached_library_sha256" || \
+        "$(vesper_ffmpeg_sha256_file "$cached_library_path")" != "$cached_library_sha256" ]]
+      then
+        cached_libraries_match=false
+        break
+      fi
+    done
+  fi
+  if [[ "$VESPER_FFMPEG_FORCE" != "1" && \
+    -f "$metadata_path" && \
+    -f "$output_root/lib/$output_libdir/libavformat.a" && \
+    "$cached_libraries_match" == "true" ]] && \
+    cmp -s "$metadata_path" "$metadata_expected"
+  then
+      echo "Apple FFmpeg prebuilt for $slice is up to date for profile $VESPER_FFMPEG_PROFILE."
+      continue
   fi
 
   rm -rf "$source_dir" "$install_dir"
@@ -203,6 +238,18 @@ EOF
 
   rm -rf "$output_root/include"
   cp -R "$install_dir/include" "$output_root/include"
+  : >"$library_checksums_path"
+  for library_name in ${VESPER_FFMPEG_FINAL_LIBRARIES[@]+"${VESPER_FFMPEG_FINAL_LIBRARIES[@]}"}; do
+    installed_library_path="$output_root/lib/$output_libdir/lib$library_name.dylib"
+    if [[ ! -f "$installed_library_path" ]]; then
+      echo "Missing built Apple FFmpeg shared library for checksum recording: $installed_library_path" >&2
+      exit 1
+    fi
+    printf '%s_sha256=%s\n' \
+      "$library_name" \
+      "$(vesper_ffmpeg_sha256_file "$installed_library_path")" \
+      >>"$library_checksums_path"
+  done
   cp "$metadata_expected" "$metadata_path"
 done
 

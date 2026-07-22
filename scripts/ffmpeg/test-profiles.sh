@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 source "$SCRIPT_DIR/lib/ffmpeg.sh"
 source "$SCRIPT_DIR/lib/ffmpeg-profile.sh"
+source "$SCRIPT_DIR/lib/ffmpeg-validate.sh"
 
 fail() {
   echo "ffmpeg profile test failed: $*" >&2
@@ -25,6 +26,13 @@ assert_contains() {
   local label="$3"
 
   [[ ",$haystack," == *",$needle,"* ]] || fail "$label: missing '$needle' in '$haystack'"
+}
+
+metadata_value() {
+  local metadata="$1"
+  local key="$2"
+
+  awk -F= -v expected="$key" '$1 == expected { print substr($0, index($0, "=") + 1); exit }' <<<"$metadata"
 }
 
 profile_csv() {
@@ -62,6 +70,75 @@ cleanup() {
 }
 trap cleanup EXIT
 
+metadata_profile_args=()
+vesper_ffmpeg_profile_resolve default ios "$VESPER_REPO_ROOT/scripts/ffmpeg-profiles.toml"
+while IFS= read -r arg; do
+  metadata_profile_args+=("$arg")
+done < <(vesper_ffmpeg_profile_emit_legacy_args)
+vesper_ffmpeg_parse_common_args apple "${metadata_profile_args[@]}"
+
+metadata_source="$tmp_dir/ffmpeg-source.tar.xz"
+printf 'first source payload' >"$metadata_source"
+first_metadata="$(vesper_ffmpeg_metadata_text \
+  apple \
+  ios-arm64 \
+  8.1.2 \
+  "$metadata_source" \
+  https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz \
+  ./configure \
+  --enable-shared)"
+first_source_sha256="$(metadata_value "$first_metadata" source_sha256)"
+assert_eq \
+  "Vesper FFmpeg build metadata v2" \
+  "$(printf '%s\n' "$first_metadata" | sed -n '1p')" \
+  "build metadata schema includes source provenance"
+assert_eq \
+  "$(vesper_ffmpeg_sha256_file "$metadata_source")" \
+  "$first_source_sha256" \
+  "build metadata records the source archive SHA-256"
+
+printf 'second source payload' >"$metadata_source"
+second_metadata="$(vesper_ffmpeg_metadata_text \
+  apple \
+  ios-arm64 \
+  8.1.2 \
+  "$metadata_source" \
+  https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz \
+  ./configure \
+  --enable-shared)"
+second_source_sha256="$(metadata_value "$second_metadata" source_sha256)"
+if [[ "$first_source_sha256" == "$second_source_sha256" ]]; then
+  fail "build metadata source SHA-256 did not change with the source archive"
+fi
+
+lgpl_shared_metadata="$tmp_dir/lgpl-shared-metadata.txt"
+printf '%s\n' "$first_metadata" >"$lgpl_shared_metadata"
+vesper_ffmpeg_validate_lgpl_shared_metadata_file "$lgpl_shared_metadata"
+
+gpl_license_metadata="$tmp_dir/gpl-license-metadata.txt"
+sed 's/^license_flags=$/license_flags=gpl/' "$lgpl_shared_metadata" >"$gpl_license_metadata"
+if vesper_ffmpeg_validate_lgpl_shared_metadata_file "$gpl_license_metadata" >/dev/null 2>&1; then
+  fail "GPL license metadata unexpectedly passed LGPL release validation"
+fi
+
+gpl_configure_metadata="$tmp_dir/gpl-configure-metadata.txt"
+sed 's/^configure_line=/configure_line=--enable-gpl /' "$lgpl_shared_metadata" >"$gpl_configure_metadata"
+if vesper_ffmpeg_validate_lgpl_shared_metadata_file "$gpl_configure_metadata" >/dev/null 2>&1; then
+  fail "--enable-gpl metadata unexpectedly passed LGPL release validation"
+fi
+
+nonfree_configure_metadata="$tmp_dir/nonfree-configure-metadata.txt"
+sed 's/^configure_line=/configure_line=--enable-nonfree /' "$lgpl_shared_metadata" >"$nonfree_configure_metadata"
+if vesper_ffmpeg_validate_lgpl_shared_metadata_file "$nonfree_configure_metadata" >/dev/null 2>&1; then
+  fail "--enable-nonfree metadata unexpectedly passed LGPL release validation"
+fi
+
+static_metadata="$tmp_dir/static-metadata.txt"
+sed 's/--enable-shared/--disable-shared/' "$lgpl_shared_metadata" >"$static_metadata"
+if vesper_ffmpeg_validate_lgpl_shared_metadata_file "$static_metadata" >/dev/null 2>&1; then
+  fail "metadata without --enable-shared unexpectedly passed release validation"
+fi
+
 cache_dir="$tmp_dir/cache"
 mkdir -p "$cache_dir"
 touch \
@@ -85,6 +162,10 @@ VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" VESPER_ANDROID_FFMPEG_VERSION=8
   "8.1.2" \
   "$(VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" VESPER_ANDROID_FFMPEG_VERSION=8.1.2 vesper_ffmpeg_resolve_version android)" \
   "FFmpeg resolver honors exact platform version override"
+VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" VESPER_APPLE_FFMPEG_VERSION=8.1.2 assert_eq \
+  "8.1.2" \
+  "$(VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" VESPER_APPLE_FFMPEG_VERSION=8.1.2 vesper_ffmpeg_resolve_version apple)" \
+  "FFmpeg resolver pins the exact Apple release version"
 VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" assert_eq \
   "3.5.7" \
   "$(VESPER_THIRD_PARTY_SOURCE_CACHE_DIR="$cache_dir" vesper_openssl_resolve_version android)" \

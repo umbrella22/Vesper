@@ -86,6 +86,9 @@ root-level status view; detailed implementation notes stay under `devnotes/`.
 - [ ] Design the minimum subtitle DTO and host control surface.
 - [ ] Continue release validation for tag-derived version metadata, GitHub
   binary artifacts, and future pub.dev publishing.
+- [ ] Pass the canonical iOS `verify-release --scope complete` gate in the
+  tagged Xcode 16+ Release job. The local core gate already rebuilds the public
+  module from textual interfaces and links all four core distribution paths.
 
 ## Deferred
 
@@ -103,6 +106,7 @@ cargo check --workspace
 ./scripts/vesper ffi verify
 ./scripts/vesper android aar
 ./scripts/vesper ios kit-xcframework
+./scripts/vesper ios verify-release /path/to/ios-release --scope core
 ./scripts/vesper desktop verify-remux
 cargo test -p player-plugin -p player-plugin-loader -p player-runtime
 ```

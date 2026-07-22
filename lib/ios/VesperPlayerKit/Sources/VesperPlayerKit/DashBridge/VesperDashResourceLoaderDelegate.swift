@@ -1,6 +1,6 @@
 @preconcurrency import AVFoundation
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
     typealias SubtitleResourceFailureHandler = @MainActor @Sendable () -> Void

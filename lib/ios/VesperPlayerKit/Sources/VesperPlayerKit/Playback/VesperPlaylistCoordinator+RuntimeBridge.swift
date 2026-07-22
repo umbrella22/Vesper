@@ -1,5 +1,5 @@
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 func duplicatePlaylistCString(_ value: String) -> UnsafePointer<CChar>? {
     let duplicated = strdup(value)

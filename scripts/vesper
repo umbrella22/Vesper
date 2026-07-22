@@ -11,7 +11,7 @@ Groups:
   ffmpeg  --platform android|ios|all [options]
   ffi      generate | sync | verify | c-host-smoke
   android  jni | aar | remux-plugin | source-normalizer-plugin | decoder-mediacodec-plugin | frame-processor-plugin | stage-release | sample-apks
-  ios      ffi | remux-plugin | source-normalizer-plugin | frame-processor-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | stage-source-normalizer-plugin-release | stage-frame-processor-plugin-release | kit-xcframework | embed-remux-plugin | stage-release | sync-bridge-shim | verify-bridge-shim | verify-native-frame
+  ios      ffi | remux-plugin | source-normalizer-plugin | frame-processor-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | stage-source-normalizer-plugin-release | stage-frame-processor-plugin-release | stage-optional-plugins-release | verify-optional-plugins-release | kit-xcframework | stage-release | verify-release | sync-bridge-shim | verify-bridge-shim | verify-native-frame | verify-app-store-layout
   desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
   mobile   verify-no-remux | verify-binary-names
   flutter  stage-pub | pub-dry-run | pub-publish | local-overrides | verify-android-plugin
@@ -95,14 +95,20 @@ case "$group:$command" in
   ios:stage-frame-processor-plugin-release)
     exec "$SCRIPT_DIR/ios/stage-player-frame-processor-diagnostic-plugin-release.sh" "$@"
     ;;
+  ios:stage-optional-plugins-release)
+    exec "$SCRIPT_DIR/ios/stage-player-optional-plugins-release.sh" "$@"
+    ;;
+  ios:verify-optional-plugins-release)
+    exec "$SCRIPT_DIR/ios/verify-player-optional-plugins-release.sh" "$@"
+    ;;
   ios:kit-xcframework)
     exec "$SCRIPT_DIR/ios/build-vesper-player-kit-xcframework.sh" "$@"
     ;;
-  ios:embed-remux-plugin)
-    exec "$SCRIPT_DIR/ios/embed-player-remux-ffmpeg-plugin.sh" "$@"
-    ;;
   ios:stage-release)
     exec "$SCRIPT_DIR/ios/stage-vesper-player-kit-release.sh" "$@"
+    ;;
+  ios:verify-release)
+    exec "$SCRIPT_DIR/ios/verify-vesper-player-kit-release.sh" "$@"
     ;;
   ios:sync-bridge-shim)
     exec "$SCRIPT_DIR/ios/sync-vesper-player-kit-bridge-shim.sh" "$@"
@@ -112,6 +118,9 @@ case "$group:$command" in
     ;;
   ios:verify-native-frame)
     exec "$SCRIPT_DIR/ios/verify-native-frame-pipeline.sh" "$@"
+    ;;
+  ios:verify-app-store-layout)
+    exec "$SCRIPT_DIR/ios/verify-app-store-framework-layout.sh" "$@"
     ;;
   desktop:ensure-ffmpeg)
     exec "$SCRIPT_DIR/desktop/ensure-ffmpeg.sh" "$@"

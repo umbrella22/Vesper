@@ -19,6 +19,9 @@
   without publishing generic player errors.
 - `exitPictureInPicture` now lets `AVPictureInPictureControllerDelegate`
   callbacks publish the final inactive state.
+- Bundled SourceNormalizer discovery now resolves the signed sibling framework
+  embedded by the Flutter App target through the canonical optional-plugin
+  SwiftPM package.
 
 ## 0.3.0 - 2026-05-18
 

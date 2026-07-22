@@ -1,6 +1,6 @@
 @preconcurrency import AVFoundation
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 struct VesperMp4BoxHeader {
     let boxType: [UInt8]

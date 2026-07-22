@@ -576,11 +576,12 @@ export flow because the SDK does not request legacy public storage permissions.
 
 `player-remux-ffmpeg` is an optional dynamic plugin that remuxes downloaded HLS,
 DASH, or FLV assets into `.mp4`. Android hosts must package the shared
-`vesper-player-kit-ffmpeg-runtime` AAR separately, and iOS hosts must embed the
-shared `VesperPlayerFfmpegRuntime.xcframework.zip` alongside
-`VesperPlayerRemuxFfmpegPlugin.xcframework.zip`. Export becomes available only
-after the host app packages the runtime, packages the plugin library, and passes
-the plugin absolute path through `VesperDownloadConfiguration.pluginLibraryPaths`.
+`vesper-player-kit-ffmpeg-runtime` AAR separately. Flutter iOS hosts embed the
+signed `VesperPlayerRemuxFfmpegPlugin.framework` together with the sibling
+`VesperFFmpegAVCodec`, `VesperFFmpegAVFormat`, and `VesperFFmpegAVUtil`
+frameworks. Export becomes available only after the host app packages the
+runtime components and plugin, then passes the plugin framework executable path
+through `VesperDownloadConfiguration.pluginLibraryPaths`.
 
 ```dart
 final pluginLibraryPaths = <String>[
@@ -613,15 +614,15 @@ final savedUri = await manager.saveTaskOutput(
 Key points:
 
 - `pluginLibraryPaths` must point to an already packaged and accessible
-  Android `libvesper_remux_ffmpeg.so` or iOS remux plugin framework binary.
-  Do not include the iOS shared FFmpeg runtime path in `pluginLibraryPaths`.
+  Android `libvesper_remux_ffmpeg.so` or iOS remux plugin binary.
+  Do not include any iOS FFmpeg component framework path in
+  `pluginLibraryPaths`.
 - `exportTaskOutput(...)` triggers the plugin and reports progress through
   `VesperDownloadExportProgressEvent`.
 - The mobile examples in this repository already show the full host wiring.
-  Android builds the plugin during Gradle `preBuild`; iOS can either use the
-  Xcode embed script during local development or consume the optional
-  `VesperPlayerFfmpegRuntime.xcframework.zip` and
-  `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` release artifacts.
+  Android builds the plugin during Gradle `preBuild`; Flutter iOS links the
+  aggregate `VesperPlayerOptionalPlugins` SwiftPM product from the App target so
+  Xcode embeds and signs the seven sibling frameworks.
 - Depending on `vesper_player` alone does not pull FFmpeg into your app. That
   keeps app size stable when export is not needed.
 - FFmpeg prebuilts are selected through `./scripts/vesper ffmpeg --platform
@@ -647,12 +648,14 @@ configurations:
 Both are disabled by default. Apps can depend on the optional
 `vesper_player_source_normalizer_ffmpeg` package and pass
 `VesperSourceNormalizerConfiguration.preferBundled()` or
-`VesperSourceNormalizerConfiguration.requireBundled()` to use the published
-Android AAR / iOS SPM binary artifacts without host-app path lookup code.
+`VesperSourceNormalizerConfiguration.requireBundled()` to use the Android AAR
+or the iOS host-embedded plugin without app-side path lookup code. The iOS SPM
+package depends on the canonical SourceNormalizer framework product, while the
+App target's aggregate product embeds all required sibling frameworks.
 `pluginLibraryPaths` remains available for custom builds and must contain plugin
-binary paths only: Android `.so` paths or iOS plugin framework binary paths. The
-Android FFmpeg runtime AAR and iOS `VesperPlayerFfmpegRuntime.xcframework.zip`
-are package dependencies and should not be placed in `pluginLibraryPaths`.
+binary paths only: Android `.so` paths or iOS framework executable paths.
+Android and iOS FFmpeg runtime libraries should not be placed in
+`pluginLibraryPaths`.
 
 SourceNormalizer mobile can load the optional FFmpeg plugin, report capability
 diagnostics in `controller.pluginDiagnostics`, and in `preflightOnly` mode

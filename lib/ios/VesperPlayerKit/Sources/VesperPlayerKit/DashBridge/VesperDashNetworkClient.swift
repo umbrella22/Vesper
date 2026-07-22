@@ -1,6 +1,6 @@
 @preconcurrency import AVFoundation
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 class VesperDashNetworkClient {
     private let headers: [String: String]

@@ -3,7 +3,7 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 import UIKit
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 @MainActor
 protocol PlayerBridge: AnyObject {
     var backend: PlayerBridgeBackend { get }

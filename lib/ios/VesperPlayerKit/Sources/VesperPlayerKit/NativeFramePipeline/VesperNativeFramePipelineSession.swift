@@ -1,7 +1,7 @@
 @preconcurrency import AVFoundation
 import CoreAudio
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 @MainActor
 final class VesperNativeFramePipelineSession {

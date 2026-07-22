@@ -1,7 +1,7 @@
 # Third-Party Notices
 
 This file tracks third-party notice information for Vesper source releases and
-for future binary distributions that bundle third-party components.
+binary distributions that bundle third-party components.
 
 ## Project License
 
@@ -33,12 +33,21 @@ Release gate:
   their own `libav*` copies; they depend on the shared runtime profile selected
   by the host
 - iOS core `VesperPlayerKit.xcframework` must not embed FFmpeg. Optional iOS
-  FFmpeg-backed remux and SourceNormalizer support is split into a shared signable
-  `VesperPlayerFfmpegRuntime.xcframework.zip` plus plugin XCFrameworks such as
-  `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` and
-  `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`; the shared
-  runtime remains under FFmpeg's own redistribution boundary, and
-  plugin/runtime `profile-hash.txt` values must match before release
+  FFmpeg-backed remux and SourceNormalizer support uses the sibling signable
+  `VesperFFmpegAVCodec.xcframework.zip`,
+  `VesperFFmpegAVFormat.xcframework.zip`, and
+  `VesperFFmpegAVUtil.xcframework.zip` components plus plugin XCFrameworks such
+  as `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` and
+  `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`. The FFmpeg
+  component frameworks remain under FFmpeg's own redistribution boundary, and
+  every FFmpeg-backed sibling's `profile-hash.txt` must match before release
+- tagged iOS releases publish the three FFmpeg component frameworks, the two
+  FFmpeg-backed plugins, the VideoToolbox decoder plugin, and the diagnostic
+  FrameProcessor plugin as seven sibling XCFramework archives. The release is
+  rejected unless it also contains
+  `VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip` and exactly one
+  `VesperPlayerOptionalPlugins-FFmpeg-<version>-source.tar.xz` asset matching
+  the framework build metadata and checksum
 - mobile FrameProcessor diagnostic artifacts do not bundle FFmpeg and must stay
   outside the FFmpeg redistribution boundary unless a future implementation adds
   an FFmpeg-backed dependency
@@ -46,7 +55,7 @@ Release gate:
   optional remux-plugin boundary and does not by itself add a repository-bundled
   FFmpeg binary
 
-## Planned Third-Party Runtime Tracking
+## Third-Party Runtime Tracking Requirements
 
 When a release artifact bundles a third-party runtime, add an entry here with:
 
@@ -85,8 +94,8 @@ Default Vesper scripts are intended to stay on the LGPL-oriented side:
   public documentation should use the root `ffmpeg` command.
 - Every generated ABI / slice writes `vesper-ffmpeg-build-metadata.txt`; use
   that file as the source of truth for the declared profile, profile hash,
-  external dependencies, license-sensitive flags, source archive, and full
-  configure line in release notices.
+  external dependencies, license-sensitive flags, build-time source archive
+  SHA-256, and full configure line in release notices.
 - The scripts block `--enable-gpl` and `--enable-nonfree` unless the caller
   passes `--acknowledge-gpl-nonfree`. Passing that acknowledgement does not
   resolve licensing obligations; it only records an intentional release-owner
@@ -99,10 +108,13 @@ Default Vesper scripts are intended to stay on the LGPL-oriented side:
   `scripts/vesper android source-normalizer-plugin`,
   `scripts/vesper ios ffmpeg-runtime-release`, and
   `scripts/vesper ios stage-remux-plugin-release`, and
-  `scripts/vesper ios stage-source-normalizer-plugin-release` produce optional
-  runtime or plugin artifacts; bundling those artifacts in an app is an
-  explicit decision by the host and triggers the same FFmpeg redistribution
-  review
+  `scripts/vesper ios stage-source-normalizer-plugin-release` are lower-level
+  optional artifact commands. Repository hosts use
+  `scripts/vesper ios stage-optional-plugins-release`; that command also stages
+  the compliance archive and exact corresponding source archive, then verifies
+  the full release set. Bundling any resulting FFmpeg component or plugin
+  artifact in an app is an explicit host decision and triggers the same FFmpeg
+  redistribution review
 
 Before shipping any artifact that includes FFmpeg libraries:
 
@@ -144,7 +156,7 @@ License mode: <LGPLv2.1-or-later|LGPLv3-or-later|GPL|nonfree>
 Linkage: <dynamic|static|mixed>
 Build command: <scripts/vesper ...>
 Configure flags: <full configure line>
-Artifact scope: <Android FFmpeg runtime / Android SourceNormalizer plugin / iOS FFmpeg runtime / iOS remux plugin / iOS SourceNormalizer plugin / desktop app / other>
+Artifact scope: <Android FFmpeg runtime / Android SourceNormalizer plugin / iOS FFmpeg component frameworks / iOS remux plugin / iOS SourceNormalizer plugin / desktop app / other>
 Bundled FFmpeg libraries: <libavcodec, libavformat, ...>
 Bundled external libraries: <OpenSSL, libxml2, ...>
 FFmpeg source location: <same release download URL / source bundle URL>

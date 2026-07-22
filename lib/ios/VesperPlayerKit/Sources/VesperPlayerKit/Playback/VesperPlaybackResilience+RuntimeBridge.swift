@@ -1,5 +1,5 @@
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 extension VesperPlayerSourceKind {
     var runtimeBridgeOrdinal: Int32 {
         switch self {

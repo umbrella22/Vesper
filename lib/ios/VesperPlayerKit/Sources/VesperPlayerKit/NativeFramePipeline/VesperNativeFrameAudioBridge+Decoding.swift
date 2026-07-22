@@ -1,7 +1,7 @@
 @preconcurrency import AVFoundation
 import CoreAudio
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 extension VesperNativeFrameAudioOutput {
     nonisolated static func preflightAudioFormat(asset: AVURLAsset) async throws -> AVAudioFormat {

@@ -247,6 +247,19 @@ vesper_ffmpeg_hash_text() {
   fi
 }
 
+vesper_ffmpeg_sha256_file() {
+  local path="$1"
+
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$path" | awk '{print $1}'
+  else
+    echo "A SHA-256 tool (shasum or sha256sum) is required." >&2
+    return 1
+  fi
+}
+
 vesper_ffmpeg_uppercase() {
   printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
 }
@@ -943,9 +956,16 @@ vesper_ffmpeg_metadata_text() {
   local ffmpeg_version="$3"
   local source_archive="$4"
   local source_url="$5"
+  local source_sha256
   shift 5
 
-  printf 'Vesper FFmpeg build metadata v1\n'
+  if [[ ! -f "$source_archive" ]]; then
+    echo "Cannot record FFmpeg source provenance; archive is missing: $source_archive" >&2
+    return 1
+  fi
+  source_sha256="$(vesper_ffmpeg_sha256_file "$source_archive")"
+
+  printf 'Vesper FFmpeg build metadata v2\n'
   printf 'platform=%s\n' "$platform"
   printf 'target=%s\n' "$target"
   printf 'profile=%s\n' "$VESPER_FFMPEG_PROFILE"
@@ -966,6 +986,7 @@ vesper_ffmpeg_metadata_text() {
   printf 'ffmpeg_version=%s\n' "$ffmpeg_version"
   printf 'source_archive=%s\n' "$source_archive"
   printf 'source_url=%s\n' "$source_url"
+  printf 'source_sha256=%s\n' "$source_sha256"
   printf 'configure_line='
   vesper_ffmpeg_join_quoted "$@"
   printf '\n'

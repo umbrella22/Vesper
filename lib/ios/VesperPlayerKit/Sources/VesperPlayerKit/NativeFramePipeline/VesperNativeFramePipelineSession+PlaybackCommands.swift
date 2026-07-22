@@ -1,7 +1,7 @@
 @preconcurrency import AVFoundation
 import CoreAudio
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 extension VesperNativeFramePipelineSession {
     func play(rate: Float = 1.0) {
         guard didStart, !isClosed else { return }

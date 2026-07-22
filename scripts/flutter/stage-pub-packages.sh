@@ -72,71 +72,6 @@ rewrite_pubspec() {
   done
 }
 
-rewrite_source_normalizer_ios_package() {
-  local package_dir="$1"
-  local manifest="$package_dir/ios/vesper_player_source_normalizer_ffmpeg/Package.swift"
-  local ios_release_dir="$ROOT_DIR/dist/release/ios"
-  local runtime_zip="$ios_release_dir/VesperPlayerFfmpegRuntime.xcframework.zip"
-  local plugin_zip="$ios_release_dir/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip"
-  local binary_base_url="${VESPER_IOS_BINARY_BASE_URL:-https://github.com/umbrella22/Vesper/releases/download/v$VERSION}"
-  local runtime_checksum
-  local plugin_checksum
-
-  if [[ ! -f "$manifest" ]]; then
-    return
-  fi
-  if [[ ! -f "$runtime_zip" || ! -f "$plugin_zip" ]]; then
-    echo "Staged $package_dir with local-development iOS package manifest."
-    echo "  Set VESPER_IOS_BINARY_BASE_URL and stage iOS XCFramework zips to emit binaryTarget metadata."
-    return
-  fi
-
-  runtime_checksum="$(swift package compute-checksum "$runtime_zip")"
-  plugin_checksum="$(swift package compute-checksum "$plugin_zip")"
-
-  cat >"$manifest" <<EOF
-// swift-tools-version: 5.9
-import PackageDescription
-
-let package = Package(
-    name: "vesper_player_source_normalizer_ffmpeg",
-    defaultLocalization: "en",
-    platforms: [
-        .iOS("17.0"),
-    ],
-    products: [
-        .library(
-            name: "vesper-player-source-normalizer-ffmpeg",
-            targets: ["vesper_player_source_normalizer_ffmpeg"]
-        ),
-    ],
-    dependencies: [
-        .package(name: "FlutterFramework", path: "../FlutterFramework"),
-    ],
-    targets: [
-        .binaryTarget(
-            name: "VesperPlayerFfmpegRuntime",
-            url: "$binary_base_url/VesperPlayerFfmpegRuntime.xcframework.zip",
-            checksum: "$runtime_checksum"
-        ),
-        .binaryTarget(
-            name: "VesperPlayerSourceNormalizerFfmpegPlugin",
-            url: "$binary_base_url/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip",
-            checksum: "$plugin_checksum"
-        ),
-        .target(
-            name: "vesper_player_source_normalizer_ffmpeg",
-            dependencies: [
-                .product(name: "FlutterFramework", package: "FlutterFramework"),
-                "VesperPlayerFfmpegRuntime",
-                "VesperPlayerSourceNormalizerFfmpegPlugin",
-            ]
-        ),
-    ]
-)
-EOF
-}
-
 validate_staged_package() {
   local package_dir="$1"
   local leaked_paths
@@ -178,6 +113,43 @@ validate_staged_package() {
   fi
 }
 
+stage_ios_optional_plugins_package() {
+  local flutter_package_stage_dir="$1"
+  local source_dir="$ROOT_DIR/lib/ios/VesperPlayerOptionalPlugins"
+  local destination_dir="$flutter_package_stage_dir/ios/VesperPlayerOptionalPlugins"
+  local artifact_name
+  local artifacts=(
+    VesperFFmpegAVCodec
+    VesperFFmpegAVFormat
+    VesperFFmpegAVUtil
+    VesperPlayerRemuxFfmpegPlugin
+    VesperPlayerSourceNormalizerFfmpegPlugin
+    VesperPlayerDecoderVideoToolboxPlugin
+    VesperPlayerFrameProcessorDiagnosticPlugin
+  )
+
+  if [[ ! -f "$source_dir/Package.swift" ]]; then
+    echo "Missing canonical iOS optional plugin package: $source_dir/Package.swift" >&2
+    exit 1
+  fi
+
+  for artifact_name in "${artifacts[@]}"; do
+    if [[ ! -d "$source_dir/Artifacts/$artifact_name.xcframework" ]]; then
+      echo "Missing optional iOS artifact for Flutter pub staging:" >&2
+      echo "  $source_dir/Artifacts/$artifact_name.xcframework" >&2
+      echo "Run scripts/vesper ios stage-optional-plugins-release first." >&2
+      exit 1
+    fi
+  done
+
+  mkdir -p "$destination_dir"
+  rsync -a \
+    --exclude '.build' \
+    --exclude '.swiftpm' \
+    "$source_dir/" \
+    "$destination_dir/"
+}
+
 for package in "${packages[@]}"; do
   source_dir="$ROOT_DIR/lib/flutter/$package"
   stage_dir="$OUTPUT_DIR/$package"
@@ -196,10 +168,10 @@ for package in "${packages[@]}"; do
   rsync -a "${rsync_excludes[@]}" "$source_dir/" "$stage_dir/"
 
   cp "$ROOT_DIR/LICENSE" "$stage_dir/LICENSE"
-  rewrite_pubspec "$stage_dir/pubspec.yaml"
   if [[ "$package" == "vesper_player_source_normalizer_ffmpeg" ]]; then
-    rewrite_source_normalizer_ios_package "$stage_dir"
+    stage_ios_optional_plugins_package "$stage_dir"
   fi
+  rewrite_pubspec "$stage_dir/pubspec.yaml"
   validate_staged_package "$stage_dir"
 done
 

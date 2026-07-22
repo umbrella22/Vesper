@@ -1,6 +1,6 @@
 import Combine
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 #if canImport(UIKit)
 import UIKit
 #endif

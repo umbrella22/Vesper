@@ -590,7 +590,6 @@ func formatStorageBytes(_ value: Int64?) -> String {
 
 func bundledDownloadPluginLibraryPaths() -> [String] {
     bundledPluginLibraryPaths(
-        dylibName: "libvesper_remux_ffmpeg.dylib",
         frameworkName: "VesperPlayerRemuxFfmpegPlugin",
         binaryName: "VesperPlayerRemuxFfmpegPlugin"
     )
@@ -598,7 +597,6 @@ func bundledDownloadPluginLibraryPaths() -> [String] {
 
 func bundledSourceNormalizerPluginLibraryPaths() -> [String] {
     bundledPluginLibraryPaths(
-        dylibName: "libvesper_source_normalizer_ffmpeg.dylib",
         frameworkName: "VesperPlayerSourceNormalizerFfmpegPlugin",
         binaryName: "VesperPlayerSourceNormalizerFfmpegPlugin"
     )
@@ -606,7 +604,6 @@ func bundledSourceNormalizerPluginLibraryPaths() -> [String] {
 
 func bundledDecoderPluginLibraryPaths() -> [String] {
     bundledPluginLibraryPaths(
-        dylibName: "libvesper_decoder_videotoolbox.dylib",
         frameworkName: "VesperPlayerDecoderVideoToolboxPlugin",
         binaryName: "VesperPlayerDecoderVideoToolboxPlugin"
     )
@@ -614,30 +611,19 @@ func bundledDecoderPluginLibraryPaths() -> [String] {
 
 func bundledFrameProcessorPluginLibraryPaths() -> [String] {
     bundledPluginLibraryPaths(
-        dylibName: "libvesper_frame_processor_diagnostic.dylib",
         frameworkName: "VesperPlayerFrameProcessorDiagnosticPlugin",
         binaryName: "VesperPlayerFrameProcessorDiagnosticPlugin"
     )
 }
 
 private func bundledPluginLibraryPaths(
-    dylibName: String,
     frameworkName: String,
     binaryName: String
 ) -> [String] {
     let fileManager = FileManager.default
     let frameworksPath = Bundle.main.privateFrameworksPath ?? "\(Bundle.main.bundlePath)/Frameworks"
-    let candidates = [
-        "\(frameworksPath)/\(dylibName)",
-        "\(frameworksPath)/\(frameworkName).framework/\(binaryName)",
-    ]
-
-    return candidates.compactMap { candidate in
-        guard fileManager.fileExists(atPath: candidate) else {
-            return nil
-        }
-        return candidate
-    }
+    let frameworkBinary = "\(frameworksPath)/\(frameworkName).framework/\(binaryName)"
+    return fileManager.fileExists(atPath: frameworkBinary) ? [frameworkBinary] : []
 }
 
 struct ExamplePreparedDownloadTask {

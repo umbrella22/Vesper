@@ -1,7 +1,7 @@
 @preconcurrency import AVFoundation
 import CoreAudio
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 extension VesperNativeFramePipelineSession {
     func rebindSurfaceHost(_ nextSurfaceHost: PlayerSurfaceView) {
         guard !isClosed else { return }

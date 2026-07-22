@@ -235,14 +235,14 @@ emit_initial_release_en() {
 ## New Capabilities
 
 - Android ships a core host-kit AAR, Compose binding, Compose UI package, external playback extension, and split FFmpeg runtime package for arm64-v8a devices.
-- iOS ships a device framework, Apple Silicon simulator framework, combined XCFramework, and optional FFmpeg shared runtime plus remux plugin XCFrameworks.
+- iOS ships a device framework, Apple Silicon simulator framework, combined XCFramework, and seven optional sibling XCFrameworks covering the three FFmpeg runtime components, two FFmpeg-backed plugins, the VideoToolbox decoder plugin, and the diagnostic FrameProcessor plugin.
 - Flutter and Android Compose sample apps are published with the release for quick integration checks.
 - Core capabilities include DASH / HLS bridging, offline download and export, remote media references, request-header forwarding, SegmentBase / byte-range handling, DLNA / AirPlay external playback, and FFmpeg remux post-processing.
 
 ## Improvements
 
 - Android defaults to hardware decoding and the SurfaceView path, with release artifacts split by module so host apps can depend only on the capabilities they need.
-- iOS keeps the SPM / XCFramework distribution path and separates the FFmpeg plugin from the main SDK, preserving FFmpeg's independent license, notices, source, and LGPL relinking boundary.
+- iOS keeps the SPM / XCFramework distribution path and separates all optional plugins from the main SDK. Tagged releases publish the FFmpeg-backed frameworks only with the mandatory compliance bundle and exact corresponding source, preserving FFmpeg's independent license and LGPL relinking boundary.
 - The release flow generates checksums and verifies Android / iOS artifacts contain only the expected arm64 slices.
 EOF
 }
@@ -257,14 +257,14 @@ emit_initial_release_zh() {
 ## 新增功能
 
 - Android 提供核心 Host Kit AAR、Compose 绑定、Compose UI 包、外部播放扩展和 FFmpeg Runtime 拆分包，面向 arm64-v8a 设备发布。
-- iOS 提供真机 framework、Apple Silicon 模拟器 framework、合并 XCFramework，以及可选的 FFmpeg shared runtime 和 remux 插件 XCFramework。
+- iOS 提供真机 framework、Apple Silicon 模拟器 framework、合并 XCFramework，以及由三个 FFmpeg runtime component、两个 FFmpeg-backed 插件、VideoToolbox decoder 插件和 diagnostic FrameProcessor 插件组成的七个可选同级 XCFramework。
 - Flutter 示例和 Android Compose 示例随 release 一起提供，方便快速验证接入效果。
 - 核心能力覆盖 DASH / HLS 桥接、离线下载与导出、远程媒体引用、请求头透传、SegmentBase / byte-range 处理、DLNA / AirPlay 外部播放，以及 FFmpeg remux 后处理。
 
 ## 优化改进
 
 - Android 默认走硬件解码和 SurfaceView 路径，发布产物按模块拆分，便于宿主应用只接入需要的能力。
-- iOS 保持 SPM / XCFramework 分发路径，并把 FFmpeg shared runtime / plugin 与主 SDK 分离，保留 FFmpeg 独立许可、notice、源码和 LGPL relinking 边界。
+- iOS 保持 SPM / XCFramework 分发路径，并把全部可选插件与主 SDK 分离。Tagged Release 仅在同时提供强制合规包和精确对应源码时发布 FFmpeg-backed frameworks，以保留 FFmpeg 独立许可和 LGPL relinking 边界。
 - 发布流程会生成校验和，并校验 Android / iOS 产物只包含预期的 arm64 切片。
 EOF
 }
@@ -426,6 +426,19 @@ RELEASE_CHANNEL="$(release_channel "$CURRENT_TAG")"
 
 mkdir -p "$(dirname "$OUTPUT_PATH")"
 
+OUTPUT_DIR="$(dirname "$OUTPUT_PATH")"
+shopt -s nullglob
+FFMPEG_SOURCE_ASSETS=(
+  "$OUTPUT_DIR"/VesperPlayerOptionalPlugins-FFmpeg-*-source.tar.xz
+)
+shopt -u nullglob
+if [[ ${#FFMPEG_SOURCE_ASSETS[@]} -ne 1 ]]; then
+  echo "Expected exactly one optional iOS FFmpeg source asset beside the release notes, found ${#FFMPEG_SOURCE_ASSETS[@]}." >&2
+  printf '  %s\n' ${FFMPEG_SOURCE_ASSETS[@]+"${FFMPEG_SOURCE_ASSETS[@]}"} >&2
+  exit 1
+fi
+FFMPEG_SOURCE_ASSET_NAME="$(basename "${FFMPEG_SOURCE_ASSETS[0]}")"
+
 contributor_lines="$(release_contributor_lines "$RANGE_SPEC")"
 
 {
@@ -516,12 +529,21 @@ contributor_lines="$(release_contributor_lines "$RANGE_SPEC")"
   emit_download_item "VesperPlayerKit-ios-arm64.framework.zip" "iOS device framework"
   emit_download_item "VesperPlayerKit-ios-simulator-arm64.framework.zip" "Apple Silicon simulator framework"
   emit_download_item "VesperPlayerKit.xcframework.zip" "Combined XCFramework"
+  emit_download_item "VesperFFmpegAVCodec.xcframework.zip" "Optional FFmpeg avcodec runtime component XCFramework"
+  emit_download_item "VesperFFmpegAVFormat.xcframework.zip" "Optional FFmpeg avformat runtime component XCFramework"
+  emit_download_item "VesperFFmpegAVUtil.xcframework.zip" "Optional FFmpeg avutil runtime component XCFramework"
+  emit_download_item "VesperPlayerRemuxFfmpegPlugin.xcframework.zip" "Optional FFmpeg-backed remux plugin XCFramework"
+  emit_download_item "VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip" "Optional FFmpeg-backed source normalizer plugin XCFramework"
+  emit_download_item "VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip" "Optional VideoToolbox decoder plugin XCFramework"
+  emit_download_item "VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip" "Optional diagnostic FrameProcessor plugin XCFramework"
   echo
   echo "### Checksums and Licensing"
   echo
+  emit_download_item "VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip" "Mandatory FFmpeg licenses, notices, build metadata, and LGPL relinking instructions for the optional iOS frameworks"
+  emit_download_item "$FFMPEG_SOURCE_ASSET_NAME" "Exact corresponding FFmpeg source for the optional iOS frameworks"
   emit_download_item "SHA256SUMS.txt" "SHA-256 checksums for release artifacts"
   echo
-  echo "Default mobile release assets do not include optional plugin binaries. FFmpeg-backed optional artifacts, when staged through explicit plugin release commands, keep FFmpeg's license, notices, corresponding source, configure flags, and LGPL relinking boundary separate from Vesper's Apache-2.0 source license."
+  echo "Tagged releases include the seven optional iOS plugin/runtime XCFrameworks only together with the FFmpeg compliance bundle and exact corresponding source asset. FFmpeg remains separately licensed; its notices, configure metadata, source, and LGPL relinking boundary are not covered by Vesper's Apache-2.0 source license."
   echo
   echo "## Release Contributors"
   echo

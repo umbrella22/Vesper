@@ -22,7 +22,7 @@ enum VesperBundledPluginResolver {
         }
 
         guard
-            let pluginPath = findFrameworkBinary(
+            let pluginPath = findPluginBinary(
                 frameworkName: sourceNormalizerFrameworkName,
                 searchURLs: frameworkSearchURLs,
                 fileManager: fileManager
@@ -35,6 +35,18 @@ enum VesperBundledPluginResolver {
             mode: configuration.mode,
             pluginLibraryPaths: [pluginPath],
             runtimeProfile: configuration.runtimeProfile
+        )
+    }
+
+    static func findPluginBinary(
+        frameworkName: String,
+        searchURLs: [URL],
+        fileManager: FileManager = .default
+    ) -> String? {
+        return findFrameworkBinary(
+            frameworkName: frameworkName,
+            searchURLs: searchURLs,
+            fileManager: fileManager
         )
     }
 

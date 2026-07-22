@@ -22,6 +22,7 @@ on:
       - "crates/platform/jni/**"
       - "lib/android/**"
       - "lib/ios/VesperPlayerKit/**"
+      - "lib/ios/VesperPlayerOptionalPlugins/**"
       - "examples/android-compose-host/**"
       - "examples/ios-swift-host/**"
   push:
@@ -47,6 +48,7 @@ on:
       - "crates/platform/jni/**"
       - "lib/android/**"
       - "lib/ios/VesperPlayerKit/**"
+      - "lib/ios/VesperPlayerOptionalPlugins/**"
       - "examples/android-compose-host/**"
       - "examples/ios-swift-host/**"
   workflow_dispatch:
@@ -193,11 +195,14 @@ jobs:
         with:
           minimum-major: "16"
 
-      - name: Build Apple FFmpeg prebuilts
-        run: ./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
+      - name: Stage canonical optional iOS plugin XCFrameworks
+        run: ./scripts/vesper ios stage-optional-plugins-release /tmp/vesper-ios-optional-plugins-release --profile source-normalizer ios-arm64 ios-simulator-arm64
 
-      - name: Build optional iOS FFmpeg runtime and remux plugin XCFrameworks
-        run: ./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-player-remux-ffmpeg-release --profile default ios-arm64 ios-simulator-arm64
+      - name: Test iOS framework platform validation
+        run: bash scripts/ios/test-framework-platform-validation.sh
+
+      - name: Test optional iOS release validation failures
+        run: bash scripts/ios/test-player-optional-plugins-release.sh /tmp/vesper-ios-optional-plugins-release
 
       - name: Verify native binary library names
         run: ./scripts/vesper mobile verify-binary-names
@@ -270,9 +275,5 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             build
 
-      - name: Upload Vesper iOS release app
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: VesperPlayerHostDemo-ios-arm64-release-app
-          path: examples/ios-swift-host/build/DerivedData/Build/Products/Release-iphoneos/*.app
+      - name: Verify Vesper iOS host App Store framework layout
+        run: ./scripts/vesper ios verify-app-store-layout examples/ios-swift-host/build/DerivedData/Build/Products/Release-iphoneos/VesperPlayerHostDemo.app

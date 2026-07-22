@@ -4,6 +4,7 @@ fi
 VESPER_FFMPEG_VALIDATE_SH_INCLUDED=1
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ffmpeg.sh"
 
 vesper_ffmpeg_validation_csv_contains() {
   local csv="$1"
@@ -100,6 +101,107 @@ vesper_ffmpeg_validate_metadata_file() {
       exit 1
     fi
   fi
+}
+
+vesper_ffmpeg_metadata_value() {
+  local metadata_file="$1"
+  local key="$2"
+  local value
+  local status
+
+  if value="$(awk -F= -v expected="$key" '
+    $1 == expected {
+      value = substr($0, index($0, "=") + 1)
+      count += 1
+    }
+    END {
+      if (count == 0) exit 1
+      if (count > 1) exit 2
+      print value
+    }
+  ' "$metadata_file")"; then
+    printf '%s\n' "$value"
+    return 0
+  else
+    status=$?
+  fi
+  if [[ "$status" -eq 2 ]]; then
+    echo "Duplicate FFmpeg metadata key '$key': $metadata_file" >&2
+  else
+    echo "Missing FFmpeg metadata key '$key': $metadata_file" >&2
+  fi
+  return 1
+}
+
+vesper_ffmpeg_validate_lgpl_shared_metadata_file() {
+  local metadata_file="$1"
+  local license_flags
+  local configure_line
+
+  if [[ ! -f "$metadata_file" ]]; then
+    echo "Missing FFmpeg build metadata: $metadata_file" >&2
+    return 1
+  fi
+
+  license_flags="$(vesper_ffmpeg_metadata_value "$metadata_file" license_flags)" || return 1
+  if [[ -n "$license_flags" ]]; then
+    echo "The default release requires LGPL-oriented FFmpeg metadata; license_flags is not empty:" >&2
+    echo "  $metadata_file: $license_flags" >&2
+    return 1
+  fi
+
+  configure_line="$(vesper_ffmpeg_metadata_value "$metadata_file" configure_line)" || return 1
+  if [[ "$configure_line" == *"--enable-gpl"* || "$configure_line" == *"--enable-nonfree"* ]]; then
+    echo "GPL or nonfree FFmpeg configure flags are not allowed in the default release:" >&2
+    echo "  $metadata_file" >&2
+    return 1
+  fi
+  if [[ " $configure_line " != *" --enable-shared "* ]]; then
+    echo "The default release requires shared FFmpeg libraries: $metadata_file" >&2
+    return 1
+  fi
+}
+
+vesper_ffmpeg_verified_binary_sha256() {
+  local binary_path="$1"
+  local checksum_path="$2"
+  local recorded_sha256
+  local actual_sha256
+
+  if [[ ! -f "$binary_path" || ! -f "$checksum_path" ]]; then
+    echo "Missing FFmpeg-backed framework binary checksum input:" >&2
+    echo "  binary:   $binary_path" >&2
+    echo "  checksum: $checksum_path" >&2
+    return 1
+  fi
+  recorded_sha256="$(tr -d '[:space:]' <"$checksum_path")"
+  if [[ ! "$recorded_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Invalid FFmpeg-backed framework binary SHA-256 record: $checksum_path" >&2
+    return 1
+  fi
+  actual_sha256="$(vesper_ffmpeg_sha256_file "$binary_path")" || return 1
+  if [[ "$actual_sha256" != "$recorded_sha256" ]]; then
+    echo "FFmpeg-backed framework binary SHA-256 mismatch:" >&2
+    echo "  binary:   $binary_path" >&2
+    echo "  recorded: $recorded_sha256" >&2
+    echo "  actual:   $actual_sha256" >&2
+    return 1
+  fi
+  printf '%s\n' "$actual_sha256"
+}
+
+vesper_ffmpeg_build_input_fingerprint() {
+  local ffmpeg_dir="$1"
+  local metadata_path="$ffmpeg_dir/vesper-ffmpeg-build-metadata.txt"
+  local library_checksums_path="$ffmpeg_dir/vesper-ffmpeg-library-sha256.txt"
+
+  if [[ ! -f "$metadata_path" || ! -f "$library_checksums_path" ]]; then
+    echo "Missing FFmpeg build input provenance under: $ffmpeg_dir" >&2
+    return 1
+  fi
+  printf '%s-%s\n' \
+    "$(vesper_ffmpeg_sha256_file "$metadata_path")" \
+    "$(vesper_ffmpeg_sha256_file "$library_checksums_path")"
 }
 
 vesper_ffmpeg_validate_metadata_tree() {

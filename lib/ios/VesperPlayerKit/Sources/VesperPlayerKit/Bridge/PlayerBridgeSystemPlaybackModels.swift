@@ -3,7 +3,7 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 import UIKit
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 public enum VesperBackgroundPlaybackMode: String, Equatable {
     case disabled
     case continueAudio

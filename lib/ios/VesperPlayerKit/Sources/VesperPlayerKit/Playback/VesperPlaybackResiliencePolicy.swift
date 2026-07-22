@@ -1,5 +1,5 @@
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 public struct VesperPlaybackResiliencePolicy: Equatable {
     public let buffering: VesperBufferingPolicy
     public let retry: VesperRetryPolicy

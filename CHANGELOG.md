@@ -16,6 +16,11 @@
 - Added explicit RTMP, RTSP, and HTTP-FLV protocol DTO values across Rust, C,
   Android, iOS, and Flutter boundaries. Unsupported host routes fail with
   capability errors instead of falling through silently.
+- Added tagged iOS release artifacts for the three FFmpeg component frameworks
+  and four optional plugin frameworks. The release workflow requires a generated
+  FFmpeg compliance bundle and exactly one corresponding source archive before
+  those XCFrameworks can be published, and binds that archive to the SHA-256
+  recorded in each framework's build metadata.
 
 ### Changed
 
@@ -23,12 +28,24 @@
   the explicit `flvLive` source factory.
 - Native-frame plugin breakers now enforce queue/in-flight load decisions and
   reset consecutive failure counters after every successful adapter call.
+- Native and Flutter iOS hosts now consume the App-target
+  `VesperPlayerOptionalPlugins` SwiftPM product, which embeds and signs three
+  FFmpeg component frameworks plus four plugin frameworks as top-level siblings.
+  The flat-dylib and legacy umbrella-runtime embedding paths were removed.
 
 ### Fixed
 
 - Aligned Android CI and release jobs with the Gradle 9.6.0 wrapper, corrected
   the Flutter Android minimum requirement to 3.44.0, and synchronized Android
   source-build toolchain documentation.
+- Core iOS framework archives now keep `VesperPlayerKitBridgeShim` internal,
+  use one canonical XCFramework, omit AppleDouble metadata, and pass an isolated
+  textual-interface import and link smoke before Release upload.
+- Hardened optional iOS release validation to preserve whitespace in Mach-O
+  dependency locators, reject undeclared dynamic dependencies and extra
+  assets/slices, verify FFmpeg compliance file contents against their sources,
+  force FFmpeg source rebuilds, cross-check device and Simulator metadata, and
+  remove retired GitHub Release assets during same-tag reruns.
 
 ## 0.3.1 - 2026-06-09
 

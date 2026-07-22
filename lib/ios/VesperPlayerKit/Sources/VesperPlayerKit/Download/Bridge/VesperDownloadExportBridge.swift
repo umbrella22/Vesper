@@ -1,5 +1,5 @@
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 final class DownloadExportProgressBridge: @unchecked Sendable {
     let onProgress: (Float) -> Void

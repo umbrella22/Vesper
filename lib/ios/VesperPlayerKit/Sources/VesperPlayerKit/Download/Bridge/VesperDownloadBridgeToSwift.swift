@@ -1,5 +1,5 @@
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 extension VesperRuntimeDownloadSnapshot {
     func toPublic() -> VesperDownloadSnapshot {

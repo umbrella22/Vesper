@@ -153,36 +153,28 @@ routing.
 ## Optional `player-remux-ffmpeg` Remux Plugin
 
 If the host app wants to export downloaded HLS, DASH, or FLV content to `.mp4`,
-it must embed the optional shared FFmpeg runtime plus `player-remux-ffmpeg`
-plugin and pass the real plugin framework binary path through
-`VesperDownloadConfiguration.pluginLibraryPaths`. FFmpeg is not embedded in the
-core iOS host kit.
+it must embed the three optional FFmpeg component frameworks plus the
+`player-remux-ffmpeg` plugin framework and pass the real plugin executable path
+through `VesperDownloadConfiguration.pluginLibraryPaths`. FFmpeg is not embedded
+in the core iOS host kit.
 
 Typical setup:
 
-1. Add an Xcode Run Script phase to the app target:
-
-   ```sh
-   /bin/bash "$SRCROOT/../../../scripts/ios/embed-player-remux-ffmpeg-plugin.sh" "vesper_player_ios.framework"
-   ```
-
-   For the native iOS host kit, replace the argument with `VesperPlayerKit.framework`.
-
-2. For release downloads, embed and sign both
-   `VesperPlayerFfmpegRuntime.xcframework.zip` and
-   `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` instead of shipping bare
-   `.dylib` files. Build both artifacts from the same FFmpeg profile so their
-   `profile-hash.txt` values match.
-3. Resolve the plugin framework binary at runtime from
-   `Bundle.main.privateFrameworksPath` or the app `Frameworks` directory.
-4. Pass the resolved absolute path into the download manager configuration.
+1. Stage the canonical optional package before SwiftPM resolution.
+2. Add the aggregate `VesperPlayerOptionalPlugins` product to the App target
+   with Embed & Sign. The repository Flutter host already has this dependency.
+3. Let Xcode place the three FFmpeg component frameworks and four plugin
+   frameworks as top-level siblings under `Runner.app/Frameworks`.
+4. Resolve the plugin framework executable and pass only that absolute path
+   into the download manager configuration.
 
 Apple FFmpeg prebuilts are built on demand through the root profile CLI:
 
 ```sh
-./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
-./scripts/vesper ios ffmpeg-runtime-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
-./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
+./scripts/vesper ios stage-optional-plugins-release \
+  /tmp/vesper-ios-optional-plugins-release \
+  --profile source-normalizer \
+  ios-arm64 ios-simulator-arm64
 ```
 
 Both iOS examples in this repository already embed the plugin that way:

@@ -3,7 +3,7 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 import UIKit
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 /// Describes the raw runtime evidence currently observed for the active video
 /// variant.
 public struct VesperVideoVariantObservation: Equatable {

@@ -1,6 +1,6 @@
 @preconcurrency import AVFoundation
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 actor VesperDashSession {
     typealias BenchmarkEventRecorder = @MainActor @Sendable (String, [String: String]) -> Void

@@ -1,7 +1,7 @@
 @preconcurrency import AVFoundation
 import Foundation
 import UIKit
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 @MainActor
 final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {

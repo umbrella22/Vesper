@@ -1,5 +1,5 @@
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 /// Immediate (synchronous) subtitle selection failures thrown by
 /// `setSubtitleTrackSelection`. These surface through the iOS Flutter

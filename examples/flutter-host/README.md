@@ -68,8 +68,13 @@ flutter build apk --release
 iOS release (no codesign):
 
 ```sh
+./scripts/vesper ios stage-optional-plugins-release \
+  /tmp/vesper-flutter-ios-optional-plugins-release \
+  --profile source-normalizer \
+  ios-arm64 ios-simulator-arm64
 ./scripts/vesper ios ffi release
 cd examples/flutter-host
+flutter pub get
 flutter build ios --release --no-codesign
 ```
 
@@ -82,17 +87,19 @@ flutter build ios --release --no-codesign
 
 The Android Runner project builds and packages the optional remux,
 SourceNormalizer, and FrameProcessor diagnostic plugin `.so` files into
-generated `jniLibs`. The iOS Runner project includes a build phase that embeds
-the optional `VesperPlayerFfmpegRuntime.framework`,
-`VesperPlayerRemuxFfmpegPlugin.framework`,
-`VesperPlayerSourceNormalizerFfmpegPlugin.framework`, and
-`VesperPlayerFrameProcessorDiagnosticPlugin.framework`. Release hosts should
-consume the matching
-`VesperPlayerFfmpegRuntime.xcframework.zip` and
-`VesperPlayerRemuxFfmpegPlugin.xcframework.zip`,
-`VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`, and
-`VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip` artifacts built
-from the same FFmpeg profile where applicable.
+generated `jniLibs`. The iOS Runner App target directly depends on the aggregate
+`VesperPlayerOptionalPlugins` SwiftPM product. Xcode embeds and signs three
+FFmpeg component frameworks plus the Remux, SourceNormalizer, VideoToolbox
+Decoder, and diagnostic FrameProcessor frameworks as top-level siblings under
+`Runner.app/Frameworks`. The host passes only the applicable plugin framework
+executables through MethodChannel; FFmpeg component frameworks are dependencies,
+not plugin paths.
+
+`flutter pub get` initially generates its aggregate Swift package with Flutter's
+default deployment target. `flutter build ios` raises it from the Runner's
+durable `IPHONEOS_DEPLOYMENT_TARGET=17.0`. Before invoking `xcodebuild` directly,
+run `flutter build ios --config-only --no-codesign` once after the final
+`flutter pub get`; do not edit the generated ephemeral `Package.swift`.
 
 ## Optional Plugin Diagnostics
 
@@ -101,9 +108,9 @@ The Flutter example depends on `vesper_player_source_normalizer_ffmpeg` and uses
 `VesperSourceNormalizerConfiguration.requireBundled()` so Android and iOS host
 kits can discover bundled SourceNormalizer binaries themselves. FrameProcessor
 remains explicit and still uses native host plugin paths. FFmpeg runtime
-libraries are provided by the Android runtime AAR or by the iOS
-`VesperPlayerFfmpegRuntime.framework`; neither runtime is passed as a plugin
-path.
+libraries are provided by the Android runtime AAR or by the signed sibling
+`VesperFFmpegAVCodec`, `VesperFFmpegAVFormat`, and `VesperFFmpegAVUtil`
+frameworks on iOS; neither runtime form is passed as a plugin path.
 
 SourceNormalizer diagnostics and preflight modes do not change playback. In
 `preferNormalized` and `requireNormalized`, the Android and iOS host kits may

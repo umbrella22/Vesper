@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/apple.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ios-framework.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ffmpeg-validate.sh"
 
 ROOT_DIR="$VESPER_REPO_ROOT"
 FFMPEG_APPLE_BASE_DIR="$ROOT_DIR/third_party/ffmpeg/apple"
@@ -52,12 +53,13 @@ prepare_plugin_binary() {
   local binary_path="$1"
   install_name_tool -id "@rpath/libvesper_source_normalizer_ffmpeg.dylib" "$binary_path"
   ensure_loader_rpath "$binary_path"
-  if ! otool -l "$binary_path" | grep -Fq "@loader_path/VesperPlayerFfmpegRuntime.framework/Frameworks"; then
-    install_name_tool -add_rpath "@loader_path/VesperPlayerFfmpegRuntime.framework/Frameworks" "$binary_path"
-  fi
-  if ! otool -l "$binary_path" | grep -Fq "@loader_path/../VesperPlayerFfmpegRuntime.framework/Frameworks"; then
-    install_name_tool -add_rpath "@loader_path/../VesperPlayerFfmpegRuntime.framework/Frameworks" "$binary_path"
-  fi
+  vesper_ios_remove_rpath \
+    "$binary_path" \
+    "@loader_path/VesperPlayerFfmpegRuntime.framework/Frameworks"
+  vesper_ios_remove_rpath \
+    "$binary_path" \
+    "@loader_path/../VesperPlayerFfmpegRuntime.framework/Frameworks"
+  vesper_ios_ensure_rpath "$binary_path" "@loader_path/.."
 }
 
 selected_slices=()
@@ -89,7 +91,8 @@ for slice in "${selected_slices[@]}"; do
   rust_target="$(vesper_ios_slice_rust_target "$slice")"
   ffmpeg_dir="$(vesper_apple_slice_output_root "$slice" "$FFMPEG_APPLE_DIR")"
   output_path="$(slice_output_path "$slice")"
-  cargo_target_dir="$ROOT_DIR/target/player-source-normalizer-ffmpeg-ios/$(vesper_path_cache_key "$ffmpeg_dir")"
+  ffmpeg_input_fingerprint="$(vesper_ffmpeg_build_input_fingerprint "$ffmpeg_dir")"
+  cargo_target_dir="$ROOT_DIR/target/player-source-normalizer-ffmpeg-ios/$(vesper_path_cache_key "$ffmpeg_dir")/$ffmpeg_input_fingerprint"
   cargo_command=(
     cargo
     build
@@ -138,7 +141,7 @@ unexpected_runtime="$(
 if [[ -n "$unexpected_runtime" ]]; then
   echo "iOS player-source-normalizer-ffmpeg must not bundle FFmpeg runtime dylibs:" >&2
   echo "  $unexpected_runtime" >&2
-  echo "Embed VesperPlayerFfmpegRuntime.framework alongside the plugin instead." >&2
+  echo "Embed the matching VesperFFmpeg component frameworks alongside the plugin instead." >&2
   exit 1
 fi
 
@@ -153,4 +156,4 @@ echo "Selected slices:"
 for slice in "${selected_slices[@]}"; do
   echo "  $slice"
 done
-echo "The plugin no longer copies FFmpeg runtime dylibs; embed VesperPlayerFfmpegRuntime.framework instead."
+echo "This dylib is an intermediate build input; package it as VesperPlayerSourceNormalizerFfmpegPlugin.framework for app distribution."

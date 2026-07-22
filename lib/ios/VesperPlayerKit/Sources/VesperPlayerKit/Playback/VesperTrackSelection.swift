@@ -1,5 +1,5 @@
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 public enum VesperTrackSelectionMode: String, Equatable {
     case auto

@@ -1,6 +1,6 @@
 @preconcurrency import AVFoundation
 import Foundation
-import VesperPlayerKitBridgeShim
+internal import VesperPlayerKitBridgeShim
 
 extension VesperDashSession {
 #if DEBUG

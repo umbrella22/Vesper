@@ -91,39 +91,42 @@ source is loaded.
 
 ## Run
 
-1. Build the Rust iOS resolver bundle (required before resolving the Swift
-   package):
+1. Stage the canonical optional plugin package before SwiftPM resolution:
+
+   ```sh
+   ./scripts/vesper ios stage-optional-plugins-release \
+     /tmp/vesper-ios-optional-plugins-release \
+     --profile source-normalizer \
+     ios-arm64 ios-simulator-arm64
+   ```
+
+2. Build the Rust iOS resolver bundle:
 
    ```sh
    ./scripts/vesper ios ffi
    ```
 
-2. Generate the Xcode project:
+3. Generate the Xcode project:
 
    ```sh
    cd examples/ios-swift-host && xcodegen generate
    ```
 
-3. Open `VesperPlayerHostDemo.xcodeproj` in Xcode and run on an arm64
+4. Open `VesperPlayerHostDemo.xcodeproj` in Xcode and run on an arm64
    Simulator or device.
 
-The generated Xcode project includes a post-build script that embeds the
-optional `VesperPlayerFfmpegRuntime.framework`,
-`VesperPlayerRemuxFfmpegPlugin.framework`,
-`VesperPlayerSourceNormalizerFfmpegPlugin.framework`, and
-`VesperPlayerFrameProcessorDiagnosticPlugin.framework`. Release hosts should
-consume the matching
-`VesperPlayerFfmpegRuntime.xcframework.zip` and
-`VesperPlayerRemuxFfmpegPlugin.xcframework.zip`,
-`VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`, and
-`VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip` artifacts built
-from the same FFmpeg profile where applicable.
+The generated App target directly depends on the aggregate
+`VesperPlayerOptionalPlugins` SwiftPM product. Xcode embeds and signs seven
+top-level sibling frameworks: `VesperFFmpegAVCodec`, `VesperFFmpegAVFormat`,
+`VesperFFmpegAVUtil`, and the Remux, SourceNormalizer, VideoToolbox Decoder,
+and diagnostic FrameProcessor plugin frameworks. The project has no custom
+flat-dylib embedding phase and does not use the legacy umbrella runtime.
 
 ## Optional Plugin Diagnostics
 
-The iOS example passes only plugin framework binary paths to
-`VesperPlayerController`. The shared `VesperPlayerFfmpegRuntime.framework` is
-embedded and signed by the host, but it is not passed as a plugin path.
+The iOS example passes only plugin framework executable paths to
+`VesperPlayerController`. The three FFmpeg component frameworks are embedded
+and signed by the App target, but are not passed as plugin paths.
 
 SourceNormalizer diagnostics and preflight modes do not change playback. In
 `preferNormalized` and `requireNormalized`, the host may open a disk-backed

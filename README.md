@@ -325,8 +325,8 @@ Callers can add controlled overlays with `--extra-libraries`,
 `--extra-parsers`, `--extra-bsfs`, and repeated `--extra-configure-arg` flags.
 Validation fails if an overlay violates the selected profile policy. Generated
 ABIs and slices record `vesper-ffmpeg-build-metadata.txt` with the declared
-profile, profile hash, source archive, license-sensitive flags, and exact
-configure line for release review.
+profile, profile hash, source archive SHA-256, license-sensitive flags, and
+exact configure line for release review.
 
 Android builds that explicitly opt into `--tls-backend openssl` provision
 OpenSSL from the 3.5 LTS series by default. FFmpeg source builds default to the
@@ -373,7 +373,10 @@ Useful overrides:
 Vesper is Apache-2.0 licensed, but FFmpeg remains under its own FFmpeg
 license terms. The repository does not commit generated FFmpeg binaries by
 default; optional Android, iOS, and desktop workflows can build or bundle
-FFmpeg-backed artifacts when a host application explicitly opts in.
+FFmpeg-backed artifacts when a host application explicitly opts in. Tagged
+GitHub Releases publish the optional iOS FFmpeg-backed XCFrameworks only when
+the same release also contains the generated compliance bundle and exactly one
+corresponding FFmpeg source archive for those binaries.
 
 The default Vesper FFmpeg scripts avoid `--enable-gpl` and
 `--enable-nonfree`; the scripts refuse those flags unless the caller passes an
@@ -423,19 +426,43 @@ name:
 - Flutter Android sample APK: `VesperPlayerFlutterHost-android-<abi>-debug-signed.apk`
 - iOS framework slices: `VesperPlayerKit-ios-*.framework.zip`
 - iOS XCFramework: `VesperPlayerKit.xcframework.zip`
+- iOS optional FFmpeg components: `VesperFFmpegAVCodec.xcframework.zip`,
+  `VesperFFmpegAVFormat.xcframework.zip`, and
+  `VesperFFmpegAVUtil.xcframework.zip`
+- iOS optional plugins: `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`,
+  `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`,
+  `VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip`, and
+  `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip`
+- iOS FFmpeg redistribution materials:
+  `VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip` and
+  `VesperPlayerOptionalPlugins-FFmpeg-<version>-source.tar.xz`
 - `SHA256SUMS.txt` for release artifact verification
+
+The canonical iOS release gate validates the archive layout and metadata, then
+imports and links the public module from textual interfaces in isolated module
+caches:
+
+```sh
+./scripts/vesper ios verify-release /path/to/ios-release --scope core
+./scripts/vesper ios verify-release /path/to/ios-release --scope complete
+```
 
 Android packaging is currently `arm64-v8a` only, including the downloadable
 sample APKs. The sample APKs are debug-signed for side-load evaluation only and
-are not production app-store artifacts. iOS packaging is arm64 only for device,
-Apple Silicon Simulator, and optional Catalyst slices. Default mobile releases
-do not publish optional plugin binaries. The iOS core `VesperPlayerKit.xcframework`
-does not embed FFmpeg; FFmpeg-backed remux support and SourceNormalizer support
-are staged through explicit optional runtime and plugin release commands that
-the host app signs and embeds. Plugin library path configuration points only at
-plugin binaries; the shared FFmpeg runtime is a package dependency, not a plugin
-path. All FFmpeg-backed optional plugins and their shared runtime must come from
-the same FFmpeg profile so `profile-hash.txt` values match.
+are not production app-store artifacts. iOS binary packaging is arm64 only for
+iPhoneOS devices and Apple Silicon Simulator. Tagged releases include the seven
+optional iOS framework archives only as one verified set with the FFmpeg
+compliance asset and exactly one corresponding-source asset. Verification
+rejects extra top-level assets or XCFramework slices and compares the bundled
+license and notice material with its source. Same-tag workflow reruns reconcile
+the GitHub Release asset list so retired artifacts are removed. The iOS core
+`VesperPlayerKit.xcframework` does not embed FFmpeg; FFmpeg-backed remux support
+and SourceNormalizer support are staged through the canonical optional-plugin
+command. The iOS App target embeds three FFmpeg component frameworks plus four
+plugin frameworks as signed top-level siblings. Plugin library path
+configuration points only at plugin framework executables; the FFmpeg component
+frameworks are dependencies, not plugin paths. All FFmpeg-backed siblings must
+come from the same FFmpeg profile so `profile-hash.txt` values match.
 
 Optional SourceNormalizer, decoder, and FrameProcessor artifacts are for
 diagnostics and explicit opt-in workflows. Default mobile playback remains

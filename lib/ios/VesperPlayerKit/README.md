@@ -8,21 +8,40 @@ or a prebuilt `XCFramework`, and consumable from any UIKit / SwiftUI app.
 - `Package.swift` — local Swift Package consumed by app projects
 - `project.yml` — XcodeGen descriptor for the framework / `XCFramework` build
 
-GitHub Releases publish the following artifacts via
+Tagged GitHub Releases publish the following core artifacts via
 `.github/workflows/mobile-lib-release.yml`:
 
 - `VesperPlayerKit-ios-arm64.framework.zip` — device-only packaging
 - `VesperPlayerKit-ios-simulator-arm64.framework.zip` — Apple Silicon Simulator
 - `VesperPlayerKit.xcframework.zip` — combined device + Apple Silicon Simulator
-- `VesperPlayerFfmpegRuntime.xcframework.zip` — optional shared FFmpeg runtime
-- `VesperPlayerRemuxFfmpegPlugin.xcframework.zip` — optional download remux plugin
-- `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip` — optional
-  SourceNormalizer diagnostics / source-preflight plugin
-- `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip` — optional
-  FrameProcessor diagnostics shell
 
-Apple packaging is `arm64`-only across iOS device, iOS Simulator, and (when
-enabled) Mac Catalyst. Use an Apple Silicon Mac for Simulator validation. See
+The same release also publishes three FFmpeg component XCFrameworks and four
+plugin XCFrameworks as an optional sibling set:
+
+- `VesperFFmpegAVCodec.xcframework.zip`
+- `VesperFFmpegAVFormat.xcframework.zip`
+- `VesperFFmpegAVUtil.xcframework.zip`
+- `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`
+- `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`
+- `VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip`
+- `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip`
+
+The optional set is released only with both mandatory redistribution assets:
+
+- `VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip` — FFmpeg licenses,
+  notices, exact build metadata, and LGPL relinking instructions
+- `VesperPlayerOptionalPlugins-FFmpeg-<version>-source.tar.xz` — exact
+  corresponding FFmpeg source
+
+Release verification fails if any optional framework or either redistribution
+asset is absent, if the corresponding-source archive count is not exactly one,
+if an extra top-level asset or XCFramework slice is present, if FFmpeg profile
+metadata differs between sibling frameworks, if license and notice material is
+empty or differs from its source, or if a legacy umbrella framework or bare
+dylib is present.
+
+Tagged binary packaging is `arm64`-only across iOS device and Apple Silicon
+Simulator. The current release archives do not contain Catalyst slices. See
 [Release Downloads](../../../README.md#release-downloads) for the public
 package names and artifact-selection notes.
 
@@ -55,7 +74,16 @@ For distribution, build the core FFmpeg-free framework:
 
 ```sh
 ./scripts/vesper ios kit-xcframework
-./scripts/vesper ios stage-release
+./scripts/vesper ios stage-release /tmp/vesper-ios-release
+./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope core
+```
+
+To reproduce the complete tagged-release set locally, enable optional staging:
+
+```sh
+VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1 \
+  ./scripts/vesper ios stage-release /tmp/vesper-ios-release
+./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope complete
 ```
 
 The build script:
@@ -310,42 +338,47 @@ Completed files can be exposed through `shareTaskOutput(...)`, which presents a
 document export picker. `exportTaskOutput(...)` still writes to an explicit
 host-provided path and keeps the original offline file in place.
 
-## Optional FFmpeg Remux Plugin
+## Optional iOS Plugin Package
 
-`exportTaskOutput(...)` uses an optional `player-remux-ffmpeg` dynamic plugin
-when the host wants to export downloaded HLS, DASH, or FLV assets to `.mp4`.
-FFmpeg is not embedded in the core `VesperPlayerKit.xcframework`. Release builds
-stage FFmpeg as `VesperPlayerFfmpegRuntime.xcframework.zip` and the remux
-plugin as `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`. The host app signs
-and embeds both XCFrameworks explicitly.
-
-For repository builds:
+FFmpeg is not embedded in the core `VesperPlayerKit.xcframework`. Repository
+hosts stage the canonical optional package before SwiftPM resolution:
 
 ```sh
-./scripts/vesper ffmpeg --platform ios --profile default --slice ios-arm64 --slice ios-simulator-arm64
-./scripts/vesper ios ffmpeg-runtime-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
-./scripts/vesper ios stage-remux-plugin-release /tmp/vesper-ios-release --profile default ios-arm64 ios-simulator-arm64
+./scripts/vesper ios stage-optional-plugins-release \
+  /tmp/vesper-ios-optional-plugins-release \
+  --profile source-normalizer \
+  ios-arm64 ios-simulator-arm64
 ```
 
-At runtime, pass the remux plugin framework binary path through
-`VesperDownloadConfiguration.pluginLibraryPaths`. Do not pass the shared FFmpeg
-runtime path as a plugin path; it is only a dynamic dependency of the plugin.
-Both artifacts must be built from the same FFmpeg profile so their profile hashes
-match.
+The App target depends on the local `VesperPlayerOptionalPlugins` Swift package
+and embeds its aggregate `VesperPlayerOptionalPlugins` product with Embed &
+Sign. SwiftPM then places the three FFmpeg component frameworks and four plugin
+frameworks as top-level siblings under `App.app/Frameworks`. Do not create flat
+dylibs, nested frameworks, or the legacy `VesperPlayerFfmpegRuntime.framework`
+umbrella.
 
-Bundling the shared runtime makes the host responsible for FFmpeg notices,
+At runtime, pass only plugin framework executable paths through APIs such as
+`VesperDownloadConfiguration.pluginLibraryPaths`. The three FFmpeg component
+frameworks are dynamic dependencies, not plugin entries. All FFmpeg-backed
+siblings must carry the same `profile-hash.txt` value.
+
+Bundling these components makes the host responsible for FFmpeg notices,
 corresponding source, configure flags, and LGPL relinking rights. See
 [THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md) before publishing such
-an artifact.
+an artifact. The canonical staging command generates and verifies
+`VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip` together with the versioned
+corresponding-source archive; downstream app distributors must preserve that
+redistribution boundary.
 
 ## Optional Mobile Plugin Routes
 
 `VesperSourceNormalizerConfiguration` and `VesperFrameProcessorConfiguration`
 are disabled by default. When enabled, their `pluginLibraryPaths` must point to
-plugin framework binaries only. Do not pass
-`VesperPlayerFfmpegRuntime.framework/VesperPlayerFfmpegRuntime` as a plugin
-path; it is a dynamic dependency that the host embeds and signs alongside the
-plugin.
+plugin framework executables. Do not pass FFmpeg component framework paths as
+plugin paths; the App target embeds and signs them as sibling dependencies.
+Bundled SourceNormalizer discovery resolves
+`VesperPlayerSourceNormalizerFfmpegPlugin.framework/`
+`VesperPlayerSourceNormalizerFfmpegPlugin` from the app `Frameworks` directory.
 
 SourceNormalizer mobile supports `diagnosticsOnly`, `preflightOnly`,
 `preferNormalized`, and `requireNormalized`. Diagnostics mode loads the optional
@@ -360,11 +393,11 @@ still uses the existing DASH bridge unless normalization is explicitly required.
 Standard HLS and DASH stay native-first by default, and the repository smoke
 expectations live in `fixtures/media/source-normalizer-smoke-matrix.json`.
 
-The optional
-`VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip` depends on the
-shared `VesperPlayerFfmpegRuntime.xcframework.zip`; both artifacts must be
-built from the same FFmpeg profile so their `profile-hash.txt` values match.
-The SourceNormalizer plugin XCFramework must not contain FFmpeg dylibs.
+The optional `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip` depends
+on the sibling `VesperFFmpegAVCodec`, `VesperFFmpegAVFormat`, and
+`VesperFFmpegAVUtil` XCFrameworks. All four must be built from the same FFmpeg
+profile so their `profile-hash.txt` values match. The SourceNormalizer plugin
+XCFramework must not contain duplicate FFmpeg libraries.
 
 FrameProcessor mobile remains explicit through
 `VesperNativeFramePipelineConfiguration`. The iOS host kit now exposes the
@@ -393,19 +426,6 @@ xcodebuild \
   -project VesperPlayerKit.xcodeproj \
   -scheme VesperPlayerKit \
   -destination 'id=<SIMULATOR_ID>' \
-  ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test
-```
-
-Mac Catalyst:
-
-```sh
-cd lib/ios/VesperPlayerKit
-xcodegen generate
-xcodebuild \
-  -project VesperPlayerKit.xcodeproj \
-  -scheme VesperPlayerKit \
-  -destination 'platform=macOS,variant=Mac Catalyst,name=My Mac' \
   ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test
 ```

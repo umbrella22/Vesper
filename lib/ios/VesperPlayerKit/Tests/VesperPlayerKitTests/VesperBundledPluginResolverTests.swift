@@ -59,6 +59,26 @@ final class VesperBundledPluginResolverTests: XCTestCase {
         XCTAssertEqual(resolved.pluginLibraryPaths, [bundledPath.path])
     }
 
+    func testEnabledSourceNormalizerIgnoresFlatDylibAndUsesFramework() throws {
+        let root = try makeTemporaryDirectory()
+        _ = try makeFlatBinary(
+            named: "libvesper_source_normalizer_ffmpeg.dylib",
+            in: root
+        )
+        let frameworkPath = try makeFrameworkBinary(
+            named: "VesperPlayerSourceNormalizerFfmpegPlugin",
+            in: root
+        )
+
+        let resolved =
+            VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
+                VesperSourceNormalizerConfiguration(mode: .preferNormalized),
+                frameworkSearchURLs: [root]
+            )
+
+        XCTAssertEqual(resolved.pluginLibraryPaths, [frameworkPath.path])
+    }
+
     func testPreferNormalizedWithoutBundledPluginLeavesConfigurationNonFatal() throws {
         let root = try makeTemporaryDirectory()
 
@@ -102,6 +122,12 @@ final class VesperBundledPluginResolverTests: XCTestCase {
             withIntermediateDirectories: true
         )
         let binaryURL = frameworkDirectory.appendingPathComponent(frameworkName)
+        try Data().write(to: binaryURL)
+        return binaryURL.standardizedFileURL
+    }
+
+    private func makeFlatBinary(named binaryName: String, in root: URL) throws -> URL {
+        let binaryURL = root.appendingPathComponent(binaryName)
         try Data().write(to: binaryURL)
         return binaryURL.standardizedFileURL
     }

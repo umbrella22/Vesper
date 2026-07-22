@@ -147,17 +147,22 @@ update_changelog_heading() {
   if grep -q "^## $version - " "$changelog"; then
     perl -0pi -e "s{^## \Q$version\E - (?:Unreleased|[0-9]{4}-[0-9]{2}-[0-9]{2})}{## $version - $release_date}m" \
       "$changelog"
-    return 0
-  fi
-
-  if grep -Eq '^## [0-9]+\.[0-9]+\.[0-9]+ - Unreleased$' "$changelog"; then
+  elif grep -Eq '^## [0-9]+\.[0-9]+\.[0-9]+ - Unreleased$' "$changelog"; then
     perl -0pi -e "s{^## [0-9]+\.[0-9]+\.[0-9]+ - Unreleased$}{## $version - $release_date}m" \
       "$changelog"
-    return 0
+  elif grep -q '^# Changelog$' "$changelog"; then
+    perl -0pi -e "s{# Changelog\n\n}{# Changelog\n\n## $version - $release_date\n\n- Prepared package metadata for the $version release.\n\n}" \
+      "$changelog"
+  else
+    perl -0pi -e "\$_ = qq{# Changelog\n\n## $version - $release_date\n\n- Prepared package metadata for the $version release.\n\n} . \$_" \
+      "$changelog"
   fi
 
-  perl -0pi -e "s{# Changelog\n\n}{# Changelog\n\n## $version - $release_date\n\n- Prepared package metadata for the $version release.\n\n}" \
-    "$changelog"
+  if ! grep -Eq "^## $version - $release_date$" "$changelog"; then
+    echo "Unable to update changelog heading for $version." >&2
+    echo "  $changelog" >&2
+    return 1
+  fi
 }
 
 resolve_release_metadata() {
@@ -279,7 +284,8 @@ set_version() {
 
   for gradle_file in \
     "$ROOT_DIR/lib/flutter/vesper_player_android/android/build.gradle" \
-    "$ROOT_DIR/lib/flutter/vesper_player_external_playback/android/build.gradle"
+    "$ROOT_DIR/lib/flutter/vesper_player_external_playback/android/build.gradle" \
+    "$ROOT_DIR/lib/flutter/vesper_player_source_normalizer_ffmpeg/android/build.gradle"
   do
     perl -0pi -e "s{^version = \"[0-9]+\\.[0-9]+\\.[0-9]+\"}{version = \"$version\"}m" "$gradle_file"
   done
@@ -307,8 +313,8 @@ set_version() {
   for changelog in \
     "$ROOT_DIR/lib/flutter/vesper_player_platform_interface/CHANGELOG.md" \
     "$ROOT_DIR/lib/flutter/vesper_player_ios/CHANGELOG.md" \
-    "$ROOT_DIR/lib/flutter/vesper_player_macos/CHANGELOG.md" \
-    "$ROOT_DIR/lib/flutter/vesper_player_ui/CHANGELOG.md"
+    "$ROOT_DIR/lib/flutter/vesper_player_ui/CHANGELOG.md" \
+    "$ROOT_DIR/lib/flutter/vesper_player_source_normalizer_ffmpeg/CHANGELOG.md"
   do
     update_changelog_heading "$changelog" "$version" "$release_date"
   done
@@ -418,9 +424,28 @@ verify_version() {
 
   for gradle_file in \
     "$ROOT_DIR/lib/flutter/vesper_player_android/android/build.gradle" \
-    "$ROOT_DIR/lib/flutter/vesper_player_external_playback/android/build.gradle"
+    "$ROOT_DIR/lib/flutter/vesper_player_external_playback/android/build.gradle" \
+    "$ROOT_DIR/lib/flutter/vesper_player_source_normalizer_ffmpeg/android/build.gradle"
   do
     expect_line "$gradle_file" "version = \"$version\"" "Flutter Android plugin Gradle version mismatch." || failures=$((failures + 1))
+  done
+
+  for changelog in \
+    "$ROOT_DIR/CHANGELOG.md" \
+    "$ROOT_DIR/lib/android/CHANGELOG.md" \
+    "$ROOT_DIR/lib/ios/VesperPlayerKit/CHANGELOG.md" \
+    "$ROOT_DIR/lib/flutter/vesper_player/CHANGELOG.md" \
+    "$ROOT_DIR/lib/flutter/vesper_player_android/CHANGELOG.md" \
+    "$ROOT_DIR/lib/flutter/vesper_player_external_playback/CHANGELOG.md" \
+    "$ROOT_DIR/lib/flutter/vesper_player_platform_interface/CHANGELOG.md" \
+    "$ROOT_DIR/lib/flutter/vesper_player_ios/CHANGELOG.md" \
+    "$ROOT_DIR/lib/flutter/vesper_player_ui/CHANGELOG.md" \
+    "$ROOT_DIR/lib/flutter/vesper_player_source_normalizer_ffmpeg/CHANGELOG.md"
+  do
+    expect_line \
+      "$changelog" \
+      "^## $version - (Unreleased|[0-9]{4}-[0-9]{2}-[0-9]{2})$" \
+      "Changelog version heading mismatch." || failures=$((failures + 1))
   done
 
   if [[ -f "$ROOT_DIR/Cargo.lock" ]]; then
