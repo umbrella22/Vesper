@@ -75,25 +75,25 @@ case "$group:$command" in
     exec "$SCRIPT_DIR/ios/build-player-ffi-xcframework.sh" "$@"
     ;;
   ios:remux-plugin)
-    exec "$SCRIPT_DIR/ios/build-player-remux-ffmpeg-plugin.sh" "$@"
+    exec "$SCRIPT_DIR/ios/build-player-plugin.sh" remux-ffmpeg "$@"
     ;;
   ios:source-normalizer-plugin)
-    exec "$SCRIPT_DIR/ios/build-player-source-normalizer-ffmpeg-plugin.sh" "$@"
+    exec "$SCRIPT_DIR/ios/build-player-plugin.sh" source-normalizer-ffmpeg "$@"
     ;;
   ios:frame-processor-plugin)
-    exec "$SCRIPT_DIR/ios/build-player-frame-processor-diagnostic-plugin.sh" "$@"
+    exec "$SCRIPT_DIR/ios/build-player-plugin.sh" frame-processor-diagnostic "$@"
     ;;
   ios:ffmpeg-runtime-release)
     exec "$SCRIPT_DIR/ios/stage-player-ffmpeg-runtime-release.sh" "$@"
     ;;
   ios:stage-remux-plugin-release)
-    exec "$SCRIPT_DIR/ios/stage-player-remux-ffmpeg-plugin-release.sh" "$@"
+    exec "$SCRIPT_DIR/ios/stage-player-plugin-release.sh" remux-ffmpeg "$@"
     ;;
   ios:stage-source-normalizer-plugin-release)
-    exec "$SCRIPT_DIR/ios/stage-player-source-normalizer-ffmpeg-plugin-release.sh" "$@"
+    exec "$SCRIPT_DIR/ios/stage-player-plugin-release.sh" source-normalizer-ffmpeg "$@"
     ;;
   ios:stage-frame-processor-plugin-release)
-    exec "$SCRIPT_DIR/ios/stage-player-frame-processor-diagnostic-plugin-release.sh" "$@"
+    exec "$SCRIPT_DIR/ios/stage-player-plugin-release.sh" frame-processor-diagnostic "$@"
     ;;
   ios:stage-optional-plugins-release)
     exec "$SCRIPT_DIR/ios/stage-player-optional-plugins-release.sh" "$@"

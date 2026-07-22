@@ -149,15 +149,18 @@ build_ios_plugins() {
 
   env \
     VESPER_SKIP_APPLE_FFMPEG_PREBUILDS=1 \
-    "$ROOT_DIR/scripts/ios/build-player-source-normalizer-ffmpeg-plugin.sh" \
+    "$ROOT_DIR/scripts/ios/build-player-plugin.sh" \
+      source-normalizer-ffmpeg \
       "$source_output_dir" \
       "$PROFILE" \
       ios-simulator-arm64
-  "$ROOT_DIR/scripts/ios/build-player-decoder-videotoolbox-plugin.sh" \
+  "$ROOT_DIR/scripts/ios/build-player-plugin.sh" \
+    decoder-videotoolbox \
     "$decoder_output_dir" \
     "$PROFILE" \
     ios-simulator-arm64
-  "$ROOT_DIR/scripts/ios/build-player-frame-processor-diagnostic-plugin.sh" \
+  "$ROOT_DIR/scripts/ios/build-player-plugin.sh" \
+    frame-processor-diagnostic \
     "$frame_processor_output_dir" \
     "$PROFILE" \
     ios-simulator-arm64

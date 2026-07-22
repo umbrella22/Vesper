@@ -127,9 +127,27 @@ ALTERED_MANIFEST_ARCHIVE="$ALTERED_MANIFEST_FIXTURE/VesperFFmpegAVCodec.xcframew
 ALTERED_MANIFEST_EXTRACT="$ALTERED_MANIFEST_FIXTURE/altered-manifest-extract"
 mkdir -p "$ALTERED_MANIFEST_EXTRACT"
 ditto -x -k "$ALTERED_MANIFEST_ARCHIVE" "$ALTERED_MANIFEST_EXTRACT"
+ALTERED_MANIFEST_PLIST="$ALTERED_MANIFEST_EXTRACT/VesperFFmpegAVCodec.xcframework/Info.plist"
+ALTERED_MANIFEST_SIMULATOR_INDEX=""
+for library_index in 0 1; do
+  library_variant="$(
+    /usr/libexec/PlistBuddy \
+      -c "Print :AvailableLibraries:$library_index:SupportedPlatformVariant" \
+      "$ALTERED_MANIFEST_PLIST" \
+      2>/dev/null || true
+  )"
+  if [[ "$library_variant" == "simulator" ]]; then
+    ALTERED_MANIFEST_SIMULATOR_INDEX="$library_index"
+    break
+  fi
+done
+if [[ -z "$ALTERED_MANIFEST_SIMULATOR_INDEX" ]]; then
+  echo "Unable to locate the simulator library in the XCFramework manifest fixture." >&2
+  exit 1
+fi
 /usr/libexec/PlistBuddy \
-  -c 'Set :AvailableLibraries:1:SupportedPlatformVariant maccatalyst' \
-  "$ALTERED_MANIFEST_EXTRACT/VesperFFmpegAVCodec.xcframework/Info.plist"
+  -c "Set :AvailableLibraries:$ALTERED_MANIFEST_SIMULATOR_INDEX:SupportedPlatformVariant maccatalyst" \
+  "$ALTERED_MANIFEST_PLIST"
 rm -f "$ALTERED_MANIFEST_ARCHIVE"
 ditto -c -k --sequesterRsrc --keepParent \
   "$ALTERED_MANIFEST_EXTRACT/VesperFFmpegAVCodec.xcframework" \

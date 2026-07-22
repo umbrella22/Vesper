@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ios-framework.sh"
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/ios-release.sh"
 
 ROOT_DIR="$VESPER_REPO_ROOT"
@@ -19,12 +20,11 @@ RUNTIME_FRAMEWORKS=(
   VesperFFmpegAVUtil
 )
 
-PLUGIN_FRAMEWORKS=(
-  VesperPlayerRemuxFfmpegPlugin
-  VesperPlayerSourceNormalizerFfmpegPlugin
-  VesperPlayerDecoderVideoToolboxPlugin
-  VesperPlayerFrameProcessorDiagnosticPlugin
-)
+PLUGIN_FRAMEWORKS=()
+for plugin_id in "${VESPER_IOS_OPTIONAL_PLUGIN_IDS[@]}"; do
+  vesper_ios_resolve_plugin "$plugin_id"
+  PLUGIN_FRAMEWORKS+=("$VESPER_IOS_PLUGIN_FRAMEWORK")
+done
 
 usage() {
   cat <<EOF >&2
@@ -72,9 +72,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ ${#SELECTED_SLICES[@]} -eq 0 ]]; then
-  SELECTED_SLICES=(ios-arm64 ios-simulator-arm64)
+if ! resolved_slices="$(vesper_apple_resolve_selected_slices ${SELECTED_SLICES[@]+"${SELECTED_SLICES[@]}"})"; then
+  exit 1
 fi
+SELECTED_SLICES=()
+while IFS= read -r slice; do
+  [[ -n "$slice" ]] && SELECTED_SLICES+=("$slice")
+done <<<"$resolved_slices"
 
 case " ${SELECTED_SLICES[*]} " in
   *" ios-arm64 "*)
@@ -89,21 +93,10 @@ runtime_args=(
   "$OUTPUT_DIR"
   --profile "$PROFILE"
 )
-plugin_args=(
-  "$OUTPUT_DIR"
-  --profile "$PROFILE"
-)
-diagnostic_args=("$OUTPUT_DIR")
-
 if [[ "$DRY_RUN" == "1" ]]; then
   runtime_args+=(--dry-run)
-  plugin_args+=(--dry-run)
-  diagnostic_args+=(--dry-run)
 fi
-
 runtime_args+=("${SELECTED_SLICES[@]}")
-plugin_args+=("${SELECTED_SLICES[@]}")
-diagnostic_args+=("${SELECTED_SLICES[@]}")
 
 if [[ "$DRY_RUN" == "0" ]]; then
   mkdir -p "$OUTPUT_DIR"
@@ -117,11 +110,28 @@ env \
   "$ROOT_DIR/scripts/ios/stage-player-ffmpeg-runtime-release.sh" \
     "${runtime_args[@]}"
 
+for plugin_id in "${VESPER_IOS_OPTIONAL_PLUGIN_IDS[@]}"; do
+  vesper_ios_resolve_plugin "$plugin_id"
+  plugin_args=("$plugin_id" "$OUTPUT_DIR")
+  if [[ "$VESPER_IOS_PLUGIN_USES_FFMPEG" == "1" ]]; then
+    plugin_args+=(--profile "$PROFILE")
+  fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    plugin_args+=(--dry-run)
+  fi
+  plugin_args+=("${SELECTED_SLICES[@]}")
+
+  if [[ "$DRY_RUN" == "0" && "$VESPER_IOS_PLUGIN_USES_FFMPEG" == "1" ]]; then
+    env VESPER_SKIP_IOS_FFMPEG_RUNTIME_STAGE=1 \
+      "$ROOT_DIR/scripts/ios/stage-player-plugin-release.sh" \
+        "${plugin_args[@]}"
+  else
+    "$ROOT_DIR/scripts/ios/stage-player-plugin-release.sh" \
+      "${plugin_args[@]}"
+  fi
+done
+
 if [[ "$DRY_RUN" == "1" ]]; then
-  "$ROOT_DIR/scripts/ios/stage-player-remux-ffmpeg-plugin-release.sh" "${plugin_args[@]}"
-  "$ROOT_DIR/scripts/ios/stage-player-source-normalizer-ffmpeg-plugin-release.sh" "${plugin_args[@]}"
-  "$ROOT_DIR/scripts/ios/stage-player-decoder-videotoolbox-plugin-release.sh" "${diagnostic_args[@]}"
-  "$ROOT_DIR/scripts/ios/stage-player-frame-processor-diagnostic-plugin-release.sh" "${diagnostic_args[@]}"
   echo "Canonical local package artifacts:"
   for framework_name in "${RUNTIME_FRAMEWORKS[@]}" "${PLUGIN_FRAMEWORKS[@]}"; do
     echo "  $PACKAGE_ARTIFACTS_DIR/$framework_name.xcframework"
@@ -131,20 +141,6 @@ if [[ "$DRY_RUN" == "1" ]]; then
   echo "  $OUTPUT_DIR/VesperPlayerOptionalPlugins-FFmpeg-<version>-source.tar.xz"
   exit 0
 fi
-
-env VESPER_SKIP_IOS_FFMPEG_RUNTIME_STAGE=1 \
-  "$ROOT_DIR/scripts/ios/stage-player-remux-ffmpeg-plugin-release.sh" \
-    "${plugin_args[@]}"
-
-env VESPER_SKIP_IOS_FFMPEG_RUNTIME_STAGE=1 \
-  "$ROOT_DIR/scripts/ios/stage-player-source-normalizer-ffmpeg-plugin-release.sh" \
-    "${plugin_args[@]}"
-
-"$ROOT_DIR/scripts/ios/stage-player-decoder-videotoolbox-plugin-release.sh" \
-  "${diagnostic_args[@]}"
-
-"$ROOT_DIR/scripts/ios/stage-player-frame-processor-diagnostic-plugin-release.sh" \
-  "${diagnostic_args[@]}"
 
 copy_xcframework() {
   local framework_name="$1"
@@ -171,18 +167,12 @@ for framework_name in "${RUNTIME_FRAMEWORKS[@]}"; do
     "$PROJECT_DIR/.build/player-ffmpeg-runtime/$framework_name.xcframework"
 done
 
-copy_xcframework \
-  VesperPlayerRemuxFfmpegPlugin \
-  "$PROJECT_DIR/.build/player-remux-ffmpeg-plugin/VesperPlayerRemuxFfmpegPlugin.xcframework"
-copy_xcframework \
-  VesperPlayerSourceNormalizerFfmpegPlugin \
-  "$PROJECT_DIR/.build/player-source-normalizer-ffmpeg-plugin/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework"
-copy_xcframework \
-  VesperPlayerDecoderVideoToolboxPlugin \
-  "$PROJECT_DIR/.build/player-decoder-videotoolbox-plugin/VesperPlayerDecoderVideoToolboxPlugin.xcframework"
-copy_xcframework \
-  VesperPlayerFrameProcessorDiagnosticPlugin \
-  "$PROJECT_DIR/.build/player-frame-processor-diagnostic-plugin/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework"
+for plugin_id in "${VESPER_IOS_OPTIONAL_PLUGIN_IDS[@]}"; do
+  vesper_ios_resolve_plugin "$plugin_id"
+  copy_xcframework \
+    "$VESPER_IOS_PLUGIN_FRAMEWORK" \
+    "$PROJECT_DIR/.build/$VESPER_IOS_PLUGIN_BUILD_DIRECTORY/$VESPER_IOS_PLUGIN_FRAMEWORK.xcframework"
+done
 
 echo "Staged the canonical local iOS optional plugin package artifacts:"
 for framework_name in "${RUNTIME_FRAMEWORKS[@]}" "${PLUGIN_FRAMEWORKS[@]}"; do

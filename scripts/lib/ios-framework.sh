@@ -5,6 +5,82 @@ VESPER_IOS_FRAMEWORK_SH_INCLUDED=1
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/apple.sh"
 
+VESPER_IOS_OPTIONAL_PLUGIN_IDS=(
+  "remux-ffmpeg"
+  "source-normalizer-ffmpeg"
+  "decoder-videotoolbox"
+  "frame-processor-diagnostic"
+)
+
+vesper_ios_reset_plugin_registry() {
+  VESPER_IOS_PLUGIN_ID=""
+  VESPER_IOS_PLUGIN_CRATE=""
+  VESPER_IOS_PLUGIN_DYLIB=""
+  VESPER_IOS_PLUGIN_FRAMEWORK=""
+  VESPER_IOS_PLUGIN_BUNDLE_IDENTIFIER=""
+  VESPER_IOS_PLUGIN_TYPE=""
+  VESPER_IOS_PLUGIN_DEFAULT_FFMPEG_PROFILE=""
+  VESPER_IOS_PLUGIN_BUILD_DIRECTORY=""
+  VESPER_IOS_PLUGIN_USES_FFMPEG=0
+  VESPER_IOS_PLUGIN_LINK_HEADERPAD=0
+  VESPER_IOS_PLUGIN_DESCRIPTION=""
+}
+
+vesper_ios_resolve_plugin() {
+  local plugin_id="${1:-}"
+
+  vesper_ios_reset_plugin_registry
+  case "$plugin_id" in
+    remux-ffmpeg)
+      VESPER_IOS_PLUGIN_CRATE="player-remux-ffmpeg"
+      VESPER_IOS_PLUGIN_DYLIB="libvesper_remux_ffmpeg.dylib"
+      VESPER_IOS_PLUGIN_FRAMEWORK="VesperPlayerRemuxFfmpegPlugin"
+      VESPER_IOS_PLUGIN_BUNDLE_IDENTIFIER="io.github.ikaros.vesper.player.remux-ffmpeg-plugin"
+      VESPER_IOS_PLUGIN_TYPE="remux"
+      VESPER_IOS_PLUGIN_DEFAULT_FFMPEG_PROFILE="default"
+      VESPER_IOS_PLUGIN_BUILD_DIRECTORY="player-remux-ffmpeg-plugin"
+      VESPER_IOS_PLUGIN_USES_FFMPEG=1
+      VESPER_IOS_PLUGIN_LINK_HEADERPAD=1
+      VESPER_IOS_PLUGIN_DESCRIPTION="remux plugin"
+      ;;
+    source-normalizer-ffmpeg)
+      VESPER_IOS_PLUGIN_CRATE="player-source-normalizer-ffmpeg"
+      VESPER_IOS_PLUGIN_DYLIB="libvesper_source_normalizer_ffmpeg.dylib"
+      VESPER_IOS_PLUGIN_FRAMEWORK="VesperPlayerSourceNormalizerFfmpegPlugin"
+      VESPER_IOS_PLUGIN_BUNDLE_IDENTIFIER="io.github.ikaros.vesper.player.source-normalizer-ffmpeg-plugin"
+      VESPER_IOS_PLUGIN_TYPE="source-normalizer"
+      VESPER_IOS_PLUGIN_DEFAULT_FFMPEG_PROFILE="source-normalizer"
+      VESPER_IOS_PLUGIN_BUILD_DIRECTORY="player-source-normalizer-ffmpeg-plugin"
+      VESPER_IOS_PLUGIN_USES_FFMPEG=1
+      VESPER_IOS_PLUGIN_DESCRIPTION="source normalizer plugin"
+      ;;
+    decoder-videotoolbox)
+      VESPER_IOS_PLUGIN_CRATE="player-decoder-videotoolbox"
+      VESPER_IOS_PLUGIN_DYLIB="libvesper_decoder_videotoolbox.dylib"
+      VESPER_IOS_PLUGIN_FRAMEWORK="VesperPlayerDecoderVideoToolboxPlugin"
+      VESPER_IOS_PLUGIN_BUNDLE_IDENTIFIER="io.github.ikaros.vesper.player.decoder-videotoolbox-plugin"
+      VESPER_IOS_PLUGIN_TYPE="decoder"
+      VESPER_IOS_PLUGIN_BUILD_DIRECTORY="player-decoder-videotoolbox-plugin"
+      VESPER_IOS_PLUGIN_DESCRIPTION="VideoToolbox decoder plugin"
+      ;;
+    frame-processor-diagnostic)
+      VESPER_IOS_PLUGIN_CRATE="player-frame-processor-diagnostic"
+      VESPER_IOS_PLUGIN_DYLIB="libvesper_frame_processor_diagnostic.dylib"
+      VESPER_IOS_PLUGIN_FRAMEWORK="VesperPlayerFrameProcessorDiagnosticPlugin"
+      VESPER_IOS_PLUGIN_BUNDLE_IDENTIFIER="io.github.ikaros.vesper.player.frame-processor-diagnostic-plugin"
+      VESPER_IOS_PLUGIN_TYPE="frame-processor"
+      VESPER_IOS_PLUGIN_BUILD_DIRECTORY="player-frame-processor-diagnostic-plugin"
+      VESPER_IOS_PLUGIN_DESCRIPTION="frame processor plugin"
+      ;;
+    *)
+      echo "Unsupported iOS plugin ID: ${plugin_id:-<missing>}" >&2
+      echo "Supported plugin IDs: ${VESPER_IOS_OPTIONAL_PLUGIN_IDS[*]}" >&2
+      return 1
+      ;;
+  esac
+  VESPER_IOS_PLUGIN_ID="$plugin_id"
+}
+
 vesper_ios_ffmpeg_framework_name() {
   case "$1" in
     avcodec) echo "VesperFFmpegAVCodec" ;;

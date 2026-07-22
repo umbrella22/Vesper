@@ -487,7 +487,7 @@ verify_version() {
     "$ROOT_DIR/examples/android-compose-host/app/build.gradle.kts" \
     "$ROOT_DIR/examples/flutter-host/pubspec.yaml" \
     "$ROOT_DIR/scripts/ios/stage-player-ffmpeg-runtime-release.sh" \
-    "$ROOT_DIR/scripts/ios/stage-player-remux-ffmpeg-plugin-release.sh" \
+    "$ROOT_DIR/scripts/ios/stage-player-plugin-release.sh" \
     >/tmp/vesper-version-mismatch.txt; then
     echo "Found stale 0.2.0 product version fields:" >&2
     cat /tmp/vesper-version-mismatch.txt >&2
