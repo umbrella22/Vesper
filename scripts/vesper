@@ -36,13 +36,13 @@ shift 2
 
 case "$group:$command" in
   ffi:generate)
-    exec "$SCRIPT_DIR/ffi/generate-player-ffi-header.sh" "$@"
+    exec "$SCRIPT_DIR/ffi/player-ffi-header.sh" generate "$@"
     ;;
   ffi:sync)
-    exec "$SCRIPT_DIR/ffi/sync-player-ffi-header.sh" "$@"
+    exec "$SCRIPT_DIR/ffi/player-ffi-header.sh" sync "$@"
     ;;
   ffi:verify)
-    exec "$SCRIPT_DIR/ffi/verify-player-ffi-header.sh" "$@"
+    exec "$SCRIPT_DIR/ffi/player-ffi-header.sh" verify "$@"
     ;;
   ffi:c-host-smoke)
     exec "$SCRIPT_DIR/ffi/run-c-host-smoke.sh" "$@"

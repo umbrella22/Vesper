@@ -193,6 +193,84 @@ vesper_android_report_missing_ndk() {
   echo "$suffix" >&2
 }
 
+vesper_android_build_runtime_free_plugin() {
+  local crate_name="$1"
+  shift
+  local output_dir="${1:-}"
+  local build_profile="debug"
+  local android_sdk_root
+  local android_ndk_version
+  local android_ndk_root
+  local resolved_abis
+  local selected_abis=()
+  local required_targets=()
+  local cargo_args
+  local unexpected_runtime
+  local abi
+
+  if [[ -z "$output_dir" ]]; then
+    echo "Usage: $0 <output-dir> [debug|release]" >&2
+    echo "Android ABI selection is controlled by RUST_ANDROID_ABIS." >&2
+    return 1
+  fi
+  shift
+
+  if [[ $# -gt 0 && ( "$1" == "debug" || "$1" == "release" ) ]]; then
+    build_profile="$1"
+    shift
+  fi
+  if [[ $# -gt 0 ]]; then
+    echo "Unexpected arguments: $*" >&2
+    return 1
+  fi
+
+  android_sdk_root="$(vesper_android_sdk_root)"
+  android_ndk_version="$(vesper_android_ndk_version)"
+  android_ndk_root="${ANDROID_NDK_ROOT:-}"
+
+  if ! resolved_abis="$(vesper_android_resolve_selected_abis)"; then
+    return 1
+  fi
+  while IFS= read -r abi; do
+    [[ -n "$abi" ]] && selected_abis+=("$abi")
+  done <<<"$resolved_abis"
+  for abi in "${selected_abis[@]}"; do
+    required_targets+=("$(vesper_android_abi_to_rust_target "$abi")")
+  done
+
+  vesper_android_require_cargo_ndk "Android $crate_name plugins"
+  vesper_android_require_rust_targets "${required_targets[@]}"
+  if ! android_ndk_root="$(vesper_android_resolve_ndk_root "$android_sdk_root" "$android_ndk_root" "$android_ndk_version")"; then
+    vesper_android_report_missing_ndk "$android_sdk_root" "$android_ndk_version"
+    return 1
+  fi
+
+  rm -rf "$output_dir"
+  mkdir -p "$output_dir"
+  for abi in "${selected_abis[@]}"; do
+    cargo_args=(ndk -o "$output_dir" -t "$abi" build -p "$crate_name")
+    if [[ "$build_profile" == "release" ]]; then
+      cargo_args+=(--release)
+    fi
+    cargo "${cargo_args[@]}"
+  done
+
+  unexpected_runtime="$(
+    find "$output_dir" -type f \
+      \( -name 'libav*.so' -o -name 'libsw*.so' -o -name 'libssl*.so' -o -name 'libcrypto*.so' -o -name 'libxml2*.so' \) \
+      -print -quit
+  )"
+  if [[ -n "$unexpected_runtime" ]]; then
+    echo "$crate_name must not bundle FFmpeg runtime libraries:" >&2
+    echo "  $unexpected_runtime" >&2
+    return 1
+  fi
+
+  echo
+  echo "Built Android $crate_name plugin libraries into:"
+  echo "  $output_dir"
+}
+
 vesper_android_resolve_gradle() {
   local project_dir="$1"
   local fallback_project_dir="${2:-}"

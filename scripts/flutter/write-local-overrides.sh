@@ -1,28 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/flutter.sh"
 
 ROOT_DIR="$VESPER_REPO_ROOT"
 
-core_packages=(
-  vesper_player_platform_interface
-  vesper_player_android
-  vesper_player_ios
-  vesper_player
-  vesper_player_external_playback
-  vesper_player_ui
-)
-optional_plugin_packages=(
-  vesper_player_source_normalizer_ffmpeg
-)
-packages=("${core_packages[@]}")
-
-case "${VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS:-0}" in
-  1|true|TRUE|yes|YES)
-    packages+=("${optional_plugin_packages[@]}")
-    ;;
-esac
+packages=("${VESPER_FLUTTER_PACKAGES[@]}")
 
 write_package_overrides() {
   local package="$1"

@@ -181,6 +181,7 @@ val buildPlayerFrameProcessorDiagnosticAndroidPlugin =
     val scriptFile = workspaceRootDir.file("scripts/android/build-player-frame-processor-diagnostic-plugin.sh")
 
     inputs.file(scriptFile)
+    inputs.file(workspaceRootDir.file("scripts/lib/android.sh"))
     inputs.file(workspaceRootDir.file("Cargo.toml"))
     inputs.file(workspaceRootDir.file("Cargo.lock"))
     inputs.dir(workspaceRootDir.dir("crates/plugin/player-frame-processor-diagnostic"))
@@ -209,6 +210,7 @@ val buildPlayerDecoderMediaCodecAndroidPlugin =
     val scriptFile = workspaceRootDir.file("scripts/android/build-player-decoder-mediacodec-plugin.sh")
 
     inputs.file(scriptFile)
+    inputs.file(workspaceRootDir.file("scripts/lib/android.sh"))
     inputs.file(workspaceRootDir.file("Cargo.toml"))
     inputs.file(workspaceRootDir.file("Cargo.lock"))
     inputs.dir(workspaceRootDir.dir("crates/plugin-decoder/player-decoder-mediacodec"))
