@@ -3655,10 +3655,7 @@ pub unsafe extern "C" fn player_ffi_dash_bridge_execute_json(
         let response_json = match player_dash_hls_bridge::ops::execute_json(request_json) {
             Ok(value) => value,
             Err(error) => {
-                write_error(
-                    out_error,
-                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
-                );
+                write_error(out_error, dash_bridge_error_to_ffi(&error));
                 return PlayerFfiCallStatus::Error;
             }
         };
@@ -3735,10 +3732,7 @@ pub unsafe extern "C" fn player_ffi_dash_bridge_parse_sidx(
         let sidx = match player_dash_hls_bridge::mp4::parse_sidx(data) {
             Ok(value) => value,
             Err(error) => {
-                write_error(
-                    out_error,
-                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
-                );
+                write_error(out_error, dash_bridge_error_to_ffi(&error));
                 return PlayerFfiCallStatus::Error;
             }
         };
@@ -3793,6 +3787,7 @@ pub unsafe extern "C" fn player_ffi_error_free(error: *mut PlayerFfiError) {
         };
 
         free_c_string(&mut error.message);
+        free_c_string(&mut error.details_json);
         *error = PlayerFfiError::default();
     });
 }

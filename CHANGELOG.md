@@ -1,10 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - Unreleased
 
 ### Breaking Changes
 
 - Raised the Rust workspace MSRV and dedicated CI check from 1.94 to 1.97.
+- Android `setSubtitleTrackSelection` is now suspending and iOS is now
+  `async throws`; both complete after native confirmation.
+- External subtitle source declarations now use `VesperExternalSubtitleSource`
+  and `externalSubtitles`. The old type and source property remain deprecated
+  aliases.
+- C and iOS FFI consumers must regenerate and recompile bindings for the
+  expanded `PlayerFfiError.details_json` field; replacing only the static
+  library is not ABI-compatible.
 
 ### Added
 
@@ -16,6 +24,9 @@
 - Added explicit RTMP, RTSP, and HTTP-FLV protocol DTO values across Rust, C,
   Android, iOS, and Flutter boundaries. Unsupported host routes fail with
   capability errors instead of falling through silently.
+- Added canonical subtitle catalog/selection state, requested/confirmed/effective
+  selection snapshots, structured cross-platform subtitle errors, DASH/HLS
+  metadata propagation, and source-local external subtitle ids.
 - Added tagged iOS release artifacts for the three FFmpeg component frameworks
   and four optional plugin frameworks. The release workflow requires a generated
   FFmpeg compliance bundle and exactly one corresponding source archive before
@@ -28,6 +39,8 @@
   the explicit `flvLive` source factory.
 - Native-frame plugin breakers now enforce queue/in-flight load decisions and
   reset consecutive failure counters after every successful adapter call.
+- Subtitle selection restore, source refresh, and stale callback handling now
+  pass through bounded source-epoch and command-id coordination.
 - Native and Flutter iOS hosts now consume the App-target
   `VesperPlayerOptionalPlugins` SwiftPM product, which embeds and signs three
   FFmpeg component frameworks plus four plugin frameworks as top-level siblings.
@@ -35,9 +48,6 @@
 
 ### Fixed
 
-- Aligned Android CI and release jobs with the Gradle 9.6.0 wrapper, corrected
-  the Flutter Android minimum requirement to 3.44.0, and synchronized Android
-  source-build toolchain documentation.
 - Core iOS framework archives now keep `VesperPlayerKitBridgeShim` internal,
   use one canonical XCFramework, omit AppleDouble metadata, and pass an isolated
   textual-interface import and link smoke before Release upload.
@@ -46,6 +56,13 @@
   assets/slices, verify FFmpeg compliance file contents against their sources,
   force FFmpeg source rebuilds, cross-check device and Simulator metadata, and
   remove retired GitHub Release assets during same-tag reruns.
+- Aligned Android CI and release jobs with the Gradle 9.6.0 wrapper, corrected
+  the Flutter Android minimum requirement to 3.44.0, and synchronized Android
+  source-build toolchain documentation.
+- Preserved usable subtitle catalogs after partial external resource failures
+  while reporting all-track failures and duplicate identity/default conflicts.
+- Fixed iOS local audio-only playback waiting for a video frame and separated
+  explicit automatic subtitle selection from the startup subtitle-enable gate.
 
 ## 0.3.1 - 2026-06-09
 

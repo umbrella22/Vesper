@@ -5,6 +5,9 @@ internal import VesperPlayerKitBridgeShim
 
 extension VesperNativePlayerBridge {
     func resetTrackState() {
+        let preserveConfirmedSelection = pendingResilienceRestore != nil
+        let preservedConfirmedSelection = publishedConfirmedSubtitleSelection
+        cancelPendingSubtitleSelection()
         audioGroup = nil
         subtitleGroup = nil
         videoVariantPinsByTrackId = [:]
@@ -12,17 +15,35 @@ extension VesperNativePlayerBridge {
         dashStartupAbrLimitPin = nil
         audioOptionsByTrackId = [:]
         subtitleOptionsByTrackId = [:]
+        failedSubtitleTrackIds.removeAll()
         subtitleOverlayRenderer.reset()
         hasAppliedDefaultTrackPreferences = false
         fixedTrackConvergenceState = nil
         publishedTrackCatalog = .empty
-        publishedTrackSelection = VesperTrackSelectionSnapshot()
+        publishedTrackSelection = VesperTrackSelectionSnapshot(
+            subtitle: .disabled(),
+            confirmedSubtitle: preserveConfirmedSelection ? preservedConfirmedSelection : .disabled(),
+            effectiveSubtitleTrackId: nil
+        )
         publishedEffectiveVideoTrackId = nil
+        publishedEffectiveSubtitleTrackId = nil
+        confirmedSubtitleSelection = preserveConfirmedSelection
+            ? preservedConfirmedSelection
+            : .disabled()
+        publishedRequestedSubtitleSelection = .disabled()
+        publishedConfirmedSubtitleSelection = preserveConfirmedSelection
+            ? preservedConfirmedSelection
+            : .disabled()
         publishedVideoVariantObservation = nil
         publishedFixedTrackStatus = nil
         // Reset the subtitle lifecycle state so a new source epoch does not
         // inherit a stale failure from the previous source.
-        publishedSubtitleState = .empty
+        publishedSubtitleState = preserveConfirmedSelection
+            ? .loading(advertisedTrackCount: currentSource?.externalSubtitles.count ?? 0)
+            : (currentSource.map {
+                .loading(advertisedTrackCount: $0.externalSubtitles.count)
+            } ?? .empty)
+        pendingSubtitleOverlayFailure = nil
     }
 
     func updateTrackSelection(
@@ -191,6 +212,8 @@ extension VesperNativePlayerBridge {
                     video: selection,
                     audio: current.audio,
                     subtitle: current.subtitle,
+                    confirmedSubtitle: current.confirmedSubtitle,
+                    effectiveSubtitleTrackId: current.effectiveSubtitleTrackId,
                     abrPolicy: current.abrPolicy
                 )
             case .audio:
@@ -198,6 +221,8 @@ extension VesperNativePlayerBridge {
                     video: current.video,
                     audio: selection,
                     subtitle: current.subtitle,
+                    confirmedSubtitle: current.confirmedSubtitle,
+                    effectiveSubtitleTrackId: current.effectiveSubtitleTrackId,
                     abrPolicy: current.abrPolicy
                 )
             case .subtitle:
@@ -205,8 +230,16 @@ extension VesperNativePlayerBridge {
                     video: current.video,
                     audio: current.audio,
                     subtitle: selection,
+                    confirmedSubtitle: current.confirmedSubtitle,
+                    effectiveSubtitleTrackId: current.effectiveSubtitleTrackId,
                     abrPolicy: current.abrPolicy
                 )
+            }
+        }
+        if kind == .subtitle {
+            confirmedSubtitleSelection = selection
+            publishedEffectiveSubtitleTrackId = optionToSelect.flatMap { option in
+                subtitleOptionsByTrackId.first { _, candidate in candidate === option }?.key
             }
         }
     }

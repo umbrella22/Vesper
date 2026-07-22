@@ -207,14 +207,17 @@ typedef enum PlayerFfiCachePreset {
  * Error payload written by status-returning `player_ffi_*` calls.
  *
  * When a call returns `PlayerFfiCallStatus::Error`, the caller owns the
- * `message` buffer and must release it with `player_ffi_error_free` before
- * reusing the same storage for another error result.
+ * `message` and optional `details_json` buffers and must release them with
+ * `player_ffi_error_free` before reusing the same storage for another error
+ * result. `details_json` is a UTF-8 JSON object when present and is null for
+ * errors that do not carry structured details.
  */
 typedef struct PlayerFfiError {
   enum PlayerFfiErrorCode code;
   enum PlayerFfiErrorCategory category;
   bool retriable;
   char *message;
+  char *details_json;
 } PlayerFfiError;
 
 typedef struct PlayerFfiAudioOutputInfo {

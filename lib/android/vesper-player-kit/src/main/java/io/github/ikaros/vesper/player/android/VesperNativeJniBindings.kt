@@ -35,14 +35,19 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.text.TextOutput
+import androidx.media3.exoplayer.text.TextRenderer
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 import java.io.File
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.pow
 import kotlin.math.roundToLong
 import org.json.JSONArray
@@ -67,8 +72,13 @@ internal class VesperNativeJniBindings(
     @Volatile
     internal var nativeFramePipelineStatus: Map<String, Any?>? = null
     internal val isDisposed = AtomicBoolean(false)
+    internal val systemPlaybackCallbackGeneration = AtomicLong(0L)
+    internal val subtitleSelectionCommandGenerationState = AtomicLong(0L)
     internal var player: ExoPlayer? = null
     internal var playerListener: Player.Listener? = null
+
+    override val isSystemPlaybackActive: Boolean
+        get() = player != null && !isDisposed.get()
     internal var analyticsListener: AnalyticsListener? = null
     @Volatile
     internal var attachedSurface: Surface? = null
@@ -87,6 +97,11 @@ internal class VesperNativeJniBindings(
     internal var currentTrackCatalogState: VesperTrackCatalog = VesperTrackCatalog.Empty
     internal var currentTrackSelectionState: VesperTrackSelectionSnapshot =
         VesperTrackSelectionSnapshot()
+    internal var currentAppliedSubtitleSelectionState: VesperTrackSelection =
+        VesperTrackSelection.disabled()
+    internal var currentAdvertisedSubtitleTrackCountState = 0
+    @Volatile
+    internal var trackSelectionChangeGenerationState = 0L
     @Volatile
     internal var hasObservedTrackCatalog = false
     internal var currentSubtitleCatalogFailure: NativeTrackSelectionFailure? = null
@@ -134,6 +149,15 @@ internal class VesperNativeJniBindings(
      * `subtitle:dash:*`.
      */
     internal var currentSourceProtocol: VesperPlayerSourceProtocol? = null
+    internal var currentExternalSubtitleIds: List<String> = emptyList()
+    /** All source-declared external ids, including resources that failed preparation. */
+    internal var currentDeclaredExternalSubtitleIds: List<String> = emptyList()
+    internal var currentExternalSubtitleSources: List<VesperExternalSubtitleSource> = emptyList()
+    internal val failedExternalSubtitleIds = linkedSetOf<String>()
+    internal var currentSubtitleResourceFailure: NativeTrackSelectionFailure? = null
+    internal var currentDeclaredExternalSubtitleCount = 0
+    internal var currentDeclaredExternalSubtitleDefaultCount = 0
+    internal var currentSubtitleSelectionModeOrdinal = NativeTrackSelectionMode.Disabled.ordinal
     internal var currentSourceNormalizerResource: NativeSourceNormalizerResource? = null
     internal var currentNativeFramePacketSource: NativeFramePacketSource? = null
     internal val firstFrameGate = VesperPlaybackEpochFirstFrameGate()
@@ -187,6 +211,7 @@ internal class VesperNativeJniBindings(
         subtitleCuesListener = existingSubtitleCuesListener
         trackSelectionFailureListener = existingTrackSelectionFailureListener
         isDisposed.set(false)
+        val callbackGeneration = systemPlaybackCallbackGeneration.incrementAndGet()
         var preparedSourceNormalizerConsumed = false
         try {
             currentBenchmarkSourceProtocol = source.protocol
@@ -217,21 +242,45 @@ internal class VesperNativeJniBindings(
             val resolvedResiliencePolicy = resolveResiliencePolicy(source, resiliencePolicy)
             currentRetryMaxAttempts = resolvedResiliencePolicy.retry.resolvedMaxAttempts()
             val resolvedTrackPreferences = resolveTrackPreferences(trackPreferencePolicy)
+            currentDeclaredExternalSubtitleCount = playbackSource.externalSubtitles.size
+            currentDeclaredExternalSubtitleIds = playbackSource.externalSubtitles.map { it.id }
+            currentDeclaredExternalSubtitleDefaultCount =
+                playbackSource.externalSubtitles.count { it.isDefault }
+            currentSubtitleSelectionModeOrdinal =
+                resolvedTrackPreferences.subtitleSelection.toNativePayload().modeOrdinal
             val renderersFactory =
-                DefaultRenderersFactory(appContext)
+                VesperExternalSubtitleRenderersFactory(appContext)
                     .setExtensionRendererMode(decoderBackend.toExtensionRendererMode())
                     .setMediaCodecSelector(VesperHardwareMediaCodecSelector)
 
+            val loadErrorHandlingPolicy =
+                buildLoadErrorHandlingPolicy(playbackSource, resolvedResiliencePolicy.retry) { attempt, delayMs ->
+                    VesperNativeJni.reportRetryScheduled(handle, attempt, delayMs)
+                }
             val mediaSourceFactory =
                 DefaultMediaSourceFactory(appContext)
                     .setDataSourceFactory(
-                        buildDataSourceFactory(appContext, resolvedResiliencePolicy.cache, playbackSource.headers)
+                        buildDataSourceFactory(
+                            appContext,
+                            resolvedResiliencePolicy.cache,
+                            playbackSource.headers,
+                        )
                     )
-                    .setLoadErrorHandlingPolicy(
-                        buildLoadErrorHandlingPolicy(playbackSource, resolvedResiliencePolicy.retry) { attempt, delayMs ->
-                            VesperNativeJni.reportRetryScheduled(handle, attempt, delayMs)
-                        }
-                    )
+                    .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+            val preparedExternalSubtitles =
+                prepareExternalSubtitleMediaSources(
+                    appContext = appContext,
+                    cachePolicy = resolvedResiliencePolicy.cache,
+                    sources = playbackSource.externalSubtitles,
+                    loadErrorHandlingPolicy = loadErrorHandlingPolicy,
+                    primaryUri = playbackSource.uri,
+                    primaryHeaders = playbackSource.headers,
+                )
+            currentExternalSubtitleSources = preparedExternalSubtitles.activeSources
+            currentExternalSubtitleIds = preparedExternalSubtitles.activeSources.map { it.id }
+            failedExternalSubtitleIds.clear()
+            failedExternalSubtitleIds += preparedExternalSubtitles.failures.mapNotNull { it.trackId }
+            currentSubtitleResourceFailure = preparedExternalSubtitles.failures.firstOrNull()
             Log.i(
                 NATIVE_JNI_BINDINGS_TAG,
                 "using decoderBackend=$decoderBackend extensionRendererMode=${decoderBackend.toExtensionRendererMode()} sourceNormalizerRoute=${normalizedResource?.outputRoute ?: "native"}",
@@ -253,11 +302,22 @@ internal class VesperNativeJniBindings(
                 policy = resolvedTrackPreferences,
                 videoEnabled = systemPlaybackVideoEnabled,
             )
-            val listener = buildPlayerListener(resolvedTrackPreferences)
-            val analytics = buildAnalyticsListener()
+            val listener = buildPlayerListener(resolvedTrackPreferences, callbackGeneration)
+            val analytics = buildAnalyticsListener(callbackGeneration)
             exoPlayer.addListener(listener)
             exoPlayer.addAnalyticsListener(analytics)
-            exoPlayer.setMediaItem(buildMediaItem(playbackSource))
+            val mainMediaSource =
+                mediaSourceFactory.createMediaSource(
+                    buildMediaItem(playbackSource.copy(externalSubtitles = emptyList()))
+                )
+            val mediaSources = listOf(mainMediaSource) + preparedExternalSubtitles.mediaSources
+            exoPlayer.setMediaSource(
+                if (mediaSources.size == 1) {
+                    mainMediaSource
+                } else {
+                    MergingMediaSource(*mediaSources.toTypedArray())
+                }
+            )
             attachedSurface?.takeIf { systemPlaybackVideoEnabled }?.let { surface ->
                 Log.i(NATIVE_JNI_BINDINGS_TAG, "reusing attached surface for source=${source.uri}")
                 exoPlayer.setVideoSurface(surface)
@@ -476,10 +536,16 @@ internal class VesperNativeJniBindings(
         dispose(stopSourceNormalizerLoopbackServer = true)
     }
 
+    override fun invalidateSystemPlaybackCallbacks() {
+        systemPlaybackCallbackGeneration.incrementAndGet()
+        localBridgeEvents.clear()
+    }
+
     private fun dispose(stopSourceNormalizerLoopbackServer: Boolean) {
         if (!isDisposed.compareAndSet(false, true)) {
             return
         }
+        systemPlaybackCallbackGeneration.incrementAndGet()
         Log.i(NATIVE_JNI_BINDINGS_TAG, "dispose")
         closeNativeFramePipeline()
         preloadCoordinator.dispose()
@@ -521,6 +587,17 @@ internal class VesperNativeJniBindings(
         }
         currentTrackCatalogState = VesperTrackCatalog.Empty
         currentTrackSelectionState = VesperTrackSelectionSnapshot()
+        currentAppliedSubtitleSelectionState = VesperTrackSelection.disabled()
+        currentAdvertisedSubtitleTrackCountState = 0
+        currentExternalSubtitleIds = emptyList()
+        currentDeclaredExternalSubtitleIds = emptyList()
+        currentExternalSubtitleSources = emptyList()
+        failedExternalSubtitleIds.clear()
+        currentSubtitleResourceFailure = null
+        currentDeclaredExternalSubtitleCount = 0
+        currentDeclaredExternalSubtitleDefaultCount = 0
+        currentSubtitleSelectionModeOrdinal = NativeTrackSelectionMode.Disabled.ordinal
+        trackSelectionChangeGenerationState = 0L
         hasObservedTrackCatalog = false
         currentEffectiveVideoTrackIdState = null
         currentVideoVariantObservationState = null
@@ -548,9 +625,33 @@ internal class VesperNativeJniBindings(
 
     override fun currentTrackSelection(): VesperTrackSelectionSnapshot = currentTrackSelectionState
 
+    override fun currentAppliedSubtitleSelection(): VesperTrackSelection =
+        currentAppliedSubtitleSelectionState
+
+    override fun currentAdvertisedSubtitleTrackCount(): Int =
+        currentAdvertisedSubtitleTrackCountState
+
+    override val sourceCallbackGeneration: Long
+        get() = systemPlaybackCallbackGeneration.get()
+
+    override val subtitleSelectionCommandGeneration: Long
+        get() = subtitleSelectionCommandGenerationState.get()
+
+    override val trackSelectionChangeGeneration: Long
+        get() = trackSelectionChangeGenerationState
+
     override fun isTrackCatalogReady(): Boolean = hasObservedTrackCatalog
 
-    override fun currentSubtitleCatalogFailure(): NativeTrackSelectionFailure? = currentSubtitleCatalogFailure
+    override fun currentSubtitleCatalogFailure(): NativeTrackSelectionFailure? {
+        // A filtered DASH/HLS Tracks snapshot can arrive before its typed
+        // manifest. Do not expose an identity/resource failure from that
+        // provisional snapshot as a terminal catalog failure; the catalog is
+        // still loading and the manifest remains the source of truth.
+        if (subtitleManifestIsRequired(currentSourceProtocol) && !hasObservedTrackCatalog) {
+            return null
+        }
+        return currentSubtitleCatalogFailure ?: currentSubtitleResourceFailure
+    }
 
     override fun currentEffectiveVideoTrackId(): String? = currentEffectiveVideoTrackIdState
 
@@ -665,8 +766,13 @@ internal class VesperNativeJniBindings(
             "setSubtitleTrackSelection mode=${selection.mode} trackId=${selection.trackId}",
         )
         recordBenchmark("native_set_subtitle_track_selection_command")
-        dispatchRustCommand { handle ->
-            VesperNativeJni.setSubtitleTrackSelection(handle, selection.toNativePayload())
+        val commandGeneration = subtitleSelectionCommandGenerationState.incrementAndGet()
+        dispatchRustCommand(subtitleCommandGeneration = commandGeneration) { handle ->
+            val errorJson =
+                VesperNativeJni.setSubtitleTrackSelection(handle, selection.toNativePayload())
+            if (!errorJson.isNullOrBlank()) {
+                throw subtitleNativeErrorFromJson(errorJson)
+            }
         }
     }
 
@@ -702,4 +808,29 @@ internal class VesperNativeJniBindings(
         notifyNativeUpdate()
     }
 
+}
+
+/**
+ * Enables Media3's render-time decoding for Vesper's side-loaded subtitle
+ * sources. Media3 1.9 keeps this legacy path disabled by default even though
+ * external WebVTT, SRT, and ASS samples still use it.
+ */
+@OptIn(UnstableApi::class)
+internal class VesperExternalSubtitleRenderersFactory(
+    context: Context,
+) : DefaultRenderersFactory(context) {
+    @Suppress("DEPRECATION")
+    override fun buildTextRenderers(
+        context: Context,
+        output: TextOutput,
+        outputLooper: Looper,
+        extensionRendererMode: Int,
+        out: ArrayList<Renderer>,
+    ) {
+        out.add(
+            TextRenderer(output, outputLooper).apply {
+                experimentalSetLegacyDecodingEnabled(true)
+            },
+        )
+    }
 }

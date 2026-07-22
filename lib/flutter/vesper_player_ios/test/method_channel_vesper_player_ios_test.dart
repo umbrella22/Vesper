@@ -430,6 +430,81 @@ void main() {
     );
   });
 
+  test('subtitle selection forwards the requested mode and opaque id',
+      () async {
+    final platform = MethodChannelVesperPlayerIos();
+
+    await platform.setSubtitleTrackSelection(
+      'ios-player',
+      const VesperTrackSelection.track('opaque-subtitle-id'),
+    );
+
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'setSubtitleTrackSelection');
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      <Object?, Object?>{
+        'playerId': 'ios-player',
+        'selection': <String, Object?>{
+          'mode': 'track',
+          'trackId': 'opaque-subtitle-id',
+        },
+      },
+    );
+  });
+
+  test('subtitle selection maps canonical iOS errors and preserves raw values',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) async {
+      throw PlatformException(
+        code: 'vesper_subtitle_error',
+        message: 'future subtitle validation failure',
+        details: <String, Object?>{
+          'domain': 'subtitle',
+          'code': 'subtitle_future_validation_failure',
+          'phase': 'future_selection_phase',
+          'trackId': 'opaque-subtitle-id',
+          'retriable': false,
+          'commandId': null,
+          'sourceEpoch': null,
+          'message': 'future subtitle validation failure',
+        },
+      );
+    });
+    final platform = MethodChannelVesperPlayerIos();
+
+    await expectLater(
+      platform.setSubtitleTrackSelection(
+        'ios-player',
+        const VesperTrackSelection.track('opaque-subtitle-id'),
+      ),
+      throwsA(
+        isA<VesperSubtitleException>()
+            .having(
+              (error) => error.code,
+              'code',
+              'subtitle_future_validation_failure',
+            )
+            .having(
+              (error) => error.phase,
+              'phase',
+              VesperSubtitleErrorPhase.unknown,
+            )
+            .having(
+              (error) => error.phaseRawValue,
+              'phaseRawValue',
+              'future_selection_phase',
+            )
+            .having(
+              (error) => error.trackId,
+              'trackId',
+              'opaque-subtitle-id',
+            ),
+      ),
+    );
+  });
+
   test('typed unsupported platform error maps to unsupported exception',
       () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

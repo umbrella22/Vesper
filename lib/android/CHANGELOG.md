@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - Unreleased
+
+### Breaking Changes
+
+- `VesperPlayerController.setSubtitleTrackSelection` is now suspending and
+  completes only after Media3 confirms the requested selection.
+- External subtitle declarations now use `VesperExternalSubtitleSource` and
+  `VesperPlayerSource.externalSubtitles`; the previous names are deprecated
+  aliases.
 
 ### Added
 
@@ -9,6 +17,9 @@
   font scaling.
 - Added explicit RTMP, RTSP, and HTTP-FLV source protocol DTOs; RTMP remains an
   explicit unsupported operation in the stable host kit.
+- Added canonical catalog/selection subtitle state, requested/confirmed/effective
+  selection, structured errors, source/command generation fencing, and isolated
+  per-subtitle request headers.
 
 ### Changed
 

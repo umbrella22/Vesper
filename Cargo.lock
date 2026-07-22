@@ -149,7 +149,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "basic-player"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -1565,7 +1565,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "player-audio-cpal"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "player-backend-ffmpeg"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "ffmpeg-next",
@@ -1584,8 +1584,9 @@ dependencies = [
 
 [[package]]
 name = "player-dash-hls-bridge"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
+ "player-model",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1593,7 +1594,7 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-d3d11"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-plugin",
  "serde",
@@ -1603,7 +1604,7 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-fixture"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-plugin",
  "serde",
@@ -1612,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-mediacodec"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-plugin",
  "serde",
@@ -1622,7 +1623,7 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-videotoolbox"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-plugin",
  "serde",
@@ -1631,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "player-download"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-model",
  "player-plugin",
@@ -1639,7 +1640,7 @@ dependencies = [
 
 [[package]]
 name = "player-ffi"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-backend-ffmpeg",
  "player-ffi-common",
@@ -1648,15 +1649,16 @@ dependencies = [
  "player-platform-macos",
  "player-platform-windows",
  "player-runtime",
+ "serde_json",
 ]
 
 [[package]]
 name = "player-ffi-common"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "player-ffi-ios"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-dash-hls-bridge",
  "player-ffi-common",
@@ -1672,7 +1674,7 @@ dependencies = [
 
 [[package]]
 name = "player-frame-processor-diagnostic"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-plugin",
  "serde",
@@ -1681,7 +1683,7 @@ dependencies = [
 
 [[package]]
 name = "player-host-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "player-model",
@@ -1696,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "player-ios-bridge-shim-generator"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -1705,7 +1707,7 @@ dependencies = [
 
 [[package]]
 name = "player-jni-android"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "jni",
  "player-model",
@@ -1719,14 +1721,16 @@ dependencies = [
 
 [[package]]
 name = "player-model"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "player-platform-android"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-model",
  "player-platform-mobile",
@@ -1741,11 +1745,11 @@ dependencies = [
 
 [[package]]
 name = "player-platform-apple"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "player-platform-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "player-audio-cpal",
@@ -1761,7 +1765,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-ios"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-model",
  "player-platform-mobile",
@@ -1773,7 +1777,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-linux"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-model",
  "player-platform-desktop",
@@ -1782,7 +1786,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-macos"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -1798,7 +1802,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-mobile"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-model",
  "player-plugin",
@@ -1810,7 +1814,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-native-frame"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-plugin",
  "player-runtime",
@@ -1819,7 +1823,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-windows"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -1833,7 +1837,7 @@ dependencies = [
 
 [[package]]
 name = "player-playlist"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-download",
  "player-model",
@@ -1842,7 +1846,7 @@ dependencies = [
 
 [[package]]
 name = "player-plugin"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1851,7 +1855,7 @@ dependencies = [
 
 [[package]]
 name = "player-plugin-loader"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libloading 0.9.0",
  "player-plugin",
@@ -1863,7 +1867,7 @@ dependencies = [
 
 [[package]]
 name = "player-preload"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-download",
  "player-model",
@@ -1871,7 +1875,7 @@ dependencies = [
 
 [[package]]
 name = "player-relay-ffmpeg-android"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ffmpeg-next",
  "jni",
@@ -1882,7 +1886,7 @@ dependencies = [
 
 [[package]]
 name = "player-remux-ffmpeg"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ffmpeg-next",
  "player-plugin",
@@ -1893,7 +1897,7 @@ dependencies = [
 
 [[package]]
 name = "player-render-wgpu"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "wgpu",
@@ -1902,7 +1906,7 @@ dependencies = [
 
 [[package]]
 name = "player-runtime"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-download",
  "player-model",
@@ -1915,7 +1919,7 @@ dependencies = [
 
 [[package]]
 name = "player-source-normalizer"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -1924,7 +1928,7 @@ dependencies = [
 
 [[package]]
 name = "player-source-normalizer-diagnostic"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "player-plugin",
  "serde",
@@ -1933,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "player-source-normalizer-ffmpeg"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ffmpeg-next",
  "player-plugin",

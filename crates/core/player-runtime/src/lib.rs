@@ -36,7 +36,7 @@ pub use player_model::{
     DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
     MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
     MediaTrackSelectionSnapshot, PlaybackProgress, PlayerError, PlayerErrorCategory,
-    PlayerErrorCode, PlayerResult, PresentationState, VideoPixelFormat,
+    PlayerErrorCode, PlayerResult, PresentationState, SubtitleErrorDetails, VideoPixelFormat,
 };
 pub use player_playlist::{
     PlaylistActivationReason, PlaylistActiveItem, PlaylistAdvanceDecision, PlaylistAdvanceOutcome,
@@ -70,7 +70,9 @@ pub mod download {
 
 /// Error API re-exports.
 pub mod error {
-    pub use player_model::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
+    pub use player_model::{
+        PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult, SubtitleErrorDetails,
+    };
 }
 
 /// Preload API re-exports.

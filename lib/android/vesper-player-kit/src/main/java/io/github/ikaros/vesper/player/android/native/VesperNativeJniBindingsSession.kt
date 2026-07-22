@@ -149,21 +149,31 @@ private object VesperPreloadWarmupDispatcher {
         }
 }
 
-internal fun VesperNativeJniBindings.dispatchRustCommand(action: (Long) -> Unit) {
+internal fun VesperNativeJniBindings.dispatchRustCommand(
+    subtitleCommandGeneration: Long? = null,
+    action: (Long) -> Unit,
+) {
     // Read sessionHandle first so that if dispose() has already nulled it we
     // bail out before checking isDisposed and avoid passing a stale handle.
     val handle = sessionHandle ?: return
     if (isDisposed.get()) {
         return
     }
+    val sourceCallbackGeneration = systemPlaybackCallbackGeneration.get()
     action(handle)
-    drainAndApplyNativeCommands()
+    drainAndApplyNativeCommands(
+        subtitleSourceCallbackGeneration = sourceCallbackGeneration,
+        subtitleCommandGeneration = subtitleCommandGeneration,
+    )
     pushSnapshotToRust()
     pushTrackStateToRust()
     notifyNativeUpdate()
 }
 
-internal fun VesperNativeJniBindings.drainAndApplyNativeCommands() {
+internal fun VesperNativeJniBindings.drainAndApplyNativeCommands(
+    subtitleSourceCallbackGeneration: Long? = null,
+    subtitleCommandGeneration: Long? = null,
+) {
     if (isDisposed.get()) {
         return
     }
@@ -230,13 +240,29 @@ internal fun VesperNativeJniBindings.drainAndApplyNativeCommands() {
                     NATIVE_JNI_BINDINGS_TAG,
                     "apply native command: SetSubtitleTrackSelection mode=${command.selection.modeOrdinal} trackId=${command.selection.trackId}",
                 )
-                applyTrackSelectionCommand(
+                val failureCallback =
+                    trackSelectionFailureListener?.let { callback ->
+                        { failure: NativeTrackSelectionFailure ->
+                            callback(
+                                failure.copy(
+                                    sourceCallbackGeneration = subtitleSourceCallbackGeneration,
+                                    commandGeneration = subtitleCommandGeneration,
+                                )
+                            )
+                        }
+                    }
+                val applied = applyTrackSelectionCommand(
                     exoPlayer = exoPlayer,
                     kind = NativeTrackKind.Subtitle,
                     selection = command.selection,
-                    onTrackSelectionFailure = trackSelectionFailureListener?.let { cb -> { f -> cb(f) } },
+                    onTrackSelectionFailure = failureCallback,
                     sourceProtocol = currentSourceProtocol,
+                    externalSubtitleIds = currentExternalSubtitleIds,
+                    unavailableExternalSubtitleIds = failedExternalSubtitleIds,
                 )
+                if (applied) {
+                    currentSubtitleSelectionModeOrdinal = command.selection.modeOrdinal
+                }
             }
             is NativePlayerCommand.SetAbrPolicy -> {
                 Log.d(
@@ -254,12 +280,14 @@ internal fun VesperNativeJniBindings.drainAndApplyNativeCommands() {
 
 internal fun VesperNativeJniBindings.buildPlayerListener(
     trackPreferencePolicy: VesperTrackPreferencePolicy,
+    callbackGeneration: Long,
 ): Player.Listener =
     object : Player.Listener {
         private var pendingTrackOverrides =
             trackPreferencePolicy.takeIf(::hasTrackBasedPreferenceOverrides)
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             Log.d(
                 NATIVE_JNI_BINDINGS_TAG,
                 "onPlaybackStateChanged state=${exoPlaybackStateName(playbackState)} playWhenReady=${player?.playWhenReady}",
@@ -273,6 +301,7 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
         }
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             Log.d(NATIVE_JNI_BINDINGS_TAG, "onPlayWhenReadyChanged playWhenReady=$playWhenReady reason=$reason")
             recordBenchmark(
                 "play_when_ready_changed",
@@ -286,6 +315,7 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
         }
 
         override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             Log.d(NATIVE_JNI_BINDINGS_TAG, "onPlaybackParametersChanged speed=${playbackParameters.speed}")
             recordBenchmark(
                 "playback_parameters_changed",
@@ -297,36 +327,48 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
         }
 
         override fun onCues(cueGroup: CueGroup) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             subtitleCuesListener?.invoke(cueGroup.cues)
         }
 
         override fun onTracksChanged(tracks: Tracks) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             Log.d(NATIVE_JNI_BINDINGS_TAG, "onTracksChanged groups=${tracks.groups.size}")
             recordBenchmark("tracks_changed", mapOf("groups" to tracks.groups.size.toString()))
+            trackSelectionChangeGenerationState += 1L
             hasObservedTrackCatalog = true
             player?.let { exoPlayer ->
                 pendingTrackOverrides
                     ?.takeIf { !nativeFramePipelineOwnsSurface }
                     ?.let { defaults ->
-                    applyTrackPreferenceTrackOverrides(exoPlayer, defaults)
-                    pendingTrackOverrides = null
-                }
+                        applyTrackPreferenceTrackOverrides(
+                            exoPlayer,
+                            defaults,
+                            currentSourceProtocol,
+                            currentExternalSubtitleIds,
+                            failedExternalSubtitleIds,
+                        )
+                        pendingTrackOverrides = null
+                    }
             }
             pushTrackStateToRust()
             notifyNativeUpdate()
         }
 
         override fun onTrackSelectionParametersChanged(parameters: TrackSelectionParameters) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             Log.d(NATIVE_JNI_BINDINGS_TAG, "onTrackSelectionParametersChanged overrides=${parameters.overrides.size}")
             recordBenchmark(
                 "track_selection_parameters_changed",
                 mapOf("overrides" to parameters.overrides.size.toString()),
             )
+            trackSelectionChangeGenerationState += 1L
             pushTrackStateToRust()
             notifyNativeUpdate()
         }
 
         override fun onVideoSizeChanged(videoSize: VideoSize) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             Log.d(
                 NATIVE_JNI_BINDINGS_TAG,
                 "onVideoSizeChanged width=${videoSize.width} height=${videoSize.height} pixelRatio=${videoSize.pixelWidthHeightRatio}",
@@ -352,6 +394,7 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
             newPosition: Player.PositionInfo,
             reason: Int,
         ) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             if (reason == Player.DISCONTINUITY_REASON_SEEK) {
                 sessionHandle?.let { handle ->
                     val completedPositionMs =
@@ -373,6 +416,7 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             Log.e(NATIVE_JNI_BINDINGS_TAG, "onPlayerError ${error.errorCodeName}: ${error.message}", error)
             recordBenchmark(
                 "playback_error",
@@ -404,7 +448,9 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
         }
     }
 
-internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener =
+internal fun VesperNativeJniBindings.buildAnalyticsListener(
+    callbackGeneration: Long,
+): AnalyticsListener =
     object : AnalyticsListener {
         override fun onVideoDecoderInitialized(
             eventTime: AnalyticsListener.EventTime,
@@ -412,6 +458,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
             initializedTimestampMs: Long,
             initializationDurationMs: Long,
         ) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             currentVideoDecoderName = decoderName
             Log.i(
                 NATIVE_JNI_BINDINGS_TAG,
@@ -432,6 +479,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
             format: Format,
             decoderReuseEvaluation: DecoderReuseEvaluation?,
         ) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             val codec = nativeTrackCodec(format) ?: ""
             val mimeType = videoMimeType(format)
             val decoderDiagnostics = VesperHardwareMediaCodecSelector.decoderDiagnostics(mimeType)
@@ -472,6 +520,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
             output: Any,
             renderTimeMs: Long,
         ) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             firstFrameRenderedForCurrentSource = true
             Log.i(
                 NATIVE_JNI_BINDINGS_TAG,
@@ -495,6 +544,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
             eventTime: AnalyticsListener.EventTime,
             state: Int,
         ) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             val source = currentDrmDiagnosticsSource ?: return
             val drm = source.drmConfiguration ?: return
             Log.i(
@@ -515,6 +565,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
             eventTime: AnalyticsListener.EventTime,
             keyRequestInfo: KeyRequestInfo,
         ) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             val source = currentDrmDiagnosticsSource ?: return
             val drm = source.drmConfiguration ?: return
             Log.i(
@@ -534,6 +585,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
             eventTime: AnalyticsListener.EventTime,
             error: Exception,
         ) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             val source = currentDrmDiagnosticsSource
             val drm = source?.drmConfiguration
             currentDrmRuntimeErrorCount += 1
@@ -603,6 +655,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
         }
 
         override fun onDrmSessionReleased(eventTime: AnalyticsListener.EventTime) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             val source = currentDrmDiagnosticsSource ?: return
             val drm = source.drmConfiguration ?: return
             Log.i(
@@ -622,13 +675,37 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
             error: IOException,
             wasCanceled: Boolean,
         ) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            val externalSubtitleIds =
+                if (mediaLoadData.trackType == C.TRACK_TYPE_TEXT) {
+                    externalSubtitleIdsForLoadFailure(
+                        formatId = mediaLoadData.trackFormat?.id,
+                        uri = loadEventInfo.uri.toString(),
+                    )
+                } else {
+                    emptyList()
+                }
+            if (externalSubtitleIds.isNotEmpty()) {
+                failedExternalSubtitleIds += externalSubtitleIds
+                currentSubtitleResourceFailure =
+                    NativeTrackSelectionFailure(
+                        kind = NativeTrackKind.Subtitle,
+                        trackId = externalSubtitleIds.first(),
+                        code = "subtitle_resource_failed",
+                        phase = "resource",
+                        message = "external subtitle resource failed to load",
+                        advertisedTrackCount = currentDeclaredExternalSubtitleCount,
+                    )
+                pushTrackStateToRust()
+                notifyNativeUpdate()
+            }
             val source = currentDrmDiagnosticsSource
             val drm = source?.drmConfiguration
             Log.w(
                 NATIVE_JNI_BINDINGS_TAG,
                 "onLoadError dataType=${mediaLoadData.dataType.media3DataTypeName()} " +
                     "trackType=${mediaLoadData.trackType.media3TrackTypeName()} canceled=$wasCanceled " +
-                    "uri=${loadEventInfo.uri} bytesLoaded=${loadEventInfo.bytesLoaded} " +
+                    "uriHost=${loadEventInfo.uri.toString().hostForDiagnostics()} bytesLoaded=${loadEventInfo.bytesLoaded} " +
                     "error=${error::class.java.name}: ${error.message}",
                 error,
             )
@@ -646,6 +723,12 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(): AnalyticsListener
             )
         }
     }
+
+internal fun VesperNativeJniBindings.isCurrentSystemPlaybackCallback(
+    callbackGeneration: Long,
+): Boolean =
+    !isDisposed.get() &&
+        systemPlaybackCallbackGeneration.get() == callbackGeneration
 
 internal fun VesperNativeJniBindings.scheduleFirstFrameWatchdog(
     source: VesperPlayerSource,
@@ -725,6 +808,24 @@ internal data class FirstFrameWatchdogRoute(
                 payloadValue = "systemPlayer",
             )
     }
+
+}
+
+/** Resolves Media3's merged child id back to source-local external ids. */
+private fun VesperNativeJniBindings.externalSubtitleIdsForLoadFailure(
+    formatId: String?,
+    uri: String,
+): List<String> {
+    val byFormat =
+        formatId?.let { id ->
+            currentExternalSubtitleIds.mapIndexedNotNull { index, externalId ->
+                externalId.takeIf { id == it || id == "${index + 1}:$it" }
+            }
+        }.orEmpty()
+    if (byFormat.isNotEmpty()) return byFormat
+    return currentExternalSubtitleSources
+        .filter { it.uri == uri }
+        .map { it.id }
 }
 
 internal fun Int.media3DataTypeName(): String =
@@ -941,15 +1042,56 @@ private fun VesperNativeJniBindings.logExoSnapshotToRust(
 internal fun VesperNativeJniBindings.pushTrackStateToRust() {
     val handle = sessionHandle ?: return
     val exoPlayer = player ?: return
-    val trackCatalog = collectTrackCatalog(exoPlayer.currentTracks, currentSourceProtocol)
+    val requiresManifestInspection = subtitleManifestIsRequired(currentSourceProtocol)
+    val manifestInfo = subtitleManifestInfo(exoPlayer.currentManifest, currentSourceProtocol)
+    // Media3 can publish an empty Tracks view before its first callback. For
+    // DASH/HLS, the typed manifest also owns advertised subtitle identity.
+    hasObservedTrackCatalog =
+        resolveTrackCatalogReadiness(
+            hasObservedTrackCatalog,
+            requiresManifestInspection,
+            manifestInfo,
+        )
+    val catalogManifestInfo =
+        manifestInfo ?: if (requiresManifestInspection) {
+            NativeSubtitleManifestInfo(declarations = emptyList(), defaultGroupCount = 0)
+        } else {
+            null
+        }
+    val trackCatalog =
+        collectTrackCatalog(
+            exoPlayer.currentTracks,
+            currentSourceProtocol,
+            currentExternalSubtitleIds,
+            failedExternalSubtitleIds,
+            currentDeclaredExternalSubtitleCount,
+            currentDeclaredExternalSubtitleDefaultCount,
+            currentDeclaredExternalSubtitleIds,
+            catalogManifestInfo,
+        )
     val trackSelection =
         collectTrackSelection(
             exoPlayer.currentTracks,
             exoPlayer.trackSelectionParameters,
             currentSourceProtocol,
+            currentExternalSubtitleIds,
+            failedExternalSubtitleIds,
+            currentSubtitleSelectionModeOrdinal,
+        )
+    val appliedSubtitleSelection =
+        collectAppliedSubtitleSelection(
+            exoPlayer.currentTracks,
+            exoPlayer.trackSelectionParameters,
+            currentSourceProtocol,
+            currentExternalSubtitleIds,
+            failedExternalSubtitleIds,
+            currentSubtitleSelectionModeOrdinal,
         )
     val publicTrackCatalog = trackCatalog.toPublicTrackCatalog()
-    currentSubtitleCatalogFailure = trackCatalog.subtitleIdentityFailure
+    currentSubtitleCatalogFailure =
+        trackCatalog.subtitleIdentityFailure.takeUnless {
+            requiresManifestInspection && manifestInfo == null
+        }
     val videoVariantObservation = resolveVideoVariantObservation(exoPlayer.videoFormat)
     val effectiveVideoTrackId = resolveEffectiveVideoTrackId(
         publicTrackCatalog.videoTracks,
@@ -957,6 +1099,16 @@ internal fun VesperNativeJniBindings.pushTrackStateToRust() {
     )
     currentTrackCatalogState = publicTrackCatalog
     currentTrackSelectionState = trackSelection.toPublicTrackSelectionSnapshot()
+    currentAppliedSubtitleSelectionState = appliedSubtitleSelection
+    currentAdvertisedSubtitleTrackCountState =
+        if (requiresManifestInspection && manifestInfo == null) {
+            // External declarations are known from the source DTO even while
+            // the embedded DASH/HLS manifest is loading. The selectable
+            // `Tracks` view must never inflate this advertised count.
+            currentDeclaredExternalSubtitleCount
+        } else {
+            trackCatalog.advertisedSubtitleTrackCount
+        }
     currentEffectiveVideoTrackIdState = effectiveVideoTrackId
     currentVideoVariantObservationState = videoVariantObservation
     Log.d(
@@ -965,6 +1117,17 @@ internal fun VesperNativeJniBindings.pushTrackStateToRust() {
     )
     VesperNativeJni.applyTrackState(handle, trackCatalog, trackSelection)
 }
+
+internal fun resolveTrackCatalogReadiness(
+    observedTrackCatalog: Boolean,
+    requiresManifestInspection: Boolean,
+    manifestInfo: NativeSubtitleManifestInfo?,
+): Boolean =
+    if (requiresManifestInspection) {
+        manifestInfo != null
+    } else {
+        observedTrackCatalog
+    }
 
 internal fun VesperNativeJniBindings.executePreloadWarmupCommands(source: VesperPlayerSource) {
     preloadCoordinator.planCurrentSource(source).forEach { command ->

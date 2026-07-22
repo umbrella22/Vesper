@@ -76,10 +76,17 @@ extension VesperDashSession {
             manifest: manifest,
             variantPolicy: .all
         )
+        let advertisedSubtitleTrackCount = manifest.periods
+            .flatMap(\.adaptationSets)
+            .filter { $0.kind == .subtitle }
+            .reduce(0) { count, adaptationSet in
+                count + adaptationSet.representations.count
+            }
         return VesperDashManifestTrackCatalogSnapshot(
             audio: selected.audio,
             video: selected.video,
-            subtitles: selected.subtitles
+            subtitles: selected.subtitles,
+            advertisedSubtitleTrackCount: advertisedSubtitleTrackCount
         )
     }
 

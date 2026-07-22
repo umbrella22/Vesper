@@ -2778,6 +2778,10 @@
         {
           "ty": "char **",
           "name": "out_error_message"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_details_json"
         }
       ],
       "storage": "public"
@@ -2802,6 +2806,10 @@
         {
           "ty": "char **",
           "name": "out_error_message"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_details_json"
         }
       ],
       "storage": "public"
@@ -3273,6 +3281,10 @@
         {
           "ty": "char *",
           "name": "message"
+        },
+        {
+          "ty": "char *",
+          "name": "details_json"
         }
       ]
     },

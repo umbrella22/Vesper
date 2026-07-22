@@ -145,8 +145,15 @@ extension VesperNativePlayerBridge {
         preloadCoordinator.configure(cachePolicy: cachePolicy)
         preloadCoordinator.warmCurrentSource(source: source, url: url)
         releaseDashStartupAbrLimitIfNeeded(reason: "sourceReload", item: player?.currentItem)
-        try await subtitleOverlayRenderer.configure(playbackSource.subtitleConfigurations)
-        let item = try makePlayerItem(for: playbackSource, url: url)
+        try Task.checkCancellation()
+        guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else {
+            throw CancellationError()
+        }
+        let item = try makePlayerItem(
+            for: playbackSource,
+            url: url,
+            sourceEpoch: subtitleSourceEpoch
+        )
         applySubtitleStyle(currentSubtitleStyle, to: item)
         refreshCurrentHdrFailureEvidence(for: playbackSource, item: item)
         let bufferingPolicy = resolvedBufferingPolicy(resolvedResiliencePolicy.buffering)
@@ -168,6 +175,13 @@ extension VesperNativePlayerBridge {
         surfaceHost?.attach(player: player)
         subtitleOverlayRenderer.attach(surfaceHost: surfaceHost)
         installObservers(for: player, item: item, playbackEpoch: playbackEpoch)
+        startSubtitleOverlayLoadTask(
+            configurations: playbackSource.externalSubtitles,
+            source: source,
+            sourceLoadEpoch: sourceLoadEpoch,
+            item: item,
+            playbackEpoch: playbackEpoch
+        )
         recordBenchmark("source_load_configured")
 
         updateState {
@@ -189,6 +203,58 @@ extension VesperNativePlayerBridge {
                     durationMs: nil
                 )
             )
+        }
+    }
+
+    func startSubtitleOverlayLoadTask(
+        configurations: [VesperExternalSubtitleSource],
+        source: VesperPlayerSource,
+        sourceLoadEpoch: UInt64,
+        item: AVPlayerItem,
+        playbackEpoch: UInt64
+    ) {
+        subtitleOverlayLoadTask?.cancel()
+        subtitleOverlayLoadTask = nil
+        guard !configurations.isEmpty else { return }
+
+        subtitleOverlayLoadTask = Task { @MainActor [weak self, weak item] in
+            guard let self, let item else { return }
+            do {
+                let prepared = try await self.subtitleOverlayRenderer.prepare(configurations)
+                try Task.checkCancellation()
+                guard self.isCurrentSourceLoad(sourceLoadEpoch, source: source),
+                      self.currentPlaybackEpoch() == playbackEpoch,
+                      self.player?.currentItem === item
+                else {
+                    return
+                }
+                self.pendingSubtitleOverlayFailure = prepared.failures.first
+                self.subtitleOverlayRenderer.install(prepared)
+                self.hasAppliedDefaultTrackPreferences = false
+                self.subtitleOverlayLoadTask = nil
+                self.refreshTrackCatalogAndSelection(for: item)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard self.isCurrentSourceLoad(sourceLoadEpoch, source: source),
+                      self.currentPlaybackEpoch() == playbackEpoch,
+                      self.player?.currentItem === item
+                else {
+                    return
+                }
+                self.subtitleOverlayLoadTask = nil
+                self.pendingSubtitleOverlayFailure = .init(
+                    trackId: "",
+                    error: VesperSubtitleError(
+                        code: "subtitle_resource_failed",
+                        phase: .resource,
+                        trackId: nil,
+                        retriable: true,
+                        message: "External subtitle preparation failed."
+                    )
+                )
+                self.refreshTrackCatalogAndSelection(for: item)
+            }
         }
     }
 }

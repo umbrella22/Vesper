@@ -1,11 +1,16 @@
 use super::*;
 
 pub(crate) fn owned_bridge_error(error: BridgeError) -> PlayerFfiError {
+    let details_json = error
+        .details_json()
+        .map(|details| into_c_string_ptr(details.to_owned()))
+        .unwrap_or(std::ptr::null_mut());
     PlayerFfiError {
         code: error.code().into(),
         category: error.category().into(),
         retriable: error.is_retriable(),
         message: into_c_string_ptr(error.message().to_owned()),
+        details_json,
     }
 }
 
@@ -15,6 +20,7 @@ pub(crate) fn owned_api_error(code: PlayerFfiErrorCode, message: &str) -> Player
         category: api_error_category(code),
         retriable: false,
         message: into_c_string_ptr(message.to_owned()),
+        details_json: std::ptr::null_mut(),
     }
 }
 

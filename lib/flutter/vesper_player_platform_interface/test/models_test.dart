@@ -734,12 +734,14 @@ void main() {
       protocol: VesperPlayerSourceProtocol.progressive,
       subtitleConfigurations: const <VesperSubtitleSideLoad>[
         VesperSubtitleSideLoad(
+          id: 'en',
           uri: 'https://example.com/sub.en.srt',
           mimeType: VesperSubtitleSideLoad.mimeSubrip,
           language: 'en',
           label: 'English',
         ),
         VesperSubtitleSideLoad(
+          id: 'zh',
           uri: 'https://example.com/sub.zh.vtt',
           mimeType: VesperSubtitleSideLoad.mimeWebvtt,
           language: 'zh',
@@ -755,6 +757,180 @@ void main() {
         VesperSubtitleSideLoad.mimeSubrip);
     expect(restored.subtitleConfigurations.first.label, 'English');
     expect(restored.subtitleConfigurations[1].language, 'zh');
+  });
+
+  test('canonical external subtitles accept legacy input aliases', () {
+    final source = VesperPlayerSource(
+      uri: 'https://example.com/video.mp4',
+      label: 'Video',
+      kind: VesperPlayerSourceKind.remote,
+      protocol: VesperPlayerSourceProtocol.progressive,
+      externalSubtitles: const <VesperExternalSubtitleSource>[
+        VesperExternalSubtitleSource(
+          id: 'en',
+          uri: 'https://example.com/sub.en.vtt',
+          mimeType: VesperExternalSubtitleSource.mimeWebvtt,
+          language: 'en',
+        ),
+      ],
+    );
+
+    final map = source.toMap();
+    expect(map['externalSubtitles'], isA<List>());
+    expect(map.containsKey('subtitleConfigurations'), isFalse);
+
+    final legacyMap = <Object?, Object?>{
+      ...map,
+      'subtitleConfigurations': map['externalSubtitles'],
+    }..remove('externalSubtitles');
+    final decoded = VesperPlayerSource.fromMap(legacyMap);
+
+    expect(decoded.externalSubtitles.single.language, 'en');
+    expect(decoded.subtitleConfigurations, decoded.externalSubtitles);
+  });
+
+  test('canonical external subtitles win when both constructor names are set',
+      () {
+    final source = VesperPlayerSource(
+      uri: 'https://example.com/video.mp4',
+      label: 'Video',
+      kind: VesperPlayerSourceKind.remote,
+      protocol: VesperPlayerSourceProtocol.progressive,
+      externalSubtitles: const <VesperExternalSubtitleSource>[
+        VesperExternalSubtitleSource(
+          id: 'canonical',
+          uri: 'https://example.com/canonical.vtt',
+        ),
+      ],
+      subtitleConfigurations: const <VesperSubtitleSideLoad>[
+        VesperSubtitleSideLoad(
+          id: 'legacy',
+          uri: 'https://example.com/legacy.vtt',
+        ),
+      ],
+    );
+
+    expect(source.externalSubtitles.single.id, 'canonical');
+  });
+
+  test('external subtitle source preserves identity, flags, and headers', () {
+    const subtitle = VesperExternalSubtitleSource(
+      id: 'subtitle:en',
+      uri: 'https://example.com/sub.en.vtt',
+      mimeType: VesperExternalSubtitleSource.mimeWebvtt,
+      language: 'en',
+      label: 'English',
+      headers: <String, String>{'Authorization': 'Bearer token'},
+      isDefault: true,
+      isForced: false,
+    );
+    final decoded = VesperExternalSubtitleSource.fromMap(
+      Map<Object?, Object?>.from(subtitle.toMap()),
+    );
+
+    expect(decoded.id, 'subtitle:en');
+    expect(decoded.headers['Authorization'], 'Bearer token');
+    expect(decoded.isDefault, isTrue);
+    expect(decoded.isForced, isFalse);
+    expect(decoded, subtitle);
+  });
+
+  test('source rejects duplicate non-empty external subtitle ids', () {
+    expect(
+      () => VesperPlayerSource.fromMap(<Object?, Object?>{
+        'uri': 'https://example.com/video.mp4',
+        'label': 'Video',
+        'kind': 'remote',
+        'protocol': 'progressive',
+        'externalSubtitles': <Object?>[
+          const VesperExternalSubtitleSource(
+            id: 'subtitle:en',
+            uri: 'https://example.com/one.vtt',
+          ).toMap(),
+          const VesperExternalSubtitleSource(
+            id: 'subtitle:en',
+            uri: 'https://example.com/two.vtt',
+          ).toMap(),
+        ],
+      }),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('source rejects an empty external subtitle id', () {
+    expect(
+      () => VesperPlayerSource.fromMap(<Object?, Object?>{
+        'uri': 'https://example.com/video.mp4',
+        'label': 'Video',
+        'kind': 'remote',
+        'protocol': 'progressive',
+        'externalSubtitles': <Object?>[
+          <Object?, Object?>{
+            'id': '',
+            'uri': 'https://example.com/subtitle.vtt',
+            'mimeType': VesperExternalSubtitleSource.mimeWebvtt,
+          },
+        ],
+      }),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('source rejects whitespace-only external subtitle identity', () {
+    expect(
+      () => VesperPlayerSource.fromMap(<Object?, Object?>{
+        'uri': 'https://example.com/video.mp4',
+        'externalSubtitles': <Object?>[
+          <Object?, Object?>{
+            'id': '   ',
+            'uri': 'https://example.com/subtitle.vtt',
+            'mimeType': VesperExternalSubtitleSource.mimeWebvtt,
+          },
+        ],
+      }),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('source rejects malformed external subtitle containers and entries', () {
+    expect(
+      () => VesperPlayerSource.fromMap(<Object?, Object?>{
+        'uri': 'https://example.com/video.mp4',
+        'externalSubtitles': <String, Object?>{'id': 'not-a-list'},
+      }),
+      throwsA(isA<ArgumentError>()),
+    );
+    expect(
+      () => VesperPlayerSource.fromMap(<Object?, Object?>{
+        'uri': 'https://example.com/video.mp4',
+        'externalSubtitles': <Object?>[
+          <Object?, Object?>{
+            'id': 'valid',
+            'uri': 'https://example.com/subtitle.vtt',
+          },
+          7,
+        ],
+      }),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('external subtitle preserves an unknown non-blank MIME type', () {
+    final source = VesperPlayerSource.fromMap(<Object?, Object?>{
+      'uri': 'https://example.com/video.mp4',
+      'externalSubtitles': <Object?>[
+        <Object?, Object?>{
+          'id': 'future-format',
+          'uri': 'https://example.com/subtitle.future',
+          'mimeType': 'application/vnd.example.subtitle',
+        },
+      ],
+    });
+
+    expect(
+      source.externalSubtitles.single.mimeType,
+      'application/vnd.example.subtitle',
+    );
   });
 
   test('source without subtitle side loads omits the wire field', () {

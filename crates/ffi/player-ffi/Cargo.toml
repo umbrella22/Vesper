@@ -14,6 +14,7 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 player-backend-ffmpeg = { path = "../../backend/player-backend-ffmpeg" }
 player-ffi-common = { path = "../player-ffi-common" }
 player-runtime = { path = "../../core/player-runtime" }
+serde_json.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 player-platform-macos = { path = "../../platform/desktop/player-platform-macos" }

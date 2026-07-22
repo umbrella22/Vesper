@@ -1,0 +1,10 @@
+{
+  "domain": "subtitle",
+  "code": "subtitle_selection_timeout",
+  "phase": "selection",
+  "trackId": "opaque-track-7",
+  "retriable": true,
+  "message": "subtitle selection did not converge before the deadline",
+  "commandId": 42,
+  "sourceEpoch": 9
+}

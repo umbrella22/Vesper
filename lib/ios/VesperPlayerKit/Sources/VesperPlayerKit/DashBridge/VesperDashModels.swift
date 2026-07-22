@@ -1,6 +1,7 @@
 import Foundation
 
 enum VesperDashBridgeError: LocalizedError {
+    case subtitle(VesperDashSubtitleErrorDetails)
     case invalidManifest(String)
     case unsupportedManifest(String)
     case invalidMp4(String)
@@ -9,6 +10,8 @@ enum VesperDashBridgeError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case let .subtitle(details):
+            details.message
         case let .invalidManifest(message):
             "Invalid DASH manifest: \(message)"
         case let .unsupportedManifest(message):
@@ -21,6 +24,14 @@ enum VesperDashBridgeError: LocalizedError {
             "DASH network request failed: \(message)"
         }
     }
+}
+
+struct VesperDashSubtitleErrorDetails: Codable, Equatable {
+    let code: String
+    let phase: String
+    let trackId: String?
+    let retriable: Bool
+    let message: String
 }
 
 struct VesperDashByteRange: Codable, Equatable {

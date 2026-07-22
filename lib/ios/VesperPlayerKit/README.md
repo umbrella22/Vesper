@@ -99,7 +99,7 @@ builds, or any other working directory.
 
 ## Public API
 
-- `VesperPlayerController` — playback control surface (`@MainActor`); exposes `@Published` `uiState`, `trackCatalog`, `trackSelection`, `effectiveVideoTrackId`, `videoVariantObservation`, `fixedTrackStatus`, `resiliencePolicy`, `lastError`
+- `VesperPlayerController` — playback control surface (`@MainActor`); exposes `@Published` `uiState`, `trackCatalog`, `trackSelection`, `subtitleState`, requested/confirmed/effective subtitle selection, `effectiveVideoTrackId`, `videoVariantObservation`, `fixedTrackStatus`, `resiliencePolicy`, `lastError`
 - `VesperPlayerControllerFactory` — controller construction with policy presets
 - `VesperPlayerSource` — media source DTO with `localFile(url:)`, `remoteUrl(_:)`, `hls(url:)`, `dash(url:)` factories
 - `VesperPlayerDrmConfiguration` — FairPlay license metadata for direct AVPlayer playback
@@ -111,7 +111,7 @@ builds, or any other working directory.
 - `VesperBufferingPolicy`, `VesperRetryPolicy`, `VesperCachePolicy`
 - `VesperPreloadBudgetPolicy` — caps for concurrent preload tasks, memory, disk, warm-up window
 - `VesperTrackPreferencePolicy` — preferred audio / subtitle languages
-- `VesperSubtitleSideLoad` and `VesperSubtitleStyle` — bounded external SRT / WebVTT / SSA parsing, visibility, and font scaling
+- `VesperExternalSubtitleSource` and `VesperSubtitleStyle` — bounded external SRT / WebVTT / SSA parsing, visibility, and font scaling
 - `VesperCodecSupport` — hardware decode capability probe
 - `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput / shareTaskOutput / saveTaskOutput / drainEvents`
 
@@ -275,9 +275,12 @@ player timeline. External subtitle input is bounded to eight tracks, 2 MiB per
 track, 10,000 cues, and 16,384 characters per cue; unsupported URI schemes,
 encodings, MIME types, and oversized inputs fail explicitly.
 
-External tracks appear in the normal subtitle track catalog with stable
-`subtitle-side-load:<index>` identifiers and use the existing
-`setSubtitleTrackSelection` API. Per-cue typography, animation fidelity, and
+External tracks appear in the normal subtitle track catalog under the
+source-local id supplied by `VesperExternalSubtitleSource`. All catalog ids are
+opaque to callers. `setSubtitleTrackSelection` is `async throws` in 0.4 and
+returns only after AVPlayer or the overlay backend confirms convergence.
+`VesperSubtitleSideLoad` and `subtitleConfigurations` remain deprecated aliases.
+Per-cue typography, animation fidelity, and
 subtitle synchronization offsets are outside the stable contract. RTMP, RTSP,
 and HTTP-FLV direct playback remain explicit capability errors on iOS. HTTP
 `.flv` URLs infer progressive VOD unless callers set the live protocol

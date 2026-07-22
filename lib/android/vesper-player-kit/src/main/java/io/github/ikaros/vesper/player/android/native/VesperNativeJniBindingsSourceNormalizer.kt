@@ -154,6 +154,7 @@ internal fun parseSourceNormalizerResource(
                     label = originalSource.label,
                     kind = VesperPlayerSourceKind.Remote,
                     protocol = playbackProtocol,
+                    externalSubtitles = originalSource.externalSubtitles,
                 ),
             diagnostics = value.optJSONArray("diagnostics")?.let { array ->
                 List(array.length()) { index ->

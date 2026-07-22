@@ -103,6 +103,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -347,10 +349,12 @@ class VesperPlayerAndroidPlugin :
                 emitSnapshot(session)
                 null
             }
-            "setSubtitleTrackSelection" -> handleSessionCommand(call, result) { session ->
+            "setSubtitleTrackSelection" -> handleSessionCommandAsync(call, result) { session ->
                 val selectionMap = requireNestedMap(call.argumentMap(), "selection")
                 session.lastError = null
-                session.controller.setSubtitleTrackSelection(selectionMap.toTrackSelection())
+                session.controller.setSubtitleTrackSelection(
+                    selectionMap.toTrackSelection(isSubtitle = true),
+                )
                 emitSnapshot(session)
                 null
             }
@@ -1062,18 +1066,23 @@ class VesperPlayerAndroidPlugin :
                     return@onSuccess
                 }
                 result.success(value)
-            }
+                }
                 .onFailure { error ->
-                    if (!isCurrentSession(session)) {
-                        result.success(null)
-                        return@onFailure
+                    val methodErrorMap = error.toErrorMap()
+                    if (isCurrentSession(session)) {
+                        session.lastError = methodErrorMap.toEventErrorMap()
+                        emitError(session, error)
                     }
-                    session.lastError = error.toErrorMap()
-                    emitError(session, error)
+                    val flutterErrorCode =
+                        if (methodErrorMap["domain"] == "subtitle") {
+                            "vesper_subtitle_error"
+                        } else {
+                            "vesper_operation_failed"
+                        }
                     result.error(
-                        "vesper_operation_failed",
+                        flutterErrorCode,
                         error.message,
-                        session.lastError,
+                        methodErrorMap,
                     )
                 }
         }
@@ -1456,21 +1465,31 @@ class VesperPlayerAndroidPlugin :
 
     private fun observeSession(session: PlayerSession) {
         session.warningDrainJob?.cancel()
-        session.warningDrainJob = scope.launch {
-            while (isActive) {
-                delay(250L)
-                if (isCurrentSession(session)) {
-                    emitRuntimeWarnings(session)
+        // Runtime warnings have exactly one consumer: the snapshot observer
+        // below. A separate drain job can consume warnings before the event
+        // channel is listening (or race the observer), silently dropping them.
+        session.warningDrainJob = null
+        session.observerJob = scope.launch {
+            val warningTicks = flow {
+                while (currentCoroutineContext().isActive) {
+                    emit(Unit)
+                    delay(250L)
                 }
             }
-        }
-        session.observerJob = scope.launch {
-            combine(
-                session.controller.uiState,
-                session.controller.trackCatalog,
-                session.controller.trackSelection,
-                session.controller.subtitleState,
-            ) { _, _, _, _ ->
+            val hostUpdates =
+                combine(
+                    session.controller.uiState,
+                    session.controller.trackCatalog,
+                    session.controller.trackSelection,
+                    session.controller.subtitleState,
+                ) { _, _, _, _ -> Unit }
+            val subtitleSelectionUpdates =
+                combine(
+                    session.controller.requestedSubtitleSelection,
+                    session.controller.confirmedSubtitleSelection,
+                    session.controller.effectiveSubtitleTrackId,
+                ) { _, _, _ -> Unit }
+            combine(hostUpdates, subtitleSelectionUpdates, warningTicks) { _, _, _ ->
                 // Drain runtime warnings once per snapshot tick and feed
                 // them to the warning event stream. Subtitle state is now
                 // first-class on the controller (read directly in
@@ -1478,7 +1497,15 @@ class VesperPlayerAndroidPlugin :
                 // accumulate for state derivation. This fixes the
                 // previous double-drain that starved the warning channel
                 // and the unbounded accumulated list.
-                val drained = session.controller.drainRuntimeWarnings()
+                // Keep warnings queued until an EventChannel listener exists;
+                // draining while `eventSink` is null would make them
+                // impossible to replay on the next listen.
+                val drained =
+                    if (eventSink == null) {
+                        emptyList()
+                    } else {
+                        session.controller.drainRuntimeWarnings()
+                    }
                 buildSnapshotMap(session) to drained
             }.collect { (snapshot, drained) ->
                 emitRuntimeWarnings(session, drained)
@@ -1782,6 +1809,11 @@ class VesperPlayerAndroidPlugin :
             "capabilities" to buildCapabilitiesMap(),
             "trackCatalog" to trackCatalog.toMap(),
             "trackSelection" to trackSelection.toMap(),
+            // Deprecated aliases are derived from the same immutable
+            // snapshot so they cannot diverge from the canonical fields.
+            "requestedSubtitleSelection" to trackSelection.subtitle.toMap(),
+            "confirmedSubtitleSelection" to trackSelection.confirmedSubtitle.toMap(),
+            "effectiveSubtitleTrackId" to trackSelection.effectiveSubtitleTrackId,
             "effectiveVideoTrackId" to effectiveVideoTrackId,
             "videoVariantObservation" to videoVariantObservation?.toMap(),
             "resiliencePolicy" to resiliencePolicy.toMap(),

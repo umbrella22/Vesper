@@ -19,6 +19,7 @@ import io.github.ikaros.vesper.player.android.VesperDownloadResourceRecord
 import io.github.ikaros.vesper.player.android.VesperDownloadSegmentRecord
 import io.github.ikaros.vesper.player.android.VesperDownloadSource
 import io.github.ikaros.vesper.player.android.VesperDownloadStreamKind
+import io.github.ikaros.vesper.player.android.VesperExternalSubtitleSource
 import io.github.ikaros.vesper.player.android.VesperFrameProcessorConfiguration
 import io.github.ikaros.vesper.player.android.VesperFrameProcessorMode
 import io.github.ikaros.vesper.player.android.VesperNativeFramePipelineConfiguration
@@ -28,12 +29,12 @@ import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
+import io.github.ikaros.vesper.player.android.VesperPlayerUnsupportedOperation
 import io.github.ikaros.vesper.player.android.VesperPreloadBudgetPolicy
 import io.github.ikaros.vesper.player.android.VesperRetryBackoff
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
 import io.github.ikaros.vesper.player.android.VesperSourceNormalizerConfiguration
 import io.github.ikaros.vesper.player.android.VesperSourceNormalizerMode
-import io.github.ikaros.vesper.player.android.VesperSubtitleSideLoad
 import io.github.ikaros.vesper.player.android.VesperSubtitleStyle
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControlButton
 import io.github.ikaros.vesper.player.android.VesperSystemPlaybackControlKind
@@ -156,6 +157,7 @@ internal fun Any?.toVesperVideoSurfaceKind(): VesperVideoSurfaceKind =
 internal fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
     val uri = this["uri"] as? String ?: throw IllegalArgumentException("Missing source uri.")
     val label = this["label"] as? String ?: uri
+    val externalSubtitleEntries = this["externalSubtitles"] ?: this["subtitleConfigurations"]
     return VesperPlayerSource(
         uri = uri,
         label = label,
@@ -179,11 +181,11 @@ internal fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
             (this["drmConfiguration"] as? Map<*, *>)
                 ?.stringMap()
                 ?.let(::vesperPlayerDrmConfigurationFromWireMap),
-        subtitleConfigurations =
-            (this["subtitleConfigurations"] as? List<*>)
+        externalSubtitles =
+            (externalSubtitleEntries as? List<*>)
                 ?.map { value ->
-                    (value as? Map<*, *>)?.stringMap()?.toVesperSubtitleSideLoad()
-                        ?: throw IllegalArgumentException("Invalid subtitleConfigurations entry.")
+                    (value as? Map<*, *>)?.stringMap()?.toVesperExternalSubtitleSource()
+                        ?: throw IllegalArgumentException("Invalid externalSubtitles entry.")
                 }
                 ?: emptyList(),
     )
@@ -200,21 +202,24 @@ internal fun Map<String, Any?>.toVesperSubtitleStyle(): VesperSubtitleStyle {
     )
 }
 
-private fun Map<String, Any?>.toVesperSubtitleSideLoad(): VesperSubtitleSideLoad {
+private fun Map<String, Any?>.toVesperExternalSubtitleSource(): VesperExternalSubtitleSource {
+    val id = this["id"] as? String
+        ?: throw IllegalArgumentException("Missing external subtitle id.")
+    require(id.isNotBlank()) { "External subtitle id must not be blank." }
     val uri = this["uri"] as? String
         ?: throw IllegalArgumentException("Missing subtitle uri.")
     require(uri.isNotBlank()) { "Subtitle uri must not be blank." }
-    val mimeType = this["mimeType"] as? String ?: VesperSubtitleSideLoad.MIME_SUBRIP
-    require(
-        mimeType == VesperSubtitleSideLoad.MIME_SUBRIP ||
-            mimeType == VesperSubtitleSideLoad.MIME_WEBVTT ||
-            mimeType == VesperSubtitleSideLoad.MIME_SSA
-    ) { "Unsupported subtitle MIME type: $mimeType." }
-    return VesperSubtitleSideLoad(
+    val mimeType = this["mimeType"] as? String ?: VesperExternalSubtitleSource.MIME_SUBRIP
+    require(mimeType.isNotBlank()) { "Subtitle MIME type must not be blank." }
+    return VesperExternalSubtitleSource(
+        id = id,
         uri = uri,
         mimeType = mimeType,
         language = this["language"] as? String,
         label = this["label"] as? String,
+        headers = this["headers"].stringStringMap(),
+        isDefault = this["isDefault"] as? Boolean ?: false,
+        isForced = this["isForced"] as? Boolean ?: false,
     )
 }
 
@@ -417,16 +422,49 @@ internal fun Map<String, Any?>.toDownloadByteRange(): VesperDownloadByteRange =
         length = (this["length"] as? Number)?.toLong() ?: 0L,
     )
 
-internal fun Map<String, Any?>.toTrackSelection(): VesperTrackSelection =
-    when (this["mode"] as? String) {
+internal fun Map<String, Any?>.toTrackSelection(
+    isSubtitle: Boolean = false,
+): VesperTrackSelection =
+    when (val mode = this["mode"] as? String) {
+        "auto" -> VesperTrackSelection.auto()
         "disabled" -> VesperTrackSelection.disabled()
         "track" -> {
-            val trackId = this["trackId"] as? String
-                ?: throw IllegalArgumentException("Missing trackId for track selection.")
+            val trackId = (this["trackId"] as? String)?.takeIf { it.isNotBlank() }
+                ?: if (isSubtitle) {
+                    throw subtitleSelectionInputError(
+                        trackId = this["trackId"] as? String,
+                        message = "Missing trackId for subtitle track selection.",
+                    )
+                } else {
+                    throw IllegalArgumentException("Missing trackId for track selection.")
+                }
             VesperTrackSelection.track(trackId)
         }
-        else -> VesperTrackSelection.auto()
+        else -> {
+            if (isSubtitle) {
+                throw subtitleSelectionInputError(
+                    trackId = this["trackId"] as? String,
+                    message = "Unknown subtitle selection mode: ${mode ?: "<missing>"}.",
+                )
+            }
+            VesperTrackSelection.auto()
+        }
     }
+
+private fun subtitleSelectionInputError(
+    trackId: String?,
+    message: String,
+): VesperPlayerUnsupportedOperation =
+    VesperPlayerUnsupportedOperation(
+        message,
+        mapOf(
+            "domain" to "subtitle",
+            "code" to "subtitle_selection_invalid",
+            "phase" to "selection",
+            "trackId" to trackId,
+            "retriable" to false,
+        ),
+    )
 
 internal fun Map<String, Any?>.toAbrPolicy(): VesperAbrPolicy =
     when (this["mode"] as? String) {
@@ -462,7 +500,7 @@ internal fun Map<String, Any?>.toTrackPreferencePolicy(): VesperTrackPreferenceP
         (this["audioSelection"] as? Map<*, *>)?.stringMap()?.toTrackSelection()
             ?: VesperTrackSelection.auto()
     val subtitleSelection =
-        (this["subtitleSelection"] as? Map<*, *>)?.stringMap()?.toTrackSelection()
+        (this["subtitleSelection"] as? Map<*, *>)?.stringMap()?.toTrackSelection(isSubtitle = true)
             ?: VesperTrackSelection.disabled()
     val abrPolicy =
         (this["abrPolicy"] as? Map<*, *>)?.stringMap()?.toAbrPolicy()

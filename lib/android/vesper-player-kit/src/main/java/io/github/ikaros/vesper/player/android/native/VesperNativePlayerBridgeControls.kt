@@ -167,34 +167,22 @@ internal fun VesperNativePlayerBridge.setNativeAudioTrackSelection(selection: Ve
     refreshFromNative()
 }
 
-internal fun VesperNativePlayerBridge.setNativeSubtitleTrackSelection(selection: VesperTrackSelection) {
+internal suspend fun VesperNativePlayerBridge.setNativeSubtitleTrackSelection(
+    selection: VesperTrackSelection,
+) {
     recordBenchmark("set_subtitle_track_selection_command", mapOf("mode" to selection.mode.name))
-    if (isRequiredNativeFramePipelineFailureActive()) {
-        return
-    }
-    clearPreviousSubtitleSelectionFailure()
-    bindings.setSubtitleTrackSelection(selection)
-    refreshFromNative()
+    applySubtitleSelectionTransaction(selection)
 }
 
-private fun VesperNativePlayerBridge.clearPreviousSubtitleSelectionFailure() {
+internal fun VesperNativePlayerBridge.clearPreviousSubtitleSelectionFailure() {
     val currentState = _subtitleState.value
-    if (currentState.error?.phase != VesperSubtitleErrorPhase.Selection) {
+    if (currentState.selectionError == null) {
         return
     }
-    val subtitleCount = _trackCatalog.value.subtitleTracks.size
-    _subtitleState.value =
-        when {
-            currentSource?.protocol == VesperPlayerSourceProtocol.Dash &&
-                !bindings.isTrackCatalogReady() ->
-                VesperSubtitleState.loading(currentState.advertisedTrackCount)
-            subtitleCount > 0 ->
-                VesperSubtitleState.ready(
-                    advertisedTrackCount = subtitleCount,
-                    selectableTrackCount = subtitleCount,
-                )
-            else -> VesperSubtitleState.unavailable()
-        }
+    _subtitleState.value = currentState.copy(
+        selectionState = VesperSubtitleSelectionState.Idle,
+        selectionError = null,
+    )
 }
 
 internal fun VesperNativePlayerBridge.setNativeAbrPolicy(policy: VesperAbrPolicy) {
@@ -207,6 +195,19 @@ internal fun VesperNativePlayerBridge.setNativeAbrPolicy(policy: VesperAbrPolicy
 }
 
 internal fun VesperNativePlayerBridge.setNativeResiliencePolicy(policy: VesperPlaybackResiliencePolicy) {
+    if (runOnMainSynchronously("setResiliencePolicy") {
+            setNativeResiliencePolicyOnMain(policy)
+        }
+        == MainThreadRunResult.Cancelled
+    ) {
+        throw mainThreadBridgeTimeout("setResiliencePolicy")
+    }
+}
+
+private fun VesperNativePlayerBridge.setNativeResiliencePolicyOnMain(
+    policy: VesperPlaybackResiliencePolicy,
+) {
+    if (isDisposed.get()) return
     if (currentResiliencePolicy == policy) {
         return
     }
@@ -225,18 +226,36 @@ internal fun VesperNativePlayerBridge.setNativeResiliencePolicy(policy: VesperPl
     val preservedState = PreservedPlaybackState.capture(
         uiState = _uiState.value,
         trackSelection = _trackSelection.value,
+        confirmedSubtitleSelection = _confirmedSubtitleSelection.value,
+        effectiveSubtitleTrackId = _effectiveSubtitleTrackId.value,
     )
 
     Log.i(
         NATIVE_PLAYER_BRIDGE_TAG,
         "apply resilience policy buffering=${policy.buffering.preset} retry=${policy.retry.backoff} cache=${policy.cache.preset}",
     )
+    // The replacement player may spend time in SourceNormalizer preparation.
+    // Fence the current Media3 listeners before that suspension so old cues
+    // and track callbacks cannot mutate the reload transaction.
+    bindings.invalidateSystemPlaybackCallbacks()
+    clearTrackState()
+    _confirmedSubtitleSelection.value = preservedState.subtitleSelection
+    subtitleSelectionCoordinatorMode = preservedState.subtitleSelection.mode
+    _trackSelection.value = _trackSelection.value.copy(
+        confirmedSubtitle = preservedState.subtitleSelection,
+        effectiveSubtitleTrackId = null,
+    )
+    synchronized(runtimeWarnings) { runtimeWarnings.clear() }
+    _subtitleState.value =
+        VesperSubtitleState.loading(
+            advertisedTrackCount = source.externalSubtitles.size,
+        )
     updateState { copy(isBuffering = true) }
     launchSourceLoad {
-        initializeNativeBridgeAsync()
-        runOnMainForSourceLoad {
-            restorePlaybackState(source, preservedState)
-        }
+        initializeNativeBridgeAsync(
+            preservedConfirmedSubtitleSelection = preservedState.subtitleSelection,
+        )
+        restorePlaybackState(source, preservedState)
     }
 }
 

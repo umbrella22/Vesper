@@ -7,7 +7,8 @@ pub use master::{
 };
 pub use media::{build_hls_media_input_from_sidx, build_hls_media_playlist};
 pub use model::{
-    HlsAudioRendition, HlsMasterInput, HlsMediaInput, HlsMediaSegment, HlsResolution, HlsVariant,
+    HlsAudioRendition, HlsMasterInput, HlsMediaInput, HlsMediaSegment, HlsResolution,
+    HlsSubtitleRendition, HlsVariant,
 };
 
 use crate::{

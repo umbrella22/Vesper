@@ -62,7 +62,10 @@ class VesperSubtitleMedia3InstrumentationTest {
         androidx.test.platform.app.InstrumentationRegistry
             .getInstrumentation()
             .runOnMainSync {
-                val exoPlayer = ExoPlayer.Builder(context).build().also { player = it }
+                val exoPlayer =
+                    ExoPlayer.Builder(context, VesperExternalSubtitleRenderersFactory(context))
+                        .build()
+                        .also { player = it }
                 exoPlayer.addListener(
                     object : Player.Listener {
                         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -91,9 +94,7 @@ class VesperSubtitleMedia3InstrumentationTest {
                                             "selected=${textGroup.isTrackSelected(index)}"
                                     }
                             trackDiscovered.countDown()
-                            if (textGroup.isTrackSelected(0)) {
-                                selectionConfirmed.countDown()
-                            } else if (selectionRequested.compareAndSet(false, true)) {
+                            if (selectionRequested.compareAndSet(false, true)) {
                                 exoPlayer.trackSelectionParameters =
                                     exoPlayer.trackSelectionParameters
                                         .buildUpon()
@@ -104,6 +105,9 @@ class VesperSubtitleMedia3InstrumentationTest {
                                         .build()
                                 exoPlayer.seekTo(0L)
                                 exoPlayer.playWhenReady = true
+                            }
+                            if (textGroup.isTrackSelected(0)) {
+                                selectionConfirmed.countDown()
                             }
                         }
 
@@ -147,6 +151,11 @@ class VesperSubtitleMedia3InstrumentationTest {
             "Media3 did not deliver a WebVTT cue; ${currentPlayerState()}; " +
                 "events=${playbackEvents.joinToString()}",
             cueReady.await(15, TimeUnit.SECONDS),
+        )
+        assertTrue(
+            "Media3 reported a playback error while decoding WebVTT; " +
+                "events=${playbackEvents.joinToString()}",
+            playbackEvents.none { it.startsWith("playerError=") },
         )
     }
 

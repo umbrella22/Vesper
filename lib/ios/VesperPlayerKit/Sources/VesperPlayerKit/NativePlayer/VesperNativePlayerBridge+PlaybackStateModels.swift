@@ -48,7 +48,8 @@ struct PreservedPlaybackState {
 
     static func capture(
         uiState: PlayerHostUiState,
-        trackSelection: VesperTrackSelectionSnapshot
+        trackSelection: VesperTrackSelectionSnapshot,
+        confirmedSubtitleSelection: VesperTrackSelection
     ) -> PreservedPlaybackState {
         let seekToLiveEdge =
             uiState.timeline.kind == .liveDvr &&
@@ -61,7 +62,7 @@ struct PreservedPlaybackState {
             playbackState: uiState.playbackState,
             shouldResumePlayback: uiState.playbackState == .playing,
             audioSelection: trackSelection.audio,
-            subtitleSelection: trackSelection.subtitle,
+            subtitleSelection: confirmedSubtitleSelection,
             abrPolicy: trackSelection.abrPolicy
         )
     }

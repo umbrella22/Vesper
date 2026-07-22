@@ -1,5 +1,5 @@
 group = "io.github.ikaros.vesper.player.flutter.externalplayback"
-version = "0.3.0"
+version = "0.4.0"
 
 ext.vesperPlayerKitVersion = providers
     .gradleProperty("vesperPlayerKitVersion")

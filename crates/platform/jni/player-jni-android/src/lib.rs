@@ -32,7 +32,10 @@ use player_platform_mobile::{
     open_mobile_source_normalizer_resource_with_diagnostics,
 };
 use player_runtime::NativeFramePipelineMode;
-use player_runtime::{FrameProcessorMode, PlayerError, PlayerRuntimeCommand, SourceNormalizerMode};
+use player_runtime::{
+    FrameProcessorMode, MediaTrackSelection, PlayerError, PlayerErrorCode, PlayerRuntimeCommand,
+    SourceNormalizerMode, SubtitleErrorDetails,
+};
 
 pub(crate) const PKG: &str = "io/github/ikaros/vesper/player/android";
 
@@ -60,7 +63,7 @@ use sessions::{
     new_native_frame_pipeline_session, new_session, new_source_normalizer_resource_session,
     resolve_resilience_policy_with_runtime, resolve_track_preferences_with_runtime, sessions,
     with_benchmark_sink_session, with_native_frame_pipeline_session_mut, with_session_mut,
-    with_source_normalizer_resource_session_mut,
+    with_session_mut_checked, with_source_normalizer_resource_session_mut,
 };
 
 pub(crate) fn jni_name(value: impl AsRef<str>) -> JNIString {
@@ -1199,25 +1202,103 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
     selection: JObject<'_>,
-) {
+) -> jstring {
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
-            .with_env(|env| -> JniResult<()> {
+            .with_env(|env| -> JniResult<jstring> {
                 if selection.is_null() {
-                    return Ok(());
+                    return Ok(std::ptr::null_mut());
                 }
 
                 let selection = parse_native_track_selection(env, selection)?;
-                let _ = with_session_mut(env, session_handle, |session| {
-                    let _ =
-                        session.dispatch_command(PlayerRuntimeCommand::SetSubtitleTrackSelection {
-                            selection,
-                        });
+                let request = selection.clone();
+                let result = with_session_mut_checked(session_handle, |session| {
+                    session.dispatch_command(PlayerRuntimeCommand::SetSubtitleTrackSelection {
+                        selection,
+                    })
                 });
-                Ok(())
+                match result {
+                    Ok(Ok(_)) => Ok(std::ptr::null_mut()),
+                    Ok(Err(error)) => {
+                        let json = subtitle_command_error_json(&request, &error);
+                        Ok(env.new_string(json)?.into_raw())
+                    }
+                    Err(message) => {
+                        let error = stale_subtitle_session_error(&request, message);
+                        let json = subtitle_command_error_json(&request, &error);
+                        Ok(env.new_string(json)?.into_raw())
+                    }
+                }
             })
             .resolve::<ThrowRuntimeExAndDefault>()
-    });
+    })
+}
+
+fn stale_subtitle_session_error(
+    selection: &MediaTrackSelection,
+    message: &'static str,
+) -> PlayerError {
+    PlayerError::new(PlayerErrorCode::Cancelled, message).with_subtitle_details(
+        SubtitleErrorDetails::new(
+            "subtitle_selection_cancelled",
+            "selection",
+            selection.track_id.clone(),
+            true,
+            message,
+        ),
+    )
+}
+
+fn subtitle_command_error_json(selection: &MediaTrackSelection, error: &PlayerError) -> String {
+    let details = error
+        .subtitle_details()
+        .cloned()
+        .unwrap_or_else(|| fallback_subtitle_error_details(selection, error));
+    let mut payload = match serde_json::to_value(&details) {
+        Ok(serde_json::Value::Object(payload)) => payload,
+        _ => serde_json::Map::new(),
+    };
+    payload.insert(
+        "domain".to_owned(),
+        serde_json::Value::String("subtitle".to_owned()),
+    );
+    if !payload.contains_key("trackId") {
+        if let Some(track_id) = selection.track_id.as_ref() {
+            payload.insert(
+                "trackId".to_owned(),
+                serde_json::Value::String(track_id.clone()),
+            );
+        }
+    }
+    serde_json::Value::Object(payload).to_string()
+}
+
+fn fallback_subtitle_error_details(
+    selection: &MediaTrackSelection,
+    error: &PlayerError,
+) -> SubtitleErrorDetails {
+    let (code, retriable) = match error.code() {
+        PlayerErrorCode::Timeout => ("subtitle_selection_timeout", true),
+        PlayerErrorCode::Cancelled
+        | PlayerErrorCode::CommandChannelClosed
+        | PlayerErrorCode::EventChannelClosed => ("subtitle_selection_cancelled", true),
+        PlayerErrorCode::Unsupported | PlayerErrorCode::BackendFailure => {
+            ("subtitle_platform_track_unavailable", error.is_retriable())
+        }
+        PlayerErrorCode::InvalidArgument
+        | PlayerErrorCode::InvalidState
+        | PlayerErrorCode::InvalidSource
+        | PlayerErrorCode::AudioOutputUnavailable
+        | PlayerErrorCode::DecodeFailure
+        | PlayerErrorCode::SeekFailure => ("subtitle_selection_mismatch", error.is_retriable()),
+    };
+    SubtitleErrorDetails::new(
+        code,
+        "selection",
+        selection.track_id.clone(),
+        retriable,
+        error.message(),
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -1250,13 +1331,14 @@ mod tests {
     use super::{
         HandleRegistry, error_category_from_jni_ordinal, error_code_from_jni_ordinal,
         resolve_resilience_policy_with_runtime, resolve_track_preferences_with_runtime,
-        u64_to_jlong_saturating, u128_to_jlong_saturating,
+        stale_subtitle_session_error, subtitle_command_error_json, u64_to_jlong_saturating,
+        u128_to_jlong_saturating, with_session_mut_checked,
     };
     use player_runtime::{
         MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrackSelection,
         PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
-        PlayerErrorCategory, PlayerErrorCode, PlayerRetryBackoff, PlayerRetryPolicy,
-        PlayerTrackPreferencePolicy,
+        PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerRetryBackoff, PlayerRetryPolicy,
+        PlayerTrackPreferencePolicy, SubtitleErrorDetails,
     };
     use std::time::Duration;
 
@@ -1377,6 +1459,60 @@ mod tests {
         assert_eq!(u64_to_jlong_saturating(u64::MAX), i64::MAX);
         assert_eq!(u128_to_jlong_saturating(456), 456);
         assert_eq!(u128_to_jlong_saturating(u128::MAX), i64::MAX);
+    }
+
+    #[test]
+    fn subtitle_json_preserves_typed_details_instead_of_selection_mode() {
+        let selection = MediaTrackSelection::track("opaque-track");
+        let error = PlayerError::new(PlayerErrorCode::Timeout, "generic timeout")
+            .with_subtitle_details(
+                SubtitleErrorDetails::new(
+                    "subtitle_auto_candidate_unavailable",
+                    "discovery",
+                    Some("opaque-track".to_owned()),
+                    true,
+                    "no automatic subtitle candidate",
+                )
+                .with_transaction(Some(42), Some(9)),
+            );
+        let payload: serde_json::Value =
+            serde_json::from_str(&subtitle_command_error_json(&selection, &error))
+                .expect("subtitle error JSON");
+        assert_eq!(payload["domain"], "subtitle");
+        assert_eq!(payload["code"], "subtitle_auto_candidate_unavailable");
+        assert_eq!(payload["phase"], "discovery");
+        assert_eq!(payload["commandId"], 42);
+        assert_eq!(payload["sourceEpoch"], 9);
+    }
+
+    #[test]
+    fn subtitle_json_fallback_maps_runtime_code_without_request_mode() {
+        let selection = MediaTrackSelection::auto();
+        let error = PlayerError::new(PlayerErrorCode::Timeout, "timeout");
+        let payload: serde_json::Value =
+            serde_json::from_str(&subtitle_command_error_json(&selection, &error))
+                .expect("subtitle error JSON");
+        assert_eq!(payload["code"], "subtitle_selection_timeout");
+        assert_eq!(payload["phase"], "selection");
+    }
+
+    #[test]
+    fn stale_session_lookup_is_checked_without_java_exception() {
+        let handle = super::sessions::new_session("stale-test".to_owned()).expect("session");
+        {
+            let mut guard = super::lock_or_recover(super::sessions::sessions());
+            assert!(guard.remove(handle).is_some());
+        }
+        let result = with_session_mut_checked(handle, |_| ());
+        assert_eq!(result, Err("invalid android JNI session handle"));
+
+        let selection = MediaTrackSelection::track("stale-track");
+        let error = stale_subtitle_session_error(&selection, "invalid android JNI session handle");
+        let payload: serde_json::Value =
+            serde_json::from_str(&subtitle_command_error_json(&selection, &error))
+                .expect("subtitle error JSON");
+        assert_eq!(payload["code"], "subtitle_selection_cancelled");
+        assert_eq!(payload["trackId"], "stale-track");
     }
 
     #[test]

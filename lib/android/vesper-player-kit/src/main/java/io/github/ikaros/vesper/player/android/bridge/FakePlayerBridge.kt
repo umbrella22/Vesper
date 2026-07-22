@@ -45,6 +45,9 @@ internal class FakePlayerBridge(
     )
     private val _trackCatalog = MutableStateFlow(VesperTrackCatalog.Empty)
     private val _trackSelection = MutableStateFlow(VesperTrackSelectionSnapshot())
+    private val _requestedSubtitleSelection = MutableStateFlow(VesperTrackSelection.disabled())
+    private val _confirmedSubtitleSelection = MutableStateFlow(VesperTrackSelection.disabled())
+    private val _effectiveSubtitleTrackId = MutableStateFlow<String?>(null)
     private val _subtitleState = MutableStateFlow(VesperSubtitleState.EMPTY)
     private val _effectiveVideoTrackId = MutableStateFlow<String?>(null)
     private val _videoVariantObservation = MutableStateFlow<VesperVideoVariantObservation?>(null)
@@ -55,6 +58,12 @@ internal class FakePlayerBridge(
     override val trackCatalog: StateFlow<VesperTrackCatalog> = _trackCatalog.asStateFlow()
     override val trackSelection: StateFlow<VesperTrackSelectionSnapshot> =
         _trackSelection.asStateFlow()
+    override val requestedSubtitleSelection: StateFlow<VesperTrackSelection> =
+        _requestedSubtitleSelection.asStateFlow()
+    override val confirmedSubtitleSelection: StateFlow<VesperTrackSelection> =
+        _confirmedSubtitleSelection.asStateFlow()
+    override val effectiveSubtitleTrackId: StateFlow<String?> =
+        _effectiveSubtitleTrackId.asStateFlow()
     override val subtitleState: StateFlow<VesperSubtitleState> = _subtitleState.asStateFlow()
     override val effectiveVideoTrackId: StateFlow<String?> =
         _effectiveVideoTrackId.asStateFlow()
@@ -113,6 +122,15 @@ internal class FakePlayerBridge(
             mapOf("targetProtocol" to source.protocol.name.lowercase()),
         )
         currentSource = source
+        _requestedSubtitleSelection.value = VesperTrackSelection.disabled()
+        _confirmedSubtitleSelection.value = VesperTrackSelection.disabled()
+        _effectiveSubtitleTrackId.value = null
+        _trackSelection.value =
+            _trackSelection.value.copy(
+                subtitle = VesperTrackSelection.disabled(),
+                confirmedSubtitle = VesperTrackSelection.disabled(),
+                effectiveSubtitleTrackId = null,
+            )
         _effectiveVideoTrackId.value = null
         _videoVariantObservation.value = null
         updateState {
@@ -249,7 +267,33 @@ internal class FakePlayerBridge(
 
     override fun setAudioTrackSelection(selection: VesperTrackSelection) = Unit
 
-    override fun setSubtitleTrackSelection(selection: VesperTrackSelection) = Unit
+    override suspend fun setSubtitleTrackSelection(selection: VesperTrackSelection) {
+        if (selection.mode == VesperTrackSelectionMode.Track &&
+            (selection.trackId.isNullOrBlank() ||
+                selection.trackId !in _trackCatalog.value.subtitleTracks.map { it.id })
+        ) {
+            throw VesperPlayerUnsupportedOperation(
+                "the requested subtitle track ${selection.trackId ?: "<null>"} is not in the current catalog",
+                mapOf(
+                    "domain" to "subtitle",
+                    "code" to "subtitle_track_not_found",
+                    "phase" to "selection",
+                    "trackId" to selection.trackId,
+                    "retriable" to false,
+                    "message" to "subtitle track was not found",
+                ),
+            )
+        }
+        _requestedSubtitleSelection.value = selection
+        _confirmedSubtitleSelection.value = selection
+        _effectiveSubtitleTrackId.value = selection.trackId
+        _trackSelection.value =
+            _trackSelection.value.copy(
+                subtitle = selection,
+                confirmedSubtitle = selection,
+                effectiveSubtitleTrackId = selection.trackId,
+            )
+    }
 
     override fun setSubtitleStyle(style: VesperSubtitleStyle) = Unit
 

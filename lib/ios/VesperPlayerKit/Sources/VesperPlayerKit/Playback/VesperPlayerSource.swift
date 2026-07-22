@@ -55,7 +55,9 @@ public struct VesperPlayerSource: Equatable, Codable {
     /// natively), AVPlayer does not parse standalone SRT files. The iOS host
     /// kit renders side-loaded subtitles through a dedicated overlay; see
     /// `VesperSubtitleOverlayRenderer`.
-    public let subtitleConfigurations: [VesperSubtitleSideLoad]
+    public let externalSubtitles: [VesperExternalSubtitleSource]
+    @available(*, deprecated, message: "Use externalSubtitles instead.")
+    public var subtitleConfigurations: [VesperExternalSubtitleSource] { externalSubtitles }
 
     public init(
         uri: String,
@@ -64,7 +66,7 @@ public struct VesperPlayerSource: Equatable, Codable {
         protocol: VesperPlayerSourceProtocol,
         headers: [String: String] = [:],
         drmConfiguration: VesperPlayerDrmConfiguration? = nil,
-        subtitleConfigurations: [VesperSubtitleSideLoad] = []
+        externalSubtitles: [VesperExternalSubtitleSource] = []
     ) {
         self.uri = uri
         self.label = label
@@ -72,15 +74,20 @@ public struct VesperPlayerSource: Equatable, Codable {
         self.protocol = `protocol`
         self.headers = headers
         self.drmConfiguration = drmConfiguration
-        self.subtitleConfigurations = subtitleConfigurations
+        self.externalSubtitles = externalSubtitles
     }
 
-    public static func localFile(url: URL, label: String? = nil) -> VesperPlayerSource {
+    public static func localFile(
+        url: URL,
+        label: String? = nil,
+        externalSubtitles: [VesperExternalSubtitleSource] = []
+    ) -> VesperPlayerSource {
         VesperPlayerSource(
             uri: url.absoluteString,
             label: label ?? url.lastPathComponent,
             kind: .local,
-            protocol: inferLocalProtocol(for: url)
+            protocol: inferLocalProtocol(for: url),
+            externalSubtitles: externalSubtitles
         )
     }
 
@@ -90,6 +97,7 @@ public struct VesperPlayerSource: Equatable, Codable {
         protocol: VesperPlayerSourceProtocol? = nil,
         headers: [String: String] = [:],
         drmConfiguration: VesperPlayerDrmConfiguration? = nil,
+        externalSubtitles: [VesperExternalSubtitleSource] = []
     ) -> VesperPlayerSource {
         VesperPlayerSource(
             uri: url.absoluteString,
@@ -97,7 +105,8 @@ public struct VesperPlayerSource: Equatable, Codable {
             kind: .remote,
             protocol: `protocol` ?? inferRemoteProtocol(for: url),
             headers: headers,
-            drmConfiguration: drmConfiguration
+            drmConfiguration: drmConfiguration,
+            externalSubtitles: externalSubtitles
         )
     }
 
@@ -105,14 +114,16 @@ public struct VesperPlayerSource: Equatable, Codable {
         url: URL,
         label: String? = nil,
         headers: [String: String] = [:],
-        drmConfiguration: VesperPlayerDrmConfiguration? = nil
+        drmConfiguration: VesperPlayerDrmConfiguration? = nil,
+        externalSubtitles: [VesperExternalSubtitleSource] = []
     ) -> VesperPlayerSource {
         remoteUrl(
             url,
             label: label,
             protocol: .hls,
             headers: headers,
-            drmConfiguration: drmConfiguration
+            drmConfiguration: drmConfiguration,
+            externalSubtitles: externalSubtitles
         )
     }
 
@@ -120,14 +131,16 @@ public struct VesperPlayerSource: Equatable, Codable {
         url: URL,
         label: String? = nil,
         headers: [String: String] = [:],
-        drmConfiguration: VesperPlayerDrmConfiguration? = nil
+        drmConfiguration: VesperPlayerDrmConfiguration? = nil,
+        externalSubtitles: [VesperExternalSubtitleSource] = []
     ) -> VesperPlayerSource {
         remoteUrl(
             url,
             label: label,
             protocol: .dash,
             headers: headers,
-            drmConfiguration: drmConfiguration
+            drmConfiguration: drmConfiguration,
+            externalSubtitles: externalSubtitles
         )
     }
 

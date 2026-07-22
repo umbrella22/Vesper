@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - Unreleased
 
 ### Added
 
-- Added `VesperSubtitleStyle`, `VesperSubtitleSideLoad`, source subtitle
-  configurations, and the `setSubtitleStyle` platform contract.
+- Added `VesperSubtitleStyle`, `VesperExternalSubtitleSource`, canonical
+  subtitle catalog/selection state, requested/confirmed/effective selection,
+  `VesperSubtitleException`, and the `setSubtitleStyle` platform contract.
 - Added RTMP, RTSP, and HTTP-FLV source protocol values. HTTP `.flv` inference
   remains progressive; explicit live sources use `VesperPlayerSource.flvLive`.
 
@@ -17,6 +18,9 @@
 - `requestPictureInPicture` now accepts a nullable configuration so a request
   without overrides preserves the previously applied Picture in Picture
   configuration.
+- `VesperPlayerSource.externalSubtitles` is the canonical external subtitle
+  field. `VesperSubtitleSideLoad` and `subtitleConfigurations` remain deprecated
+  migration aliases.
 
 ### Added
 

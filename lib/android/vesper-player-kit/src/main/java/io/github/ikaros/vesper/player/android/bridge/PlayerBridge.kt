@@ -282,6 +282,20 @@ internal interface PlayerBridge {
     val trackCatalog: StateFlow<VesperTrackCatalog>
     val trackSelection: StateFlow<VesperTrackSelectionSnapshot>
     /**
+     * The latest subtitle selection requested by the host. This is kept
+     * separate from the compatibility [trackSelection] snapshot because a
+     * native player may take time to converge on the request.
+     */
+    val requestedSubtitleSelection: StateFlow<VesperTrackSelection>
+    /**
+     * The subtitle selection most recently confirmed by the native player.
+     */
+    val confirmedSubtitleSelection: StateFlow<VesperTrackSelection>
+    /**
+     * The native subtitle track id currently confirmed as effective.
+     */
+    val effectiveSubtitleTrackId: StateFlow<String?>
+    /**
      * First-class subtitle lifecycle state. Mirrors the iOS
      * `publishedSubtitleState`. Driven by catalog refresh, structured JNI
      * failures, and source-switch reset
@@ -313,7 +327,7 @@ internal interface PlayerBridge {
     fun setPlaybackRate(rate: Float)
     fun setVideoTrackSelection(selection: VesperTrackSelection)
     fun setAudioTrackSelection(selection: VesperTrackSelection)
-    fun setSubtitleTrackSelection(selection: VesperTrackSelection)
+    suspend fun setSubtitleTrackSelection(selection: VesperTrackSelection)
     fun setSubtitleStyle(style: VesperSubtitleStyle)
     fun setAbrPolicy(policy: VesperAbrPolicy)
     fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy)

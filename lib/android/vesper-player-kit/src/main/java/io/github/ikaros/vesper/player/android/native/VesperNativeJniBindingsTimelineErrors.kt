@@ -27,6 +27,7 @@ import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
@@ -77,25 +78,92 @@ internal fun buildDataSourceFactory(
     cachePolicy: NativeCachePolicy,
     headers: Map<String, String> = emptyMap(),
 ): androidx.media3.datasource.DataSource.Factory {
-    val httpFactory = DefaultHttpDataSource.Factory()
-        .setDefaultRequestProperties(headers)
+    // Each resource owner receives its own factory. Main-media headers never
+    // enter an external-subtitle factory, even when both resources use the
+    // same URI.
+    val httpFactory =
+        DefaultHttpDataSource.Factory().apply {
+            if (headers.isNotEmpty()) {
+                setDefaultRequestProperties(headers)
+            }
+        }
     val upstreamFactory = DefaultDataSource.Factory(appContext, httpFactory)
     val resolvedCachePolicy = resolveCachePolicy(cachePolicy)
-    if (!resolvedCachePolicy.enabled) {
-        return upstreamFactory
+    val baseFactory =
+        if (!resolvedCachePolicy.enabled) {
+            upstreamFactory
+        } else {
+            val cache =
+                VesperMediaCacheStore.cache(
+                    appContext = appContext,
+                    maxDiskBytes = resolvedCachePolicy.maxDiskBytes,
+                )
+            CacheDataSource.Factory()
+                .setCache(cache)
+                .setUpstreamDataSourceFactory(upstreamFactory)
+                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        }
+    return baseFactory
+}
+
+internal enum class NativeResourceRequestRole {
+    Media,
+    ExternalSubtitle,
+}
+
+internal fun resolveResourceRequestHeaders(
+    role: NativeResourceRequestRole,
+    mediaHeaders: Map<String, String>,
+    subtitleHeaders: Map<String, String>,
+): Map<String, String> =
+    when (role) {
+        NativeResourceRequestRole.Media -> mediaHeaders
+        NativeResourceRequestRole.ExternalSubtitle -> subtitleHeaders
     }
 
-    val cache =
-        VesperMediaCacheStore.cache(
-            appContext = appContext,
-            maxDiskBytes = resolvedCachePolicy.maxDiskBytes,
-        )
-
-    return CacheDataSource.Factory()
-        .setCache(cache)
-        .setUpstreamDataSourceFactory(upstreamFactory)
-        .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+internal fun subtitleNativeErrorFromJson(errorJson: String): VesperPlayerUnsupportedOperation {
+    val payload = JSONObject(errorJson)
+    val code = (payload.opt("code") as? String) ?: "subtitle_selection_mismatch"
+    val phase = (payload.opt("phase") as? String) ?: "selection"
+    val trackId = payload.opt("trackId") as? String
+    val message = (payload.opt("message") as? String) ?: "native subtitle selection failed"
+    val commandId = payload.longOrNull("commandId")
+    val sourceEpoch = payload.longOrNull("sourceEpoch")
+    return subtitleNativeError(
+        code = code,
+        phase = phase,
+        trackId = trackId,
+        retriable = payload.optBoolean("retriable", false),
+        commandId = commandId,
+        sourceEpoch = sourceEpoch,
+        message = message,
+    )
 }
+
+internal fun subtitleNativeError(
+    code: String,
+    phase: String,
+    trackId: String?,
+    retriable: Boolean,
+    commandId: Long?,
+    sourceEpoch: Long?,
+    message: String,
+): VesperPlayerUnsupportedOperation =
+    VesperPlayerUnsupportedOperation(
+        message,
+        mapOf(
+            "domain" to "subtitle",
+            "code" to code,
+            "phase" to phase,
+            "trackId" to trackId,
+            "retriable" to retriable,
+            "commandId" to commandId,
+            "sourceEpoch" to sourceEpoch,
+        ),
+    )
+
+private fun JSONObject.longOrNull(key: String): Long? =
+    if (!has(key) || isNull(key)) null else optLong(key)
 
 internal fun resolveCachePolicy(
     cachePolicy: NativeCachePolicy,

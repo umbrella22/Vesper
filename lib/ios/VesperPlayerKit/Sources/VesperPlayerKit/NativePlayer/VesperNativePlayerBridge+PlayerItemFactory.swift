@@ -4,7 +4,11 @@ import UIKit
 internal import VesperPlayerKitBridgeShim
 
 extension VesperNativePlayerBridge {
-    func makePlayerItem(for source: VesperPlayerSource, url: URL) throws -> AVPlayerItem {
+    func makePlayerItem(
+        for source: VesperPlayerSource,
+        url: URL,
+        sourceEpoch: UInt64? = nil
+    ) throws -> AVPlayerItem {
         // Live streaming protocols (RTMP/RTSP/FLV) are not supported by AVPlayer
         // on iOS. Supporting them would require a software demux/remux pipeline
         // (FFmpeg), which conflicts with the native-first boundary. Reject
@@ -78,10 +82,12 @@ extension VesperNativePlayerBridge {
         )
         let loaderDelegate = VesperDashResourceLoaderDelegate(
             session: session,
-            subtitleResourceFailureHandler: { [weak self, session] in
+            subtitleResourceFailureHandler: { [weak self, session] renditionId in
                 self?.reportDashSubtitleResourceFailure(
                     session: session,
-                    source: source
+                    source: source,
+                    trackId: renditionId,
+                    sourceEpoch: sourceEpoch
                 )
             }
         )
@@ -105,17 +111,71 @@ extension VesperNativePlayerBridge {
 
     func reportDashSubtitleResourceFailure(
         session: VesperDashSession,
-        source: VesperPlayerSource
+        source: VesperPlayerSource,
+        trackId: String? = nil,
+        sourceEpoch: UInt64? = nil
     ) {
-        guard currentDashSession === session, currentSource == source else {
+        guard currentDashSession === session,
+              currentSource == source,
+              sourceEpoch.map({ $0 == subtitleSourceEpoch }) ?? true
+        else {
             iosHostLog("ignored stale DASH subtitle resource failure")
             return
         }
+        let catalogTrackId = trackId.map { renditionId in
+            renditionId.hasPrefix("subtitle:dash:")
+                ? renditionId
+                : "subtitle:dash:\(renditionId)"
+        }
+        let didRecordFailure: Bool
+        if let catalogTrackId, !catalogTrackId.isEmpty {
+            didRecordFailure = failedSubtitleTrackIds.insert(catalogTrackId).inserted
+            subtitleOptionsByTrackId.removeValue(forKey: catalogTrackId)
+            if didRecordFailure {
+                publishedTrackCatalog = VesperTrackCatalog(
+                    tracks: publishedTrackCatalog.tracks.filter { $0.id != catalogTrackId },
+                    adaptiveVideo: publishedTrackCatalog.adaptiveVideo,
+                    adaptiveAudio: publishedTrackCatalog.adaptiveAudio
+                )
+            }
+            if publishedEffectiveSubtitleTrackId == catalogTrackId {
+                if let item = player?.currentItem, let subtitleGroup {
+                    item.select(nil, in: subtitleGroup)
+                }
+                _ = subtitleOverlayRenderer.select(trackId: nil)
+                publishedEffectiveSubtitleTrackId = nil
+                publishedTrackSelection = VesperTrackSelectionSnapshot(
+                    video: publishedTrackSelection.video,
+                    audio: publishedTrackSelection.audio,
+                    subtitle: publishedTrackSelection.subtitle,
+                    confirmedSubtitle: publishedTrackSelection.confirmedSubtitle,
+                    effectiveSubtitleTrackId: nil,
+                    abrPolicy: publishedTrackSelection.abrPolicy
+                )
+            }
+        } else {
+            didRecordFailure = true
+        }
         reportSubtitleFailure(
-            code: "subtitle_resource_load_failed",
+            code: "subtitle_resource_failed",
             phase: .resource,
+            trackId: catalogTrackId,
             retriable: true,
             message: "DASH subtitle resource loading failed"
+        )
+        guard didRecordFailure else { return }
+        let remainingSelectableCount = max(
+            0,
+            publishedSubtitleState.selectableTrackCount - 1
+        )
+        let catalogError = publishedSubtitleState.catalogError
+        publishedSubtitleState = VesperSubtitleState(
+            catalogState: remainingSelectableCount > 0 ? .ready : .failed,
+            selectionState: publishedSubtitleState.selectionState,
+            advertisedTrackCount: publishedSubtitleState.advertisedTrackCount,
+            selectableTrackCount: remainingSelectableCount,
+            catalogError: catalogError,
+            selectionError: publishedSubtitleState.selectionError
         )
     }
 

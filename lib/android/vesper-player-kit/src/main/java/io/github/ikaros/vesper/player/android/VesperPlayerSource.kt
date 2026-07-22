@@ -53,15 +53,21 @@ data class VesperPlayerSource(
     val protocol: VesperPlayerSourceProtocol,
     val headers: Map<String, String> = emptyMap(),
     val drmConfiguration: VesperPlayerDrmConfiguration? = null,
-    /** Optional external side-loaded subtitle tracks (SRT/ASS/WebVTT URIs). */
-    val subtitleConfigurations: List<VesperSubtitleSideLoad> = emptyList(),
+    /** Canonical external side-loaded subtitle tracks. */
+    val externalSubtitles: List<VesperExternalSubtitleSource> = emptyList(),
 ) {
+    /** @deprecated Use [externalSubtitles]. */
+    @Deprecated("Use externalSubtitles instead.")
+    val subtitleConfigurations: List<VesperExternalSubtitleSource>
+        get() = externalSubtitles
+
     companion object {
         fun local(
             uri: String,
             label: String,
             headers: Map<String, String> = emptyMap(),
             drmConfiguration: VesperPlayerDrmConfiguration? = null,
+            externalSubtitles: List<VesperExternalSubtitleSource> = emptyList(),
         ): VesperPlayerSource =
             VesperPlayerSource(
                 uri = uri,
@@ -70,6 +76,7 @@ data class VesperPlayerSource(
                 protocol = inferLocalProtocol(uri),
                 headers = headers,
                 drmConfiguration = drmConfiguration,
+                externalSubtitles = externalSubtitles,
             )
 
         fun localDash(
@@ -77,6 +84,7 @@ data class VesperPlayerSource(
             label: String,
             headers: Map<String, String> = emptyMap(),
             drmConfiguration: VesperPlayerDrmConfiguration? = null,
+            externalSubtitles: List<VesperExternalSubtitleSource> = emptyList(),
         ): VesperPlayerSource =
             VesperPlayerSource(
                 uri = uri,
@@ -85,6 +93,7 @@ data class VesperPlayerSource(
                 protocol = VesperPlayerSourceProtocol.Dash,
                 headers = headers,
                 drmConfiguration = drmConfiguration,
+                externalSubtitles = externalSubtitles,
             )
 
         fun remote(
@@ -93,6 +102,7 @@ data class VesperPlayerSource(
             protocol: VesperPlayerSourceProtocol = inferRemoteProtocol(uri),
             headers: Map<String, String> = emptyMap(),
             drmConfiguration: VesperPlayerDrmConfiguration? = null,
+            externalSubtitles: List<VesperExternalSubtitleSource> = emptyList(),
         ): VesperPlayerSource =
             VesperPlayerSource(
                 uri = uri,
@@ -101,6 +111,7 @@ data class VesperPlayerSource(
                 protocol = protocol,
                 headers = headers,
                 drmConfiguration = drmConfiguration,
+                externalSubtitles = externalSubtitles,
             )
 
         fun hls(
@@ -108,6 +119,7 @@ data class VesperPlayerSource(
             label: String,
             headers: Map<String, String> = emptyMap(),
             drmConfiguration: VesperPlayerDrmConfiguration? = null,
+            externalSubtitles: List<VesperExternalSubtitleSource> = emptyList(),
         ): VesperPlayerSource =
             remote(
                 uri = uri,
@@ -115,6 +127,7 @@ data class VesperPlayerSource(
                 protocol = VesperPlayerSourceProtocol.Hls,
                 headers = headers,
                 drmConfiguration = drmConfiguration,
+                externalSubtitles = externalSubtitles,
             )
 
         fun dash(
@@ -122,6 +135,7 @@ data class VesperPlayerSource(
             label: String,
             headers: Map<String, String> = emptyMap(),
             drmConfiguration: VesperPlayerDrmConfiguration? = null,
+            externalSubtitles: List<VesperExternalSubtitleSource> = emptyList(),
         ): VesperPlayerSource =
             remote(
                 uri = uri,
@@ -129,6 +143,7 @@ data class VesperPlayerSource(
                 protocol = VesperPlayerSourceProtocol.Dash,
                 headers = headers,
                 drmConfiguration = drmConfiguration,
+                externalSubtitles = externalSubtitles,
             )
 
         /**
@@ -139,12 +154,14 @@ data class VesperPlayerSource(
             uri: String,
             label: String,
             headers: Map<String, String> = emptyMap(),
+            externalSubtitles: List<VesperExternalSubtitleSource> = emptyList(),
         ): VesperPlayerSource =
             remote(
                 uri = uri,
                 label = label,
                 protocol = VesperPlayerSourceProtocol.Rtmp,
                 headers = headers,
+                externalSubtitles = externalSubtitles,
             )
 
         /**
@@ -155,12 +172,14 @@ data class VesperPlayerSource(
             uri: String,
             label: String,
             headers: Map<String, String> = emptyMap(),
+            externalSubtitles: List<VesperExternalSubtitleSource> = emptyList(),
         ): VesperPlayerSource =
             remote(
                 uri = uri,
                 label = label,
                 protocol = VesperPlayerSourceProtocol.Rtsp,
                 headers = headers,
+                externalSubtitles = externalSubtitles,
             )
 
         /**
@@ -172,12 +191,14 @@ data class VesperPlayerSource(
             uri: String,
             label: String,
             headers: Map<String, String> = emptyMap(),
+            externalSubtitles: List<VesperExternalSubtitleSource> = emptyList(),
         ): VesperPlayerSource =
             remote(
                 uri = uri,
                 label = label,
                 protocol = VesperPlayerSourceProtocol.Flv,
                 headers = headers,
+                externalSubtitles = externalSubtitles,
             )
 
         private fun inferLocalProtocol(uri: String): VesperPlayerSourceProtocol =

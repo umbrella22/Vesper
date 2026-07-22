@@ -45,5 +45,7 @@ data class VesperTrackSelectionSnapshot(
     val video: VesperTrackSelection = VesperTrackSelection.auto(),
     val audio: VesperTrackSelection = VesperTrackSelection.auto(),
     val subtitle: VesperTrackSelection = VesperTrackSelection.disabled(),
+    val confirmedSubtitle: VesperTrackSelection = subtitle,
+    val effectiveSubtitleTrackId: String? = null,
     val abrPolicy: VesperAbrPolicy = VesperAbrPolicy.auto(),
 )

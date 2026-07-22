@@ -8,14 +8,20 @@ final class VesperPlayerSource {
     required this.protocol,
     this.headers = const <String, String>{},
     this.drmConfiguration,
-    this.subtitleConfigurations = const <VesperSubtitleSideLoad>[],
-  });
+    List<VesperExternalSubtitleSource>? externalSubtitles,
+    @Deprecated('Use externalSubtitles instead.')
+    List<VesperSubtitleSideLoad>? subtitleConfigurations,
+  }) : externalSubtitles = externalSubtitles ??
+            subtitleConfigurations ??
+            const <VesperExternalSubtitleSource>[];
 
   factory VesperPlayerSource.local({
     required String uri,
     String? label,
     Map<String, String> headers = const <String, String>{},
     VesperPlayerDrmConfiguration? drmConfiguration,
+    List<VesperExternalSubtitleSource> externalSubtitles =
+        const <VesperExternalSubtitleSource>[],
   }) {
     return VesperPlayerSource(
       uri: uri,
@@ -24,6 +30,7 @@ final class VesperPlayerSource {
       protocol: _inferLocalProtocol(uri),
       headers: headers,
       drmConfiguration: drmConfiguration,
+      externalSubtitles: externalSubtitles,
     );
   }
 
@@ -32,6 +39,8 @@ final class VesperPlayerSource {
     String? label,
     Map<String, String> headers = const <String, String>{},
     VesperPlayerDrmConfiguration? drmConfiguration,
+    List<VesperExternalSubtitleSource> externalSubtitles =
+        const <VesperExternalSubtitleSource>[],
   }) {
     return VesperPlayerSource(
       uri: uri,
@@ -40,6 +49,7 @@ final class VesperPlayerSource {
       protocol: VesperPlayerSourceProtocol.dash,
       headers: headers,
       drmConfiguration: drmConfiguration,
+      externalSubtitles: externalSubtitles,
     );
   }
 
@@ -49,6 +59,8 @@ final class VesperPlayerSource {
     VesperPlayerSourceProtocol? protocol,
     Map<String, String> headers = const <String, String>{},
     VesperPlayerDrmConfiguration? drmConfiguration,
+    List<VesperExternalSubtitleSource> externalSubtitles =
+        const <VesperExternalSubtitleSource>[],
   }) {
     return VesperPlayerSource(
       uri: uri,
@@ -57,6 +69,7 @@ final class VesperPlayerSource {
       protocol: protocol ?? _inferRemoteProtocol(uri),
       headers: headers,
       drmConfiguration: drmConfiguration,
+      externalSubtitles: externalSubtitles,
     );
   }
 
@@ -65,6 +78,8 @@ final class VesperPlayerSource {
     String? label,
     Map<String, String> headers = const <String, String>{},
     VesperPlayerDrmConfiguration? drmConfiguration,
+    List<VesperExternalSubtitleSource> externalSubtitles =
+        const <VesperExternalSubtitleSource>[],
   }) {
     return VesperPlayerSource.remote(
       uri: uri,
@@ -72,6 +87,7 @@ final class VesperPlayerSource {
       protocol: VesperPlayerSourceProtocol.hls,
       headers: headers,
       drmConfiguration: drmConfiguration,
+      externalSubtitles: externalSubtitles,
     );
   }
 
@@ -80,6 +96,8 @@ final class VesperPlayerSource {
     String? label,
     Map<String, String> headers = const <String, String>{},
     VesperPlayerDrmConfiguration? drmConfiguration,
+    List<VesperExternalSubtitleSource> externalSubtitles =
+        const <VesperExternalSubtitleSource>[],
   }) {
     return VesperPlayerSource.remote(
       uri: uri,
@@ -87,6 +105,7 @@ final class VesperPlayerSource {
       protocol: VesperPlayerSourceProtocol.dash,
       headers: headers,
       drmConfiguration: drmConfiguration,
+      externalSubtitles: externalSubtitles,
     );
   }
 
@@ -99,12 +118,15 @@ final class VesperPlayerSource {
     required String uri,
     String? label,
     Map<String, String> headers = const <String, String>{},
+    List<VesperExternalSubtitleSource> externalSubtitles =
+        const <VesperExternalSubtitleSource>[],
   }) {
     return VesperPlayerSource.remote(
       uri: uri,
       label: label,
       protocol: VesperPlayerSourceProtocol.rtmp,
       headers: headers,
+      externalSubtitles: externalSubtitles,
     );
   }
 
@@ -116,12 +138,15 @@ final class VesperPlayerSource {
     required String uri,
     String? label,
     Map<String, String> headers = const <String, String>{},
+    List<VesperExternalSubtitleSource> externalSubtitles =
+        const <VesperExternalSubtitleSource>[],
   }) {
     return VesperPlayerSource.remote(
       uri: uri,
       label: label,
       protocol: VesperPlayerSourceProtocol.rtsp,
       headers: headers,
+      externalSubtitles: externalSubtitles,
     );
   }
 
@@ -134,17 +159,24 @@ final class VesperPlayerSource {
     required String uri,
     String? label,
     Map<String, String> headers = const <String, String>{},
+    List<VesperExternalSubtitleSource> externalSubtitles =
+        const <VesperExternalSubtitleSource>[],
   }) {
     return VesperPlayerSource.remote(
       uri: uri,
       label: label,
       protocol: VesperPlayerSourceProtocol.flv,
       headers: headers,
+      externalSubtitles: externalSubtitles,
     );
   }
 
   factory VesperPlayerSource.fromMap(Map<Object?, Object?> map) {
     final uri = map['uri'] as String? ?? '';
+    final externalSubtitles = _decodeExternalSubtitles(
+      map['externalSubtitles'] ?? map['subtitleConfigurations'],
+    );
+    _validateExternalSubtitleIds(externalSubtitles);
     return VesperPlayerSource(
       uri: uri,
       label: map['label'] as String? ?? uri,
@@ -164,8 +196,7 @@ final class VesperPlayerSource {
       drmConfiguration: VesperPlayerDrmConfiguration.tryFromMap(
         _rawMap(map['drmConfiguration']),
       ),
-      subtitleConfigurations:
-          _decodeSubtitleSideLoads(map['subtitleConfigurations']),
+      externalSubtitles: externalSubtitles,
     );
   }
 
@@ -176,10 +207,16 @@ final class VesperPlayerSource {
   final Map<String, String> headers;
   final VesperPlayerDrmConfiguration? drmConfiguration;
 
-  /// Optional side-loaded external subtitle tracks (SRT/ASS/WebVTT URIs).
-  final List<VesperSubtitleSideLoad> subtitleConfigurations;
+  /// Optional external subtitle tracks (SRT/ASS/WebVTT URIs).
+  final List<VesperExternalSubtitleSource> externalSubtitles;
+
+  /// Legacy alias for [externalSubtitles].
+  @Deprecated('Use externalSubtitles instead.')
+  List<VesperExternalSubtitleSource> get subtitleConfigurations =>
+      externalSubtitles;
 
   Map<String, Object?> toMap() {
+    _validateExternalSubtitleIds(externalSubtitles);
     return <String, Object?>{
       'uri': uri,
       'label': label,
@@ -188,9 +225,9 @@ final class VesperPlayerSource {
       'headers': headers,
       if (drmConfiguration != null)
         'drmConfiguration': drmConfiguration?.toMap(),
-      if (subtitleConfigurations.isNotEmpty)
-        'subtitleConfigurations': subtitleConfigurations
-            .map((VesperSubtitleSideLoad sideLoad) => sideLoad.toMap())
+      if (externalSubtitles.isNotEmpty)
+        'externalSubtitles': externalSubtitles
+            .map((VesperExternalSubtitleSource source) => source.toMap())
             .toList(),
     };
   }
@@ -279,12 +316,57 @@ final class VesperPlayerDrmConfiguration {
   }
 }
 
-List<VesperSubtitleSideLoad> _decodeSubtitleSideLoads(
+List<VesperExternalSubtitleSource> _decodeExternalSubtitles(
   Object? raw,
 ) {
-  final list = raw is List ? raw : const <Object>[];
-  return list
-      .whereType<Map<Object?, Object?>>()
-      .map(VesperSubtitleSideLoad.fromMap)
-      .toList(growable: false);
+  if (raw == null) {
+    return const <VesperExternalSubtitleSource>[];
+  }
+  if (raw is! List) {
+    throw ArgumentError.value(
+      raw,
+      'externalSubtitles',
+      'must be a list of subtitle maps.',
+    );
+  }
+  return raw.indexed.map((entry) {
+    final (index, value) = entry;
+    if (value is! Map) {
+      throw ArgumentError.value(
+        value,
+        'externalSubtitles[$index]',
+        'must be a subtitle map.',
+      );
+    }
+    return VesperExternalSubtitleSource.fromMap(
+      Map<Object?, Object?>.from(value),
+    );
+  }).toList(growable: false);
+}
+
+bool _hasUniqueExternalSubtitleIds(
+  Iterable<VesperExternalSubtitleSource> subtitles,
+) {
+  final ids = <String>{};
+  for (final subtitle in subtitles) {
+    if (subtitle.id.trim().isEmpty) {
+      return false;
+    }
+    if (!ids.add(subtitle.id)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void _validateExternalSubtitleIds(
+  Iterable<VesperExternalSubtitleSource> subtitles,
+) {
+  if (!_hasUniqueExternalSubtitleIds(subtitles)) {
+    throw ArgumentError.value(
+      subtitles,
+      'externalSubtitles',
+      'ids must be non-empty and unique within a source.',
+    );
+  }
 }

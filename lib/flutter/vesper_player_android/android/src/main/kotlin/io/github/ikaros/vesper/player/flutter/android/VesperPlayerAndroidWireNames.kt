@@ -120,15 +120,29 @@ internal fun VesperPlayerSource.toMap(): Map<String, Any?> =
         "label" to label,
         "kind" to kind.toWireName(),
         "protocol" to protocol.toWireName(),
-        "headers" to headers,
         "drmConfiguration" to drmConfiguration?.toMap(),
+        // Request headers are intentionally excluded from snapshots and
+        // download events. They are transport credentials, not public state.
+        "externalSubtitles" to externalSubtitles.map { it.toPublicMap() },
+    )
+
+private fun io.github.ikaros.vesper.player.android.VesperExternalSubtitleSource.toPublicMap(): Map<String, Any?> =
+    mapOf(
+        "id" to id,
+        "uri" to uri,
+        "mimeType" to mimeType,
+        "language" to language,
+        "label" to label,
+        "isDefault" to isDefault,
+        "isForced" to isForced,
     )
 
 internal fun io.github.ikaros.vesper.player.android.VesperPlayerDrmConfiguration.toMap(): Map<String, Any?> =
     mapOf(
         "keySystem" to keySystem,
         "licenseUri" to licenseUri,
-        "licenseHeaders" to licenseHeaders,
+        // License request headers are credentials and are intentionally not
+        // part of public snapshots/download events.
         "fairPlayCertificateUri" to fairPlayCertificateUri,
         "fairPlayCertificateBase64" to fairPlayCertificateBase64,
         "multiSession" to multiSession,

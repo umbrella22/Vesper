@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import XCTest
 @testable import VesperPlayerKit
 
@@ -11,6 +12,375 @@ import XCTest
 /// the Flutter wire mapping so regressions surface without a simulator
 /// device boot.
 final class VesperNativeSubtitleStateTests: XCTestCase {
+    func testHlsSubtitleInspectorPreservesAdvertisedMetadataAndStableIdentity() throws {
+        let first = try VesperHlsSubtitleManifestInspector.parse(sampleHlsSubtitleMaster)
+        let reordered = try VesperHlsSubtitleManifestInspector.parse(
+            sampleHlsSubtitleMasterReordered
+        )
+        let rotatedUris = try VesperHlsSubtitleManifestInspector.parse(
+            sampleHlsSubtitleMaster
+                .replacingOccurrences(
+                    of: "sub-en.m3u8",
+                    with: "sub-en.m3u8?token=rotated"
+                )
+                .replacingOccurrences(
+                    of: "sub-en-forced.m3u8",
+                    with: "sub-en-forced.m3u8?token=rotated"
+                )
+        )
+        let refreshedMetadata = try VesperHlsSubtitleManifestInspector.parse(
+            sampleHlsSubtitleMaster
+                .replacingOccurrences(of: "LANGUAGE=\"en\"", with: "LANGUAGE=\"en-US\"")
+                .replacingOccurrences(of: "FORCED=YES", with: "FORCED=NO")
+        )
+
+        XCTAssertTrue(first.isMasterPlaylist)
+        XCTAssertEqual(first.advertisedTrackCount, 2)
+        XCTAssertEqual(first.renditions[0].name, "English")
+        XCTAssertEqual(first.renditions[0].language, "en")
+        XCTAssertTrue(first.renditions[0].isDefault)
+        XCTAssertTrue(first.renditions[1].isForced)
+        XCTAssertEqual(
+            Set(first.renditions.map(\.id)),
+            Set(reordered.renditions.map(\.id))
+        )
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: first.renditions.map { ($0.name, $0.id) }),
+            Dictionary(uniqueKeysWithValues: rotatedUris.renditions.map { ($0.name, $0.id) })
+        )
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: first.renditions.map { ($0.name, $0.id) }),
+            Dictionary(uniqueKeysWithValues: refreshedMetadata.renditions.map { ($0.name, $0.id) })
+        )
+    }
+
+    func testHlsSubtitleInspectorKeepsDefaultsScopedToEachGroup() throws {
+        let snapshot = try VesperHlsSubtitleManifestInspector.parse(
+            #"""
+            #EXTM3U
+            #EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs-main",NAME="English",LANGUAGE="en",DEFAULT=YES,FORCED=NO,URI="main-en.m3u8"
+            #EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs-commentary",NAME="English",LANGUAGE="en",DEFAULT=YES,FORCED=NO,URI="commentary-en.m3u8"
+            #EXT-X-STREAM-INF:BANDWIDTH=800000,SUBTITLES="subs-main"
+            video.m3u8
+            """#
+        )
+
+        XCTAssertEqual(snapshot.advertisedTrackCount, 2)
+        XCTAssertEqual(Set(snapshot.renditions.map(\.groupId)), ["subs-main", "subs-commentary"])
+        XCTAssertEqual(Set(snapshot.renditions.map(\.id)).count, 2)
+    }
+
+    @MainActor
+    func testHlsDescriptorResolverIgnoresUnselectedGroupWithOverlappingMetadata() {
+        let english = VesperNativePlayerBridge.VesperHlsSubtitleMatchKey(
+            language: "en",
+            label: "english",
+            isForced: false
+        )
+        let chinese = VesperNativePlayerBridge.VesperHlsSubtitleMatchKey(
+            language: "zh",
+            label: "chinese",
+            isForced: false
+        )
+        let descriptors = [
+            VesperNativePlayerBridge.VesperHlsSubtitleDescriptorIdentity(
+                id: "main-en",
+                groupId: "main",
+                key: english
+            ),
+            VesperNativePlayerBridge.VesperHlsSubtitleDescriptorIdentity(
+                id: "main-zh",
+                groupId: "main",
+                key: chinese
+            ),
+            VesperNativePlayerBridge.VesperHlsSubtitleDescriptorIdentity(
+                id: "commentary-en",
+                groupId: "commentary",
+                key: english
+            ),
+        ]
+        let bridge = VesperNativePlayerBridge()
+
+        let result = bridge.resolveHlsSubtitleDescriptorGroup(
+            optionKeys: [english, chinese],
+            descriptors: descriptors
+        )
+
+        XCTAssertEqual(result, .unique(["main-en", "main-zh"]))
+    }
+
+    @MainActor
+    func testHlsDescriptorResolverRejectsTiedGroupsAsAmbiguous() {
+        let english = VesperNativePlayerBridge.VesperHlsSubtitleMatchKey(
+            language: "en",
+            label: "english",
+            isForced: false
+        )
+        let descriptors = [
+            VesperNativePlayerBridge.VesperHlsSubtitleDescriptorIdentity(
+                id: "main-en",
+                groupId: "main",
+                key: english
+            ),
+            VesperNativePlayerBridge.VesperHlsSubtitleDescriptorIdentity(
+                id: "commentary-en",
+                groupId: "commentary",
+                key: english
+            ),
+        ]
+        let bridge = VesperNativePlayerBridge()
+
+        let result = bridge.resolveHlsSubtitleDescriptorGroup(
+            optionKeys: [english],
+            descriptors: descriptors
+        )
+
+        XCTAssertEqual(result, .ambiguous)
+    }
+
+    func testHlsSubtitleInspectorRejectsDuplicateDefaultWithinGroup() {
+        XCTAssertThrowsError(
+            try VesperHlsSubtitleManifestInspector.parse(
+                sampleHlsSubtitleMaster.replacingOccurrences(
+                    of: "DEFAULT=NO,AUTOSELECT=YES,FORCED=YES",
+                    with: "DEFAULT=YES,AUTOSELECT=YES,FORCED=YES"
+                )
+            )
+        ) { error in
+            guard case VesperHlsSubtitleManifestError.duplicateDefault = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testHlsSubtitleInspectorDoesNotInferAdvertisedCountFromMediaPlaylist() throws {
+        let snapshot = try VesperHlsSubtitleManifestInspector.parse(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nsegment.ts\n"
+        )
+        XCTAssertFalse(snapshot.isMasterPlaylist)
+        XCTAssertEqual(snapshot.advertisedTrackCount, 0)
+        XCTAssertTrue(snapshot.renditions.isEmpty)
+    }
+
+    func testSourceConvenienceFactoriesPreserveExternalSubtitles() throws {
+        let subtitle = VesperExternalSubtitleSource(
+            id: "external-en",
+            uri: "https://example.com/subtitle.vtt",
+            mimeType: VesperExternalSubtitleSource.mimeWebVtt
+        )
+        let expected = [subtitle]
+        let localURL = try XCTUnwrap(URL(string: "file:///tmp/video.mp4"))
+        let remoteURL = try XCTUnwrap(URL(string: "https://example.com/video.mp4"))
+        let hlsURL = try XCTUnwrap(URL(string: "https://example.com/master.m3u8"))
+        let dashURL = try XCTUnwrap(URL(string: "https://example.com/manifest.mpd"))
+        let sources = [
+            VesperPlayerSource.localFile(url: localURL, externalSubtitles: expected),
+            VesperPlayerSource.remoteUrl(remoteURL, externalSubtitles: expected),
+            VesperPlayerSource.hls(url: hlsURL, externalSubtitles: expected),
+            VesperPlayerSource.dash(url: dashURL, externalSubtitles: expected),
+        ]
+
+        for source in sources {
+            XCTAssertEqual(source.externalSubtitles, expected)
+        }
+    }
+
+    @MainActor
+    func testResilienceRestoreWaitsForExternalSubtitlePreparation() async {
+        let externalTrack = VesperExternalSubtitleSource(
+            id: "external-en",
+            uri: "file:///tmp/external-en.vtt",
+            mimeType: VesperExternalSubtitleSource.mimeWebVtt,
+            language: "en",
+            label: "English"
+        )
+        let source = VesperPlayerSource(
+            uri: "file:///tmp/video.mp4",
+            label: "Video",
+            kind: .local,
+            protocol: .file,
+            externalSubtitles: [externalTrack]
+        )
+        let bridge = VesperNativePlayerBridge(initialSource: source)
+        bridge.subtitleOverlayLoadTask = Task { @MainActor in }
+        defer {
+            bridge.subtitleOverlayLoadTask?.cancel()
+            bridge.subtitleOverlayLoadTask = nil
+        }
+        let preserved = PreservedPlaybackState(
+            positionMs: 0,
+            restorePosition: false,
+            seekToLiveEdge: false,
+            playbackRate: 1,
+            playbackState: .ready,
+            shouldResumePlayback: false,
+            audioSelection: .auto(),
+            subtitleSelection: .track(externalTrack.id),
+            abrPolicy: .auto()
+        )
+
+        let stillPending = await bridge.restoreTrackSelectionsIfNeeded(
+            preserved,
+            item: AVPlayerItem(url: URL(fileURLWithPath: "/tmp/video.mp4"))
+        )
+
+        XCTAssertTrue(stillPending)
+        XCTAssertNil(bridge.publishedSubtitleState.selectionError)
+    }
+
+    @MainActor
+    func testExplicitExternalSubtitleSelectionWaitsForLoadingCatalog() async throws {
+        let subtitleURL =
+            FileManager.default.temporaryDirectory
+                .appendingPathComponent("vesper-subtitle-\(UUID().uuidString).vtt")
+        try "WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n".write(
+            to: subtitleURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        defer { try? FileManager.default.removeItem(at: subtitleURL) }
+
+        let externalTrack = VesperExternalSubtitleSource(
+            id: "external-en",
+            uri: subtitleURL.absoluteString,
+            mimeType: VesperExternalSubtitleSource.mimeWebVtt,
+            language: "en",
+            label: "English",
+            isDefault: true
+        )
+        let source = VesperPlayerSource(
+            uri: "file:///tmp/video.mp4",
+            label: "Video",
+            kind: .local,
+            protocol: .file,
+            externalSubtitles: [externalTrack]
+        )
+        let bridge = VesperNativePlayerBridge(initialSource: source)
+        let item = AVPlayerItem(url: URL(fileURLWithPath: "/tmp/video.mp4"))
+        bridge.player = AVPlayer(playerItem: item)
+        bridge.publishedSubtitleState = .loading(advertisedTrackCount: 1)
+
+        let selectionTask = Task { @MainActor in
+            try await bridge.setSubtitleTrackSelection(.track(externalTrack.id))
+        }
+        defer { selectionTask.cancel() }
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertEqual(bridge.publishedSubtitleState.selectionState, .applying)
+
+        let prepared = try await bridge.subtitleOverlayRenderer.prepare([externalTrack])
+        bridge.subtitleOverlayRenderer.install(prepared)
+        bridge.publishedTrackCatalog = VesperTrackCatalog(
+            tracks: [
+                VesperMediaTrack(
+                    id: externalTrack.id,
+                    kind: .subtitle,
+                    language: externalTrack.language,
+                    isDefault: true
+                ),
+            ]
+        )
+        bridge.publishedSubtitleState = .ready(advertisedTrackCount: 1, selectableTrackCount: 1)
+
+        try await selectionTask.value
+
+        XCTAssertEqual(bridge.publishedRequestedSubtitleSelection, .track(externalTrack.id))
+        XCTAssertEqual(bridge.publishedConfirmedSubtitleSelection, .track(externalTrack.id))
+        XCTAssertEqual(bridge.publishedEffectiveSubtitleTrackId, externalTrack.id)
+        XCTAssertEqual(bridge.publishedSubtitleState.selectionState, .confirmed)
+    }
+
+    @MainActor
+    func testResilienceItemResetDoesNotPublishTheOldItemAsEffective() {
+        let trackId = "stable-subtitle-id"
+        let confirmed = VesperTrackSelection.track(trackId)
+        let bridge = VesperNativePlayerBridge()
+        bridge.publishedConfirmedSubtitleSelection = confirmed
+        bridge.publishedEffectiveSubtitleTrackId = trackId
+        bridge.publishedTrackSelection = VesperTrackSelectionSnapshot(
+            subtitle: confirmed,
+            confirmedSubtitle: confirmed,
+            effectiveSubtitleTrackId: trackId
+        )
+        let preserved = PreservedPlaybackState(
+            positionMs: 0,
+            restorePosition: false,
+            seekToLiveEdge: false,
+            playbackRate: 1,
+            playbackState: .ready,
+            shouldResumePlayback: false,
+            audioSelection: .auto(),
+            subtitleSelection: confirmed,
+            abrPolicy: .auto()
+        )
+        bridge.pendingResilienceRestore = PendingResilienceRestore(
+            sourceUri: "file:///tmp/video.mp4",
+            state: preserved
+        )
+
+        bridge.resetTrackState()
+
+        XCTAssertEqual(bridge.publishedConfirmedSubtitleSelection, confirmed)
+        XCTAssertEqual(bridge.publishedTrackSelection.confirmedSubtitle, confirmed)
+        XCTAssertNil(bridge.publishedEffectiveSubtitleTrackId)
+        XCTAssertNil(bridge.publishedTrackSelection.effectiveSubtitleTrackId)
+    }
+
+    func testEmbeddedSubtitleIdentityIsStableAcrossMetadataOrdering() {
+        let first = stableEmbeddedSubtitleTrackId(
+            language: "zh-Hans",
+            label: "Commentary: main / descriptive",
+            isForced: false,
+            codecValues: [0x77767474, 0x73756274],
+            characteristics: ["public.accessibility", "public.main-program-content"]
+        )
+        let reordered = stableEmbeddedSubtitleTrackId(
+            language: "zh-Hans",
+            label: "Commentary: main / descriptive",
+            isForced: false,
+            codecValues: [0x73756274, 0x77767474],
+            characteristics: ["public.main-program-content", "public.accessibility"]
+        )
+
+        XCTAssertEqual(first, reordered)
+        XCTAssertTrue(first.hasPrefix("subtitle:av:"))
+    }
+
+    func testEmbeddedSubtitleIdentityPreservesSemanticFieldBoundaries() {
+        let labelContainsDelimiter = stableEmbeddedSubtitleTrackId(
+            language: "en",
+            label: "main:forced",
+            isForced: false,
+            codecValues: [],
+            characteristics: []
+        )
+        let forcedTrack = stableEmbeddedSubtitleTrackId(
+            language: "en",
+            label: "main",
+            isForced: true,
+            codecValues: [],
+            characteristics: []
+        )
+        let missingLanguage = stableEmbeddedSubtitleTrackId(
+            language: nil,
+            label: "main",
+            isForced: false,
+            codecValues: [],
+            characteristics: []
+        )
+        let emptyLanguage = stableEmbeddedSubtitleTrackId(
+            language: "",
+            label: "main",
+            isForced: false,
+            codecValues: [],
+            characteristics: []
+        )
+
+        XCTAssertNotEqual(labelContainsDelimiter, forcedTrack)
+        XCTAssertNotEqual(missingLanguage, emptyLanguage)
+    }
+
     func testSubtitleStateUnavailableHasZeroCounts() {
         let state = VesperSubtitleState.unavailable()
         XCTAssertEqual(state.status, .unavailable)
@@ -60,9 +430,44 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
             trackId: "subtitle:dash:sub-en",
             message: "missing"
         )
-        let error = try XCTUnwrap(state.error)
+        XCTAssertEqual(state.catalogState, .ready)
+        XCTAssertEqual(state.selectionState, .failed)
+        let error = try XCTUnwrap(state.selectionError)
         XCTAssertEqual(error.trackId, "subtitle:dash:sub-en")
         XCTAssertEqual(error.phase, .selection)
+    }
+
+    func testCatalogFailureReplacementPreservesSelectionFailure() throws {
+        let selectionFailure = VesperSubtitleError(
+            code: "subtitle_selection_timeout",
+            phase: .selection,
+            trackId: "opaque-track-id",
+            retriable: true,
+            message: "timed out",
+            commandId: 9,
+            sourceEpoch: 3
+        )
+        let current = VesperSubtitleState(
+            catalogState: .ready,
+            selectionState: .failed,
+            advertisedTrackCount: 2,
+            selectableTrackCount: 2,
+            catalogError: nil,
+            selectionError: selectionFailure
+        )
+        let catalogFailure = VesperSubtitleState.failed(
+            advertisedTrackCount: 2,
+            code: "subtitle_manifest_parse_failed",
+            phase: .manifest,
+            message: "manifest failed"
+        )
+
+        let merged = current.replacingCatalog(with: catalogFailure)
+
+        XCTAssertEqual(merged.catalogState, .failed)
+        XCTAssertEqual(merged.catalogError?.code, "subtitle_manifest_parse_failed")
+        XCTAssertEqual(merged.selectionState, .failed)
+        XCTAssertEqual(merged.selectionError, selectionFailure)
     }
 
     @MainActor
@@ -77,11 +482,13 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
             message: "track not in catalog"
         )
 
-        XCTAssertEqual(bridge.publishedSubtitleState.status, .failed)
+        XCTAssertEqual(bridge.publishedSubtitleState.catalogState, .ready)
+        XCTAssertEqual(bridge.publishedSubtitleState.selectionState, .failed)
         // Advertised count must be preserved across the failure transition
         // so a future ready state can still show "2 of 2 subtitles".
         XCTAssertEqual(bridge.publishedSubtitleState.advertisedTrackCount, 2)
-        let subtitleError = try XCTUnwrap(bridge.publishedSubtitleState.error)
+        XCTAssertEqual(bridge.publishedSubtitleState.selectableTrackCount, 2)
+        let subtitleError = try XCTUnwrap(bridge.publishedSubtitleState.selectionError)
         XCTAssertEqual(subtitleError.code, "subtitle_track_not_found")
         XCTAssertEqual(subtitleError.phase, .selection)
         XCTAssertEqual(subtitleError.trackId, "subtitle:dash:sub-zh")
@@ -92,8 +499,8 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
         let lastError = try XCTUnwrap(bridge.publishedLastError)
         XCTAssertEqual(lastError.code, .invalidState)
         XCTAssertEqual(lastError.category, .capability)
-        XCTAssertEqual(lastError.details["subtitlePhase"], "selection")
-        XCTAssertEqual(lastError.details["subtitleCode"], "subtitle_track_not_found")
+        XCTAssertEqual(lastError.details["phase"], "selection")
+        XCTAssertEqual(lastError.details["code"], "subtitle_track_not_found")
         XCTAssertEqual(lastError.details["trackId"], "subtitle:dash:sub-zh")
     }
 
@@ -124,30 +531,68 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
 
         bridge.reportDashSubtitleResourceFailure(
             session: currentSession,
-            source: currentSource
+            source: currentSource,
+            trackId: "subtitle:dash:sub-en"
         )
         XCTAssertEqual(bridge.publishedSubtitleState.status, .failed)
         XCTAssertEqual(
             bridge.publishedSubtitleState.error?.code,
-            "subtitle_resource_load_failed"
+            "subtitle_resource_failed"
+        )
+    }
+
+    @MainActor
+    func testDashResourceFailureKeepsRemainingSubtitleSelectable() {
+        let source = VesperPlayerSource.dash(
+            url: URL(string: "https://example.test/current.mpd")!
+        )
+        let session = VesperDashSession(sourceURL: URL(string: source.uri)!)
+        let bridge = VesperNativePlayerBridge(initialSource: source)
+        bridge.currentDashSession = session
+        bridge.publishedTrackCatalog = VesperTrackCatalog(
+            tracks: [
+                VesperMediaTrack(id: "subtitle:dash:sub-en", kind: .subtitle),
+                VesperMediaTrack(id: "subtitle:dash:sub-ja", kind: .subtitle),
+            ]
+        )
+        bridge.publishedSubtitleState = .ready(
+            advertisedTrackCount: 2,
+            selectableTrackCount: 2
+        )
+
+        bridge.reportDashSubtitleResourceFailure(
+            session: session,
+            source: source,
+            trackId: "sub-en"
+        )
+        bridge.reportDashSubtitleResourceFailure(
+            session: session,
+            source: source,
+            trackId: "sub-en"
+        )
+
+        XCTAssertEqual(bridge.publishedSubtitleState.catalogState, .ready)
+        XCTAssertEqual(bridge.publishedSubtitleState.advertisedTrackCount, 2)
+        XCTAssertEqual(bridge.publishedSubtitleState.selectableTrackCount, 1)
+        XCTAssertEqual(
+            bridge.publishedSubtitleState.catalogError?.code,
+            "subtitle_resource_failed"
+        )
+        XCTAssertEqual(
+            bridge.publishedTrackCatalog.subtitleTracks.map(\.id),
+            ["subtitle:dash:sub-ja"]
         )
     }
 
     @MainActor
     func testClearSubtitleFailureRevertsToReadyWhenSelectableTracksExist() {
         let bridge = VesperNativePlayerBridge()
-        bridge.publishedSubtitleState = .failed(
-            advertisedTrackCount: 2,
-            code: "subtitle_track_not_found",
-            phase: .selection,
-            message: "previous failure"
-        )
-        // Simulate that a previous load produced a selectable track.
         bridge.publishedSubtitleState = VesperSubtitleState(
-            status: .failed,
+            catalogState: .ready,
+            selectionState: .failed,
             advertisedTrackCount: 2,
             selectableTrackCount: 1,
-            error: VesperSubtitleError(
+            selectionError: VesperSubtitleError(
                 code: "subtitle_track_not_found",
                 phase: .selection,
                 trackId: nil,
@@ -158,14 +603,15 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
 
         bridge.clearSubtitleFailure()
 
-        XCTAssertEqual(bridge.publishedSubtitleState.status, .ready)
+        XCTAssertEqual(bridge.publishedSubtitleState.catalogState, .ready)
+        XCTAssertEqual(bridge.publishedSubtitleState.selectionState, .idle)
         XCTAssertEqual(bridge.publishedSubtitleState.advertisedTrackCount, 2)
         XCTAssertEqual(bridge.publishedSubtitleState.selectableTrackCount, 1)
         XCTAssertNil(bridge.publishedSubtitleState.error)
     }
 
     @MainActor
-    func testClearSubtitleFailureRevertsToLoadingWhenNoSelectableTracks() {
+    func testClearSubtitleFailureDoesNotEraseCatalogFailure() {
         let bridge = VesperNativePlayerBridge()
         bridge.publishedSubtitleState = .failed(
             advertisedTrackCount: 1,
@@ -176,11 +622,14 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
 
         bridge.clearSubtitleFailure()
 
-        // Without any selectable track, the cleared state is `loading`
-        // (still waiting for the AV legible group to populate).
-        XCTAssertEqual(bridge.publishedSubtitleState.status, .loading)
+        XCTAssertEqual(bridge.publishedSubtitleState.catalogState, .failed)
+        XCTAssertEqual(bridge.publishedSubtitleState.selectionState, .idle)
         XCTAssertEqual(bridge.publishedSubtitleState.advertisedTrackCount, 1)
-        XCTAssertNil(bridge.publishedSubtitleState.error)
+        XCTAssertEqual(
+            bridge.publishedSubtitleState.catalogError?.code,
+            "subtitle_platform_track_unavailable"
+        )
+        XCTAssertNil(bridge.publishedSubtitleState.selectionError)
     }
 
     @MainActor
@@ -197,17 +646,24 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
 
         let map = controller.subtitleStateWireMap()
 
-        // Status / phase / code wire names must be lowercase to match the
-        // Dart enum names in subtitle_state_models.dart.
-        XCTAssertEqual(map["status"] as? String, "failed")
+        XCTAssertEqual(map["catalogState"] as? String, "ready")
+        XCTAssertEqual(map["selectionState"] as? String, "failed")
+        // The legacy status is catalog-derived; the legacy error alias still
+        // exposes the selection failure for old clients.
+        XCTAssertEqual(map["status"] as? String, "ready")
         XCTAssertEqual(map["advertisedTrackCount"] as? Int, 2)
         XCTAssertEqual(map["selectableTrackCount"] as? Int, 0)
-        let errorMap = try XCTUnwrap(map["error"] as? [String: Any])
+        XCTAssertTrue(map["catalogError"] is NSNull)
+        let errorMap = try XCTUnwrap(map["selectionError"] as? [String: Any])
         XCTAssertEqual(errorMap["code"] as? String, "subtitle_track_not_found")
         XCTAssertEqual(errorMap["phase"] as? String, "selection")
         XCTAssertEqual(errorMap["trackId"] as? String, "subtitle:dash:sub-en")
         XCTAssertEqual(errorMap["retriable"] as? Bool, false)
         XCTAssertEqual(errorMap["message"] as? String, "missing")
+        XCTAssertEqual(
+            (map["error"] as? [String: Any])?["code"] as? String,
+            "subtitle_track_not_found"
+        )
     }
 
     @MainActor
@@ -238,9 +694,11 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
         let error = VesperSubtitleSelectionError.platformTrackUnavailable(
             trackId: "subtitle:dash:sub-en"
         )
+        XCTAssertEqual(error.subtitleCode, "subtitle_platform_track_unavailable")
+        XCTAssertEqual(error.subtitleTrackId, "subtitle:dash:sub-en")
         XCTAssertEqual(
             error.errorDescription,
-            "subtitle_platform_track_unavailable: no legible media selection group trackId=subtitle:dash:sub-en"
+            "No legible media selection group is available. trackId=subtitle:dash:sub-en"
         )
     }
 
@@ -248,9 +706,11 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
     /// message shape (used by `.auto` paths where no id is in flight).
     func testPlatformTrackUnavailableErrorWithoutTrackId() {
         let error = VesperSubtitleSelectionError.platformTrackUnavailable(trackId: nil)
+        XCTAssertEqual(error.subtitleCode, "subtitle_platform_track_unavailable")
+        XCTAssertNil(error.subtitleTrackId)
         XCTAssertEqual(
             error.errorDescription,
-            "subtitle_platform_track_unavailable: no legible media selection group"
+            "No legible media selection group is available."
         )
     }
 
@@ -258,27 +718,209 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
     /// throw `.trackNotFound(trackId:)` carrying the offending id.
     func testSetSubtitleTrackSelectionThrowsForUnknownTrackId() {
         let error = VesperSubtitleSelectionError.trackNotFound(trackId: "subtitle:dash:sub-zh")
+        XCTAssertEqual(error.subtitleCode, "subtitle_track_not_found")
+        XCTAssertEqual(error.subtitleTrackId, "subtitle:dash:sub-zh")
         XCTAssertEqual(
             error.errorDescription,
-            "subtitle_track_not_found: trackId=subtitle:dash:sub-zh is not in the current catalog"
+            "Subtitle trackId=subtitle:dash:sub-zh is not in the current catalog."
         )
     }
 
     /// `.autoCandidateUnavailable` carries the matching subtitle_* code.
     func testAutoCandidateUnavailableErrorCarriesStructuredCode() {
         let error = VesperSubtitleSelectionError.autoCandidateUnavailable
+        XCTAssertEqual(error.subtitleCode, "subtitle_auto_candidate_unavailable")
+        XCTAssertNil(error.subtitleTrackId)
         XCTAssertEqual(
             error.errorDescription,
-            "subtitle_auto_candidate_unavailable: no subtitle candidate for auto selection"
+            "No subtitle candidate is available for automatic selection."
         )
+    }
+
+    func testAutomaticSubtitleResolverPrefersNativeDefaultOverNonDefaultExternal() {
+        let nativeDefault = VesperMediaTrack(
+            id: "native-default",
+            kind: .subtitle,
+            language: "ja",
+            isDefault: true
+        )
+        let externalNonDefault = VesperMediaTrack(
+            id: "external-non-default",
+            kind: .subtitle,
+            language: "en"
+        )
+
+        let selected = resolveAutomaticSubtitleTrackId(
+            tracks: [externalNonDefault, nativeDefault],
+            preferredLanguage: nil,
+            selectUndeterminedLanguage: false,
+            allowDefaultCandidate: true
+        )
+
+        XCTAssertEqual(selected, nativeDefault.id)
+    }
+
+    func testAutomaticSubtitleResolverAppliesLanguageBeforeBackendOrDefault() {
+        let nativeDefault = VesperMediaTrack(
+            id: "native-default",
+            kind: .subtitle,
+            language: "ja",
+            isDefault: true
+        )
+        let externalEnglish = VesperMediaTrack(
+            id: "external-english",
+            kind: .subtitle,
+            language: "en-US"
+        )
+
+        let selected = resolveAutomaticSubtitleTrackId(
+            tracks: [nativeDefault, externalEnglish],
+            preferredLanguage: "en",
+            selectUndeterminedLanguage: false,
+            allowDefaultCandidate: true
+        )
+
+        XCTAssertEqual(selected, externalEnglish.id)
+    }
+
+    func testAutomaticSubtitleResolverIsStableAcrossCandidateOrdering() {
+        let first = VesperMediaTrack(
+            id: "track-b",
+            kind: .subtitle,
+            language: "en"
+        )
+        let preferredDefault = VesperMediaTrack(
+            id: "track-a",
+            kind: .subtitle,
+            language: "en",
+            isDefault: true
+        )
+
+        let forward = resolveAutomaticSubtitleTrackId(
+            tracks: [first, preferredDefault],
+            preferredLanguage: "en",
+            selectUndeterminedLanguage: false,
+            allowDefaultCandidate: false
+        )
+        let reversed = resolveAutomaticSubtitleTrackId(
+            tracks: [preferredDefault, first],
+            preferredLanguage: "en",
+            selectUndeterminedLanguage: false,
+            allowDefaultCandidate: false
+        )
+
+        XCTAssertEqual(forward, preferredDefault.id)
+        XCTAssertEqual(reversed, preferredDefault.id)
+    }
+
+    func testAutomaticSubtitleDefaultCandidateRespectsSelectionOrigin() {
+        let defaultTrack = VesperMediaTrack(
+            id: "external-default",
+            kind: .subtitle,
+            language: "zh",
+            isDefault: true
+        )
+
+        func resolvedTrackId(
+            origin: SubtitleSelectionOrigin,
+            startupPolicySelectsSubtitlesByDefault: Bool
+        ) -> String? {
+            resolveAutomaticSubtitleTrackId(
+                tracks: [defaultTrack],
+                preferredLanguage: nil,
+                selectUndeterminedLanguage: false,
+                allowDefaultCandidate: automaticSubtitleSelectionAllowsDefaultCandidate(
+                    origin: origin,
+                    startupPolicySelectsSubtitlesByDefault:
+                        startupPolicySelectsSubtitlesByDefault
+                )
+            )
+        }
+
+        XCTAssertNil(
+            resolvedTrackId(
+                origin: .defaultPolicy,
+                startupPolicySelectsSubtitlesByDefault: false
+            )
+        )
+        XCTAssertEqual(
+            resolvedTrackId(
+                origin: .defaultPolicy,
+                startupPolicySelectsSubtitlesByDefault: true
+            ),
+            defaultTrack.id
+        )
+        for origin in [
+            SubtitleSelectionOrigin.explicit,
+            .resilienceRestore,
+            .visibilityRestore,
+        ] {
+            XCTAssertEqual(
+                resolvedTrackId(
+                    origin: origin,
+                    startupPolicySelectsSubtitlesByDefault: false
+                ),
+                defaultTrack.id
+            )
+        }
     }
 
     /// `.selectionDidNotConverge(trackId:)` carries the matching code.
     func testSelectionDidNotConvergeErrorCarriesStructuredCode() {
         let error = VesperSubtitleSelectionError.selectionDidNotConverge(trackId: "subtitle:dash:sub-en")
+        XCTAssertEqual(error.subtitleCode, "subtitle_selection_mismatch")
+        XCTAssertEqual(error.subtitleTrackId, "subtitle:dash:sub-en")
         XCTAssertEqual(
             error.errorDescription,
-            "subtitle_selection_failed: AVPlayer did not converge on the requested option trackId=subtitle:dash:sub-en"
+            "AVPlayer did not converge on the requested subtitle option. trackId=subtitle:dash:sub-en"
+        )
+    }
+
+    func testSelectionCommandErrorPreservesTransactionIdentity() {
+        let error = VesperSubtitleSelectionCommandError(
+            failure: .selectionTimedOut(trackId: "opaque-track-id"),
+            commandId: 42,
+            sourceEpoch: 7
+        )
+
+        XCTAssertEqual(error.code, "subtitle_selection_timeout")
+        XCTAssertEqual(error.trackId, "opaque-track-id")
+        XCTAssertTrue(error.retriable)
+        XCTAssertEqual(error.commandId, 42)
+        XCTAssertEqual(error.sourceEpoch, 7)
+    }
+
+    func testInternalSelectionOriginsCannotSupersedeExplicitIntent() {
+        XCTAssertFalse(
+            SubtitleSelectionOrigin.defaultPolicy.canSupersede(.explicit)
+        )
+        XCTAssertFalse(
+            SubtitleSelectionOrigin.resilienceRestore.canSupersede(.explicit)
+        )
+        XCTAssertFalse(
+            SubtitleSelectionOrigin.visibilityRestore.canSupersede(.explicit)
+        )
+        XCTAssertTrue(
+            SubtitleSelectionOrigin.explicit.canSupersede(.resilienceRestore)
+        )
+        XCTAssertTrue(
+            SubtitleSelectionOrigin.resilienceRestore.canSupersede(.defaultPolicy)
         )
     }
 }
+
+private let sampleHlsSubtitleMaster = #"""
+#EXTM3U
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",LANGUAGE="en",DEFAULT=YES,AUTOSELECT=YES,FORCED=NO,URI="sub-en.m3u8"
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English Forced",LANGUAGE="en",DEFAULT=NO,AUTOSELECT=YES,FORCED=YES,URI="sub-en-forced.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=800000,SUBTITLES="subs"
+video.m3u8
+"""#
+
+private let sampleHlsSubtitleMasterReordered = #"""
+#EXTM3U
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English Forced",LANGUAGE="en",DEFAULT=NO,AUTOSELECT=YES,FORCED=YES,URI="sub-en-forced.m3u8"
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",LANGUAGE="en",DEFAULT=YES,AUTOSELECT=YES,FORCED=NO,URI="sub-en.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=800000,SUBTITLES="subs"
+video.m3u8
+"""#

@@ -107,18 +107,27 @@ public struct VesperAbrPolicy: Equatable {
 public struct VesperTrackSelectionSnapshot: Equatable {
     public let video: VesperTrackSelection
     public let audio: VesperTrackSelection
+    /// The most recent subtitle request issued by the host.
     public let subtitle: VesperTrackSelection
+    /// The last subtitle request confirmed by the native backend.
+    public let confirmedSubtitle: VesperTrackSelection
+    /// The native subtitle currently effective after confirmation, if any.
+    public let effectiveSubtitleTrackId: String?
     public let abrPolicy: VesperAbrPolicy
 
     public init(
         video: VesperTrackSelection = .auto(),
         audio: VesperTrackSelection = .auto(),
         subtitle: VesperTrackSelection = .disabled(),
+        confirmedSubtitle: VesperTrackSelection? = nil,
+        effectiveSubtitleTrackId: String? = nil,
         abrPolicy: VesperAbrPolicy = .auto(),
     ) {
         self.video = video
         self.audio = audio
         self.subtitle = subtitle
+        self.confirmedSubtitle = confirmedSubtitle ?? subtitle
+        self.effectiveSubtitleTrackId = effectiveSubtitleTrackId
         self.abrPolicy = abrPolicy
     }
 }

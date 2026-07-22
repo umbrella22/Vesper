@@ -375,10 +375,11 @@ final sourceWithSubtitles = VesperPlayerSource(
   label: 'Video',
   kind: VesperPlayerSourceKind.remote,
   protocol: VesperPlayerSourceProtocol.progressive,
-  subtitleConfigurations: const <VesperSubtitleSideLoad>[
-    VesperSubtitleSideLoad(
+  externalSubtitles: const <VesperExternalSubtitleSource>[
+    VesperExternalSubtitleSource(
+      id: 'english-main',
       uri: 'https://example.com/subtitles/en.srt',
-      mimeType: VesperSubtitleSideLoad.mimeSubrip,
+      mimeType: VesperExternalSubtitleSource.mimeSubrip,
       language: 'en',
       label: 'English',
     ),
@@ -393,6 +394,22 @@ await controller.setAbrPolicy(
   VesperAbrPolicy.fixedTrack(videoTracks.last.id),
 );
 ```
+
+### 0.4 Subtitle Migration
+
+- Android `setSubtitleTrackSelection` is suspending and iOS is `async throws`;
+  the Dart `Future<void>` completes only after native confirmation.
+- Replace `VesperSubtitleSideLoad` with `VesperExternalSubtitleSource` and give
+  every source-local track a non-empty unique `id`.
+- Replace `subtitleConfigurations` with `externalSubtitles`. The old names are
+  deprecated aliases for source migration only.
+- Read `snapshot.trackSelection.subtitle`, `confirmedSubtitle`, and
+  `effectiveSubtitleTrackId` as requested, confirmed, and currently rendered
+  state. Do not parse or depend on the format of track ids.
+- `subtitleState.catalogState` and `selectionState` are independent. A selection
+  failure preserves a ready catalog and the last confirmed/effective selection.
+- Subtitle command failures are thrown as `VesperSubtitleException` with
+  `code`, `phase`, `trackId`, `retriable`, `commandId`, and `sourceEpoch`.
 
 On iOS, `VesperAbrPolicy.fixedTrack(...)` is implemented as best-effort HLS
 variant pinning on iOS 15+, not exact AVPlayer video-track switching. Single-

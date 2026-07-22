@@ -3,7 +3,7 @@ import Foundation
 internal import VesperPlayerKitBridgeShim
 
 final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDelegate {
-    typealias SubtitleResourceFailureHandler = @MainActor @Sendable () -> Void
+    typealias SubtitleResourceFailureHandler = @MainActor @Sendable (String) -> Void
 
     let resourceLoadingQueue: DispatchQueue
 
@@ -87,7 +87,7 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
                    let subtitleResourceFailureHandler = self?.subtitleResourceFailureHandler
                 {
                     Task { @MainActor in
-                        subtitleResourceFailureHandler()
+                        subtitleResourceFailureHandler(subtitleRenditionId)
                     }
                 }
                 self?.finish(loadingRequest, requestId: requestId, error: error)

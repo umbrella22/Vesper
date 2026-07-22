@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - Unreleased
 
 ### Added
 
@@ -12,6 +12,8 @@
 ### Breaking Changes
 
 - The iOS Flutter implementation now requires Flutter 3.44.0 or newer.
+- Subtitle MethodChannel calls now await the iOS host API and return canonical
+  `vesper_subtitle_error` details for validation and convergence failures.
 
 ### Changed
 
@@ -19,6 +21,8 @@
   without publishing generic player errors.
 - `exitPictureInPicture` now lets `AVPictureInPictureControllerDelegate`
   callbacks publish the final inactive state.
+- Subtitle snapshots now carry canonical catalog/selection state and
+  requested/confirmed/effective selection fields.
 - Bundled SourceNormalizer discovery now resolves the signed sibling framework
   embedded by the Flutter App target through the canonical optional-plugin
   SwiftPM package.

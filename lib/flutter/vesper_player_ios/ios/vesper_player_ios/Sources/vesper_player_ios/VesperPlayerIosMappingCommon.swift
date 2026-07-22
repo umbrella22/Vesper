@@ -37,6 +37,36 @@ enum PluginError: LocalizedError {
     }
 }
 
+struct PluginSubtitleError: LocalizedError {
+    let code: String
+    let phase: String
+    let trackId: String?
+    let retriable: Bool
+    let message: String
+    let commandId: UInt64?
+    let sourceEpoch: UInt64?
+
+    init(
+        code: String,
+        phase: String,
+        trackId: String? = nil,
+        retriable: Bool = false,
+        message: String,
+        commandId: UInt64? = nil,
+        sourceEpoch: UInt64? = nil
+    ) {
+        self.code = code
+        self.phase = phase
+        self.trackId = trackId
+        self.retriable = retriable
+        self.message = message
+        self.commandId = commandId
+        self.sourceEpoch = sourceEpoch
+    }
+
+    var errorDescription: String? { message }
+}
+
 func arguments(of call: FlutterMethodCall) -> [String: Any] {
     stringKeyedMap(call.arguments) ?? [:]
 }
@@ -106,4 +136,3 @@ func stringMap(_ value: Any?) -> [String: String] {
     }
     return decoded
 }
-

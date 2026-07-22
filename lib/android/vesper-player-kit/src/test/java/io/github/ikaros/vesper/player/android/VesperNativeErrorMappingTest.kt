@@ -14,6 +14,33 @@ import org.junit.Test
 
 class VesperNativeErrorMappingTest {
     @Test
+    fun sharedSubtitleContractKeepsCanonicalStateAndErrorFields() {
+        val state = contractText("subtitle_state.json")
+        assertEquals(
+            VesperSubtitleCatalogState.Ready,
+            VesperSubtitleCatalogState.fromWire(contractString(state, "catalogState")),
+        )
+        assertEquals(
+            VesperSubtitleSelectionState.Failed,
+            VesperSubtitleSelectionState.fromWire(contractString(state, "selectionState")),
+        )
+        assertTrue(state.contains("\"advertisedTrackCount\": 3"))
+        assertTrue(state.contains("\"selectableTrackCount\": 2"))
+        assertTrue(state.contains("\"code\": \"subtitle_resource_failed\""))
+        assertTrue(state.contains("\"trackId\": \"opaque-track-7\""))
+        assertTrue(state.contains("\"commandId\": 42"))
+        assertTrue(state.contains("\"sourceEpoch\": 9"))
+
+        val error = contractText("subtitle_error.json")
+        assertEquals("subtitle", contractString(error, "domain"))
+        assertEquals("subtitle_selection_timeout", contractString(error, "code"))
+        assertEquals(
+            VesperSubtitleErrorPhase.Selection,
+            VesperSubtitleErrorPhase.fromWire(contractString(error, "phase")),
+        )
+    }
+
+    @Test
     fun sharedPlayerErrorContractKeepsStableWireNames() {
         val payload = contractText("player_error.json")
 
@@ -28,6 +55,28 @@ class VesperNativeErrorMappingTest {
         )
         assertTrue(payload.contains("\"retriable\": false"))
         assertTrue(payload.contains("\"operation\": \"setAbrPolicy\""))
+    }
+
+    @Test
+    fun nativeSubtitleErrorPreservesTransactionIdentityAndRetryability() {
+        val error =
+            subtitleNativeError(
+                code = "subtitle_selection_timeout",
+                phase = "selection",
+                trackId = "caption-en",
+                retriable = true,
+                commandId = 42,
+                sourceEpoch = 9,
+                message = "confirmation timed out",
+            )
+
+        assertEquals("subtitle", error.details["domain"])
+        assertEquals("subtitle_selection_timeout", error.details["code"])
+        assertEquals("selection", error.details["phase"])
+        assertEquals("caption-en", error.details["trackId"])
+        assertEquals(true, error.details["retriable"])
+        assertEquals(42L, error.details["commandId"])
+        assertEquals(9L, error.details["sourceEpoch"])
     }
 
     @Test

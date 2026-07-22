@@ -126,10 +126,10 @@ Core (`vesper-player-kit`):
 - `VesperPlayerControllerFactory` — `createDefault(...)` for production bridge, `createPreview(...)` for a Fake bridge
 - `VesperPlayerBackendFamily` — public backend family snapshot exposed through `VesperPlayerController.backendFamily`
 - `VesperPlayerSource` — media source DTO with `local / remote / hls / dash / rtmp / rtsp / flvLive` factories
-- `VesperSubtitleSideLoad` and `VesperSubtitleStyle` — external SRT / WebVTT / SSA attachment plus visibility and bounded font scaling
+- `VesperExternalSubtitleSource` and `VesperSubtitleStyle` — external SRT / WebVTT / SSA attachment plus visibility and bounded font scaling
 - `VesperPlayerDrmConfiguration` — Widevine license metadata for direct Media3 playback
 - `VesperTrackSelection` — audio / subtitle / video track selection (`auto`, `disabled`, `track(id)`)
-- Reactive state on the controller: `uiState`, `trackCatalog`, `trackSelection`, `effectiveVideoTrackId`, `videoVariantObservation`, `resiliencePolicy` (all `StateFlow<...>`)
+- Reactive state on the controller: `uiState`, `trackCatalog`, `trackSelection`, `subtitleState`, `requestedSubtitleSelection`, `confirmedSubtitleSelection`, `effectiveSubtitleTrackId`, `effectiveVideoTrackId`, `videoVariantObservation`, `resiliencePolicy` (all `StateFlow<...>`)
 - `VesperAbrPolicy` — `auto`, `constrained`, `fixedTrack`
 - `VesperPlaybackResiliencePolicy` with presets: `balanced()`, `streaming()`, `resilient()`, `lowLatency()`
 - `VesperBufferingPolicy`, `VesperRetryPolicy`, `VesperCachePolicy`
@@ -138,6 +138,12 @@ Core (`vesper-player-kit`):
 - `VesperDecoderBackend` — `SystemOnly` / `SystemPreferred` / `ExtensionPreferred`
 - `VesperVideoSurfaceKind` — `SurfaceView` (default, HDR / high frame rate) or `TextureView` (scrolling / animated stages)
 - `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput / shareTaskOutput / saveTaskOutput`
+
+`setSubtitleTrackSelection` is a suspending API in 0.4. It returns only after
+Media3 confirms the requested state or throws a structured subtitle error.
+`VesperSubtitleSideLoad` remains a deprecated typealias, and
+`VesperPlayerSource.subtitleConfigurations` remains a deprecated read-only alias;
+new source declarations use `externalSubtitles`.
 
 External playback (`vesper-player-kit-external-playback`):
 

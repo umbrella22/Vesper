@@ -136,8 +136,10 @@ resource to AVPlayer through a `vesper-normalized://` resource loader.
 `requireNormalized` reports a source error. Standard HLS and DASH stay
 native-first unless normalization is explicitly required or forced. The plugin
 diagnostics panel shows route, profile, cache usage, fallback reason, and
-participation. FrameProcessor remains debug diagnostics only in this example
-and is never marked as participating in mobile playback.
+participation. FrameProcessor does not participate in direct AVPlayer playback;
+with the explicit SDR native-frame route, the example can route normalized
+packets through the VideoToolbox Decoder, diagnostic FrameProcessor, and Metal
+presentation and report non-zero processed and presented frame counters.
 
 ## Build From CLI
 

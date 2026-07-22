@@ -198,6 +198,28 @@ let sampleWebVttMultiSubtitleMpd = #"""
 </MPD>
 """#
 
+/// One default subtitle adaptation set with two representations. The default
+/// role belongs to the logical adaptation set, so the catalog must expose only
+/// one default representative.
+let sampleWebVttDefaultMultiRepresentationMpd = #"""
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD type="static" mediaPresentationDuration="PT6S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true">
+      <SegmentTemplate timescale="1000" initialization="init-$RepresentationID$.mp4" media="video-$Number$.m4s" startNumber="1" duration="2000"/>
+      <Representation id="v1" bandwidth="800000" codecs="avc1.64001f" width="1280" height="720"/>
+    </AdaptationSet>
+    <AdaptationSet id="subs-en" contentType="text" mimeType="text/vtt" lang="en">
+      <Label>English</Label>
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="main"/>
+      <SegmentTemplate timescale="1000" media="sub-en-$Number$.vtt" startNumber="1" duration="2000"/>
+      <Representation id="sub-en-low" bandwidth="600" codecs="wvtt"/>
+      <Representation id="sub-en-high" bandwidth="1200" codecs="wvtt"/>
+    </AdaptationSet>
+  </Period>
+</MPD>
+"""#
+
 /// Two subtitle representations sharing the same `Representation@id`.
 ///
 /// The subtitle improvement plan (section 3.2) requires this to surface a

@@ -990,6 +990,7 @@ pub unsafe extern "C" fn player_ffi_error_free(error: *mut PlayerFfiError) {
     ffi_void(|| {
         let _ = with_error_mut(error, |error| {
             free_c_string(&mut error.message);
+            free_c_string(&mut error.details_json);
             *error = PlayerFfiError::default();
         });
     });

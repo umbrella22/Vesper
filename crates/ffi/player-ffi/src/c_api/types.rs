@@ -303,13 +303,16 @@ const _: [(); std::mem::size_of::<u64>()] = [(); std::mem::size_of::<PlayerFfiHa
 /// Error payload written by status-returning `player_ffi_*` calls.
 ///
 /// When a call returns `PlayerFfiCallStatus::Error`, the caller owns the
-/// `message` buffer and must release it with `player_ffi_error_free` before
-/// reusing the same storage for another error result.
+/// `message` and optional `details_json` buffers and must release them with
+/// `player_ffi_error_free` before reusing the same storage for another error
+/// result. `details_json` is a UTF-8 JSON object when present and is null for
+/// errors that do not carry structured details.
 pub struct PlayerFfiError {
     pub code: PlayerFfiErrorCode,
     pub category: PlayerFfiErrorCategory,
     pub retriable: bool,
     pub message: *mut c_char,
+    pub details_json: *mut c_char,
 }
 
 #[repr(C)]

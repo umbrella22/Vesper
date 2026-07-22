@@ -45,3 +45,32 @@ struct FixedTrackMismatchSignature: Equatable {
         height = observation?.height
     }
 }
+
+enum SubtitleSelectionOrigin {
+    case explicit
+    case defaultPolicy
+    case resilienceRestore
+    case visibilityRestore
+
+    func canSupersede(_ pendingOrigin: SubtitleSelectionOrigin) -> Bool {
+        switch self {
+        case .explicit:
+            return true
+        case .resilienceRestore:
+            return pendingOrigin != .explicit
+        case .defaultPolicy:
+            return pendingOrigin == .defaultPolicy || pendingOrigin == .visibilityRestore
+        case .visibilityRestore:
+            return pendingOrigin == .visibilityRestore
+        }
+    }
+}
+
+struct PendingSubtitleSelection {
+    let commandId: UInt64
+    let sourceEpoch: UInt64
+    let playbackEpoch: UInt64
+    let item: AVPlayerItem
+    let selection: VesperTrackSelection
+    let origin: SubtitleSelectionOrigin
+}

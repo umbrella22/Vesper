@@ -1,7 +1,7 @@
 part of '../models.dart';
 
 final class VesperPlayerSnapshot {
-  const VesperPlayerSnapshot({
+  VesperPlayerSnapshot({
     required this.title,
     required this.subtitle,
     required this.sourceLabel,
@@ -16,7 +16,10 @@ final class VesperPlayerSnapshot {
     this.backendFamily = VesperPlayerBackendFamily.unknown,
     this.capabilities = const VesperPlayerCapabilities.unsupported(),
     this.trackCatalog = const VesperTrackCatalog(),
-    this.trackSelection = const VesperTrackSelectionSnapshot(),
+    VesperTrackSelectionSnapshot? trackSelection,
+    VesperTrackSelection? requestedSubtitleSelection,
+    VesperTrackSelection? confirmedSubtitleSelection,
+    String? effectiveSubtitleTrackId,
     this.effectiveVideoTrackId,
     this.videoVariantObservation,
     this.fixedTrackStatus,
@@ -24,7 +27,15 @@ final class VesperPlayerSnapshot {
     this.pluginDiagnostics = const <VesperPluginDiagnostic>[],
     this.lastError,
     this.subtitleState = VesperSubtitleState.empty,
-  });
+  }) : trackSelection = trackSelection ??
+            VesperTrackSelectionSnapshot(
+              subtitle: requestedSubtitleSelection ??
+                  const VesperTrackSelection.disabled(),
+              confirmedSubtitle: confirmedSubtitleSelection ??
+                  requestedSubtitleSelection ??
+                  const VesperTrackSelection.disabled(),
+              effectiveSubtitleTrackId: effectiveSubtitleTrackId,
+            );
 
   const VesperPlayerSnapshot.initial()
       : title = 'Vesper',
@@ -55,6 +66,9 @@ final class VesperPlayerSnapshot {
     final rawCapabilities = map['capabilities'];
     final rawTrackCatalog = map['trackCatalog'];
     final rawTrackSelection = map['trackSelection'];
+    final rawRequestedSubtitleSelection = map['requestedSubtitleSelection'];
+    final rawConfirmedSubtitleSelection = map['confirmedSubtitleSelection'];
+    final rawEffectiveSubtitleTrackId = map['effectiveSubtitleTrackId'];
     final rawEffectiveVideoTrackId = map['effectiveVideoTrackId'];
     final rawVideoVariantObservation = map['videoVariantObservation'];
     final rawFixedTrackStatus = map['fixedTrackStatus'];
@@ -70,6 +84,39 @@ final class VesperPlayerSnapshot {
     final capabilities = _rawMap(rawCapabilities);
     final trackCatalog = _rawMap(rawTrackCatalog);
     final trackSelection = _rawMap(rawTrackSelection);
+    final requestedSubtitleSelection = _rawMap(
+      rawRequestedSubtitleSelection,
+    );
+    final confirmedSubtitleSelection = _rawMap(
+      rawConfirmedSubtitleSelection,
+    );
+    final decodedTrackSelection = trackSelection != null
+        ? VesperTrackSelectionSnapshot.fromMap(trackSelection)
+        : const VesperTrackSelectionSnapshot();
+    final canonicalRequestedSubtitle =
+        trackSelection?.containsKey('subtitle') == true
+            ? decodedTrackSelection.subtitle
+            : requestedSubtitleSelection != null
+                ? VesperTrackSelection.fromMap(requestedSubtitleSelection)
+                : decodedTrackSelection.subtitle;
+    final canonicalConfirmedSubtitle =
+        trackSelection?.containsKey('confirmedSubtitle') == true
+            ? decodedTrackSelection.confirmedSubtitle
+            : confirmedSubtitleSelection != null
+                ? VesperTrackSelection.fromMap(confirmedSubtitleSelection)
+                : canonicalRequestedSubtitle;
+    final canonicalEffectiveSubtitleTrackId =
+        trackSelection?.containsKey('effectiveSubtitleTrackId') == true
+            ? decodedTrackSelection.effectiveSubtitleTrackId
+            : rawEffectiveSubtitleTrackId as String?;
+    final canonicalTrackSelection = VesperTrackSelectionSnapshot(
+      video: decodedTrackSelection.video,
+      audio: decodedTrackSelection.audio,
+      subtitle: canonicalRequestedSubtitle,
+      confirmedSubtitle: canonicalConfirmedSubtitle,
+      effectiveSubtitleTrackId: canonicalEffectiveSubtitleTrackId,
+      abrPolicy: decodedTrackSelection.abrPolicy,
+    );
     final videoVariantObservation = _rawMap(rawVideoVariantObservation);
     final resiliencePolicy = _rawMap(rawResiliencePolicy);
     final lastError = _rawMap(rawLastError);
@@ -106,9 +153,7 @@ final class VesperPlayerSnapshot {
       trackCatalog: trackCatalog != null
           ? VesperTrackCatalog.fromMap(trackCatalog)
           : const VesperTrackCatalog(),
-      trackSelection: trackSelection != null
-          ? VesperTrackSelectionSnapshot.fromMap(trackSelection)
-          : const VesperTrackSelectionSnapshot(),
+      trackSelection: canonicalTrackSelection,
       effectiveVideoTrackId: rawEffectiveVideoTrackId as String?,
       videoVariantObservation: videoVariantObservation != null
           ? VesperVideoVariantObservation.fromMap(
@@ -157,6 +202,22 @@ final class VesperPlayerSnapshot {
   final VesperPlayerCapabilities capabilities;
   final VesperTrackCatalog trackCatalog;
   final VesperTrackSelectionSnapshot trackSelection;
+
+  /// Compatibility alias for the canonical nested requested selection.
+  @Deprecated('Use trackSelection.subtitle instead.')
+  VesperTrackSelection get requestedSubtitleSelection =>
+      trackSelection.subtitle;
+
+  /// Compatibility alias for the canonical nested confirmed selection.
+  @Deprecated('Use trackSelection.confirmedSubtitle instead.')
+  VesperTrackSelection get confirmedSubtitleSelection =>
+      trackSelection.confirmedSubtitle;
+
+  /// Compatibility alias for the canonical nested effective track id.
+  @Deprecated('Use trackSelection.effectiveSubtitleTrackId instead.')
+  String? get effectiveSubtitleTrackId =>
+      trackSelection.effectiveSubtitleTrackId;
+
   final String? effectiveVideoTrackId;
   final VesperVideoVariantObservation? videoVariantObservation;
   final VesperFixedTrackStatus? fixedTrackStatus;
@@ -185,6 +246,10 @@ final class VesperPlayerSnapshot {
     VesperPlayerCapabilities? capabilities,
     VesperTrackCatalog? trackCatalog,
     VesperTrackSelectionSnapshot? trackSelection,
+    VesperTrackSelection? requestedSubtitleSelection,
+    VesperTrackSelection? confirmedSubtitleSelection,
+    String? effectiveSubtitleTrackId,
+    bool clearEffectiveSubtitleTrackId = false,
     String? effectiveVideoTrackId,
     bool clearEffectiveVideoTrackId = false,
     VesperVideoVariantObservation? videoVariantObservation,
@@ -197,6 +262,27 @@ final class VesperPlayerSnapshot {
     bool clearLastError = false,
     VesperSubtitleState? subtitleState,
   }) {
+    final canonicalUpdate = trackSelection;
+    final baseTrackSelection = canonicalUpdate ?? this.trackSelection;
+    final nextRequestedSubtitle = canonicalUpdate?.subtitle ??
+        requestedSubtitleSelection ??
+        this.trackSelection.subtitle;
+    final nextConfirmedSubtitle = canonicalUpdate?.confirmedSubtitle ??
+        confirmedSubtitleSelection ??
+        this.trackSelection.confirmedSubtitle;
+    final nextEffectiveSubtitleTrackId = clearEffectiveSubtitleTrackId
+        ? null
+        : (canonicalUpdate?.effectiveSubtitleTrackId ??
+            effectiveSubtitleTrackId ??
+            this.trackSelection.effectiveSubtitleTrackId);
+    final nextTrackSelection = VesperTrackSelectionSnapshot(
+      video: baseTrackSelection.video,
+      audio: baseTrackSelection.audio,
+      subtitle: nextRequestedSubtitle,
+      confirmedSubtitle: nextConfirmedSubtitle,
+      effectiveSubtitleTrackId: nextEffectiveSubtitleTrackId,
+      abrPolicy: baseTrackSelection.abrPolicy,
+    );
     return VesperPlayerSnapshot(
       title: title ?? this.title,
       subtitle: subtitle ?? this.subtitle,
@@ -212,7 +298,7 @@ final class VesperPlayerSnapshot {
       backendFamily: backendFamily ?? this.backendFamily,
       capabilities: capabilities ?? this.capabilities,
       trackCatalog: trackCatalog ?? this.trackCatalog,
-      trackSelection: trackSelection ?? this.trackSelection,
+      trackSelection: nextTrackSelection,
       effectiveVideoTrackId: clearEffectiveVideoTrackId
           ? null
           : (effectiveVideoTrackId ?? this.effectiveVideoTrackId),
@@ -246,6 +332,11 @@ final class VesperPlayerSnapshot {
       'capabilities': capabilities.toMap(),
       'trackCatalog': trackCatalog.toMap(),
       'trackSelection': trackSelection.toMap(),
+      // Deprecated wire aliases are derived from the canonical nested
+      // snapshot; they are never independently stored or accepted over it.
+      'requestedSubtitleSelection': requestedSubtitleSelection.toMap(),
+      'confirmedSubtitleSelection': confirmedSubtitleSelection.toMap(),
+      'effectiveSubtitleTrackId': effectiveSubtitleTrackId,
       'effectiveVideoTrackId': effectiveVideoTrackId,
       'videoVariantObservation': videoVariantObservation?.toMap(),
       'fixedTrackStatus': fixedTrackStatus?.name,

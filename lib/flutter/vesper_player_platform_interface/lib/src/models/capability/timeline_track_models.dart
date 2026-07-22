@@ -358,8 +358,10 @@ final class VesperTrackSelectionSnapshot {
     this.video = const VesperTrackSelection.auto(),
     this.audio = const VesperTrackSelection.auto(),
     this.subtitle = const VesperTrackSelection.disabled(),
+    VesperTrackSelection? confirmedSubtitle,
+    this.effectiveSubtitleTrackId,
     this.abrPolicy = const VesperAbrPolicy.auto(),
-  });
+  }) : confirmedSubtitle = confirmedSubtitle ?? subtitle;
 
   factory VesperTrackSelectionSnapshot.fromMap(Map<Object?, Object?> map) {
     final rawVideo = map['video'];
@@ -380,6 +382,12 @@ final class VesperTrackSelectionSnapshot {
       subtitle: subtitle != null
           ? VesperTrackSelection.fromMap(subtitle)
           : const VesperTrackSelection.disabled(),
+      confirmedSubtitle: _rawMap(map['confirmedSubtitle']) != null
+          ? VesperTrackSelection.fromMap(
+              _rawMap(map['confirmedSubtitle'])!,
+            )
+          : null,
+      effectiveSubtitleTrackId: map['effectiveSubtitleTrackId'] as String?,
       abrPolicy: abrPolicy != null
           ? VesperAbrPolicy.fromMap(abrPolicy)
           : const VesperAbrPolicy.auto(),
@@ -389,6 +397,8 @@ final class VesperTrackSelectionSnapshot {
   final VesperTrackSelection video;
   final VesperTrackSelection audio;
   final VesperTrackSelection subtitle;
+  final VesperTrackSelection confirmedSubtitle;
+  final String? effectiveSubtitleTrackId;
   final VesperAbrPolicy abrPolicy;
 
   Map<String, Object?> toMap() {
@@ -396,6 +406,8 @@ final class VesperTrackSelectionSnapshot {
       'video': video.toMap(),
       'audio': audio.toMap(),
       'subtitle': subtitle.toMap(),
+      'confirmedSubtitle': confirmedSubtitle.toMap(),
+      'effectiveSubtitleTrackId': effectiveSubtitleTrackId,
       'abrPolicy': abrPolicy.toMap(),
     };
   }

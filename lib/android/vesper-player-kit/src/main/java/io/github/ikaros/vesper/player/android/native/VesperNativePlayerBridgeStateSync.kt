@@ -50,6 +50,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -73,13 +75,20 @@ internal fun VesperNativePlayerBridge.recordBenchmark(
     benchmarkRecorder.record(eventName, currentSource?.protocol, attributes)
 }
 
-internal fun VesperNativePlayerBridge.restorePlaybackState(
+internal suspend fun VesperNativePlayerBridge.restorePlaybackState(
     source: VesperPlayerSource,
     preservedState: PreservedPlaybackState,
-) {
-    if (!hasInitializedSource) {
-        return
-    }
+): Unit = withContext(Dispatchers.Main.immediate) {
+    if (!hasInitializedSource || currentSource != source) return@withContext
+
+    _confirmedSubtitleSelection.value = preservedState.subtitleSelection
+    // The old item's effective track is not valid until the Coordinator has
+    // applied and confirmed the selection on the replacement item.
+    _effectiveSubtitleTrackId.value = null
+    _trackSelection.value = _trackSelection.value.copy(
+        confirmedSubtitle = preservedState.subtitleSelection,
+        effectiveSubtitleTrackId = null,
+    )
 
     when {
         preservedState.seekToLiveEdge &&
@@ -87,58 +96,63 @@ internal fun VesperNativePlayerBridge.restorePlaybackState(
             val liveEdge =
                 _uiState.value.timeline.goLivePositionMs ?: _uiState.value.timeline.positionMs
             if (!seekBindingsTo(liveEdge)) {
-                return
+                return@withContext
             }
         }
         preservedState.restorePosition &&
             (source.kind == VesperPlayerSourceKind.Local ||
                 source.kind == VesperPlayerSourceKind.Remote) -> {
             if (!seekBindingsTo(preservedState.positionMs.coerceAtLeast(0L))) {
-                return
+                return@withContext
             }
         }
     }
 
     if ((preservedState.playbackRate - 1.0f).absoluteValue > 0.001f) {
         if (isRequiredNativeFramePipelineFailureActive()) {
-            return
+            return@withContext
         }
         bindings.setPlaybackRate(preservedState.playbackRate)
     }
 
     if (preservedState.videoSelection.mode != VesperTrackSelectionMode.Auto) {
         if (isRequiredNativeFramePipelineFailureActive()) {
-            return
+            return@withContext
         }
         bindings.setVideoTrackSelection(preservedState.videoSelection)
     }
     if (preservedState.audioSelection.mode != VesperTrackSelectionMode.Auto) {
         if (isRequiredNativeFramePipelineFailureActive()) {
-            return
+            return@withContext
         }
         bindings.setAudioTrackSelection(preservedState.audioSelection)
     }
-    if (preservedState.subtitleSelection.mode != VesperTrackSelectionMode.Auto) {
-        if (isRequiredNativeFramePipelineFailureActive()) {
-            return
+    if (!isRequiredNativeFramePipelineFailureActive()) {
+        try {
+            applySubtitleSelectionTransaction(preservedState.subtitleSelection)
+        } catch (error: VesperPlayerUnsupportedOperation) {
+            Log.w(
+                NATIVE_PLAYER_BRIDGE_TAG,
+                "failed to restore confirmed subtitle selection",
+                error,
+            )
         }
-        bindings.setSubtitleTrackSelection(preservedState.subtitleSelection)
     }
-    if (isRequiredNativeFramePipelineFailureActive()) {
-        return
+    if (!hasInitializedSource || currentSource != source || isRequiredNativeFramePipelineFailureActive()) {
+        return@withContext
     }
     bindings.setAbrPolicy(preservedState.abrPolicy)
 
     if (preservedState.shouldResumePlayback) {
         if (isRequiredNativeFramePipelineFailureActive()) {
-            return
+            return@withContext
         }
         bindings.play()
         nativeFramePipelinePlaybackRequested = true
         startNativeFramePipelinePump("restore-playback")
     } else if (preservedState.playbackState == PlaybackStateUi.Paused) {
         if (isRequiredNativeFramePipelineFailureActive()) {
-            return
+            return@withContext
         }
         stopNativeFramePipelinePump()
         nativeFramePipelinePlaybackRequested = false
@@ -149,12 +163,49 @@ internal fun VesperNativePlayerBridge.restorePlaybackState(
 }
 
 internal fun VesperNativePlayerBridge.refreshFromNative() {
-    if (isDisposed.get() || isRequiredNativeFramePipelineFailureActive()) {
+    if (isDisposed.get() ||
+        isRequiredNativeFramePipelineFailureActive() ||
+        !hasInitializedSource ||
+        activeNativeItemEpoch != nativeUpdateEpoch
+    ) {
         return
     }
     surfaceHost.updateVideoLayout(bindings.currentVideoLayoutInfo())
     _trackCatalog.value = bindings.currentTrackCatalog()
-    _trackSelection.value = bindings.currentTrackSelection()
+    val nativeTrackSelection = bindings.currentTrackSelection()
+    _trackSelection.value =
+        nativeTrackSelection.copy(
+            subtitle = _requestedSubtitleSelection.value,
+            confirmedSubtitle = _confirmedSubtitleSelection.value,
+            effectiveSubtitleTrackId = _effectiveSubtitleTrackId.value,
+        )
+    observeSubtitleSelectionConfirmation(bindings.currentAppliedSubtitleSelection())
+    if (pendingSubtitleSelection == null &&
+        _subtitleState.value.selectionState != VesperSubtitleSelectionState.Failed
+    ) {
+        val confirmedSubtitle = _confirmedSubtitleSelection.value
+        val rendererSelectionMatchesConfirmed =
+            when (subtitleSelectionCoordinatorMode) {
+                VesperTrackSelectionMode.Track ->
+                    nativeTrackSelection.subtitle.trackId == confirmedSubtitle.trackId
+                VesperTrackSelectionMode.Disabled ->
+                    nativeTrackSelection.subtitle.mode == VesperTrackSelectionMode.Disabled
+                VesperTrackSelectionMode.Auto,
+                null,
+                -> true
+            }
+        if (rendererSelectionMatchesConfirmed) {
+            _effectiveSubtitleTrackId.value =
+                if (nativeTrackSelection.subtitle.mode == VesperTrackSelectionMode.Disabled) {
+                    null
+                } else {
+                    nativeTrackSelection.subtitle.trackId
+                }
+            _trackSelection.value = _trackSelection.value.copy(
+                effectiveSubtitleTrackId = _effectiveSubtitleTrackId.value,
+            )
+        }
+    }
     _effectiveVideoTrackId.value = bindings.currentEffectiveVideoTrackId()
     _videoVariantObservation.value = bindings.currentVideoVariantObservation()
     // Derive the first-class subtitle state from the refreshed catalog and
@@ -164,31 +215,88 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
     val currentSubtitleState = _subtitleState.value
     val catalogFailure = bindings.currentSubtitleCatalogFailure()
     if (catalogFailure != null) {
-        _subtitleState.value =
-            VesperSubtitleState.failed(
-                advertisedTrackCount = catalogFailure.advertisedTrackCount ?: 0,
+        val phase = VesperSubtitleErrorPhase.fromWire(catalogFailure.phase)
+        val error =
+            VesperSubtitleError(
                 code = catalogFailure.code,
-                phase = VesperSubtitleErrorPhase.Identity,
+                phase = phase,
+                phaseRawValue = catalogFailure.phase.takeIf {
+                    phase == VesperSubtitleErrorPhase.Unknown
+                },
                 trackId = catalogFailure.trackId,
+                // Retryability is part of the structured native error. Do not
+                // infer it from the display phase, or explicit non-retriable
+                // resource failures and unknown phases are corrupted.
+                retriable = catalogFailure.retriable,
                 message = catalogFailure.message,
             )
-    } else if (
-        currentSource?.protocol == VesperPlayerSourceProtocol.Dash &&
-        !bindings.isTrackCatalogReady()
-    ) {
-        _subtitleState.value =
-            VesperSubtitleState.loading(
-                advertisedTrackCount = currentSubtitleState.advertisedTrackCount,
+        val advertisedCount =
+            maxOf(
+                catalogFailure.advertisedTrackCount ?: 0,
+                bindings.currentAdvertisedSubtitleTrackCount(),
             )
-    } else if (currentSubtitleState.status != VesperSubtitleStatus.Failed) {
         _subtitleState.value =
-            if (subtitleCount > 0) {
-                VesperSubtitleState.ready(
-                    advertisedTrackCount = subtitleCount,
+            if (catalogFailure.phase == VesperSubtitleErrorPhase.Identity.wireName || subtitleCount == 0) {
+                currentSubtitleState.copy(
+                    catalogState = VesperSubtitleCatalogState.Failed,
+                    catalogError = error,
+                    advertisedTrackCount = advertisedCount,
                     selectableTrackCount = subtitleCount,
                 )
             } else {
-                VesperSubtitleState.unavailable()
+                currentSubtitleState.copy(
+                    catalogState = VesperSubtitleCatalogState.Ready,
+                    catalogError = error,
+                    advertisedTrackCount = advertisedCount,
+                    selectableTrackCount = subtitleCount,
+                )
+            }
+    } else if (!bindings.isTrackCatalogReady()) {
+        _subtitleState.value =
+            VesperSubtitleState.loading(
+                advertisedTrackCount = bindings.currentAdvertisedSubtitleTrackCount(),
+            )
+    } else {
+        val advertisedCount = bindings.currentAdvertisedSubtitleTrackCount()
+        _subtitleState.value =
+            if (subtitleCount > 0) {
+                currentSubtitleState.copy(
+                    catalogState = VesperSubtitleCatalogState.Ready,
+                    advertisedTrackCount = advertisedCount,
+                    selectableTrackCount = subtitleCount,
+                    catalogError = null,
+                    selectionState = when {
+                        currentSubtitleState.selectionError != null ->
+                            VesperSubtitleSelectionState.Failed
+                        currentSubtitleState.selectionState ==
+                            VesperSubtitleSelectionState.Applying ->
+                            VesperSubtitleSelectionState.Applying
+                        currentSubtitleState.selectionState ==
+                            VesperSubtitleSelectionState.Confirmed ->
+                            VesperSubtitleSelectionState.Confirmed
+                        else -> VesperSubtitleSelectionState.Idle
+                    },
+                )
+            } else if (advertisedCount > 0) {
+                currentSubtitleState.copy(
+                    catalogState = VesperSubtitleCatalogState.Failed,
+                    advertisedTrackCount = advertisedCount,
+                    selectableTrackCount = 0,
+                    catalogError =
+                        VesperSubtitleError(
+                            code = "subtitle_platform_track_unavailable",
+                            phase = VesperSubtitleErrorPhase.Discovery,
+                            retriable = false,
+                            message = "the platform cannot select any advertised subtitle track",
+                        ),
+                )
+            } else {
+                currentSubtitleState.copy(
+                    catalogState = VesperSubtitleCatalogState.Unavailable,
+                    advertisedTrackCount = advertisedCount,
+                    selectableTrackCount = 0,
+                    catalogError = null,
+                )
             }
     }
     currentNativeFramePipelineStatusOnRuntime()
@@ -344,8 +452,14 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
 
 internal fun VesperNativePlayerBridge.installNativeUpdateListener() {
     val epoch = nativeUpdateEpoch
+    val subtitleEpoch = subtitleSourceEpoch
     bindings.setOnNativeUpdateListener {
-        if (isDisposed.get() || epoch != nativeUpdateEpoch) {
+        if (isDisposed.get() ||
+            epoch != nativeUpdateEpoch ||
+            subtitleEpoch != subtitleSourceEpoch ||
+            !hasInitializedSource ||
+            activeNativeItemEpoch != epoch
+        ) {
             return@setOnNativeUpdateListener
         }
         refreshFromNative()
@@ -362,6 +476,10 @@ internal fun VesperNativePlayerBridge.advanceNativeUpdateEpoch(clearListener: Bo
 }
 
 internal fun VesperNativePlayerBridge.clearTrackState() {
+    hasInitializedSource = false
+    activeNativeItemEpoch = null
+    advanceNativeUpdateEpoch(clearListener = true)
+    advanceSubtitleSourceEpoch()
     _trackCatalog.value = VesperTrackCatalog.Empty
     _trackSelection.value = VesperTrackSelectionSnapshot()
     _effectiveVideoTrackId.value = null

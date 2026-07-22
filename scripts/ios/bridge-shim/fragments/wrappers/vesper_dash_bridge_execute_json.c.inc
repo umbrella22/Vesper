@@ -5,6 +5,9 @@
   if (out_error_message != NULL) {
     *out_error_message = NULL;
   }
+  if (out_error_details_json != NULL) {
+    *out_error_details_json = NULL;
+  }
   *out_json = NULL;
 
   PlayerFfiError ffi_error;
@@ -18,6 +21,10 @@
     if (out_error_message != NULL) {
       *out_error_message = ffi_error.message;
       ffi_error.message = NULL;
+    }
+    if (out_error_details_json != NULL) {
+      *out_error_details_json = ffi_error.details_json;
+      ffi_error.details_json = NULL;
     }
     player_ffi_error_free(&ffi_error);
     return false;

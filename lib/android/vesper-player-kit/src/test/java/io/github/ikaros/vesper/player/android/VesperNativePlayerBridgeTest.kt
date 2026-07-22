@@ -11,6 +11,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -36,6 +44,39 @@ class VesperNativePlayerBridgeTest {
         bridge.refreshFromNative()
 
         assertEquals(VesperSubtitleStatus.Unavailable, bridge.subtitleState.value.status)
+    }
+
+    @Test
+    fun progressiveSubtitleStateStaysLoadingUntilMedia3ReportsTracks() {
+        val trackId = "external-en"
+        val bindings =
+            FakeBindings().apply {
+                trackCatalogReady = false
+                advertisedSubtitleTrackCount = 1
+            }
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = VesperPlayerSource.remote("https://example.com/video.mp4", "Video"),
+            )
+
+        bridge.refreshFromNative()
+
+        val loading = bridge.subtitleState.value
+        assertEquals(VesperSubtitleCatalogState.Loading, loading.catalogState)
+        assertEquals(1, loading.advertisedTrackCount)
+        assertEquals(0, loading.selectableTrackCount)
+        assertNull(loading.catalogError)
+
+        bindings.trackCatalogReady = true
+        bindings.trackCatalog = subtitleCatalog(trackId)
+        bridge.refreshFromNative()
+
+        val ready = bridge.subtitleState.value
+        assertEquals(VesperSubtitleCatalogState.Ready, ready.catalogState)
+        assertEquals(1, ready.advertisedTrackCount)
+        assertEquals(1, ready.selectableTrackCount)
+        assertNull(ready.catalogError)
     }
 
     @Test
@@ -67,10 +108,404 @@ class VesperNativePlayerBridgeTest {
                 message = "stale selection",
             )
 
-        bridge.setSubtitleTrackSelection(VesperTrackSelection.disabled())
+        runBlocking { bridge.setSubtitleTrackSelection(VesperTrackSelection.disabled()) }
 
         assertEquals(VesperSubtitleStatus.Ready, bridge.subtitleState.value.status)
         assertNull(bridge.subtitleState.value.error)
+    }
+
+    @Test
+    fun subtitleSelectionPublishesConfirmedAndEffectiveStateAfterNativeCallback() {
+        val trackId = "subtitle:dash:sub-en"
+        val catalog =
+            VesperTrackCatalog(
+                tracks =
+                    listOf(
+                        VesperMediaTrack(
+                            id = trackId,
+                            kind = VesperMediaTrackKind.Subtitle,
+                        ),
+                    ),
+            )
+        val bindings = FakeBindings(trackCatalog = catalog)
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = VesperPlayerSource.dash("https://example.com/video.mpd", "DASH"),
+            )
+
+        runBlocking {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
+        }
+
+        assertEquals(VesperTrackSelection.track(trackId), bridge.requestedSubtitleSelection.value)
+        assertEquals(VesperTrackSelection.track(trackId), bridge.confirmedSubtitleSelection.value)
+        assertEquals(trackId, bridge.effectiveSubtitleTrackId.value)
+        assertEquals("selection confirmation must not rewrite the catalog", catalog, bridge.trackCatalog.value)
+    }
+
+    @Test
+    fun pausedSubtitleSelectionConfirmsAppliedOverrideBeforeRendererActivation() {
+        val trackId = "subtitle:dash:sub-en"
+        val bindings =
+            FakeBindings(
+                trackCatalog =
+                    VesperTrackCatalog(
+                        tracks =
+                            listOf(
+                                VesperMediaTrack(
+                                    id = trackId,
+                                    kind = VesperMediaTrackKind.Subtitle,
+                                ),
+                            ),
+                    ),
+            ).apply {
+                confirmAppliedSubtitleSelectionWithoutRenderer = true
+            }
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = VesperPlayerSource.dash("https://example.com/video.mpd", "DASH"),
+            )
+
+        runBlocking {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
+        }
+
+        assertEquals(VesperTrackSelection.track(trackId), bridge.confirmedSubtitleSelection.value)
+        assertNull(bridge.effectiveSubtitleTrackId.value)
+
+        bindings.trackSelection =
+            bindings.trackSelection.copy(subtitle = VesperTrackSelection.track(trackId))
+        bridge.refreshFromNative()
+
+        assertEquals(trackId, bridge.effectiveSubtitleTrackId.value)
+    }
+
+    @Test
+    fun subtitleSelectionFailureRetainsConfirmedStateAndCatalog() {
+        val previousId = "subtitle:dash:sub-en"
+        val requestedId = "subtitle:dash:sub-zh"
+        val catalog =
+            VesperTrackCatalog(
+                tracks =
+                    listOf(
+                        VesperMediaTrack(
+                            id = previousId,
+                            kind = VesperMediaTrackKind.Subtitle,
+                        ),
+                        VesperMediaTrack(
+                            id = requestedId,
+                            kind = VesperMediaTrackKind.Subtitle,
+                        ),
+                    ),
+            )
+        val bindings = FakeBindings(trackCatalog = catalog)
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = VesperPlayerSource.dash("https://example.com/video.mpd", "DASH"),
+            )
+
+        runBlocking {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(previousId))
+        }
+        bindings.subtitleSelectionFailure =
+            NativeTrackSelectionFailure(
+                kind = NativeTrackKind.Subtitle,
+                trackId = requestedId,
+                code = "subtitle_track_not_found",
+                phase = "selection",
+                message = "requested subtitle is unavailable",
+            )
+
+        val error =
+            org.junit.Assert.assertThrows(VesperPlayerUnsupportedOperation::class.java) {
+                runBlocking {
+                    bridge.setSubtitleTrackSelection(VesperTrackSelection.track(requestedId))
+                }
+            }
+
+        assertEquals("subtitle_track_not_found", error.details["code"])
+        assertEquals(VesperTrackSelection.track(previousId), bridge.confirmedSubtitleSelection.value)
+        assertEquals(previousId, bridge.effectiveSubtitleTrackId.value)
+        assertEquals(catalog, bridge.trackCatalog.value)
+    }
+
+    @Test
+    fun unknownSubtitleRequestFailsInsideTransactionAndRetainsConfirmation() {
+        val previousId = "subtitle:dash:sub-en"
+        val missingId = "subtitle:dash:missing"
+        val catalog =
+            VesperTrackCatalog(
+                tracks =
+                    listOf(
+                        VesperMediaTrack(
+                            id = previousId,
+                            kind = VesperMediaTrackKind.Subtitle,
+                        ),
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = FakeBindings(trackCatalog = catalog),
+                initialSource = VesperPlayerSource.dash("https://example.com/video.mpd", "DASH"),
+            )
+        runBlocking {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(previousId))
+        }
+
+        val error =
+            org.junit.Assert.assertThrows(VesperPlayerUnsupportedOperation::class.java) {
+                runBlocking {
+                    bridge.setSubtitleTrackSelection(VesperTrackSelection.track(missingId))
+                }
+            }
+
+        assertEquals("subtitle_track_not_found", error.details["code"])
+        assertEquals(VesperTrackSelection.track(missingId), bridge.requestedSubtitleSelection.value)
+        assertEquals(VesperTrackSelection.track(previousId), bridge.confirmedSubtitleSelection.value)
+        assertEquals(previousId, bridge.effectiveSubtitleTrackId.value)
+        assertEquals(VesperSubtitleSelectionState.Failed, bridge.subtitleState.value.selectionState)
+        assertEquals(missingId, bridge.subtitleState.value.selectionError?.trackId)
+        assertEquals(catalog, bridge.trackCatalog.value)
+    }
+
+    @Test
+    fun subtitleSelectionWaitsForNativeConfirmationCallback() = runBlocking {
+        val trackId = "subtitle:dash:sub-en"
+        val bindings =
+            FakeBindings(trackCatalog = subtitleCatalog(trackId)).apply {
+                deferSubtitleSelectionConfirmation = true
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        val request = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
+        }
+        kotlinx.coroutines.yield()
+
+        assertFalse(request.isCompleted)
+        assertEquals(VesperTrackSelection.track(trackId), bridge.requestedSubtitleSelection.value)
+        assertEquals(VesperTrackSelection.disabled(), bridge.confirmedSubtitleSelection.value)
+        assertEquals(VesperSubtitleSelectionState.Applying, bridge.subtitleState.value.selectionState)
+
+        bindings.confirmDeferredSubtitleSelection()
+        request.await()
+
+        assertEquals(VesperTrackSelection.track(trackId), bridge.confirmedSubtitleSelection.value)
+        assertEquals(trackId, bridge.effectiveSubtitleTrackId.value)
+        assertEquals(VesperSubtitleSelectionState.Confirmed, bridge.subtitleState.value.selectionState)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun subtitleSelectionTimeoutUsesBoundedVirtualClockAndRetainsConfirmedState() = runTest {
+        val confirmedId = "subtitle:dash:sub-en"
+        val timedOutId = "subtitle:dash:sub-zh"
+        val catalog = subtitleCatalog(confirmedId, timedOutId)
+        val bindings = FakeBindings(trackCatalog = catalog)
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        bridge._requestedSubtitleSelection.value = VesperTrackSelection.track(confirmedId)
+        bridge._confirmedSubtitleSelection.value = VesperTrackSelection.track(confirmedId)
+        bridge._effectiveSubtitleTrackId.value = confirmedId
+        bridge._trackSelection.value =
+            VesperTrackSelectionSnapshot(
+                subtitle = VesperTrackSelection.track(confirmedId),
+                confirmedSubtitle = VesperTrackSelection.track(confirmedId),
+                effectiveSubtitleTrackId = confirmedId,
+            )
+        bindings.deferSubtitleSelectionConfirmation = true
+        val request = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(timedOutId))
+        }
+        runCurrent()
+
+        assertFalse(request.isCompleted)
+        assertEquals(VesperTrackSelection.track(timedOutId), bridge.requestedSubtitleSelection.value)
+        assertEquals(VesperTrackSelection.track(confirmedId), bridge.confirmedSubtitleSelection.value)
+        assertEquals(confirmedId, bridge.effectiveSubtitleTrackId.value)
+        assertEquals(VesperSubtitleSelectionState.Applying, bridge.subtitleState.value.selectionState)
+
+        advanceTimeBy(3_001)
+        runCurrent()
+        val error =
+            try {
+                request.await()
+                throw AssertionError("Expected the bounded subtitle selection timeout.")
+            } catch (error: VesperPlayerUnsupportedOperation) {
+                error
+            }
+
+        assertEquals("subtitle_selection_timeout", error.details["code"])
+        assertEquals(VesperTrackSelection.track(confirmedId), bridge.confirmedSubtitleSelection.value)
+        assertEquals(confirmedId, bridge.effectiveSubtitleTrackId.value)
+        assertEquals(catalog, bridge.trackCatalog.value)
+        assertEquals(VesperSubtitleSelectionState.Failed, bridge.subtitleState.value.selectionState)
+        assertEquals("subtitle_selection_timeout", bridge.subtitleState.value.selectionError?.code)
+        assertEquals(timedOutId, bridge.subtitleState.value.selectionError?.trackId)
+
+        // A callback arriving after the transaction deadline belongs to the
+        // expired command and must not rewrite the last confirmed selection.
+        bindings.confirmDeferredSubtitleSelection()
+        assertEquals(VesperTrackSelection.track(confirmedId), bridge.confirmedSubtitleSelection.value)
+        assertEquals(confirmedId, bridge.effectiveSubtitleTrackId.value)
+        assertEquals(VesperSubtitleSelectionState.Failed, bridge.subtitleState.value.selectionState)
+        assertEquals("subtitle_selection_timeout", bridge.subtitleState.value.selectionError?.code)
+    }
+
+    @Test
+    fun lateNativeCallbackFromSupersededCommandCannotRewriteConfirmedEffectiveState() = runBlocking {
+        val firstId = "subtitle:dash:sub-en"
+        val secondId = "subtitle:dash:sub-zh"
+        val bindings =
+            FakeBindings(trackCatalog = subtitleCatalog(firstId, secondId)).apply {
+                deferSubtitleSelectionConfirmation = true
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        val first = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(firstId))
+        }
+        kotlinx.coroutines.yield()
+        first.cancel()
+        first.join()
+
+        val second = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(secondId))
+        }
+        kotlinx.coroutines.yield()
+        bindings.confirmDeferredSubtitleSelection()
+        second.await()
+        assertEquals(secondId, bridge.effectiveSubtitleTrackId.value)
+
+        // A delayed callback from the cancelled command can arrive on the
+        // same Media3 item and callback generation. It must not overwrite the
+        // coordinator's last confirmed/effective selection.
+        bindings.trackSelection =
+            bindings.trackSelection.copy(
+                subtitle = VesperTrackSelection.track(firstId),
+            )
+        bindings.trackSelectionChangeGenerationValue += 1L
+        bridge.refreshFromNative()
+
+        assertEquals(VesperTrackSelection.track(secondId), bridge.confirmedSubtitleSelection.value)
+        assertEquals(secondId, bridge.effectiveSubtitleTrackId.value)
+    }
+
+    @Test
+    fun sourceEpochInvalidatesPendingSelectionAndIgnoresOldConfirmation() = runBlocking {
+        val trackId = "subtitle:dash:sub-en"
+        val bindings =
+            FakeBindings(trackCatalog = subtitleCatalog(trackId)).apply {
+                deferSubtitleSelectionConfirmation = true
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        val request = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
+        }
+        kotlinx.coroutines.yield()
+        bridge.advanceSubtitleSourceEpoch()
+
+        val error =
+            try {
+                request.await()
+                throw AssertionError("Expected the source epoch change to cancel the selection.")
+            } catch (error: VesperPlayerUnsupportedOperation) {
+                error
+            }
+        assertEquals("subtitle_source_changed", error.details["code"])
+        assertNotNull(error.details["commandId"])
+        assertNotNull(error.details["sourceEpoch"])
+
+        bindings.confirmDeferredSubtitleSelection()
+        assertEquals(VesperTrackSelection.disabled(), bridge.confirmedSubtitleSelection.value)
+        assertNull(bridge.effectiveSubtitleTrackId.value)
+        assertEquals(VesperSubtitleSelectionState.Idle, bridge.subtitleState.value.selectionState)
+    }
+
+    @Test
+    fun newerSubtitleSelectionSupersedesTheSinglePendingCommand() = runBlocking {
+        val firstId = "subtitle:dash:sub-en"
+        val secondId = "subtitle:dash:sub-zh"
+        val bindings =
+            FakeBindings(trackCatalog = subtitleCatalog(firstId, secondId)).apply {
+                deferSubtitleSelectionConfirmation = true
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        val first = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(firstId))
+        }
+        kotlinx.coroutines.yield()
+        val second = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(secondId))
+        }
+        kotlinx.coroutines.yield()
+
+        val firstError =
+            try {
+                first.await()
+                throw AssertionError("Expected the first selection to be superseded.")
+            } catch (error: VesperPlayerUnsupportedOperation) {
+                error
+            }
+        assertEquals("subtitle_selection_superseded", firstError.details["code"])
+        assertEquals(VesperTrackSelection.track(secondId), bridge.requestedSubtitleSelection.value)
+        assertFalse(second.isCompleted)
+
+        bindings.confirmDeferredSubtitleSelection()
+        second.await()
+
+        assertEquals(VesperTrackSelection.track(secondId), bridge.confirmedSubtitleSelection.value)
+        assertEquals(secondId, bridge.effectiveSubtitleTrackId.value)
+    }
+
+    @Test
+    fun delayedFailureFromSupersededCommandCannotFailNewPendingSelection() = runBlocking {
+        val firstId = "subtitle:dash:sub-en"
+        val secondId = "subtitle:dash:sub-zh"
+        val bindings =
+            FakeBindings(trackCatalog = subtitleCatalog(firstId, secondId)).apply {
+                deferSubtitleSelectionConfirmation = true
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        val first = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(firstId))
+        }
+        kotlinx.coroutines.yield()
+        val firstCommandGeneration = bindings.subtitleSelectionCommandGeneration
+        val second = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(secondId))
+        }
+        kotlinx.coroutines.yield()
+
+        bindings.emitSubtitleSelectionFailure(
+            NativeTrackSelectionFailure(
+                kind = NativeTrackKind.Subtitle,
+                trackId = null,
+                code = "subtitle_selection_mismatch",
+                phase = "selection",
+                message = "delayed failure from the superseded command",
+            ),
+            commandGeneration = firstCommandGeneration,
+        )
+
+        assertFalse(second.isCompleted)
+        bindings.confirmDeferredSubtitleSelection()
+        second.await()
+        val firstError =
+            try {
+                first.await()
+                throw AssertionError("Expected the first selection to be superseded.")
+            } catch (error: VesperPlayerUnsupportedOperation) {
+                error
+            }
+        assertEquals("subtitle_selection_superseded", firstError.details["code"])
+        assertEquals(VesperTrackSelection.track(secondId), bridge.confirmedSubtitleSelection.value)
     }
 
     @Test
@@ -97,6 +532,101 @@ class VesperNativePlayerBridgeTest {
 
         assertEquals(VesperSubtitleStatus.Failed, bridge.subtitleState.value.status)
         assertEquals(2, bridge.subtitleState.value.advertisedTrackCount)
+    }
+
+    @Test
+    fun subtitleManifestRefreshCanReduceAdvertisedTrackCount() {
+        val bindings = FakeBindings(trackCatalog = subtitleCatalog("subtitle:a", "subtitle:b"))
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        bridge.refreshFromNative()
+        assertEquals(2, bridge.subtitleState.value.advertisedTrackCount)
+
+        bindings.trackCatalog = subtitleCatalog("subtitle:b")
+        bridge.refreshFromNative()
+
+        assertEquals(1, bridge.subtitleState.value.advertisedTrackCount)
+        assertEquals(1, bridge.subtitleState.value.selectableTrackCount)
+        assertEquals(VesperSubtitleCatalogState.Ready, bridge.subtitleState.value.catalogState)
+    }
+
+    @Test
+    fun advertisedButUnsupportedSubtitleCatalogFailsDiscovery() {
+        val bindings =
+            FakeBindings().apply {
+                advertisedSubtitleTrackCount = 1
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        bridge.refreshFromNative()
+
+        val state = bridge.subtitleState.value
+        assertEquals(VesperSubtitleCatalogState.Failed, state.catalogState)
+        assertEquals(1, state.advertisedTrackCount)
+        assertEquals(0, state.selectableTrackCount)
+        assertEquals("subtitle_platform_track_unavailable", state.catalogError?.code)
+        assertEquals(VesperSubtitleErrorPhase.Discovery, state.catalogError?.phase)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun resilienceRestorePublishesRequestedSelectionOnlyWhenCoordinatorStarts() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        val trackId = "subtitle:restored"
+        val source = VesperPlayerSource.remote("https://example.com/video.mp4", "video")
+        val bindings =
+            FakeBindings(
+                systemPlaybackActive = true,
+                trackCatalog = subtitleCatalog(trackId),
+            )
+        try {
+            lateinit var bridge: VesperNativePlayerBridge
+            var requestedAtSeek: VesperTrackSelection? = null
+            var confirmedAtSeek: VesperTrackSelection? = null
+            var effectiveAtSeek: String? = null
+            var selectionStateAtSeek: VesperSubtitleSelectionState? = null
+            bindings.onSeekTo = {
+                requestedAtSeek = bridge.requestedSubtitleSelection.value
+                confirmedAtSeek = bridge.confirmedSubtitleSelection.value
+                effectiveAtSeek = bridge.effectiveSubtitleTrackId.value
+                selectionStateAtSeek = bridge.subtitleState.value.selectionState
+            }
+            bridge =
+                VesperNativePlayerBridge(
+                    bindings = bindings,
+                    initialSource = source,
+                )
+
+            bridge.restorePlaybackState(
+                source = source,
+                preservedState =
+                    PreservedPlaybackState(
+                        positionMs = 500,
+                        restorePosition = true,
+                        seekToLiveEdge = false,
+                        playbackRate = 1f,
+                        playbackState = PlaybackStateUi.Paused,
+                        shouldResumePlayback = false,
+                        videoSelection = VesperTrackSelection.auto(),
+                        audioSelection = VesperTrackSelection.auto(),
+                        subtitleSelection = VesperTrackSelection.track(trackId),
+                        effectiveSubtitleTrackId = trackId,
+                        abrPolicy = VesperAbrPolicy.auto(),
+                    ),
+            )
+            advanceUntilIdle()
+
+            assertEquals(VesperTrackSelection.disabled(), requestedAtSeek)
+            assertEquals(VesperTrackSelection.track(trackId), confirmedAtSeek)
+            assertNull(effectiveAtSeek)
+            assertEquals(VesperSubtitleSelectionState.Idle, selectionStateAtSeek)
+            assertEquals(VesperTrackSelection.track(trackId), bridge.requestedSubtitleSelection.value)
+            assertEquals(VesperTrackSelection.track(trackId), bridge.confirmedSubtitleSelection.value)
+            assertEquals(trackId, bridge.effectiveSubtitleTrackId.value)
+            assertEquals(VesperSubtitleSelectionState.Confirmed, bridge.subtitleState.value.selectionState)
+        } finally {
+            Dispatchers.resetMain()
+        }
     }
 
     @Test
@@ -135,7 +665,7 @@ class VesperNativePlayerBridgeTest {
 
     @Test
     fun playBeforeInitializeDefersAutoplayWithoutPublishingPlaying() {
-        val bindings = FakeBindings()
+        val bindings = FakeBindings(systemPlaybackActive = false)
         val bridge =
             VesperNativePlayerBridge(
                 bindings = bindings,
@@ -1116,6 +1646,12 @@ class VesperNativePlayerBridgeTest {
             bindings.trackSelection = VesperTrackSelectionSnapshot()
             bindings.effectiveVideoTrackId = null
             bindings.videoVariantObservation = null
+        }
+        bindings.onPrepareSourceNormalizerForPlayback = {
+            // Source selection and the subsequent prepare phase both fence
+            // callbacks; the important contract is that at least one fence
+            // occurs before the new player item is installed.
+            assertTrue(bindings.invalidateSystemPlaybackCallbacksCount >= 1)
         }
 
         runBlocking { bridge.selectSourceAsync(VesperPlayerSource.hls("https://example.com/next.m3u8", "Next")) }
@@ -3306,7 +3842,11 @@ class VesperNativePlayerBridgeTest {
 
         bridge.setVideoTrackSelection(VesperTrackSelection.track("video:720p"))
         bridge.setAudioTrackSelection(VesperTrackSelection.track("audio:main"))
-        bridge.setSubtitleTrackSelection(VesperTrackSelection.disabled())
+        val subtitleError =
+            org.junit.Assert.assertThrows(VesperPlayerUnsupportedOperation::class.java) {
+                runBlocking { bridge.setSubtitleTrackSelection(VesperTrackSelection.disabled()) }
+            }
+        assertEquals("subtitle_platform_track_unavailable", subtitleError.details["code"])
         bridge.setAbrPolicy(VesperAbrPolicy.fixedTrack("video:720p"))
         bridge.configureSystemPlayback(
             VesperSystemPlaybackConfiguration(
@@ -3887,7 +4427,7 @@ class VesperNativePlayerBridgeTest {
         bridge.setPlaybackRate(1.5f)
         bridge.setVideoTrackSelection(VesperTrackSelection.track("video:720p"))
         bridge.setAudioTrackSelection(VesperTrackSelection.track("audio:main"))
-        bridge.setSubtitleTrackSelection(VesperTrackSelection.disabled())
+        runBlocking { bridge.setSubtitleTrackSelection(VesperTrackSelection.disabled()) }
         bridge.setAbrPolicy(VesperAbrPolicy.fixedTrack("video:720p"))
         bridge.configureSystemPlayback(
             VesperSystemPlaybackConfiguration(
@@ -4588,7 +5128,19 @@ private fun testVodTimeline(positionMs: Long = 0L): TimelineUiState =
         durationMs = 10_000L,
     )
 
+private fun subtitleCatalog(vararg ids: String): VesperTrackCatalog =
+    VesperTrackCatalog(
+        tracks =
+            ids.map { id ->
+                VesperMediaTrack(
+                    id = id,
+                    kind = VesperMediaTrackKind.Subtitle,
+                )
+            },
+    )
+
 private class FakeBindings(
+    var systemPlaybackActive: Boolean = true,
     var snapshot: NativeBridgeSnapshot? = null,
     var trackCatalog: VesperTrackCatalog = VesperTrackCatalog.Empty,
     var trackSelection: VesperTrackSelectionSnapshot = VesperTrackSelectionSnapshot(),
@@ -4606,7 +5158,11 @@ private class FakeBindings(
     var nativeFramePipelineAdvanceStatus: Map<String, Any?>? = null,
     var nativeFramePipelineAdvanceStatuses: MutableList<Map<String, Any?>> = mutableListOf(),
 ) : VesperNativeBindings {
+    override val isSystemPlaybackActive: Boolean
+        get() = systemPlaybackActive
+
     var onInitialize: (() -> Unit)? = null
+    var onSeekTo: ((Long) -> Unit)? = null
     val events = mutableListOf<NativeBridgeEvent>()
     var disposeCount = 0
     var openNativeFramePipelineCount = 0
@@ -4619,15 +5175,23 @@ private class FakeBindings(
     var videoTrackSelectionCount = 0
     var audioTrackSelectionCount = 0
     var subtitleTrackSelectionCount = 0
+    var trackSelectionChangeGenerationValue = 0L
+    var sourceCallbackGenerationValue = 0L
+    var subtitleSelectionCommandGenerationValue = 0L
+    var subtitleSelectionFailure: NativeTrackSelectionFailure? = null
+    var deferSubtitleSelectionConfirmation = false
+    var confirmAppliedSubtitleSelectionWithoutRenderer = false
     var abrPolicyCount = 0
     var configureSystemPlaybackCount = 0
     var updateSystemPlaybackMetadataCount = 0
     var clearSystemPlaybackCount = 0
     var refreshSnapshotCount = 0
     var trackCatalogReady = true
+    var advertisedSubtitleTrackCount: Int? = null
     var subtitleCatalogFailure: NativeTrackSelectionFailure? = null
     var prepareSourceNormalizerForPlaybackCount = 0
     var disposePreparedSourceNormalizerResourceCount = 0
+    var invalidateSystemPlaybackCallbacksCount = 0
     var onPrepareSourceNormalizerForPlayback: (() -> Unit)? = null
     val releasedNativeFramePipelineFrames = mutableListOf<Pair<Long, Boolean>>()
     val seekNativeFramePipelinePositions = mutableListOf<Long>()
@@ -4647,6 +5211,10 @@ private class FakeBindings(
     var lastNativeFramePipelineSurfaceKind: NativeVideoSurfaceKind? = null
     private var currentNativeFramePipelineStatus: Map<String, Any?>? = null
     private var updateListener: (() -> Unit)? = null
+    private var trackSelectionFailureListener:
+        ((NativeTrackSelectionFailure) -> Unit)? = null
+    private var deferredSubtitleSelection: VesperTrackSelection? = null
+    private var appliedSubtitleSelection: VesperTrackSelection? = null
 
     override fun probeMobilePlugins(
         source: VesperPlayerSource,
@@ -4836,6 +5404,12 @@ private class FakeBindings(
         disposeCount += 1
     }
 
+    override fun invalidateSystemPlaybackCallbacks() {
+        invalidateSystemPlaybackCallbacksCount += 1
+        sourceCallbackGenerationValue += 1L
+        events.clear()
+    }
+
     override fun refreshSnapshot() {
         refreshSnapshotCount += 1
     }
@@ -4843,6 +5417,21 @@ private class FakeBindings(
     override fun currentTrackCatalog(): VesperTrackCatalog = trackCatalog
 
     override fun currentTrackSelection(): VesperTrackSelectionSnapshot = trackSelection
+
+    override fun currentAppliedSubtitleSelection(): VesperTrackSelection =
+        appliedSubtitleSelection ?: trackSelection.subtitle
+
+    override fun currentAdvertisedSubtitleTrackCount(): Int =
+        advertisedSubtitleTrackCount ?: trackCatalog.subtitleTracks.size
+
+    override val trackSelectionChangeGeneration: Long
+        get() = trackSelectionChangeGenerationValue
+
+    override val sourceCallbackGeneration: Long
+        get() = sourceCallbackGenerationValue
+
+    override val subtitleSelectionCommandGeneration: Long
+        get() = subtitleSelectionCommandGenerationValue
 
     override fun isTrackCatalogReady(): Boolean = trackCatalogReady
 
@@ -4858,6 +5447,12 @@ private class FakeBindings(
 
     override fun setOnNativeUpdateListener(listener: (() -> Unit)?) {
         updateListener = listener
+    }
+
+    override fun setOnTrackSelectionFailureListener(
+        listener: ((NativeTrackSelectionFailure) -> Unit)?,
+    ) {
+        trackSelectionFailureListener = listener
     }
 
     override fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind) = Unit
@@ -4882,6 +5477,7 @@ private class FakeBindings(
 
     override fun seekTo(positionMs: Long) {
         seekToPositions += positionMs
+        onSeekTo?.invoke(positionMs)
     }
 
     override fun setPlaybackRate(rate: Float) {
@@ -4898,6 +5494,48 @@ private class FakeBindings(
 
     override fun setSubtitleTrackSelection(selection: VesperTrackSelection) {
         subtitleTrackSelectionCount += 1
+        subtitleSelectionCommandGenerationValue += 1L
+        subtitleSelectionFailure?.let { failure ->
+            emitSubtitleSelectionFailure(failure, subtitleSelectionCommandGenerationValue)
+            return
+        }
+        if (deferSubtitleSelectionConfirmation) {
+            deferredSubtitleSelection = selection
+            return
+        }
+        if (confirmAppliedSubtitleSelectionWithoutRenderer) {
+            appliedSubtitleSelection = selection
+            trackSelectionChangeGenerationValue += 1L
+            updateListener?.invoke()
+            return
+        }
+        confirmSubtitleSelection(selection)
+    }
+
+    fun confirmDeferredSubtitleSelection() {
+        val selection = deferredSubtitleSelection ?: return
+        deferredSubtitleSelection = null
+        confirmSubtitleSelection(selection)
+    }
+
+    fun emitSubtitleSelectionFailure(
+        failure: NativeTrackSelectionFailure,
+        commandGeneration: Long,
+        sourceCallbackGeneration: Long = sourceCallbackGenerationValue,
+    ) {
+        trackSelectionFailureListener?.invoke(
+            failure.copy(
+                sourceCallbackGeneration = sourceCallbackGeneration,
+                commandGeneration = commandGeneration,
+            )
+        )
+    }
+
+    private fun confirmSubtitleSelection(selection: VesperTrackSelection) {
+        appliedSubtitleSelection = selection
+        trackSelection = trackSelection.copy(subtitle = selection)
+        trackSelectionChangeGenerationValue += 1L
+        updateListener?.invoke()
     }
 
     override fun setAbrPolicy(policy: VesperAbrPolicy) {

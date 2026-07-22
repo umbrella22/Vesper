@@ -75,6 +75,7 @@ extension VesperNativePlayerBridge {
         cancelPendingRetry(resetAttempts: true)
         cancelStopSeekTimeout()
         cancelSourceLoadTask()
+        advanceSubtitleSourceEpoch()
         pendingResilienceRestore = nil
         currentSource = nil
         currentHdrFailureEvidence = nil
@@ -100,6 +101,7 @@ extension VesperNativePlayerBridge {
         iosHostLog(
             "selectSource source=\(source.uri) label=\(source.label) kind=\(source.kind.rawValue) protocol=\(source.protocol.rawValue)"
         )
+        advanceSubtitleSourceEpoch()
         currentSource = source
         currentHdrFailureEvidence = nil
         cancelPendingRetry(resetAttempts: true)
@@ -167,6 +169,8 @@ extension VesperNativePlayerBridge {
     func cancelSourceLoadTask() {
         sourceLoadTask?.cancel()
         sourceLoadTask = nil
+        subtitleOverlayLoadTask?.cancel()
+        subtitleOverlayLoadTask = nil
         sourceLoadEpoch &+= 1
         fairPlayDrmCoordinator?.cancelPendingRequests()
     }
@@ -325,6 +329,7 @@ extension VesperNativePlayerBridge {
         pendingPlayAfterStopSeek = false
         isSeekingToStartAfterStop = false
         removeObservers()
+        cancelPendingSubtitleSelection()
         player?.pause()
         surfaceHost?.attach(player: nil)
         nativeFramePipelineCoordinator.closeActiveSession()
@@ -336,5 +341,20 @@ extension VesperNativePlayerBridge {
         fairPlayDrmCoordinatorId = nil
         closeCurrentSourceNormalizerResource()
         resetTrackState()
+    }
+
+    @discardableResult
+    func advanceSubtitleSourceEpoch() -> UInt64 {
+        subtitleSourceEpoch &+= 1
+        cancelPendingSubtitleSelection()
+        explicitSubtitleIntentSourceEpoch = nil
+        latestConfirmedExplicitSubtitleSelection = nil
+        return subtitleSourceEpoch
+    }
+
+    func cancelPendingSubtitleSelection() {
+        subtitleSelectionTask?.cancel()
+        subtitleSelectionTask = nil
+        pendingSubtitleSelection = nil
     }
 }

@@ -274,18 +274,14 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 return nil
             }
         case "setSubtitleTrackSelection":
-            handleSessionCommand(call, result: result) { session in
+            handleAsyncSessionCommand(call, result: result) { session in
                 let selectionMap = try requireNestedMap(
                     arguments: arguments(of: call), key: "selection")
                 session.lastError = nil
-                // `setSubtitleTrackSelection` now throws on immediate
-                // validation failures (missing group, unknown id, no auto
-                // candidate). The existing `handleSessionCommand` catch
-                // converts the throw into a `FlutterError`, so the Dart
-                // `Future<void>` actually fails instead of completing
-                // successfully.
-                try session.controller.setSubtitleTrackSelection(try selectionMap.toTrackSelection())
-                emitSnapshot(for: session)
+                try await session.controller.setSubtitleTrackSelection(
+                    try selectionMap.toTrackSelection(isSubtitle: true)
+                )
+                self.emitSnapshot(for: session)
                 return nil
             }
         case "setSubtitleStyle":
@@ -1792,6 +1788,10 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "capabilities": buildCapabilitiesMap(),
             "trackCatalog": trackCatalog.toMap(),
             "trackSelection": trackSelection.toMap(),
+            // Deprecated aliases are derived from the canonical snapshot.
+            "requestedSubtitleSelection": trackSelection.subtitle.toMap(),
+            "confirmedSubtitleSelection": trackSelection.confirmedSubtitle.toMap(),
+            "effectiveSubtitleTrackId": flutterValue(trackSelection.effectiveSubtitleTrackId),
             "effectiveVideoTrackId": flutterValue(effectiveVideoTrackId),
             "videoVariantObservation": flutterValue(
                 videoVariantObservation.map { observation in

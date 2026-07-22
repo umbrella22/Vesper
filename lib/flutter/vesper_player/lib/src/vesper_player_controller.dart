@@ -409,21 +409,38 @@ class VesperPlayerController {
       return;
     }
 
-    final vesperError = error is VesperUnsupportedError
+    final vesperError = error is VesperSubtitleException
         ? VesperPlayerError(
-            message: error.message?.toString() ??
-                'Vesper player is not supported on this platform.',
-            code: VesperPlayerErrorCode.unsupported,
+            message: error.message,
+            code: VesperPlayerErrorCode.invalidState,
             category: VesperPlayerErrorCategory.capability,
-            retriable: false,
-            details: _unsupportedErrorDetails(error),
+            retriable: error.retriable,
+            details: <String, Object?>{
+              'domain': 'subtitle',
+              'code': error.code,
+              'phase': error.phase.name,
+              'phaseRawValue': error.phaseRawValue,
+              'trackId': error.trackId,
+              'commandId': error.commandId,
+              'sourceEpoch': error.sourceEpoch,
+              'retriable': error.retriable,
+            },
           )
-        : VesperPlayerError(
-            message: error.toString(),
-            code: VesperPlayerErrorCode.backendFailure,
-            category: VesperPlayerErrorCategory.platform,
-            retriable: false,
-          );
+        : error is VesperUnsupportedError
+            ? VesperPlayerError(
+                message: error.message?.toString() ??
+                    'Vesper player is not supported on this platform.',
+                code: VesperPlayerErrorCode.unsupported,
+                category: VesperPlayerErrorCategory.capability,
+                retriable: false,
+                details: _unsupportedErrorDetails(error),
+              )
+            : VesperPlayerError(
+                message: error.toString(),
+                code: VesperPlayerErrorCode.backendFailure,
+                category: VesperPlayerErrorCategory.platform,
+                retriable: false,
+              );
 
     final snapshot = this.snapshot.copyWith(lastError: vesperError);
     snapshotListenable.value = snapshot;

@@ -33,7 +33,7 @@ require_text_in_tree() {
 require_flutter_models_text() {
   local needle="$1"
   if ! grep -Fq "$needle" "$REPO_ROOT/lib/flutter/vesper_player_platform_interface/lib/src/models.dart" \
-    && ! grep -FRq "$needle" "$REPO_ROOT/lib/flutter/vesper_player_platform_interface/lib/src/models"; then
+    && ! grep -FRq "$needle" "$REPO_ROOT/lib/flutter/vesper_player_platform_interface/lib/src"; then
     echo "Contract drift: expected '$needle' in Flutter platform interface models" >&2
     exit 1
   fi
@@ -54,7 +54,7 @@ PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -Ev '^/opt/homebrew/(bin|sbin)$
 
 require_flutter_models_text "unsupported"
 require_text lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/VesperPlayerError.kt "unsupported"
-require_text lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/PlayerBridge.swift "case unsupported"
+require_text lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/Bridge/VesperPlayerError.swift "case unsupported"
 require_text_in_tree crates/ffi/player-ffi/src/c_api "PlayerFfiErrorCode::Unsupported"
 
 require_flutter_models_text "decoderSupported"
@@ -74,11 +74,11 @@ require_text fixtures/contracts/plugin_diagnostics.json '"participation": "avail
 require_text fixtures/contracts/plugin_diagnostics.json '"participation": "bypassed"'
 
 require_text lib/flutter/vesper_player_platform_interface/lib/src/download_models.dart "dashSegments"
-require_text lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/VesperDownloadManager.kt "DashSegments"
-require_text lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/VesperDownloadManager.swift "case dashSegments"
+require_text lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/download/manager/VesperDownloadTypes.kt "DashSegments"
+require_text lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/Download/Manager/VesperDownloadConfiguration.swift "case dashSegments"
 
 require_flutter_models_text "continueAudio"
-require_text lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/PlayerBridge.kt "ContinueAudio"
-require_text lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/PlayerBridge.swift "case continueAudio"
+require_text lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/bridge/PlayerBridge.kt "ContinueAudio"
+require_text lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/Bridge/PlayerBridgeSystemPlaybackModels.swift "case continueAudio"
 
 echo "Contract fixtures match the checked Rust, Android, iOS, and Flutter wire names."

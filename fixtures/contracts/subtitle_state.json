@@ -1,0 +1,22 @@
+{
+  "catalogState": "ready",
+  "selectionState": "failed",
+  "advertisedTrackCount": 3,
+  "selectableTrackCount": 2,
+  "catalogError": {
+    "code": "subtitle_resource_failed",
+    "phase": "resource",
+    "trackId": "opaque-external-bad",
+    "retriable": true,
+    "message": "one external subtitle resource could not be loaded"
+  },
+  "selectionError": {
+    "code": "subtitle_selection_timeout",
+    "phase": "selection",
+    "trackId": "opaque-track-7",
+    "retriable": true,
+    "message": "subtitle selection did not converge before the deadline",
+    "commandId": 42,
+    "sourceEpoch": 9
+  }
+}

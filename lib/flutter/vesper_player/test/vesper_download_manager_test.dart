@@ -181,6 +181,45 @@ void main() {
     expect(reportedErrors.single.exception, isA<VesperUnsupportedError>());
   });
 
+  test('player controller preserves structured subtitle failures', () async {
+    platform.subtitleSelectionError = const VesperSubtitleException(
+      code: 'subtitle_selection_timeout',
+      phase: VesperSubtitleErrorPhase.selection,
+      retriable: true,
+      message: 'selection timed out',
+      trackId: 'opaque-track',
+      commandId: 7,
+      sourceEpoch: 3,
+    );
+    final reportedErrors = <FlutterErrorDetails>[];
+    final previousOnError = FlutterError.onError;
+    FlutterError.onError = reportedErrors.add;
+    addTearDown(() {
+      FlutterError.onError = previousOnError;
+    });
+
+    final controller = await VesperPlayerController.create();
+    addTearDown(controller.dispose);
+
+    await expectLater(
+      controller.setSubtitleTrackSelection(
+        const VesperTrackSelection.track('opaque-track'),
+      ),
+      throwsA(isA<VesperSubtitleException>()),
+    );
+
+    final error = controller.snapshot.lastError;
+    expect(error?.code, VesperPlayerErrorCode.invalidState);
+    expect(error?.category, VesperPlayerErrorCategory.capability);
+    expect(error?.retriable, isTrue);
+    expect(error?.details['domain'], 'subtitle');
+    expect(error?.details['code'], 'subtitle_selection_timeout');
+    expect(error?.details['phase'], 'selection');
+    expect(error?.details['trackId'], 'opaque-track');
+    expect(error?.details['commandId'], 7);
+    expect(reportedErrors.single.exception, isA<VesperSubtitleException>());
+  });
+
   test('player controller forwards picture-in-picture APIs and events',
       () async {
     platform.pictureInPictureAvailability =
@@ -318,6 +357,7 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
   List<VesperPluginDiagnostic> playerPluginDiagnostics =
       const <VesperPluginDiagnostic>[];
   Object? playError;
+  Object? subtitleSelectionError;
   VesperPictureInPictureAvailability pictureInPictureAvailability =
       const VesperPictureInPictureAvailability(isAvailable: false);
   Object? pictureInPictureFailure;
@@ -557,8 +597,13 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
   Future<void> setSubtitleTrackSelection(
     String playerId,
     VesperTrackSelection selection,
-  ) async =>
-      throw UnimplementedError();
+  ) async {
+    final error = subtitleSelectionError;
+    if (error != null) {
+      throw error;
+    }
+    throw UnimplementedError();
+  }
 
   @override
   Future<void> setAbrPolicy(String playerId, VesperAbrPolicy policy) async =>

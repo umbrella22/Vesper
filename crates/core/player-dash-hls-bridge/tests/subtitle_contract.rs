@@ -15,8 +15,29 @@
 
 mod common;
 
-use player_dash_hls_bridge::ops::execute_json;
+use player_dash_hls_bridge::{DashHlsError, ops::execute_json};
 use serde_json::Value;
+
+#[test]
+fn shared_subtitle_contract_fixtures_keep_canonical_fields() {
+    let error: player_dash_hls_bridge::SubtitleErrorDetails = serde_json::from_str(include_str!(
+        "../../../../fixtures/contracts/subtitle_error.json"
+    ))
+    .expect("subtitle error fixture");
+    assert_eq!(error.code, "subtitle_selection_timeout");
+    assert_eq!(error.phase, "selection");
+    assert_eq!(error.track_id.as_deref(), Some("opaque-track-7"));
+    assert!(error.retriable);
+
+    let state: Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/contracts/subtitle_state.json"
+    ))
+    .expect("subtitle state fixture");
+    assert_eq!(state["catalogState"], "ready");
+    assert_eq!(state["selectionState"], "failed");
+    assert_eq!(state["advertisedTrackCount"], 3);
+    assert_eq!(state["selectableTrackCount"], 2);
+}
 
 /// Parses an MPD text into a `DashManifest` JSON value via the public FFI.
 /// The iOS host uses the same two-step flow (`parse_manifest` then
@@ -208,12 +229,91 @@ fn master_playlist_rejects_duplicate_subtitle_representation_id() {
     });
     let error =
         execute_json(&request.to_string()).expect_err("duplicate id must fail identity check");
+    let details = error
+        .subtitle_details()
+        .expect("subtitle failures expose typed details");
+    assert_eq!(details.code, "subtitle_track_identity_ambiguous");
+    assert_eq!(details.phase, "identity");
+    assert_eq!(details.track_id.as_deref(), Some("sub-en"));
     assert!(
         error
             .to_string()
             .contains("subtitle_track_identity_ambiguous"),
         "expected structured subtitle_track_identity_ambiguous prefix, got: {error}"
     );
+}
+
+#[test]
+fn subtitle_errors_are_typed_without_prefix_parsing() {
+    let manifest = parse_manifest(common::webvtt_subtitle_multi_default());
+    let request = serde_json::json!({
+        "operation": "selected_playable_representations",
+        "manifest": manifest,
+        "variantPolicy": "all",
+    });
+    let error = execute_json(&request.to_string()).expect_err("duplicate defaults must fail");
+    assert!(matches!(error, DashHlsError::Subtitle { .. }));
+    let details = error.subtitle_details().expect("typed details");
+    assert_eq!(details.code, "subtitle_default_track_ambiguous");
+    assert_eq!(details.phase, "identity");
+    assert!(!details.retriable);
+}
+
+#[test]
+fn subtitle_identity_validation_precedes_playable_filtering() {
+    let mpd = r#"<?xml version="1.0"?>
+<MPD type="static" mediaPresentationDuration="PT6S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet contentType="text" mimeType="text/vtt" lang="en">
+      <Representation id="sub-en" bandwidth="1200" codecs="wvtt">
+        <SegmentTemplate timescale="1000" media="sub-$Number$.vtt" startNumber="1" duration="2000"/>
+      </Representation>
+      <Representation id="sub-en" bandwidth="800" codecs="wvtt"/>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+    let manifest = parse_manifest(mpd);
+    let request = serde_json::json!({
+        "operation": "selected_playable_representations",
+        "manifest": manifest,
+        "variantPolicy": "all",
+    });
+
+    let error = execute_json(&request.to_string())
+        .expect_err("a filtered representation must still participate in identity validation");
+    let details = error.subtitle_details().expect("typed subtitle details");
+    assert_eq!(details.code, "subtitle_track_identity_ambiguous");
+    assert_eq!(details.track_id.as_deref(), Some("sub-en"));
+}
+
+#[test]
+fn subtitle_default_validation_precedes_playable_filtering() {
+    let mpd = r#"<?xml version="1.0"?>
+<MPD type="static" mediaPresentationDuration="PT6S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet contentType="text" mimeType="text/vtt" lang="en">
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="main"/>
+      <Representation id="sub-en" bandwidth="1200" codecs="wvtt">
+        <SegmentTemplate timescale="1000" media="sub-$Number$.vtt" startNumber="1" duration="2000"/>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet contentType="text" mimeType="text/vtt" lang="ja">
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="main"/>
+      <Representation id="sub-ja" bandwidth="800" codecs="wvtt"/>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+    let manifest = parse_manifest(mpd);
+    let request = serde_json::json!({
+        "operation": "selected_playable_representations",
+        "manifest": manifest,
+        "variantPolicy": "all",
+    });
+
+    let error = execute_json(&request.to_string())
+        .expect_err("a filtered representation must still participate in default validation");
+    let details = error.subtitle_details().expect("typed subtitle details");
+    assert_eq!(details.code, "subtitle_default_track_ambiguous");
 }
 
 #[test]
@@ -367,7 +467,7 @@ fn master_playlist_rejects_multiple_default_subtitles() {
 }
 
 #[test]
-fn master_playlist_rejects_multiple_default_representations_in_one_set() {
+fn master_playlist_emits_one_default_for_multiple_representations_in_one_set() {
     let mpd = r#"<?xml version="1.0"?>
 <MPD type="static" mediaPresentationDuration="PT6S" minBufferTime="PT2S">
   <Period id="period0">
@@ -383,20 +483,16 @@ fn master_playlist_rejects_multiple_default_representations_in_one_set() {
     </AdaptationSet>
   </Period>
 </MPD>"#;
-    let manifest = parse_manifest(mpd);
-    let request = serde_json::json!({
-        "operation": "selected_playable_representations",
-        "manifest": manifest,
-        "variantPolicy": "all",
-    });
-
-    let error = execute_json(&request.to_string())
-        .expect_err("multiple default subtitle renditions must fail");
-    assert!(
-        error
-            .to_string()
-            .contains("subtitle_default_track_ambiguous"),
-        "expected structured default ambiguity, got: {error}"
+    let playlist = build_master_playlist(mpd);
+    let subtitle_entries = subtitle_media_entries(&playlist);
+    assert_eq!(subtitle_entries.len(), 2);
+    assert_eq!(
+        subtitle_entries
+            .iter()
+            .filter(|entry| entry.get("DEFAULT").map(String::as_str) == Some("YES"))
+            .count(),
+        1,
+        "one logical default group must emit exactly one DEFAULT rendition"
     );
 }
 

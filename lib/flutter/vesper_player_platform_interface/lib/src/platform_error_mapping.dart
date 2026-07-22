@@ -1,9 +1,14 @@
 import 'package:flutter/services.dart';
 
 import 'models.dart';
+import 'subtitle_exception.dart';
 import 'vesper_player_platform.dart' show VesperUnsupportedError;
 
 Object vesperMapPlatformException(PlatformException error) {
+  final subtitleError = VesperSubtitleException.tryFromPlatformException(error);
+  if (subtitleError != null) {
+    return subtitleError;
+  }
   final details = error.details;
   final normalized = details is Map
       ? Map<Object?, Object?>.from(details)

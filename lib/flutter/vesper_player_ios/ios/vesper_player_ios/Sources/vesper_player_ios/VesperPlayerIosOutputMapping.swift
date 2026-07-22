@@ -56,6 +56,8 @@ extension VesperTrackSelectionSnapshot {
             "video": video.toMap(),
             "audio": audio.toMap(),
             "subtitle": subtitle.toMap(),
+            "confirmedSubtitle": confirmedSubtitle.toMap(),
+            "effectiveSubtitleTrackId": flutterValue(effectiveSubtitleTrackId),
             "abrPolicy": abrPolicy.toMap(),
         ]
     }
@@ -132,8 +134,24 @@ extension VesperPlayerSource {
             "label": label,
             "kind": kind.rawValue,
             "protocol": `protocol`.rawValue,
-            "headers": headers,
             "drmConfiguration": flutterValue(drmConfiguration?.toMap()),
+            // Request headers are transport credentials and must never be
+            // exposed through snapshots or download events.
+            "externalSubtitles": externalSubtitles.map { $0.toPublicMap() },
+        ]
+    }
+}
+
+private extension VesperExternalSubtitleSource {
+    func toPublicMap() -> [String: Any] {
+        [
+            "id": id,
+            "uri": uri,
+            "mimeType": mimeType,
+            "language": flutterValue(language),
+            "label": flutterValue(label),
+            "isDefault": isDefault,
+            "isForced": isForced,
         ]
     }
 }
@@ -143,7 +161,6 @@ extension VesperPlayerDrmConfiguration {
         [
             "keySystem": keySystem,
             "licenseUri": licenseUri,
-            "licenseHeaders": licenseHeaders,
             "fairPlayCertificateUri": flutterValue(fairPlayCertificateUri),
             "fairPlayCertificateBase64": flutterValue(fairPlayCertificateBase64),
             "multiSession": multiSession,
@@ -791,34 +808,37 @@ func errorMap(from error: Error) -> [String: Any] {
             ) { current, _ in current },
         ]
     }
+    if let subtitleError = error as? PluginSubtitleError {
+        return subtitleErrorMap(
+            code: subtitleError.code,
+            phase: subtitleError.phase,
+            trackId: subtitleError.trackId,
+            retriable: subtitleError.retriable,
+            message: subtitleError.message,
+            commandId: subtitleError.commandId,
+            sourceEpoch: subtitleError.sourceEpoch
+        )
+    }
+    if let commandError = error as? VesperSubtitleSelectionCommandError {
+        return subtitleSelectionErrorMap(
+            commandError.failure,
+            commandId: commandError.commandId,
+            sourceEpoch: commandError.sourceEpoch
+        )
+    }
     if let subtitleError = error as? VesperSubtitleSelectionError {
-        let code: String
-        let trackId: String?
-        switch subtitleError {
-        case let .platformTrackUnavailable(id):
-            code = "subtitle_platform_track_unavailable"
-            trackId = id
-        case let .trackNotFound(id):
-            code = "subtitle_track_not_found"
-            trackId = id
-        case .autoCandidateUnavailable:
-            code = "subtitle_auto_candidate_unavailable"
-            trackId = nil
-        case let .selectionDidNotConverge(id):
-            code = "subtitle_selection_failed"
-            trackId = id
-        }
-        return [
-            "message": error.localizedDescription,
-            "code": code,
-            "category": "capability",
-            "retriable": false,
-            "details": [
-                "subtitleCode": code,
-                "subtitlePhase": "selection",
-                "trackId": flutterValue(trackId),
-            ],
-        ]
+        return subtitleSelectionErrorMap(subtitleError)
+    }
+    if let subtitleError = error as? VesperSubtitleError {
+        return subtitleErrorMap(
+            code: subtitleError.code,
+            phase: subtitleError.phaseRawValue ?? subtitleError.phase.rawValue,
+            trackId: subtitleError.trackId,
+            retriable: subtitleError.retriable,
+            message: subtitleError.message,
+            commandId: subtitleError.commandId,
+            sourceEpoch: subtitleError.sourceEpoch
+        )
     }
     let code: String
     let category: String
@@ -852,6 +872,102 @@ func errorMap(from error: Error) -> [String: Any] {
     ]
 }
 
+private func subtitleSelectionErrorMap(
+    _ subtitleError: VesperSubtitleSelectionError,
+    commandId: UInt64? = nil,
+    sourceEpoch: UInt64? = nil
+) -> [String: Any] {
+    let code: String
+    let trackId: String?
+    let retriable: Bool
+    let phase: String
+    switch subtitleError {
+    case let .platformTrackUnavailable(id):
+        code = "subtitle_platform_track_unavailable"
+        trackId = id
+        retriable = false
+        phase = "selection"
+    case let .trackNotFound(id):
+        code = "subtitle_track_not_found"
+        trackId = id
+        retriable = false
+        phase = "selection"
+    case .autoCandidateUnavailable:
+        code = "subtitle_auto_candidate_unavailable"
+        trackId = nil
+        retriable = false
+        phase = "selection"
+    case let .selectionDidNotConverge(id):
+        code = "subtitle_selection_mismatch"
+        trackId = id
+        retriable = false
+        phase = "selection"
+    case let .selectionTimedOut(id):
+        code = "subtitle_selection_timeout"
+        trackId = id
+        retriable = true
+        phase = "selection"
+    case let .selectionCancelled(id):
+        code = "subtitle_selection_cancelled"
+        trackId = id
+        retriable = true
+        phase = "selection"
+    case let .sourceChanged(id):
+        code = "subtitle_source_changed"
+        trackId = id
+        retriable = true
+        phase = "selection"
+    case let .selectionSuperseded(id):
+        code = "subtitle_selection_superseded"
+        trackId = id
+        retriable = true
+        phase = "selection"
+    case let .catalogUnavailable(rawCode, id, errorPhase, phaseRawValue, _, isRetriable):
+        code = rawCode
+        trackId = id
+        retriable = isRetriable
+        phase = phaseRawValue ?? errorPhase.rawValue
+    }
+    return subtitleErrorMap(
+        code: code,
+        phase: phase,
+        trackId: trackId,
+        retriable: retriable,
+        message: subtitleError.localizedDescription,
+        commandId: commandId,
+        sourceEpoch: sourceEpoch
+    )
+}
+
+private func subtitleErrorMap(
+    code: String,
+    phase: String,
+    trackId: String?,
+    retriable: Bool,
+    message: String,
+    commandId: UInt64? = nil,
+    sourceEpoch: UInt64? = nil
+) -> [String: Any] {
+    [
+        "domain": "subtitle",
+        "code": code,
+        "phase": phase,
+        "trackId": flutterValue(trackId),
+        "retriable": retriable,
+        "message": message,
+        "commandId": flutterWireInteger(commandId),
+        "sourceEpoch": flutterWireInteger(sourceEpoch),
+    ]
+}
+
+private func flutterWireInteger(_ value: UInt64?) -> Any {
+    guard let value else { return NSNull() }
+    if value <= UInt64(Int64.max) {
+        return Int64(value)
+    }
+    return String(value)
+}
+
 func downloadErrorMap(from error: Error) -> [String: Any] {
     if let drmError = error as? VesperPlayerDrmUnsupportedError {
         return [
@@ -876,10 +992,14 @@ func downloadErrorMap(from error: Error) -> [String: Any] {
 }
 
 func asFlutterError(_ error: Error, code: String) -> FlutterError {
-    FlutterError(
-        code: code,
+    let details = errorMap(from: error)
+    let flutterCode = details["domain"] as? String == "subtitle"
+        ? "vesper_subtitle_error"
+        : code
+    return FlutterError(
+        code: flutterCode,
         message: error.localizedDescription,
-        details: errorMap(from: error)
+        details: details
     )
 }
 

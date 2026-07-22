@@ -232,6 +232,6 @@ internal object VesperNativeJni {
     external fun setSubtitleTrackSelection(
         sessionHandle: Long,
         selection: NativeTrackSelectionPayload,
-    )
+    ): String?
     external fun setAbrPolicy(sessionHandle: Long, policy: NativeAbrPolicyPayload)
 }

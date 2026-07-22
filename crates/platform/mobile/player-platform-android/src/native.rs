@@ -46,7 +46,7 @@ use player_runtime::{
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
     PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
     PlayerRuntimeStartup, PlayerSeekableRange, PlayerSnapshot, PlayerTimelineKind,
-    PlayerTimelineSnapshot, PresentationState, SourceNormalizerMode,
+    PlayerTimelineSnapshot, PresentationState, SourceNormalizerMode, SubtitleErrorDetails,
 };
 use serde::Serialize;
 
@@ -2765,8 +2765,10 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
             MediaTrackSelectionMode::Disabled => Ok(MediaTrackSelection::disabled()),
             MediaTrackSelectionMode::Track => {
                 let Some(track_id) = selection.track_id.as_deref() else {
-                    return Err(PlayerError::new(
-                        PlayerErrorCode::InvalidArgument,
+                    return Err(Self::track_selection_error(
+                        kind,
+                        "subtitle_track_not_found",
+                        None,
                         "track selection mode=Track requires a track id",
                     ));
                 };
@@ -2778,8 +2780,10 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                     .iter()
                     .find(|track| track.id == track_id)
                     .ok_or_else(|| {
-                        PlayerError::new(
-                            PlayerErrorCode::InvalidArgument,
+                        Self::track_selection_error(
+                            kind,
+                            "subtitle_track_not_found",
+                            Some(track_id),
                             format!(
                                 "track '{track_id}' is not present in the current track catalog"
                             ),
@@ -2787,14 +2791,37 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                     })?;
 
                 if track.kind != kind {
-                    return Err(PlayerError::new(
-                        PlayerErrorCode::InvalidArgument,
+                    return Err(Self::track_selection_error(
+                        kind,
+                        "subtitle_track_not_found",
+                        Some(track_id),
                         format!("track '{track_id}' is not a {:?} track", kind),
                     ));
                 }
 
                 Ok(MediaTrackSelection::track(track_id))
             }
+        }
+    }
+
+    fn track_selection_error(
+        kind: MediaTrackKind,
+        code: &str,
+        track_id: Option<&str>,
+        message: impl Into<String>,
+    ) -> PlayerError {
+        let message = message.into();
+        let error = PlayerError::new(PlayerErrorCode::InvalidArgument, message.clone());
+        if kind == MediaTrackKind::Subtitle {
+            error.with_subtitle_details(SubtitleErrorDetails::new(
+                code,
+                "selection",
+                track_id.map(str::to_owned),
+                false,
+                message,
+            ))
+        } else {
+            error
         }
     }
 

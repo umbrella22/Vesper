@@ -165,7 +165,8 @@ extension VesperNativePlayerBridge {
                 ?? original.uri,
             label: original.label,
             kind: .local,
-            protocol: playbackProtocol
+            protocol: playbackProtocol,
+            externalSubtitles: original.externalSubtitles
         )
     }
 }

@@ -24,7 +24,16 @@ internal data class NativeTrackSelectionFailure(
     val code: String,
     val phase: String,
     val message: String,
+    val retriable: Boolean = false,
     val advertisedTrackCount: Int? = null,
+    /** Callback identity used to reject delayed failures from an older command. */
+    val sourceCallbackGeneration: Long? = null,
+    val commandGeneration: Long? = null,
+)
+
+internal data class AutomaticSubtitleOverrideResult(
+    val override: TrackSelectionOverride? = null,
+    val failure: NativeTrackSelectionFailure? = null,
 )
 
 internal fun applyTrackPreferenceDefaults(
@@ -104,6 +113,9 @@ internal fun applyAbrPreferenceDefaults(
 internal fun applyTrackPreferenceTrackOverrides(
     exoPlayer: ExoPlayer,
     policy: VesperTrackPreferencePolicy,
+    sourceProtocol: VesperPlayerSourceProtocol? = null,
+    externalSubtitleIds: List<String> = emptyList(),
+    unavailableExternalSubtitleIds: Set<String> = emptySet(),
 ) {
     val builder = exoPlayer.trackSelectionParameters.buildUpon()
     var hasChanges = false
@@ -123,7 +135,17 @@ internal fun applyTrackPreferenceTrackOverrides(
 
     if (policy.subtitleSelection.mode == VesperTrackSelectionMode.Track) {
         val trackId = policy.subtitleSelection.trackId
-        val override = trackId?.let { findTrackOverride(exoPlayer.currentTracks, C.TRACK_TYPE_TEXT, it) }
+        val override =
+            trackId?.let {
+                findTrackOverride(
+                    exoPlayer.currentTracks,
+                    C.TRACK_TYPE_TEXT,
+                    it,
+                    sourceProtocol,
+                    externalSubtitleIds,
+                    unavailableExternalSubtitleIds,
+                )
+            }
         if (override != null) {
             builder.clearOverridesOfType(C.TRACK_TYPE_TEXT)
             builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
@@ -160,29 +182,43 @@ internal fun applyTrackSelectionCommand(
     selection: NativeTrackSelectionPayload,
     onTrackSelectionFailure: ((NativeTrackSelectionFailure) -> Unit)? = null,
     sourceProtocol: VesperPlayerSourceProtocol? = null,
-) {
+    externalSubtitleIds: List<String> = emptyList(),
+    unavailableExternalSubtitleIds: Set<String> = emptySet(),
+): Boolean {
     val trackType = media3TrackType(kind)
     val builder = exoPlayer.trackSelectionParameters.buildUpon()
     builder.clearOverridesOfType(trackType)
 
     when (selection.modeOrdinal) {
         NativeTrackSelectionMode.Auto.ordinal -> {
-            if (kind == NativeTrackKind.Subtitle &&
-                exoPlayer.currentTracks.groups.none { group ->
-                    group.type == trackType &&
-                        (0 until group.length).any { index -> group.isTrackSupported(index, true) }
+            if (kind == NativeTrackKind.Subtitle) {
+                val resolution =
+                    findAutomaticSubtitleOverride(
+                        exoPlayer.currentTracks,
+                        exoPlayer.trackSelectionParameters,
+                        sourceProtocol,
+                        externalSubtitleIds,
+                        unavailableExternalSubtitleIds,
+                    )
+                resolution.failure?.let { failure ->
+                    Log.w(NATIVE_JNI_BINDINGS_TAG, failure.code)
+                    onTrackSelectionFailure?.invoke(failure)
+                    return false
                 }
-            ) {
-                val failure = NativeTrackSelectionFailure(
-                    kind = kind,
-                    trackId = null,
-                    code = "subtitle_auto_candidate_unavailable",
-                    phase = "selection",
-                    message = "no selectable subtitle candidate is available",
-                )
-                Log.w(NATIVE_JNI_BINDINGS_TAG, failure.message)
-                onTrackSelectionFailure?.invoke(failure)
-                return
+                val override = resolution.override
+                if (override == null) {
+                    val failure = NativeTrackSelectionFailure(
+                        kind = kind,
+                        trackId = null,
+                        code = "subtitle_auto_candidate_unavailable",
+                        phase = "selection",
+                        message = "no selectable subtitle candidate is available",
+                    )
+                    Log.w(NATIVE_JNI_BINDINGS_TAG, failure.message)
+                    onTrackSelectionFailure?.invoke(failure)
+                    return false
+                }
+                builder.setOverrideForType(override)
             }
             builder.setTrackTypeDisabled(trackType, false)
         }
@@ -191,7 +227,17 @@ internal fun applyTrackSelectionCommand(
         }
         NativeTrackSelectionMode.Track.ordinal -> {
             val trackId = selection.trackId
-            val override = trackId?.let { findTrackOverride(exoPlayer.currentTracks, trackType, it, sourceProtocol) }
+            val override =
+                trackId?.let {
+                    findTrackOverride(
+                        exoPlayer.currentTracks,
+                        trackType,
+                        it,
+                        sourceProtocol,
+                        externalSubtitleIds,
+                        unavailableExternalSubtitleIds,
+                    )
+                }
             if (override == null) {
                 // A Track-mode lookup failure must surface as a structured
                 // runtime warning, not a silent Log.w. The
@@ -209,7 +255,7 @@ internal fun applyTrackSelectionCommand(
                 )
                 Log.w(NATIVE_JNI_BINDINGS_TAG, failure.code)
                 onTrackSelectionFailure?.invoke(failure)
-                return
+                return false
             }
             builder.setTrackTypeDisabled(trackType, false)
             if (kind == NativeTrackKind.Video) {
@@ -217,10 +263,11 @@ internal fun applyTrackSelectionCommand(
             }
             builder.setOverrideForType(override)
         }
-        else -> return
+        else -> return false
     }
 
     exoPlayer.setTrackSelectionParameters(builder.build())
+    return true
 }
 
 internal fun applyAbrPolicyCommand(
@@ -273,6 +320,8 @@ internal fun findTrackOverride(
     trackType: Int,
     trackId: String,
     sourceProtocol: VesperPlayerSourceProtocol? = null,
+    externalSubtitleIds: List<String> = emptyList(),
+    unavailableExternalSubtitleIds: Set<String> = emptySet(),
 ): TrackSelectionOverride? {
     val isDashSource = sourceProtocol == VesperPlayerSourceProtocol.Dash
     var match: TrackSelectionOverride? = null
@@ -281,16 +330,12 @@ internal fun findTrackOverride(
         if (group.type != trackType) continue
         for (trackIndex in 0 until group.length) {
             val format = group.getTrackFormat(trackIndex)
-            // Subtitle lookups prefer the stable id (`subtitle:dash:<rep id>`)
-            // so source-refresh / track-reorder do not break an existing
-            // selection. The stable id is only computed for DASH sources to
-            // match the catalog/selection gating; non-DASH subtitle tracks
-            // and all video/audio tracks use only the positional
-            // `nativeTrackId`. A DASH subtitle without a stable id is an
-            // identity failure and must not be selected positionally.
-            if (trackType == C.TRACK_TYPE_TEXT && isDashSource) {
-                val stableId = subtitleStableTrackId(format)
-                if (stableId.isNotEmpty() && stableId == trackId) {
+            if (trackType == C.TRACK_TYPE_TEXT) {
+                val stableId = subtitleTrackId(format, isDashSource, externalSubtitleIds)
+                if (stableId.isNotEmpty() &&
+                    stableId !in unavailableExternalSubtitleIds &&
+                    stableId == trackId
+                ) {
                     match = TrackSelectionOverride(group.mediaTrackGroup, trackIndex)
                     matchCount += 1
                 }
@@ -301,6 +346,77 @@ internal fun findTrackOverride(
         }
     }
     return match.takeIf { matchCount == 1 }
+}
+
+internal fun findAutomaticSubtitleOverride(
+    tracks: Tracks,
+    parameters: TrackSelectionParameters,
+    sourceProtocol: VesperPlayerSourceProtocol?,
+    externalSubtitleIds: List<String>,
+    unavailableExternalSubtitleIds: Set<String> = emptySet(),
+): AutomaticSubtitleOverrideResult {
+    val isDashSource = sourceProtocol == VesperPlayerSourceProtocol.Dash
+    data class Candidate(
+        val id: String,
+        val override: TrackSelectionOverride,
+        val languageRank: Int,
+        val isDefault: Boolean,
+        val isForced: Boolean,
+    )
+    val candidates = mutableListOf<Candidate>()
+    tracks.groups.forEach { group ->
+        if (group.type != C.TRACK_TYPE_TEXT) return@forEach
+        for (index in 0 until group.length) {
+            if (!group.isTrackSupported(index, true)) continue
+            val format = group.getTrackFormat(index)
+            val id = subtitleTrackId(format, isDashSource, externalSubtitleIds)
+            if (id.isBlank() || id in unavailableExternalSubtitleIds) continue
+            val languageRank =
+                parameters.preferredTextLanguages.indexOfFirst { preferred ->
+                    preferred.equals(format.language, ignoreCase = true) ||
+                        preferred.substringBefore('-')
+                            .equals(format.language?.substringBefore('-'), ignoreCase = true)
+                }.let { if (it < 0) Int.MAX_VALUE else it }
+            candidates +=
+                Candidate(
+                    id = id,
+                    override = TrackSelectionOverride(group.mediaTrackGroup, index),
+                    languageRank = languageRank,
+                    isDefault = (format.selectionFlags and C.SELECTION_FLAG_DEFAULT) != 0,
+                    isForced = (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0,
+                )
+        }
+    }
+    val duplicateId =
+        candidates
+            .groupingBy { it.id }
+            .eachCount()
+            .entries
+            .firstOrNull { it.value > 1 }
+            ?.key
+    if (duplicateId != null) {
+        return AutomaticSubtitleOverrideResult(
+            failure = NativeTrackSelectionFailure(
+                kind = NativeTrackKind.Subtitle,
+                trackId = duplicateId,
+                code = "subtitle_track_identity_ambiguous",
+                phase = "identity",
+                message = "multiple selectable subtitle tracks resolve to the same identity",
+                advertisedTrackCount = candidates.size,
+            ),
+        )
+    }
+
+    val override = candidates
+        .sortedWith(
+            compareBy<Candidate> { it.languageRank }
+                .thenByDescending { it.isDefault }
+                .thenBy { it.isForced }
+                .thenBy { it.id },
+        )
+        .firstOrNull()
+        ?.override
+    return AutomaticSubtitleOverrideResult(override = override)
 }
 
 internal fun media3TrackType(kind: NativeTrackKind): Int =

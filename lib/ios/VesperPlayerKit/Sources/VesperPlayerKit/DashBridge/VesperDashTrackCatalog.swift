@@ -4,6 +4,9 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
     let videoTracks: [VesperMediaTrack]
     let audioTracks: [VesperMediaTrack]
     let subtitleTracks: [VesperMediaTrack]
+    /// Number declared by the parsed DASH manifest before platform support
+    /// filtering removes unplayable representations.
+    let advertisedSubtitleTrackCount: Int
     let videoVariantPinsByTrackId: [String: LoadedVideoVariantPin]
     let adaptiveVideo: Bool
     let adaptiveAudio: Bool
@@ -11,7 +14,8 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
     init(
         audio: [VesperDashPlayableRepresentation],
         video: [VesperDashPlayableRepresentation],
-        subtitles: [VesperDashPlayableRepresentation] = []
+        subtitles: [VesperDashPlayableRepresentation] = [],
+        advertisedSubtitleTrackCount: Int? = nil
     ) {
         var pinsByTrackId: [String: LoadedVideoVariantPin] = [:]
         var videoTracks: [VesperMediaTrack] = []
@@ -32,9 +36,20 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
         audioTracks = audio.enumerated().map { index, item in
             Self.audioTrack(for: item, index: index)
         }
+        // A DASH default flag belongs to the adaptation set, not to every
+        // representation in that set.  Keep the first representation as the
+        // catalog's default representative so the iOS catalog agrees with
+        // the Rust-to-HLS bridge and never advertises multiple defaults for
+        // one logical subtitle group.
+        var emittedDefaultAdaptationSets = Set<String>()
         subtitleTracks = subtitles.enumerated().map { index, item in
-            Self.subtitleTrack(for: item, index: index)
+            let adaptationSetKey = Self.subtitleAdaptationSetKey(item.adaptationSet)
+            let isDefault = item.adaptationSet.isDefault &&
+                emittedDefaultAdaptationSets.insert(adaptationSetKey).inserted
+            return Self.subtitleTrack(for: item, index: index, isDefault: isDefault)
         }
+        self.advertisedSubtitleTrackCount =
+            advertisedSubtitleTrackCount ?? subtitles.count
         videoVariantPinsByTrackId = pinsByTrackId
         adaptiveVideo = video.count > 1
         adaptiveAudio = audio.count > 1
@@ -100,7 +115,8 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
 
     private static func subtitleTrack(
         for item: VesperDashPlayableRepresentation,
-        index: Int
+        index: Int,
+        isDefault: Bool
     ) -> VesperMediaTrack {
         let representation = item.representation
         // Default/forced semantics come from the shared DASH adaptation set
@@ -120,9 +136,27 @@ struct VesperDashManifestTrackCatalogSnapshot: Equatable {
             frameRate: nil,
             channels: nil,
             sampleRate: nil,
-            isDefault: item.adaptationSet.isDefault,
+            isDefault: isDefault,
             isForced: item.adaptationSet.isForced
         )
+    }
+
+    private static func subtitleAdaptationSetKey(
+        _ adaptationSet: VesperDashAdaptationSet
+    ) -> String {
+        if let id = adaptationSet.id, !id.isEmpty {
+            return "id:\(id)"
+        }
+        // Representation ids are source-stable and make the fallback key
+        // distinct even when a manifest omits AdaptationSet@id.
+        let representationIds = adaptationSet.representations.map(\.id).joined(separator: "\u{1f}")
+        return [
+            adaptationSet.language ?? "",
+            adaptationSet.label ?? "",
+            adaptationSet.kind.rawValue,
+            adaptationSet.isForced ? "forced" : "regular",
+            representationIds
+        ].joined(separator: "\u{1e}")
     }
 
     private static func videoTrackLabel(representation: VesperDashRepresentation) -> String {

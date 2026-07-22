@@ -69,6 +69,7 @@ pub struct FfiError {
     category: FfiErrorCategory,
     retriable: bool,
     message: String,
+    details_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -663,6 +664,10 @@ impl FfiError {
     pub fn message(&self) -> &str {
         &self.message
     }
+
+    pub fn details_json(&self) -> Option<&str> {
+        self.details_json.as_deref()
+    }
 }
 
 impl From<PresentationState> for FfiPlaybackState {
@@ -712,11 +717,25 @@ impl From<PlayerErrorCategory> for FfiErrorCategory {
 
 impl From<PlayerError> for FfiError {
     fn from(value: PlayerError) -> Self {
+        let details_json = value
+            .subtitle_details()
+            .map(|details| {
+                let mut payload = match serde_json::to_value(details) {
+                    Ok(serde_json::Value::Object(payload)) => payload,
+                    _ => serde_json::Map::new(),
+                };
+                payload.insert(
+                    "domain".to_owned(),
+                    serde_json::Value::String("subtitle".to_owned()),
+                );
+                serde_json::Value::Object(payload).to_string()
+            });
         Self {
             code: value.code().into(),
             category: value.category().into(),
             retriable: value.is_retriable(),
             message: value.message().to_owned(),
+            details_json,
         }
     }
 }

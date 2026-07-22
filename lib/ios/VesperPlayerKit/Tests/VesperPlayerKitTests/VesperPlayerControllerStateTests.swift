@@ -4,6 +4,59 @@ import XCTest
 
 @MainActor
 final class VesperPlayerControllerStateTests: XCTestCase {
+    func testFirstVideoFrameDeferralAppliesOnlyToLocalVideo() {
+        XCTAssertFalse(
+            shouldDeferPlaybackUntilFirstVideoFrame(
+                sourceKind: .local,
+                itemHasVideoTrack: false,
+                surfaceIsReadyForDisplay: false
+            )
+        )
+        XCTAssertTrue(
+            shouldDeferPlaybackUntilFirstVideoFrame(
+                sourceKind: .local,
+                itemHasVideoTrack: true,
+                surfaceIsReadyForDisplay: false
+            )
+        )
+        XCTAssertFalse(
+            shouldDeferPlaybackUntilFirstVideoFrame(
+                sourceKind: .local,
+                itemHasVideoTrack: true,
+                surfaceIsReadyForDisplay: true
+            )
+        )
+        XCTAssertFalse(
+            shouldDeferPlaybackUntilFirstVideoFrame(
+                sourceKind: .remote,
+                itemHasVideoTrack: true,
+                surfaceIsReadyForDisplay: false
+            )
+        )
+        XCTAssertFalse(
+            shouldDeferPlaybackUntilFirstVideoFrame(
+                sourceKind: .local,
+                itemHasVideoTrack: true,
+                surfaceIsReadyForDisplay: nil
+            )
+        )
+    }
+
+    func testSubtitleSelectionReturnsAfterControllerStateIsSynchronized() async throws {
+        let bridge = TestObservablePlayerBridge()
+        let controller = VesperPlayerController(bridge)
+        let selection = VesperTrackSelection.track("stable-subtitle-id")
+
+        try await controller.setSubtitleTrackSelection(selection)
+
+        XCTAssertEqual(controller.requestedSubtitleSelection, selection)
+        XCTAssertEqual(controller.confirmedSubtitleSelection, selection)
+        XCTAssertEqual(controller.trackSelection.subtitle, selection)
+        XCTAssertEqual(controller.trackSelection.confirmedSubtitle, selection)
+        XCTAssertEqual(controller.effectiveSubtitleTrackId, "stable-subtitle-id")
+        XCTAssertEqual(controller.subtitleState.selectionState, .confirmed)
+    }
+
     func testControllerMirrorsBridgeFixedTrackStatusAndResiliencePolicy() async {
         let bridge = TestObservablePlayerBridge()
         let controller = VesperPlayerController(bridge)
@@ -2789,19 +2842,25 @@ private final class TestObservablePlayerBridge: ObservableObject, ObservablePlay
     )
     @Published var publishedTrackCatalog: VesperTrackCatalog = .empty
     @Published var publishedTrackSelection = VesperTrackSelectionSnapshot()
+    @Published var publishedRequestedSubtitleSelection: VesperTrackSelection = .disabled()
+    @Published var publishedConfirmedSubtitleSelection: VesperTrackSelection = .disabled()
     @Published var publishedEffectiveVideoTrackId: String?
     @Published var publishedVideoVariantObservation: VesperVideoVariantObservation?
     @Published var publishedFixedTrackStatus: VesperFixedTrackStatus?
     @Published var publishedResiliencePolicy = VesperPlaybackResiliencePolicy()
     @Published var publishedLastError: VesperPlayerError?
     @Published var publishedSubtitleState: VesperSubtitleState = .empty
+    @Published var publishedEffectiveSubtitleTrackId: String?
 
     let backend: PlayerBridgeBackend = .fakeDemo
 
     var uiState: PlayerHostUiState { publishedUiState }
     var trackCatalog: VesperTrackCatalog { publishedTrackCatalog }
     var trackSelection: VesperTrackSelectionSnapshot { publishedTrackSelection }
+    var requestedSubtitleSelection: VesperTrackSelection { publishedRequestedSubtitleSelection }
+    var confirmedSubtitleSelection: VesperTrackSelection { publishedConfirmedSubtitleSelection }
     var effectiveVideoTrackId: String? { publishedEffectiveVideoTrackId }
+    var effectiveSubtitleTrackId: String? { publishedEffectiveSubtitleTrackId }
     var videoVariantObservation: VesperVideoVariantObservation? { publishedVideoVariantObservation }
     var fixedTrackStatus: VesperFixedTrackStatus? { publishedFixedTrackStatus }
     var resiliencePolicy: VesperPlaybackResiliencePolicy { publishedResiliencePolicy }
@@ -2824,7 +2883,27 @@ private final class TestObservablePlayerBridge: ObservableObject, ObservablePlay
     func setPlaybackRate(_ rate: Float) {}
     func setVideoTrackSelection(_ selection: VesperTrackSelection) {}
     func setAudioTrackSelection(_ selection: VesperTrackSelection) {}
-    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) throws {}
+    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) async throws {
+        publishedRequestedSubtitleSelection = selection
+        publishedConfirmedSubtitleSelection = selection
+        publishedEffectiveSubtitleTrackId = selection.mode == .track ? selection.trackId : nil
+        publishedTrackSelection = VesperTrackSelectionSnapshot(
+            video: publishedTrackSelection.video,
+            audio: publishedTrackSelection.audio,
+            subtitle: selection,
+            confirmedSubtitle: selection,
+            effectiveSubtitleTrackId: publishedEffectiveSubtitleTrackId,
+            abrPolicy: publishedTrackSelection.abrPolicy
+        )
+        publishedSubtitleState = VesperSubtitleState(
+            catalogState: .ready,
+            selectionState: .confirmed,
+            advertisedTrackCount: 1,
+            selectableTrackCount: 1,
+            catalogError: nil,
+            selectionError: nil
+        )
+    }
     func setSubtitleStyle(_ style: VesperSubtitleStyle) {}
     func setAbrPolicy(_ policy: VesperAbrPolicy) {}
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {}

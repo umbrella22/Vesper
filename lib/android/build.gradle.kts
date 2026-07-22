@@ -9,7 +9,7 @@ plugins {
 
 allprojects {
     group = "io.github.ikaros.vesper"
-    version = "0.3.0"
+    version = "0.4.0"
 }
 
 data class AndroidPublicationMetadata(

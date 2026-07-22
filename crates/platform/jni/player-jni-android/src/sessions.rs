@@ -104,6 +104,27 @@ pub(crate) fn with_session_mut<R>(
     Some(f(&mut session))
 }
 
+/// Runs a session operation without raising a Java exception for a stale handle.
+///
+/// Subtitle commands use this form because their public contract returns a
+/// structured failure payload through JNI. Other legacy JNI entry points keep
+/// using [`with_session_mut`] and its Java exception behavior.
+pub(crate) fn with_session_mut_checked<R>(
+    handle: jlong,
+    f: impl FnOnce(&mut AndroidHostBridgeSession) -> R,
+) -> Result<R, &'static str> {
+    let session = {
+        let guard = lock_or_recover(sessions());
+        guard
+            .get(handle)
+            .cloned()
+            .ok_or_else(invalid_handle_error)?
+    };
+
+    let mut session = lock_or_recover(session.as_ref());
+    Ok(f(&mut session))
+}
+
 pub(crate) fn new_session(source_uri: String) -> Result<jlong, &'static str> {
     let session = Arc::new(Mutex::new(AndroidHostBridgeSession::new(source_uri)));
     let mut guard = lock_or_recover(sessions());

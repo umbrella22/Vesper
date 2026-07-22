@@ -7,21 +7,274 @@ import androidx.media3.common.TrackGroup
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
+import androidx.media3.exoplayer.dash.manifest.AdaptationSet
+import androidx.media3.exoplayer.dash.manifest.DashManifest
+import androidx.media3.exoplayer.hls.HlsManifest
+import androidx.media3.exoplayer.hls.playlist.HlsMultivariantPlaylist
+import java.nio.charset.StandardCharsets
+import java.util.Base64
+
+/** Manifest-level subtitle declaration, before Media3 support filtering. */
+internal data class NativeSubtitleManifestDeclaration(
+    val id: String,
+    val label: String?,
+    val language: String?,
+    val codec: String?,
+    val isDefault: Boolean,
+    val isForced: Boolean,
+)
+
+/**
+ * Facts owned by the source manifest. [Tracks] is only a selectable view and
+ * must not be used to reconstruct these counts after platform filtering.
+ */
+internal data class NativeSubtitleManifestInfo(
+    val declarations: List<NativeSubtitleManifestDeclaration>,
+    val defaultGroupCount: Int,
+    val failure: NativeTrackSelectionFailure? = null,
+) {
+    val advertisedTrackCount: Int
+        get() = declarations.size
+}
+
+internal fun subtitleManifestInfo(
+    manifest: Any?,
+    sourceProtocol: VesperPlayerSourceProtocol?,
+): NativeSubtitleManifestInfo? =
+    when (sourceProtocol) {
+        VesperPlayerSourceProtocol.Dash -> (manifest as? DashManifest)?.let(::dashSubtitleManifestInfo)
+        VesperPlayerSourceProtocol.Hls -> when (manifest) {
+            is HlsManifest -> hlsSubtitleManifestInfo(manifest.multivariantPlaylist)
+            is HlsMultivariantPlaylist -> hlsSubtitleManifestInfo(manifest)
+            else -> null
+        }
+        else -> null
+    }
+
+/** Returns whether a source protocol has a manifest-owned subtitle catalog. */
+internal fun subtitleManifestIsRequired(sourceProtocol: VesperPlayerSourceProtocol?): Boolean =
+    sourceProtocol == VesperPlayerSourceProtocol.Dash ||
+        sourceProtocol == VesperPlayerSourceProtocol.Hls
+
+/**
+ * Returns true only when Media3 exposed the typed manifest needed to derive
+ * advertised subtitle declarations. A filtered `Tracks` snapshot alone is
+ * never sufficient for DASH/HLS readiness.
+ */
+internal fun hasTypedSubtitleManifest(
+    manifest: Any?,
+    sourceProtocol: VesperPlayerSourceProtocol?,
+): Boolean =
+    when (sourceProtocol) {
+        VesperPlayerSourceProtocol.Dash -> manifest is DashManifest
+        VesperPlayerSourceProtocol.Hls ->
+            manifest is HlsManifest || manifest is HlsMultivariantPlaylist
+        else -> true
+    }
+
+private fun dashSubtitleManifestInfo(manifest: DashManifest): NativeSubtitleManifestInfo {
+    val declarations = mutableListOf<NativeSubtitleManifestDeclaration>()
+    val ids = mutableSetOf<String>()
+    var defaultGroupCount = 0
+    var failure: NativeTrackSelectionFailure? = null
+
+    for (periodIndex in 0 until manifest.periodCount) {
+        val period = manifest.getPeriod(periodIndex)
+        for (adaptationSet in period.adaptationSets) {
+            if (!isSubtitleAdaptationSet(adaptationSet)) continue
+            val representations = adaptationSet.representations
+            val groupIsDefault = representations.any { representation ->
+                (representation.format.selectionFlags and C.SELECTION_FLAG_DEFAULT) != 0
+            }
+            if (groupIsDefault) defaultGroupCount += 1
+            representations.forEachIndexed { representationIndex, representation ->
+                val format = representation.format
+                val rawId = format.id?.takeIf { it.isNotBlank() }
+                val publicId = rawId?.let { "subtitle:dash:$it" }
+                if (rawId == null) {
+                    failure =
+                        failure ?: NativeTrackSelectionFailure(
+                            kind = NativeTrackKind.Subtitle,
+                            trackId = null,
+                            code = "subtitle_track_identity_ambiguous",
+                            phase = "identity",
+                            message = "DASH subtitle representation id is missing",
+                        )
+                } else if (!ids.add(rawId)) {
+                    failure =
+                        failure ?: NativeTrackSelectionFailure(
+                            kind = NativeTrackKind.Subtitle,
+                            trackId = rawId,
+                            code = "subtitle_track_identity_ambiguous",
+                            phase = "identity",
+                            message = "subtitle track identities are not unique",
+                        )
+                }
+                declarations +=
+                    NativeSubtitleManifestDeclaration(
+                        id = publicId.orEmpty(),
+                        label = format.label,
+                        language = format.language?.takeUnless { it.equals("und", ignoreCase = true) },
+                        codec = nativeTrackCodec(format),
+                        // A default role belongs to the adaptation set. Only
+                        // its first representation is the default catalog
+                        // representative, matching the Rust HLS bridge.
+                        isDefault = groupIsDefault && representationIndex == 0,
+                        isForced = (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0,
+                    )
+            }
+        }
+    }
+    if (defaultGroupCount > 1) {
+        failure =
+            failure ?: NativeTrackSelectionFailure(
+                kind = NativeTrackKind.Subtitle,
+                trackId = null,
+                code = "subtitle_default_track_ambiguous",
+                phase = "identity",
+                message = "a subtitle group may contain at most one default track",
+            )
+    }
+    return NativeSubtitleManifestInfo(declarations, defaultGroupCount, failure)
+}
+
+private fun hlsSubtitleManifestInfo(
+    playlist: HlsMultivariantPlaylist,
+): NativeSubtitleManifestInfo {
+    val declarations = mutableListOf<NativeSubtitleManifestDeclaration>()
+    val ids = mutableSetOf<String>()
+    var failure: NativeTrackSelectionFailure? = null
+    playlist.subtitles.groupBy { rendition -> rendition.groupId }.forEach { (_, renditions) ->
+        val defaultRenditions = renditions.filter { rendition ->
+            (rendition.format.selectionFlags and C.SELECTION_FLAG_DEFAULT) != 0
+        }
+        if (defaultRenditions.size > 1) {
+            failure =
+                failure ?: NativeTrackSelectionFailure(
+                    kind = NativeTrackKind.Subtitle,
+                    trackId = null,
+                    code = "subtitle_default_track_ambiguous",
+                    phase = "identity",
+                    message = "a subtitle group may contain at most one default track",
+                )
+        }
+        renditions.forEachIndexed { index, rendition ->
+            val format = rendition.format
+            val identity = format.id?.takeIf { it.isNotBlank() }
+                ?: "${rendition.groupId}:${rendition.name}"
+            val publicId = subtitleTrackId(format, isDashSource = false)
+                .takeIf { it.isNotBlank() }
+                ?: "subtitle:hls:$identity"
+            if (!ids.add(identity)) {
+                failure =
+                    failure ?: NativeTrackSelectionFailure(
+                        kind = NativeTrackKind.Subtitle,
+                        trackId = publicId,
+                        code = "subtitle_track_identity_ambiguous",
+                        phase = "identity",
+                        message = "subtitle track identities are not unique",
+                    )
+            }
+            declarations +=
+                NativeSubtitleManifestDeclaration(
+                    id = publicId,
+                    label = rendition.name.takeIf { it.isNotBlank() } ?: format.label,
+                    language = format.language?.takeUnless { it.equals("und", ignoreCase = true) },
+                    codec = nativeTrackCodec(format),
+                    isDefault = defaultRenditions.isNotEmpty() && index == 0,
+                    isForced = (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0,
+                )
+        }
+    }
+    // HLS group ids define independent logical subtitle groups. Do not merge
+    // defaults from separate groups with caller-declared external tracks; the
+    // per-group duplicate check above is the invariant this layer owns.
+    return NativeSubtitleManifestInfo(declarations, defaultGroupCount = 0, failure)
+}
+
+private fun isSubtitleAdaptationSet(adaptationSet: AdaptationSet): Boolean =
+    adaptationSet.type == C.TRACK_TYPE_TEXT ||
+        adaptationSet.representations.any { representation ->
+            MimeTypes.isText(representation.format.sampleMimeType)
+        }
 
 internal fun collectTrackCatalog(
     tracks: Tracks,
     sourceProtocol: VesperPlayerSourceProtocol? = null,
+    externalSubtitleIds: List<String> = emptyList(),
+    unavailableExternalSubtitleIds: Set<String> = emptySet(),
+    advertisedExternalSubtitleCount: Int = externalSubtitleIds.size,
+    advertisedExternalDefaultCount: Int? = null,
+    declaredExternalSubtitleIds: List<String> = externalSubtitleIds,
+    manifestInfo: NativeSubtitleManifestInfo? = null,
 ): NativeTrackCatalog {
     val trackInfos = mutableListOf<NativeTrackInfo>()
-    val subtitleIds = mutableSetOf<String>()
+    val advertisedSubtitleIds = mutableSetOf<String>()
+    val embeddedSubtitleIds = mutableSetOf<String>()
+    val manifestDeclarations = manifestInfo?.declarations?.associateBy { declaration -> declaration.id }
     var subtitleIdentityFailure: NativeTrackSelectionFailure? = null
-    var advertisedSubtitleTrackCount = 0
+    var advertisedEmbeddedSubtitleTrackCount = 0
+    var embeddedDefaultSubtitleTrackCount = 0
+    var embeddedDefaultSubtitleGroupConflict = false
+    var observedExternalDefaultSubtitleTrackCount = 0
     var adaptiveVideo = false
     var adaptiveAudio = false
     val isDashSource = sourceProtocol == VesperPlayerSourceProtocol.Dash
 
     tracks.groups.forEach { group ->
         val kind = nativeTrackKind(group.type) ?: return@forEach
+        if (kind == NativeTrackKind.Subtitle) {
+            var groupDefaultSubtitleTrackCount = 0
+            for (trackIndex in 0 until group.length) {
+                val format = group.getTrackFormat(trackIndex)
+                val isExternal = externalSubtitleTrackId(format, externalSubtitleIds) != null
+                val candidateId = subtitleTrackId(format, isDashSource, externalSubtitleIds)
+                if (candidateId.isBlank()) {
+                    subtitleIdentityFailure =
+                        subtitleIdentityFailure
+                            ?: NativeTrackSelectionFailure(
+                                kind = NativeTrackKind.Subtitle,
+                                trackId = format.id?.takeIf { it.isNotBlank() },
+                                code = "subtitle_track_identity_ambiguous",
+                                phase = "identity",
+                                message =
+                                    if (isDashSource) {
+                                        "DASH subtitle representation id is missing"
+                                    } else {
+                                        "embedded subtitle metadata does not identify a unique track"
+                                    },
+                            )
+                } else if (!advertisedSubtitleIds.add(candidateId)) {
+                    subtitleIdentityFailure =
+                        subtitleIdentityFailure
+                            ?: NativeTrackSelectionFailure(
+                                kind = NativeTrackKind.Subtitle,
+                                trackId = format.id?.takeIf { it.isNotBlank() } ?: candidateId,
+                                code = "subtitle_track_identity_ambiguous",
+                                phase = "identity",
+                                message = "subtitle track identities are not unique",
+                            )
+                }
+                if (!isExternal) {
+                    embeddedSubtitleIds += candidateId
+                    advertisedEmbeddedSubtitleTrackCount += 1
+                }
+                val declaredDefault = manifestDeclarations?.get(candidateId)?.isDefault
+                val isDefault = declaredDefault
+                    ?: ((format.selectionFlags and C.SELECTION_FLAG_DEFAULT) != 0)
+                if (isDefault) {
+                    if (isExternal) {
+                        observedExternalDefaultSubtitleTrackCount += 1
+                    } else {
+                        embeddedDefaultSubtitleTrackCount += 1
+                        groupDefaultSubtitleTrackCount += 1
+                    }
+                }
+            }
+            if (!isDashSource && groupDefaultSubtitleTrackCount > 1) {
+                embeddedDefaultSubtitleGroupConflict = true
+            }
+        }
         if (kind == NativeTrackKind.Video && group.isAdaptiveSupported) {
             adaptiveVideo = true
         }
@@ -34,48 +287,19 @@ internal fun collectTrackCatalog(
                 continue
             }
             val format = group.getTrackFormat(trackIndex)
-            if (kind == NativeTrackKind.Subtitle && isDashSource) {
-                advertisedSubtitleTrackCount += 1
+            if (kind == NativeTrackKind.Subtitle &&
+                subtitleTrackId(format, isDashSource, externalSubtitleIds) in unavailableExternalSubtitleIds
+            ) {
+                continue
             }
-            // Subtitle public id must come from the manifest
-            // `Representation@id` (Media3 `Format.id` for DASH
-            // text tracks) so it survives source refresh, track reorder,
-            // and resilience restore. The stable id is gated on DASH
-            // sources only — non-DASH subtitle tracks (HLS CEA-608, MP4
-            // embedded captions) keep the legacy positional id so they are
-            // not mislabeled as `subtitle:dash:*`. Video/audio keep the
-            // legacy position-derived `nativeTrackId` (plan: video/audio id
-            // behavior is out of scope for this work).
+            // Subtitle identity is derived from the source-local external id,
+            // DASH Representation@id, or stable media metadata. Positional
+            // ids are never used for subtitle tracks.
             val trackId =
-                if (kind == NativeTrackKind.Subtitle && isDashSource) {
-                    val formatId = format.id
-                    when {
-                        formatId.isNullOrBlank() -> {
-                            subtitleIdentityFailure =
-                                subtitleIdentityFailure
-                                    ?: NativeTrackSelectionFailure(
-                                        kind = NativeTrackKind.Subtitle,
-                                        trackId = null,
-                                        code = "subtitle_track_identity_ambiguous",
-                                        phase = "identity",
-                                        message = "DASH subtitle representation id is missing",
-                                    )
-                            nativeTrackId(group.mediaTrackGroup, trackIndex, format)
-                        }
-                        !subtitleIds.add(formatId) -> {
-                            subtitleIdentityFailure =
-                                subtitleIdentityFailure
-                                    ?: NativeTrackSelectionFailure(
-                                        kind = NativeTrackKind.Subtitle,
-                                        trackId = formatId,
-                                        code = "subtitle_track_identity_ambiguous",
-                                        phase = "identity",
-                                        message = "DASH subtitle representation ids are not unique",
-                                    )
-                            nativeTrackId(group.mediaTrackGroup, trackIndex, format)
-                        }
-                        else -> subtitleStableTrackId(format)
-                    }
+                if (kind == NativeTrackKind.Subtitle) {
+                    val candidateId = subtitleTrackId(format, isDashSource, externalSubtitleIds)
+                    candidateId.takeIf { it.isNotBlank() }
+                        ?: nativeTrackId(group.mediaTrackGroup, trackIndex, format)
                 } else {
                     nativeTrackId(group.mediaTrackGroup, trackIndex, format)
                 }
@@ -83,9 +307,10 @@ internal fun collectTrackCatalog(
                 NativeTrackInfo(
                     id = trackId,
                     kindOrdinal = kind.ordinal,
-                    label = format.label,
-                    language = format.language?.takeUnless { it.equals("und", ignoreCase = true) },
-                    codec = nativeTrackCodec(format),
+                    label = manifestDeclarations?.get(trackId)?.label ?: format.label,
+                    language = manifestDeclarations?.get(trackId)?.language
+                        ?: format.language?.takeUnless { it.equals("und", ignoreCase = true) },
+                    codec = manifestDeclarations?.get(trackId)?.codec ?: nativeTrackCodec(format),
                     hasBitRate = format.bitrate != Format.NO_VALUE,
                     bitRate = format.bitrate.coerceAtLeast(0).toLong(),
                     hasWidth = format.width != Format.NO_VALUE,
@@ -99,22 +324,75 @@ internal fun collectTrackCatalog(
                     channels = format.channelCount.coerceAtLeast(0),
                     hasSampleRate = format.sampleRate != Format.NO_VALUE,
                     sampleRate = format.sampleRate.coerceAtLeast(0),
-                    isDefault = (format.selectionFlags and C.SELECTION_FLAG_DEFAULT) != 0,
-                    isForced = (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0,
+                    isDefault = manifestDeclarations?.get(trackId)?.isDefault
+                        ?: ((format.selectionFlags and C.SELECTION_FLAG_DEFAULT) != 0),
+                    isForced = manifestDeclarations?.get(trackId)?.isForced
+                        ?: ((format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0),
                 )
         }
     }
 
+    val declaredManifestIds = manifestInfo?.declarations?.map { declaration -> declaration.id }.orEmpty()
+    val declaredExternalIds = declaredExternalSubtitleIds.filter { it.isNotBlank() }
+    val duplicateDeclaredExternalId =
+        declaredExternalIds.groupingBy { it }.eachCount().entries.firstOrNull { entry -> entry.value > 1 }?.key
+    val embeddedExternalConflict =
+        (declaredManifestIds.toSet() intersect declaredExternalIds.toSet()).firstOrNull()
+            ?: (embeddedSubtitleIds intersect declaredExternalIds.toSet()).firstOrNull()
+    if (duplicateDeclaredExternalId != null || embeddedExternalConflict != null) {
+        subtitleIdentityFailure =
+            subtitleIdentityFailure ?: NativeTrackSelectionFailure(
+                kind = NativeTrackKind.Subtitle,
+                trackId = duplicateDeclaredExternalId ?: embeddedExternalConflict,
+                code = "subtitle_track_identity_ambiguous",
+                phase = "identity",
+                message = "subtitle track identities are not unique",
+            )
+    }
+
+    manifestInfo?.failure?.let { failure ->
+        subtitleIdentityFailure = subtitleIdentityFailure ?: failure
+    }
+
+    val advertisedSubtitleTrackCount =
+        (manifestInfo?.advertisedTrackCount ?: advertisedEmbeddedSubtitleTrackCount) +
+            advertisedExternalSubtitleCount
+    val externalDefaultSubtitleTrackCount =
+        advertisedExternalDefaultCount ?: observedExternalDefaultSubtitleTrackCount
+    val defaultSubtitleTrackConflict =
+        (manifestInfo == null && embeddedDefaultSubtitleGroupConflict) ||
+            externalDefaultSubtitleTrackCount > 1 ||
+            (manifestInfo == null && isDashSource &&
+                embeddedDefaultSubtitleTrackCount + externalDefaultSubtitleTrackCount > 1) ||
+            // DASH adaptation-set defaults are one logical group-level
+            // contract, so multiple default groups are ambiguous. HLS
+            // renditions, however, are validated per GROUP-ID by the
+            // manifest inspector; defaults in separate HLS groups are valid
+            // and must not be rejected as a global duplicate.
+            (manifestInfo != null && isDashSource && manifestInfo.defaultGroupCount > 1)
+    val catalogFailure =
+        subtitleIdentityFailure
+            ?: if (defaultSubtitleTrackConflict) {
+                NativeTrackSelectionFailure(
+                    kind = NativeTrackKind.Subtitle,
+                    trackId = null,
+                    code = "subtitle_default_track_ambiguous",
+                    phase = "identity",
+                    message = "a subtitle group may contain at most one default track",
+                    advertisedTrackCount = advertisedSubtitleTrackCount,
+                )
+            } else {
+                null
+            }
+
     return NativeTrackCatalog(
         tracks = trackInfos
-            .filterNot { subtitleIdentityFailure != null && it.kindOrdinal == NativeTrackKind.Subtitle.ordinal }
+            .filterNot { catalogFailure != null && it.kindOrdinal == NativeTrackKind.Subtitle.ordinal }
             .toTypedArray(),
         adaptiveVideo = adaptiveVideo,
         adaptiveAudio = adaptiveAudio,
-        subtitleIdentityFailure =
-            subtitleIdentityFailure?.copy(
-                advertisedTrackCount = advertisedSubtitleTrackCount,
-            ),
+        subtitleIdentityFailure = catalogFailure?.copy(advertisedTrackCount = advertisedSubtitleTrackCount),
+        advertisedSubtitleTrackCount = advertisedSubtitleTrackCount,
     )
 }
 
@@ -122,19 +400,80 @@ internal fun collectTrackSelection(
     tracks: Tracks,
     parameters: TrackSelectionParameters,
     sourceProtocol: VesperPlayerSourceProtocol? = null,
+    externalSubtitleIds: List<String> = emptyList(),
+    unavailableExternalSubtitleIds: Set<String> = emptySet(),
+    subtitleModeOrdinal: Int? = null,
 ): NativeTrackSelectionSnapshotPayload =
     NativeTrackSelectionSnapshotPayload(
         video = collectTrackSelectionForType(C.TRACK_TYPE_VIDEO, tracks, parameters, sourceProtocol),
         audio = collectTrackSelectionForType(C.TRACK_TYPE_AUDIO, tracks, parameters, sourceProtocol),
-        subtitle = collectTrackSelectionForType(C.TRACK_TYPE_TEXT, tracks, parameters, sourceProtocol),
+        subtitle =
+            collectTrackSelectionForType(
+                C.TRACK_TYPE_TEXT,
+                tracks,
+                parameters,
+                sourceProtocol,
+                externalSubtitleIds,
+                unavailableExternalSubtitleIds,
+                subtitleModeOrdinal,
+            ),
         abrPolicy = collectAbrPolicy(tracks, parameters),
     )
+
+/**
+ * Returns the subtitle preference that Media3 has accepted into its
+ * [TrackSelectionParameters]. It intentionally does not use
+ * [Tracks.Group.isTrackSelected]: that signal is renderer-active state and
+ * can remain empty while a prepared player is paused.
+ */
+internal fun collectAppliedSubtitleSelection(
+    tracks: Tracks,
+    parameters: TrackSelectionParameters,
+    sourceProtocol: VesperPlayerSourceProtocol? = null,
+    externalSubtitleIds: List<String> = emptyList(),
+    unavailableExternalSubtitleIds: Set<String> = emptySet(),
+    requestedModeOrdinal: Int? = null,
+): VesperTrackSelection {
+    if (parameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)) {
+        return VesperTrackSelection.disabled()
+    }
+
+    val mode =
+        requestedModeOrdinal
+            ?.let { NativeTrackSelectionMode.entries.getOrNull(it) }
+            ?: NativeTrackSelectionMode.Auto
+    if (mode == NativeTrackSelectionMode.Disabled) {
+        return VesperTrackSelection.disabled()
+    }
+
+    val override = currentOverrideForType(C.TRACK_TYPE_TEXT, tracks, parameters)
+    val trackIndex = override?.trackIndices?.singleOrNull()
+    val trackId =
+        trackIndex?.let { index ->
+            subtitleTrackId(
+                override.mediaTrackGroup.getFormat(index),
+                sourceProtocol == VesperPlayerSourceProtocol.Dash,
+                externalSubtitleIds,
+            ).takeIf { it.isNotBlank() && it !in unavailableExternalSubtitleIds }
+        }
+
+    return when (mode) {
+        NativeTrackSelectionMode.Auto ->
+            VesperTrackSelection(VesperTrackSelectionMode.Auto, trackId)
+        NativeTrackSelectionMode.Track ->
+            trackId?.let(VesperTrackSelection::track) ?: VesperTrackSelection.auto()
+        NativeTrackSelectionMode.Disabled -> VesperTrackSelection.disabled()
+    }
+}
 
 internal fun collectTrackSelectionForType(
     trackType: Int,
     tracks: Tracks,
     parameters: TrackSelectionParameters,
     sourceProtocol: VesperPlayerSourceProtocol? = null,
+    externalSubtitleIds: List<String> = emptyList(),
+    unavailableExternalSubtitleIds: Set<String> = emptySet(),
+    requestedModeOrdinal: Int? = null,
 ): NativeTrackSelectionPayload {
     if (parameters.disabledTrackTypes.contains(trackType)) {
         return NativeTrackSelectionPayload(
@@ -143,16 +482,25 @@ internal fun collectTrackSelectionForType(
         )
     }
 
-    val selectedTrackId = currentSelectedTrackId(trackType, tracks, sourceProtocol)
-    val defaultMode =
-        if (trackType == C.TRACK_TYPE_TEXT && selectedTrackId == null) {
-            NativeTrackSelectionMode.Disabled
+    val selectedTrackId =
+        currentSelectedTrackId(
+            trackType,
+            tracks,
+            sourceProtocol,
+            externalSubtitleIds,
+            unavailableExternalSubtitleIds,
+        )
+    val modeOrdinal =
+        if (trackType == C.TRACK_TYPE_TEXT && requestedModeOrdinal != null) {
+            requestedModeOrdinal
+        } else if (trackType == C.TRACK_TYPE_TEXT && selectedTrackId == null) {
+            NativeTrackSelectionMode.Disabled.ordinal
         } else {
-            NativeTrackSelectionMode.Auto
+            NativeTrackSelectionMode.Auto.ordinal
         }
 
     return NativeTrackSelectionPayload(
-        modeOrdinal = defaultMode.ordinal,
+        modeOrdinal = modeOrdinal,
         trackId = selectedTrackId,
     )
 }
@@ -214,6 +562,8 @@ internal fun currentSelectedTrackId(
     trackType: Int,
     tracks: Tracks,
     sourceProtocol: VesperPlayerSourceProtocol? = null,
+    externalSubtitleIds: List<String> = emptyList(),
+    unavailableExternalSubtitleIds: Set<String> = emptySet(),
 ): String? {
     val isDashSource = sourceProtocol == VesperPlayerSourceProtocol.Dash
     tracks.groups.forEach { group ->
@@ -223,20 +573,27 @@ internal fun currentSelectedTrackId(
                 val format = group.getTrackFormat(trackIndex)
                 // Subtitle selections publish the stable id so the snapshot
                 // a Flutter consumer observes matches the catalog id.
-                if (trackType == C.TRACK_TYPE_TEXT && isDashSource) {
-                    val formatId = format.id?.takeIf { it.isNotBlank() } ?: return null
+                if (trackType == C.TRACK_TYPE_TEXT) {
+                    val identity = subtitleTrackId(format, isDashSource, externalSubtitleIds)
+                    if (identity in unavailableExternalSubtitleIds) continue
                     val matchingIdentityCount =
                         tracks.groups.sumOf { candidateGroup ->
                             if (candidateGroup.type != C.TRACK_TYPE_TEXT) {
                                 0
                             } else {
                                 (0 until candidateGroup.length).count { candidateIndex ->
-                                    candidateGroup.getTrackFormat(candidateIndex).id == formatId
+                                    subtitleTrackId(
+                                        candidateGroup.getTrackFormat(candidateIndex),
+                                        isDashSource,
+                                        externalSubtitleIds,
+                                    ).let { candidateIdentity ->
+                                        candidateIdentity == identity &&
+                                            candidateIdentity !in unavailableExternalSubtitleIds
+                                    }
                                 }
                             }
                         }
-                    return subtitleStableTrackId(format)
-                        .takeIf { matchingIdentityCount == 1 }
+                    return identity.takeIf { it.isNotBlank() && matchingIdentityCount == 1 }
                 }
                 return nativeTrackId(group.mediaTrackGroup, trackIndex, format)
             }
@@ -281,6 +638,73 @@ internal fun nativeTrackId(trackGroup: TrackGroup, trackIndex: Int, format: Form
 internal fun subtitleStableTrackId(format: Format): String {
     val formatId = format.id?.takeIf { it.isNotBlank() } ?: return ""
     return "subtitle:dash:$formatId"
+}
+
+/** Returns the opaque, source-scoped identity used for a subtitle catalog entry. */
+internal fun subtitleTrackId(
+    format: Format,
+    isDashSource: Boolean,
+    externalSubtitleIds: List<String> = emptyList(),
+): String {
+    val formatId = format.id?.takeIf { it.isNotBlank() }
+    externalSubtitleTrackId(format, externalSubtitleIds)?.let { return it }
+    val primaryFormatId =
+        formatId?.let { id ->
+            if (externalSubtitleIds.isNotEmpty() && id.startsWith("0:")) {
+                id.removePrefix("0:")
+            } else {
+                id
+            }
+        }
+    if (isDashSource) {
+        return primaryFormatId?.let { "subtitle:dash:$it" }.orEmpty()
+    }
+    // Media3's Format.id is the backend identity when present. Metadata such
+    // as label/default may change across a manifest refresh and must not
+    // silently rename the same track.
+    val values =
+        primaryFormatId?.let(::listOf)
+            ?: listOf(
+                format.language,
+                format.label,
+                format.sampleMimeType,
+                format.containerMimeType,
+                format.codecs,
+                format.selectionFlags.toString(),
+                format.roleFlags.toString(),
+            )
+    val payload = buildString {
+        values.forEach { value ->
+            val bytes = value?.toByteArray(StandardCharsets.UTF_8)
+            if (bytes == null) {
+                append("n:")
+            } else {
+                append(bytes.size).append(':').append(value)
+            }
+            append(';')
+        }
+    }
+    val encoded =
+        Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(payload.toByteArray(StandardCharsets.UTF_8))
+    return "subtitle:media3:$encoded"
+}
+
+/** Resolves only caller-declared external identities from Media3 merge ids. */
+private fun externalSubtitleTrackId(
+    format: Format,
+    externalSubtitleIds: List<String>,
+): String? {
+    val formatId = format.id?.takeIf { it.isNotBlank() } ?: return null
+    externalSubtitleIds.forEachIndexed { index, externalId ->
+        // MergingMediaPeriod prefixes each child Format.id with its child
+        // index. Match the complete value so opaque ids containing ':' remain
+        // lossless and cannot collide through suffix matching.
+        if (formatId == externalId || formatId == "${index + 1}:$externalId") {
+            return externalId
+        }
+    }
+    return null
 }
 
 internal fun nativeTrackCodec(format: Format): String? =

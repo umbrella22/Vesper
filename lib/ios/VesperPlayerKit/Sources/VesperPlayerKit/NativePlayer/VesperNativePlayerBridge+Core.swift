@@ -13,16 +13,20 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published var publishedUiState: PlayerHostUiState
     @Published var publishedTrackCatalog: VesperTrackCatalog
     @Published var publishedTrackSelection: VesperTrackSelectionSnapshot
+    @Published var publishedRequestedSubtitleSelection: VesperTrackSelection = .disabled()
+    @Published var publishedConfirmedSubtitleSelection: VesperTrackSelection = .disabled()
     @Published var publishedEffectiveVideoTrackId: String?
     @Published var publishedVideoVariantObservation: VesperVideoVariantObservation?
     @Published var publishedFixedTrackStatus: VesperFixedTrackStatus?
     @Published var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
     @Published var publishedLastError: VesperPlayerError?
     @Published var publishedSubtitleState: VesperSubtitleState = .empty
+    @Published var publishedEffectiveSubtitleTrackId: String?
 
     var currentSource: VesperPlayerSource?
     var player: AVPlayer?
     let subtitleOverlayRenderer = VesperSubtitleOverlayRenderer()
+    var pendingSubtitleOverlayFailure: VesperSubtitleOverlayRenderer.PreparationFailure?
     var currentSubtitleStyle = VesperSubtitleStyle.default
     var currentDashSession: VesperDashSession?
     var dashResourceLoaderDelegate: VesperDashResourceLoaderDelegate?
@@ -58,6 +62,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var dashStartupAbrLimitAppliedAtNs: UInt64?
     var audioOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
     var subtitleOptionsByTrackId: [String: AVMediaSelectionOption] = [:]
+    /// DASH subtitle renditions that failed resource loading in the current
+    /// source epoch. They remain advertised by the manifest but are removed
+    /// from the selectable catalog until the source is refreshed.
+    var failedSubtitleTrackIds = Set<String>()
     var currentResiliencePolicy: VesperPlaybackResiliencePolicy
     let trackPreferencePolicy: VesperTrackPreferencePolicy
     var resolvedTrackPreferencePolicy: VesperTrackPreferencePolicy
@@ -66,7 +74,19 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var retryTask: Task<Void, Never>?
     var stopSeekTimeoutTask: Task<Void, Never>?
     var sourceLoadTask: Task<Void, Never>?
+    var subtitleOverlayLoadTask: Task<Void, Never>?
     var sourceLoadEpoch: UInt64 = 0
+    var subtitleSourceEpoch: UInt64 = 0
+    var nextSubtitleCommandId: UInt64 = 0
+    var pendingSubtitleSelection: PendingSubtitleSelection?
+    var subtitleSelectionTask: Task<Void, Error>?
+    var trackCatalogLoadGeneration: UInt64 = 0
+    var confirmedSubtitleSelection: VesperTrackSelection = .disabled()
+    var explicitSubtitleIntentSourceEpoch: UInt64?
+    var latestConfirmedExplicitSubtitleSelection: (
+        sourceEpoch: UInt64,
+        selection: VesperTrackSelection
+    )?
     var retryAttemptCount = 0
     let cachePolicyToken = UUID()
     let preloadCoordinator: VesperNativePreloadCoordinator
@@ -92,6 +112,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     var trackSelection: VesperTrackSelectionSnapshot {
         publishedTrackSelection
+    }
+
+    var requestedSubtitleSelection: VesperTrackSelection {
+        publishedRequestedSubtitleSelection
     }
 
     var effectiveVideoTrackId: String? {
@@ -185,6 +209,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedResiliencePolicy = resiliencePolicy
         publishedLastError = nil
         publishedSubtitleState = .empty
+        publishedEffectiveSubtitleTrackId = nil
+        pendingSubtitleOverlayFailure = nil
         currentPluginDiagnostics = nativeFramePipelineDiagnostics()
     }
 }

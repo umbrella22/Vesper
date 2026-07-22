@@ -2,9 +2,11 @@ package io.github.ikaros.vesper.player.android
 
 import android.content.Context
 import android.view.ViewGroup
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 
 class VesperPlayerController internal constructor(
     private val bridge: PlayerBridge,
@@ -23,6 +25,18 @@ class VesperPlayerController internal constructor(
 
     val trackSelection: StateFlow<VesperTrackSelectionSnapshot>
         get() = bridge.trackSelection
+
+    /** Latest valid subtitle selection requested by the host. */
+    val requestedSubtitleSelection: StateFlow<VesperTrackSelection>
+        get() = bridge.requestedSubtitleSelection
+
+    /** Latest subtitle selection confirmed by the native player. */
+    val confirmedSubtitleSelection: StateFlow<VesperTrackSelection>
+        get() = bridge.confirmedSubtitleSelection
+
+    /** Native subtitle track id confirmed as effective, or `null` when disabled. */
+    val effectiveSubtitleTrackId: StateFlow<String?>
+        get() = bridge.effectiveSubtitleTrackId
 
     /**
      * First-class subtitle lifecycle state. Mirrors the iOS
@@ -105,41 +119,11 @@ class VesperPlayerController internal constructor(
     fun setAudioTrackSelection(selection: VesperTrackSelection) =
         bridge.setAudioTrackSelection(selection)
 
-    fun setSubtitleTrackSelection(selection: VesperTrackSelection) {
-        // Validate the requested track id against the current catalog
-        // before forwarding to the JNI bridge so an
-        // unknown id surfaces `subtitle_track_not_found` immediately as a
-        // structured failure. The JNI race-failure path
-        // (applyTrackSelectionCommand) additionally reports native-stage
-        // races, but the common case of "host issued a stale id" should
-        // not wait for a JNI round trip.
-        if (selection.mode == VesperTrackSelectionMode.Track) {
-            val trackId = selection.trackId
-            if (trackId.isNullOrBlank()) {
-                throw VesperPlayerUnsupportedOperation(
-                    "setSubtitleTrackSelection rejected: trackId must not be null or blank in Track mode",
-                    mapOf(
-                        "subtitleCode" to "subtitle_track_not_found",
-                        "subtitlePhase" to "selection",
-                        "trackId" to trackId,
-                    ),
-                )
-            }
-            val knownSubtitleIds =
-                bridge.trackCatalog.value.subtitleTracks.map { it.id }.toSet()
-            if (trackId !in knownSubtitleIds) {
-                throw VesperPlayerUnsupportedOperation(
-                    "setSubtitleTrackSelection rejected: trackId=$trackId is not in the current subtitle catalog",
-                    mapOf(
-                        "subtitleCode" to "subtitle_track_not_found",
-                        "subtitlePhase" to "selection",
-                        "trackId" to trackId,
-                    ),
-                )
-            }
+    /** Applies a subtitle selection and waits for native confirmation. */
+    suspend fun setSubtitleTrackSelection(selection: VesperTrackSelection) =
+        withContext(Dispatchers.Main.immediate) {
+            bridge.setSubtitleTrackSelection(selection)
         }
-        bridge.setSubtitleTrackSelection(selection)
-    }
 
     /**
      * Updates subtitle styling (font scale, visibility). Hosts observing

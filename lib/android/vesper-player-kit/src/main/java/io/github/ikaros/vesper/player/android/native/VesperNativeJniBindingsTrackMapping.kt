@@ -47,7 +47,11 @@ internal fun NativeTrackCatalog.toPublicTrackCatalog(): VesperTrackCatalog =
 internal fun NativeTrackSelectionPayload.toPublicTrackSelection(): VesperTrackSelection {
     val mode = NativeTrackSelectionMode.entries.getOrNull(modeOrdinal) ?: NativeTrackSelectionMode.Auto
     return when (mode) {
-        NativeTrackSelectionMode.Auto -> VesperTrackSelection.auto()
+        NativeTrackSelectionMode.Auto ->
+            VesperTrackSelection(
+                mode = VesperTrackSelectionMode.Auto,
+                trackId = trackId,
+            )
         NativeTrackSelectionMode.Disabled -> VesperTrackSelection.disabled()
         NativeTrackSelectionMode.Track -> trackId?.let(VesperTrackSelection::track) ?: VesperTrackSelection.auto()
     }

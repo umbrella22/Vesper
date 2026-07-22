@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub struct HlsMasterInput {
     pub variants: Vec<HlsVariant>,
     pub audio_renditions: Vec<HlsAudioRendition>,
+    #[serde(default)]
+    pub subtitle_renditions: Vec<HlsSubtitleRendition>,
     pub independent_segments: bool,
 }
 
@@ -14,6 +16,7 @@ impl Default for HlsMasterInput {
         Self {
             variants: Vec::new(),
             audio_renditions: Vec::new(),
+            subtitle_renditions: Vec::new(),
             independent_segments: true,
         }
     }
@@ -29,6 +32,8 @@ pub struct HlsVariant {
     pub resolution: Option<HlsResolution>,
     pub frame_rate: Option<String>,
     pub audio_group_id: Option<String>,
+    #[serde(default)]
+    pub subtitle_group_id: Option<String>,
     pub video_range: Option<String>,
 }
 
@@ -49,6 +54,21 @@ pub struct HlsAudioRendition {
     pub is_default: bool,
     pub autoselect: bool,
     pub channels: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HlsSubtitleRendition {
+    /// Explicit rendition identity. It is kept separate from the display
+    /// `name` so HLS NAME changes do not silently change track identity.
+    pub id: String,
+    pub group_id: String,
+    pub name: String,
+    pub uri: String,
+    pub language: Option<String>,
+    pub is_default: bool,
+    pub autoselect: bool,
+    pub is_forced: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

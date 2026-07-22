@@ -13,8 +13,14 @@ private enum VesperDashRustBridge {
 
         var outputPointer: UnsafeMutablePointer<CChar>?
         var errorPointer: UnsafeMutablePointer<CChar>?
+        var errorDetailsPointer: UnsafeMutablePointer<CChar>?
         let ok = requestJson.withCString { requestPointer in
-            vesper_dash_bridge_execute_json(requestPointer, &outputPointer, &errorPointer)
+            vesper_dash_bridge_execute_json(
+                requestPointer,
+                &outputPointer,
+                &errorPointer,
+                &errorDetailsPointer
+            )
         }
         defer {
             if let outputPointer {
@@ -23,11 +29,17 @@ private enum VesperDashRustBridge {
             if let errorPointer {
                 vesper_dash_bridge_string_free(errorPointer)
             }
+            if let errorDetailsPointer {
+                vesper_dash_bridge_string_free(errorDetailsPointer)
+            }
         }
 
         guard ok, let outputPointer else {
             let message = errorPointer.map { String(cString: $0) } ?? "Rust DASH bridge call failed"
-            throw bridgeError(fromRustMessage: message)
+            throw bridgeError(
+                fromRustMessage: message,
+                detailsJson: errorDetailsPointer.map { String(cString: $0) }
+            )
         }
 
         let responseJson = String(cString: outputPointer)
@@ -46,12 +58,14 @@ private enum VesperDashRustBridge {
     static func parseSidx(data: Data) throws -> VesperDashSidxBox {
         var outputPointer: UnsafeMutablePointer<CChar>?
         var errorPointer: UnsafeMutablePointer<CChar>?
+        var errorDetailsPointer: UnsafeMutablePointer<CChar>?
         let ok = data.withUnsafeBytes { bytes in
             vesper_dash_bridge_parse_sidx(
                 bytes.bindMemory(to: UInt8.self).baseAddress,
                 UInt(bytes.count),
                 &outputPointer,
-                &errorPointer
+                &errorPointer,
+                &errorDetailsPointer
             )
         }
         defer {
@@ -61,11 +75,17 @@ private enum VesperDashRustBridge {
             if let errorPointer {
                 vesper_dash_bridge_string_free(errorPointer)
             }
+            if let errorDetailsPointer {
+                vesper_dash_bridge_string_free(errorDetailsPointer)
+            }
         }
 
         guard ok, let outputPointer else {
             let message = errorPointer.map { String(cString: $0) } ?? "Rust DASH bridge call failed"
-            throw bridgeError(fromRustMessage: message)
+            throw bridgeError(
+                fromRustMessage: message,
+                detailsJson: errorDetailsPointer.map { String(cString: $0) }
+            )
         }
 
         let responseJson = String(cString: outputPointer)
@@ -81,21 +101,36 @@ private enum VesperDashRustBridge {
         }
     }
 
-    private static func bridgeError(fromRustMessage message: String) -> VesperDashBridgeError {
-        if message.hasPrefix("unsupported MPD:") {
-            return .unsupportedManifest(message)
-        }
-        if message.hasPrefix("invalid MPD:") {
-            return .invalidManifest(message)
-        }
-        if message.hasPrefix("unsupported MP4:") {
-            return .unsupportedMp4(message)
-        }
-        if message.hasPrefix("invalid MP4:") {
-            return .invalidMp4(message)
+    private static func bridgeError(
+        fromRustMessage message: String,
+        detailsJson: String? = nil
+    ) -> VesperDashBridgeError {
+        if let detailsJson,
+           let data = detailsJson.data(using: .utf8),
+           let envelope = try? JSONDecoder().decode(VesperDashBridgeErrorEnvelope.self, from: data)
+        {
+            if envelope.domain == "subtitle",
+               let details = try? JSONDecoder().decode(VesperDashSubtitleErrorDetails.self, from: data)
+            {
+                return .subtitle(details)
+            }
+            switch envelope.code {
+            case "dash_manifest_unsupported": return .unsupportedManifest(envelope.message)
+            case "dash_mp4_unsupported": return .unsupportedMp4(envelope.message)
+            case "dash_mp4_invalid": return .invalidMp4(envelope.message)
+            default: return .invalidManifest(envelope.message)
+            }
         }
         return .invalidManifest(message)
     }
+}
+
+private struct VesperDashBridgeErrorEnvelope: Decodable {
+    let domain: String
+    let code: String
+    let phase: String
+    let retriable: Bool
+    let message: String
 }
 
 private struct VesperDashParseManifestRequest: Encodable {

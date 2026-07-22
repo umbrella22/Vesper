@@ -18,57 +18,55 @@ public struct VesperSubtitleStyle: Equatable, Codable {
     public static let `default` = VesperSubtitleStyle()
 }
 
-/// A side-loaded external subtitle track to attach to a `VesperPlayerSource`.
+/// An external subtitle track to attach to a `VesperPlayerSource`.
 ///
 /// Unlike Android (where ExoPlayer's TextRenderer parses SRT/WebVTT natively),
 /// AVPlayer does not consume standalone SRT files. The iOS host kit parses
 /// side-loaded subtitles and renders them through a dedicated overlay driven
 /// by `AVPlayer.currentTime()`.
-public struct VesperSubtitleSideLoad: Equatable, Codable {
+public struct VesperExternalSubtitleSource: Equatable, Codable {
+    /// Source-local stable identity used for selection and diagnostics.
+    public let id: String
     /// Subtitle file URI (local `file://`, or remote `https://`).
     public let uri: String
-    /// Subtitle codec MIME hint.
-    public let mimeType: VesperSubtitleMimeType
+    /// Subtitle codec MIME type. Unknown values are preserved so a newer
+    /// backend can add support without changing the public DTO.
+    public let mimeType: String
     /// Optional BCP-47 language tag for track selection.
     public let language: String?
     /// Optional human-readable label.
     public let label: String?
+    /// Request headers used only for this subtitle resource.
+    public let headers: [String: String]
+    /// Whether automatic selection should prefer this source.
+    public let isDefault: Bool
+    /// Whether this source is forced narrative text.
+    public let isForced: Bool
     public init(
+        id: String,
         uri: String,
-        mimeType: VesperSubtitleMimeType = .subrip,
+        mimeType: String = VesperExternalSubtitleSource.mimeSubrip,
         language: String? = nil,
-        label: String? = nil
+        label: String? = nil,
+        headers: [String: String] = [:],
+        isDefault: Bool = false,
+        isForced: Bool = false
     ) {
+        self.id = id
         self.uri = uri
         self.mimeType = mimeType
         self.language = language
         self.label = label
+        self.headers = headers
+        self.isDefault = isDefault
+        self.isForced = isForced
     }
+
+    public static let mimeSubrip = "application/x-subrip"
+    public static let mimeWebVtt = "text/vtt"
+    public static let mimeSsa = "text/x-ssa"
 }
 
-/// Subtitle codec hint for side-loaded tracks.
-public enum VesperSubtitleMimeType: String, Equatable, Codable {
-    /// SRT (`application/x-subrip`).
-    case subrip
-    /// WebVTT (`text/vtt`).
-    case webvtt
-    /// SSA / ASS (`text/x-ssa`).
-    case ssa
-
-    /// MIME type string consumed by parsers.
-    public var rawMime: String {
-        switch self {
-        case .subrip: return "application/x-subrip"
-        case .webvtt: return "text/vtt"
-        case .ssa: return "text/x-ssa"
-        }
-    }
-
-    /// Parses a MIME string into the coarse hint, falling back to SRT.
-    public static func from(rawMime: String?) -> VesperSubtitleMimeType {
-        guard let raw = rawMime?.lowercased() else { return .subrip }
-        if raw.contains("vtt") { return .webvtt }
-        if raw.contains("ass") || raw.contains("ssa") { return .ssa }
-        return .subrip
-    }
-}
+/// @deprecated Use `VesperExternalSubtitleSource`.
+@available(*, deprecated, message: "Use VesperExternalSubtitleSource instead.")
+public typealias VesperSubtitleSideLoad = VesperExternalSubtitleSource

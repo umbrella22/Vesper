@@ -10,7 +10,10 @@ fun VesperPlayerUnsupportedOperation.toPlayerErrorState(): VesperPlayerErrorStat
         message = message ?: "Unsupported Vesper player operation.",
         code = VesperPlayerErrorCode.Unsupported,
         category = VesperPlayerErrorCategory.Capability,
-        retriable = false,
+        // Structured bridge failures may be retryable even when their outer
+        // transport exception is an UnsupportedOperationException (for
+        // example a temporarily saturated source-load queue).
+        retriable = details["retriable"] as? Boolean ?: false,
         details = details,
     )
 

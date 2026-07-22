@@ -2121,8 +2121,19 @@ internal fun PlayerHostApp(
                                 activeSheet = null
                             },
                             onSelectSubtitle = { selection ->
-                                controller.setSubtitleTrackSelection(selection)
-                                activeSheet = null
+                                scope.launch {
+                                    runCatching {
+                                        controller.setSubtitleTrackSelection(selection)
+                                    }.onSuccess {
+                                        activeSheet = null
+                                    }.onFailure { error ->
+                                        recordHostLog(
+                                            severity = ExampleHostLogSeverity.Error,
+                                            title = context.getString(R.string.example_common_subtitles),
+                                            detail = error.localizedMessage,
+                                        )
+                                    }
+                                }
                             },
                             onSelectSpeed = { rate ->
                                 controller.setPlaybackRate(rate)

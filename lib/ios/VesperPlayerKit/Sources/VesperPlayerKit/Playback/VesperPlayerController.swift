@@ -3,6 +3,15 @@ import Combine
 import Foundation
 import UIKit
 
+private struct VesperSubtitleBridgeSnapshot {
+    let trackSelection: VesperTrackSelectionSnapshot
+    let requestedSelection: VesperTrackSelection
+    let confirmedSelection: VesperTrackSelection
+    let effectiveTrackId: String?
+    let state: VesperSubtitleState
+    let lastError: VesperPlayerError?
+}
+
 @MainActor
 public final class VesperPlayerController: ObservableObject {
     public let backend: PlayerBridgeBackend
@@ -10,6 +19,8 @@ public final class VesperPlayerController: ObservableObject {
     @Published private(set) var publishedUiState: PlayerHostUiState
     @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
     @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
+    @Published private(set) var publishedRequestedSubtitleSelection: VesperTrackSelection
+    @Published private(set) var publishedConfirmedSubtitleSelection: VesperTrackSelection
     @Published private(set) var publishedEffectiveVideoTrackId: String?
     @Published private(set) var publishedVideoVariantObservation: VesperVideoVariantObservation?
     @Published private(set) var publishedFixedTrackStatus: VesperFixedTrackStatus?
@@ -20,6 +31,7 @@ public final class VesperPlayerController: ObservableObject {
     /// loading/ready/failed transitions independently of the generic
     /// `lastError` channel.
     @Published private(set) var publishedSubtitleState: VesperSubtitleState
+    @Published private(set) var publishedEffectiveSubtitleTrackId: String?
     /// Current subtitle styling (font scale, visibility). Hosts observe this
     /// to drive a subtitle overlay; it does not flow through the player bridge
     /// because it only affects rendering.
@@ -37,6 +49,14 @@ public final class VesperPlayerController: ObservableObject {
     /// The currently applied track-selection intent for the active source.
     public var trackSelection: VesperTrackSelectionSnapshot {
         publishedTrackSelection
+    }
+
+    public var requestedSubtitleSelection: VesperTrackSelection {
+        publishedRequestedSubtitleSelection
+    }
+
+    public var confirmedSubtitleSelection: VesperTrackSelection {
+        publishedConfirmedSubtitleSelection
     }
 
     /// The best-effort video variant currently rendered by the backend.
@@ -81,32 +101,42 @@ public final class VesperPlayerController: ObservableObject {
         publishedSubtitleState
     }
 
+    /// The native subtitle track currently confirmed as effective. `nil`
+    /// means subtitles are disabled or no platform track has converged yet.
+    public var effectiveSubtitleTrackId: String? {
+        publishedEffectiveSubtitleTrackId
+    }
+
     /// Flutter wire shape for `subtitleState`. Keys are stable across
     /// iOS/Android and must match the Dart enum names in
     /// `subtitle_state_models.dart`.
     public func subtitleStateWireMap() -> [String: Any] {
         let state = publishedSubtitleState
         var map: [String: Any] = [
-            "status": state.status.rawValue,
+            "catalogState": state.catalogStateRawValue ?? state.catalogState.rawValue,
+            "selectionState": state.selectionStateRawValue ?? state.selectionState.rawValue,
             "advertisedTrackCount": state.advertisedTrackCount,
             "selectableTrackCount": state.selectableTrackCount,
+            "status": state.status.rawValue,
         ]
-        if let error = state.error {
-            // `trackId` may be nil; bridge it to `NSNull()` explicitly so
-            // the wire shape matches the rest of the plugin (which uses
-            // `flutterValue(...)` for nullable values) instead of relying
-            // on Optional<String>.none-as-Any serialization.
-            let trackIdWire: Any = error.trackId ?? NSNull()
-            map["error"] = [
-                "code": error.code,
-                "phase": error.phase.rawValue,
-                "trackId": trackIdWire,
-                "retriable": error.retriable,
-                "message": error.message,
-            ] as [String: Any]
-        } else {
-            map["error"] = NSNull()
-        }
+        map["catalogError"] = subtitleErrorWire(state.catalogError)
+        map["selectionError"] = subtitleErrorWire(state.selectionError)
+        // Compatibility aliases for pre-0.4 clients.
+        map["error"] = subtitleErrorWire(state.error)
+        return map
+    }
+
+    private func subtitleErrorWire(_ error: VesperSubtitleError?) -> Any {
+        guard let error else { return NSNull() }
+        var map: [String: Any] = [
+            "code": error.code,
+            "phase": error.phaseRawValue ?? error.phase.rawValue,
+            "trackId": error.trackId ?? NSNull(),
+            "retriable": error.retriable,
+            "message": error.message,
+        ]
+        if let commandId = error.commandId { map["commandId"] = commandId }
+        if let sourceEpoch = error.sourceEpoch { map["sourceEpoch"] = sourceEpoch }
         return map
     }
 
@@ -136,7 +166,8 @@ public final class VesperPlayerController: ObservableObject {
     private let setPlaybackRateImpl: (Float) -> Void
     private let setVideoTrackSelectionImpl: (VesperTrackSelection) -> Void
     private let setAudioTrackSelectionImpl: (VesperTrackSelection) -> Void
-    private let setSubtitleTrackSelectionImpl: (VesperTrackSelection) throws -> Void
+    private let setSubtitleTrackSelectionImpl: (VesperTrackSelection) async throws -> Void
+    private let subtitleBridgeSnapshotImpl: () -> VesperSubtitleBridgeSnapshot
     private let setSubtitleStyleImpl: (VesperSubtitleStyle) -> Void
     private let setAbrPolicyImpl: (VesperAbrPolicy) -> Void
     private let setResiliencePolicyImpl: (VesperPlaybackResiliencePolicy) -> Void
@@ -157,7 +188,10 @@ public final class VesperPlayerController: ObservableObject {
         publishedUiState = bridge.publishedUiState
         publishedTrackCatalog = bridge.publishedTrackCatalog
         publishedTrackSelection = bridge.publishedTrackSelection
+        publishedRequestedSubtitleSelection = bridge.publishedRequestedSubtitleSelection
+        publishedConfirmedSubtitleSelection = bridge.publishedConfirmedSubtitleSelection
         publishedSubtitleState = bridge.publishedSubtitleState
+        publishedEffectiveSubtitleTrackId = bridge.publishedEffectiveSubtitleTrackId
         publishedEffectiveVideoTrackId = bridge.publishedEffectiveVideoTrackId
         publishedVideoVariantObservation = bridge.publishedVideoVariantObservation
         publishedFixedTrackStatus = bridge.publishedFixedTrackStatus
@@ -193,6 +227,16 @@ public final class VesperPlayerController: ObservableObject {
         setVideoTrackSelectionImpl = bridge.setVideoTrackSelection
         setAudioTrackSelectionImpl = bridge.setAudioTrackSelection
         setSubtitleTrackSelectionImpl = bridge.setSubtitleTrackSelection
+        subtitleBridgeSnapshotImpl = {
+            VesperSubtitleBridgeSnapshot(
+                trackSelection: bridge.publishedTrackSelection,
+                requestedSelection: bridge.publishedRequestedSubtitleSelection,
+                confirmedSelection: bridge.publishedConfirmedSubtitleSelection,
+                effectiveTrackId: bridge.publishedEffectiveSubtitleTrackId,
+                state: bridge.publishedSubtitleState,
+                lastError: bridge.publishedLastError
+            )
+        }
         setSubtitleStyleImpl = bridge.setSubtitleStyle
         setAbrPolicyImpl = bridge.setAbrPolicy
         setResiliencePolicyImpl = bridge.setResiliencePolicy
@@ -206,12 +250,15 @@ public final class VesperPlayerController: ObservableObject {
                 self.publishedUiState = bridge.publishedUiState
                 self.publishedTrackCatalog = bridge.publishedTrackCatalog
                 self.publishedTrackSelection = bridge.publishedTrackSelection
+                self.publishedRequestedSubtitleSelection = bridge.publishedRequestedSubtitleSelection
+                self.publishedConfirmedSubtitleSelection = bridge.publishedConfirmedSubtitleSelection
                 self.publishedEffectiveVideoTrackId = bridge.publishedEffectiveVideoTrackId
                 self.publishedVideoVariantObservation = bridge.publishedVideoVariantObservation
                 self.publishedFixedTrackStatus = bridge.publishedFixedTrackStatus
                 self.publishedResiliencePolicy = bridge.publishedResiliencePolicy
                 self.publishedLastError = bridge.publishedLastError
                 self.publishedSubtitleState = bridge.publishedSubtitleState
+                self.publishedEffectiveSubtitleTrackId = bridge.publishedEffectiveSubtitleTrackId
                 self.pluginDiagnostics = bridge.pluginDiagnostics
                 self.systemPlaybackCoordinator.updatePlaybackState(self.publishedUiState)
                 self.updateScreenSleepPolicy()
@@ -310,8 +357,24 @@ public final class VesperPlayerController: ObservableObject {
         setAudioTrackSelectionImpl(selection)
     }
 
-    public func setSubtitleTrackSelection(_ selection: VesperTrackSelection) throws {
-        try setSubtitleTrackSelectionImpl(selection)
+    public func setSubtitleTrackSelection(_ selection: VesperTrackSelection) async throws {
+        do {
+            try await setSubtitleTrackSelectionImpl(selection)
+            synchronizeSubtitleStateFromBridge()
+        } catch {
+            synchronizeSubtitleStateFromBridge()
+            throw error
+        }
+    }
+
+    private func synchronizeSubtitleStateFromBridge() {
+        let snapshot = subtitleBridgeSnapshotImpl()
+        publishedTrackSelection = snapshot.trackSelection
+        publishedRequestedSubtitleSelection = snapshot.requestedSelection
+        publishedConfirmedSubtitleSelection = snapshot.confirmedSelection
+        publishedEffectiveSubtitleTrackId = snapshot.effectiveTrackId
+        publishedSubtitleState = snapshot.state
+        publishedLastError = snapshot.lastError
     }
 
     /// Updates subtitle styling (font scale, visibility). Hosts observing

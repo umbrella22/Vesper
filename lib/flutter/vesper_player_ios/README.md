@@ -198,16 +198,18 @@ relinking rights. The repository-level release checklist is in
 `VesperFrameProcessorConfiguration` to `VesperPlayerKit`. Both are disabled by
 default.
 
-For SourceNormalizer v1, `diagnosticsOnly` loads the optional plugin and reports
+For SourceNormalizer, `diagnosticsOnly` loads the optional plugin and reports
 capabilities through `pluginDiagnostics`; `preflightOnly` may also open and
-close a packet session for the selected source. AVPlayer still receives the
-original source, and preflight failures are non-fatal. Apps can depend on
+close a packet session while AVPlayer still receives the original source.
+`preferNormalized` and `requireNormalized` may instead hand a disk-backed fMP4
+or short-window HLS resource to AVPlayer. Apps can depend on
 `vesper_player_source_normalizer_ffmpeg` and use the bundled configuration
-presets instead of app-side framework-path wiring. Hosts that embed
-`VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip` must also embed and
-sign the matching `VesperPlayerFfmpegRuntime.xcframework.zip`; both artifacts
-must have matching `profile-hash.txt` values. The shared runtime framework is
-not a plugin path.
+presets instead of app-side plugin-path wiring. On iOS, that package contributes
+the canonical `VesperPlayerSourceNormalizerFfmpegPlugin` product, while the App
+target consumes the aggregate optional-plugin product. The bundled resolver
+loads `VesperPlayerSourceNormalizerFfmpegPlugin.framework/`
+`VesperPlayerSourceNormalizerFfmpegPlugin`. FFmpeg component frameworks are not
+plugin paths.
 
 For FrameProcessor v1, `diagnosticsOnly` reports availability without opening
 frame sessions or marking playback participation. iOS playback participation

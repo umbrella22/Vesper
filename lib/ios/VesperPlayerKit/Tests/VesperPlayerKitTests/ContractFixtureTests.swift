@@ -3,6 +3,26 @@ import XCTest
 @testable import VesperPlayerKit
 
 final class ContractFixtureTests: XCTestCase {
+    func testSharedSubtitleContractKeepsCanonicalStateAndErrorFields() throws {
+        let payload = try contractMap("subtitle_state")
+        let catalogError = try XCTUnwrap(payload["catalogError"] as? [String: Any])
+        let selectionError = try XCTUnwrap(payload["selectionError"] as? [String: Any])
+
+        XCTAssertEqual(payload["catalogState"] as? String, "ready")
+        XCTAssertEqual(payload["selectionState"] as? String, "failed")
+        XCTAssertEqual(payload["advertisedTrackCount"] as? Int, 3)
+        XCTAssertEqual(payload["selectableTrackCount"] as? Int, 2)
+        XCTAssertEqual(catalogError["code"] as? String, "subtitle_resource_failed")
+        XCTAssertEqual(selectionError["trackId"] as? String, "opaque-track-7")
+        XCTAssertEqual(selectionError["commandId"] as? Int, 42)
+        XCTAssertEqual(selectionError["sourceEpoch"] as? Int, 9)
+
+        let error = try contractMap("subtitle_error")
+        XCTAssertEqual(error["domain"] as? String, "subtitle")
+        XCTAssertEqual(error["code"] as? String, "subtitle_selection_timeout")
+        XCTAssertEqual(error["phase"] as? String, VesperSubtitleErrorPhase.selection.rawValue)
+    }
+
     func testSharedPlayerErrorContractKeepsStableFields() throws {
         let payload = try contractMap("player_error")
         let error = VesperPlayerError(

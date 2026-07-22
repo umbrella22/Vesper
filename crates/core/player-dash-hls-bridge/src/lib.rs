@@ -14,4 +14,4 @@ pub mod hls;
 pub mod mp4;
 pub mod ops;
 
-pub use error::{DashHlsError, DashHlsResult};
+pub use error::{DashHlsError, DashHlsResult, SubtitleErrorDetails};

@@ -205,7 +205,8 @@ unchanged and does not expose decoded frames to FrameProcessor plugins.
 
 ## Subtitle Notes
 
-`VesperPlayerSource.subtitleConfigurations` is mapped to the Android host kit,
-and `setSubtitleStyle` is a real MethodChannel command rather than a no-op. Text
+`VesperPlayerSource.externalSubtitles` is mapped to the Android host kit;
+`subtitleConfigurations` remains a deprecated input alias. `setSubtitleStyle`
+is a real MethodChannel command rather than a no-op. Text
 cues render in the native surface host; frames are never sent through Dart.
 HTTP `.flv` URLs remain progressive unless `VesperPlayerSource.flvLive` is used.

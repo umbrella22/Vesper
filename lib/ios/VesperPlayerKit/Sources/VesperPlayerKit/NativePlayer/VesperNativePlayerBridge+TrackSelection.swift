@@ -36,82 +36,424 @@ extension VesperNativePlayerBridge {
         )
     }
 
-    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) throws {
+    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) async throws {
+        try await coordinateSubtitleSelection(selection, origin: .explicit)
+    }
+
+    func coordinateSubtitleSelection(
+        _ selection: VesperTrackSelection,
+        origin: SubtitleSelectionOrigin
+    ) async throws {
         clearLastError()
-        clearSubtitleFailure()
         iosHostLog("setSubtitleTrackSelection mode=\(selection.mode.rawValue)")
+        if origin == .explicit {
+            explicitSubtitleIntentSourceEpoch = subtitleSourceEpoch
+        } else if origin == .defaultPolicy,
+                  explicitSubtitleIntentSourceEpoch == subtitleSourceEpoch {
+            return
+        } else if origin == .visibilityRestore,
+                  selection != publishedConfirmedSubtitleSelection {
+            return
+        }
+        if let pendingSubtitleSelection,
+           !origin.canSupersede(pendingSubtitleSelection.origin) {
+            return
+        }
+        subtitleSelectionTask?.cancel()
+        pendingSubtitleSelection = nil
+        nextSubtitleCommandId &+= 1
+        let commandId = nextSubtitleCommandId
+        let sourceEpoch = subtitleSourceEpoch
+        clearSubtitleFailure()
+        publishedRequestedSubtitleSelection = selection
+        updateTrackSelection { current in
+            VesperTrackSelectionSnapshot(
+                video: current.video,
+                audio: current.audio,
+                subtitle: selection,
+                confirmedSubtitle: current.confirmedSubtitle,
+                effectiveSubtitleTrackId: current.effectiveSubtitleTrackId,
+                abrPolicy: current.abrPolicy
+            )
+        }
+        publishedSubtitleState = VesperSubtitleState(
+            catalogState: publishedSubtitleState.catalogState,
+            selectionState: .applying,
+            advertisedTrackCount: publishedSubtitleState.advertisedTrackCount,
+            selectableTrackCount: publishedSubtitleState.selectableTrackCount,
+            catalogError: publishedSubtitleState.catalogError,
+            selectionError: nil
+        )
+
         guard let item = player?.currentItem else {
-            throw VesperSubtitleSelectionError.platformTrackUnavailable(trackId: nil)
+            let failure = VesperSubtitleSelectionError.platformTrackUnavailable(
+                trackId: selection.trackId
+            )
+            let commandError = VesperSubtitleSelectionCommandError(
+                failure: failure,
+                commandId: commandId,
+                sourceEpoch: sourceEpoch
+            )
+            reportSubtitleFailure(
+                code: commandError.code,
+                phase: .selection,
+                trackId: commandError.trackId,
+                retriable: commandError.retriable,
+                message: commandError.localizedDescription,
+                commandId: commandId,
+                sourceEpoch: sourceEpoch
+            )
+            throw commandError
         }
 
-        if subtitleOverlayRenderer.hasTracks {
-            let selectedSideLoadId: String?
-            switch selection.mode {
-            case .disabled:
-                selectedSideLoadId = nil
-            case .auto:
-                selectedSideLoadId = subtitleOverlayRenderer.firstTrackId()
-            case .track:
-                selectedSideLoadId = selection.trackId.flatMap { trackId in
-                    subtitleOverlayRenderer.containsTrack(trackId) ? trackId : nil
-                }
+        // A single pending transaction keeps ownership and cancellation
+        // bounded. The previous task is cancelled before the new command is
+        // registered, so an old AVPlayer callback cannot publish a new state.
+        let playbackEpoch = currentPlaybackEpoch()
+        let pending = PendingSubtitleSelection(
+            commandId: commandId,
+            sourceEpoch: sourceEpoch,
+            playbackEpoch: playbackEpoch,
+            item: item,
+            selection: selection,
+            origin: origin
+        )
+        pendingSubtitleSelection = pending
+
+        let task = Task { @MainActor [weak self] in
+            guard let self else { throw CancellationError() }
+            try await self.performSubtitleSelectionTransaction(pending)
+        }
+        subtitleSelectionTask = task
+        defer {
+            if pendingSubtitleSelection?.commandId == commandId {
+                pendingSubtitleSelection = nil
+                subtitleSelectionTask = nil
             }
-            if selection.mode != .track || selectedSideLoadId != nil {
-                if let group = subtitleGroup {
-                    item.select(nil, in: group)
-                }
-                guard subtitleOverlayRenderer.select(trackId: selectedSideLoadId) else {
-                    throw VesperSubtitleSelectionError.trackNotFound(
-                        trackId: selection.trackId ?? ""
-                    )
-                }
-                updateTrackSelection { current in
-                    VesperTrackSelectionSnapshot(
-                        video: current.video,
-                        audio: current.audio,
-                        subtitle: selection,
-                        abrPolicy: current.abrPolicy
-                    )
-                }
-                enforceSubtitleVisibility(for: item)
-                return
+        }
+
+        do {
+            try await task.value
+        } catch is CancellationError {
+            let sourceOrItemChanged = subtitleSourceEpoch != sourceEpoch
+                || currentPlaybackEpoch() != playbackEpoch
+                || player?.currentItem !== item
+            let failure: VesperSubtitleSelectionError
+            if sourceOrItemChanged {
+                failure = currentSource == nil
+                    ? .selectionCancelled(trackId: selection.trackId)
+                    : .sourceChanged(trackId: selection.trackId)
+            } else {
+                failure = .selectionSuperseded(trackId: selection.trackId)
             }
-            _ = subtitleOverlayRenderer.select(trackId: nil)
-            if selection.mode == .track, subtitleGroup == nil {
-                throw VesperSubtitleSelectionError.trackNotFound(
-                    trackId: selection.trackId ?? ""
+            throw VesperSubtitleSelectionCommandError(
+                failure: failure,
+                commandId: commandId,
+                sourceEpoch: sourceEpoch
+            )
+        } catch let failure as VesperSubtitleSelectionError {
+            let commandError = VesperSubtitleSelectionCommandError(
+                failure: failure,
+                commandId: commandId,
+                sourceEpoch: sourceEpoch
+            )
+            if isCurrentSubtitleSelection(pending) {
+                restoreConfirmedSubtitleBackendIfPossible(on: item)
+                reportSubtitleFailure(
+                    code: commandError.code,
+                    phase: .selection,
+                    trackId: commandError.trackId,
+                    retriable: commandError.retriable,
+                    message: commandError.localizedDescription,
+                    commandId: commandId,
+                    sourceEpoch: sourceEpoch
                 )
             }
+            throw commandError
+        } catch {
+            if isCurrentSubtitleSelection(pending) {
+                restoreConfirmedSubtitleBackendIfPossible(on: item)
+            }
+            throw error
         }
 
-        // Immediate validation failures must throw so the iOS Flutter plugin
-        // surfaces them through `FlutterError` and
-        // the Dart `Future<void>` actually fails. Race failures after
-        // `item.select` still surface through `reportSubtitleFailure`
-        // because they cannot be observed synchronously.
-        guard let group = subtitleGroup else {
-            throw VesperSubtitleSelectionError.platformTrackUnavailable(trackId: selection.trackId)
+    }
+
+    private func performSubtitleSelectionTransaction(
+        _ pending: PendingSubtitleSelection
+    ) async throws {
+        guard isCurrentSubtitleSelection(pending) else {
+            throw CancellationError()
+        }
+        if pending.selection.mode != .disabled {
+            try await waitForSubtitleCatalogReadiness(pending: pending)
+        }
+        if let failure = subtitleCatalogSelectionFailure(for: pending.selection) {
+            throw failure
         }
 
-        // For .track mode, validate the id against the current catalog
-        // before applying so an unknown id throws
-        // `subtitle_track_not_found` instead of a silent no-op in
-        // `applyTrackSelection`.
+        let item = pending.item
+        let target: SubtitleSelectionTarget
+        switch pending.selection.mode {
+        case .disabled:
+            target = .disabled
+        case .auto:
+            let availableTracks = publishedTrackCatalog.subtitleTracks.filter { track in
+                subtitleOverlayRenderer.containsTrack(track.id)
+                    || subtitleOptionsByTrackId[track.id] != nil
+            }
+            guard let trackId = resolveAutomaticSubtitleTrackId(
+                tracks: availableTracks,
+                preferredLanguage: resolvedTrackPreferencePolicy.preferredSubtitleLanguage,
+                selectUndeterminedLanguage:
+                    resolvedTrackPreferencePolicy.selectUndeterminedSubtitleLanguage,
+                allowDefaultCandidate: automaticSubtitleSelectionAllowsDefaultCandidate(
+                    origin: pending.origin,
+                    startupPolicySelectsSubtitlesByDefault:
+                        resolvedTrackPreferencePolicy.selectSubtitlesByDefault
+                )
+            ) else {
+                throw VesperSubtitleSelectionError.autoCandidateUnavailable
+            }
+            if subtitleOverlayRenderer.containsTrack(trackId) {
+                target = .overlay(trackId)
+            } else if let option = subtitleOptionsByTrackId[trackId] {
+                guard subtitleGroup != nil else {
+                    throw VesperSubtitleSelectionError.platformTrackUnavailable(trackId: trackId)
+                }
+                target = .native(option: option, trackId: trackId)
+            } else {
+                throw VesperSubtitleSelectionError.platformTrackUnavailable(trackId: trackId)
+            }
+        case .track:
+            guard let trackId = pending.selection.trackId else {
+                throw VesperSubtitleSelectionError.trackNotFound(trackId: "nil")
+            }
+            if subtitleOverlayRenderer.containsTrack(trackId) {
+                target = .overlay(trackId)
+            } else if let option = subtitleOptionsByTrackId[trackId] {
+                target = .native(option: option, trackId: trackId)
+            } else {
+                throw VesperSubtitleSelectionError.trackNotFound(trackId: trackId)
+            }
+        }
+
+        switch target {
+        case .disabled:
+            var group = subtitleGroup
+            if group == nil,
+               publishedSubtitleState.catalogState == .loading {
+                group = try await waitForSubtitleGroup(pending: pending)
+            }
+            if let group {
+                item.select(nil, in: group)
+                try await waitForSubtitleOption(
+                    nil,
+                    in: group,
+                    pending: pending
+                )
+            }
+            guard subtitleOverlayRenderer.select(trackId: nil) else {
+                throw VesperSubtitleSelectionError.selectionDidNotConverge(trackId: nil)
+            }
+            commitSubtitleSelection(pending, effectiveTrackId: nil)
+        case let .overlay(trackId):
+            if let group = subtitleGroup {
+                item.select(nil, in: group)
+                try await waitForSubtitleOption(
+                    nil,
+                    in: group,
+                    pending: pending
+                )
+            }
+            guard subtitleOverlayRenderer.select(trackId: trackId) else {
+                throw VesperSubtitleSelectionError.trackNotFound(
+                    trackId: pending.selection.trackId ?? ""
+                )
+            }
+            commitSubtitleSelection(pending, effectiveTrackId: trackId)
+        case let .native(option, trackId):
+            guard let group = subtitleGroup else {
+                throw VesperSubtitleSelectionError.platformTrackUnavailable(
+                    trackId: pending.selection.trackId
+                )
+            }
+            item.select(option, in: group)
+            try await waitForSubtitleOption(option, in: group, pending: pending)
+            guard subtitleOverlayRenderer.select(trackId: nil) else {
+                throw VesperSubtitleSelectionError.selectionDidNotConverge(
+                    trackId: pending.selection.trackId
+                )
+            }
+            commitSubtitleSelection(pending, effectiveTrackId: trackId)
+        }
+        enforceSubtitleVisibility(for: item)
+    }
+
+    private enum SubtitleSelectionTarget {
+        case disabled
+        case overlay(String?)
+        case native(option: AVMediaSelectionOption, trackId: String?)
+    }
+
+    func subtitleCatalogSelectionFailure(
+        for selection: VesperTrackSelection
+    ) -> VesperSubtitleSelectionError? {
+        guard selection.mode != .disabled else { return nil }
+        if publishedSubtitleState.catalogState == .failed {
+            let error = publishedSubtitleState.catalogError
+            return .catalogUnavailable(
+                code: error?.code ?? "subtitle_platform_track_unavailable",
+                trackId: selection.trackId ?? error?.trackId,
+                phase: error?.phase ?? .discovery,
+                phaseRawValue: error?.phaseRawValue,
+                message: error?.message ?? "The subtitle catalog is unavailable.",
+                retriable: error?.retriable ?? false
+            )
+        }
         if selection.mode == .track,
            let trackId = selection.trackId,
-           subtitleOptionsByTrackId[trackId] == nil
-        {
-            throw VesperSubtitleSelectionError.trackNotFound(trackId: trackId)
+           !publishedTrackCatalog.subtitleTracks.contains(where: { $0.id == trackId }) {
+            return .trackNotFound(trackId: trackId)
         }
+        return nil
+    }
 
-        try applyTrackSelection(
-            selection,
-            kind: .subtitle,
-            group: group,
-            optionsByTrackId: subtitleOptionsByTrackId,
-            item: item
+    private func restoreConfirmedSubtitleBackendIfPossible(on item: AVPlayerItem) {
+        let effectiveTrackId = publishedEffectiveSubtitleTrackId
+        if let effectiveTrackId,
+           subtitleOverlayRenderer.containsTrack(effectiveTrackId) {
+            if let subtitleGroup {
+                item.select(nil, in: subtitleGroup)
+            }
+            _ = subtitleOverlayRenderer.select(trackId: effectiveTrackId)
+            return
+        }
+        if let effectiveTrackId,
+           let option = subtitleOptionsByTrackId[effectiveTrackId],
+           let subtitleGroup {
+            item.select(option, in: subtitleGroup)
+            _ = subtitleOverlayRenderer.select(trackId: nil)
+            return
+        }
+        if publishedConfirmedSubtitleSelection.mode == .disabled {
+            if let subtitleGroup {
+                item.select(nil, in: subtitleGroup)
+            }
+            _ = subtitleOverlayRenderer.select(trackId: nil)
+        }
+    }
+
+    private func waitForSubtitleCatalogReadiness(
+        pending: PendingSubtitleSelection
+    ) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds &+ 3_000_000_000
+        while publishedSubtitleState.catalogState == .loading {
+            guard isCurrentSubtitleSelection(pending) else {
+                throw CancellationError()
+            }
+            guard DispatchTime.now().uptimeNanoseconds < deadline else {
+                throw VesperSubtitleSelectionError.selectionTimedOut(
+                    trackId: pending.selection.trackId
+                )
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    private func waitForSubtitleOption(
+        _ expected: AVMediaSelectionOption?,
+        in group: AVMediaSelectionGroup,
+        pending: PendingSubtitleSelection
+    ) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds &+ 3_000_000_000
+        while true {
+            guard isCurrentSubtitleSelection(pending) else {
+                throw CancellationError()
+            }
+            let actual = pending.item.currentMediaSelection.selectedMediaOption(in: group)
+            if (expected == nil && actual == nil) || (expected != nil && actual === expected) {
+                return
+            }
+            if pending.item.status == .failed {
+                throw VesperSubtitleSelectionError.selectionDidNotConverge(
+                    trackId: pending.selection.trackId
+                )
+            }
+            guard DispatchTime.now().uptimeNanoseconds < deadline else {
+                throw VesperSubtitleSelectionError.selectionTimedOut(
+                    trackId: pending.selection.trackId
+                )
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    private func waitForSubtitleGroup(
+        pending: PendingSubtitleSelection
+    ) async throws -> AVMediaSelectionGroup? {
+        let deadline = DispatchTime.now().uptimeNanoseconds &+ 3_000_000_000
+        while subtitleGroup == nil {
+            guard isCurrentSubtitleSelection(pending) else {
+                throw CancellationError()
+            }
+            if publishedSubtitleState.catalogState != .loading {
+                return nil
+            }
+            guard DispatchTime.now().uptimeNanoseconds < deadline else {
+                throw VesperSubtitleSelectionError.selectionTimedOut(
+                    trackId: pending.selection.trackId
+                )
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return subtitleGroup
+    }
+
+    private func isCurrentSubtitleSelection(_ pending: PendingSubtitleSelection) -> Bool {
+        pendingSubtitleSelection?.commandId == pending.commandId
+            && pendingSubtitleSelection?.sourceEpoch == pending.sourceEpoch
+            && pendingSubtitleSelection?.playbackEpoch == pending.playbackEpoch
+            && pendingSubtitleSelection?.item === pending.item
+            && subtitleSourceEpoch == pending.sourceEpoch
+            && currentPlaybackEpoch() == pending.playbackEpoch
+            && player?.currentItem === pending.item
+    }
+
+    func subtitleTrackId(for option: AVMediaSelectionOption) -> String? {
+        subtitleOptionsByTrackId.first { _, candidate in candidate === option }?.key
+    }
+
+    private func commitSubtitleSelection(
+        _ pending: PendingSubtitleSelection,
+        effectiveTrackId: String?
+    ) {
+        guard isCurrentSubtitleSelection(pending) else { return }
+        confirmedSubtitleSelection = pending.selection
+        publishedConfirmedSubtitleSelection = pending.selection
+        publishedEffectiveSubtitleTrackId = effectiveTrackId
+        publishedTrackSelection = VesperTrackSelectionSnapshot(
+            video: publishedTrackSelection.video,
+            audio: publishedTrackSelection.audio,
+            subtitle: publishedTrackSelection.subtitle,
+            confirmedSubtitle: pending.selection,
+            effectiveSubtitleTrackId: effectiveTrackId,
+            abrPolicy: publishedTrackSelection.abrPolicy
         )
-        enforceSubtitleVisibility(for: item)
+        if pending.origin == .explicit {
+            latestConfirmedExplicitSubtitleSelection = (
+                sourceEpoch: pending.sourceEpoch,
+                selection: pending.selection
+            )
+        }
+        publishedSubtitleState = VesperSubtitleState(
+            catalogState: publishedSubtitleState.catalogState,
+            selectionState: .confirmed,
+            advertisedTrackCount: publishedSubtitleState.advertisedTrackCount,
+            selectableTrackCount: publishedSubtitleState.selectableTrackCount,
+            catalogError: publishedSubtitleState.catalogError,
+            selectionError: nil
+        )
     }
 
     func setAbrPolicy(_ policy: VesperAbrPolicy) {
@@ -219,6 +561,8 @@ extension VesperNativePlayerBridge {
                     video: .auto(),
                     audio: current.audio,
                     subtitle: current.subtitle,
+                    confirmedSubtitle: current.confirmedSubtitle,
+                    effectiveSubtitleTrackId: current.effectiveSubtitleTrackId,
                     abrPolicy: .auto()
                 )
             }
@@ -230,6 +574,8 @@ extension VesperNativePlayerBridge {
                     video: .auto(),
                     audio: current.audio,
                     subtitle: current.subtitle,
+                    confirmedSubtitle: current.confirmedSubtitle,
+                    effectiveSubtitleTrackId: current.effectiveSubtitleTrackId,
                     abrPolicy: .constrained(
                         maxBitRate: policy.maxBitRate,
                         maxWidth: policy.maxWidth,
@@ -252,6 +598,8 @@ extension VesperNativePlayerBridge {
                     video: .auto(),
                     audio: current.audio,
                     subtitle: current.subtitle,
+                    confirmedSubtitle: current.confirmedSubtitle,
+                    effectiveSubtitleTrackId: current.effectiveSubtitleTrackId,
                     abrPolicy: .fixedTrack(resolvedFixedTrackId)
                 )
             }
@@ -283,7 +631,8 @@ extension VesperNativePlayerBridge {
             sourceUri: currentSource.uri,
             state: PreservedPlaybackState.capture(
                 uiState: publishedUiState,
-                trackSelection: publishedTrackSelection
+                trackSelection: publishedTrackSelection,
+                confirmedSubtitleSelection: publishedConfirmedSubtitleSelection
             )
         )
 

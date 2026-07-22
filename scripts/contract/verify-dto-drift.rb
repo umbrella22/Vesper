@@ -25,7 +25,7 @@ end
 def assert_dart_models_contains(needle)
   paths = [
     "lib/flutter/vesper_player_platform_interface/lib/src/models.dart",
-    *Dir.glob(ROOT.join("lib/flutter/vesper_player_platform_interface/lib/src/models/*.dart"))
+    *Dir.glob(ROOT.join("lib/flutter/vesper_player_platform_interface/lib/src/**/*.dart"))
         .map { |path| path.delete_prefix("#{ROOT}/") }
   ]
   found = paths.any? { |path| read(path).include?(needle) }
@@ -104,7 +104,7 @@ check_wire_values(
   {
     "flutter_models" => ->(v) { v },
     "lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/VesperPlayerError.kt" => ->(v) { "\"#{v}\"" },
-    "lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/PlayerBridge.swift" => ->(v) { "case #{v}" },
+    "lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/Bridge/VesperPlayerError.swift" => ->(v) { "case #{v}" },
     "crates/model/player-model/src/error.rs" => ->(v) { camel_to_rust_variant(v) },
     "crates/ffi/player-ffi/src/c_api/" => ->(v) { camel_to_rust_variant(v) },
     "crates/ffi/player-ffi-ios/src/" => ->(v) { camel_to_rust_variant(v) }
@@ -153,7 +153,7 @@ check_wire_values(
   "download snapshot",
   download_values,
   {
-    "lib/flutter/vesper_player_platform_interface/lib/src/download_models.dart" => ->(v) { v },
+    "flutter_models" => ->(v) { v },
     "lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/" => ->(v) { kotlin_variant(v) },
     "lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/" => ->(v) { swift_case(v) },
     "crates/core/player-download/src/download/types.rs" => ->(v) { camel_to_rust_variant(v) },
@@ -188,8 +188,8 @@ check_wire_values(
   system_values,
   {
     "flutter_models" => ->(v) { v },
-    "lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/PlayerBridge.kt" => ->(v) { kotlin_variant(v) },
-    "lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/PlayerBridge.swift" => ->(v) { swift_case(v) }
+    "lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/bridge/PlayerBridge.kt" => ->(v) { kotlin_variant(v) },
+    "lib/ios/VesperPlayerKit/Sources/VesperPlayerKit/Bridge/PlayerBridgeSystemPlaybackModels.swift" => ->(v) { swift_case(v) }
   }
 )
 

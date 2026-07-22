@@ -66,28 +66,55 @@ final class VesperSubtitleStyle {
       'VesperSubtitleStyle(fontScale: $fontScale, visible: $visible)';
 }
 
-/// A side-loaded external subtitle track to attach to a [VesperPlayerSource].
+/// An external subtitle track to attach to a [VesperPlayerSource].
 ///
 /// Platform implementations forward the URI, MIME type and optional
 /// language/label to the native player (Media3 `SubtitleConfiguration` on
 /// Android; a custom renderer on iOS where AVPlayer does not natively consume
 /// standalone SRT files).
-final class VesperSubtitleSideLoad {
-  const VesperSubtitleSideLoad({
+final class VesperExternalSubtitleSource {
+  const VesperExternalSubtitleSource({
+    required this.id,
     required this.uri,
     this.mimeType = mimeSubrip,
     this.language,
     this.label,
-  });
+    this.headers = const <String, String>{},
+    this.isDefault = false,
+    this.isForced = false,
+  })  : assert(id != '', 'id must not be empty.'),
+        assert(uri != '', 'uri must not be empty.'),
+        assert(mimeType != '', 'mimeType must not be empty.');
 
-  factory VesperSubtitleSideLoad.fromMap(Map<Object?, Object?> map) {
-    return VesperSubtitleSideLoad(
-      uri: map['uri'] as String? ?? '',
-      mimeType: map['mimeType'] as String? ?? mimeSubrip,
+  factory VesperExternalSubtitleSource.fromMap(Map<Object?, Object?> map) {
+    final id = map['id'] as String? ?? '';
+    if (id.trim().isEmpty) {
+      throw ArgumentError.value(id, 'id', 'must not be blank.');
+    }
+    final uri = map['uri'] as String? ?? '';
+    if (uri.trim().isEmpty) {
+      throw ArgumentError.value(uri, 'uri', 'must not be blank.');
+    }
+    final mimeType = map['mimeType'] as String? ?? mimeSubrip;
+    if (mimeType.trim().isEmpty) {
+      throw ArgumentError.value(mimeType, 'mimeType', 'must not be blank.');
+    }
+    return VesperExternalSubtitleSource(
+      id: id,
+      uri: uri,
+      mimeType: mimeType,
       language: map['language'] as String?,
       label: map['label'] as String?,
+      headers: _decodeStringMap(map['headers']),
+      isDefault: _decodeBool(map, 'isDefault'),
+      isForced: _decodeBool(map, 'isForced'),
     );
   }
+
+  /// Stable source-local identifier used for selection and diagnostics.
+  ///
+  /// The id must be non-empty and unique within its containing source.
+  final String id;
 
   /// Subtitle file URI (local `file://`, `content://`, or remote `https://`).
   final String uri;
@@ -101,6 +128,15 @@ final class VesperSubtitleSideLoad {
   /// Optional human-readable label.
   final String? label;
 
+  /// Optional request headers used when loading this subtitle resource.
+  final Map<String, String> headers;
+
+  /// Whether the host should prefer this source for automatic selection.
+  final bool isDefault;
+
+  /// Whether this source should only be selected when explicitly requested.
+  final bool isForced;
+
   /// MIME type for SRT subtitles.
   static const mimeSubrip = 'application/x-subrip';
 
@@ -111,28 +147,79 @@ final class VesperSubtitleSideLoad {
   static const mimeSsa = 'text/x-ssa';
 
   Map<String, Object?> toMap() {
+    if (id.trim().isEmpty) {
+      throw ArgumentError.value(id, 'id', 'must not be blank.');
+    }
+    if (uri.trim().isEmpty) {
+      throw ArgumentError.value(uri, 'uri', 'must not be blank.');
+    }
+    if (mimeType.trim().isEmpty) {
+      throw ArgumentError.value(mimeType, 'mimeType', 'must not be blank.');
+    }
     return <String, Object?>{
+      'id': id,
       'uri': uri,
       'mimeType': mimeType,
       if (language != null) 'language': language,
       if (label != null) 'label': label,
+      'headers': headers,
+      'isDefault': isDefault,
+      'isForced': isForced,
     };
   }
 
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
-    return other is VesperSubtitleSideLoad &&
+    return other is VesperExternalSubtitleSource &&
+        other.id == id &&
         other.uri == uri &&
         other.mimeType == mimeType &&
         other.language == language &&
-        other.label == label;
+        other.label == label &&
+        _mapEquals(other.headers, headers) &&
+        other.isDefault == isDefault &&
+        other.isForced == isForced;
   }
 
   @override
-  int get hashCode => Object.hash(uri, mimeType, language, label);
+  int get hashCode => Object.hash(
+        id,
+        uri,
+        mimeType,
+        language,
+        label,
+        Object.hashAll(
+          (headers.keys.toList()..sort())
+              .map((key) => Object.hash(key, headers[key])),
+        ),
+        isDefault,
+        isForced,
+      );
 
   @override
-  String toString() => 'VesperSubtitleSideLoad(uri: $uri, mimeType: $mimeType, '
-      'language: $language, label: $label)';
+  String toString() =>
+      'VesperExternalSubtitleSource(uri: $uri, mimeType: $mimeType, '
+      'language: $language, label: $label, id: $id, '
+      'isDefault: $isDefault, isForced: $isForced)';
 }
+
+bool _mapEquals(Map<String, String> left, Map<String, String> right) {
+  if (left.length != right.length) {
+    return false;
+  }
+  for (final entry in left.entries) {
+    if (right[entry.key] != entry.value) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// Legacy name for [VesperExternalSubtitleSource].
+///
+/// This typedef keeps existing source declarations and MIME constants source
+/// compatible while making the external-subtitle terminology explicit in the
+/// canonical API.
+@Deprecated('Use VesperExternalSubtitleSource instead.')
+typedef VesperSubtitleSideLoad = VesperExternalSubtitleSource;

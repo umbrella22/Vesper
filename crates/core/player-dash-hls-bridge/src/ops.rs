@@ -7,9 +7,19 @@ use crate::{
         ByteRange, DashAdaptationKind, DashAdaptationSet, DashManifest, DashManifestType,
         DashRepresentation, DashSegmentBase, DashSegmentTemplate, parse_mpd_with_base_uri,
     },
-    error::{DashHlsError, DashHlsResult},
+    error::{DashHlsError, DashHlsResult, SubtitleErrorDetails},
+    hls::{
+        HlsAudioRendition, HlsMasterInput, HlsSubtitleRendition, HlsVariant,
+        build_hls_master_playlist,
+        master::{
+            dash_startup_video_sort_key, hls_variant_from_dash_representation, rendition_name,
+        },
+    },
     mp4::{SidxBox, parse_sidx, remove_top_level_sidx_boxes},
 };
+
+#[cfg(test)]
+use crate::hls::build_hls_master_input_from_dash_manifest;
 
 #[derive(Debug, Deserialize)]
 #[serde(
@@ -338,36 +348,49 @@ fn playable_representations(manifest: &DashManifest) -> DashHlsResult<Vec<Playab
     };
 
     let mut subtitle_ids = std::collections::HashSet::new();
-    let mut default_subtitle_renditions = 0_u32;
+    let mut default_subtitle_groups = 0_u32;
     for adaptation_set in &period.adaptation_sets {
         if !matches!(adaptation_set.kind, DashAdaptationKind::Subtitle) {
             continue;
         }
+        if adaptation_set.is_default && !adaptation_set.representations.is_empty() {
+            default_subtitle_groups += 1;
+        }
         for representation in &adaptation_set.representations {
-            if representation.segment_base.is_none() && representation.segment_template.is_none() {
-                continue;
-            }
             if representation.id.trim().is_empty() {
-                return Err(DashHlsError::InvalidMpd(
-                    "subtitle_track_identity_ambiguous: missing Representation@id in subtitle adaptation set"
-                        .to_owned(),
-                ));
+                return Err(DashHlsError::Subtitle {
+                    details: SubtitleErrorDetails::new(
+                        "subtitle_track_identity_ambiguous",
+                        "identity",
+                        None,
+                        false,
+                        "missing Representation@id in subtitle adaptation set",
+                    ),
+                });
             }
             if !subtitle_ids.insert(representation.id.clone()) {
-                return Err(DashHlsError::InvalidMpd(format!(
-                    "subtitle_track_identity_ambiguous: duplicate DASH representation id {}",
-                    representation.id
-                )));
-            }
-            if adaptation_set.is_default {
-                default_subtitle_renditions += 1;
+                return Err(DashHlsError::Subtitle {
+                    details: SubtitleErrorDetails::new(
+                        "subtitle_track_identity_ambiguous",
+                        "identity",
+                        Some(representation.id.clone()),
+                        false,
+                        "duplicate DASH representation id",
+                    ),
+                });
             }
         }
     }
-    if default_subtitle_renditions > 1 {
-        return Err(DashHlsError::InvalidMpd(format!(
-            "subtitle_default_track_ambiguous: {default_subtitle_renditions} default subtitle renditions",
-        )));
+    if default_subtitle_groups > 1 {
+        return Err(DashHlsError::Subtitle {
+            details: SubtitleErrorDetails::new(
+                "subtitle_default_track_ambiguous",
+                "identity",
+                None,
+                false,
+                format!("{default_subtitle_groups} default subtitle groups"),
+            ),
+        });
     }
 
     // Rendition ids are dictionary keys in the Apple host. Reserve stable
@@ -470,51 +493,10 @@ fn startup_video_score(
     index: usize,
     prefer_modern_video_codecs: bool,
 ) -> (u8, u8, u8, u8, u32, u64, u32, usize) {
-    const STARTUP_MAX_HEIGHT: u32 = 720;
-    const STARTUP_MAX_BANDWIDTH: u64 = 800_000;
-
-    let representation = &item.representation;
-    let codec_family = video_codec_family(&representation.codecs);
-    let codec_rank = video_codec_startup_rank(codec_family, prefer_modern_video_codecs);
-    let exceeds_startup_target = u8::from(
-        representation
-            .height
-            .is_none_or(|height| height > STARTUP_MAX_HEIGHT)
-            || representation
-                .bandwidth
-                .is_none_or(|bandwidth| bandwidth > STARTUP_MAX_BANDWIDTH),
-    );
-    let missing_bandwidth = u8::from(representation.bandwidth.is_none());
-    (
-        u8::from(codec_rank == u8::MAX),
-        exceeds_startup_target,
-        codec_rank,
-        missing_bandwidth,
-        representation.height.unwrap_or(u32::MAX),
-        representation.bandwidth.unwrap_or(u64::MAX),
-        representation.width.unwrap_or(u32::MAX),
-        index,
-    )
+    dash_startup_video_sort_key(&item.representation, index, prefer_modern_video_codecs)
 }
 
-fn video_codec_startup_rank(family: VideoCodecFamily, prefer_modern_video_codecs: bool) -> u8 {
-    if prefer_modern_video_codecs {
-        match family {
-            VideoCodecFamily::Vvc => 0,
-            VideoCodecFamily::Av1 => 1,
-            VideoCodecFamily::Hevc => 2,
-            VideoCodecFamily::Avc => 3,
-            VideoCodecFamily::Unknown => u8::MAX,
-        }
-    } else {
-        match family {
-            VideoCodecFamily::Avc => 0,
-            VideoCodecFamily::Hevc => 1,
-            VideoCodecFamily::Vvc | VideoCodecFamily::Av1 | VideoCodecFamily::Unknown => u8::MAX,
-        }
-    }
-}
-
+#[cfg(test)]
 fn video_codec_family(value: &str) -> VideoCodecFamily {
     for codec in value
         .split(',')
@@ -575,42 +557,35 @@ fn build_master_playlist(
     media_urls: &HashMap<String, String>,
     prefer_modern_video_codecs: bool,
 ) -> DashHlsResult<String> {
-    let mut lines = vec![
-        "#EXTM3U".to_owned(),
-        "#EXT-X-VERSION:7".to_owned(),
-        "#EXT-X-INDEPENDENT-SEGMENTS".to_owned(),
-    ];
+    let audio_renditions = if selected.video.is_empty() {
+        Vec::new()
+    } else {
+        selected
+            .audio
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                Ok(HlsAudioRendition {
+                    group_id: "audio".to_owned(),
+                    name: rendition_name(&item.adaptation_set, &item.representation, index),
+                    uri: required_media_url(media_urls, &item.rendition_id)?.to_owned(),
+                    language: item.adaptation_set.language.clone(),
+                    is_default: index == 0,
+                    autoselect: true,
+                    channels: None,
+                })
+            })
+            .collect::<DashHlsResult<Vec<_>>>()?
+    };
 
-    if !selected.audio.is_empty() && !selected.video.is_empty() {
-        for (index, item) in selected.audio.iter().enumerate() {
-            let name = item
-                .adaptation_set
-                .language
-                .as_deref()
-                .or(item.adaptation_set.id.as_deref())
-                .map(str::to_owned)
-                .unwrap_or_else(|| format!("audio-{}", index + 1));
-            let media_url = required_media_url(media_urls, &item.rendition_id)?;
-            let mut attrs = format!(
-                "TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"{}\",DEFAULT={},AUTOSELECT=YES,URI=\"{}\"",
-                escape_attribute(&name),
-                if index == 0 { "YES" } else { "NO" },
-                escape_attribute(media_url)
-            );
-            if let Some(language) = &item.adaptation_set.language {
-                attrs.push_str(&format!(",LANGUAGE=\"{}\"", escape_attribute(language)));
-            }
-            lines.push(format!("#EXT-X-MEDIA:{attrs}"));
-        }
-    }
-
-    if !selected.subtitles.is_empty() {
-        for (index, item) in selected.subtitles.iter().enumerate() {
-            // NAME preference: <Label> / @label -> language -> adaptation
-            // set id -> positional index. This keeps host-visible naming
-            // stable when the host migrates from legacy `@label` to the
-            // standard `<Label>` element.
-            let name = item
+    let mut subtitle_names = Vec::new();
+    let mut emitted_default_subtitle = false;
+    let subtitle_renditions = selected
+        .subtitles
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let base_name = item
                 .adaptation_set
                 .label
                 .as_deref()
@@ -618,43 +593,38 @@ fn build_master_playlist(
                 .or(item.adaptation_set.id.as_deref())
                 .map(str::to_owned)
                 .unwrap_or_else(|| format!("subtitles-{}", index + 1));
-            let media_url = required_media_url(media_urls, &item.rendition_id)?;
-            let default_flag = if item.adaptation_set.is_default {
-                "YES"
-            } else {
-                "NO"
-            };
-            let forced_flag = if item.adaptation_set.is_forced {
-                "YES"
-            } else {
-                "NO"
-            };
-            let mut attrs = format!(
-                "TYPE=SUBTITLES,GROUP-ID=\"subtitles\",NAME=\"{}\",DEFAULT={},AUTOSELECT=YES,FORCED={},URI=\"{}\"",
-                escape_attribute(&name),
-                default_flag,
-                forced_flag,
-                escape_attribute(media_url)
-            );
-            if let Some(language) = &item.adaptation_set.language {
-                attrs.push_str(&format!(",LANGUAGE=\"{}\"", escape_attribute(language)));
-            }
-            lines.push(format!("#EXT-X-MEDIA:{attrs}"));
-        }
-    }
+            let name = disambiguate_hls_name(&base_name, &subtitle_names);
+            subtitle_names.push(name.clone());
+            let is_default = item.adaptation_set.is_default && !emitted_default_subtitle;
+            emitted_default_subtitle |= is_default;
+            Ok(HlsSubtitleRendition {
+                id: item.rendition_id.clone(),
+                group_id: "subtitles".to_owned(),
+                name,
+                uri: required_media_url(media_urls, &item.rendition_id)?.to_owned(),
+                language: item.adaptation_set.language.clone(),
+                is_default,
+                autoselect: true,
+                is_forced: item.adaptation_set.is_forced,
+            })
+        })
+        .collect::<DashHlsResult<Vec<_>>>()?;
 
-    if selected.video.is_empty() {
-        for item in &selected.audio {
-            append_variant_lines(
-                &mut lines,
-                item,
-                &[],
-                0,
-                None,
-                (!selected.subtitles.is_empty()).then_some("subtitles"),
-                media_urls,
-            )?;
-        }
+    let variants = if selected.video.is_empty() {
+        selected
+            .audio
+            .iter()
+            .map(|item| {
+                hls_variant_from_playable(
+                    item,
+                    &[],
+                    0,
+                    None,
+                    (!selected.subtitles.is_empty()).then_some("subtitles"),
+                    media_urls,
+                )
+            })
+            .collect::<DashHlsResult<Vec<_>>>()?
     } else {
         let audio_codecs = unique_codecs(
             selected
@@ -672,81 +642,59 @@ fn build_master_playlist(
         ordered_video.sort_by_key(|(index, item)| {
             startup_video_score(item, *index, prefer_modern_video_codecs)
         });
-        for (_, item) in ordered_video {
-            append_variant_lines(
-                &mut lines,
-                item,
-                &audio_codecs,
-                max_audio_bandwidth,
-                (!selected.audio.is_empty()).then_some("audio"),
-                (!selected.subtitles.is_empty()).then_some("subtitles"),
-                media_urls,
-            )?;
-        }
-    }
+        ordered_video
+            .into_iter()
+            .map(|(_, item)| {
+                hls_variant_from_playable(
+                    item,
+                    &audio_codecs,
+                    max_audio_bandwidth,
+                    (!selected.audio.is_empty()).then_some("audio"),
+                    (!selected.subtitles.is_empty()).then_some("subtitles"),
+                    media_urls,
+                )
+            })
+            .collect::<DashHlsResult<Vec<_>>>()?
+    };
 
-    lines.push(String::new());
-    Ok(lines.join("\n"))
+    build_hls_master_playlist(&HlsMasterInput {
+        variants,
+        audio_renditions,
+        subtitle_renditions,
+        independent_segments: true,
+    })
 }
 
-fn append_variant_lines(
-    lines: &mut Vec<String>,
+fn hls_variant_from_playable(
     item: &PlayableRepresentation,
     extra_codecs: &[String],
     extra_bandwidth: u64,
     audio_group: Option<&str>,
     subtitle_group: Option<&str>,
     media_urls: &HashMap<String, String>,
-) -> DashHlsResult<()> {
-    let base_bandwidth = item.representation.bandwidth.ok_or_else(|| {
-        DashHlsError::InvalidMpd(format!(
-            "Representation {} is missing bandwidth",
-            item.representation.id
-        ))
-    })?;
-    let average_bandwidth = base_bandwidth.checked_add(extra_bandwidth).ok_or_else(|| {
-        DashHlsError::InvalidHlsInput("HLS AVERAGE-BANDWIDTH overflows u64".to_owned())
-    })?;
-    let peak_bandwidth = average_bandwidth
-        .checked_add(average_bandwidth)
-        .ok_or_else(|| DashHlsError::InvalidHlsInput("HLS BANDWIDTH overflows u64".to_owned()))?;
-    let mut attrs = vec![
-        format!("BANDWIDTH={peak_bandwidth}"),
-        format!("AVERAGE-BANDWIDTH={average_bandwidth}"),
-    ];
-    if let (Some(width), Some(height)) = (item.representation.width, item.representation.height)
-        && width > 0
-        && height > 0
-    {
-        attrs.push(format!("RESOLUTION={width}x{height}"));
-    }
-    if let Some(frame_rate) = item
-        .representation
-        .frame_rate
-        .as_deref()
-        .and_then(format_frame_rate)
-    {
-        attrs.push(format!("FRAME-RATE={frame_rate}"));
-    }
-    let mut codec_values = vec![item.representation.codecs.as_str()];
-    codec_values.extend(extra_codecs.iter().map(String::as_str));
-    let codecs = unique_codecs(codec_values).join(",");
-    if !codecs.is_empty() {
-        attrs.push(format!("CODECS=\"{}\"", escape_attribute(&codecs)));
-    }
-    if let Some(audio_group) = audio_group {
-        attrs.push(format!("AUDIO=\"{}\"", escape_attribute(audio_group)));
-    }
-    if let Some(subtitle_group) = subtitle_group {
-        attrs.push(format!(
-            "SUBTITLES=\"{}\"",
-            escape_attribute(subtitle_group)
-        ));
-    }
+) -> DashHlsResult<HlsVariant> {
+    hls_variant_from_dash_representation(
+        &item.representation,
+        required_media_url(media_urls, &item.rendition_id)?.to_owned(),
+        extra_codecs,
+        extra_bandwidth,
+        audio_group,
+        subtitle_group,
+    )
+}
 
-    lines.push(format!("#EXT-X-STREAM-INF:{}", attrs.join(",")));
-    lines.push(required_media_url(media_urls, &item.rendition_id)?.to_owned());
-    Ok(())
+fn disambiguate_hls_name(base_name: &str, existing: &[String]) -> String {
+    if !existing.iter().any(|name| name == base_name) {
+        return base_name.to_owned();
+    }
+    let mut suffix = 2_u32;
+    loop {
+        let candidate = format!("{base_name} ({suffix})");
+        if !existing.iter().any(|name| name == &candidate) {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 fn required_media_url<'a>(
@@ -777,24 +725,6 @@ fn unique_codecs<'a>(values: impl IntoIterator<Item = &'a str>) -> Vec<String> {
         }
     }
     codecs
-}
-
-fn format_frame_rate(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let rate = if let Some((numerator, denominator)) = trimmed.split_once('/') {
-        let numerator: f64 = numerator.trim().parse().ok()?;
-        let denominator: f64 = denominator.trim().parse().ok()?;
-        if denominator == 0.0 {
-            return None;
-        }
-        numerator / denominator
-    } else {
-        trimmed.parse().ok()?
-    };
-    (rate.is_finite() && rate > 0.0).then(|| format_decimal(rate))
 }
 
 pub fn media_segments(
@@ -1341,6 +1271,57 @@ fn format_decimal(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_builder_and_json_ops_share_multi_variant_master_playlist_semantics() {
+        let manifest = crate::dash::parse_mpd(
+            r#"<?xml version="1.0"?>
+<MPD type="static" mediaPresentationDuration="PT6S" minBufferTime="PT2S">
+  <Period id="period0">
+    <AdaptationSet id="video" mimeType="video/mp4">
+      <SegmentTemplate timescale="1000" initialization="init-$RepresentationID$.mp4" media="video-$Number$.m4s" duration="2000"/>
+      <Representation id="video-2160" bandwidth="20000000" codecs="avc1.640033" width="3840" height="2160"/>
+      <Representation id="video-360" bandwidth="109000" codecs="avc1.4d401e" width="640" height="360"/>
+      <Representation id="video-720" bandwidth="800000" codecs="avc1.4d401f" width="1280" height="720"/>
+    </AdaptationSet>
+    <AdaptationSet id="audio" mimeType="audio/mp4" lang="ja">
+      <SegmentTemplate timescale="1000" initialization="init-$RepresentationID$.mp4" media="audio-$Number$.m4s" duration="2000"/>
+      <Representation id="audio-main" bandwidth="128000" codecs="mp4a.40.2"/>
+    </AdaptationSet>
+    <AdaptationSet id="subtitles" mimeType="text/vtt" lang="en">
+      <Label>English</Label>
+      <SegmentTemplate timescale="1000" media="sub-$Number$.vtt" duration="2000"/>
+      <Representation id="subtitle-en" bandwidth="256" codecs="wvtt"/>
+    </AdaptationSet>
+  </Period>
+</MPD>"#,
+        )
+        .expect("manifest");
+        let media_urls = HashMap::from([
+            ("video-2160".to_owned(), "media/video-2160.m3u8".to_owned()),
+            ("video-360".to_owned(), "media/video-360.m3u8".to_owned()),
+            ("video-720".to_owned(), "media/video-720.m3u8".to_owned()),
+            ("audio-main".to_owned(), "media/audio.m3u8".to_owned()),
+            ("subtitle-en".to_owned(), "media/subtitle.m3u8".to_owned()),
+        ]);
+
+        let public_input =
+            build_hls_master_input_from_dash_manifest(&manifest, |_, representation| {
+                media_urls
+                    .get(&representation.id)
+                    .cloned()
+                    .expect("representation URL")
+            })
+            .expect("public master input");
+        let public_playlist = build_hls_master_playlist(&public_input).expect("public playlist");
+
+        let selected = selected_playable_response(&manifest, VariantPolicy::All, None)
+            .expect("selected representations");
+        let ops_playlist =
+            build_master_playlist(&selected, &media_urls, false).expect("ops playlist");
+
+        assert_eq!(public_playlist, ops_playlist);
+    }
 
     #[test]
     fn startup_video_prefers_low_cost_supported_variant() {

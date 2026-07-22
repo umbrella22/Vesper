@@ -4,19 +4,19 @@ use std::ptr;
 use super::{
     PlayerFfiBufferingPolicy, PlayerFfiCachePolicy, PlayerFfiCallStatus, PlayerFfiError,
     PlayerFfiErrorCategory, PlayerFfiErrorCode, PlayerFfiResolvedResiliencePolicy,
-    PlayerFfiRetryPolicy, map_player_error, player_error_to_ffi,
-    player_ffi_ios_native_frame_pipeline_advance, player_ffi_ios_native_frame_pipeline_close,
-    player_ffi_ios_native_frame_pipeline_open, player_ffi_ios_native_frame_pipeline_release_frame,
-    player_ffi_ios_native_frame_pipeline_seek, player_ffi_ios_plugin_abi_summary_json,
-    player_ffi_preload_session_fail, player_ffi_resolve_resilience_policy,
-    player_ffi_source_normalizer_resource_open,
+    PlayerFfiRetryPolicy, dash_bridge_error_to_ffi, map_player_error, player_error_to_ffi,
+    player_ffi_dash_bridge_parse_sidx, player_ffi_ios_native_frame_pipeline_advance,
+    player_ffi_ios_native_frame_pipeline_close, player_ffi_ios_native_frame_pipeline_open,
+    player_ffi_ios_native_frame_pipeline_release_frame, player_ffi_ios_native_frame_pipeline_seek,
+    player_ffi_ios_plugin_abi_summary_json, player_ffi_preload_session_fail,
+    player_ffi_resolve_resilience_policy, player_ffi_source_normalizer_resource_open,
 };
 use crate::handles::HandleRegistry;
 use player_plugin::{
     VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
     VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
 };
-use player_runtime::{PlayerError, PlayerErrorCategory, PlayerErrorCode};
+use player_runtime::{PlayerError, PlayerErrorCategory, PlayerErrorCode, SubtitleErrorDetails};
 
 #[test]
 fn ffi_handle_registry_reuses_slot_with_new_generation_and_rejects_stale_handle() {
@@ -265,6 +265,78 @@ fn ffi_error_code_direct_mapping_preserves_legacy_and_appended_values() {
     for (ffi_code, code) in cases {
         assert_eq!(PlayerErrorCode::from(ffi_code), code);
     }
+}
+
+#[test]
+fn player_error_to_ffi_preserves_structured_subtitle_details() {
+    let error = PlayerError::new(PlayerErrorCode::Timeout, "outer timeout").with_subtitle_details(
+        SubtitleErrorDetails::new(
+            "future_subtitle_code",
+            "future_phase",
+            Some("opaque-track".to_owned()),
+            true,
+            "typed timeout",
+        )
+        .with_transaction(Some(42), Some(9)),
+    );
+    let mut ffi_error = player_error_to_ffi(error);
+    assert!(!ffi_error.details_json.is_null());
+    // SAFETY: player_error_to_ffi returns a valid owned NUL-terminated string.
+    let json = unsafe { CStr::from_ptr(ffi_error.details_json) }
+        .to_string_lossy()
+        .into_owned();
+    let details: SubtitleErrorDetails = serde_json::from_str(&json).expect("subtitle details");
+    let payload: serde_json::Value = serde_json::from_str(&json).expect("details envelope");
+    assert_eq!(payload["domain"], "subtitle");
+    assert_eq!(details.code, "future_subtitle_code");
+    assert_eq!(details.phase, "future_phase");
+    assert_eq!(details.command_id, Some(42));
+    assert_eq!(details.source_epoch, Some(9));
+    unsafe { super::player_ffi_error_free(&mut ffi_error) };
+}
+
+#[test]
+fn dash_bridge_error_to_ffi_emits_structured_non_subtitle_envelope() {
+    let error =
+        player_dash_hls_bridge::DashHlsError::UnsupportedMpd("multi-period manifest".to_owned());
+    let mut ffi_error = dash_bridge_error_to_ffi(&error);
+    assert!(!ffi_error.details_json.is_null());
+    // SAFETY: dash_bridge_error_to_ffi returns a valid owned C string.
+    let json = unsafe { CStr::from_ptr(ffi_error.details_json) }
+        .to_string_lossy()
+        .into_owned();
+    let payload: serde_json::Value = serde_json::from_str(&json).expect("DASH details");
+    assert_eq!(payload["domain"], "dash");
+    assert_eq!(payload["code"], "dash_manifest_unsupported");
+    unsafe { super::player_ffi_error_free(&mut ffi_error) };
+}
+
+#[test]
+fn dash_bridge_parse_sidx_ffi_preserves_structured_error_details() {
+    let truncated_sidx = [0, 0, 0, 16, b's', b'i', b'd', b'x'];
+    let mut response_json = ptr::null_mut();
+    let mut ffi_error = PlayerFfiError::default();
+
+    let status = unsafe {
+        player_ffi_dash_bridge_parse_sidx(
+            truncated_sidx.as_ptr(),
+            truncated_sidx.len(),
+            &mut response_json,
+            &mut ffi_error,
+        )
+    };
+
+    assert_eq!(status, PlayerFfiCallStatus::Error);
+    assert!(response_json.is_null());
+    assert!(!ffi_error.details_json.is_null());
+    // SAFETY: the FFI entry point returned an owned NUL-terminated details string.
+    let details = unsafe { CStr::from_ptr(ffi_error.details_json) }
+        .to_string_lossy()
+        .into_owned();
+    let payload: serde_json::Value = serde_json::from_str(&details).expect("DASH details");
+    assert_eq!(payload["domain"], "dash");
+    assert_eq!(payload["code"], "dash_mp4_invalid");
+    unsafe { super::player_ffi_error_free(&mut ffi_error) };
 }
 
 #[test]

@@ -439,16 +439,18 @@ struct PlayerHostView: View {
                     activeSheet = nil
                 },
                 onSelectSubtitle: { selection in
-                    do {
-                        try controller.setSubtitleTrackSelection(selection)
-                        activeSheet = nil
-                    } catch {
-                        hostMessage = error.localizedDescription
-                        appendHostLog(
-                            severity: .error,
-                            title: ExampleI18n.subtitles,
-                            detail: error.localizedDescription
-                        )
+                    Task { @MainActor in
+                        do {
+                            try await controller.setSubtitleTrackSelection(selection)
+                            activeSheet = nil
+                        } catch {
+                            hostMessage = error.localizedDescription
+                            appendHostLog(
+                                severity: .error,
+                                title: ExampleI18n.subtitles,
+                                detail: error.localizedDescription
+                            )
+                        }
                     }
                 },
                 onSelectSpeed: {

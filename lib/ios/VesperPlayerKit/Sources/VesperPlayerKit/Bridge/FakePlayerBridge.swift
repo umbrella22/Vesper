@@ -9,12 +9,15 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published private(set) var publishedUiState: PlayerHostUiState
     @Published private(set) var publishedTrackCatalog: VesperTrackCatalog
     @Published private(set) var publishedTrackSelection: VesperTrackSelectionSnapshot
+    @Published private(set) var publishedRequestedSubtitleSelection: VesperTrackSelection
+    @Published private(set) var publishedConfirmedSubtitleSelection: VesperTrackSelection
     @Published private(set) var publishedEffectiveVideoTrackId: String?
     @Published private(set) var publishedVideoVariantObservation: VesperVideoVariantObservation?
     @Published private(set) var publishedFixedTrackStatus: VesperFixedTrackStatus?
     @Published private(set) var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
     @Published private(set) var publishedLastError: VesperPlayerError?
     @Published private(set) var publishedSubtitleState: VesperSubtitleState
+    @Published private(set) var publishedEffectiveSubtitleTrackId: String?
 
     let backend: PlayerBridgeBackend = .fakeDemo
     private let benchmarkRecorder: VesperBenchmarkRecorder
@@ -31,8 +34,20 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedTrackSelection
     }
 
+    var requestedSubtitleSelection: VesperTrackSelection {
+        publishedRequestedSubtitleSelection
+    }
+
+    var confirmedSubtitleSelection: VesperTrackSelection {
+        publishedConfirmedSubtitleSelection
+    }
+
     var effectiveVideoTrackId: String? {
         publishedEffectiveVideoTrackId
+    }
+
+    var effectiveSubtitleTrackId: String? {
+        publishedEffectiveSubtitleTrackId
     }
 
     var videoVariantObservation: VesperVideoVariantObservation? {
@@ -96,12 +111,15 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
         publishedTrackCatalog = .empty
         publishedTrackSelection = VesperTrackSelectionSnapshot()
+        publishedRequestedSubtitleSelection = .disabled()
+        publishedConfirmedSubtitleSelection = .disabled()
         publishedEffectiveVideoTrackId = nil
         publishedVideoVariantObservation = nil
         publishedFixedTrackStatus = nil
         publishedResiliencePolicy = resiliencePolicy
         publishedLastError = nil
         publishedSubtitleState = .empty
+        publishedEffectiveSubtitleTrackId = nil
     }
 
     func initialize() {
@@ -127,6 +145,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         )
         currentSource = source
         publishedEffectiveVideoTrackId = nil
+        publishedEffectiveSubtitleTrackId = nil
         publishedVideoVariantObservation = nil
         publishedFixedTrackStatus = nil
         update { current in
@@ -327,7 +346,7 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func setAudioTrackSelection(_ selection: VesperTrackSelection) {}
 
-    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) throws {}
+    func setSubtitleTrackSelection(_ selection: VesperTrackSelection) async throws {}
 
     func setSubtitleStyle(_ style: VesperSubtitleStyle) {}
 

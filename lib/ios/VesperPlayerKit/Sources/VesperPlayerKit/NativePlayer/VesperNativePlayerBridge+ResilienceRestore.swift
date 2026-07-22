@@ -11,7 +11,7 @@ extension VesperNativePlayerBridge {
     func applyPendingResilienceRestore(
         ifNeededFor item: AVPlayerItem,
         phase: PendingResilienceRestorePhase
-    ) {
+    ) async {
         guard
             var pendingResilienceRestore,
             currentSource?.uri == pendingResilienceRestore.sourceUri,
@@ -29,7 +29,10 @@ extension VesperNativePlayerBridge {
         case .trackSelection:
             if pendingResilienceRestore.needsTrackSelectionRestore {
                 pendingResilienceRestore.needsTrackSelectionRestore =
-                    restoreTrackSelectionsIfNeeded(pendingResilienceRestore.state, item: item)
+                    await restoreTrackSelectionsIfNeeded(
+                        pendingResilienceRestore.state,
+                        item: item
+                    )
             }
         }
 
@@ -73,7 +76,7 @@ extension VesperNativePlayerBridge {
     func restoreTrackSelectionsIfNeeded(
         _ state: PreservedPlaybackState,
         item: AVPlayerItem
-    ) -> Bool {
+    ) async -> Bool {
         if state.audioSelection.mode != .auto {
             if let group = audioGroup {
                 try? applyTrackSelection(
@@ -86,41 +89,38 @@ extension VesperNativePlayerBridge {
             }
         }
 
-        if state.subtitleSelection.mode != .auto {
-            // A resilience restore must not silently drop a preserved subtitle
-            // selection when the legible group
-            // or option lookup fails. Surface a structured
-            // `subtitle_platform_track_unavailable` /
-            // `subtitle_track_not_found` failure so the host can show the
-            // user that subtitles could not be restored.
-            if let group = subtitleGroup {
-                if state.subtitleSelection.mode == .track,
-                   let trackId = state.subtitleSelection.trackId,
-                   subtitleOptionsByTrackId[trackId] == nil
-                {
-                    reportSubtitleFailure(
-                        code: "subtitle_track_not_found",
-                        phase: .selection,
-                        trackId: trackId,
-                        message: "resilience restore could not locate preserved subtitle trackId=\(trackId)"
-                    )
-                } else {
-                    try? applyTrackSelection(
-                        state.subtitleSelection,
-                        kind: .subtitle,
-                        group: group,
-                        optionsByTrackId: subtitleOptionsByTrackId,
-                        item: item
-                    )
-                }
-            } else if state.subtitleSelection.mode == .track {
-                reportSubtitleFailure(
-                    code: "subtitle_platform_track_unavailable",
-                    phase: .selection,
-                    trackId: state.subtitleSelection.trackId,
-                    message: "resilience restore rejected: no legible media selection group for preserved subtitle selection"
-                )
+        do {
+            let subtitleSelection = if
+                let explicitSelection = latestConfirmedExplicitSubtitleSelection,
+                explicitSelection.sourceEpoch == subtitleSourceEpoch
+            {
+                explicitSelection.selection
+            } else {
+                state.subtitleSelection
             }
+            // The AV item is installed before external overlay preparation
+            // finishes. Keep the restore intent alive while the requested
+            // source-local track is still being prepared; treating that
+            // interval as `trackNotFound` would permanently discard a valid
+            // resilience restore.
+            let externalPreparationPending =
+                subtitleOverlayLoadTask != nil &&
+                    currentSource?.externalSubtitles.isEmpty == false &&
+                    (subtitleSelection.mode == .auto ||
+                        (subtitleSelection.trackId.map { externalTrackId in
+                            currentSource?.externalSubtitles.contains {
+                                $0.id == externalTrackId
+                            } == true && !subtitleOverlayRenderer.containsTrack(externalTrackId)
+                        } ?? false))
+            if externalPreparationPending {
+                return true
+            }
+            try await coordinateSubtitleSelection(
+                subtitleSelection,
+                origin: .resilienceRestore
+            )
+        } catch {
+            iosHostLog("resilience subtitle restore failed: \(error.localizedDescription)")
         }
 
         if abrPolicyRequiresLoadedVideoVariantCatalog(state.abrPolicy) {
@@ -154,7 +154,14 @@ extension VesperNativePlayerBridge {
         @unknown default:
             return "current item becomes ready"
         }
-        if currentSource?.kind == .local, let surfaceHost, !surfaceHost.isReadyForDisplay {
+        let itemHasVideoTrack = item.tracks.contains { track in
+            track.assetTrack?.mediaType == .video
+        }
+        if shouldDeferPlaybackUntilFirstVideoFrame(
+            sourceKind: currentSource?.kind,
+            itemHasVideoTrack: itemHasVideoTrack,
+            surfaceIsReadyForDisplay: surfaceHost?.isReadyForDisplay
+        ) {
             return "first video frame is ready for display"
         }
         return nil
@@ -433,4 +440,12 @@ extension VesperNativePlayerBridge {
             return policy.trackId ?? "fixed track"
         }
     }
+}
+
+func shouldDeferPlaybackUntilFirstVideoFrame(
+    sourceKind: VesperPlayerSourceKind?,
+    itemHasVideoTrack: Bool,
+    surfaceIsReadyForDisplay: Bool?
+) -> Bool {
+    sourceKind == .local && itemHasVideoTrack && surfaceIsReadyForDisplay == false
 }

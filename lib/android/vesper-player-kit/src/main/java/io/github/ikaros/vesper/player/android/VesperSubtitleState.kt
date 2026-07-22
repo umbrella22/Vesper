@@ -1,11 +1,36 @@
 package io.github.ikaros.vesper.player.android
 
-/**
- * Subtitle lifecycle status shared by Android, iOS, and Flutter.
- *
- * Mirrors the Swift `VesperSubtitleStatus` enum. Wire names are lowercase to match the
- * Dart enum names in `subtitle_state_models.dart`.
- */
+/** Canonical subtitle catalog lifecycle shared by Android, iOS, and Flutter. */
+enum class VesperSubtitleCatalogState(val wireName: String) {
+    Unavailable("unavailable"),
+    Loading("loading"),
+    Ready("ready"),
+    Failed("failed"),
+    Unknown("unknown");
+
+    companion object {
+        fun fromWire(raw: String?): VesperSubtitleCatalogState =
+            values().firstOrNull { it.wireName == raw } ?:
+                if (raw == null) Unavailable else Unknown
+    }
+}
+
+/** Canonical subtitle selection transaction lifecycle. */
+enum class VesperSubtitleSelectionState(val wireName: String) {
+    Idle("idle"),
+    Applying("applying"),
+    Confirmed("confirmed"),
+    Failed("failed"),
+    Unknown("unknown");
+
+    companion object {
+        fun fromWire(raw: String?): VesperSubtitleSelectionState =
+            values().firstOrNull { it.wireName == raw } ?:
+                if (raw == null) Idle else Unknown
+    }
+}
+
+/** Legacy catalog status retained as a read-only compatibility alias. */
 enum class VesperSubtitleStatus(val wireName: String) {
     Unavailable("unavailable"),
     Loading("loading"),
@@ -14,16 +39,13 @@ enum class VesperSubtitleStatus(val wireName: String) {
     Unknown("unknown");
 
     companion object {
-        fun fromWire(raw: String?): VesperSubtitleStatus {
-            if (raw == null) return Unavailable
-            return values().firstOrNull { it.wireName == raw } ?: Unknown
-        }
+        fun fromWire(raw: String?): VesperSubtitleStatus =
+            values().firstOrNull { it.wireName == raw } ?:
+                if (raw == null) Unavailable else Unknown
     }
 }
 
-/**
- * Phase where a subtitle failure originated.
- */
+/** Phase where a subtitle failure originated. */
 enum class VesperSubtitleErrorPhase(val wireName: String) {
     Manifest("manifest"),
     Resource("resource"),
@@ -33,80 +55,90 @@ enum class VesperSubtitleErrorPhase(val wireName: String) {
     Unknown("unknown");
 
     companion object {
-        fun fromWire(raw: String?): VesperSubtitleErrorPhase {
-            if (raw == null) return Unknown
-            return values().firstOrNull { it.wireName == raw } ?: Unknown
-        }
+        fun fromWire(raw: String?): VesperSubtitleErrorPhase =
+            values().firstOrNull { it.wireName == raw } ?: Unknown
     }
 }
 
-/**
- * Structured subtitle error carried alongside [VesperSubtitleState].
- *
- * The [code] is a stable string (e.g. `subtitle_track_not_found`) defined
- * by the cross-platform subtitle contract. Unknown codes are preserved verbatim so
- * a newer native side does not silently lose diagnostic information.
- */
+/** Structured subtitle error. Raw code and phase strings are intentionally preserved. */
 data class VesperSubtitleError(
     val code: String,
     val phase: VesperSubtitleErrorPhase,
     val retriable: Boolean,
     val message: String,
     val trackId: String? = null,
+    val commandId: Long? = null,
+    val sourceEpoch: Long? = null,
+    val phaseRawValue: String? = null,
 ) {
     fun toMap(): Map<String, Any?> =
-        mapOf(
-            "code" to code,
-            "phase" to phase.wireName,
-            "retriable" to retriable,
-            "message" to message,
-            "trackId" to trackId,
-        )
-
-    companion object {
-        fun fromMap(map: Map<String, Any?>): VesperSubtitleError =
-            VesperSubtitleError(
-                code = (map["code"] as? String) ?: "unknown",
-                phase = VesperSubtitleErrorPhase.fromWire(map["phase"] as? String),
-                retriable = (map["retriable"] as? Boolean) ?: false,
-                message = (map["message"] as? String) ?: "",
-                trackId = map["trackId"] as? String,
-            )
-    }
+        buildMap {
+            put("code", code)
+            put("phase", phaseRawValue ?: phase.wireName)
+            put("retriable", retriable)
+            put("message", message)
+            put("trackId", trackId)
+            commandId?.let { put("commandId", it) }
+            sourceEpoch?.let { put("sourceEpoch", it) }
+        }
 }
 
 /**
- * Snapshot of subtitle catalog lifecycle exposed to Flutter. Mirrors the
- * Swift `VesperSubtitleState`.
+ * Canonical subtitle state. Selection failures update only selection fields;
+ * catalog state, counts, and catalog errors remain intact.
  */
 data class VesperSubtitleState(
-    val status: VesperSubtitleStatus = VesperSubtitleStatus.Unavailable,
+    val catalogState: VesperSubtitleCatalogState = VesperSubtitleCatalogState.Unavailable,
+    val selectionState: VesperSubtitleSelectionState = VesperSubtitleSelectionState.Idle,
     val advertisedTrackCount: Int = 0,
     val selectableTrackCount: Int = 0,
-    val error: VesperSubtitleError? = null,
+    val catalogError: VesperSubtitleError? = null,
+    val selectionError: VesperSubtitleError? = null,
+    val catalogStateRawValue: String? = null,
+    val selectionStateRawValue: String? = null,
 ) {
+    /** Compatibility alias for pre-0.4 callers. */
+    val status: VesperSubtitleStatus
+        get() = when (catalogState) {
+            VesperSubtitleCatalogState.Unavailable -> VesperSubtitleStatus.Unavailable
+            VesperSubtitleCatalogState.Loading -> VesperSubtitleStatus.Loading
+            VesperSubtitleCatalogState.Ready -> VesperSubtitleStatus.Ready
+            VesperSubtitleCatalogState.Failed -> VesperSubtitleStatus.Failed
+            VesperSubtitleCatalogState.Unknown -> VesperSubtitleStatus.Unknown
+        }
+
+    /** Compatibility alias; selection failures take precedence for old hosts. */
+    val error: VesperSubtitleError?
+        get() = selectionError ?: catalogError
+
     fun toMap(): Map<String, Any?> =
         mapOf(
-            "status" to status.wireName,
+            "catalogState" to (catalogStateRawValue ?: catalogState.wireName),
+            "selectionState" to (selectionStateRawValue ?: selectionState.wireName),
             "advertisedTrackCount" to advertisedTrackCount,
             "selectableTrackCount" to selectableTrackCount,
+            "catalogError" to catalogError?.toMap(),
+            "selectionError" to selectionError?.toMap(),
+            // Compatibility aliases for pre-0.4 Flutter hosts.
+            "status" to status.wireName,
             "error" to error?.toMap(),
         )
 
     companion object {
         val EMPTY = VesperSubtitleState()
 
-        fun unavailable() = VesperSubtitleState(status = VesperSubtitleStatus.Unavailable)
+        fun unavailable() = VesperSubtitleState()
 
         fun loading(advertisedTrackCount: Int) =
             VesperSubtitleState(
-                status = VesperSubtitleStatus.Loading,
+                catalogState = VesperSubtitleCatalogState.Loading,
                 advertisedTrackCount = advertisedTrackCount,
             )
 
         fun ready(advertisedTrackCount: Int, selectableTrackCount: Int) =
             VesperSubtitleState(
-                status = VesperSubtitleStatus.Ready,
+                catalogState = VesperSubtitleCatalogState.Ready,
+                selectionState = VesperSubtitleSelectionState.Idle,
                 advertisedTrackCount = advertisedTrackCount,
                 selectableTrackCount = selectableTrackCount,
             )
@@ -118,18 +150,34 @@ data class VesperSubtitleState(
             trackId: String? = null,
             retriable: Boolean = false,
             message: String,
-        ) = VesperSubtitleState(
-            status = VesperSubtitleStatus.Failed,
-            advertisedTrackCount = advertisedTrackCount,
-            selectableTrackCount = 0,
-            error =
-                VesperSubtitleError(
+            selectableTrackCount: Int = 0,
+        ) = if (phase == VesperSubtitleErrorPhase.Selection) {
+            VesperSubtitleState(
+                catalogState = VesperSubtitleCatalogState.Ready,
+                selectionState = VesperSubtitleSelectionState.Failed,
+                advertisedTrackCount = advertisedTrackCount,
+                selectableTrackCount = selectableTrackCount,
+                selectionError = VesperSubtitleError(
                     code = code,
                     phase = phase,
                     trackId = trackId,
                     retriable = retriable,
                     message = message,
                 ),
-        )
+            )
+        } else {
+            VesperSubtitleState(
+                catalogState = VesperSubtitleCatalogState.Failed,
+                advertisedTrackCount = advertisedTrackCount,
+                selectableTrackCount = selectableTrackCount,
+                catalogError = VesperSubtitleError(
+                    code = code,
+                    phase = phase,
+                    trackId = trackId,
+                    retriable = retriable,
+                    message = message,
+                ),
+            )
+        }
     }
 }

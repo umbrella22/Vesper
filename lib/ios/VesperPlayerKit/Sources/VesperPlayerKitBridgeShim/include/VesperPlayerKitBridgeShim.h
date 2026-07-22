@@ -752,13 +752,15 @@ void vesper_ios_native_frame_pipeline_close(uint64_t handle);
 bool vesper_dash_bridge_execute_json(
     const char *request_json,
     char **out_json,
-    char **out_error_message);
+    char **out_error_message,
+    char **out_error_details_json);
 
 bool vesper_dash_bridge_parse_sidx(
     const uint8_t *data,
     uintptr_t data_len,
     char **out_json,
-    char **out_error_message);
+    char **out_error_message,
+    char **out_error_details_json);
 
 void vesper_dash_bridge_string_free(char *value);
 

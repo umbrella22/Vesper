@@ -83,6 +83,8 @@ internal fun VesperTrackSelectionSnapshot.toMap(): Map<String, Any?> =
         "video" to video.toMap(),
         "audio" to audio.toMap(),
         "subtitle" to subtitle.toMap(),
+        "confirmedSubtitle" to confirmedSubtitle.toMap(),
+        "effectiveSubtitleTrackId" to effectiveSubtitleTrackId,
         "abrPolicy" to abrPolicy.toMap(),
     )
 
@@ -134,6 +136,26 @@ internal fun VesperCachePolicy.toMap(): Map<String, Any?> =
 
 internal fun Throwable.toErrorMap(): Map<String, Any?> {
     if (this is VesperPlayerUnsupportedOperation) {
+        val subtitleCode = details["code"] as? String
+        val isSubtitleError = details["domain"] == "subtitle"
+        if (subtitleCode != null && isSubtitleError) {
+            val phase =
+                details["phase"] as? String
+                    ?: "selection"
+            return mapOf(
+                "domain" to "subtitle",
+                "code" to subtitleCode,
+                "phase" to phase,
+                "trackId" to details["trackId"],
+                "retriable" to (details["retriable"] as? Boolean ?: false),
+                "message" to
+                    (details["message"] as? String
+                        ?: message
+                        ?: "Subtitle operation failed."),
+                "commandId" to details["commandId"],
+                "sourceEpoch" to details["sourceEpoch"],
+            )
+        }
         val errorDetails = mapOf("exception" to this::class.java.name) + details
         return mapOf(
             "message" to (message ?: toString()),
@@ -151,6 +173,19 @@ internal fun Throwable.toErrorMap(): Map<String, Any?> {
         "details" to mapOf(
             "exception" to this::class.java.name,
         ),
+    )
+}
+
+internal fun Map<String, Any?>.toEventErrorMap(): Map<String, Any?> {
+    if (this["domain"] != "subtitle") {
+        return this
+    }
+    return mapOf(
+        "message" to (this["message"] as? String ?: "Subtitle operation failed."),
+        "code" to "backendFailure",
+        "category" to "platform",
+        "retriable" to (this["retriable"] as? Boolean ?: false),
+        "details" to this,
     )
 }
 

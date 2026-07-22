@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - Unreleased
+
+### Breaking Changes
+
+- `VesperPlayerController.setSubtitleTrackSelection` is now `async throws` and
+  completes only after AVPlayer or the external overlay confirms convergence.
+- External subtitle declarations now use `VesperExternalSubtitleSource` and
+  `VesperPlayerSource.externalSubtitles`; the previous names are deprecated
+  aliases.
 
 ### Added
 
@@ -9,6 +17,8 @@
   with track selection.
 - Added `VesperSubtitleStyle` visibility and font scaling for side-loaded and
   embedded AVPlayer subtitles.
+- Added canonical catalog/selection subtitle state, requested/confirmed/effective
+  selection, structured command errors, and source/item epoch fencing.
 - Added tagged-release staging for the seven optional sibling XCFrameworks.
   FFmpeg-backed artifacts are now gated on a compliance archive and the exact
   corresponding versioned FFmpeg source archive in the same release, matched to
@@ -30,6 +40,10 @@
   dependencies, extra archives and XCFramework slices, empty or altered FFmpeg
   compliance files, cross-slice metadata mismatches, and retired assets left by
   a same-tag release rerun. FFmpeg release staging always rebuilds from source.
+- Local audio-only playback no longer waits forever for an AVPlayerLayer video
+  frame before starting.
+- Explicit automatic subtitle selection can use a default track even when the
+  startup policy leaves subtitles disabled by default.
 
 ## 0.3.0 - 2026-05-18
 

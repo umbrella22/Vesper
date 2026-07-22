@@ -4,14 +4,14 @@ import UIKit
 internal import VesperPlayerKitBridgeShim
 
 extension VesperNativePlayerBridge {
-    func applyDefaultTrackPreferencesIfNeeded(for item: AVPlayerItem) {
+    func applyDefaultTrackPreferencesIfNeeded(for item: AVPlayerItem) async {
         guard !hasAppliedDefaultTrackPreferences else {
             return
         }
 
         hasAppliedDefaultTrackPreferences = true
         applyDefaultAudioTrackPreferenceIfPossible(item: item)
-        applyDefaultSubtitleTrackPreferenceIfPossible(item: item)
+        await applyDefaultSubtitleTrackPreferenceIfPossible(item: item)
         applyAbrPolicy(
             resolvedTrackPreferencePolicy.abrPolicy,
             origin: .defaultPolicy,
@@ -33,6 +33,8 @@ extension VesperNativePlayerBridge {
                     video: current.video,
                     audio: .disabled(),
                     subtitle: current.subtitle,
+                    confirmedSubtitle: current.confirmedSubtitle,
+                    effectiveSubtitleTrackId: current.effectiveSubtitleTrackId,
                     abrPolicy: current.abrPolicy
                 )
             }
@@ -60,94 +62,33 @@ extension VesperNativePlayerBridge {
                     video: current.video,
                     audio: .auto(),
                     subtitle: current.subtitle,
+                    confirmedSubtitle: current.confirmedSubtitle,
+                    effectiveSubtitleTrackId: current.effectiveSubtitleTrackId,
                     abrPolicy: current.abrPolicy
                 )
             }
         }
     }
 
-    func applyDefaultSubtitleTrackPreferenceIfPossible(item: AVPlayerItem) {
-        let policy = resolvedTrackPreferencePolicy
-        if subtitleOverlayRenderer.hasTracks {
-            let sideLoadTrackId: String?
-            switch policy.subtitleSelection.mode {
-            case .disabled:
-                sideLoadTrackId = nil
-            case .track:
-                sideLoadTrackId = policy.subtitleSelection.trackId.flatMap { trackId in
-                    subtitleOverlayRenderer.containsTrack(trackId) ? trackId : nil
-                }
-                if sideLoadTrackId == nil, subtitleGroup != nil {
-                    break
-                }
-            case .auto:
-                let preferredLanguage = policy.preferredSubtitleLanguage?.lowercased()
-                let preferredIndex = currentSource?.subtitleConfigurations.firstIndex { configuration in
-                    configuration.language?.lowercased() == preferredLanguage
-                }
-                if let preferredIndex {
-                    sideLoadTrackId = VesperSubtitleOverlayRenderer.trackId(for: preferredIndex)
-                } else if policy.selectSubtitlesByDefault {
-                    sideLoadTrackId = subtitleOverlayRenderer.firstTrackId()
-                } else {
-                    sideLoadTrackId = nil
-                }
+    func applyDefaultSubtitleTrackPreferenceIfPossible(item: AVPlayerItem) async {
+        guard player?.currentItem === item else { return }
+        if explicitSubtitleIntentSourceEpoch == subtitleSourceEpoch,
+           publishedRequestedSubtitleSelection.mode == .disabled {
+            // An explicit disable may have arrived before AVFoundation exposed
+            // the legible group. Apply that intent when the group becomes
+            // available instead of leaving the platform default selected.
+            if let group = subtitleGroup {
+                item.select(nil, in: group)
             }
-            if policy.subtitleSelection.mode != .track || sideLoadTrackId != nil || subtitleGroup == nil {
-                if let group = subtitleGroup {
-                    item.select(nil, in: group)
-                }
-                _ = subtitleOverlayRenderer.select(trackId: sideLoadTrackId)
-                updateTrackSelection { current in
-                    VesperTrackSelectionSnapshot(
-                        video: current.video,
-                        audio: current.audio,
-                        subtitle: sideLoadTrackId == nil ? .disabled() : policy.subtitleSelection,
-                        abrPolicy: current.abrPolicy
-                    )
-                }
-                return
-            }
-        }
-
-        guard let group = subtitleGroup else {
             return
         }
-        _ = subtitleOverlayRenderer.select(trackId: nil)
-
-        switch policy.subtitleSelection.mode {
-        case .disabled:
-            item.select(nil, in: group)
-            updateTrackSelection { current in
-                VesperTrackSelectionSnapshot(
-                    video: current.video,
-                    audio: current.audio,
-                    subtitle: .disabled(),
-                    abrPolicy: current.abrPolicy
-                )
-            }
-        case .track:
-            try? applyTrackSelection(
-                policy.subtitleSelection,
-                kind: .subtitle,
-                group: group,
-                optionsByTrackId: subtitleOptionsByTrackId,
-                item: item
+        do {
+            try await coordinateSubtitleSelection(
+                resolvedTrackPreferencePolicy.subtitleSelection,
+                origin: .defaultPolicy
             )
-        case .auto:
-            let option = automaticSubtitleOption(
-                in: group,
-                optionsByTrackId: subtitleOptionsByTrackId
-            )
-            item.select(option, in: group)
-            updateTrackSelection { current in
-                VesperTrackSelectionSnapshot(
-                    video: current.video,
-                    audio: current.audio,
-                    subtitle: option == nil ? .disabled() : .auto(),
-                    abrPolicy: current.abrPolicy
-                )
-            }
+        } catch {
+            iosHostLog("default subtitle selection failed: \(error.localizedDescription)")
         }
     }
 
@@ -200,16 +141,77 @@ extension VesperNativePlayerBridge {
     }
 
     func normalizedLanguageIdentifier(_ value: String?) -> String? {
-        guard let value else {
-            return nil
-        }
-
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "_", with: "-")
-            .lowercased()
-        guard !normalized.isEmpty, normalized != "und" else {
-            return nil
-        }
-        return normalized
+        normalizedSubtitleLanguageIdentifier(value)
     }
+}
+
+func resolveAutomaticSubtitleTrackId(
+    tracks: [VesperMediaTrack],
+    preferredLanguage: String?,
+    selectUndeterminedLanguage: Bool,
+    allowDefaultCandidate: Bool
+) -> String? {
+    let candidates = tracks.filter { $0.kind == .subtitle }
+    guard !candidates.isEmpty else { return nil }
+
+    if let preferredLanguage = normalizedSubtitleLanguageIdentifier(preferredLanguage),
+       let match = preferredAutomaticSubtitleCandidate(
+           candidates.filter { track in
+               guard let language = normalizedSubtitleLanguageIdentifier(track.language) else {
+                   return false
+               }
+               return language == preferredLanguage
+                   || language.hasPrefix(preferredLanguage + "-")
+                   || preferredLanguage.hasPrefix(language + "-")
+           }
+       ) {
+        return match.id
+    }
+
+    if selectUndeterminedLanguage,
+       let match = preferredAutomaticSubtitleCandidate(
+           candidates.filter {
+               normalizedSubtitleLanguageIdentifier($0.language) == nil
+           }
+       ) {
+        return match.id
+    }
+
+    guard allowDefaultCandidate else { return nil }
+    return preferredAutomaticSubtitleCandidate(candidates.filter(\.isDefault))?.id
+}
+
+func automaticSubtitleSelectionAllowsDefaultCandidate(
+    origin: SubtitleSelectionOrigin,
+    startupPolicySelectsSubtitlesByDefault: Bool
+) -> Bool {
+    switch origin {
+    case .defaultPolicy:
+        return startupPolicySelectsSubtitlesByDefault
+    case .explicit, .resilienceRestore, .visibilityRestore:
+        return true
+    }
+}
+
+private func preferredAutomaticSubtitleCandidate(
+    _ candidates: [VesperMediaTrack]
+) -> VesperMediaTrack? {
+    candidates.sorted { lhs, rhs in
+        if lhs.isDefault != rhs.isDefault {
+            return lhs.isDefault
+        }
+        if lhs.isForced != rhs.isForced {
+            return !lhs.isForced
+        }
+        return lhs.id < rhs.id
+    }.first
+}
+
+private func normalizedSubtitleLanguageIdentifier(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: "_", with: "-")
+        .lowercased()
+    guard !normalized.isEmpty, normalized != "und" else { return nil }
+    return normalized
 }

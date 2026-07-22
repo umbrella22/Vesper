@@ -1,9 +1,17 @@
 package io.github.ikaros.vesper.player.android
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
 
 /**
  * Subtitle selection validation tests for [VesperPlayerController].
@@ -12,7 +20,18 @@ import org.junit.Test
  * the current subtitle catalog BEFORE forwarding to JNI, surfacing
  * `subtitle_track_not_found` as a structured `VesperPlayerUnsupportedOperation`.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class VesperPlayerControllerSubtitleValidationTest {
+    @Before
+    fun installMainDispatcher() {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+    }
+
+    @After
+    fun resetMainDispatcher() {
+        Dispatchers.resetMain()
+    }
+
     @Test
     fun setSubtitleTrackSelection_unknownTrackId_throwsStructuredFailure() {
         val bridge = FakePlayerBridge()
@@ -20,7 +39,9 @@ class VesperPlayerControllerSubtitleValidationTest {
         val controller = VesperPlayerController(bridge)
 
         val error = assertThrows(VesperPlayerUnsupportedOperation::class.java) {
-            controller.setSubtitleTrackSelection(VesperTrackSelection.track("subtitle:dash:sub-zh"))
+            runBlocking {
+                controller.setSubtitleTrackSelection(VesperTrackSelection.track("subtitle:dash:sub-zh"))
+            }
         }
         assertTrue(
             "error message must mention the unknown id: ${error.message}",
@@ -29,9 +50,9 @@ class VesperPlayerControllerSubtitleValidationTest {
         assertEquals(
             "structured subtitle code must be carried in details",
             "subtitle_track_not_found",
-            error.details["subtitleCode"],
+            error.details["code"],
         )
-        assertEquals("selection", error.details["subtitlePhase"])
+        assertEquals("selection", error.details["phase"])
         assertEquals("subtitle:dash:sub-zh", error.details["trackId"])
     }
 
@@ -41,11 +62,11 @@ class VesperPlayerControllerSubtitleValidationTest {
         val controller = VesperPlayerController(bridge)
 
         val error = assertThrows(VesperPlayerUnsupportedOperation::class.java) {
-            controller.setSubtitleTrackSelection(VesperTrackSelection.track(""))
+            runBlocking { controller.setSubtitleTrackSelection(VesperTrackSelection.track("")) }
         }
         assertEquals(
             "subtitle_track_not_found",
-            error.details["subtitleCode"],
+            error.details["code"],
         )
     }
 
@@ -57,9 +78,13 @@ class VesperPlayerControllerSubtitleValidationTest {
         // A Track-mode selection with a null trackId must also surface as
         // a structured failure rather than silently forwarding to JNI.
         val error = assertThrows(VesperPlayerUnsupportedOperation::class.java) {
-            controller.setSubtitleTrackSelection(VesperTrackSelection(VesperTrackSelectionMode.Track, null))
+            runBlocking {
+                controller.setSubtitleTrackSelection(
+                    VesperTrackSelection(VesperTrackSelectionMode.Track, null),
+                )
+            }
         }
-        assertEquals("subtitle_track_not_found", error.details["subtitleCode"])
+        assertEquals("subtitle_track_not_found", error.details["code"])
     }
 
     @Test
@@ -69,7 +94,7 @@ class VesperPlayerControllerSubtitleValidationTest {
 
         // Auto mode does not require a known id; it must forward directly
         // to the bridge without raising.
-        controller.setSubtitleTrackSelection(VesperTrackSelection.auto())
+        runBlocking { controller.setSubtitleTrackSelection(VesperTrackSelection.auto()) }
     }
 
     @Test
@@ -77,6 +102,6 @@ class VesperPlayerControllerSubtitleValidationTest {
         val bridge = FakePlayerBridge()
         val controller = VesperPlayerController(bridge)
 
-        controller.setSubtitleTrackSelection(VesperTrackSelection.disabled())
+        runBlocking { controller.setSubtitleTrackSelection(VesperTrackSelection.disabled()) }
     }
 }

@@ -291,8 +291,8 @@ FFmpeg packaging profiles。
 `--extra-protocols`、`--extra-parsers`、`--extra-bsfs` 以及可重复使用的
 `--extra-configure-arg` 添加受控 overlay。如果 overlay 违反所选 profile 策略，
 验证将失败。生成的 ABI 和 slice 会记录 `vesper-ffmpeg-build-metadata.txt`，包含
-声明的 profile、profile hash、源码压缩包、许可敏感标志及完整 configure 命令，
-供 release 审查。
+声明的 profile、profile hash、源码压缩包 SHA-256、许可敏感标志及完整 configure
+命令，供 release 审查。
 
 ## Desktop FFmpeg
 
@@ -363,27 +363,30 @@ GitHub Releases 会以 `VesperPlayerKit` 产品名发布移动端下载产物：
 - Android 核心包：`VesperPlayerKit-android-<abi>.aar`
 - Android Compose 适配层：`VesperPlayerKitCompose-android-<abi>.aar`
 - Android Compose UI：`VesperPlayerKitComposeUi-android-<abi>.aar`
-- Android 外部播放：`VesperPlayerKitExternalPlayback-android-<abi>.aar`
-- Android FFmpeg 运行时：`VesperPlayerKitFfmpegRuntime-android-<abi>.aar`
-- 可选 Android MediaCodec 解码插件：`VesperPlayerKitDecoderMediaCodec-android-<abi>.aar`
-- 可选 Android SourceNormalizer FFmpeg 插件：`VesperPlayerKitSourceNormalizerFfmpeg-android-<abi>.aar`
-- 可选 Android FrameProcessor 诊断插件：`VesperPlayerKitFrameProcessorDiagnostic-android-<abi>.aar`
+- Android Compose 示例 APK：`VesperPlayerAndroidComposeHost-android-<abi>-debug-signed.apk`
+- Flutter Android 示例 APK：`VesperPlayerFlutterHost-android-<abi>-debug-signed.apk`
 - iOS framework 切片：`VesperPlayerKit-ios-*.framework.zip`
 - iOS XCFramework：`VesperPlayerKit.xcframework.zip`
-- 可选 iOS FFmpeg 运行时：`VesperPlayerFfmpegRuntime.xcframework.zip`
-- 可选 iOS FFmpeg remux 插件：`VesperPlayerRemuxFfmpegPlugin.xcframework.zip`
-- 可选 iOS SourceNormalizer FFmpeg 插件：`VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`
-- 可选 iOS FrameProcessor 诊断插件：`VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip`
+- iOS 可选 FFmpeg components：`VesperFFmpegAVCodec.xcframework.zip`、
+  `VesperFFmpegAVFormat.xcframework.zip`、`VesperFFmpegAVUtil.xcframework.zip`
+- iOS 可选 plugins：`VesperPlayerRemuxFfmpegPlugin.xcframework.zip`、
+  `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`、
+  `VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip`、
+  `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip`
+- iOS FFmpeg 合规与源码：`VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip`、
+  `VesperPlayerOptionalPlugins-FFmpeg-<version>-source.tar.xz`
 - 用于校验 release artifact 的 `SHA256SUMS.txt`
 
-Android 打包当前仅提供 `arm64-v8a`。iOS 打包仅提供 arm64 device、Apple
-Silicon Simulator 和可选 Catalyst slices。iOS 核心 `VesperPlayerKit.xcframework`
-不嵌入 FFmpeg；FFmpeg-backed remux 支持以独立可选 runtime 和 plugin
-XCFramework 形式发布，由 host app 单独签名和嵌入。SourceNormalizer
-也沿用同一个 shared runtime 边界。plugin library path 配置只传插件 binary；
-shared FFmpeg runtime 是包依赖，不放进 plugin path。所有 FFmpeg-backed optional
-plugins 与 shared runtime 必须来自同一个 FFmpeg profile，保证
-`profile-hash.txt` 一致。
+Android 打包当前仅提供 `arm64-v8a`。iOS 二进制打包仅提供 arm64 iPhoneOS
+device 与 Apple Silicon Simulator。Tagged Release 会把七个 iOS 可选 framework
+与 FFmpeg 合规包、唯一一份精确对应源码作为一个通过校验的完整集合发布；额外顶层
+asset、额外 XCFramework slice 或与源码不一致的许可材料都会使发布失败。同一 tag
+重跑时会对账 GitHub Release asset 并移除已经退役的产物。
+iOS 核心 `VesperPlayerKit.xcframework` 不嵌入 FFmpeg；可选 package 由 App
+target 将三个 FFmpeg component framework 与四个 plugin framework 签名并平铺为
+`Frameworks/` 下的兄弟项。plugin library path 只传 plugin framework
+executable，不传 FFmpeg component。所有 FFmpeg-backed 兄弟 framework 必须
+来自同一个 FFmpeg profile，保证 `profile-hash.txt` 一致。
 
 可选 SourceNormalizer、decoder 和 FrameProcessor 产物用于 diagnostics 与显式 opt-in
 工作流。移动端默认播放仍以平台系统播放器优先。HDR / Dolby Vision 保持走平台系统播放；
@@ -412,7 +415,8 @@ unsupported diagnostics。桌面端默认路径仍是 FFmpeg software fallback�
 
 Vesper 使用 Apache License, Version 2.0 授权。见 [LICENSE](LICENSE)。
 带 FFmpeg 的可选产物受 FFmpeg 自身 LGPL/GPL 条款约束，具体取决于实际构建配置，
-并单独进行跟踪。
+并单独进行跟踪。Tagged Release 中的 iOS FFmpeg-backed frameworks 必须同时附带
+合规包与唯一一份精确对应源码；这些材料不属于 Vesper 的 Apache-2.0 授权范围。
 
 额外署名与捆绑二进制说明见：
 

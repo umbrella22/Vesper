@@ -43,7 +43,9 @@ internal class VesperNativePlayerBridge(
     internal var currentSource: VesperPlayerSource? = initialSource
     internal var hasInitializedSource = false
     internal val isDisposed = AtomicBoolean(false)
+    internal val disposeCleanupStarted = AtomicBoolean(false)
     internal var nativeUpdateEpoch = 0L
+    internal var activeNativeItemEpoch: Long? = null
     internal var pendingAutoPlay = false
     internal val i18n = VesperPlayerI18n.fromContext(appContext)
     internal val mainHandler = Handler(Looper.getMainLooper())
@@ -65,6 +67,18 @@ internal class VesperNativePlayerBridge(
         ).asCoroutineDispatcher()
     internal val sourceLoadScope = CoroutineScope(SupervisorJob() + sourceLoadDispatcher)
     internal var sourceLoadJob: Job? = null
+    /** Latest-wins token for queued source-load submissions. */
+    @Volatile
+    internal var sourceLoadRequestGeneration = 0L
+    /** Monotonic source/item epoch used to invalidate stale subtitle callbacks. */
+    internal var subtitleSourceEpoch = 0L
+    internal var nextSubtitleCommandId = 0L
+    internal var pendingSubtitleSelection: PendingSubtitleSelection? = null
+    /** Selection mode last owned by the coordinator. Manual/disabled modes
+     * freeze effective state against late native callbacks; auto mode remains
+     * observable because the platform may legitimately choose another
+     * effective track after confirmation. */
+    internal var subtitleSelectionCoordinatorMode: VesperTrackSelectionMode? = null
 
     internal val _uiState = MutableStateFlow(
         PlayerHostUiState(
@@ -87,6 +101,11 @@ internal class VesperNativePlayerBridge(
     )
     internal val _trackCatalog = MutableStateFlow(VesperTrackCatalog.Empty)
     internal val _trackSelection = MutableStateFlow(VesperTrackSelectionSnapshot())
+    internal val _requestedSubtitleSelection =
+        MutableStateFlow(VesperTrackSelection.disabled())
+    internal val _confirmedSubtitleSelection =
+        MutableStateFlow(VesperTrackSelection.disabled())
+    internal val _effectiveSubtitleTrackId = MutableStateFlow<String?>(null)
     /**
      * First-class subtitle lifecycle state. Driven by catalog refresh
      * (ready/unavailable counts), structured JNI failures (failed), and
@@ -127,6 +146,12 @@ internal class VesperNativePlayerBridge(
     override val trackCatalog: StateFlow<VesperTrackCatalog> = _trackCatalog.asStateFlow()
     override val trackSelection: StateFlow<VesperTrackSelectionSnapshot> =
         _trackSelection.asStateFlow()
+    override val requestedSubtitleSelection: StateFlow<VesperTrackSelection> =
+        _requestedSubtitleSelection.asStateFlow()
+    override val confirmedSubtitleSelection: StateFlow<VesperTrackSelection> =
+        _confirmedSubtitleSelection.asStateFlow()
+    override val effectiveSubtitleTrackId: StateFlow<String?> =
+        _effectiveSubtitleTrackId.asStateFlow()
     override val subtitleState: StateFlow<VesperSubtitleState> = _subtitleState.asStateFlow()
     override val effectiveVideoTrackId: StateFlow<String?> =
         _effectiveVideoTrackId.asStateFlow()
@@ -141,6 +166,10 @@ internal class VesperNativePlayerBridge(
         }
 
     init {
+        if (bindings.isSystemPlaybackActive) {
+            hasInitializedSource = true
+            activeNativeItemEpoch = nativeUpdateEpoch
+        }
         installNativeUpdateListener()
         bindings.setOnSubtitleCuesListener(surfaceHost::updateSubtitleCues)
         // Structured JNI track-selection failures (e.g. a stale subtitle id
@@ -148,6 +177,24 @@ internal class VesperNativePlayerBridge(
         // Flutter observes a `subtitle_track_not_found` warning alongside
         // the next snapshot.
         bindings.setOnTrackSelectionFailureListener { failure ->
+            if (!hasInitializedSource || activeNativeItemEpoch != nativeUpdateEpoch) {
+                return@setOnTrackSelectionFailureListener
+            }
+            val pendingSubtitle =
+                if (failure.kind == NativeTrackKind.Subtitle) pendingSubtitleSelection else null
+            val pendingAccepted =
+                if (failure.kind == NativeTrackKind.Subtitle && pendingSubtitle != null) {
+                    failPendingSubtitleSelection(failure)
+                } else {
+                    false
+                }
+            // Subtitle failures are command-scoped. A late or unassociated
+            // callback must not affect the active transaction or warning/error
+            // streams; the bounded transaction will time out if confirmation
+            // never arrives.
+            if (failure.kind == NativeTrackKind.Subtitle && !pendingAccepted) {
+                return@setOnTrackSelectionFailureListener
+            }
             synchronized(runtimeWarnings) {
                 if (runtimeWarnings.size >= MAX_RUNTIME_WARNINGS) {
                     runtimeWarnings.removeFirst()
@@ -156,10 +203,12 @@ internal class VesperNativePlayerBridge(
                     VesperRuntimeWarning(
                         domain = "io.github.ikaros.vesper.player.trackSelection",
                         payload = mapOf(
+                            "domain" to if (failure.kind == NativeTrackKind.Subtitle) "subtitle" else "track",
                             "kind" to failure.kind.name,
                             "trackId" to failure.trackId,
                             "code" to failure.code,
                             "phase" to failure.phase,
+                            "retriable" to failure.retriable,
                             "message" to failure.message,
                         ),
                     ),
@@ -169,15 +218,23 @@ internal class VesperNativePlayerBridge(
             // subtitleState so the Flutter plugin can read it directly
             // instead of deriving from drained warnings.
             if (failure.kind == NativeTrackKind.Subtitle) {
-                val advertised = _subtitleState.value.advertisedTrackCount
-                _subtitleState.value =
-                    VesperSubtitleState.failed(
-                        advertisedTrackCount = advertised,
+                val current = _subtitleState.value
+                val phase = VesperSubtitleErrorPhase.fromWire(failure.phase)
+                _subtitleState.value = current.copy(
+                    selectionState = VesperSubtitleSelectionState.Failed,
+                    selectionError = VesperSubtitleError(
                         code = failure.code,
-                        phase = VesperSubtitleErrorPhase.Selection,
+                        phase = phase,
+                        phaseRawValue = failure.phase.takeIf {
+                            phase == VesperSubtitleErrorPhase.Unknown
+                        },
                         trackId = failure.trackId,
+                        retriable = failure.retriable,
                         message = failure.message,
-                    )
+                        commandId = pendingSubtitle?.takeIf { pendingAccepted }?.commandId,
+                        sourceEpoch = pendingSubtitle?.takeIf { pendingAccepted }?.sourceEpoch,
+                    ),
+                )
             }
         }
     }
@@ -221,7 +278,7 @@ internal class VesperNativePlayerBridge(
     override fun setAudioTrackSelection(selection: VesperTrackSelection) =
         setNativeAudioTrackSelection(selection)
 
-    override fun setSubtitleTrackSelection(selection: VesperTrackSelection) =
+    override suspend fun setSubtitleTrackSelection(selection: VesperTrackSelection) =
         setNativeSubtitleTrackSelection(selection)
 
 

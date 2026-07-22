@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - Unreleased
 
 ### Added
 
@@ -11,6 +11,8 @@
 ### Breaking Changes
 
 - The Flutter package family now requires Flutter 3.44.0 or newer.
+- External subtitle declarations now use `VesperExternalSubtitleSource` and
+  `VesperPlayerSource.externalSubtitles`; the old names are deprecated aliases.
 - Android `renderSurfaceKind: auto` now maps to `SurfaceView`; hosts that need
   the previous overlay-oriented path should pass `textureView` explicitly.
 - `VesperPlayerController.requestPictureInPicture` now treats its
@@ -23,6 +25,9 @@
   package split where SDK UI widgets use Material components.
 - Picture in Picture request and exit failures are surfaced through PiP events
   and thrown platform errors without mutating the player snapshot error state.
+- `setSubtitleTrackSelection` now awaits native confirmation and throws
+  `VesperSubtitleException` for structured subtitle failures. Snapshots expose
+  requested, confirmed, and effective subtitle selection separately.
 
 ## 0.3.0 - 2026-05-18
 

@@ -3,6 +3,7 @@ package io.github.ikaros.vesper.player.android
 import android.os.Looper
 import android.util.Log
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CountDownLatch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.NonCancellable
@@ -18,10 +19,23 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 private const val SOURCE_LOAD_CLEANUP_QUEUE_CAPACITY = 64
+private const val MAIN_THREAD_BRIDGE_TIMEOUT_MS = 3_000L
+private const val MAIN_THREAD_OPERATION_PENDING = 0
+private const val MAIN_THREAD_OPERATION_RUNNING = 1
+private const val MAIN_THREAD_OPERATION_CANCELLED = 2
+private const val MAIN_THREAD_OPERATION_COMPLETED = 3
+
+/** Result of handing a bounded owner-thread mutation to the main looper. */
+internal enum class MainThreadRunResult {
+    Completed,
+    Cancelled,
+    Started,
+}
 
 private object VesperSourceLoadCleanupDispatcher {
     private val threadIndex = AtomicInteger(0)
@@ -51,13 +65,20 @@ private data class NativeSourceLoadPreparation(
 )
 
 internal fun VesperNativePlayerBridge.initializeNativeBridge() {
-    if (isDisposed.get()) {
-        return
+    if (runOnMainSynchronously("initialize") {
+            if (!isDisposed.get()) {
+                launchSourceLoad { initializeNativeBridgeAsync() }
+            }
+        }
+        == MainThreadRunResult.Cancelled
+    ) {
+        throw mainThreadBridgeTimeout("initialize")
     }
-    launchSourceLoad { initializeNativeBridgeAsync() }
 }
 
-internal suspend fun VesperNativePlayerBridge.initializeNativeBridgeAsync() {
+internal suspend fun VesperNativePlayerBridge.initializeNativeBridgeAsync(
+    preservedConfirmedSubtitleSelection: VesperTrackSelection? = null,
+) {
     if (isDisposed.get()) {
         return
     }
@@ -76,7 +97,11 @@ internal suspend fun VesperNativePlayerBridge.initializeNativeBridgeAsync() {
     }
     val nativeFrameDecision =
         runOnMainForSourceLoad {
-            prepareSourceLoadOnMain(epoch, source)
+            prepareSourceLoadOnMain(
+                epoch,
+                source,
+                preservedConfirmedSubtitleSelection,
+            )
         } ?: return
     if (nativeFrameDecision is NativeFramePipelineRoute.Fail) {
         return
@@ -193,9 +218,31 @@ private fun VesperNativePlayerBridge.handleInitializeWithoutSource() {
 private fun VesperNativePlayerBridge.prepareSourceLoadOnMain(
     epoch: Long,
     source: VesperPlayerSource,
+    preservedConfirmedSubtitleSelection: VesperTrackSelection? = null,
 ): NativeFramePipelineRoute? {
     if (!isCurrentSourceLoad(epoch) || currentSource != source) {
         return null
+    }
+    // Invalidate the current Media3 item before background preparation. No
+    // listener callback or subtitle command may observe the old item while a
+    // replacement source/item is being prepared.
+    bindings.invalidateSystemPlaybackCallbacks()
+    clearTrackState()
+    _subtitleState.value =
+        VesperSubtitleState.loading(
+            advertisedTrackCount = source.externalSubtitles.size,
+        )
+    preservedConfirmedSubtitleSelection?.let { confirmedSelection ->
+        _confirmedSubtitleSelection.value = confirmedSelection
+        // Keep native refreshes from publishing a replacement item's default
+        // subtitle before the restore transaction confirms the preserved
+        // selection. `applySubtitleSelectionTransaction` will retain the same
+        // mode (or clear it when the restore fails/source changes).
+        subtitleSelectionCoordinatorMode = confirmedSelection.mode
+        _trackSelection.value = _trackSelection.value.copy(
+            confirmedSubtitle = confirmedSelection,
+            effectiveSubtitleTrackId = null,
+        )
     }
     recordBenchmark("initialize_start")
     currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(emptyList())
@@ -288,7 +335,6 @@ private fun VesperNativePlayerBridge.applyPreparedSourceLoadOnMain(
         return
     }
     currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(preparation.pluginDiagnostics)
-    advanceNativeUpdateEpoch()
     runCatching {
         bindings.initialize(
             source,
@@ -313,6 +359,8 @@ private fun VesperNativePlayerBridge.applyPreparedSourceLoadOnMain(
             }
             recordBenchmark("initialize_completed")
             hasInitializedSource = true
+            activeNativeItemEpoch = nativeUpdateEpoch
+            installNativeUpdateListener()
             Log.i(
                 NATIVE_PLAYER_BRIDGE_TAG,
                 "initialized source=${source.uri} label=${source.label} kind=${source.kind} protocol=${source.protocol} decoderBackend=$decoderBackend",
@@ -408,6 +456,22 @@ internal fun VesperNativePlayerBridge.disposeNativeBridge() {
         return
     }
     sourceLoadEpoch.incrementAndGet()
+    sourceLoadRequestGeneration += 1L
+    val completed = runOnMainSynchronously("dispose") {
+        disposeNativeBridgeOnMain()
+    }
+    if (completed == MainThreadRunResult.Cancelled) {
+        // The bridge is already atomically closed to new work. Keep cleanup
+        // queued on the owner looper instead of touching Media3 or Views from
+        // the caller thread after the bounded synchronous wait expires.
+        mainHandler.post { disposeNativeBridgeOnMain() }
+    }
+}
+
+private fun VesperNativePlayerBridge.disposeNativeBridgeOnMain() {
+    if (!disposeCleanupStarted.compareAndSet(false, true)) return
+    cancelPendingSubtitleSelectionForDispose()
+    sourceLoadEpoch.incrementAndGet()
     advanceNativeUpdateEpoch(clearListener = true)
     hasInitializedSource = false
     stopNativeFramePipelinePump()
@@ -434,65 +498,86 @@ internal fun VesperNativePlayerBridge.disposeNativeBridge() {
 }
 
 internal fun VesperNativePlayerBridge.refreshNativeBridge() {
-    if (isDisposed.get()) {
-        return
+    if (runOnMainSynchronously("refresh") {
+            if (isDisposed.get()) {
+                return@runOnMainSynchronously
+            }
+            bindings.refreshSnapshot()
+            refreshFromNative()
+        }
+        == MainThreadRunResult.Cancelled
+    ) {
+        throw mainThreadBridgeTimeout("refresh")
     }
-    bindings.refreshSnapshot()
-    refreshFromNative()
 }
 
 internal fun VesperNativePlayerBridge.selectNativeSource(source: VesperPlayerSource) {
     if (isDisposed.get()) {
         return
     }
-    launchSourceLoad { selectNativeSourceAsync(source) }
+    val completed = runOnMainSynchronously("selectSource") {
+        if (beginNativeSourceSelectionOnMain(source)) {
+            launchSourceLoad { initializeNativeBridgeAsync() }
+        }
+    }
+    if (completed == MainThreadRunResult.Cancelled) {
+        throw mainThreadBridgeTimeout("selectSource")
+    }
 }
 
 internal suspend fun VesperNativePlayerBridge.selectNativeSourceAsync(source: VesperPlayerSource) {
     if (isDisposed.get()) {
         return
     }
-    runOnMainForSourceLoad {
-        sourceLoadEpoch.incrementAndGet()
-        recordBenchmark(
-            "select_source_start",
-            mapOf("targetProtocol" to source.protocol.name.lowercase()),
-        )
-        stopNativeFramePipelinePump()
-        releasePendingTimedNativeFrameOnRuntime(presented = false)
-        closeNativeFramePipelineOnRuntime()
-        nativeFramePipelineOpenStatus = null
-        nativeFramePipelineLastStatus = null
-        clearPendingTimedNativeFrameFromRuntime()
-        resetNativeFramePipelineRuntimeMarkers()
-        currentSource = source
-        pendingAutoPlay = true
-        clearTrackState()
-        // Subtitle state and runtime warnings must atomically reset on source
-        // epoch change so a stale `subtitle_track_not_found`
-        // from the previous source does not bleed into the new source's
-        // snapshot.
-        synchronized(runtimeWarnings) { runtimeWarnings.clear() }
-        _subtitleState.value = VesperSubtitleState.loading(advertisedTrackCount = 0)
-        Log.i(
-            NATIVE_PLAYER_BRIDGE_TAG,
-            "selecting source=${source.uri} label=${source.label} kind=${source.kind} protocol=${source.protocol}",
-        )
-        updateState {
-            copy(
-                subtitle = i18n.openingSource(source.label),
-                sourceLabel = source.label,
-                playbackState = PlaybackStateUi.Ready,
-                isBuffering = true,
-                timeline = timeline.copy(positionMs = 0L),
-                lastError = null,
-            )
-        }
-    }
+    val started = runOnMainForSourceLoad { beginNativeSourceSelectionOnMain(source) }
+    if (!started || isDisposed.get()) return
     initializeNativeBridgeAsync()
 }
 
+private fun VesperNativePlayerBridge.beginNativeSourceSelectionOnMain(
+    source: VesperPlayerSource,
+): Boolean {
+    if (isDisposed.get()) return false
+    sourceLoadEpoch.incrementAndGet()
+    recordBenchmark(
+        "select_source_start",
+        mapOf("targetProtocol" to source.protocol.name.lowercase()),
+    )
+    stopNativeFramePipelinePump()
+    releasePendingTimedNativeFrameOnRuntime(presented = false)
+    closeNativeFramePipelineOnRuntime()
+    nativeFramePipelineOpenStatus = null
+    nativeFramePipelineLastStatus = null
+    clearPendingTimedNativeFrameFromRuntime()
+    resetNativeFramePipelineRuntimeMarkers()
+    currentSource = source
+    pendingAutoPlay = true
+    // Fence the previous Media3 item and cancel its pending subtitle command
+    // before either source API returns.
+    bindings.invalidateSystemPlaybackCallbacks()
+    clearTrackState()
+    synchronized(runtimeWarnings) { runtimeWarnings.clear() }
+    _subtitleState.value =
+        VesperSubtitleState.loading(advertisedTrackCount = source.externalSubtitles.size)
+    Log.i(
+        NATIVE_PLAYER_BRIDGE_TAG,
+        "selecting source=${source.uri} label=${source.label} kind=${source.kind} protocol=${source.protocol}",
+    )
+    updateState {
+        copy(
+            subtitle = i18n.openingSource(source.label),
+            sourceLabel = source.label,
+            playbackState = PlaybackStateUi.Ready,
+            isBuffering = true,
+            timeline = timeline.copy(positionMs = 0L),
+            lastError = null,
+        )
+    }
+    return true
+}
+
 internal fun VesperNativePlayerBridge.launchSourceLoad(block: suspend () -> Unit) {
+    val requestGeneration = ++sourceLoadRequestGeneration
     sourceLoadJob?.cancel()
     sourceLoadJob =
         try {
@@ -506,7 +591,45 @@ internal fun VesperNativePlayerBridge.launchSourceLoad(block: suspend () -> Unit
                     }
             }
         } catch (error: RejectedExecutionException) {
-            Log.w(NATIVE_PLAYER_BRIDGE_TAG, "source load queue rejected superseded work", error)
+            Log.w(NATIVE_PLAYER_BRIDGE_TAG, "source load queue rejected work", error)
+            // A rejected latest load must not leave the source permanently in
+            // the loading state. Surface a bounded, structured failure on the
+            // owner thread so callers can retry or choose another source.
+            val source = currentSource
+            if (!isDisposed.get() && source != null) {
+                mainHandler.post {
+                    if (!isDisposed.get() &&
+                        currentSource == source &&
+                        sourceLoadRequestGeneration == requestGeneration
+                    ) {
+                        val failure =
+                            VesperPlayerUnsupportedOperation(
+                                "the Android source-load queue is full",
+                                mapOf(
+                                    "domain" to "source",
+                                    "code" to "source_load_queue_full",
+                                    "phase" to "source",
+                                    "reason" to "sourceLoadQueueFull",
+                                    "operation" to "initialize",
+                                    "retriable" to true,
+                                ),
+                            )
+                        if (hasInitializedSource) {
+                            // A refresh of an already healthy item must not
+                            // tear down playback merely because a superseded
+                            // background preparation was rejected.
+                            updateState {
+                                copy(
+                                    lastError = failure.toPlayerErrorState(),
+                                    isBuffering = false,
+                                )
+                            }
+                        } else {
+                            handleInitializeFailureOnMain(source, failure)
+                        }
+                    }
+                }
+            }
             null
         }
 }
@@ -532,20 +655,123 @@ internal suspend fun <T> VesperNativePlayerBridge.runOnMainForSourceLoad(block: 
         return block()
     }
     return suspendCancellableCoroutine { continuation ->
+        val gate = Any()
         val runnable =
             Runnable {
-                if (!continuation.isActive) {
-                    return@Runnable
+                synchronized(gate) {
+                    if (!continuation.isActive) {
+                        return@Runnable
+                    }
+                    runCatching(block)
+                        .onSuccess { value -> continuation.resume(value) }
+                        .onFailure { error -> continuation.resumeWithException(error) }
                 }
-                runCatching(block)
-                    .onSuccess { value -> continuation.resume(value) }
-                    .onFailure { error -> continuation.resumeWithException(error) }
             }
+        continuation.invokeOnCancellation {
+            // Do not leave cancelled source-load continuations queued on the
+            // main looper. Rapid source refreshes otherwise accumulate no-op
+            // callbacks even though the source-load dispatcher is bounded.
+            synchronized(gate) {
+                mainHandler.removeCallbacks(runnable)
+            }
+        }
         if (!mainHandler.post(runnable)) {
-            runnable.run()
+            continuation.resumeWithException(
+                IllegalStateException("the Android main looper rejected a player lifecycle command"),
+            )
         }
     }
 }
+
+/**
+ * Runs a short owner-thread mutation with a bounded wait for synchronous APIs.
+ * A timeout leaves the mutation unapplied and reports failure to the caller;
+ * it never falls back to touching Media3 or Android Views off-main.
+ */
+internal fun VesperNativePlayerBridge.runOnMainSynchronously(
+    operation: String,
+    block: () -> Unit,
+): MainThreadRunResult {
+    val mainLooper = Looper.getMainLooper()
+    if (mainLooper == null || Looper.myLooper() == mainLooper) {
+        block()
+        return MainThreadRunResult.Completed
+    }
+    val completion = CountDownLatch(1)
+    val failure = AtomicReference<Throwable?>()
+    // The timeout and the main-looper runnable claim the operation through a
+    // single CAS. This closes the removeCallbacks race where a runnable that
+    // had already started could mutate player state after the caller reported
+    // a timeout.
+    val operationState = AtomicInteger(MAIN_THREAD_OPERATION_PENDING)
+    val runnable = Runnable {
+        if (!operationState.compareAndSet(
+                MAIN_THREAD_OPERATION_PENDING,
+                MAIN_THREAD_OPERATION_RUNNING,
+            )
+        ) {
+            completion.countDown()
+            return@Runnable
+        }
+        try {
+            block()
+        } catch (error: Throwable) {
+            failure.set(error)
+            Log.e(NATIVE_PLAYER_BRIDGE_TAG, "$operation failed on the main looper", error)
+        } finally {
+            operationState.set(MAIN_THREAD_OPERATION_COMPLETED)
+            completion.countDown()
+        }
+    }
+    if (!mainHandler.post(runnable)) {
+        Log.e(NATIVE_PLAYER_BRIDGE_TAG, "$operation rejected by the main looper")
+        return MainThreadRunResult.Cancelled
+    }
+    val completed = completion.await(MAIN_THREAD_BRIDGE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+    if (!completed) {
+        if (operationState.compareAndSet(
+                MAIN_THREAD_OPERATION_PENDING,
+                MAIN_THREAD_OPERATION_CANCELLED,
+            )
+        ) {
+            mainHandler.removeCallbacks(runnable)
+            Log.e(
+                NATIVE_PLAYER_BRIDGE_TAG,
+                "$operation did not reach the main looper within ${MAIN_THREAD_BRIDGE_TIMEOUT_MS}ms",
+            )
+            return MainThreadRunResult.Cancelled
+        }
+        // The owner thread claimed the operation before the timeout. Do not
+        // report failure while its mutation is still in flight; doing so would
+        // let callers start a replacement operation against partially updated
+        // state. The owner thread owns completion and records any exception.
+        Log.w(
+            NATIVE_PLAYER_BRIDGE_TAG,
+            "$operation was already running when the synchronous wait expired",
+        )
+        // Give an operation that has already claimed the owner thread one
+        // additional bounded window to finish. This preserves exception
+        // propagation for slow-but-finite lifecycle work without returning a
+        // false timeout while the mutation is still in flight.
+        if (completion.await(MAIN_THREAD_BRIDGE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            failure.get()?.let { throw it }
+            return MainThreadRunResult.Completed
+        }
+        Log.e(
+            NATIVE_PLAYER_BRIDGE_TAG,
+            "$operation remains in flight after the bounded owner-thread grace window",
+        )
+        return MainThreadRunResult.Started
+    }
+    failure.get()?.let { throw it }
+    return MainThreadRunResult.Completed
+}
+
+internal fun mainThreadBridgeTimeout(operation: String): IllegalStateException =
+    IllegalStateException(
+        "$operation did not reach the Android main thread within " +
+            "${MAIN_THREAD_BRIDGE_TIMEOUT_MS}ms",
+    )
 
 private fun Throwable.toInitializePlayerErrorState(message: String): VesperPlayerErrorState =
     when (this) {

@@ -22,7 +22,7 @@ use player_runtime::{
     PlaylistPreloadWindow, PlaylistQueueItem, PlaylistRepeatMode, PlaylistSwitchPolicy,
     PlaylistViewportHint, PlaylistViewportHintKind, PreloadBudgetScope, PreloadCandidate,
     PreloadCandidateKind, PreloadConfig, PreloadPriority, PreloadSelectionHint,
-    PreloadTaskSnapshot,
+    PreloadTaskSnapshot, SubtitleErrorDetails,
 };
 
 use crate::*;
@@ -581,11 +581,17 @@ pub(crate) fn read_playlist_viewport_hint(
 
 pub(crate) fn player_error_to_ffi(error: PlayerError) -> PlayerFfiError {
     let (code, category) = map_player_error(&error);
+    let details_json = error
+        .subtitle_details()
+        .map(subtitle_details_json)
+        .map(into_c_string_ptr)
+        .unwrap_or(std::ptr::null_mut());
     PlayerFfiError {
         code,
         category,
         retriable: error.is_retriable(),
         message: into_c_string_ptr(error.message().to_owned()),
+        details_json,
     }
 }
 
@@ -1358,7 +1364,59 @@ pub(crate) fn owned_api_error(code: PlayerFfiErrorCode, message: &str) -> Player
         category: api_error_category(code),
         retriable: false,
         message: into_c_string_ptr(message.to_owned()),
+        details_json: std::ptr::null_mut(),
     }
+}
+
+pub(crate) fn dash_bridge_error_to_ffi(
+    error: &player_dash_hls_bridge::DashHlsError,
+) -> PlayerFfiError {
+    let mut ffi_error = owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string());
+    if let Some(details) = error.subtitle_details() {
+        ffi_error.retriable = details.retriable;
+        ffi_error.details_json = into_c_string_ptr(subtitle_details_json(details));
+        free_c_string(&mut ffi_error.message);
+        ffi_error.message = into_c_string_ptr(details.message.clone());
+    } else {
+        let (code, phase) = match error {
+            player_dash_hls_bridge::DashHlsError::InvalidMpd(_) => {
+                ("dash_manifest_invalid", "manifest")
+            }
+            player_dash_hls_bridge::DashHlsError::UnsupportedMpd(_) => {
+                ("dash_manifest_unsupported", "manifest")
+            }
+            player_dash_hls_bridge::DashHlsError::InvalidMp4(_) => ("dash_mp4_invalid", "resource"),
+            player_dash_hls_bridge::DashHlsError::UnsupportedMp4(_) => {
+                ("dash_mp4_unsupported", "resource")
+            }
+            player_dash_hls_bridge::DashHlsError::InvalidHlsInput(_) => {
+                ("dash_hls_input_invalid", "manifest")
+            }
+            player_dash_hls_bridge::DashHlsError::Subtitle { .. } => ("dash_error", "unknown"),
+        };
+        let details_json = serde_json::json!({
+            "domain": "dash",
+            "code": code,
+            "phase": phase,
+            "retriable": false,
+            "message": error.to_string(),
+        })
+        .to_string();
+        ffi_error.details_json = into_c_string_ptr(details_json);
+    }
+    ffi_error
+}
+
+fn subtitle_details_json(details: &SubtitleErrorDetails) -> String {
+    let mut payload = match serde_json::to_value(details) {
+        Ok(serde_json::Value::Object(payload)) => payload,
+        _ => serde_json::Map::new(),
+    };
+    payload.insert(
+        "domain".to_owned(),
+        serde_json::Value::String("subtitle".to_owned()),
+    );
+    serde_json::Value::Object(payload).to_string()
 }
 
 pub(crate) fn api_error_category(code: PlayerFfiErrorCode) -> PlayerFfiErrorCategory {
@@ -1423,6 +1481,7 @@ pub(crate) fn owned_panic_error(payload: Box<dyn Any + Send>) -> PlayerFfiError 
 pub(crate) fn write_error(out_error: *mut PlayerFfiError, mut error: PlayerFfiError) {
     if out_error.is_null() {
         free_c_string(&mut error.message);
+        free_c_string(&mut error.details_json);
         return;
     }
 

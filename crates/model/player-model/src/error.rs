@@ -1,6 +1,60 @@
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
+use serde::{Deserialize, Serialize};
+
+/// Structured subtitle failure details shared by runtime and native bindings.
+///
+/// `code` and `phase` remain strings so newer values cross an older host
+/// without being discarded. Consumers validate known values while preserving
+/// the raw wire value for diagnostics and forward compatibility.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtitleErrorDetails {
+    pub code: String,
+    pub phase: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_id: Option<String>,
+    pub retriable: bool,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_epoch: Option<u64>,
+}
+
+impl SubtitleErrorDetails {
+    pub fn new(
+        code: impl Into<String>,
+        phase: impl Into<String>,
+        track_id: Option<String>,
+        retriable: bool,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            phase: phase.into(),
+            track_id,
+            retriable,
+            message: message.into(),
+            command_id: None,
+            source_epoch: None,
+        }
+    }
+
+    pub fn with_transaction(mut self, command_id: Option<u64>, source_epoch: Option<u64>) -> Self {
+        self.command_id = command_id;
+        self.source_epoch = source_epoch;
+        self
+    }
+}
+
+impl Display for SubtitleErrorDetails {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.code, self.message)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerErrorCode {
     InvalidArgument,
@@ -35,6 +89,7 @@ pub struct PlayerError {
     category: PlayerErrorCategory,
     retriable: bool,
     message: String,
+    subtitle_details: Option<SubtitleErrorDetails>,
 }
 
 pub type PlayerResult<T> = Result<T, PlayerError>;
@@ -47,6 +102,7 @@ impl PlayerError {
             category,
             retriable,
             message: message.into(),
+            subtitle_details: None,
         }
     }
 
@@ -60,6 +116,7 @@ impl PlayerError {
             category,
             retriable: default_retriable_for_category(category),
             message: message.into(),
+            subtitle_details: None,
         }
     }
 
@@ -74,7 +131,21 @@ impl PlayerError {
             category,
             retriable,
             message: message.into(),
+            subtitle_details: None,
         }
+    }
+
+    /// Attaches a structured subtitle failure to this runtime error.
+    pub fn with_subtitle_details(mut self, details: SubtitleErrorDetails) -> Self {
+        self.retriable = details.retriable;
+        self.message = details.message.clone();
+        self.subtitle_details = Some(details);
+        self
+    }
+
+    /// Returns structured subtitle details when this error crossed a subtitle boundary.
+    pub fn subtitle_details(&self) -> Option<&SubtitleErrorDetails> {
+        self.subtitle_details.as_ref()
     }
 
     pub fn command_channel_closed() -> Self {
@@ -144,7 +215,7 @@ fn default_retriable_for_category(category: PlayerErrorCategory) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{PlayerError, PlayerErrorCategory, PlayerErrorCode};
+    use super::{PlayerError, PlayerErrorCategory, PlayerErrorCode, SubtitleErrorDetails};
 
     #[test]
     fn player_error_defaults_to_legacy_code_taxonomy() {
@@ -226,5 +297,45 @@ mod tests {
         assert_eq!(event.code(), PlayerErrorCode::EventChannelClosed);
         assert_eq!(event.category(), PlayerErrorCategory::Playback);
         assert!(!event.is_retriable());
+    }
+
+    #[test]
+    fn subtitle_details_preserve_unknown_wire_values_and_transaction_identity() {
+        let details = SubtitleErrorDetails::new(
+            "future_subtitle_code",
+            "future_phase",
+            Some("opaque-track".to_owned()),
+            true,
+            "future subtitle failure",
+        )
+        .with_transaction(Some(42), Some(9));
+        let json = serde_json::to_string(&details).expect("serialize details");
+        let decoded: SubtitleErrorDetails =
+            serde_json::from_str(&json).expect("deserialize details");
+
+        assert_eq!(decoded, details);
+        assert!(json.contains("future_subtitle_code"));
+        assert!(json.contains("future_phase"));
+    }
+
+    #[test]
+    fn attaching_subtitle_details_keeps_outer_error_consistent() {
+        let error = PlayerError::new(PlayerErrorCode::InvalidArgument, "outer")
+            .with_subtitle_details(SubtitleErrorDetails::new(
+                "subtitle_selection_timeout",
+                "selection",
+                None,
+                true,
+                "typed timeout",
+            ));
+
+        assert_eq!(error.message(), "typed timeout");
+        assert!(error.is_retriable());
+        assert_eq!(
+            error
+                .subtitle_details()
+                .map(|details| details.code.as_str()),
+            Some("subtitle_selection_timeout")
+        );
     }
 }

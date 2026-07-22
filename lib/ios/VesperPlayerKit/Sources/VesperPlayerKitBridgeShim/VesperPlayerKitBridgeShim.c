@@ -145,6 +145,7 @@ typedef struct PlayerFfiError {
   PlayerFfiErrorCategory category;
   bool retriable;
   char *message;
+  char *details_json;
 } PlayerFfiError;
 
 extern PlayerFfiCallStatus player_ffi_resolve_resilience_policy(
@@ -3339,12 +3340,16 @@ void vesper_ios_native_frame_pipeline_close(uint64_t handle) {
 bool vesper_dash_bridge_execute_json(
     const char *request_json,
     char **out_json,
-    char **out_error_message) {
+    char **out_error_message,
+    char **out_error_details_json) {
   if (request_json == NULL || out_json == NULL) {
     return false;
   }
   if (out_error_message != NULL) {
     *out_error_message = NULL;
+  }
+  if (out_error_details_json != NULL) {
+    *out_error_details_json = NULL;
   }
   *out_json = NULL;
 
@@ -3360,6 +3365,10 @@ bool vesper_dash_bridge_execute_json(
       *out_error_message = ffi_error.message;
       ffi_error.message = NULL;
     }
+    if (out_error_details_json != NULL) {
+      *out_error_details_json = ffi_error.details_json;
+      ffi_error.details_json = NULL;
+    }
     player_ffi_error_free(&ffi_error);
     return false;
   }
@@ -3370,12 +3379,16 @@ bool vesper_dash_bridge_parse_sidx(
     const uint8_t *data,
     uintptr_t data_len,
     char **out_json,
-    char **out_error_message) {
+    char **out_error_message,
+    char **out_error_details_json) {
   if ((data == NULL && data_len > 0) || out_json == NULL) {
     return false;
   }
   if (out_error_message != NULL) {
     *out_error_message = NULL;
+  }
+  if (out_error_details_json != NULL) {
+    *out_error_details_json = NULL;
   }
   *out_json = NULL;
 
@@ -3391,6 +3404,10 @@ bool vesper_dash_bridge_parse_sidx(
     if (out_error_message != NULL) {
       *out_error_message = ffi_error.message;
       ffi_error.message = NULL;
+    }
+    if (out_error_details_json != NULL) {
+      *out_error_details_json = ffi_error.details_json;
+      ffi_error.details_json = NULL;
     }
     player_ffi_error_free(&ffi_error);
     return false;

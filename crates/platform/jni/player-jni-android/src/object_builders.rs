@@ -221,14 +221,23 @@ pub(crate) fn host_event_object<'local>(
             let class = env.find_class(jni_name(format!("{PKG}/NativeBridgeEvent$Error")))?;
             let message = env.new_string(format!("[{code:?}] {message}"))?;
             let message_object = JObject::from(message);
+            let details = env
+                .call_static_method(
+                    jni_name("java/util/Collections"),
+                    jni_name("emptyMap"),
+                    method_sig("()Ljava/util/Map;").method_signature(),
+                    &[],
+                )?
+                .l()?;
             env.new_object(
                 class,
-                method_sig("(Ljava/lang/String;IIZ)V").method_signature(),
+                method_sig("(Ljava/lang/String;IIZLjava/util/Map;)V").method_signature(),
                 &[
                     JValue::Object(&message_object),
                     JValue::Int(*code as jint),
                     JValue::Int(*category as jint),
                     JValue::Bool(*retriable),
+                    JValue::Object(&details),
                 ],
             )
         }

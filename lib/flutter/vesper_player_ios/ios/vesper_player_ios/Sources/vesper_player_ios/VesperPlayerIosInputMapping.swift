@@ -34,7 +34,9 @@ extension Dictionary where Key == String, Value == Any {
         let headers = stringMap(self["headers"])
         let drmConfiguration = try nestedMap(self["drmConfiguration"])?
             .toVesperPlayerDrmConfiguration()
-        let subtitleConfigurations = try subtitleSideLoads(self["subtitleConfigurations"])
+        let subtitleConfigurations = try externalSubtitleSources(
+            self["externalSubtitles"] ?? self["subtitleConfigurations"]
+        )
         return try VesperPlayerSource(
             uri: uri,
             label: label,
@@ -42,7 +44,7 @@ extension Dictionary where Key == String, Value == Any {
             protocol: `protocol`,
             headers: headers,
             drmConfiguration: drmConfiguration,
-            subtitleConfigurations: subtitleConfigurations
+            externalSubtitles: subtitleConfigurations
         )
         .validatedForIosBackend()
     }
@@ -79,7 +81,9 @@ extension Dictionary where Key == String, Value == Any {
         let headers = stringMap(self["headers"])
         let drmConfiguration = try nestedMap(self["drmConfiguration"])?
             .toVesperPlayerDrmConfiguration()
-        let subtitleConfigurations = try subtitleSideLoads(self["subtitleConfigurations"])
+        let subtitleConfigurations = try externalSubtitleSources(
+            self["externalSubtitles"] ?? self["subtitleConfigurations"]
+        )
         return try VesperPlayerSource(
             uri: uri,
             label: label,
@@ -87,7 +91,7 @@ extension Dictionary where Key == String, Value == Any {
             protocol: `protocol`,
             headers: headers,
             drmConfiguration: drmConfiguration,
-            subtitleConfigurations: subtitleConfigurations
+            externalSubtitles: subtitleConfigurations
         )
     }
 
@@ -161,16 +165,37 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 
-    func toTrackSelection() throws -> VesperTrackSelection {
-        switch self["mode"] as? String {
+    func toTrackSelection(isSubtitle: Bool = false) throws -> VesperTrackSelection {
+        let mode = self["mode"] as? String
+        switch mode {
+        case "auto":
+            return .auto()
         case "disabled":
             return .disabled()
         case "track":
-            guard let trackId = self["trackId"] as? String, !trackId.isEmpty else {
+            guard let trackId = self["trackId"] as? String,
+                  !trackId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                if isSubtitle {
+                    throw PluginSubtitleError(
+                        code: "subtitle_selection_invalid",
+                        phase: "selection",
+                        message: "Missing trackId for subtitle track selection."
+                    )
+                }
                 throw PluginError.invalidTrackSelection("Missing trackId for track selection.")
             }
             return .track(trackId)
         default:
+            if isSubtitle {
+                let modeDescription = mode ?? "<missing>"
+                throw PluginSubtitleError(
+                    code: "subtitle_selection_invalid",
+                    phase: "selection",
+                    trackId: self["trackId"] as? String,
+                    message: "Unknown subtitle selection mode: \(modeDescription)."
+                )
+            }
             return .auto()
         }
     }
@@ -207,7 +232,8 @@ extension Dictionary where Key == String, Value == Any {
     func toTrackPreferencePolicy() throws -> VesperTrackPreferencePolicy {
         let audioSelection = try (nestedMap(self["audioSelection"])?.toTrackSelection()) ?? .auto()
         let subtitleSelection =
-            try (nestedMap(self["subtitleSelection"])?.toTrackSelection()) ?? .disabled()
+            try (nestedMap(self["subtitleSelection"])?.toTrackSelection(isSubtitle: true))
+                ?? .disabled()
         let abrPolicy = try (nestedMap(self["abrPolicy"])?.toAbrPolicy()) ?? .auto()
         return VesperTrackPreferencePolicy(
             preferredAudioLanguage: self["preferredAudioLanguage"] as? String,
@@ -559,33 +585,37 @@ extension Dictionary where Key == String, Value == Any {
 }
 
 
-private func subtitleSideLoads(_ value: Any?) throws -> [VesperSubtitleSideLoad] {
-    guard let values = value as? [Any] else { return [] }
+private func externalSubtitleSources(_ value: Any?) throws -> [VesperExternalSubtitleSource] {
+    guard let value else { return [] }
+    guard let values = value as? [Any] else {
+        throw PluginError.invalidSource("externalSubtitles must be a list.")
+    }
     return try values.map { value in
         guard let map = value as? [String: Any],
               let uri = map["uri"] as? String,
-              !uri.isEmpty
+              !uri.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
-            throw PluginError.invalidSource("Invalid subtitleConfigurations entry.")
+            throw PluginError.invalidSource("Invalid externalSubtitles entry.")
         }
-        let rawMime = (map["mimeType"] as? String)?.lowercased()
-            ?? VesperSubtitleMimeType.subrip.rawMime
-        let mimeType: VesperSubtitleMimeType
-        switch rawMime {
-        case "application/x-subrip", "application/srt":
-            mimeType = .subrip
-        case "text/vtt":
-            mimeType = .webvtt
-        case "text/x-ssa", "text/x-ass":
-            mimeType = .ssa
-        default:
-            throw PluginError.invalidSource("Unsupported subtitle MIME type: \(rawMime).")
+        guard let id = map["id"] as? String,
+              !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw PluginError.invalidSource("Missing external subtitle id.")
         }
-        return VesperSubtitleSideLoad(
+        let mimeType = map["mimeType"] as? String
+            ?? VesperExternalSubtitleSource.mimeSubrip
+        guard !mimeType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw PluginError.invalidSource("External subtitle MIME type must not be blank.")
+        }
+        return VesperExternalSubtitleSource(
+            id: id,
             uri: uri,
             mimeType: mimeType,
             language: map["language"] as? String,
-            label: map["label"] as? String
+            label: map["label"] as? String,
+            headers: stringMap(map["headers"]),
+            isDefault: map["isDefault"] as? Bool ?? false,
+            isForced: map["isForced"] as? Bool ?? false
         )
     }
 }

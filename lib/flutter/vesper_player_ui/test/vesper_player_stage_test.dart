@@ -226,7 +226,7 @@ void main() {
   });
 }
 
-const _playingSnapshot = VesperPlayerSnapshot(
+final _playingSnapshot = VesperPlayerSnapshot(
   title: 'Sample',
   subtitle: '',
   sourceLabel: '',

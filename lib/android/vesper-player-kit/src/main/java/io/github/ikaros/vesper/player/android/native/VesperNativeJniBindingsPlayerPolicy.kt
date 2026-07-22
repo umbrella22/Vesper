@@ -39,7 +39,10 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 import java.io.File
 import java.net.URI
@@ -234,24 +237,154 @@ internal fun buildMediaItem(source: VesperPlayerSource): MediaItem {
 
     // Side-loaded external subtitles (SRT/ASS/WebVTT). ExoPlayer's TextRenderer
     // parses and renders them; Vesper only forwards the URIs and MIME types.
-    if (source.subtitleConfigurations.isNotEmpty()) {
-        builder.setSubtitleConfigurations(
-            source.subtitleConfigurations.mapIndexed { index, sideLoad ->
-                MediaItem.SubtitleConfiguration.Builder(Uri.parse(sideLoad.uri))
-                    .setMimeType(sideLoad.mimeType)
-                    .apply {
-                        if (index == 0) {
-                            setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                        }
-                        sideLoad.language?.let { setLanguage(it) }
-                        sideLoad.label?.let { setLabel(it) }
-                    }
-                    .build()
-            }
-        )
+    if (source.externalSubtitles.isNotEmpty()) {
+        val ids = source.externalSubtitles.map { it.id }
+        if (ids.any(String::isBlank) || ids.toSet().size != ids.size) {
+            throw VesperPlayerUnsupportedOperation(
+                "External subtitle ids must be non-empty and unique within a source.",
+                mapOf(
+                    "domain" to "subtitle",
+                    "code" to "subtitle_track_identity_ambiguous",
+                    "phase" to "identity",
+                    "trackId" to null,
+                    "retriable" to false,
+                    "message" to "external subtitle ids must be non-empty and unique within a source",
+                ),
+            )
+        }
+        if (source.externalSubtitles.count { it.isDefault } > 1) {
+            throw VesperPlayerUnsupportedOperation(
+                "A subtitle group may contain at most one default track.",
+                mapOf(
+                    "domain" to "subtitle",
+                    "code" to "subtitle_default_track_ambiguous",
+                    "phase" to "identity",
+                    "trackId" to null,
+                    "retriable" to false,
+                    "message" to "a subtitle group may contain at most one default track",
+                ),
+            )
+        }
+        builder.setSubtitleConfigurations(source.externalSubtitles.map(::buildExternalSubtitleConfiguration))
     }
 
     return builder.build()
+}
+
+internal fun buildExternalSubtitleConfiguration(
+    source: VesperExternalSubtitleSource,
+): MediaItem.SubtitleConfiguration =
+    MediaItem.SubtitleConfiguration.Builder(Uri.parse(source.uri))
+        .setId(source.id)
+        .setMimeType(source.mimeType)
+        .apply {
+            var flags = 0
+            if (source.isDefault) flags = flags or C.SELECTION_FLAG_DEFAULT
+            if (source.isForced) flags = flags or C.SELECTION_FLAG_FORCED
+            setSelectionFlags(flags)
+            source.language?.let(::setLanguage)
+            source.label?.let(::setLabel)
+        }
+        .build()
+
+internal data class PreparedExternalSubtitleMediaSources(
+    val mediaSources: List<MediaSource>,
+    val activeSources: List<VesperExternalSubtitleSource>,
+    val failures: List<NativeTrackSelectionFailure>,
+)
+
+internal fun prepareExternalSubtitleMediaSources(
+    appContext: Context,
+    cachePolicy: NativeCachePolicy,
+    sources: List<VesperExternalSubtitleSource>,
+    loadErrorHandlingPolicy: LoadErrorHandlingPolicy,
+    primaryUri: String? = null,
+    primaryHeaders: Map<String, String> = emptyMap(),
+): PreparedExternalSubtitleMediaSources {
+    if (sources.isEmpty()) return PreparedExternalSubtitleMediaSources(emptyList(), emptyList(), emptyList())
+
+    val failures = mutableListOf<NativeTrackSelectionFailure>()
+    val ids = sources.map { it.id }
+    if (ids.any(String::isBlank) || ids.toSet().size != ids.size) {
+        failures += NativeTrackSelectionFailure(
+            kind = NativeTrackKind.Subtitle,
+            trackId = ids.firstOrNull { id -> id.isBlank() || ids.count { it == id } > 1 },
+            code = "subtitle_track_identity_ambiguous",
+            phase = "identity",
+            message = "external subtitle ids must be non-blank and unique within a source",
+            advertisedTrackCount = sources.size,
+        )
+        return PreparedExternalSubtitleMediaSources(emptyList(), emptyList(), failures)
+    }
+    if (sources.count { it.isDefault } > 1) {
+        failures += NativeTrackSelectionFailure(
+            kind = NativeTrackKind.Subtitle,
+            trackId = null,
+            code = "subtitle_default_track_ambiguous",
+            phase = "identity",
+            message = "a subtitle group may contain at most one default track",
+            advertisedTrackCount = sources.size,
+        )
+        return PreparedExternalSubtitleMediaSources(emptyList(), emptyList(), failures)
+    }
+
+    val conflictingUris =
+        sources
+            .groupBy { it.uri }
+            .filterValues { group -> group.map { it.headers }.distinct().size > 1 }
+            .keys
+    val activeSources = mutableListOf<VesperExternalSubtitleSource>()
+    val mediaSources = mutableListOf<MediaSource>()
+    for (source in sources) {
+        val conflictsWithPrimaryRequest =
+            primaryUri != null &&
+                source.uri == primaryUri &&
+                source.headers != primaryHeaders
+        if (source.uri in conflictingUris || conflictsWithPrimaryRequest) {
+            failures += NativeTrackSelectionFailure(
+                kind = NativeTrackKind.Subtitle,
+                trackId = source.id,
+                code = "subtitle_request_identity_ambiguous",
+                phase = "resource",
+                message = "resources sharing a URI must use identical request headers",
+                advertisedTrackCount = sources.size,
+            )
+            continue
+        }
+        val uri = Uri.parse(source.uri)
+        val supportedScheme = uri.scheme?.lowercase() in setOf("file", "content", "http", "https", "android.resource")
+        if (source.uri.isBlank() || !supportedScheme) {
+            failures += NativeTrackSelectionFailure(
+                kind = NativeTrackKind.Subtitle,
+                trackId = source.id,
+                code = "subtitle_uri_invalid",
+                phase = "resource",
+                message = "external subtitle URI is invalid or unsupported",
+                advertisedTrackCount = sources.size,
+            )
+            continue
+        }
+        try {
+            val dataSourceFactory = buildDataSourceFactory(appContext, cachePolicy, source.headers)
+            mediaSources +=
+                SingleSampleMediaSource.Factory(dataSourceFactory)
+                    .setTrackId(source.id)
+                    .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                    .setTreatLoadErrorsAsEndOfStream(true)
+                    .createMediaSource(buildExternalSubtitleConfiguration(source), C.TIME_UNSET)
+            activeSources += source
+        } catch (_: RuntimeException) {
+            failures += NativeTrackSelectionFailure(
+                kind = NativeTrackKind.Subtitle,
+                trackId = source.id,
+                code = "subtitle_resource_failed",
+                phase = "resource",
+                message = "external subtitle media source could not be prepared",
+                advertisedTrackCount = sources.size,
+            )
+        }
+    }
+    return PreparedExternalSubtitleMediaSources(mediaSources, activeSources, failures)
 }
 
 internal fun buildWidevineDrmConfiguration(source: VesperPlayerSource): MediaItem.DrmConfiguration? {

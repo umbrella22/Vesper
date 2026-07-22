@@ -33,6 +33,7 @@ pub(crate) fn owned_panic_error(payload: Box<dyn Any + Send>) -> PlayerFfiError 
 pub(crate) fn write_error(out_error: *mut PlayerFfiError, mut error: PlayerFfiError) {
     if out_error.is_null() {
         free_c_string(&mut error.message);
+        free_c_string(&mut error.details_json);
         return;
     }
 

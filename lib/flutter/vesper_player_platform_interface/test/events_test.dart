@@ -229,6 +229,58 @@ void main() {
     );
   });
 
+  test('player error event decodes nested subtitle error details', () {
+    final subtitleDetails = <Object?, Object?>{
+      'domain': 'subtitle',
+      'code': 'subtitle_selection_timeout',
+      'phase': 'selection',
+      'trackId': 'external-en',
+      'retriable': true,
+      'commandId': 42,
+      'sourceEpoch': 9,
+      'message': 'confirmation timed out',
+    };
+    final eventError = <Object?, Object?>{
+      'message': 'confirmation timed out',
+      'code': 'backendFailure',
+      'category': 'platform',
+      'retriable': true,
+      'details': subtitleDetails,
+    };
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'android-player',
+      'type': 'error',
+      'error': eventError,
+      'snapshot': <Object?, Object?>{
+        'title': 'Demo',
+        'subtitle': 'Subtitle',
+        'sourceLabel': 'https://example.com/video.mp4',
+        'playbackState': 'ready',
+        'playbackRate': 1.0,
+        'isBuffering': false,
+        'isInterrupted': false,
+        'hasVideoSurface': false,
+        'timeline': const VesperTimeline.initial().toMap(),
+        'lastError': eventError,
+      },
+    });
+
+    final errorEvent = event as VesperPlayerErrorEvent;
+    expect(errorEvent.error.code, VesperPlayerErrorCode.backendFailure);
+    expect(errorEvent.error.category, VesperPlayerErrorCategory.platform);
+    expect(errorEvent.error.details['domain'], 'subtitle');
+    expect(errorEvent.error.details['code'], 'subtitle_selection_timeout');
+    expect(errorEvent.error.details['phase'], 'selection');
+    expect(errorEvent.error.details['trackId'], 'external-en');
+    expect(errorEvent.error.details['commandId'], 42);
+    expect(errorEvent.error.details['sourceEpoch'], 9);
+    final snapshotError = errorEvent.snapshot?.lastError;
+    expect(snapshotError?.code, VesperPlayerErrorCode.backendFailure);
+    expect(snapshotError?.category, VesperPlayerErrorCategory.platform);
+    expect(snapshotError?.details['domain'], 'subtitle');
+    expect(snapshotError?.details['code'], 'subtitle_selection_timeout');
+  });
+
   test('player warning event decodes frame processor payload', () {
     final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
       'playerId': 'macos-player',

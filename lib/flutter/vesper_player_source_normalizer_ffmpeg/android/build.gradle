@@ -1,5 +1,5 @@
 group = "io.github.ikaros.vesper.player.flutter.source_normalizer_ffmpeg"
-version = "0.3.0"
+version = "0.4.0"
 
 buildscript {
     ext.kotlin_version = "2.3.10"

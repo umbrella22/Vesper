@@ -122,6 +122,7 @@ pub struct PlayerFfiError {
     pub category: PlayerFfiErrorCategory,
     pub retriable: bool,
     pub message: *mut c_char,
+    pub details_json: *mut c_char,
 }
 
 #[repr(C)]

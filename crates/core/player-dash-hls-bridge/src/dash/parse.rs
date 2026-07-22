@@ -6,7 +6,7 @@ use crate::{
         DashPeriod, DashRepresentation, DashSegmentBase, DashSegmentTemplate,
         DashSegmentTimelineEntry,
     },
-    error::{DashHlsError, DashHlsResult},
+    error::{DashHlsError, DashHlsResult, SubtitleErrorDetails},
 };
 
 pub fn parse_mpd(input: &str) -> DashHlsResult<DashManifest> {
@@ -131,10 +131,15 @@ fn parse_adaptation_set(
             Some(value) if !value.trim().is_empty() => value.to_owned(),
             _ => {
                 if matches!(kind, DashAdaptationKind::Subtitle) {
-                    return Err(DashHlsError::InvalidMpd(
-                        "subtitle_track_identity_ambiguous: missing Representation@id in subtitle adaptation set"
-                            .to_owned(),
-                    ));
+                    return Err(DashHlsError::Subtitle {
+                        details: SubtitleErrorDetails::new(
+                            "subtitle_track_identity_ambiguous",
+                            "identity",
+                            None,
+                            false,
+                            "missing Representation@id in subtitle adaptation set",
+                        ),
+                    });
                 }
                 format!("representation-{}", representations.len())
             }

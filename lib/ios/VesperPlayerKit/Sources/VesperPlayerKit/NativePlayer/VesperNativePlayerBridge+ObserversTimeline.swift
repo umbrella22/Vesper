@@ -71,7 +71,13 @@ extension VesperNativePlayerBridge {
                     self.recordBenchmark("player_item_ready")
                     self.cancelPendingRetry(resetAttempts: true)
                     self.refreshTrackCatalogAndSelection(for: item)
-                    self.applyPendingResilienceRestore(ifNeededFor: item, phase: .coreState)
+                    Task { @MainActor [weak self, weak item] in
+                        guard let self, let item else { return }
+                        await self.applyPendingResilienceRestore(
+                            ifNeededFor: item,
+                            phase: .coreState
+                        )
+                    }
                     self.attemptPendingPlaybackStart(reason: "itemReadyToPlay")
                     self.refreshPlaybackState()
                 case .failed:

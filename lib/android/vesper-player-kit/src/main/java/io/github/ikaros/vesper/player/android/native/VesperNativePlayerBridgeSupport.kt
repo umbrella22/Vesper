@@ -331,12 +331,15 @@ internal data class PreservedPlaybackState(
     val videoSelection: VesperTrackSelection,
     val audioSelection: VesperTrackSelection,
     val subtitleSelection: VesperTrackSelection,
+    val effectiveSubtitleTrackId: String?,
     val abrPolicy: VesperAbrPolicy,
 ) {
     companion object {
         fun capture(
             uiState: PlayerHostUiState,
             trackSelection: VesperTrackSelectionSnapshot,
+            confirmedSubtitleSelection: VesperTrackSelection = trackSelection.subtitle,
+            effectiveSubtitleTrackId: String? = trackSelection.effectiveSubtitleTrackId,
         ): PreservedPlaybackState {
             val seekToLiveEdge =
                 uiState.timeline.kind == TimelineKind.LiveDvr &&
@@ -350,7 +353,8 @@ internal data class PreservedPlaybackState(
                 shouldResumePlayback = uiState.playbackState == PlaybackStateUi.Playing,
                 videoSelection = trackSelection.video,
                 audioSelection = trackSelection.audio,
-                subtitleSelection = trackSelection.subtitle,
+                subtitleSelection = confirmedSubtitleSelection,
+                effectiveSubtitleTrackId = effectiveSubtitleTrackId,
                 abrPolicy = trackSelection.abrPolicy,
             )
         }
@@ -358,6 +362,10 @@ internal data class PreservedPlaybackState(
 }
 
 internal interface VesperNativeBindings {
+    /** Whether the bindings already own an active system-playback item. */
+    val isSystemPlaybackActive: Boolean
+        get() = false
+
     fun probeMobilePlugins(
         source: VesperPlayerSource,
         sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration,
@@ -398,10 +406,32 @@ internal interface VesperNativeBindings {
     fun seekNativeFramePipeline(positionMs: Long): Map<String, Any?>?
     fun currentNativeFramePipelineStatus(): Map<String, Any?>?
     fun closeNativeFramePipeline()
+    /** Invalidates callbacks and queued events owned by the current system player. */
+    fun invalidateSystemPlaybackCallbacks() = Unit
     fun dispose()
     fun refreshSnapshot()
     fun currentTrackCatalog(): VesperTrackCatalog
     fun currentTrackSelection(): VesperTrackSelectionSnapshot
+    /**
+     * Returns the subtitle choice accepted by Media3's track-selection
+     * parameters. This is distinct from [currentTrackSelection], whose
+     * subtitle value represents only a renderer-active track.
+     */
+    fun currentAppliedSubtitleSelection(): VesperTrackSelection = currentTrackSelection().subtitle
+    fun currentAdvertisedSubtitleTrackCount(): Int = currentTrackCatalog().subtitleTracks.size
+    /**
+     * Increments only when Media3 reports a track or track-parameter change.
+     * Subtitle transactions use this to distinguish a confirmation callback
+     * from an unrelated player update.
+     */
+    val trackSelectionChangeGeneration: Long
+        get() = 0L
+    /** Monotonic identity of the currently active Media3 player callback set. */
+    val sourceCallbackGeneration: Long
+        get() = 0L
+    /** Monotonic identity assigned to each subtitle selection command. */
+    val subtitleSelectionCommandGeneration: Long
+        get() = 0L
     fun isTrackCatalogReady(): Boolean = true
     fun currentSubtitleCatalogFailure(): NativeTrackSelectionFailure? = null
     fun currentEffectiveVideoTrackId(): String?
@@ -499,6 +529,7 @@ internal class MissingVesperNativeBindings : VesperNativeBindings {
     override fun currentTrackCatalog(): VesperTrackCatalog = VesperTrackCatalog.Empty
     override fun currentTrackSelection(): VesperTrackSelectionSnapshot =
         VesperTrackSelectionSnapshot()
+    override fun currentAdvertisedSubtitleTrackCount(): Int = 0
     override fun currentSubtitleCatalogFailure(): NativeTrackSelectionFailure? = null
     override fun currentEffectiveVideoTrackId(): String? = null
     override fun currentVideoVariantObservation(): VesperVideoVariantObservation? = null

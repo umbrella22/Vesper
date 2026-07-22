@@ -23,7 +23,20 @@ extension VesperNativePlayerBridge {
                     // Style toggles are best-effort: if the previous
                     // subtitle selection is no longer valid (e.g. source
                     // switched underneath), don't fail the style call.
-                    try? setSubtitleTrackSelection(publishedTrackSelection.subtitle)
+                    let selection = confirmedSubtitleSelection
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        do {
+                            try await self.coordinateSubtitleSelection(
+                                selection,
+                                origin: .visibilityRestore
+                            )
+                        } catch {
+                            iosHostLog(
+                                "subtitle visibility restore failed: \(error.localizedDescription)"
+                            )
+                        }
+                    }
                 }
             } else {
                 enforceSubtitleVisibility(for: item)
@@ -32,10 +45,10 @@ extension VesperNativePlayerBridge {
     }
 
     func enforceSubtitleVisibility(for item: AVPlayerItem) {
-        guard !currentSubtitleStyle.visible else { return }
-        if let group = subtitleGroup {
-            item.select(nil, in: group)
-        }
+        // Visibility is a rendering concern. Keep AVPlayer's selected option
+        // intact so the confirmed/effective selection remains truthful; the
+        // text style rule below hides native cues without changing selection.
+        applySubtitleStyle(currentSubtitleStyle, to: item)
     }
 
     func applySubtitleStyle(_ style: VesperSubtitleStyle, to item: AVPlayerItem) {

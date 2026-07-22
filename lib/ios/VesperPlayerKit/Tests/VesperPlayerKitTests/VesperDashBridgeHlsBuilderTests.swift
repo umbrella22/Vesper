@@ -349,6 +349,30 @@ final class VesperDashBridgeHlsBuilderTests: XCTestCase {
         XCTAssertEqual(snapshot.subtitleTracks[0].codec, "wvtt")
     }
 
+    func testDefaultDashAdaptationSetMarksOnlyOneRepresentationDefault() throws {
+        let manifest = try VesperDashManifestParser.parse(
+            data: Data(sampleWebVttDefaultMultiRepresentationMpd.utf8),
+            manifestURL: URL(string: "https://cdn.example.com/vod/manifest.mpd")!
+        )
+        let selected = try VesperDashHlsBuilder.selectedPlayableRepresentations(
+            manifest: manifest,
+            variantPolicy: .all
+        )
+
+        let snapshot = VesperDashManifestTrackCatalogSnapshot(
+            audio: selected.audio,
+            video: selected.video,
+            subtitles: selected.subtitles
+        )
+        XCTAssertEqual(snapshot.subtitleTracks.map(\.id), [
+            "subtitle:dash:sub-en-low",
+            "subtitle:dash:sub-en-high"
+        ])
+        XCTAssertEqual(snapshot.subtitleTracks.filter(\.isDefault).map(\.id), [
+            "subtitle:dash:sub-en-low"
+        ])
+    }
+
     func testManifestParserReadsSegmentTimelineTemplate() throws {
         let manifest = try VesperDashManifestParser.parse(
             data: Data(sampleSegmentTimelineMpd.utf8),
@@ -617,18 +641,19 @@ final class VesperDashBridgeHlsBuilderTests: XCTestCase {
                 variantPolicy: .all
             )
         ) { error in
-            // Either VesperDashBridgeError or a Rust-side JSON error is
-            // acceptable; the contract is "duplicate ids must not silently
-            // produce distinct rendition ids".
-            XCTAssertNotNil(error as? Error, "expected structured failure for duplicate ids")
+            guard case let VesperDashBridgeError.subtitle(details) = error else {
+                return XCTFail("expected typed subtitle error, got: \(error)")
+            }
+            XCTAssertEqual(details.code, "subtitle_track_identity_ambiguous")
+            XCTAssertEqual(details.phase, "identity")
+            XCTAssertEqual(details.trackId, "sub-en")
         }
     }
 
     /// A subtitle adaptation set whose `<Representation>` lacks an `id`
     /// attribute must surface a structured
     /// `subtitle_track_identity_ambiguous` failure at parse time rather
-    /// than synthesizing a positional id. The structured prefix lets iOS
-    /// classify the failure into the subtitle state.
+    /// than synthesizing a positional id.
     func testDashManifestWithMissingSubtitleRepresentationIdFailsIdentity() {
         XCTAssertThrowsError(
             try VesperDashManifestParser.parse(
@@ -636,12 +661,12 @@ final class VesperDashBridgeHlsBuilderTests: XCTestCase {
                 manifestURL: URL(string: "https://cdn.example.com/vod/manifest.mpd")!
             )
         ) { error in
-            let message = (error as? LocalizedError)?.errorDescription
-                ?? String(describing: error)
-            XCTAssertTrue(
-                message.contains("subtitle_track_identity_ambiguous"),
-                "expected structured subtitle_track_identity_ambiguous prefix, got: \(message)"
-            )
+            guard case let VesperDashBridgeError.subtitle(details) = error else {
+                return XCTFail("expected typed subtitle error, got: \(error)")
+            }
+            XCTAssertEqual(details.code, "subtitle_track_identity_ambiguous")
+            XCTAssertEqual(details.phase, "identity")
+            XCTAssertNil(details.trackId)
         }
     }
 }
