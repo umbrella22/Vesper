@@ -69,6 +69,7 @@ vesper_require_command otool
 vesper_require_command plutil
 vesper_require_command rg
 vesper_require_command ruby
+vesper_require_command strings
 vesper_require_command xcrun
 vesper_require_command zipinfo
 
@@ -109,6 +110,10 @@ validate_archive_entries() {
   local entry
   local duplicate_entry
   local entry_count=0
+
+  if ! vesper_verify_archive_excludes_test_fixtures "$archive_path"; then
+    return 1
+  fi
 
   duplicate_entry="$(zipinfo -1 "$archive_path" | sort | uniq -d | head -n 1)"
   if [[ -n "$duplicate_entry" ]]; then
@@ -206,6 +211,12 @@ verify_framework() {
   local macho_minimum_os
   local dependencies
 
+  if ! vesper_verify_directory_excludes_test_fixtures "$framework_dir"; then
+    return 1
+  fi
+  if ! vesper_verify_binary_excludes_test_fixture_markers "$binary_path"; then
+    return 1
+  fi
   vesper_ios_verify_flat_framework "$framework_dir" "$FRAMEWORK_NAME"
   vesper_ios_verify_framework_platform "$framework_dir" "$FRAMEWORK_NAME" "$expected_platform"
 

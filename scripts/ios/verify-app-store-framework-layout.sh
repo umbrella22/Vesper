@@ -62,6 +62,12 @@ if [[ ! -d "$APP_PATH" ]]; then
   exit 1
 fi
 
+vesper_verify_directory_excludes_test_fixtures "$APP_PATH"
+FLUTTER_AOT_BINARY="$APP_PATH/Frameworks/App.framework/App"
+if [[ -f "$FLUTTER_AOT_BINARY" ]]; then
+  vesper_verify_binary_excludes_test_fixture_markers "$FLUTTER_AOT_BINARY"
+fi
+
 FRAMEWORKS_DIR="$APP_PATH/Frameworks"
 if [[ ! -d "$FRAMEWORKS_DIR" ]]; then
   echo "App bundle is missing its Frameworks directory: $FRAMEWORKS_DIR" >&2

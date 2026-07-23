@@ -2,12 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:vesper_player/vesper_player.dart';
 import 'package:flutter_host/src/device/example_subtitle_overlay_evidence.dart';
+
+import 'support/subtitle_media_fixture.dart';
 
 const String _subtitleAId = 'external-a';
 const String _subtitleBId = 'external-b';
@@ -27,17 +28,7 @@ void main() {
           'vesper-subtitle-contract-',
         );
         final fixtureDirectory = directory!;
-        final media = File('${fixtureDirectory.path}/tiny-aac.m4a');
-        final mediaBytes = await rootBundle.load(
-          'assets/subtitle_contract/tiny-aac.m4a',
-        );
-        await media.writeAsBytes(
-          mediaBytes.buffer.asUint8List(
-            mediaBytes.offsetInBytes,
-            mediaBytes.lengthInBytes,
-          ),
-          flush: true,
-        );
+        final media = await writeTinyAacFixture(fixtureDirectory);
         final subtitleA = await _writeWebVtt(
           fixtureDirectory,
           fileName: 'a.vtt',

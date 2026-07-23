@@ -37,6 +37,7 @@ for abi in "${selected_abis[@]}"; do
     printf '%s\n' "${compose_apks[@]}" >&2
     exit 1
   fi
+  vesper_verify_archive_excludes_test_fixtures "${compose_apks[0]}"
   cp "${compose_apks[0]}" "$OUTPUT_DIR/VesperPlayerAndroidComposeHost-android-$abi-debug-signed.apk"
 
   if command -v flutter >/dev/null 2>&1; then
@@ -60,6 +61,7 @@ for abi in "${selected_abis[@]}"; do
     printf '%s\n' "${flutter_apks[@]}" >&2
     exit 1
   fi
+  vesper_verify_flutter_android_release_artifact "${flutter_apks[0]}"
   cp "${flutter_apks[0]}" "$OUTPUT_DIR/VesperPlayerFlutterHost-android-$abi-debug-signed.apk"
 done
 

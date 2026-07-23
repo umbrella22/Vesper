@@ -2,10 +2,11 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:vesper_player/vesper_player.dart';
+
+import 'support/subtitle_media_fixture.dart';
 
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -361,14 +362,7 @@ final class _SubtitleLifecycleFixture {
     final directory = await Directory.systemTemp.createTemp(
       'vesper-subtitle-lifecycle-',
     );
-    final media = File('${directory.path}/tiny-aac.m4a');
-    final bytes = await rootBundle.load(
-      'assets/subtitle_contract/tiny-aac.m4a',
-    );
-    await media.writeAsBytes(
-      bytes.buffer.asUint8List(bytes.offsetInBytes, bytes.lengthInBytes),
-      flush: true,
-    );
+    final media = await writeTinyAacFixture(directory);
     return _SubtitleLifecycleFixture(directory, media);
   }
 

@@ -188,6 +188,24 @@ for abi in "${selected_abis[@]}"; do
     fi
   fi
 
+  release_aars=(
+    "$CORE_OUTPUT_AAR"
+    "$COMPOSE_OUTPUT_AAR"
+    "$COMPOSE_UI_OUTPUT_AAR"
+  )
+  if [[ "$include_optional_plugins" -eq 1 ]]; then
+    release_aars+=(
+      "$EXTERNAL_PLAYBACK_OUTPUT_AAR"
+      "$FFMPEG_RUNTIME_OUTPUT_AAR"
+      "$DECODER_MEDIACODEC_OUTPUT_AAR"
+      "$SOURCE_NORMALIZER_OUTPUT_AAR"
+      "$FRAME_PROCESSOR_OUTPUT_AAR"
+    )
+  fi
+  for release_aar in "${release_aars[@]}"; do
+    vesper_verify_archive_excludes_test_fixtures "$release_aar"
+  done
+
   echo "Staged VesperPlayerKit Android AARs:"
   echo "  $CORE_OUTPUT_AAR"
   echo "  $COMPOSE_OUTPUT_AAR"

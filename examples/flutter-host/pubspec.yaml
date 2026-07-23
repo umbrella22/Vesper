@@ -27,6 +27,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/subtitle_contract/tiny-h264-aac.m4v
-    - assets/subtitle_contract/tiny-aac.m4a

@@ -185,3 +185,107 @@ vesper_path_cache_key() {
 
   printf '%s\n' "$sanitized"
 }
+
+vesper_test_fixture_path_pattern() {
+  printf '%s\n' '(^|/)(subtitle_contract|test[-_]?fixtures?|test[-_]?assets?|testdata)(/|$)|(^|/)fixtures/(contracts|media)(/|$)|(^|/)(tiny-aac\.m4a|tiny-h264-aac\.m4v)$'
+}
+
+vesper_test_fixture_binary_marker_pattern() {
+  printf '%s\n' 'assets/subtitle_contract|fixtures/(contracts|media)|tiny-aac\.m4a|tiny-h264-aac\.m4v'
+}
+
+vesper_verify_archive_excludes_test_fixtures() {
+  local archive_path="$1"
+  local entries
+  local matches
+  local pattern
+
+  if [[ ! -f "$archive_path" ]]; then
+    echo "Release archive does not exist: $archive_path" >&2
+    return 1
+  fi
+
+  vesper_require_command unzip
+  if ! entries="$(unzip -Z1 "$archive_path")"; then
+    echo "Unable to list release archive entries: $archive_path" >&2
+    return 1
+  fi
+
+  pattern="$(vesper_test_fixture_path_pattern)"
+  matches="$(printf '%s\n' "$entries" | grep -Ei "$pattern" || true)"
+  if [[ -n "$matches" ]]; then
+    echo "Release archive contains test fixture resources: $archive_path" >&2
+    printf '  %s\n' "$matches" >&2
+    return 1
+  fi
+}
+
+vesper_verify_directory_excludes_test_fixtures() {
+  local directory_path="$1"
+  local matches
+  local pattern
+
+  if [[ ! -d "$directory_path" ]]; then
+    echo "Release directory does not exist: $directory_path" >&2
+    return 1
+  fi
+
+  pattern="$(vesper_test_fixture_path_pattern)"
+  matches="$(
+    cd "$directory_path"
+    find . -type f -print | sed 's#^\./##' | grep -Ei "$pattern" || true
+  )"
+  if [[ -n "$matches" ]]; then
+    echo "Release directory contains test fixture resources: $directory_path" >&2
+    printf '  %s\n' "$matches" >&2
+    return 1
+  fi
+}
+
+vesper_verify_binary_excludes_test_fixture_markers() {
+  local binary_path="$1"
+  local matches
+  local pattern
+
+  if [[ ! -f "$binary_path" ]]; then
+    echo "Release binary does not exist: $binary_path" >&2
+    return 1
+  fi
+
+  vesper_require_command strings
+  pattern="$(vesper_test_fixture_binary_marker_pattern)"
+  matches="$(strings "$binary_path" | grep -Ei "$pattern" || true)"
+  if [[ -n "$matches" ]]; then
+    echo "Release binary contains test fixture markers: $binary_path" >&2
+    printf '  %s\n' "$matches" >&2
+    return 1
+  fi
+}
+
+vesper_verify_flutter_android_release_artifact() (
+  set -euo pipefail
+
+  local apk_path="$1"
+  local binary_path
+  local binary_count=0
+  local temp_dir
+
+  vesper_verify_archive_excludes_test_fixtures "$apk_path"
+
+  temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/vesper-flutter-apk-verify.XXXXXX")"
+  trap 'rm -rf "$temp_dir"' EXIT
+  if ! unzip -qq "$apk_path" 'lib/*/libapp.so' -d "$temp_dir"; then
+    echo "Flutter release APK does not contain libapp.so: $apk_path" >&2
+    return 1
+  fi
+
+  while IFS= read -r -d '' binary_path; do
+    binary_count=$((binary_count + 1))
+    vesper_verify_binary_excludes_test_fixture_markers "$binary_path"
+  done < <(find "$temp_dir" -type f -name libapp.so -print0)
+
+  if [[ "$binary_count" -eq 0 ]]; then
+    echo "Flutter release APK does not contain an extracted libapp.so: $apk_path" >&2
+    return 1
+  fi
+)

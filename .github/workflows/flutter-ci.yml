@@ -283,6 +283,13 @@ jobs:
         working-directory: examples/flutter-host
         run: flutter build apk --release --target-platform ${{ matrix.flutter_target }}
 
+      - name: Verify Flutter Android host release excludes test fixtures
+        shell: bash
+        run: |
+          source scripts/lib/common.sh
+          vesper_verify_flutter_android_release_artifact \
+            examples/flutter-host/build/app/outputs/flutter-apk/app-release.apk
+
       - name: Stage Flutter Android release APK
         if: github.event_name == 'workflow_dispatch'
         run: |
