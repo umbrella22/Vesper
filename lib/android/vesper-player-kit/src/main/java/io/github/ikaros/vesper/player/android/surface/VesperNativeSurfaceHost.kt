@@ -16,6 +16,9 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.media3.common.text.Cue
 
+private const val SUBTITLE_OVERLAY_TAG =
+    "io.github.ikaros.vesper.player.subtitle-overlay"
+
 internal class VesperNativeSurfaceHost(
     private val bindings: VesperNativeBindings,
     private val surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
@@ -186,6 +189,7 @@ internal class VesperNativeSurfaceHost(
 
     private fun createSubtitleView(host: ViewGroup): TextView =
         TextView(host.context).apply {
+            tag = SUBTITLE_OVERLAY_TAG
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.TRANSPARENT)
             gravity = Gravity.CENTER

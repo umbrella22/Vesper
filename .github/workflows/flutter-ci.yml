@@ -265,6 +265,12 @@ jobs:
         working-directory: examples/flutter-host
         run: flutter pub get
 
+      - name: Run Flutter Android plugin Kotlin unit tests
+        run: >-
+          gradle -p examples/flutter-host/android
+          -Pvesper.player.android.abis=${{ matrix.abi }}
+          :vesper_player_android:testDebugUnitTest
+
       - name: Analyze Flutter Android host
         working-directory: examples/flutter-host
         run: flutter analyze

@@ -53,6 +53,7 @@ class VesperSubtitleSelectionLifecycleInstrumentationTest {
         val elapsedMs = SystemClock.elapsedRealtime() - startedAtMs
 
         assertEquals("subtitle_selection_timeout", failure.details["code"])
+        assertTransactionIdentity(failure)
         assertTrue("selection timeout fired too early after ${elapsedMs}ms", elapsedMs >= 2_500L)
         assertTrue("selection timeout was not bounded after ${elapsedMs}ms", elapsedMs < 8_000L)
         assertEquals(VesperTrackSelection.disabled(), activeBridge.confirmedSubtitleSelection.value)
@@ -88,7 +89,7 @@ class VesperSubtitleSelectionLifecycleInstrumentationTest {
         yield()
         assertTrue(
             "subtitle selection did not reach the deferred native boundary",
-            bindings.selectionIssued.await(1, TimeUnit.SECONDS),
+            bindings.firstSelectionIssued.await(1, TimeUnit.SECONDS),
         )
 
         bindings.replaceCatalog(subtitleCatalog(secondTrackId))
@@ -103,6 +104,7 @@ class VesperSubtitleSelectionLifecycleInstrumentationTest {
                 error
             }
         assertEquals("subtitle_source_changed", failure.details["code"])
+        assertTransactionIdentity(failure)
         assertEquals(replacement, bindings.initializedSource)
         assertEquals(VesperTrackSelection.disabled(), activeBridge.confirmedSubtitleSelection.value)
         assertNull(activeBridge.effectiveSubtitleTrackId.value)
@@ -110,6 +112,59 @@ class VesperSubtitleSelectionLifecycleInstrumentationTest {
             VesperSubtitleSelectionState.Idle,
             activeBridge.subtitleState.value.selectionState,
         )
+    }
+
+    @Test
+    fun newerSubtitleSelectionSupersedesPendingCommandOnTheDevice() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val firstTrackId = "device-supersede-a"
+        val secondTrackId = "device-supersede-b"
+        val bindings = DeviceDeferredSubtitleBindings(subtitleCatalog(firstTrackId, secondTrackId))
+        val activeBridge = activeBridge(context, bindings, "Supersede source")
+        bridge = activeBridge
+
+        val firstSelection = async(SupervisorJob()) {
+            activeBridge.setSubtitleTrackSelection(VesperTrackSelection.track(firstTrackId))
+        }
+        yield()
+        assertTrue(
+            "first subtitle selection did not reach the deferred native boundary",
+            bindings.firstSelectionIssued.await(1, TimeUnit.SECONDS),
+        )
+
+        val secondSelection = async(SupervisorJob()) {
+            activeBridge.setSubtitleTrackSelection(VesperTrackSelection.track(secondTrackId))
+        }
+        yield()
+        assertTrue(
+            "second subtitle selection did not reach the deferred native boundary",
+            bindings.secondSelectionIssued.await(1, TimeUnit.SECONDS),
+        )
+
+        val firstFailure =
+            try {
+                firstSelection.await()
+                throw AssertionError("Expected the newer subtitle command to supersede the first.")
+            } catch (error: VesperPlayerUnsupportedOperation) {
+                error
+            }
+        assertEquals("subtitle_selection_superseded", firstFailure.details["code"])
+        assertTransactionIdentity(firstFailure)
+
+        bindings.confirmDeferredSelection()
+        activeBridge.refreshFromNative()
+        secondSelection.await()
+
+        assertEquals(
+            VesperTrackSelection.track(secondTrackId),
+            activeBridge.confirmedSubtitleSelection.value,
+        )
+        assertEquals(secondTrackId, activeBridge.effectiveSubtitleTrackId.value)
+        assertEquals(
+            VesperSubtitleSelectionState.Confirmed,
+            activeBridge.subtitleState.value.selectionState,
+        )
+        assertNull(activeBridge.subtitleState.value.selectionError)
     }
 
     private fun activeBridge(
@@ -128,6 +183,12 @@ class VesperSubtitleSelectionLifecycleInstrumentationTest {
             uri = "file:///subtitle-device-lifecycle-${label.replace(' ', '-')}.m4a",
             label = label,
         )
+
+    private fun assertTransactionIdentity(failure: VesperPlayerUnsupportedOperation) {
+        val commandId = failure.details["commandId"] as? Long
+        assertTrue("subtitle failure did not preserve command identity", commandId != null && commandId > 0L)
+        assertEquals(0L, failure.details["sourceEpoch"])
+    }
 }
 
 private class DeviceDeferredSubtitleBindings(
@@ -140,7 +201,9 @@ private class DeviceDeferredSubtitleBindings(
     private var sourceGeneration = 0L
     private var selectionGeneration = 0L
 
-    val selectionIssued = CountDownLatch(1)
+    private var selectionIssueCount = 0
+    val firstSelectionIssued = CountDownLatch(1)
+    val secondSelectionIssued = CountDownLatch(1)
     var initializedSource: VesperPlayerSource? = null
         private set
 
@@ -181,7 +244,12 @@ private class DeviceDeferredSubtitleBindings(
 
     override fun setSubtitleTrackSelection(selection: VesperTrackSelection) {
         deferredSelection = selection
-        selectionIssued.countDown()
+        selectionIssueCount += 1
+        if (selectionIssueCount == 1) {
+            firstSelectionIssued.countDown()
+        } else if (selectionIssueCount == 2) {
+            secondSelectionIssued.countDown()
+        }
     }
 
     fun replaceCatalog(replacement: VesperTrackCatalog) {
@@ -199,7 +267,9 @@ private class DeviceDeferredSubtitleBindings(
     }
 }
 
-private fun subtitleCatalog(trackId: String): VesperTrackCatalog =
+private fun subtitleCatalog(vararg trackIds: String): VesperTrackCatalog =
     VesperTrackCatalog(
-        tracks = listOf(VesperMediaTrack(id = trackId, kind = VesperMediaTrackKind.Subtitle)),
+        tracks = trackIds.map { trackId ->
+            VesperMediaTrack(id = trackId, kind = VesperMediaTrackKind.Subtitle)
+        },
     )

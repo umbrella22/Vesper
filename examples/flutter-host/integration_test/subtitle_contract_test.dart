@@ -139,7 +139,7 @@ void main() {
         });
         try {
           await activeController.play().timeout(const Duration(seconds: 10));
-          if (Platform.isIOS) {
+          if (Platform.isIOS || Platform.isAndroid) {
             final visibleOverlay = await _waitForVisibleSubtitleOverlay(
               activeController.playerId,
               expectedText: 'Subtitle B',

@@ -15,6 +15,7 @@ SIMULATOR_ID=""
 EVIDENCE_DIR=""
 IOS_DEVELOPMENT_TEAM="${VESPER_IOS_DEVELOPMENT_TEAM:-}"
 IOS_FLUTTER_HOST_BUNDLE_ID="io.github.ikaros.flutterHost"
+ANDROID_FLUTTER_HOST_APPLICATION_ID="io.github.ikaros.vesper.example.flutterhost"
 
 usage() {
   cat <<EOF >&2
@@ -146,6 +147,7 @@ PREFLIGHT_DIR="$EVIDENCE_DIR/preflight"
 XCRESULT_DIR="$EVIDENCE_DIR/xcresult"
 FLUTTER_EVIDENCE_DIR="$EVIDENCE_DIR/flutter"
 ATTACHMENTS_DIR="$EVIDENCE_DIR/xctest-attachments"
+ANDROID_EVIDENCE_DIR="$EVIDENCE_DIR/android"
 STEPS_FILE="$EVIDENCE_DIR/steps.tsv"
 SUMMARY_FILE="$EVIDENCE_DIR/summary.md"
 MANIFEST_FILE="$EVIDENCE_DIR/manifest.json"
@@ -154,7 +156,13 @@ TOOLCHAIN_FILE="$EVIDENCE_DIR/toolchain.txt"
 SOURCE_STATUS_FILE="$EVIDENCE_DIR/source-status.txt"
 RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/vesper-subtitle-verify.XXXXXX")"
 
-mkdir -p "$LOG_DIR" "$PREFLIGHT_DIR" "$XCRESULT_DIR" "$FLUTTER_EVIDENCE_DIR" "$ATTACHMENTS_DIR"
+mkdir -p \
+  "$LOG_DIR" \
+  "$PREFLIGHT_DIR" \
+  "$XCRESULT_DIR" \
+  "$FLUTTER_EVIDENCE_DIR" \
+  "$ATTACHMENTS_DIR" \
+  "$ANDROID_EVIDENCE_DIR"
 : > "$STEPS_FILE"
 git -C "$ROOT_DIR" status --short > "$SOURCE_STATUS_FILE"
 printf '%s\n' "$SOURCE_SHA" > "$EVIDENCE_DIR/source-sha.txt"
@@ -333,6 +341,80 @@ verify_ios_device_attachments() {
   ' "$attachments_dir"
 }
 
+verify_android_instrumentation_results() {
+  local results_dir="$1"
+  local evidence_dir="$2"
+  local started_marker="$3"
+
+  ruby -rfileutils -rjson -rrexml/document -e '
+    results_dir = ARGV.fetch(0)
+    evidence_dir = ARGV.fetch(1)
+    started_at = File.mtime(ARGV.fetch(2))
+    xml_paths = Dir.glob(File.join(results_dir, "TEST-*.xml")).select do |path|
+      File.file?(path) && File.size?(path) && File.mtime(path) >= started_at
+    end
+    abort("Missing fresh Android instrumentation XML under #{results_dir}") if xml_paths.empty?
+
+    expected = {
+      "io.github.ikaros.vesper.player.android.VesperSubtitleMedia3InstrumentationTest" => [
+        "localDashWebVttIsDiscoveredSelectedAndProducesCue",
+        "nativeBindingsPreserveBridgeListenersAcrossReinitialize"
+      ],
+      "io.github.ikaros.vesper.player.android.VesperSubtitleSelectionLifecycleInstrumentationTest" => [
+        "newerSubtitleSelectionSupersedesPendingCommandOnTheDevice",
+        "pendingSubtitleSelectionTimesOutAgainstTheDeviceClock",
+        "sourceSwitchCancelsPendingSubtitleSelectionOnTheDevice"
+      ]
+    }
+    suites = Hash.new { |hash, key| hash[key] = [] }
+    xml_paths.each do |path|
+      document = REXML::Document.new(File.read(path))
+      REXML::XPath.each(document, "//testsuite") do |suite|
+        name = suite.attributes.fetch("name").to_s
+        test_cases = suite.get_elements("testcase")
+        suites[name].concat(test_cases.map do |test_case|
+          {
+            "name" => test_case.attributes.fetch("name").to_s,
+            "className" => test_case.attributes.fetch("classname").to_s,
+            "failed" => !test_case.get_elements("failure").empty?,
+            "errored" => !test_case.get_elements("error").empty?,
+            "skipped" => !test_case.get_elements("skipped").empty?
+          }
+        end)
+      end
+    end
+
+    unexpected = suites.keys - expected.keys
+    abort("Unexpected Android subtitle instrumentation suites: #{unexpected.join(", ")}") unless unexpected.empty?
+    expected.each do |suite_name, expected_names|
+      cases = suites.fetch(suite_name, [])
+      actual_names = cases.map { |test_case| test_case.fetch("name") }.sort
+      abort("Android instrumentation suite #{suite_name} ran #{actual_names.inspect}; expected #{expected_names.sort.inspect}") unless
+        actual_names == expected_names.sort
+      abort("Android instrumentation suite did not pass: #{suite_name}") unless
+        cases.all? do |test_case|
+          test_case["className"] == suite_name &&
+            !test_case["failed"] && !test_case["errored"] && !test_case["skipped"]
+        end
+    end
+    total_tests = suites.values.sum(&:length)
+    abort("Android subtitle instrumentation ran #{total_tests} tests; expected 5") unless total_tests == 5
+
+    FileUtils.mkdir_p(evidence_dir)
+    xml_paths.each { |path| FileUtils.cp(path, File.join(evidence_dir, File.basename(path))) }
+    summary = {
+      "result" => "passed",
+      "totalTests" => total_tests,
+      "suites" => suites.transform_values { |cases| cases.map { |test_case| test_case.slice("name", "className") } },
+      "xmlFiles" => xml_paths.map { |path| File.basename(path) }.sort
+    }
+    File.write(
+      File.join(evidence_dir, "summary.json"),
+      JSON.pretty_generate(summary) + "\n"
+    )
+  ' "$results_dir" "$evidence_dir" "$started_marker"
+}
+
 verify_xcresult_tests() {
   local result_bundle="$1"
   local summary_path="$2"
@@ -471,6 +553,7 @@ write_manifest() {
           "xcresults" => "xcresult",
           "flutter" => "flutter",
           "xctestAttachments" => "xctest-attachments",
+          "android" => "android",
           "checksums" => "SHA256SUMS"
         }
       }
@@ -926,12 +1009,116 @@ terminate_ios_flutter_host_processes() {
   done < "$pids_file"
 }
 
+force_stop_android_flutter_host() {
+  local target_device="$1"
+
+  adb -s "$target_device" shell am force-stop "$ANDROID_FLUTTER_HOST_APPLICATION_ID"
+}
+
+capture_android_adb_forwards() {
+  local target_device="$1"
+  local output_path="$2"
+  local raw_path="$output_path.raw"
+
+  adb -s "$target_device" forward --list > "$raw_path"
+  ruby -e '
+    target_device = ARGV.fetch(0)
+    raw_path = ARGV.fetch(1)
+    output_path = ARGV.fetch(2)
+    records = File.readlines(raw_path, chomp: true).each_with_object([]) do |line, result|
+      fields = line.split
+      next if fields.empty? || fields.first != target_device
+      abort("Unexpected adb forward record: #{line}") unless fields.length == 3
+      result << [fields.fetch(1), fields.fetch(2)].join("\t")
+    end
+    File.write(output_path, records.sort.join("\n") + (records.empty? ? "" : "\n"))
+  ' "$target_device" "$raw_path" "$output_path"
+  rm -f "$raw_path"
+}
+
+cleanup_android_flutter_adb_forwards() {
+  local target_device="$1"
+  local before_path="$2"
+  local flutter_log_path="$3"
+  local after_path="$before_path.after"
+  local removable_path="$before_path.removable"
+  local final_path="$before_path.final"
+  local local_spec
+  local remote_spec
+
+  capture_android_adb_forwards "$target_device" "$after_path"
+  ruby -e '
+    parse_records = lambda do |path|
+      File.readlines(path, chomp: true).each_with_object({}) do |line, records|
+        local_spec, remote_spec = line.split("\t", 2)
+        abort("Invalid captured adb forward: #{line}") unless local_spec && remote_spec
+        abort("Duplicate adb local forward: #{local_spec}") if records.key?(local_spec)
+        records[local_spec] = remote_spec
+      end
+    end
+    before = parse_records.call(ARGV.fetch(0))
+    after = parse_records.call(ARGV.fetch(1))
+    flutter_log = File.read(ARGV.fetch(2))
+    flutter_locals = flutter_log.scan(
+      %r{VMServiceFlutterDriver: Connecting to Flutter application at http://127\.0\.0\.1:(\d+)/}
+    ).flatten.uniq.map { |port| "tcp:#{port}" }
+    removable = after.select do |local_spec, _remote_spec|
+      !before.key?(local_spec) && flutter_locals.include?(local_spec)
+    end.map { |local_spec, remote_spec| "#{local_spec}\t#{remote_spec}" }
+    File.write(
+      ARGV.fetch(3),
+      removable.join("\n") + (removable.empty? ? "" : "\n")
+    )
+  ' "$before_path" "$after_path" "$flutter_log_path" "$removable_path"
+
+  while IFS=$'\t' read -r local_spec remote_spec; do
+    [[ -n "$local_spec" ]] || continue
+    case "$local_spec" in
+      tcp:*) ;;
+      *)
+        echo "Refusing to remove an unexpected adb local forward: $local_spec" >&2
+        return 1
+        ;;
+    esac
+    case "${local_spec#tcp:}" in
+      ''|*[!0-9]*)
+        echo "Refusing to remove an invalid adb local forward: $local_spec" >&2
+        return 1
+        ;;
+    esac
+    case "$remote_spec" in
+      tcp:*) ;;
+      *)
+        echo "Refusing to remove an unexpected adb remote forward: $remote_spec" >&2
+        return 1
+        ;;
+    esac
+    case "${remote_spec#tcp:}" in
+      ''|*[!0-9]*)
+        echo "Refusing to remove an invalid adb remote forward: $remote_spec" >&2
+        return 1
+        ;;
+    esac
+    echo "Removing Flutter adb forward: $local_spec -> $remote_spec"
+    adb -s "$target_device" forward --remove "$local_spec"
+  done < "$removable_path"
+
+  capture_android_adb_forwards "$target_device" "$final_path"
+  ruby -e '
+    before = File.readlines(ARGV.fetch(0), chomp: true).sort
+    final = File.readlines(ARGV.fetch(1), chomp: true).sort
+    abort("ADB forwards changed during Flutter drive. Before=#{before.inspect} Final=#{final.inspect}") unless
+      final == before
+  ' "$before_path" "$final_path"
+}
+
 run_flutter_integration() {
   local target_device="$1"
   local target_kind="$2"
   local evidence_name="$3"
   local test_target="$4"
   local output_dir="$FLUTTER_EVIDENCE_DIR/$target_kind"
+  local android_forwards_before="$RUN_TMP/android-flutter-forwards-$evidence_name-before.tsv"
   local drive_status=0
   local cleanup_status=0
 
@@ -956,6 +1143,36 @@ run_flutter_integration() {
     run_logged "flutter-$target_kind-$evidence_name-cleanup-after" "$ROOT_DIR" \
       terminate_ios_flutter_host_processes "$target_device" "$evidence_name-after" || \
       cleanup_status=$?
+    if [[ "$drive_status" -ne 0 ]]; then
+      return "$drive_status"
+    fi
+    if [[ "$cleanup_status" -ne 0 ]]; then
+      return "$cleanup_status"
+    fi
+  elif [[ "$PLATFORM" == "android" && "$target_kind" == "device" ]]; then
+    run_logged "flutter-$target_kind-$evidence_name-cleanup-before" "$ROOT_DIR" \
+      force_stop_android_flutter_host "$target_device"
+    run_logged "flutter-$target_kind-$evidence_name-forwards-before" "$ROOT_DIR" \
+      capture_android_adb_forwards "$target_device" "$android_forwards_before"
+    if run_logged "flutter-$target_kind-$evidence_name" "$ROOT_DIR/examples/flutter-host" \
+      env VESPER_SUBTITLE_EVIDENCE_DIR="$output_dir" \
+        VESPER_SUBTITLE_EVIDENCE_NAME="$evidence_name" \
+        flutter drive \
+          --no-keep-app-running \
+          --driver=test_driver/subtitle_integration_test.dart \
+          --target="$test_target" \
+          --device-id "$target_device"; then
+      drive_status=0
+    else
+      drive_status=$?
+    fi
+    run_logged "flutter-$target_kind-$evidence_name-cleanup-after" "$ROOT_DIR" \
+      force_stop_android_flutter_host "$target_device" || cleanup_status=$?
+    run_logged "flutter-$target_kind-$evidence_name-forwards-after" "$ROOT_DIR" \
+      cleanup_android_flutter_adb_forwards \
+        "$target_device" \
+        "$android_forwards_before" \
+        "$LOG_DIR/flutter-$target_kind-$evidence_name.log" || cleanup_status=$?
     if [[ "$drive_status" -ne 0 ]]; then
       return "$drive_status"
     fi
@@ -1112,21 +1329,54 @@ prepare_android_device() {
   run_logged android-adb-state "$ROOT_DIR" adb -s "$DEVICE_ID" get-state
   capture_output android-adb-properties "$adb_properties" "$ROOT_DIR" \
     adb -s "$DEVICE_ID" shell getprop
-  run_logged android-adb-arm64-abi "$ROOT_DIR" \
-    ruby -e '
-      properties = File.read(ARGV.fetch(0))
-      abort("The Android subtitle gate requires an arm64-v8a device.") unless
-        properties.match?(/^\[ro\.product\.cpu\.abi\]: \[arm64-v8a\]$/)
-    ' "$adb_properties"
+  run_logged android-adb-device-metadata "$ROOT_DIR" \
+    ruby -rjson -e '
+      selected_path = ARGV.fetch(0)
+      properties = File.readlines(ARGV.fetch(1), chomp: true).each_with_object({}) do |line, result|
+        match = line.match(/^\[([^\]]+)\]: \[(.*)\]$/)
+        result[match[1]] = match[2] if match
+      end
+      required_property = lambda do |name|
+        value = properties.fetch(name, "").strip
+        abort("Android device property is missing: #{name}") if value.empty?
+        value
+      end
+      api_level = Integer(required_property.call("ro.build.version.sdk"), 10)
+      abort("The Android subtitle gate requires API 26 or newer; found API #{api_level}.") if api_level < 26
+      abi = required_property.call("ro.product.cpu.abi")
+      abort("The Android subtitle gate requires an arm64-v8a device; found #{abi}.") unless abi == "arm64-v8a"
+
+      selected = JSON.parse(File.read(selected_path))
+      selected.merge!({
+        "apiLevel" => api_level,
+        "abi" => abi,
+        "manufacturer" => required_property.call("ro.product.manufacturer"),
+        "model" => required_property.call("ro.product.model"),
+        "osVersion" => required_property.call("ro.build.version.release"),
+        "build" => {
+          "id" => required_property.call("ro.build.id"),
+          "display" => required_property.call("ro.build.display.id"),
+          "fingerprint" => required_property.call("ro.build.fingerprint")
+        }
+      })
+      File.write(selected_path, JSON.pretty_generate(selected) + "\n")
+    ' "$selected_device_json" "$adb_properties"
 }
 
 run_android_regression() {
   local gradle_path
+  local flutter_gradle_path
 
   vesper_require_command cargo
   vesper_require_command flutter
+  prepare_flutter_dependencies
   source "$ROOT_DIR/scripts/lib/android.sh"
   gradle_path="$(vesper_android_resolve_gradle "$ROOT_DIR/lib/android")"
+  flutter_gradle_path="$(
+    vesper_android_resolve_gradle \
+      "$ROOT_DIR/examples/flutter-host/android" \
+      "$ROOT_DIR/lib/android"
+  )"
 
   run_common_contract_regression
   run_logged android-rust-subtitle-tests "$ROOT_DIR" \
@@ -1135,6 +1385,11 @@ run_android_regression() {
     env GRADLE_USER_HOME="$ROOT_DIR/lib/android/.gradle/gradle-user-home" \
       "$gradle_path" -p "$ROOT_DIR/lib/android" \
         -Pvesper.player.android.abis=arm64-v8a test
+  run_logged flutter-android-kotlin-tests "$ROOT_DIR" \
+    env GRADLE_USER_HOME="$ROOT_DIR/examples/flutter-host/android/.gradle/gradle-user-home" \
+      "$flutter_gradle_path" -p "$ROOT_DIR/examples/flutter-host/android" \
+        -Pvesper.player.android.abis=arm64-v8a \
+        :vesper_player_android:testDebugUnitTest
   run_logged flutter-platform-subtitle-tests \
     "$ROOT_DIR/lib/flutter/vesper_player_platform_interface" \
     flutter test test/subtitle_exception_test.dart test/subtitle_state_models_test.dart
@@ -1142,15 +1397,35 @@ run_android_regression() {
     flutter test test/vesper_download_manager_test.dart
   run_logged flutter-android-channel-tests "$ROOT_DIR/lib/flutter/vesper_player_android" \
     flutter test test/method_channel_vesper_player_android_test.dart
+  run_logged flutter-host-subtitle-evidence-test "$ROOT_DIR/examples/flutter-host" \
+    flutter test test/subtitle_overlay_evidence_test.dart
 }
 
 run_android_device() {
+  local gradle_path
+  local instrumentation_results="$ROOT_DIR/lib/android/vesper-player-kit/build/outputs/androidTest-results/connected/debug"
+  local instrumentation_evidence="$ANDROID_EVIDENCE_DIR/instrumentation"
+  local instrumentation_started="$RUN_TMP/android-instrumentation-started"
+
   prepare_flutter_dependencies
   prepare_android_device
+  source "$ROOT_DIR/scripts/lib/android.sh"
+  gradle_path="$(vesper_android_resolve_gradle "$ROOT_DIR/lib/android")"
+  : > "$instrumentation_started"
+  run_logged android-device-subtitle-instrumentation "$ROOT_DIR" \
+    env ANDROID_SERIAL="$DEVICE_ID" \
+      GRADLE_USER_HOME="$ROOT_DIR/lib/android/.gradle/gradle-user-home" \
+      "$gradle_path" -p "$ROOT_DIR/lib/android" \
+        -Pvesper.player.android.abis=arm64-v8a \
+        "-Pandroid.testInstrumentationRunnerArguments.class=io.github.ikaros.vesper.player.android.VesperSubtitleMedia3InstrumentationTest,io.github.ikaros.vesper.player.android.VesperSubtitleSelectionLifecycleInstrumentationTest" \
+        :vesper-player-kit:connectedDebugAndroidTest
+  run_logged android-device-subtitle-instrumentation-evidence "$ROOT_DIR" \
+    verify_android_instrumentation_results \
+      "$instrumentation_results" \
+      "$instrumentation_evidence" \
+      "$instrumentation_started"
   run_flutter_integration "$DEVICE_ID" device subtitle-positive \
     integration_test/subtitle_contract_test.dart
-  run_flutter_integration "$DEVICE_ID" device subtitle-lifecycle \
-    integration_test/subtitle_lifecycle_test.dart
 }
 
 run_logged toolchain "$ROOT_DIR" collect_toolchain

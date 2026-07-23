@@ -93,7 +93,6 @@ class VesperSubtitleMedia3InstrumentationTest {
                                         "${textGroup.getTrackFormat(index).id}:" +
                                             "selected=${textGroup.isTrackSelected(index)}"
                                     }
-                            trackDiscovered.countDown()
                             if (selectionRequested.compareAndSet(false, true)) {
                                 exoPlayer.trackSelectionParameters =
                                     exoPlayer.trackSelectionParameters
@@ -106,6 +105,7 @@ class VesperSubtitleMedia3InstrumentationTest {
                                 exoPlayer.seekTo(0L)
                                 exoPlayer.playWhenReady = true
                             }
+                            trackDiscovered.countDown()
                             if (textGroup.isTrackSelected(0)) {
                                 selectionConfirmed.countDown()
                             }

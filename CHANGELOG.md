@@ -54,6 +54,9 @@
 - Isolated obsolete iOS subtitle selection transactions so source changes,
   disposal, and superseding commands cannot restore stale backend state,
   overwrite newer selection state, or publish stale player errors.
+- Prevented obsolete Android subtitle selection failures from overwriting newer
+  Flutter session errors or emitting stale player error events while preserving
+  the original MethodChannel error for the superseded command.
 - Core iOS framework archives now keep `VesperPlayerKitBridgeShim` internal,
   use one canonical XCFramework, omit AppleDouble metadata, and pass an isolated
   textual-interface import and link smoke before Release upload.

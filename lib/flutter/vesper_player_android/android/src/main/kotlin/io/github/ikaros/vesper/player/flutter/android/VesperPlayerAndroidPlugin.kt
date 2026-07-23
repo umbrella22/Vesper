@@ -112,6 +112,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 
+private const val PLAYER_SURFACE_TAG_PREFIX =
+    "io.github.ikaros.vesper.player.surface."
+
 class VesperPlayerAndroidPlugin :
     PlatformViewFactory(StandardMessageCodec.INSTANCE),
     FlutterPlugin,
@@ -500,6 +503,7 @@ class VesperPlayerAndroidPlugin :
         }
 
         if (!playerId.isNullOrBlank()) {
+            host.tag = "$PLAYER_SURFACE_TAG_PREFIX$playerId"
             bindSessionHost(playerId, host)
         }
 
@@ -1068,21 +1072,16 @@ class VesperPlayerAndroidPlugin :
                 result.success(value)
                 }
                 .onFailure { error ->
-                    val methodErrorMap = error.toErrorMap()
-                    if (isCurrentSession(session)) {
-                        session.lastError = methodErrorMap.toEventErrorMap()
-                        emitError(session, error)
-                    }
-                    val flutterErrorCode =
-                        if (methodErrorMap["domain"] == "subtitle") {
-                            "vesper_subtitle_error"
-                        } else {
-                            "vesper_operation_failed"
-                        }
-                    result.error(
-                        flutterErrorCode,
-                        error.message,
-                        methodErrorMap,
+                    routeAsyncSessionCommandFailure(
+                        error = error,
+                        isCurrentSession = isCurrentSession(session),
+                        publishPlayerError = { eventErrorMap ->
+                            session.lastError = eventErrorMap
+                            emitError(session, error)
+                        },
+                        returnMethodError = { code, message, details ->
+                            result.error(code, message, details)
+                        },
                     )
                 }
         }
