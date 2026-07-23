@@ -43,12 +43,12 @@ use player_plugin::{
 use player_runtime::{
     DecodedVideoFrame, FrameProcessorMode, MediaAbrMode, MediaAbrPolicy, MediaTrack,
     MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot,
-    NativeFramePipelineMode, PlaybackProgress, PlayerErrorCode, PlayerMediaInfo,
-    PlayerPluginParticipation, PlayerResilienceMetrics, PlayerResult,
+    NativeFramePipelineMode, PlaybackProgress, PlayerError, PlayerErrorCategory, PlayerErrorCode,
+    PlayerMediaInfo, PlayerPluginParticipation, PlayerResilienceMetrics, PlayerResult,
     PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterCapabilities,
     PlayerRuntimeAdapterFactory, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
     PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerSnapshot,
-    PlayerTimelineSnapshot, PresentationState, SourceNormalizerMode,
+    PlayerTimelineSnapshot, PresentationState, SourceNormalizerMode, SubtitleErrorDetails,
 };
 #[test]
 fn android_factory_exposes_native_capabilities() {
@@ -2387,6 +2387,38 @@ fn android_host_event_conversion_maps_runtime_events() {
         },
     ));
     assert!(initialized.is_none());
+}
+
+#[test]
+fn android_host_event_conversion_preserves_subtitle_error_details() {
+    let details = SubtitleErrorDetails::new(
+        "future_subtitle_code",
+        "future_phase",
+        Some("opaque-track".to_owned()),
+        true,
+        "selection failed",
+    )
+    .with_transaction(Some(42), Some(9));
+    let event = AndroidHostEvent::from_runtime_event(&PlayerRuntimeEvent::Error(
+        PlayerError::with_taxonomy(
+            PlayerErrorCode::Timeout,
+            PlayerErrorCategory::Playback,
+            true,
+            "selection failed",
+        )
+        .with_subtitle_details(details.clone()),
+    ));
+
+    assert_eq!(
+        event,
+        Some(AndroidHostEvent::Error {
+            code: PlayerErrorCode::Timeout,
+            category: PlayerErrorCategory::Playback,
+            retriable: true,
+            message: "selection failed".to_owned(),
+            subtitle_details: Some(details),
+        })
+    );
 }
 
 #[test]

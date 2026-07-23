@@ -75,8 +75,64 @@ class VesperNativeErrorMappingTest {
         assertEquals("selection", error.details["phase"])
         assertEquals("caption-en", error.details["trackId"])
         assertEquals(true, error.details["retriable"])
-        assertEquals(42L, error.details["commandId"])
-        assertEquals(9L, error.details["sourceEpoch"])
+        assertEquals(42L, (error.details["commandId"] as Number).toLong())
+        assertEquals(9L, (error.details["sourceEpoch"] as Number).toLong())
+    }
+
+    @Test
+    fun nativeBridgeErrorDecodesSubtitleDetailsJsonAtTheJniBoundary() {
+        val event =
+            NativeBridgeEvent.Error(
+                message = "selection timed out",
+                codeOrdinal = VesperPlayerErrorCode.Timeout.jniOrdinal,
+                categoryOrdinal = VesperPlayerErrorCategory.Playback.jniOrdinal,
+                retriable = true,
+                detailsJson =
+                    """{"domain":"subtitle","code":"future_subtitle_code","phase":"future_phase","trackId":"opaque-track","retriable":true,"message":"selection timed out","commandId":42,"sourceEpoch":9}""",
+            )
+
+        val error = event.toPlayerErrorState()
+
+        assertEquals("subtitle", error.details["domain"])
+        assertEquals("future_subtitle_code", error.details["code"])
+        assertEquals("future_phase", error.details["phase"])
+        assertEquals("opaque-track", error.details["trackId"])
+        assertEquals(42L, (error.details["commandId"] as Number).toLong())
+        assertEquals(9L, (error.details["sourceEpoch"] as Number).toLong())
+    }
+
+    @Test
+    fun nativeBridgeErrorPreservesMalformedDetailsJson() {
+        val event =
+            NativeBridgeEvent.Error(
+                message = "malformed details",
+                codeOrdinal = VesperPlayerErrorCode.BackendFailure.jniOrdinal,
+                categoryOrdinal = VesperPlayerErrorCategory.Platform.jniOrdinal,
+                retriable = false,
+                detailsJson = "{not-json",
+            )
+
+        val error = event.toPlayerErrorState()
+
+        assertEquals("{not-json", error.details["_rawDetailsJson"])
+        assertEquals(true, error.details["_detailsJsonDecodeFailed"])
+    }
+
+    @Test
+    fun nativeBridgeErrorPreservesBothUnknownOrdinals() {
+        val event =
+            NativeBridgeEvent.Error(
+                message = "future enum values",
+                codeOrdinal = 99,
+                categoryOrdinal = 88,
+                retriable = false,
+                detailsJson = null,
+            )
+
+        val error = event.toPlayerErrorState()
+
+        assertEquals(99, error.details["_rawCodeOrdinal"])
+        assertEquals(88, error.details["_rawCategoryOrdinal"])
     }
 
     @Test

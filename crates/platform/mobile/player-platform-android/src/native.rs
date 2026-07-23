@@ -181,6 +181,7 @@ pub enum AndroidHostEvent {
         category: PlayerErrorCategory,
         retriable: bool,
         message: String,
+        subtitle_details: Option<SubtitleErrorDetails>,
     },
 }
 
@@ -785,6 +786,7 @@ impl AndroidHostEvent {
                 category: error.category(),
                 retriable: error.is_retriable(),
                 message: error.message().to_owned(),
+                subtitle_details: error.subtitle_details().cloned(),
             }),
             PlayerRuntimeEvent::Initialized(_)
             | PlayerRuntimeEvent::MetadataReady(_)

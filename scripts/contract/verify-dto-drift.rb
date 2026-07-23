@@ -51,6 +51,15 @@ def assert_json_keys(path, keys)
   end
 end
 
+def assert_json_exact_keys(path, keys)
+  parsed = JSON.parse(read(path))
+  actual = parsed.keys.sort
+  expected = keys.sort
+  return if actual == expected
+
+  fail_contract("expected #{path} JSON keys #{expected.inspect}, found #{actual.inspect}")
+end
+
 def camel_to_pascal(value)
   value.split("_").map { |part| part[0].upcase + part[1..] }.join
 end
@@ -97,6 +106,18 @@ assert_json_keys(
   "fixtures/contracts/player_error.json",
   %w[message code category retriable details]
 )
+
+assert_json_exact_keys(
+  "fixtures/contracts/subtitle_error.json",
+  %w[domain code phase trackId retriable message commandId sourceEpoch]
+)
+puts "checked subtitle error fields"
+
+assert_json_exact_keys(
+  "fixtures/contracts/subtitle_state.json",
+  %w[catalogState selectionState advertisedTrackCount selectableTrackCount catalogError selectionError]
+)
+puts "checked subtitle state fields"
 
 check_wire_values(
   "player error code/category",

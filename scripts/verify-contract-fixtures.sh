@@ -43,7 +43,9 @@ for fixture in \
   fixtures/contracts/player_error.json \
   fixtures/contracts/plugin_diagnostics.json \
   fixtures/contracts/download_task_snapshot.json \
-  fixtures/contracts/system_playback_configuration.json; do
+  fixtures/contracts/system_playback_configuration.json \
+  fixtures/contracts/subtitle_error.json \
+  fixtures/contracts/subtitle_state.json; do
   require_file "$fixture"
 done
 

@@ -1,6 +1,7 @@
 package io.github.ikaros.vesper.player.android
 
 import kotlin.jvm.JvmField
+import org.json.JSONObject
 
 internal enum class NativeVideoSurfaceKind {
     TextureView,
@@ -366,7 +367,21 @@ internal sealed interface NativeBridgeEvent {
         val categoryOrdinal: Int,
         val retriable: Boolean,
         val details: Map<String, Any?> = emptyMap(),
-    ) : NativeBridgeEvent
+    ) : NativeBridgeEvent {
+        constructor(
+            message: String,
+            codeOrdinal: Int,
+            categoryOrdinal: Int,
+            retriable: Boolean,
+            detailsJson: String?,
+        ) : this(
+            message = message,
+            codeOrdinal = codeOrdinal,
+            categoryOrdinal = categoryOrdinal,
+            retriable = retriable,
+            details = decodeNativeErrorDetailsJson(detailsJson),
+        )
+    }
 }
 
 internal fun NativeBridgeEvent.Error.toPlayerErrorState(): VesperPlayerErrorState {
@@ -374,14 +389,13 @@ internal fun NativeBridgeEvent.Error.toPlayerErrorState(): VesperPlayerErrorStat
     val category = VesperPlayerErrorCategory.fromJniOrdinal(categoryOrdinal)
     // Preserve raw ordinals in details when they fall back to default, so hosts can
     // still diagnose cross-version enum mismatches.
-    val enrichedDetails =
-        if (code == VesperPlayerErrorCode.BackendFailure && codeOrdinal != VesperPlayerErrorCode.BackendFailure.jniOrdinal) {
-            details + ("_rawCodeOrdinal" to codeOrdinal)
-        } else if (category == VesperPlayerErrorCategory.Platform && categoryOrdinal != VesperPlayerErrorCategory.Platform.jniOrdinal) {
-            details + ("_rawCategoryOrdinal" to categoryOrdinal)
-        } else {
-            details
-        }
+    val enrichedDetails = details.toMutableMap()
+    if (code == VesperPlayerErrorCode.BackendFailure && codeOrdinal != VesperPlayerErrorCode.BackendFailure.jniOrdinal) {
+        enrichedDetails["_rawCodeOrdinal"] = codeOrdinal
+    }
+    if (category == VesperPlayerErrorCategory.Platform && categoryOrdinal != VesperPlayerErrorCategory.Platform.jniOrdinal) {
+        enrichedDetails["_rawCategoryOrdinal"] = categoryOrdinal
+    }
     return VesperPlayerErrorState(
         message = message,
         code = code,
@@ -389,6 +403,20 @@ internal fun NativeBridgeEvent.Error.toPlayerErrorState(): VesperPlayerErrorStat
         retriable = retriable,
         details = enrichedDetails,
     )
+}
+
+private fun decodeNativeErrorDetailsJson(detailsJson: String?): Map<String, Any?> {
+    if (detailsJson == null) {
+        return emptyMap()
+    }
+    return runCatching {
+        jsonObjectToMap(JSONObject(detailsJson))
+    }.getOrElse {
+        linkedMapOf(
+            "_rawDetailsJson" to detailsJson,
+            "_detailsJsonDecodeFailed" to true,
+        )
+    }
 }
 
 internal sealed interface NativePlayerCommand {

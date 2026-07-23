@@ -1,8 +1,9 @@
 use super::{
     FfiPlayerInitializer, PlayerFfiAbrMode, PlayerFfiBufferingPolicy, PlayerFfiCachePolicy,
-    PlayerFfiCallStatus, PlayerFfiCommandKind, PlayerFfiError, PlayerFfiErrorCode,
-    PlayerFfiEventKind, PlayerFfiFrameProcessorPolicyAction, PlayerFfiFrameProcessorWarningKind,
-    PlayerFfiHandle, PlayerFfiInitializerHandle, PlayerFfiMediaInfo, PlayerFfiPlaybackState,
+    PlayerFfiCallStatus, PlayerFfiCommandKind, PlayerFfiError, PlayerFfiErrorCategory,
+    PlayerFfiErrorCode, PlayerFfiEvent, PlayerFfiEventKind, PlayerFfiEventList,
+    PlayerFfiFrameProcessorPolicyAction, PlayerFfiFrameProcessorWarningKind, PlayerFfiHandle,
+    PlayerFfiInitializerHandle, PlayerFfiMediaInfo, PlayerFfiPlaybackState,
     PlayerFfiPluginCapabilityKind, PlayerFfiPluginDiagnosticStatus, PlayerFfiPluginParticipation,
     PlayerFfiResolvedResiliencePolicy, PlayerFfiRetryPolicy, PlayerFfiRuntimeWarningDomain,
     PlayerFfiSnapshot, PlayerFfiStartup, PlayerFfiTrackKind, PlayerFfiVideoFrame,
@@ -18,15 +19,16 @@ use player_runtime::{
     DecodedVideoFrame, FrameProcessorPolicyAction, FrameProcessorWarning,
     FrameProcessorWarningKind, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
     MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
-    MediaTrackSelectionSnapshot, PlaybackProgress, PlayerAudioInfo, PlayerMediaInfo,
-    PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
-    PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
-    PlayerPluginFrameProcessorCapabilitySummary, PlayerPluginParticipation, PlayerResult,
-    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    MediaTrackSelectionSnapshot, PlaybackProgress, PlayerAudioInfo, PlayerError,
+    PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo, PlayerPluginCapabilitySummary,
+    PlayerPluginCodecCapability, PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic,
+    PlayerPluginDiagnosticStatus, PlayerPluginFrameProcessorCapabilitySummary,
+    PlayerPluginParticipation, PlayerResult, PlayerRuntimeAdapter,
+    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
     PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeInitializer,
     PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerRuntimeWarning, PlayerVideoInfo,
-    PresentationState, VideoPixelFormat,
+    PresentationState, SubtitleErrorDetails, VideoPixelFormat,
 };
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -176,6 +178,125 @@ fn ffi_call_converts_panics_into_backend_failure() {
     assert_eq!(error.category, super::PlayerFfiErrorCategory::Platform);
     assert!(copy_c_string(error.message).contains("ffi panic smoke"));
     unsafe { super::player_ffi_error_free(&mut error) };
+}
+
+#[test]
+fn ffi_subtitle_error_details_json_preserves_canonical_and_unknown_values() {
+    let cases = [
+        (
+            "subtitle_selection_timeout",
+            "selection",
+            Some("caption-en"),
+            Some(42),
+            Some(9),
+        ),
+        (
+            "future_subtitle_code",
+            "future_phase",
+            Some("opaque-track"),
+            Some(u64::MAX),
+            Some(17),
+        ),
+    ];
+
+    for (code, phase, track_id, command_id, source_epoch) in cases {
+        let details = SubtitleErrorDetails::new(
+            code,
+            phase,
+            track_id.map(str::to_owned),
+            true,
+            "selection failed",
+        )
+        .with_transaction(command_id, source_epoch);
+        let error = PlayerError::with_taxonomy(
+            PlayerErrorCode::Timeout,
+            PlayerErrorCategory::Playback,
+            true,
+            "selection failed",
+        )
+        .with_subtitle_details(details);
+        let mut ffi_error = super::owned_bridge_error(error.into());
+        let payload: serde_json::Value =
+            serde_json::from_str(&copy_c_string(ffi_error.details_json))
+                .expect("subtitle details JSON");
+
+        assert_eq!(payload["domain"], "subtitle");
+        assert_eq!(payload["code"], code);
+        assert_eq!(payload["phase"], phase);
+        assert_eq!(payload["trackId"], track_id.expect("track id"));
+        assert_eq!(payload["commandId"].as_u64(), command_id);
+        assert_eq!(payload["sourceEpoch"].as_u64(), source_epoch);
+
+        unsafe { super::player_ffi_error_free(&mut ffi_error) };
+    }
+}
+
+#[test]
+fn player_ffi_error_free_resets_fields_and_allows_reuse() {
+    let details = SubtitleErrorDetails::new(
+        "subtitle_selection_timeout",
+        "selection",
+        None,
+        true,
+        "selection timed out",
+    );
+    let error = PlayerError::new(PlayerErrorCode::Timeout, "selection timed out")
+        .with_subtitle_details(details);
+    let mut ffi_error = super::owned_bridge_error(error.into());
+    assert!(!ffi_error.message.is_null());
+    assert!(!ffi_error.details_json.is_null());
+
+    unsafe { super::player_ffi_error_free(&mut ffi_error) };
+
+    assert_eq!(ffi_error.code, PlayerFfiErrorCode::None);
+    assert_eq!(ffi_error.category, PlayerFfiErrorCategory::Platform);
+    assert!(!ffi_error.retriable);
+    assert!(ffi_error.message.is_null());
+    assert!(ffi_error.details_json.is_null());
+
+    let uri = CString::new("https://example.com/reused-error.m3u8").expect("valid uri");
+    let status =
+        unsafe { player_ffi_initializer_probe_uri(uri.as_ptr(), ptr::null_mut(), &mut ffi_error) };
+    assert_eq!(status, PlayerFfiCallStatus::Error);
+    assert_eq!(ffi_error.code, PlayerFfiErrorCode::NullPointer);
+    assert_eq!(copy_c_string(ffi_error.message), "out_initializer was null");
+    unsafe { super::player_ffi_error_free(&mut ffi_error) };
+}
+
+#[test]
+fn player_ffi_error_free_accepts_null_pointer() {
+    unsafe { super::player_ffi_error_free(ptr::null_mut()) };
+}
+
+#[test]
+fn player_ffi_event_list_free_releases_nested_error_and_resets_list() {
+    let details = SubtitleErrorDetails::new(
+        "future_subtitle_code",
+        "future_phase",
+        Some("opaque-track".to_owned()),
+        false,
+        "future failure",
+    )
+    .with_transaction(Some(3), Some(4));
+    let error = PlayerError::with_taxonomy(
+        PlayerErrorCode::BackendFailure,
+        PlayerErrorCategory::Playback,
+        false,
+        "future failure",
+    )
+    .with_subtitle_details(details);
+    let event = PlayerFfiEvent::from(crate::FfiEvent::Error(error.into()));
+    assert_eq!(event.kind, PlayerFfiEventKind::Error);
+    assert!(!event.error.message.is_null());
+    assert!(!event.error.details_json.is_null());
+    let (ptr, len) = super::into_owned_struct_array(vec![event]);
+    let mut events = PlayerFfiEventList { ptr, len };
+
+    unsafe { player_ffi_event_list_free(&mut events) };
+
+    assert!(events.ptr.is_null());
+    assert_eq!(events.len, 0);
+    unsafe { player_ffi_event_list_free(&mut events) };
 }
 
 #[test]

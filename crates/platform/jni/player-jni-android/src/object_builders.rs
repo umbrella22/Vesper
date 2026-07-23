@@ -217,30 +217,122 @@ pub(crate) fn host_event_object<'local>(
             category,
             retriable,
             message,
+            subtitle_details,
         } => {
             let class = env.find_class(jni_name(format!("{PKG}/NativeBridgeEvent$Error")))?;
             let message = env.new_string(format!("[{code:?}] {message}"))?;
             let message_object = JObject::from(message);
-            let details = env
-                .call_static_method(
-                    jni_name("java/util/Collections"),
-                    jni_name("emptyMap"),
-                    method_sig("()Ljava/util/Map;").method_signature(),
-                    &[],
-                )?
-                .l()?;
+            let details_object = match subtitle_details.as_ref() {
+                Some(details) => {
+                    JObject::from(env.new_string(subtitle_error_details_json(details))?)
+                }
+                None => JObject::null(),
+            };
             env.new_object(
                 class,
-                method_sig("(Ljava/lang/String;IIZLjava/util/Map;)V").method_signature(),
+                method_sig("(Ljava/lang/String;IIZLjava/lang/String;)V").method_signature(),
                 &[
                     JValue::Object(&message_object),
                     JValue::Int(*code as jint),
                     JValue::Int(*category as jint),
                     JValue::Bool(*retriable),
-                    JValue::Object(&details),
+                    JValue::Object(&details_object),
                 ],
             )
         }
+    }
+}
+
+fn subtitle_error_details_json(details: &player_model::SubtitleErrorDetails) -> String {
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "domain".to_owned(),
+        serde_json::Value::String("subtitle".to_owned()),
+    );
+    payload.insert(
+        "code".to_owned(),
+        serde_json::Value::String(details.code.clone()),
+    );
+    payload.insert(
+        "phase".to_owned(),
+        serde_json::Value::String(details.phase.clone()),
+    );
+    if let Some(track_id) = details.track_id.as_ref() {
+        payload.insert(
+            "trackId".to_owned(),
+            serde_json::Value::String(track_id.clone()),
+        );
+    }
+    payload.insert(
+        "retriable".to_owned(),
+        serde_json::Value::Bool(details.retriable),
+    );
+    payload.insert(
+        "message".to_owned(),
+        serde_json::Value::String(details.message.clone()),
+    );
+    if let Some(command_id) = details.command_id {
+        payload.insert(
+            "commandId".to_owned(),
+            serde_json::Value::Number(command_id.into()),
+        );
+    }
+    if let Some(source_epoch) = details.source_epoch {
+        payload.insert(
+            "sourceEpoch".to_owned(),
+            serde_json::Value::Number(source_epoch.into()),
+        );
+    }
+    serde_json::Value::Object(payload).to_string()
+}
+
+#[cfg(test)]
+mod subtitle_error_details_tests {
+    use super::subtitle_error_details_json;
+    use player_model::SubtitleErrorDetails;
+
+    #[test]
+    fn encoder_adds_transport_domain_and_preserves_transaction_fields() {
+        let details = SubtitleErrorDetails::new(
+            "subtitle_selection_timeout",
+            "selection",
+            Some("caption-en".to_owned()),
+            true,
+            "selection timed out",
+        )
+        .with_transaction(Some(42), Some(9));
+        let payload: serde_json::Value =
+            serde_json::from_str(&subtitle_error_details_json(&details))
+                .expect("subtitle error details JSON");
+
+        assert_eq!(payload["domain"], "subtitle");
+        assert_eq!(payload["code"], "subtitle_selection_timeout");
+        assert_eq!(payload["phase"], "selection");
+        assert_eq!(payload["trackId"], "caption-en");
+        assert_eq!(payload["retriable"], true);
+        assert_eq!(payload["message"], "selection timed out");
+        assert_eq!(payload["commandId"], 42);
+        assert_eq!(payload["sourceEpoch"], 9);
+    }
+
+    #[test]
+    fn encoder_preserves_unknown_code_and_phase_strings() {
+        let details = SubtitleErrorDetails::new(
+            "future_subtitle_code",
+            "future_phase",
+            None,
+            false,
+            "future failure",
+        );
+        let payload: serde_json::Value =
+            serde_json::from_str(&subtitle_error_details_json(&details))
+                .expect("subtitle error details JSON");
+
+        assert_eq!(payload["code"], "future_subtitle_code");
+        assert_eq!(payload["phase"], "future_phase");
+        assert!(payload.get("trackId").is_none());
+        assert!(payload.get("commandId").is_none());
+        assert!(payload.get("sourceEpoch").is_none());
     }
 }
 
