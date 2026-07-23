@@ -83,7 +83,25 @@ root-level status view; detailed implementation notes stay under `devnotes/`.
   and Flutter desktop integration settle.
 - [ ] Continue Live / LiveDvr real-experience validation across Android, iOS,
   and Flutter hosts.
-- [ ] Design the minimum subtitle DTO and host control surface.
+- [x] The 0.4 subtitle implementation separates catalog and selection state,
+  publishes requested, confirmed, and effective subtitle selection, preserves
+  opaque source-stable ids, carries structured errors through native and Flutter
+  boundaries, and supports embedded plus external SRT / WebVTT / SSA sources.
+  Android selection waits for Media3 track callbacks; iOS selection waits for
+  `currentMediaSelection` convergence. Shared fixtures and host unit tests cover
+  partial resource failure, duplicate identity/default rejection, source epochs,
+  superseded commands, and unknown error values.
+- [ ] Complete the 0.4 subtitle device gate. Required evidence includes the
+  Controller-to-native-to-snapshot chain on Android and iOS, Flutter integration,
+  reorder/refresh/restore identity, manual/auto/disabled selection, timeout and
+  source-switch cancellation, and local WebVTT cue delivery.
+  - [x] iOS evidence: On 2026-07-23, the complete subtitle gate passed on an
+    arm64 iPhone 16 Pro running iOS 27.0 beta and an Apple Silicon Simulator.
+    Simulator and physical-device XCTest, Flutter positive rendering, and
+    timeout/source-change/supersede lifecycle coverage passed. JSON and PNG
+    evidence confirmed visible `Subtitle B` in a window-attached, nonzero overlay.
+  - [ ] Android evidence: Run the equivalent complete gate on an arm64 Android
+    device before closing the cross-platform gate.
 - [ ] Continue release validation for tag-derived version metadata, GitHub
   binary artifacts, and future pub.dev publishing.
 - [ ] Pass the canonical iOS `verify-release --scope complete` gate in the

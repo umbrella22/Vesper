@@ -48,6 +48,12 @@
 
 ### Fixed
 
+- Preserved structured subtitle error details across Rust, C FFI, Android
+  JNI/Kotlin, and Flutter boundaries, including malformed JSON payloads and
+  unknown enum values.
+- Isolated obsolete iOS subtitle selection transactions so source changes,
+  disposal, and superseding commands cannot restore stale backend state,
+  overwrite newer selection state, or publish stale player errors.
 - Core iOS framework archives now keep `VesperPlayerKitBridgeShim` internal,
   use one canonical XCFramework, omit AppleDouble metadata, and pass an isolated
   textual-interface import and link smoke before Release upload.
