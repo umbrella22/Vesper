@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -6,12 +7,13 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:vesper_player/vesper_player.dart';
+import 'package:flutter_host/src/device/example_subtitle_overlay_evidence.dart';
 
 const String _subtitleAId = 'external-a';
 const String _subtitleBId = 'external-b';
 
 void main() {
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('subtitle contract converges through the native host kit', (
     WidgetTester tester,
@@ -137,6 +139,29 @@ void main() {
         });
         try {
           await activeController.play().timeout(const Duration(seconds: 10));
+          if (Platform.isIOS) {
+            final visibleOverlay = await _waitForVisibleSubtitleOverlay(
+              activeController.playerId,
+              expectedText: 'Subtitle B',
+            );
+            expect(visibleOverlay.visible, isTrue);
+            expect(visibleOverlay.windowAttached, isTrue);
+            expect(visibleOverlay.frame.width, greaterThan(0));
+            expect(visibleOverlay.frame.height, greaterThan(0));
+
+            final evidence =
+                await ExampleSubtitleOverlayEvidenceChannel.capture(
+                  activeController.playerId,
+                );
+            expect(evidence.snapshot.text, 'Subtitle B');
+            expect(evidence.snapshot.visible, isTrue);
+            binding.reportData = <String, dynamic>{
+              'evidenceName': 'subtitle-positive',
+              'playerId': activeController.playerId,
+              'snapshot': evidence.snapshot.toJson(),
+              'pngBase64': base64Encode(evidence.png),
+            };
+          }
           snapshot = await _waitForSnapshot(
             activeController,
             (VesperPlayerSnapshot value) =>
@@ -313,6 +338,29 @@ void main() {
       });
     }
   });
+}
+
+Future<ExampleSubtitleOverlaySnapshot> _waitForVisibleSubtitleOverlay(
+  String playerId, {
+  required String expectedText,
+  Duration timeout = const Duration(seconds: 5),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  ExampleSubtitleOverlaySnapshot? latest;
+  while (DateTime.now().isBefore(deadline)) {
+    latest = await ExampleSubtitleOverlayEvidenceChannel.snapshot(playerId);
+    if (latest.visible && latest.text == expectedText) {
+      return latest;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+  throw TimeoutException(
+    'subtitle overlay did not become visible: '
+    'text=${latest?.text} visible=${latest?.visible} '
+    'windowAttached=${latest?.windowAttached} '
+    'frame=${latest?.frame.toJson()}',
+    timeout,
+  );
 }
 
 Future<File> _writeWebVtt(

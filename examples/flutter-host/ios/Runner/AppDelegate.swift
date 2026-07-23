@@ -168,9 +168,181 @@ import UIKit
         return
       }
       result(setVolumeRatio(ratio))
+    case "subtitleOverlaySnapshot":
+      handleSubtitleOverlayEvidence(call: call, captureImage: false, result: result)
+    case "captureSubtitleOverlayEvidence":
+      handleSubtitleOverlayEvidence(call: call, captureImage: true, result: result)
     default:
       result(FlutterMethodNotImplemented)
     }
+  }
+
+  private func handleSubtitleOverlayEvidence(
+    call: FlutterMethodCall,
+    captureImage: Bool,
+    result: @escaping FlutterResult
+  ) {
+    guard
+      let arguments = call.arguments as? [String: Any],
+      let playerId = arguments["playerId"] as? String,
+      !playerId.isEmpty
+    else {
+      result(
+        FlutterError(
+          code: "invalid_argument",
+          message: "Missing playerId for subtitle overlay evidence.",
+          details: nil
+        )
+      )
+      return
+    }
+    let windows = applicationWindows()
+    let surfaceIdentifier = "io.github.ikaros.vesper.player.surface.\(playerId)"
+    let surfaceMarkerIdentifier =
+      "io.github.ikaros.vesper.player.surface-marker.\(playerId)"
+    let directSurface = windows.lazy.compactMap({ window in
+      self.descendantView(in: window, accessibilityIdentifier: surfaceIdentifier)
+    }).first
+    let markedSurface = windows.lazy.compactMap({ window in
+      self.descendantView(in: window, accessibilityIdentifier: surfaceMarkerIdentifier)?
+        .superview
+    }).first
+    guard
+      let surface = directSurface ?? markedSurface,
+      let subtitleLabel = descendantView(
+        in: surface,
+        accessibilityIdentifier: "io.github.ikaros.vesper.player.subtitle-overlay"
+      ) as? UILabel
+    else {
+      result(
+        FlutterError(
+          code: "subtitle_overlay_unavailable",
+          message: "Unable to locate the subtitle overlay for playerId=\(playerId).",
+          details: [
+            "windowCount": windows.count,
+            "surfaceIdentifier": surfaceIdentifier,
+            "surfaceMarkerIdentifier": surfaceMarkerIdentifier,
+            "visibleAccessibilityIdentifiers": windows.flatMap { window in
+              self.descendantAccessibilityIdentifiers(in: window, remaining: 64)
+            },
+          ]
+        )
+      )
+      return
+    }
+
+    surface.layoutIfNeeded()
+    subtitleLabel.layoutIfNeeded()
+    let snapshot = subtitleOverlaySnapshot(from: subtitleLabel)
+    guard captureImage else {
+      result(snapshot)
+      return
+    }
+    guard surface.bounds.width > 0, surface.bounds.height > 0 else {
+      result(
+        FlutterError(
+          code: "subtitle_overlay_unavailable",
+          message: "The subtitle surface has an empty frame.",
+          details: snapshot
+        )
+      )
+      return
+    }
+
+    var didDrawHierarchy = false
+    let renderer = UIGraphicsImageRenderer(bounds: surface.bounds)
+    let image = renderer.image { _ in
+      didDrawHierarchy = surface.drawHierarchy(
+        in: surface.bounds,
+        afterScreenUpdates: true
+      )
+    }
+    guard didDrawHierarchy, let png = image.pngData() else {
+      result(
+        FlutterError(
+          code: "subtitle_overlay_capture_failed",
+          message: "UIKit could not capture the subtitle surface.",
+          details: snapshot
+        )
+      )
+      return
+    }
+    result([
+      "snapshot": snapshot,
+      "png": FlutterStandardTypedData(bytes: png),
+    ])
+  }
+
+  private func descendantView(
+    in view: UIView,
+    accessibilityIdentifier: String
+  ) -> UIView? {
+    if view.accessibilityIdentifier == accessibilityIdentifier {
+      return view
+    }
+    for subview in view.subviews {
+      if let match = descendantView(
+        in: subview,
+        accessibilityIdentifier: accessibilityIdentifier
+      ) {
+        return match
+      }
+    }
+    return nil
+  }
+
+  private func descendantAccessibilityIdentifiers(
+    in view: UIView,
+    remaining: Int
+  ) -> [String] {
+    guard remaining > 0 else { return [] }
+    var identifiers: [String] = []
+    if let identifier = view.accessibilityIdentifier, !identifier.isEmpty {
+      identifiers.append(identifier)
+    }
+    for subview in view.subviews where identifiers.count < remaining {
+      identifiers.append(
+        contentsOf: descendantAccessibilityIdentifiers(
+          in: subview,
+          remaining: remaining - identifiers.count
+        )
+      )
+    }
+    return identifiers
+  }
+
+  private func applicationWindows() -> [UIWindow] {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    return scenes.flatMap(\.windows).sorted { lhs, rhs in
+      if lhs.isKeyWindow != rhs.isKeyWindow {
+        return lhs.isKeyWindow
+      }
+      return lhs.windowLevel.rawValue < rhs.windowLevel.rawValue
+    }
+  }
+
+  private func subtitleOverlaySnapshot(from label: UILabel) -> [String: Any] {
+    let text = label.text ?? ""
+    let frame = label.frame
+    let windowAttached = label.window != nil
+    return [
+      "text": text,
+      "hidden": label.isHidden,
+      "alpha": Double(label.alpha),
+      "windowAttached": windowAttached,
+      "frame": [
+        "x": Double(frame.origin.x),
+        "y": Double(frame.origin.y),
+        "width": Double(frame.width),
+        "height": Double(frame.height),
+      ],
+      "visible": !text.isEmpty
+        && !label.isHidden
+        && label.alpha > 0
+        && windowAttached
+        && frame.width > 0
+        && frame.height > 0,
+    ]
   }
 
   private func ratioArgument(from call: FlutterMethodCall) -> Double? {

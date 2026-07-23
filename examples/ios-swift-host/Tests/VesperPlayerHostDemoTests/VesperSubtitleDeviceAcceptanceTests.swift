@@ -3,6 +3,110 @@ import XCTest
 @testable import VesperPlayerKit
 
 final class VesperSubtitleDeviceAcceptanceTests: XCTestCase {
+    @MainActor
+    func testFactoryRendersExternalSubtitleIntoVisibleSurfaceLabelOnPhysicalDevice() async throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("Physical iOS device required for subtitle rendering acceptance")
+#else
+        let subtitleURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vesper-device-overlay-\(UUID().uuidString)")
+            .appendingPathExtension("vtt")
+        try Data(
+            "WEBVTT\n\n00:00:00.000 --> 00:01:00.000\nSubtitle B\n".utf8
+        ).write(to: subtitleURL)
+        defer { try? FileManager.default.removeItem(at: subtitleURL) }
+
+        let mediaURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(
+                forResource: "tiny-h264-aac",
+                withExtension: "m4v"
+            )
+        )
+        let trackId = "device-overlay-b"
+        let source = VesperPlayerSource.localFile(
+            url: mediaURL,
+            label: "Subtitle Overlay Device Acceptance",
+            externalSubtitles: [
+                VesperExternalSubtitleSource(
+                    id: trackId,
+                    uri: subtitleURL.absoluteString,
+                    mimeType: VesperExternalSubtitleSource.mimeWebVtt,
+                    language: "en",
+                    label: "Subtitle B"
+                )
+            ]
+        )
+        let controller = VesperPlayerControllerFactory.makeDefault(
+            initialSource: source,
+            keepScreenOnDuringPlayback: false
+        )
+        let surface = PlayerSurfaceView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 180)
+        )
+        let window = UIWindow(frame: surface.bounds)
+        let viewController = UIViewController()
+        viewController.view.frame = window.bounds
+        viewController.view.backgroundColor = .black
+        window.rootViewController = viewController
+        viewController.view.addSubview(surface)
+        surface.frame = viewController.view.bounds
+        window.makeKeyAndVisible()
+        surface.layoutIfNeeded()
+        controller.attachSurfaceHost(surface)
+        defer {
+            controller.pause()
+            controller.detachSurfaceHost()
+            controller.dispose()
+            surface.detachBridgeIfNeeded()
+            window.isHidden = true
+        }
+
+        controller.initialize()
+        let catalogReady = try await waitForSubtitleDeviceCondition(timeout: .seconds(10)) {
+            controller.refresh()
+            return controller.subtitleState.catalogState == .ready
+                && controller.trackCatalog.subtitleTracks.contains { $0.id == trackId }
+        }
+        XCTAssertTrue(catalogReady, "The external subtitle must enter the selectable catalog")
+
+        try await controller.setSubtitleTrackSelection(.track(trackId))
+        controller.play()
+        let snapshot = try await waitForVisibleOverlay(
+            controller: controller,
+            surface: surface,
+            expectedText: "Subtitle B",
+            timeout: .seconds(10)
+        )
+
+        let jsonAttachment = XCTAttachment(
+            data: try JSONEncoder().encode(snapshot),
+            uniformTypeIdentifier: "public.json"
+        )
+        jsonAttachment.name = "subtitle-overlay-snapshot.json"
+        jsonAttachment.lifetime = .keepAlways
+        add(jsonAttachment)
+
+        let renderer = UIGraphicsImageRenderer(bounds: surface.bounds)
+        let image = renderer.image { _ in
+            surface.drawHierarchy(in: surface.bounds, afterScreenUpdates: true)
+        }
+        let imageAttachment = XCTAttachment(image: image)
+        imageAttachment.name = "subtitle-overlay.png"
+        imageAttachment.lifetime = .keepAlways
+        add(imageAttachment)
+
+        XCTAssertEqual(snapshot.text, "Subtitle B")
+        XCTAssertFalse(snapshot.hidden)
+        XCTAssertGreaterThan(snapshot.alpha, 0)
+        XCTAssertTrue(snapshot.windowAttached)
+        XCTAssertGreaterThan(snapshot.frame.width, 0)
+        XCTAssertGreaterThan(snapshot.frame.height, 0)
+        XCTAssertTrue(snapshot.visible)
+        XCTAssertEqual(controller.confirmedSubtitleSelection, .track(trackId))
+        XCTAssertEqual(controller.effectiveSubtitleTrackId, trackId)
+#endif
+    }
+
     func testDashWebVttPublishesLegibleGroupOnPhysicalDevice() async throws {
 #if targetEnvironment(simulator)
         throw XCTSkip("Physical iOS device required for AVPlayer subtitle acceptance")
@@ -183,6 +287,43 @@ final class VesperSubtitleDeviceAcceptanceTests: XCTestCase {
             group.cancelAll()
             return result
         }
+    }
+
+    @MainActor
+    private func waitForVisibleOverlay(
+        controller: VesperPlayerController,
+        surface: PlayerSurfaceView,
+        expectedText: String,
+        timeout: Duration
+    ) async throws -> VesperSubtitleOverlaySnapshot {
+        var snapshot = surface.subtitleOverlaySnapshot
+        let visible = try await waitForSubtitleDeviceCondition(timeout: timeout) {
+            controller.refresh()
+            surface.layoutIfNeeded()
+            snapshot = surface.subtitleOverlaySnapshot
+            return snapshot.visible && snapshot.text == expectedText
+        }
+        XCTAssertTrue(
+            visible,
+            "The selected subtitle must render into an attached, nonzero UILabel"
+        )
+        return snapshot
+    }
+
+    @MainActor
+    private func waitForSubtitleDeviceCondition(
+        timeout: Duration,
+        condition: () -> Bool
+    ) async throws -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while clock.now < deadline {
+            if condition() {
+                return true
+            }
+            try await clock.sleep(for: .milliseconds(50))
+        }
+        return condition()
     }
 }
 

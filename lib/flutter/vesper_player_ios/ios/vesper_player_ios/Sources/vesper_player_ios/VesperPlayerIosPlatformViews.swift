@@ -25,6 +25,14 @@ final class PlayerViewFactory: NSObject, FlutterPlatformViewFactory {
         hostView.isUserInteractionEnabled = false
 
         if let playerId {
+            hostView.accessibilityIdentifier =
+                "io.github.ikaros.vesper.player.surface.\(playerId)"
+            let evidenceMarker = UIView(frame: .zero)
+            evidenceMarker.isHidden = true
+            evidenceMarker.isAccessibilityElement = false
+            evidenceMarker.accessibilityIdentifier =
+                "io.github.ikaros.vesper.player.surface-marker.\(playerId)"
+            hostView.addSubview(evidenceMarker)
             Task { @MainActor [weak plugin, weak hostView] in
                 guard let plugin, let hostView else { return }
                 plugin.bindSessionHost(playerId: playerId, host: hostView)
@@ -115,4 +123,3 @@ final class PlayerPlatformView: NSObject, FlutterPlatformView {
         onDispose()
     }
 }
-

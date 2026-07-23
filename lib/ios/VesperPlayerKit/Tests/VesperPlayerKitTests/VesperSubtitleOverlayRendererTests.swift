@@ -92,6 +92,40 @@ final class VesperSubtitleOverlayRendererTests: XCTestCase {
         XCTAssertEqual(renderer.renderedTextSnapshot, "Short timestamp cue")
     }
 
+    func testSurfaceSnapshotRequiresVisibleAttachedNonzeroSubtitleLabel() throws {
+        let surface = PlayerSurfaceView(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
+        let window = UIWindow(frame: surface.bounds)
+        let viewController = UIViewController()
+        window.rootViewController = viewController
+        viewController.view.addSubview(surface)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+
+        surface.updateSubtitleOverlay(text: "Subtitle B", style: .default)
+        surface.layoutIfNeeded()
+
+        let snapshot = surface.subtitleOverlaySnapshot
+        XCTAssertEqual(snapshot.text, "Subtitle B")
+        XCTAssertFalse(snapshot.hidden)
+        XCTAssertGreaterThan(snapshot.alpha, 0)
+        XCTAssertTrue(snapshot.windowAttached)
+        XCTAssertGreaterThan(snapshot.frame.width, 0)
+        XCTAssertGreaterThan(snapshot.frame.height, 0)
+        XCTAssertTrue(snapshot.visible)
+
+        let label = try XCTUnwrap(
+            surface.subviews.compactMap { $0 as? UILabel }.first
+        )
+        XCTAssertEqual(
+            label.accessibilityIdentifier,
+            PlayerSurfaceView.subtitleOverlayAccessibilityIdentifier
+        )
+
+        surface.updateSubtitleOverlay(text: "", style: .default)
+        surface.layoutIfNeeded()
+        XCTAssertFalse(surface.subtitleOverlaySnapshot.visible)
+    }
+
     func testSsaDialogueIsParsedAndOverrideTagsAreRemoved() async throws {
         let url = try temporarySubtitle(
             extension: "ass",

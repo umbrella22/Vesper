@@ -6,6 +6,22 @@ import QuartzCore
 import SwiftUI
 import UIKit
 
+struct VesperSubtitleOverlayFrameSnapshot: Codable, Equatable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+}
+
+struct VesperSubtitleOverlaySnapshot: Codable, Equatable {
+    let text: String
+    let hidden: Bool
+    let alpha: Double
+    let windowAttached: Bool
+    let frame: VesperSubtitleOverlayFrameSnapshot
+    let visible: Bool
+}
+
 public struct PlayerSurfaceContainer: UIViewRepresentable {
     @ObservedObject public var controller: VesperPlayerController
     private let onSurfaceReady: ((PlayerSurfaceView) -> Void)?
@@ -92,6 +108,9 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
 }
 
 public final class PlayerSurfaceView: UIView {
+    static let subtitleOverlayAccessibilityIdentifier =
+        "io.github.ikaros.vesper.player.subtitle-overlay"
+
     private weak var attachedPlayer: AVPlayer?
     private var readyForDisplayObservation: NSKeyValueObservation?
     private let playerLayer = AVPlayerLayer()
@@ -153,6 +172,30 @@ public final class PlayerSurfaceView: UIView {
         setNeedsLayout()
     }
 
+    var subtitleOverlaySnapshot: VesperSubtitleOverlaySnapshot {
+        let text = subtitleLabel.text ?? ""
+        let frame = subtitleLabel.frame
+        let windowAttached = subtitleLabel.window != nil
+        return VesperSubtitleOverlaySnapshot(
+            text: text,
+            hidden: subtitleLabel.isHidden,
+            alpha: Double(subtitleLabel.alpha),
+            windowAttached: windowAttached,
+            frame: VesperSubtitleOverlayFrameSnapshot(
+                x: Double(frame.origin.x),
+                y: Double(frame.origin.y),
+                width: Double(frame.width),
+                height: Double(frame.height)
+            ),
+            visible: !text.isEmpty
+                && !subtitleLabel.isHidden
+                && subtitleLabel.alpha > 0
+                && windowAttached
+                && frame.width > 0
+                && frame.height > 0
+        )
+    }
+
     private func configureSubtitleLabel() {
         subtitleLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
         subtitleLabel.textColor = .white
@@ -160,6 +203,7 @@ public final class PlayerSurfaceView: UIView {
         subtitleLabel.numberOfLines = 0
         subtitleLabel.layer.cornerRadius = 6
         subtitleLabel.layer.masksToBounds = true
+        subtitleLabel.accessibilityIdentifier = Self.subtitleOverlayAccessibilityIdentifier
         subtitleLabel.isAccessibilityElement = false
         subtitleLabel.isUserInteractionEnabled = false
         subtitleLabel.isHidden = true
