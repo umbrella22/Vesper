@@ -14,6 +14,7 @@ DEVICE_ID=""
 SIMULATOR_ID=""
 EVIDENCE_DIR=""
 IOS_DEVELOPMENT_TEAM="${VESPER_IOS_DEVELOPMENT_TEAM:-}"
+IOS_FLUTTER_HOST_BUNDLE_ID="io.github.ikaros.flutterHost"
 
 usage() {
   cat <<EOF >&2
@@ -822,23 +823,139 @@ prepare_ios_device() {
     ' "$identities_file" "$PREFLIGHT_DIR/selected-signing-certificate.txt"
 }
 
+terminate_ios_flutter_host_processes() {
+  local target_device="$1"
+  local evidence_name="$2"
+  local apps_json="$RUN_TMP/ios-flutter-apps-$evidence_name.json"
+  local processes_json="$RUN_TMP/ios-flutter-processes-$evidence_name.json"
+  local pids_file="$RUN_TMP/ios-flutter-pids-$evidence_name.txt"
+  local pid
+
+  xcrun devicectl device info apps \
+    --device "$target_device" \
+    --json-output "$apps_json" \
+    --quiet || return $?
+  xcrun devicectl device info processes \
+    --device "$target_device" \
+    --json-output "$processes_json" \
+    --quiet || return $?
+
+  ruby -rjson -e '
+    apps = JSON.parse(File.read(ARGV.fetch(0))).dig("result", "apps") || []
+    processes = JSON.parse(File.read(ARGV.fetch(1))).dig("result", "runningProcesses") || []
+    bundle_id = ARGV.fetch(2)
+    matches = apps.select { |app| app["bundleIdentifier"] == bundle_id }
+    abort("Multiple installed apps reported bundle identifier #{bundle_id}.") if matches.length > 1
+    exit 0 if matches.empty?
+
+    app_url = matches.first.fetch("url")
+    unless app_url.start_with?("file:///private/var/containers/Bundle/Application/") &&
+        app_url.end_with?(".app/")
+      abort("Refusing to terminate a process for unexpected app URL: #{app_url}")
+    end
+    app_directory = File.basename(app_url.chomp("/"))
+    executable_url = "#{app_url}#{app_directory.delete_suffix(".app")}"
+    processes.each do |process|
+      next unless process["executable"] == executable_url
+      pid = process["processIdentifier"]
+      abort("Invalid process identifier for #{bundle_id}: #{pid.inspect}") unless
+        pid.is_a?(Integer) && pid.positive?
+      puts pid
+    end
+  ' "$apps_json" "$processes_json" "$IOS_FLUTTER_HOST_BUNDLE_ID" > "$pids_file" || return $?
+
+  if [[ ! -s "$pids_file" ]]; then
+    echo "No running iOS Flutter host process requires cleanup."
+    return 0
+  fi
+
+  while IFS= read -r pid; do
+    local current_processes_json="$RUN_TMP/ios-flutter-processes-$evidence_name-$pid-current.json"
+    local verification_status=0
+
+    case "$pid" in
+      ''|*[!0-9]*)
+        echo "Invalid iOS Flutter host process identifier: $pid" >&2
+        return 1
+        ;;
+    esac
+
+    xcrun devicectl device info processes \
+      --device "$target_device" \
+      --json-output "$current_processes_json" \
+      --quiet || return $?
+    if ruby -rjson -e '
+      apps = JSON.parse(File.read(ARGV.fetch(0))).dig("result", "apps") || []
+      processes = JSON.parse(File.read(ARGV.fetch(1))).dig("result", "runningProcesses") || []
+      bundle_id = ARGV.fetch(2)
+      expected_pid = Integer(ARGV.fetch(3), 10)
+      app = apps.find { |entry| entry["bundleIdentifier"] == bundle_id }
+      abort("Installed app metadata disappeared for #{bundle_id}.") unless app
+      app_url = app.fetch("url")
+      app_directory = File.basename(app_url.chomp("/"))
+      executable_url = "#{app_url}#{app_directory.delete_suffix(".app")}"
+      process = processes.find { |entry| entry["processIdentifier"] == expected_pid }
+      exit 3 unless process
+      unless process["executable"] == executable_url
+        abort("Refusing to terminate reused PID #{expected_pid}: #{process["executable"].inspect}")
+      end
+    ' "$apps_json" "$current_processes_json" "$IOS_FLUTTER_HOST_BUNDLE_ID" "$pid"; then
+      verification_status=0
+    else
+      verification_status=$?
+    fi
+    if [[ "$verification_status" -eq 3 ]]; then
+      echo "iOS Flutter host process $pid exited before cleanup."
+      continue
+    fi
+    if [[ "$verification_status" -ne 0 ]]; then
+      return "$verification_status"
+    fi
+
+    echo "Terminating stale iOS Flutter host process: bundle=$IOS_FLUTTER_HOST_BUNDLE_ID pid=$pid"
+    xcrun devicectl device process terminate \
+      --device "$target_device" \
+      --pid "$pid" \
+      --timeout 15 || return $?
+  done < "$pids_file"
+}
+
 run_flutter_integration() {
   local target_device="$1"
   local target_kind="$2"
   local evidence_name="$3"
   local test_target="$4"
   local output_dir="$FLUTTER_EVIDENCE_DIR/$target_kind"
+  local drive_status=0
+  local cleanup_status=0
 
   mkdir -p "$output_dir"
   if [[ "$PLATFORM" == "ios" && "$target_kind" == "device" ]]; then
-    run_logged "flutter-$target_kind-$evidence_name" "$ROOT_DIR/examples/flutter-host" \
+    run_logged "flutter-$target_kind-$evidence_name-cleanup-before" "$ROOT_DIR" \
+      terminate_ios_flutter_host_processes "$target_device" "$evidence_name-before"
+    if run_logged "flutter-$target_kind-$evidence_name" "$ROOT_DIR/examples/flutter-host" \
       env DEVELOPMENT_TEAM="$IOS_DEVELOPMENT_TEAM" \
         VESPER_SUBTITLE_EVIDENCE_DIR="$output_dir" \
         VESPER_SUBTITLE_EVIDENCE_NAME="$evidence_name" \
         flutter drive \
+          --no-keep-app-running \
+          --device-connection attached \
           --driver=test_driver/subtitle_integration_test.dart \
           --target="$test_target" \
-          --device-id "$target_device"
+          --device-id "$target_device"; then
+      drive_status=0
+    else
+      drive_status=$?
+    fi
+    run_logged "flutter-$target_kind-$evidence_name-cleanup-after" "$ROOT_DIR" \
+      terminate_ios_flutter_host_processes "$target_device" "$evidence_name-after" || \
+      cleanup_status=$?
+    if [[ "$drive_status" -ne 0 ]]; then
+      return "$drive_status"
+    fi
+    if [[ "$cleanup_status" -ne 0 ]]; then
+      return "$cleanup_status"
+    fi
   else
     run_logged "flutter-$target_kind-$evidence_name" "$ROOT_DIR/examples/flutter-host" \
       env VESPER_SUBTITLE_EVIDENCE_DIR="$output_dir" \
