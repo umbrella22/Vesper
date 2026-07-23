@@ -872,6 +872,18 @@ func errorMap(from error: Error) -> [String: Any] {
     ]
 }
 
+func shouldPublishAsyncPlayerError(_ error: Error) -> Bool {
+    guard let commandError = error as? VesperSubtitleSelectionCommandError else {
+        return true
+    }
+    switch commandError.failure {
+    case .selectionCancelled, .sourceChanged, .selectionSuperseded:
+        return false
+    default:
+        return true
+    }
+}
+
 private func subtitleSelectionErrorMap(
     _ subtitleError: VesperSubtitleSelectionError,
     commandId: UInt64? = nil,

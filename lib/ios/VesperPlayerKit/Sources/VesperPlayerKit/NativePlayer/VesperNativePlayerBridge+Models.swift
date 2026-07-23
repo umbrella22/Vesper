@@ -74,3 +74,13 @@ struct PendingSubtitleSelection {
     let selection: VesperTrackSelection
     let origin: SubtitleSelectionOrigin
 }
+
+struct VesperSubtitleSelectionWaitPolicy: Equatable, Sendable {
+    let timeout: Duration
+    let pollInterval: Duration
+
+    static let production = VesperSubtitleSelectionWaitPolicy(
+        timeout: .seconds(3),
+        pollInterval: .milliseconds(50)
+    )
+}

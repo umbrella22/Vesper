@@ -292,6 +292,175 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
     }
 
     @MainActor
+    func testSubtitleSelectionTimeoutDoesNotCommitLateCatalogResult() async throws {
+        let subtitleURL = try writeSubtitleFixture(text: "Late subtitle")
+        defer { try? FileManager.default.removeItem(at: subtitleURL) }
+        let track = externalSubtitle(id: "timeout-track", url: subtitleURL)
+        let (bridge, _) = makeLoadingSubtitleBridge(
+            tracks: [track],
+            waitPolicy: VesperSubtitleSelectionWaitPolicy(
+                timeout: .milliseconds(30),
+                pollInterval: .milliseconds(1)
+            )
+        )
+
+        let selectionTask = Task { @MainActor in
+            try await bridge.setSubtitleTrackSelection(.track(track.id))
+        }
+        let error = try await subtitleCommandError(from: selectionTask)
+
+        XCTAssertEqual(error.code, "subtitle_selection_timeout")
+        XCTAssertEqual(error.commandId, 1)
+        XCTAssertEqual(error.sourceEpoch, 0)
+        XCTAssertEqual(bridge.publishedSubtitleState.selectionState, .failed)
+
+        let prepared = try await bridge.subtitleOverlayRenderer.prepare([track])
+        bridge.subtitleOverlayRenderer.install(prepared)
+        bridge.publishedTrackCatalog = subtitleCatalog(tracks: [track])
+        bridge.publishedSubtitleState = .ready(
+            advertisedTrackCount: 1,
+            selectableTrackCount: 1
+        )
+        try await ContinuousClock().sleep(for: .milliseconds(10))
+
+        XCTAssertEqual(bridge.publishedConfirmedSubtitleSelection, .disabled())
+        XCTAssertNil(bridge.publishedEffectiveSubtitleTrackId)
+        XCTAssertNil(bridge.pendingSubtitleSelection)
+    }
+
+    @MainActor
+    func testSubtitleSelectionSourceChangeDoesNotOverwriteNewSourceState() async throws {
+        let oldTrack = externalSubtitle(
+            id: "old-track",
+            url: URL(fileURLWithPath: "/tmp/old-track.vtt")
+        )
+        let (bridge, _) = makeLoadingSubtitleBridge(
+            tracks: [oldTrack],
+            waitPolicy: VesperSubtitleSelectionWaitPolicy(
+                timeout: .milliseconds(500),
+                pollInterval: .milliseconds(1)
+            )
+        )
+        let selectionTask = Task { @MainActor in
+            try await bridge.setSubtitleTrackSelection(.track(oldTrack.id))
+        }
+        try await waitForPendingSubtitleSelection(bridge)
+
+        let newTrackId = "new-source-track"
+        let newSelection = VesperTrackSelection.track(newTrackId)
+        let newSource = VesperPlayerSource.localFile(
+            url: URL(fileURLWithPath: "/tmp/new-source.mp4"),
+            label: "New Source"
+        )
+        bridge.advanceSubtitleSourceEpoch()
+        bridge.currentSource = newSource
+        bridge.player = AVPlayer(
+            playerItem: AVPlayerItem(url: URL(fileURLWithPath: "/tmp/new-source.mp4"))
+        )
+        bridge.publishedRequestedSubtitleSelection = newSelection
+        bridge.publishedConfirmedSubtitleSelection = newSelection
+        bridge.publishedEffectiveSubtitleTrackId = newTrackId
+        bridge.publishedTrackSelection = VesperTrackSelectionSnapshot(
+            subtitle: newSelection,
+            confirmedSubtitle: newSelection,
+            effectiveSubtitleTrackId: newTrackId
+        )
+        bridge.publishedSubtitleState = VesperSubtitleState(
+            catalogState: .ready,
+            selectionState: .confirmed,
+            advertisedTrackCount: 1,
+            selectableTrackCount: 1,
+            catalogError: nil,
+            selectionError: nil
+        )
+
+        let error = try await subtitleCommandError(from: selectionTask)
+
+        XCTAssertEqual(error.code, "subtitle_source_changed")
+        XCTAssertEqual(error.commandId, 1)
+        XCTAssertEqual(error.sourceEpoch, 0)
+        XCTAssertEqual(bridge.publishedConfirmedSubtitleSelection, newSelection)
+        XCTAssertEqual(bridge.publishedEffectiveSubtitleTrackId, newTrackId)
+        XCTAssertEqual(bridge.publishedSubtitleState.selectionState, .confirmed)
+        XCTAssertNil(bridge.publishedSubtitleState.selectionError)
+        XCTAssertNil(bridge.publishedLastError)
+    }
+
+    @MainActor
+    func testSubtitleSelectionDisposeCancelsWithoutPublishingFailure() async throws {
+        let track = externalSubtitle(
+            id: "dispose-track",
+            url: URL(fileURLWithPath: "/tmp/dispose-track.vtt")
+        )
+        let (bridge, _) = makeLoadingSubtitleBridge(
+            tracks: [track],
+            waitPolicy: VesperSubtitleSelectionWaitPolicy(
+                timeout: .milliseconds(500),
+                pollInterval: .milliseconds(1)
+            )
+        )
+        let selectionTask = Task { @MainActor in
+            try await bridge.setSubtitleTrackSelection(.track(track.id))
+        }
+        try await waitForPendingSubtitleSelection(bridge)
+
+        bridge.dispose()
+        let error = try await subtitleCommandError(from: selectionTask)
+
+        XCTAssertEqual(error.code, "subtitle_selection_cancelled")
+        XCTAssertEqual(error.commandId, 1)
+        XCTAssertEqual(error.sourceEpoch, 0)
+        XCTAssertNil(bridge.currentSource)
+        XCTAssertNil(bridge.publishedSubtitleState.selectionError)
+        XCTAssertNil(bridge.publishedLastError)
+    }
+
+    @MainActor
+    func testNewSubtitleSelectionSupersedesPendingCommandAndCommitsLatest() async throws {
+        let firstURL = try writeSubtitleFixture(text: "Subtitle A")
+        let secondURL = try writeSubtitleFixture(text: "Subtitle B")
+        defer {
+            try? FileManager.default.removeItem(at: firstURL)
+            try? FileManager.default.removeItem(at: secondURL)
+        }
+        let firstTrack = externalSubtitle(id: "track-a", url: firstURL)
+        let secondTrack = externalSubtitle(id: "track-b", url: secondURL)
+        let tracks = [firstTrack, secondTrack]
+        let (bridge, _) = makeLoadingSubtitleBridge(
+            tracks: tracks,
+            waitPolicy: VesperSubtitleSelectionWaitPolicy(
+                timeout: .milliseconds(500),
+                pollInterval: .milliseconds(1)
+            )
+        )
+        let prepared = try await bridge.subtitleOverlayRenderer.prepare(tracks)
+        bridge.subtitleOverlayRenderer.install(prepared)
+        let firstTask = Task { @MainActor in
+            try await bridge.setSubtitleTrackSelection(.track(firstTrack.id))
+        }
+        try await waitForPendingSubtitleSelection(bridge)
+
+        bridge.publishedTrackCatalog = subtitleCatalog(tracks: tracks)
+        bridge.publishedSubtitleState = .ready(
+            advertisedTrackCount: tracks.count,
+            selectableTrackCount: tracks.count
+        )
+        try await bridge.setSubtitleTrackSelection(.track(secondTrack.id))
+        let firstError = try await subtitleCommandError(from: firstTask)
+
+        XCTAssertEqual(firstError.code, "subtitle_selection_superseded")
+        XCTAssertEqual(firstError.commandId, 1)
+        XCTAssertEqual(firstError.sourceEpoch, 0)
+        XCTAssertEqual(bridge.nextSubtitleCommandId, 2)
+        XCTAssertEqual(bridge.publishedRequestedSubtitleSelection, .track(secondTrack.id))
+        XCTAssertEqual(bridge.publishedConfirmedSubtitleSelection, .track(secondTrack.id))
+        XCTAssertEqual(bridge.publishedEffectiveSubtitleTrackId, secondTrack.id)
+        XCTAssertEqual(bridge.publishedSubtitleState.selectionState, .confirmed)
+        XCTAssertNil(bridge.publishedSubtitleState.selectionError)
+        XCTAssertNil(bridge.publishedLastError)
+    }
+
+    @MainActor
     func testResilienceItemResetDoesNotPublishTheOldItemAsEffective() {
         let trackId = "stable-subtitle-id"
         let confirmed = VesperTrackSelection.track(trackId)
@@ -345,6 +514,95 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
 
         XCTAssertEqual(first, reordered)
         XCTAssertTrue(first.hasPrefix("subtitle:av:"))
+    }
+
+    @MainActor
+    private func makeLoadingSubtitleBridge(
+        tracks: [VesperExternalSubtitleSource],
+        waitPolicy: VesperSubtitleSelectionWaitPolicy
+    ) -> (VesperNativePlayerBridge, AVPlayerItem) {
+        let source = VesperPlayerSource(
+            uri: "file:///tmp/subtitle-transaction-video.mp4",
+            label: "Subtitle Transaction",
+            kind: .local,
+            protocol: .file,
+            externalSubtitles: tracks
+        )
+        let bridge = VesperNativePlayerBridge(
+            initialSource: source,
+            subtitleSelectionWaitPolicy: waitPolicy
+        )
+        let item = AVPlayerItem(
+            url: URL(fileURLWithPath: "/tmp/subtitle-transaction-video.mp4")
+        )
+        bridge.player = AVPlayer(playerItem: item)
+        bridge.publishedSubtitleState = .loading(advertisedTrackCount: tracks.count)
+        return (bridge, item)
+    }
+
+    @MainActor
+    private func waitForPendingSubtitleSelection(
+        _ bridge: VesperNativePlayerBridge
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(250))
+        while bridge.pendingSubtitleSelection == nil, clock.now < deadline {
+            try await clock.sleep(for: .milliseconds(1))
+        }
+        _ = try XCTUnwrap(bridge.pendingSubtitleSelection)
+    }
+
+    @MainActor
+    private func subtitleCommandError(
+        from task: Task<Void, Error>
+    ) async throws -> VesperSubtitleSelectionCommandError {
+        do {
+            try await task.value
+        } catch let error as VesperSubtitleSelectionCommandError {
+            return error
+        }
+        XCTFail("Expected a subtitle selection command error")
+        throw NSError(domain: "VesperNativeSubtitleStateTests", code: 1)
+    }
+
+    private func writeSubtitleFixture(text: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vesper-subtitle-\(UUID().uuidString).vtt")
+        try "WEBVTT\n\n00:00.000 --> 00:05.000\n\(text)\n".write(
+            to: url,
+            atomically: true,
+            encoding: .utf8
+        )
+        return url
+    }
+
+    private func externalSubtitle(
+        id: String,
+        url: URL
+    ) -> VesperExternalSubtitleSource {
+        VesperExternalSubtitleSource(
+            id: id,
+            uri: url.absoluteString,
+            mimeType: VesperExternalSubtitleSource.mimeWebVtt,
+            language: "en",
+            label: id
+        )
+    }
+
+    private func subtitleCatalog(
+        tracks: [VesperExternalSubtitleSource]
+    ) -> VesperTrackCatalog {
+        VesperTrackCatalog(
+            tracks: tracks.map { track in
+                VesperMediaTrack(
+                    id: track.id,
+                    kind: .subtitle,
+                    language: track.language,
+                    isDefault: track.isDefault,
+                    isForced: track.isForced
+                )
+            }
+        )
     }
 
     func testEmbeddedSubtitleIdentityPreservesSemanticFieldBoundaries() {

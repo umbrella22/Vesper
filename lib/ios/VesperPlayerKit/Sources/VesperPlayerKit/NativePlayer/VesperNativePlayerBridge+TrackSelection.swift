@@ -134,47 +134,44 @@ extension VesperNativePlayerBridge {
 
         do {
             try await task.value
-        } catch is CancellationError {
-            let sourceOrItemChanged = subtitleSourceEpoch != sourceEpoch
-                || currentPlaybackEpoch() != playbackEpoch
-                || player?.currentItem !== item
-            let failure: VesperSubtitleSelectionError
-            if sourceOrItemChanged {
-                failure = currentSource == nil
-                    ? .selectionCancelled(trackId: selection.trackId)
-                    : .sourceChanged(trackId: selection.trackId)
-            } else {
-                failure = .selectionSuperseded(trackId: selection.trackId)
+        } catch {
+            if let failure = subtitleSelectionInvalidationFailure(for: pending) {
+                throw VesperSubtitleSelectionCommandError(
+                    failure: failure,
+                    commandId: commandId,
+                    sourceEpoch: sourceEpoch
+                )
             }
-            throw VesperSubtitleSelectionCommandError(
-                failure: failure,
-                commandId: commandId,
-                sourceEpoch: sourceEpoch
-            )
-        } catch let failure as VesperSubtitleSelectionError {
+            if error is CancellationError {
+                let failure = VesperSubtitleSelectionError.selectionCancelled(
+                    trackId: selection.trackId
+                )
+                throw VesperSubtitleSelectionCommandError(
+                    failure: failure,
+                    commandId: commandId,
+                    sourceEpoch: sourceEpoch
+                )
+            }
+            guard let failure = error as? VesperSubtitleSelectionError else {
+                restoreConfirmedSubtitleBackendIfPossible(on: item)
+                throw error
+            }
+            restoreConfirmedSubtitleBackendIfPossible(on: item)
             let commandError = VesperSubtitleSelectionCommandError(
                 failure: failure,
                 commandId: commandId,
                 sourceEpoch: sourceEpoch
             )
-            if isCurrentSubtitleSelection(pending) {
-                restoreConfirmedSubtitleBackendIfPossible(on: item)
-                reportSubtitleFailure(
-                    code: commandError.code,
-                    phase: .selection,
-                    trackId: commandError.trackId,
-                    retriable: commandError.retriable,
-                    message: commandError.localizedDescription,
-                    commandId: commandId,
-                    sourceEpoch: sourceEpoch
-                )
-            }
+            reportSubtitleFailure(
+                code: commandError.code,
+                phase: .selection,
+                trackId: commandError.trackId,
+                retriable: commandError.retriable,
+                message: commandError.localizedDescription,
+                commandId: commandId,
+                sourceEpoch: sourceEpoch
+            )
             throw commandError
-        } catch {
-            if isCurrentSubtitleSelection(pending) {
-                restoreConfirmedSubtitleBackendIfPossible(on: item)
-            }
-            throw error
         }
 
     }
@@ -347,17 +344,18 @@ extension VesperNativePlayerBridge {
     private func waitForSubtitleCatalogReadiness(
         pending: PendingSubtitleSelection
     ) async throws {
-        let deadline = DispatchTime.now().uptimeNanoseconds &+ 3_000_000_000
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: subtitleSelectionWaitPolicy.timeout)
         while publishedSubtitleState.catalogState == .loading {
             guard isCurrentSubtitleSelection(pending) else {
                 throw CancellationError()
             }
-            guard DispatchTime.now().uptimeNanoseconds < deadline else {
+            guard clock.now < deadline else {
                 throw VesperSubtitleSelectionError.selectionTimedOut(
                     trackId: pending.selection.trackId
                 )
             }
-            try await Task.sleep(nanoseconds: 50_000_000)
+            try await clock.sleep(for: subtitleSelectionWaitPolicy.pollInterval)
         }
     }
 
@@ -366,7 +364,8 @@ extension VesperNativePlayerBridge {
         in group: AVMediaSelectionGroup,
         pending: PendingSubtitleSelection
     ) async throws {
-        let deadline = DispatchTime.now().uptimeNanoseconds &+ 3_000_000_000
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: subtitleSelectionWaitPolicy.timeout)
         while true {
             guard isCurrentSubtitleSelection(pending) else {
                 throw CancellationError()
@@ -380,19 +379,20 @@ extension VesperNativePlayerBridge {
                     trackId: pending.selection.trackId
                 )
             }
-            guard DispatchTime.now().uptimeNanoseconds < deadline else {
+            guard clock.now < deadline else {
                 throw VesperSubtitleSelectionError.selectionTimedOut(
                     trackId: pending.selection.trackId
                 )
             }
-            try await Task.sleep(nanoseconds: 50_000_000)
+            try await clock.sleep(for: subtitleSelectionWaitPolicy.pollInterval)
         }
     }
 
     private func waitForSubtitleGroup(
         pending: PendingSubtitleSelection
     ) async throws -> AVMediaSelectionGroup? {
-        let deadline = DispatchTime.now().uptimeNanoseconds &+ 3_000_000_000
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: subtitleSelectionWaitPolicy.timeout)
         while subtitleGroup == nil {
             guard isCurrentSubtitleSelection(pending) else {
                 throw CancellationError()
@@ -400,24 +400,41 @@ extension VesperNativePlayerBridge {
             if publishedSubtitleState.catalogState != .loading {
                 return nil
             }
-            guard DispatchTime.now().uptimeNanoseconds < deadline else {
+            guard clock.now < deadline else {
                 throw VesperSubtitleSelectionError.selectionTimedOut(
                     trackId: pending.selection.trackId
                 )
             }
-            try await Task.sleep(nanoseconds: 50_000_000)
+            try await clock.sleep(for: subtitleSelectionWaitPolicy.pollInterval)
         }
         return subtitleGroup
     }
 
     private func isCurrentSubtitleSelection(_ pending: PendingSubtitleSelection) -> Bool {
-        pendingSubtitleSelection?.commandId == pending.commandId
-            && pendingSubtitleSelection?.sourceEpoch == pending.sourceEpoch
-            && pendingSubtitleSelection?.playbackEpoch == pending.playbackEpoch
-            && pendingSubtitleSelection?.item === pending.item
-            && subtitleSourceEpoch == pending.sourceEpoch
-            && currentPlaybackEpoch() == pending.playbackEpoch
-            && player?.currentItem === pending.item
+        subtitleSelectionInvalidationFailure(for: pending) == nil
+    }
+
+    private func subtitleSelectionInvalidationFailure(
+        for pending: PendingSubtitleSelection
+    ) -> VesperSubtitleSelectionError? {
+        if currentSource == nil {
+            return .selectionCancelled(trackId: pending.selection.trackId)
+        }
+        if subtitleSourceEpoch != pending.sourceEpoch
+            || currentPlaybackEpoch() != pending.playbackEpoch
+            || player?.currentItem !== pending.item {
+            return .sourceChanged(trackId: pending.selection.trackId)
+        }
+        guard let current = pendingSubtitleSelection else {
+            return .selectionSuperseded(trackId: pending.selection.trackId)
+        }
+        if current.commandId != pending.commandId
+            || current.sourceEpoch != pending.sourceEpoch
+            || current.playbackEpoch != pending.playbackEpoch
+            || current.item !== pending.item {
+            return .selectionSuperseded(trackId: pending.selection.trackId)
+        }
+        return nil
     }
 
     func subtitleTrackId(for option: AVMediaSelectionOption) -> String? {

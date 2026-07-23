@@ -392,9 +392,24 @@ class VesperPlayerController {
     try {
       await operation();
     } catch (error, stackTrace) {
-      _publishSyntheticError(error, stackTrace);
+      if (!_isObsoleteSubtitleTransactionError(error)) {
+        _publishSyntheticError(error, stackTrace);
+      }
       rethrow;
     }
+  }
+
+  bool _isObsoleteSubtitleTransactionError(Object error) {
+    if (error is! VesperSubtitleException) {
+      return false;
+    }
+    return switch (error.code) {
+      'subtitle_selection_cancelled' ||
+      'subtitle_source_changed' ||
+      'subtitle_selection_superseded' =>
+        true,
+      _ => false,
+    };
   }
 
   Future<void> _runPictureInPictureOperation(

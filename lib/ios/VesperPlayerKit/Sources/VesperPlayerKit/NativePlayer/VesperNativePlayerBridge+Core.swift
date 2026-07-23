@@ -80,6 +80,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var nextSubtitleCommandId: UInt64 = 0
     var pendingSubtitleSelection: PendingSubtitleSelection?
     var subtitleSelectionTask: Task<Void, Error>?
+    let subtitleSelectionWaitPolicy: VesperSubtitleSelectionWaitPolicy
     var trackCatalogLoadGeneration: UInt64 = 0
     var confirmedSubtitleSelection: VesperTrackSelection = .disabled()
     var explicitSubtitleIntentSourceEpoch: UInt64?
@@ -169,7 +170,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             VesperFrameProcessorConfiguration(),
         nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
             VesperNativeFramePipelineConfiguration(),
-        nativeFramePipelineCoordinator: VesperNativeFramePipelineCoordinator? = nil
+        nativeFramePipelineCoordinator: VesperNativeFramePipelineCoordinator? = nil,
+        subtitleSelectionWaitPolicy: VesperSubtitleSelectionWaitPolicy = .production
     ) {
         currentSource = initialSource
         currentResiliencePolicy = resiliencePolicy
@@ -179,6 +181,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         self.frameProcessorConfiguration = frameProcessorConfiguration
         self.nativeFramePipelineConfiguration = nativeFramePipelineConfiguration
         self.nativeFramePipelineCoordinator = nativeFramePipelineCoordinator ?? VesperNativeFramePipelineCoordinator()
+        self.subtitleSelectionWaitPolicy = subtitleSelectionWaitPolicy
         currentPluginDiagnostics = []
         benchmarkRecorder = VesperBenchmarkRecorder(configuration: benchmarkConfiguration)
         preloadCoordinator = VesperNativePreloadCoordinator(

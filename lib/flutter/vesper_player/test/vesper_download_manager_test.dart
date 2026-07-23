@@ -220,6 +220,60 @@ void main() {
     expect(reportedErrors.single.exception, isA<VesperSubtitleException>());
   });
 
+  test('obsolete subtitle commands only reject their originating future',
+      () async {
+    final reportedErrors = <FlutterErrorDetails>[];
+    final previousOnError = FlutterError.onError;
+    FlutterError.onError = reportedErrors.add;
+    addTearDown(() {
+      FlutterError.onError = previousOnError;
+    });
+
+    final controller = await VesperPlayerController.create();
+    addTearDown(controller.dispose);
+    final playerErrors = <VesperPlayerErrorEvent>[];
+    final subscription = controller.events.listen((event) {
+      if (event is VesperPlayerErrorEvent) {
+        playerErrors.add(event);
+      }
+    });
+    addTearDown(subscription.cancel);
+
+    for (final code in <String>[
+      'subtitle_selection_cancelled',
+      'subtitle_source_changed',
+      'subtitle_selection_superseded',
+    ]) {
+      platform.subtitleSelectionError = VesperSubtitleException(
+        code: code,
+        phase: VesperSubtitleErrorPhase.selection,
+        retriable: true,
+        message: 'obsolete transaction',
+        trackId: 'opaque-track',
+        commandId: 7,
+        sourceEpoch: 3,
+      );
+
+      await expectLater(
+        controller.setSubtitleTrackSelection(
+          const VesperTrackSelection.track('opaque-track'),
+        ),
+        throwsA(
+          isA<VesperSubtitleException>().having(
+            (error) => error.code,
+            'code',
+            code,
+          ),
+        ),
+      );
+    }
+
+    await _flushEvents();
+    expect(controller.snapshot.lastError, isNull);
+    expect(playerErrors, isEmpty);
+    expect(reportedErrors, isEmpty);
+  });
+
   test('player controller forwards picture-in-picture APIs and events',
       () async {
     platform.pictureInPictureAvailability =

@@ -760,7 +760,9 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     }
                     result(value)
                 } catch {
-                    if self.sessions[playerId] === session {
+                    if self.sessions[playerId] === session,
+                        shouldPublishAsyncPlayerError(error)
+                    {
                         session.lastError = errorMap(from: error)
                         self.emitError(for: session, error: error)
                     }
