@@ -758,14 +758,18 @@ prepare_ios_device() {
     device = data.dig("result", "devices")&.find { |entry| entry.dig("hardwareProperties", "udid") == id }
     abort("CoreDevice does not expose the requested iOS device: #{id}") unless device
     pairing = device.dig("connectionProperties", "pairingState")
+    tunnel_state = device.dig("connectionProperties", "tunnelState")
     developer_mode = device.dig("deviceProperties", "developerModeStatus")
     boot_state = device.dig("deviceProperties", "bootState")
+    ddi_services_available = device.dig("deviceProperties", "ddiServicesAvailable")
     connect_capability = device.fetch("capabilities", []).any? do |capability|
       capability["featureIdentifier"] == "com.apple.coredevice.feature.connectdevice"
     end
+    connected_and_ready = tunnel_state == "connected" && ddi_services_available == true
     abort("The requested iOS device is not paired.") unless pairing == "paired"
     abort("Developer Mode is not enabled on the requested iOS device.") unless developer_mode == "enabled"
-    abort("The requested iOS device is not booted and available.") unless boot_state == "booted" && connect_capability
+    abort("The requested iOS device is not booted and available.") unless
+      boot_state == "booted" && (connect_capability || connected_and_ready)
     selected = {
       "id" => id,
       "name" => device.dig("deviceProperties", "name"),
@@ -777,7 +781,9 @@ prepare_ios_device() {
       "pairingState" => pairing,
       "developerMode" => developer_mode,
       "bootState" => boot_state,
-      "transport" => device.dig("connectionProperties", "transportType")
+      "transport" => device.dig("connectionProperties", "transportType"),
+      "tunnelState" => tunnel_state,
+      "ddiServicesAvailable" => ddi_services_available
     }
     File.write(ARGV.fetch(2), JSON.pretty_generate(selected) + "\n")
     ' "$devicectl_json" "$DEVICE_ID" "$selected_device_json"
