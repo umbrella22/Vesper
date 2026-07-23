@@ -1046,7 +1046,7 @@ cleanup_android_flutter_adb_forwards() {
   local local_spec
   local remote_spec
 
-  capture_android_adb_forwards "$target_device" "$after_path"
+  capture_android_adb_forwards "$target_device" "$after_path" || return $?
   ruby -e '
     parse_records = lambda do |path|
       File.readlines(path, chomp: true).each_with_object({}) do |line, records|
@@ -1058,9 +1058,9 @@ cleanup_android_flutter_adb_forwards() {
     end
     before = parse_records.call(ARGV.fetch(0))
     after = parse_records.call(ARGV.fetch(1))
-    flutter_log = File.read(ARGV.fetch(2))
+    flutter_log = File.binread(ARGV.fetch(2))
     flutter_locals = flutter_log.scan(
-      %r{VMServiceFlutterDriver: Connecting to Flutter application at http://127\.0\.0\.1:(\d+)/}
+      %r{VMServiceFlutterDriver: Connecting to Flutter application at http://127\.0\.0\.1:(\d+)/}n
     ).flatten.uniq.map { |port| "tcp:#{port}" }
     removable = after.select do |local_spec, _remote_spec|
       !before.key?(local_spec) && flutter_locals.include?(local_spec)
@@ -1069,7 +1069,7 @@ cleanup_android_flutter_adb_forwards() {
       ARGV.fetch(3),
       removable.join("\n") + (removable.empty? ? "" : "\n")
     )
-  ' "$before_path" "$after_path" "$flutter_log_path" "$removable_path"
+  ' "$before_path" "$after_path" "$flutter_log_path" "$removable_path" || return $?
 
   while IFS=$'\t' read -r local_spec remote_spec; do
     [[ -n "$local_spec" ]] || continue
@@ -1103,7 +1103,7 @@ cleanup_android_flutter_adb_forwards() {
     adb -s "$target_device" forward --remove "$local_spec"
   done < "$removable_path"
 
-  capture_android_adb_forwards "$target_device" "$final_path"
+  capture_android_adb_forwards "$target_device" "$final_path" || return $?
   ruby -e '
     before = File.readlines(ARGV.fetch(0), chomp: true).sort
     final = File.readlines(ARGV.fetch(1), chomp: true).sort
@@ -1159,6 +1159,7 @@ run_flutter_integration() {
         VESPER_SUBTITLE_EVIDENCE_NAME="$evidence_name" \
         flutter drive \
           --no-keep-app-running \
+          --no-dds \
           --driver=test_driver/subtitle_integration_test.dart \
           --target="$test_target" \
           --device-id "$target_device"; then
