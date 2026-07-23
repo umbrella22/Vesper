@@ -245,10 +245,20 @@ jobs:
             -scheme VesperPlayerKit \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -resultBundlePath "$RUNNER_TEMP/VesperPlayerKit-ios-simulator.xcresult" \
             -derivedDataPath lib/ios/VesperPlayerKit/build/TestDerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             test
+
+      - name: Upload VesperPlayerKit iOS Simulator results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VesperPlayerKit-ios-simulator-xcresult
+          path: ${{ runner.temp }}/VesperPlayerKit-ios-simulator.xcresult
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Run Vesper iOS host regression tests
         run: |
@@ -257,10 +267,20 @@ jobs:
             -scheme VesperPlayerHostDemo \
             -configuration Debug \
             -destination "platform=iOS Simulator,name=iPhone 17,OS=latest" \
+            -resultBundlePath "$RUNNER_TEMP/VesperPlayerHostDemo-ios-simulator.xcresult" \
             -derivedDataPath examples/ios-swift-host/build/TestDerivedData \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             test
+
+      - name: Upload Vesper iOS host Simulator results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VesperPlayerHostDemo-ios-simulator-xcresult
+          path: ${{ runner.temp }}/VesperPlayerHostDemo-ios-simulator.xcresult
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Build Vesper iOS host demo release
         run: |

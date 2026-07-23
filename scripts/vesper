@@ -10,8 +10,8 @@ Usage: scripts/vesper <group> <command> [args...]
 Groups:
   ffmpeg  --platform android|ios|all [options]
   ffi      generate | sync | verify | c-host-smoke
-  android  jni | aar | remux-plugin | source-normalizer-plugin | decoder-mediacodec-plugin | frame-processor-plugin | stage-release | sample-apks
-  ios      ffi | remux-plugin | source-normalizer-plugin | frame-processor-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | stage-source-normalizer-plugin-release | stage-frame-processor-plugin-release | stage-optional-plugins-release | verify-optional-plugins-release | kit-xcframework | stage-release | verify-release | sync-bridge-shim | verify-bridge-shim | verify-native-frame | verify-app-store-layout
+  android  jni | aar | remux-plugin | source-normalizer-plugin | decoder-mediacodec-plugin | frame-processor-plugin | stage-release | sample-apks | verify-subtitles
+  ios      ffi | remux-plugin | source-normalizer-plugin | frame-processor-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | stage-source-normalizer-plugin-release | stage-frame-processor-plugin-release | stage-optional-plugins-release | verify-optional-plugins-release | kit-xcframework | stage-release | verify-release | verify-subtitles | sync-bridge-shim | verify-bridge-shim | verify-native-frame | verify-app-store-layout
   desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
   mobile   verify-no-remux | verify-binary-names
   flutter  stage-pub | pub-dry-run | pub-publish | local-overrides | verify-android-plugin
@@ -71,6 +71,9 @@ case "$group:$command" in
   android:sample-apks)
     exec "$SCRIPT_DIR/android/stage-sample-apks.sh" "$@"
     ;;
+  android:verify-subtitles)
+    exec "$SCRIPT_DIR/mobile/verify-subtitles.sh" android "$@"
+    ;;
   ios:ffi)
     exec "$SCRIPT_DIR/ios/build-player-ffi-xcframework.sh" "$@"
     ;;
@@ -109,6 +112,9 @@ case "$group:$command" in
     ;;
   ios:verify-release)
     exec "$SCRIPT_DIR/ios/verify-vesper-player-kit-release.sh" "$@"
+    ;;
+  ios:verify-subtitles)
+    exec "$SCRIPT_DIR/mobile/verify-subtitles.sh" ios "$@"
     ;;
   ios:sync-bridge-shim)
     exec "$SCRIPT_DIR/ios/sync-vesper-player-kit-bridge-shim.sh" "$@"
