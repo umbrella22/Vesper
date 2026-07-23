@@ -91,7 +91,7 @@ root-level status view; detailed implementation notes stay under `devnotes/`.
   `currentMediaSelection` convergence. Shared fixtures and host unit tests cover
   partial resource failure, duplicate identity/default rejection, source epochs,
   superseded commands, and unknown error values.
-- [ ] Complete the 0.4 subtitle device gate. Required evidence includes the
+- [x] Complete the 0.4 subtitle device gate. Required evidence includes the
   Controller-to-native-to-snapshot chain on Android and iOS, Flutter integration,
   reorder/refresh/restore identity, manual/auto/disabled selection, timeout and
   source-switch cancellation, and local WebVTT cue delivery.
@@ -100,8 +100,11 @@ root-level status view; detailed implementation notes stay under `devnotes/`.
     Simulator and physical-device XCTest, Flutter positive rendering, and
     timeout/source-change/supersede lifecycle coverage passed. JSON and PNG
     evidence confirmed visible `Subtitle B` in a window-attached, nonzero overlay.
-  - [ ] Android evidence: Run the equivalent complete gate on an arm64 Android
-    device before closing the cross-platform gate.
+  - [x] Android evidence: On 2026-07-23, the complete subtitle gate passed on an
+    arm64 nubia NX733J running Android 16 (API 36). Exact 5/5 Media3 and
+    lifecycle instrumentation plus Flutter positive rendering passed. JSON and
+    PNG evidence confirmed visible `Subtitle B` in a window-attached, nonzero
+    overlay.
 - [ ] Continue release validation for tag-derived version metadata, GitHub
   binary artifacts, and future pub.dev publishing.
 - [ ] Pass the canonical iOS `verify-release --scope complete` gate in the
