@@ -450,6 +450,7 @@ internal interface VesperNativeBindings {
     fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind)
     fun detachSurface()
     fun pollSnapshot(): NativeBridgeSnapshot?
+    fun sampleTimeline(): TimelineUiState? = null
     fun drainEvents(): List<NativeBridgeEvent>
     fun play()
     fun pause()

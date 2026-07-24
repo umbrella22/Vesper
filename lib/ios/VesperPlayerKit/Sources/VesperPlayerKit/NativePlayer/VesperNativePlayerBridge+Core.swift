@@ -96,6 +96,11 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     let frameProcessorConfiguration: VesperFrameProcessorConfiguration
     let nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration
     var currentPluginDiagnostics: [[String: Any]]
+    /// Set immediately before a periodic AVPlayer update publishes its state.
+    /// The Flutter-facing controller consumes this marker to suppress a full
+    /// snapshot while native hosts still observe playback and Now Playing
+    /// updates.
+    var timelineOnlyUpdatePending = false
     let nativeFramePipelineCoordinator: VesperNativeFramePipelineCoordinator
     var nativeFramePipelineFallbackIssue: VesperNativeFramePipelineIssue?
     var currentHdrFailureEvidence: VesperNativeHdrFailureEvidence?
@@ -145,6 +150,27 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     var routePickerPlayer: AVPlayer? {
         player
+    }
+
+    func sampleTimeline() -> TimelineUiState? {
+        VesperPlaybackTrace.interval("VesperRefresh#sampleTimeline") {
+            if let nativeSession = nativeFramePipelineCoordinator.activeSession {
+                return nativeFrameTimelineState(
+                    positionMs: publishedUiState.timeline.positionMs,
+                    durationMs: nativeSession.durationMs ?? publishedUiState.timeline.durationMs
+                )
+            }
+            guard player != nil else {
+                return nil
+            }
+            return currentTimelineState()
+        }
+    }
+
+    func consumeTimelineOnlyUpdate() -> Bool {
+        let pending = timelineOnlyUpdatePending
+        timelineOnlyUpdatePending = false
+        return pending
     }
 
     func recordBenchmark(

@@ -859,6 +859,10 @@ impl AndroidHostBridgeSession {
         AndroidHostSnapshot::from_player_snapshot(&self.session.snapshot())
     }
 
+    pub fn sample_timeline(&self, snapshot: &AndroidExoPlaybackSnapshot) -> PlayerTimelineSnapshot {
+        self.session.sample_timeline(snapshot)
+    }
+
     pub fn drain_events(&mut self) -> Vec<AndroidHostEvent> {
         drain_runtime_events(
             &mut self.extra_events,
@@ -2683,6 +2687,19 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
         let observation = self.tracker.observe(snapshot);
         self.timeline_metadata = live_timeline_metadata(snapshot);
         self.apply_observation(observation);
+    }
+
+    pub fn sample_timeline(&self, snapshot: &AndroidExoPlaybackSnapshot) -> PlayerTimelineSnapshot {
+        let progress = PlaybackProgress::new(snapshot.position, snapshot.duration);
+        live_timeline_metadata(snapshot)
+            .map(|metadata| player_timeline_from_android_live_metadata(progress, metadata))
+            .unwrap_or_else(|| {
+                PlayerTimelineSnapshot::from_media_info(
+                    progress,
+                    self.capabilities.supports_seek,
+                    &self.media_info,
+                )
+            })
     }
 
     fn apply_observation(&mut self, observation: AndroidNativeObservation) {

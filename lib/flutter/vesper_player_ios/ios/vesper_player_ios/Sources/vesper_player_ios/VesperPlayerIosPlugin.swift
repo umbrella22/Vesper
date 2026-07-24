@@ -3,8 +3,25 @@ import AVKit
 import Combine
 import Flutter
 import UIKit
+import os
 @_spi(VesperFlutter)
 import VesperPlayerKit
+
+private enum VesperFlutterPlaybackTrace {
+    private static let signposter = OSSignposter(
+        subsystem: "io.github.ikaros.vesper.player.flutter.ios",
+        category: "Playback"
+    )
+
+    static func interval<Result>(
+        _ name: StaticString,
+        operation: () throws -> Result
+    ) rethrows -> Result {
+        let state = signposter.beginInterval(name)
+        defer { signposter.endInterval(name, state) }
+        return try operation()
+    }
+}
 
 private let runtimeHdrCapabilityDiagnosticKeys: [String] = [
     "assetVideoTrackCount",
@@ -152,11 +169,15 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             }
         case "refreshPlayer":
             handleSessionCommand(call, result: result) { session in
-                session.lastError = nil
-                session.controller.refresh()
-                emitSnapshot(for: session)
-                return nil
+                VesperFlutterPlaybackTrace.interval("VesperMethod#refreshPlayer") {
+                    session.lastError = nil
+                    session.controller.refresh()
+                    emitSnapshot(for: session)
+                    return nil
+                }
             }
+        case "sampleTimeline":
+            handleTimelineSample(call, result: result)
         case "refreshDownloadManager":
             handleDownloadSessionCommand(call, result: result) { session in
                 session.lastError = nil
@@ -736,6 +757,46 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         }
     }
 
+    /// Timeline samples are progress diagnostics. They must not mutate the
+    /// session playback error or emit a terminal Flutter error event when a
+    /// sample is unavailable or fails.
+    @MainActor
+    private func handleTimelineSample(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) {
+        VesperFlutterPlaybackTrace.interval("VesperMethod#sampleTimeline") {
+            handleTimelineSampleBody(call, result: result)
+        }
+    }
+
+    @MainActor
+    private func handleTimelineSampleBody(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) {
+        do {
+            let arguments = arguments(of: call)
+            guard let playerId = arguments["playerId"] as? String, !playerId.isEmpty else {
+                throw PluginError.missingArgument("playerId")
+            }
+            guard let session = sessions[playerId] else {
+                throw PluginError.unknownPlayer(playerId)
+            }
+            if let sampledTimeline = session.controller.sampleTimeline() {
+                result(sampledTimeline.toMap())
+            } else {
+                // A native session may not have a low-cost timeline yet (for
+                // example during source initialization). Return the
+                // compatibility signal; the Dart adapter owns the full
+                // refresh fallback so it is performed exactly once.
+                result(nil)
+            }
+        } catch {
+            result(asFlutterError(error, code: "vesper_timeline_sample_failed"))
+        }
+    }
+
     @MainActor
     private func handleAsyncSessionCommand(
         _ call: FlutterMethodCall,
@@ -1085,8 +1146,16 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     @MainActor
     private func observeSession(_ session: PlayerSession) {
         session.observation = session.controller.objectWillChange.sink { [weak self] _ in
+            // Consume the marker at the same emission boundary as the
+            // controller's published state. Reading it inside the deferred
+            // task can merge a later full update with a preceding timeline
+            // update and suppress the wrong snapshot.
+            let timelineOnlyUpdate = session.controller.consumeTimelineOnlyUpdate()
             Task { @MainActor in
                 guard let self else { return }
+                if timelineOnlyUpdate {
+                    return
+                }
                 self.emitSnapshot(for: session)
             }
         }
@@ -1104,16 +1173,25 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
 
     @MainActor
     private func emitSnapshot(for session: PlayerSession) {
+        VesperFlutterPlaybackTrace.interval("VesperRefresh#emitSnapshot") {
+            emitSnapshotBody(for: session)
+        }
+    }
+
+    @MainActor
+    private func emitSnapshotBody(for session: PlayerSession) {
         guard sessions[session.id] === session else {
             return
         }
         let snapshot = buildSnapshotMap(for: session)
         emitHostTerminalErrorIfNeeded(for: session, snapshot: snapshot)
-        emitEvent([
-            "playerId": session.id,
-            "type": "snapshot",
-            "snapshot": snapshot,
-        ])
+        VesperFlutterPlaybackTrace.interval("VesperRefresh#emitSnapshotEvent") {
+            emitEvent([
+                "playerId": session.id,
+                "type": "snapshot",
+                "snapshot": snapshot,
+            ])
+        }
         emitBenchmarkConsoleLog(for: session)
     }
 
@@ -1765,6 +1843,13 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
 
     @MainActor
     private func buildSnapshotMap(for session: PlayerSession) -> [String: Any] {
+        VesperFlutterPlaybackTrace.interval("VesperRefresh#buildSnapshotMap") {
+            buildSnapshotMapBody(for: session)
+        }
+    }
+
+    @MainActor
+    private func buildSnapshotMapBody(for session: PlayerSession) -> [String: Any] {
         let uiState = session.controller.uiState
         let trackCatalog = session.controller.trackCatalog
         let trackSelection = session.controller.trackSelection

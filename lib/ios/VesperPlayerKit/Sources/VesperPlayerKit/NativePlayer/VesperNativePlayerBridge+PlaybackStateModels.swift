@@ -1,5 +1,22 @@
 @preconcurrency import AVFoundation
 import Foundation
+import os
+
+enum VesperPlaybackTrace {
+    private static let signposter = OSSignposter(
+        subsystem: "io.github.ikaros.vesper.player.ios",
+        category: "Playback"
+    )
+
+    static func interval<Result>(
+        _ name: StaticString,
+        operation: () throws -> Result
+    ) rethrows -> Result {
+        let state = signposter.beginInterval(name)
+        defer { signposter.endInterval(name, state) }
+        return try operation()
+    }
+}
 
 struct ResolvedBufferingPolicy {
     let preferredForwardBufferDuration: TimeInterval

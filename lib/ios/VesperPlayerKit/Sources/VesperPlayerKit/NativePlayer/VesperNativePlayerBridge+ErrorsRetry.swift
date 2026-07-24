@@ -75,7 +75,19 @@ extension VesperNativePlayerBridge {
         itemStatusDetails: [String: String] = [:],
         itemErrorLogDetails: [String: String] = [:]
     ) {
-        let resolvedError = classifyPlaybackFailure(error, fallbackMessage: fallbackMessage)
+        let classifiedError = reclassifyHTTPSourceError(
+            classifyPlaybackFailure(error, fallbackMessage: fallbackMessage),
+            nativeError: error,
+            itemStatusDetails: itemStatusDetails,
+            itemErrorLogDetails: itemErrorLogDetails
+        )
+        let resolvedError = classifiedError
+            .enrichedWithDetails(
+                sourceFailureDiagnosticDetails(
+                    for: classifiedError,
+                    nativeError: error
+                )
+            )
             .enrichedWithDetails(itemStatusDetails)
             .enrichedWithDetails(itemErrorLogDetails)
         iosHostLog(
@@ -303,6 +315,12 @@ extension VesperNativePlayerBridge {
                     retriable: true,
                     message: nsError.localizedDescription
                 )
+            case NSURLErrorBadServerResponse:
+                return ResolvedBridgeError(
+                    category: .network,
+                    retriable: true,
+                    message: nsError.localizedDescription
+                )
             case NSURLErrorFileDoesNotExist,
                 NSURLErrorBadURL,
                 NSURLErrorUnsupportedURL:
@@ -362,6 +380,92 @@ extension VesperNativePlayerBridge {
             retriable: false,
             message: nsError.localizedDescription
         )
+    }
+
+    private func httpStatusCode(
+        itemStatusDetails: [String: String],
+        itemErrorLogDetails: [String: String]
+    ) -> Int? {
+        let values = itemErrorLogDetails.merging(itemStatusDetails) { current, _ in current }
+        for key in [
+            "avPlayerItemErrorStatusCode",
+            "avPlayerItemStatusCode",
+            "httpStatusCode",
+        ] {
+            if let status = values[key].flatMap(Int.init), (400...599).contains(status) {
+                return status
+            }
+        }
+        return nil
+    }
+
+    private func reclassifyHTTPSourceError(
+        _ error: ResolvedBridgeError,
+        nativeError: Error?,
+        itemStatusDetails: [String: String],
+        itemErrorLogDetails: [String: String]
+    ) -> ResolvedBridgeError {
+        guard error.category == .platform,
+            isRemoteHTTPSource,
+            !isMediaServicesReset(nativeError),
+            let statusCode = httpStatusCode(
+                itemStatusDetails: itemStatusDetails,
+                itemErrorLogDetails: itemErrorLogDetails
+            )
+        else {
+            return error
+        }
+
+        var details = error.details
+        details["httpStatusCode"] = String(statusCode)
+        return ResolvedBridgeError(
+            code: .backendFailure,
+            category: .network,
+            retriable: true,
+            message: error.message,
+            details: details,
+            capabilityFailureCause: error.capabilityFailureCause
+        )
+    }
+
+    private func isMediaServicesReset(_ error: Error?) -> Bool {
+        guard let nsError = error as NSError?,
+              nsError.domain == AVFoundationErrorDomain || nsError.domain == AVError.errorDomain
+        else {
+            return false
+        }
+        return AVError.Code(rawValue: nsError.code) == .mediaServicesWereReset
+    }
+
+    private var isRemoteHTTPSource: Bool {
+        guard let source = currentSource,
+              source.kind == .remote,
+              let scheme = URL(string: source.uri)?.scheme?.lowercased()
+        else {
+            return false
+        }
+        return scheme == "http" || scheme == "https"
+    }
+
+    private func sourceFailureDiagnosticDetails(
+        for error: ResolvedBridgeError,
+        nativeError: Error?
+    ) -> [String: String] {
+        guard error.category == .network || error.category == .source else {
+            return [:]
+        }
+
+        var details: [String: String] = [:]
+        if let nativeError {
+            let nsError = nativeError as NSError
+            details["nativeErrorDomain"] = nsError.domain
+            details["nativeErrorCode"] = String(nsError.code)
+        }
+        if let source = currentSource {
+            details["sourceUri"] = source.uri
+            details["sourceProtocol"] = source.protocol.rawValue
+        }
+        return details
     }
 
     func resolvedBufferingPolicy(_ resolvedPolicy: VesperBufferingPolicy) -> ResolvedBufferingPolicy {

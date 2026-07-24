@@ -1,6 +1,7 @@
 package io.github.ikaros.vesper.player.android
 
 import android.os.Looper
+import android.os.Trace
 import android.util.Log
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
@@ -502,13 +503,47 @@ internal fun VesperNativePlayerBridge.refreshNativeBridge() {
             if (isDisposed.get()) {
                 return@runOnMainSynchronously
             }
-            bindings.refreshSnapshot()
-            refreshFromNative()
+            Trace.beginSection("VesperRefresh#refreshSnapshot")
+            try {
+                bindings.refreshSnapshot()
+            } finally {
+                Trace.endSection()
+            }
+            Trace.beginSection("VesperRefresh#refreshFromNative")
+            try {
+                refreshFromNative()
+            } finally {
+                Trace.endSection()
+            }
         }
         == MainThreadRunResult.Cancelled
     ) {
         throw mainThreadBridgeTimeout("refresh")
     }
+}
+
+internal fun VesperNativePlayerBridge.sampleTimelineNativeBridge(): TimelineUiState? {
+    var sampledTimeline: TimelineUiState? = null
+    if (runOnMainSynchronously("sampleTimeline") {
+            if (isDisposed.get() ||
+                isRequiredNativeFramePipelineFailureActive() ||
+                !hasInitializedSource ||
+                activeNativeItemEpoch != nativeUpdateEpoch
+            ) {
+                return@runOnMainSynchronously
+            }
+            Trace.beginSection("VesperRefresh#sampleTimeline")
+            try {
+                sampledTimeline = bindings.sampleTimeline()
+            } finally {
+                Trace.endSection()
+            }
+        }
+        == MainThreadRunResult.Cancelled
+    ) {
+        throw mainThreadBridgeTimeout("sampleTimeline")
+    }
+    return sampledTimeline
 }
 
 internal fun VesperNativePlayerBridge.selectNativeSource(source: VesperPlayerSource) {

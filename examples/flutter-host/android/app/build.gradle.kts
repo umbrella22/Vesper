@@ -33,7 +33,8 @@ val playerFrameProcessorDiagnosticPluginJniLibsDirFile =
 val playerFfmpegPluginBuildProfile =
     providers.provider {
         if (gradle.startParameter.taskNames.any { taskName ->
-                taskName.contains("Release", ignoreCase = true)
+                taskName.contains("Release", ignoreCase = true) ||
+                    taskName.contains("Profile", ignoreCase = true)
             }
         ) {
             "release"
@@ -69,6 +70,14 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
+        }
+        // Flutter's plugin initially creates profile from debug. Rebase it on
+        // release so local profile measurements use optimized dependencies.
+        val releaseBuildType = getByName("release")
+        maybeCreate("profile").apply {
+            initWith(releaseBuildType)
+            matchingFallbacks.clear()
+            matchingFallbacks.add("release")
         }
     }
 
@@ -214,6 +223,41 @@ tasks.named("preBuild").configure {
     dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
     dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)
     dependsOn(buildPlayerFrameProcessorDiagnosticAndroidPlugin)
+}
+
+val verifyVesperProfileReleaseSelection = tasks.register("verifyVesperProfileReleaseSelection") {
+    group = "verification"
+    description = "Verifies Flutter Profile uses release Android and native variants."
+    doLast {
+        val profileBuildType = android.buildTypes.getByName("profile")
+        require(profileBuildType.matchingFallbacks == listOf("release")) {
+            "Flutter Profile must resolve release Android variants; fallbacks=" +
+                profileBuildType.matchingFallbacks
+        }
+        require(playerFfmpegPluginBuildProfile.get() == "release") {
+            "Flutter Profile must use release native plugin profile."
+        }
+        val profileRuntimeClasspath = requireNotNull(
+            configurations.findByName("profileRuntimeClasspath")
+        ) {
+            "Flutter Profile runtime classpath was not created; cannot verify dependency variants."
+        }
+        val debugDependencies = profileRuntimeClasspath.incoming.resolutionResult.allDependencies
+            .filterIsInstance<org.gradle.api.artifacts.result.ResolvedDependencyResult>()
+            .filter { dependency ->
+                dependency.resolvedVariant.displayName.contains("debug", ignoreCase = true)
+            }
+        require(debugDependencies.isEmpty()) {
+            "Flutter Profile resolved Debug variants: " +
+                debugDependencies.joinToString { dependency ->
+                    "${dependency.requested.displayName} -> ${dependency.resolvedVariant.displayName}"
+                }
+        }
+    }
+}
+
+tasks.matching { task -> task.name == "preProfileBuild" }.configureEach {
+    dependsOn(verifyVesperProfileReleaseSelection)
 }
 
 tasks.matching { task ->

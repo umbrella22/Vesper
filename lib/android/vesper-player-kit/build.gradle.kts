@@ -50,6 +50,15 @@ android {
         consumerProguardFiles("consumer-rules.pro")
     }
 
+    buildTypes {
+        val releaseBuildType = getByName("release")
+        maybeCreate("profile").apply {
+            initWith(releaseBuildType)
+            matchingFallbacks.clear()
+            matchingFallbacks.add("release")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -158,8 +167,11 @@ tasks.matching {
 
 tasks.matching {
     it.name == "preReleaseBuild" ||
+        it.name == "preProfileBuild" ||
         it.name == "mergeReleaseJniLibFolders" ||
-        (it.name.startsWith("generateRelease") && it.name.contains("Lint") && it.name.endsWith("Model"))
+        it.name == "mergeProfileJniLibFolders" ||
+        (it.name.startsWith("generateRelease") && it.name.contains("Lint") && it.name.endsWith("Model")) ||
+        (it.name.startsWith("generateProfile") && it.name.contains("Lint") && it.name.endsWith("Model"))
 }.configureEach {
     dependsOn(buildRustAndroidHostRelease)
 }
@@ -173,6 +185,7 @@ buildRustAndroidHostRelease.configure {
 
 tasks.matching {
     it.name == "assembleRelease" ||
+        it.name == "assembleProfile" ||
         it.name == "bundleReleaseAar" ||
         it.name == "publishReleasePublicationToMavenLocal"
 }.configureEach {

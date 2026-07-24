@@ -129,6 +129,15 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
     throw UnimplementedError('refreshPlayer() has not been implemented.');
   }
 
+  /// Samples the current playback timeline without requiring a full snapshot.
+  ///
+  /// Older or third-party platform implementations retain compatibility by
+  /// performing a full refresh and returning `null`.
+  Future<VesperTimeline?> sampleTimeline(String playerId) async {
+    await refreshPlayer(playerId);
+    return null;
+  }
+
   Future<void> selectSource(String playerId, VesperPlayerSource source);
 
   Future<void> play(String playerId);
@@ -354,6 +363,10 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
 
   @override
   Future<void> refreshPlayer(String playerId) async =>
+      throw VesperUnsupportedError();
+
+  @override
+  Future<VesperTimeline?> sampleTimeline(String playerId) async =>
       throw VesperUnsupportedError();
 
   @override

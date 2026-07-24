@@ -247,6 +247,8 @@ internal class VesperNativePlayerBridge(
 
     override fun refresh() = refreshNativeBridge()
 
+    override fun sampleTimeline() = sampleTimelineNativeBridge()
+
     override fun selectSource(source: VesperPlayerSource) = selectNativeSource(source)
 
     override suspend fun selectSourceAsync(source: VesperPlayerSource) =

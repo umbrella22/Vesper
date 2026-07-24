@@ -84,6 +84,16 @@ internal object VesperNativeJni {
     )
     external fun detachSurface(sessionHandle: Long)
     external fun pollSnapshot(sessionHandle: Long): NativeBridgeSnapshot?
+    external fun sampleTimeline(
+        sessionHandle: Long,
+        positionMs: Long,
+        durationMs: Long,
+        isLive: Boolean,
+        isSeekable: Boolean,
+        seekableStartMs: Long,
+        seekableEndMs: Long,
+        liveEdgeMs: Long,
+    ): TimelineUiState?
     external fun drainEvents(sessionHandle: Long): Array<NativeBridgeEvent>
     external fun drainNativeCommands(sessionHandle: Long): Array<NativePlayerCommand>
     external fun planPreloadCandidates(

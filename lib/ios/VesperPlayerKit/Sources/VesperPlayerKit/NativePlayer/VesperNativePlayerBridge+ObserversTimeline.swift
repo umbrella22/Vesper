@@ -27,7 +27,7 @@ extension VesperNativePlayerBridge {
                     iosHostLog("ignored stale time observer playbackEpoch=\(playbackEpoch)")
                     return
                 }
-                self.refreshPlaybackState()
+                self.refreshPlaybackState(timelineOnly: true)
             }
         }
 
@@ -299,11 +299,19 @@ extension VesperNativePlayerBridge {
         }
     }
 
-    func refreshPlaybackState() {
+    func refreshPlaybackState(timelineOnly: Bool = false) {
+        VesperPlaybackTrace.interval("VesperRefresh#refreshPlaybackState") {
+            refreshPlaybackStateBody(timelineOnly: timelineOnly)
+        }
+    }
+
+    private func refreshPlaybackStateBody(timelineOnly: Bool) {
         guard let player else {
             return
         }
 
+        let previousPlaybackState = publishedUiState.playbackState
+        let previousBuffering = publishedUiState.isBuffering
         let durationMs = currentDurationMs()
         let positionMs = player.currentTime().milliseconds
         subtitleOverlayRenderer.render(positionMs: positionMs)
@@ -315,6 +323,13 @@ extension VesperNativePlayerBridge {
             positionMs: positionMs
         )
 
+        // A periodic time observer may also discover a playback transition.
+        // Only suppress Flutter's full snapshot when the presentation state
+        // is unchanged; playing/paused/buffering transitions must remain
+        // visible to the host.
+        timelineOnlyUpdatePending = timelineOnly &&
+            previousPlaybackState == playbackState &&
+            previousBuffering == buffering
         updateState {
             PlayerHostUiState(
                 title: $0.title,
@@ -327,7 +342,14 @@ extension VesperNativePlayerBridge {
                 timeline: currentTimelineState(positionMs: positionMs)
             )
         }
-        refreshEffectiveVideoTrackObservation(for: player.currentItem)
+        // Effective ABR observation is intentionally kept on the native time
+        // observer. It only publishes when the selected variant changes and
+        // remains the convergence clock for fixed-track diagnostics. A change
+        // emits its own full controller update after the timeline marker is
+        // consumed.
+        VesperPlaybackTrace.interval("VesperRefresh#effectiveVideoObservation") {
+            refreshEffectiveVideoTrackObservation(for: player.currentItem)
+        }
     }
 
     func updateTimelinePosition(_ positionMs: Int64) {

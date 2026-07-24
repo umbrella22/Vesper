@@ -431,6 +431,227 @@ final class PlayerErrorStateTests: XCTestCase {
         XCTAssertEqual(bridge.lastError?.details["dolbyVisionCodec"], "dvhe.08.07")
     }
 
+    func testNativeBridgeMapsBadServerResponseToRetriableNetworkError() {
+        let sourceUri = "https://media.example.invalid/video.m3u8"
+        let bridge = VesperNativePlayerBridge(
+            initialSource: .hls(
+                url: URL(string: sourceUri)!,
+                label: "HTTP source"
+            ),
+            resiliencePolicy: VesperPlaybackResiliencePolicy(
+                retry: VesperRetryPolicy(maxAttempts: 0)
+            )
+        )
+
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: NSURLErrorDomain,
+                code: NSURLErrorBadServerResponse,
+                userInfo: [NSLocalizedDescriptionKey: "The server returned an invalid response"]
+            ),
+            fallbackMessage: "source failed"
+        )
+
+        XCTAssertEqual(bridge.lastError?.code, .backendFailure)
+        XCTAssertEqual(bridge.lastError?.category, .network)
+        XCTAssertTrue(bridge.lastError?.retriable == true)
+        XCTAssertEqual(bridge.lastError?.details["nativeErrorDomain"], NSURLErrorDomain)
+        XCTAssertEqual(
+            bridge.lastError?.details["nativeErrorCode"],
+            String(NSURLErrorBadServerResponse)
+        )
+        XCTAssertEqual(bridge.lastError?.details["sourceUri"], sourceUri)
+        XCTAssertEqual(bridge.lastError?.details["sourceProtocol"], "hls")
+    }
+
+    func testNativeBridgeUsesHttpErrorLogEvidenceForPlatformFailures() {
+        for statusCode in [403, 404, 503] {
+            let bridge = VesperNativePlayerBridge(
+                initialSource: .hls(
+                    url: URL(string: "https://media.example.invalid/video.m3u8")!,
+                    label: "HTTP source"
+                ),
+                resiliencePolicy: VesperPlaybackResiliencePolicy(
+                    retry: VesperRetryPolicy(maxAttempts: 0)
+                )
+            )
+
+            bridge.handlePlaybackFailureForTesting(
+                error: NSError(
+                    domain: AVFoundationErrorDomain,
+                    code: AVError.Code.contentIsUnavailable.rawValue,
+                    userInfo: [NSLocalizedDescriptionKey: "content unavailable"]
+                ),
+                fallbackMessage: "content unavailable",
+                itemErrorLogDetails: playerItemErrorLogDetailsForTesting(
+                    eventCount: 1,
+                    uri: "https://media.example.invalid/video.m3u8",
+                    serverAddress: "203.0.113.10",
+                    playbackSessionID: "session-http-\(statusCode)",
+                    errorStatusCode: statusCode,
+                    errorDomain: "HTTP",
+                    errorComment: "HTTP source failure"
+                )
+            )
+
+            XCTAssertEqual(bridge.lastError?.code, .backendFailure)
+            XCTAssertEqual(bridge.lastError?.category, .network)
+            XCTAssertTrue(bridge.lastError?.retriable == true)
+            XCTAssertEqual(bridge.lastError?.details["httpStatusCode"], String(statusCode))
+            XCTAssertEqual(
+                bridge.lastError?.details["avPlayerItemErrorStatusCode"],
+                String(statusCode)
+            )
+            XCTAssertEqual(
+                bridge.lastError?.details["nativeErrorDomain"],
+                AVFoundationErrorDomain
+            )
+            XCTAssertEqual(
+                bridge.lastError?.details["nativeErrorCode"],
+                String(AVError.Code.contentIsUnavailable.rawValue)
+            )
+            XCTAssertEqual(
+                bridge.lastError?.details["sourceUri"],
+                "https://media.example.invalid/video.m3u8"
+            )
+            XCTAssertEqual(bridge.lastError?.details["sourceProtocol"], "hls")
+        }
+    }
+
+    func testNativeBridgeDoesNotReclassifyFilePermissionFailureWithHttpEvidence() {
+        let bridge = VesperNativePlayerBridge(
+            initialSource: .hls(
+                url: URL(string: "https://media.example.invalid/video.m3u8")!,
+                label: "HTTP source"
+            )
+        )
+
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: NSURLErrorDomain,
+                code: NSURLErrorNoPermissionsToReadFile,
+                userInfo: [NSLocalizedDescriptionKey: "permission denied"]
+            ),
+            fallbackMessage: "permission denied",
+            itemErrorLogDetails: ["avPlayerItemErrorStatusCode": "403"]
+        )
+
+        XCTAssertEqual(bridge.lastError?.category, .capability)
+        XCTAssertFalse(bridge.lastError?.retriable == true)
+        XCTAssertNil(bridge.lastError?.details["httpStatusCode"])
+        XCTAssertNil(bridge.lastError?.details["sourceUri"])
+    }
+
+    func testNativeBridgeMapsTimeoutToRetriableNetworkError() {
+        let bridge = VesperNativePlayerBridge()
+
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: NSURLErrorDomain,
+                code: NSURLErrorTimedOut,
+                userInfo: [NSLocalizedDescriptionKey: "request timed out"]
+            ),
+            fallbackMessage: "source failed"
+        )
+
+        XCTAssertEqual(bridge.lastError?.code, .backendFailure)
+        XCTAssertEqual(bridge.lastError?.category, .network)
+        XCTAssertTrue(bridge.lastError?.retriable == true)
+    }
+
+    func testNativeBridgeDoesNotReclassifyHttpEvidenceForLocalSources() {
+        let bridge = VesperNativePlayerBridge(
+            initialSource: .localFile(
+                url: URL(fileURLWithPath: "/tmp/local-media.mp4"),
+                label: "Local source"
+            )
+        )
+
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: AVFoundationErrorDomain,
+                code: AVError.Code.contentIsUnavailable.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: "content unavailable"]
+            ),
+            fallbackMessage: "content unavailable",
+            itemErrorLogDetails: ["avPlayerItemErrorStatusCode": "503"]
+        )
+
+        XCTAssertEqual(bridge.lastError?.category, .platform)
+        XCTAssertFalse(bridge.lastError?.retriable == true)
+    }
+
+    func testNativeBridgeDoesNotReclassifyMediaServicesResetWithHttpEvidence() {
+        let bridge = VesperNativePlayerBridge(
+            initialSource: .hls(
+                url: URL(string: "https://media.example.invalid/video.m3u8")!,
+                label: "HTTP source"
+            )
+        )
+
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: AVFoundationErrorDomain,
+                code: AVError.Code.mediaServicesWereReset.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: "media services were reset"]
+            ),
+            fallbackMessage: "media services were reset",
+            itemErrorLogDetails: ["avPlayerItemErrorStatusCode": "503"]
+        )
+
+        XCTAssertEqual(bridge.lastError?.category, .platform)
+        XCTAssertFalse(bridge.lastError?.retriable == true)
+    }
+
+    func testTimelineOnlyMarkerRequiresStablePlaybackPresentationState() {
+        let bridge = VesperNativePlayerBridge()
+        bridge.player = AVPlayer()
+
+        bridge.refreshPlaybackState(timelineOnly: true)
+        XCTAssertTrue(bridge.consumeTimelineOnlyUpdate())
+
+        bridge.publishedUiState = PlayerHostUiState(
+            title: bridge.uiState.title,
+            subtitle: bridge.uiState.subtitle,
+            sourceLabel: bridge.uiState.sourceLabel,
+            playbackState: .playing,
+            playbackRate: bridge.uiState.playbackRate,
+            isBuffering: true,
+            isInterrupted: bridge.uiState.isInterrupted,
+            timeline: bridge.uiState.timeline
+        )
+        bridge.refreshPlaybackState(timelineOnly: true)
+
+        XCTAssertFalse(bridge.consumeTimelineOnlyUpdate())
+    }
+
+    func testNativeBridgeDoesNotLetHttpEvidenceOverrideDecoderFailure() {
+        let bridge = VesperNativePlayerBridge()
+
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: AVFoundationErrorDomain,
+                code: AVError.Code.decoderNotFound.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: "decoder unavailable"]
+            ),
+            fallbackMessage: "decoder unavailable",
+            itemErrorLogDetails: playerItemErrorLogDetailsForTesting(
+                eventCount: 1,
+                uri: "https://media.example.invalid/video.m3u8",
+                serverAddress: "203.0.113.10",
+                playbackSessionID: "session-decoder-1",
+                errorStatusCode: 500,
+                errorDomain: "HTTP",
+                errorComment: "upstream error"
+            )
+        )
+
+        XCTAssertEqual(bridge.lastError?.code, .decodeFailure)
+        XCTAssertEqual(bridge.lastError?.category, .decode)
+        XCTAssertFalse(bridge.lastError?.retriable == true)
+        XCTAssertEqual(bridge.lastError?.details["avPlayerItemErrorStatusCode"], "500")
+    }
+
     func testNativeBridgeAddsPlayerItemErrorLogDetailsToHdrDecodeErrors() {
         let source = VesperPlayerSource.localFile(
             url: URL(fileURLWithPath: "/tmp/local-dv-profile8.mov"),

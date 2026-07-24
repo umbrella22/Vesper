@@ -5,6 +5,24 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 void main() {
+  test('timeline samples reject unknown kinds and missing positions', () {
+    expect(
+      () => VesperTimeline.fromSampleMap(<Object?, Object?>{
+        'kind': 'futureTimeline',
+        'isSeekable': false,
+        'positionMs': 1,
+      }),
+      throwsFormatException,
+    );
+    expect(
+      () => VesperTimeline.fromSampleMap(<Object?, Object?>{
+        'kind': 'vod',
+        'isSeekable': false,
+      }),
+      throwsFormatException,
+    );
+  });
+
   test('shared player error contract decodes stable fields and details', () {
     final payload = _readContractMap('player_error.json');
     final error = VesperPlayerError.fromMap(payload);

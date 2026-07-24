@@ -567,6 +567,53 @@ void main() {
     );
   });
 
+  test('sampleTimeline forwards player id and decodes only the timeline',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'sampleTimeline') {
+        return <String, Object?>{
+          'kind': 'liveDvr',
+          'isSeekable': true,
+          'seekableRange': <String, Object?>{
+            'startMs': 1000,
+            'endMs': 9000,
+          },
+          'liveEdgeMs': 9000,
+          'positionMs': 7000,
+          'durationMs': 8000,
+        };
+      }
+      return null;
+    });
+    final platform = MethodChannelVesperPlayerAndroid();
+
+    final timeline = await platform.sampleTimeline('android-player');
+
+    expect(timeline?.kind, VesperTimelineKind.liveDvr);
+    expect(timeline?.positionMs, 7000);
+    expect(timeline?.seekableRange?.startMs, 1000);
+    expect(calls.single.method, 'sampleTimeline');
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      <Object?, Object?>{'playerId': 'android-player'},
+    );
+  });
+
+  test('null sample falls back to one full refresh', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return null;
+    });
+    final platform = MethodChannelVesperPlayerAndroid();
+
+    expect(await platform.sampleTimeline('android-player'), isNull);
+    expect(calls.map((call) => call.method),
+        <String>['sampleTimeline', 'refreshPlayer']);
+  });
+
   test('typed unsupported platform error maps to unsupported exception',
       () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

@@ -24,6 +24,15 @@ protocol PlayerBridge: AnyObject {
     func initializeAsync() async
     func dispose()
     func refresh()
+    /// Returns a timeline projection without reconciling the complete player state.
+    ///
+    /// Bridges that do not expose a low-cost sampler return `nil`, allowing the
+    /// Flutter platform adapter to use its full-refresh compatibility path.
+    func sampleTimeline() -> TimelineUiState?
+    /// Consumes the marker for a native periodic update that changed only the
+    /// timeline and playback presentation state. Flutter uses this to avoid
+    /// serializing a complete snapshot for every native progress tick.
+    func consumeTimelineOnlyUpdate() -> Bool
     func selectSource(_ source: VesperPlayerSource)
     func selectSourceAsync(_ source: VesperPlayerSource) async
 
@@ -68,6 +77,14 @@ protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
 }
 
 extension PlayerBridge {
+    func sampleTimeline() -> TimelineUiState? {
+        nil
+    }
+
+    func consumeTimelineOnlyUpdate() -> Bool {
+        false
+    }
+
     var routePickerPlayer: AVPlayer? {
         nil
     }

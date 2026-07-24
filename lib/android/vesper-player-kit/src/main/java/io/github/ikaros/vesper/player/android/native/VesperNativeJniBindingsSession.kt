@@ -954,20 +954,28 @@ internal fun PlaybackException.terminalPlaybackErrorReason(): String =
 
 internal const val FIRST_FRAME_WATCHDOG_DELAY_MS = 15_000L
 
-internal fun VesperNativeJniBindings.pushSnapshotToRust() {
-    val handle = sessionHandle ?: return
-    val exoPlayer = player ?: return
-    val isLive = exoPlayer.isCurrentMediaItemLive
-    val isSeekable = exoPlayer.isCurrentMediaItemSeekable
-    val liveWindow = if (isLive) exoPlayer.currentLiveTimelineWindow() else null
-    val rawDurationMs = exoPlayer.duration.normalizedDurationMs()
+internal data class ExoTimelineSample(
+    val timelinePositionMs: Long,
+    val durationMs: Long,
+    val isLive: Boolean,
+    val isSeekable: Boolean,
+    val seekableStartMs: Long,
+    val seekableEndMs: Long,
+    val liveEdgeMs: Long,
+)
+
+internal fun ExoPlayer.currentTimelineSample(): ExoTimelineSample {
+    val isLive = isCurrentMediaItemLive
+    val isSeekable = isCurrentMediaItemSeekable
+    val liveWindow = if (isLive) currentLiveTimelineWindow() else null
+    val rawDurationMs = duration.normalizedDurationMs()
     val liveWindowStartMs = liveWindow?.startMs ?: 0L
     val liveWindowDurationMs = liveWindow?.durationMs ?: rawDurationMs.normalizedOptionalMs()
     val timelinePositionMs =
         if (isLive) {
-            timelinePositionFromWindowPosition(liveWindowStartMs, exoPlayer.currentPosition)
+            timelinePositionFromWindowPosition(liveWindowStartMs, currentPosition)
         } else {
-            exoPlayer.currentPosition.coerceAtLeast(0L)
+            currentPosition.coerceAtLeast(0L)
         }
     val durationMs = liveWindowDurationMs ?: rawDurationMs
     val seekableStartMs = if (isLive && isSeekable && liveWindowDurationMs != null) {
@@ -984,33 +992,48 @@ internal fun VesperNativeJniBindings.pushSnapshotToRust() {
     val liveEdgeMs = when {
         !isLive -> C.TIME_UNSET
         seekableEndMs >= 0L -> seekableEndMs
-        else -> exoPlayer.currentLiveOffset.normalizedOptionalMs()?.let {
+        else -> currentLiveOffset.normalizedOptionalMs()?.let {
             (timelinePositionMs + it).coerceAtLeast(0L)
         } ?: C.TIME_UNSET
     }
-    logExoSnapshotToRust(
-        playbackState = exoPlayer.playbackState,
-        isLive = isLive,
-        isSeekable = isSeekable,
-        windowPositionMs = exoPlayer.currentPosition,
+    return ExoTimelineSample(
         timelinePositionMs = timelinePositionMs,
         durationMs = durationMs,
+        isLive = isLive,
+        isSeekable = isSeekable,
         seekableStartMs = seekableStartMs,
         seekableEndMs = seekableEndMs,
         liveEdgeMs = liveEdgeMs,
+    )
+}
+
+internal fun VesperNativeJniBindings.pushSnapshotToRust() {
+    val handle = sessionHandle ?: return
+    val exoPlayer = player ?: return
+    val sample = exoPlayer.currentTimelineSample()
+    logExoSnapshotToRust(
+        playbackState = exoPlayer.playbackState,
+        isLive = sample.isLive,
+        isSeekable = sample.isSeekable,
+        windowPositionMs = exoPlayer.currentPosition,
+        timelinePositionMs = sample.timelinePositionMs,
+        durationMs = sample.durationMs,
+        seekableStartMs = sample.seekableStartMs,
+        seekableEndMs = sample.seekableEndMs,
+        liveEdgeMs = sample.liveEdgeMs,
     )
     VesperNativeJni.applyExoSnapshot(
         handle,
         exoPlaybackStateOrdinal(exoPlayer.playbackState),
         exoPlayer.playWhenReady,
         exoPlayer.playbackParameters.speed,
-        timelinePositionMs,
-        durationMs,
-        isLive,
-        isSeekable,
-        seekableStartMs,
-        seekableEndMs,
-        liveEdgeMs,
+        sample.timelinePositionMs,
+        sample.durationMs,
+        sample.isLive,
+        sample.isSeekable,
+        sample.seekableStartMs,
+        sample.seekableEndMs,
+        sample.liveEdgeMs,
     )
 }
 

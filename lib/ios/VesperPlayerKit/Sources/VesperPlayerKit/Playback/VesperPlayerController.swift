@@ -151,6 +151,7 @@ public final class VesperPlayerController: ObservableObject {
     private let initializeAsyncImpl: () async -> Void
     private let disposeImpl: () -> Void
     private let refreshImpl: () -> Void
+    private let sampleTimelineImpl: () -> TimelineUiState?
     private let selectSourceImpl: (VesperPlayerSource) -> Void
     private let selectSourceAsyncImpl: (VesperPlayerSource) async -> Void
     private let attachSurfaceHostImpl: (UIView) -> Void
@@ -177,6 +178,7 @@ public final class VesperPlayerController: ObservableObject {
     private let routePickerPlayerImpl: () -> AVPlayer?
     private let screenSleepToken = VesperScreenSleepToken()
     private var keepScreenOnDuringPlayback: Bool
+    private var pendingTimelineOnlyUpdate = false
     private lazy var systemPlaybackCoordinator = VesperSystemPlaybackCoordinator(controller: self)
 
     init<Bridge: ObservablePlayerBridge>(
@@ -203,6 +205,7 @@ public final class VesperPlayerController: ObservableObject {
         initializeAsyncImpl = bridge.initializeAsync
         disposeImpl = bridge.dispose
         refreshImpl = bridge.refresh
+        sampleTimelineImpl = bridge.sampleTimeline
         selectSourceImpl = bridge.selectSource
         selectSourceAsyncImpl = bridge.selectSourceAsync
         attachSurfaceHostImpl = { host in
@@ -246,8 +249,16 @@ public final class VesperPlayerController: ObservableObject {
         routePickerPlayerImpl = { bridge.routePickerPlayer }
         bridgeObservation = bridge.objectWillChange.sink { [weak self] _ in
             guard let self else { return }
+            let timelineOnlyUpdate = bridge.consumeTimelineOnlyUpdate()
             Task { @MainActor in
+                self.pendingTimelineOnlyUpdate =
+                    self.pendingTimelineOnlyUpdate || timelineOnlyUpdate
                 self.publishedUiState = bridge.publishedUiState
+                if timelineOnlyUpdate {
+                    self.systemPlaybackCoordinator.updatePlaybackState(self.publishedUiState)
+                    self.updateScreenSleepPolicy()
+                    return
+                }
                 self.publishedTrackCatalog = bridge.publishedTrackCatalog
                 self.publishedTrackSelection = bridge.publishedTrackSelection
                 self.publishedRequestedSubtitleSelection = bridge.publishedRequestedSubtitleSelection
@@ -294,6 +305,18 @@ public final class VesperPlayerController: ObservableObject {
 
     public func refresh() {
         refreshImpl()
+    }
+
+    @_spi(VesperFlutter)
+    public func sampleTimeline() -> TimelineUiState? {
+        sampleTimelineImpl()
+    }
+
+    @_spi(VesperFlutter)
+    public func consumeTimelineOnlyUpdate() -> Bool {
+        let pending = pendingTimelineOnlyUpdate
+        pendingTimelineOnlyUpdate = false
+        return pending
     }
 
     public func selectSource(_ source: VesperPlayerSource) {

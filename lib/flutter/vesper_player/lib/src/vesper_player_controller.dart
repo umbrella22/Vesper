@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 const Duration _progressRefreshInterval = Duration(seconds: 1);
+const Duration _maxProgressRefreshBackoff = Duration(seconds: 8);
 
 class VesperPlayerController {
   VesperPlayerController._({
@@ -84,6 +85,8 @@ class VesperPlayerController {
   Timer? _progressRefreshTimer;
   bool _refreshInFlight = false;
   bool _disposed = false;
+  int _timelineRevision = 0;
+  Duration _progressRefreshDelay = _progressRefreshInterval;
 
   VesperPlayerSnapshot get snapshot => snapshotListenable.value;
 
@@ -106,6 +109,7 @@ class VesperPlayerController {
       return;
     }
     _disposed = true;
+    _advanceTimelineRevision();
     _progressRefreshTimer?.cancel();
     _progressRefreshTimer = null;
 
@@ -315,6 +319,8 @@ class VesperPlayerController {
     if (_disposed) {
       return;
     }
+    _advanceTimelineRevision();
+    _resetProgressRefreshBackoff();
     _syncPluginDiagnostics(snapshot.pluginDiagnostics);
     snapshotListenable.value = snapshot;
     _snapshotsController.add(snapshot);
@@ -328,8 +334,10 @@ class VesperPlayerController {
     if (_disposed) {
       return;
     }
+    _advanceTimelineRevision();
+    _resetProgressRefreshBackoff();
     final snapshot =
-        event.snapshot ?? this.snapshot.copyWith(lastError: event.error);
+        (event.snapshot ?? this.snapshot).copyWith(lastError: event.error);
     snapshotListenable.value = snapshot;
     _syncPluginDiagnostics(snapshot.pluginDiagnostics);
     _snapshotsController.add(snapshot);
@@ -352,14 +360,19 @@ class VesperPlayerController {
     if (_disposed || !_shouldRefreshProgress(effectiveSnapshot)) {
       _progressRefreshTimer?.cancel();
       _progressRefreshTimer = null;
+      _resetProgressRefreshBackoff();
       return;
     }
 
-    if (_progressRefreshTimer != null) {
+    // The in-flight request owns the next scheduling decision. An
+    // authoritative snapshot may arrive while it is pending; do not create a
+    // second timer that will only churn against the in-flight guard.
+    if (_refreshInFlight || _progressRefreshTimer != null) {
       return;
     }
 
-    _progressRefreshTimer = Timer.periodic(_progressRefreshInterval, (_) {
+    _progressRefreshTimer = Timer(_progressRefreshDelay, () {
+      _progressRefreshTimer = null;
       unawaited(_refreshTimelineTick());
     });
   }
@@ -371,24 +384,60 @@ class VesperPlayerController {
     }
 
     _refreshInFlight = true;
-    var refreshFailed = false;
+    final revision = _timelineRevision;
     try {
-      await _platform.refreshPlayer(playerId);
-    } catch (error, stackTrace) {
-      refreshFailed = true;
-      _publishSyntheticError(error, stackTrace);
-      _progressRefreshTimer?.cancel();
-      _progressRefreshTimer = null;
+      final sampledTimeline = await _platform.sampleTimeline(playerId);
+      if (!_disposed && revision == _timelineRevision) {
+        _resetProgressRefreshBackoff();
+        if (sampledTimeline != null) {
+          _publishTimelineSample(sampledTimeline);
+        }
+      }
+    } catch (_) {
+      if (!_disposed && revision == _timelineRevision) {
+        _increaseProgressRefreshBackoff();
+      }
     } finally {
       _refreshInFlight = false;
-      if (!refreshFailed) {
-        _syncProgressRefreshTimer();
-      }
+      _syncProgressRefreshTimer();
     }
+  }
+
+  void _publishTimelineSample(VesperTimeline timeline) {
+    if (_disposed) {
+      return;
+    }
+    final patchedSnapshot = snapshot.copyWith(timeline: timeline);
+    snapshotListenable.value = patchedSnapshot;
+    _snapshotsController.add(patchedSnapshot);
+    _eventsController.add(
+      VesperPlayerSnapshotEvent(
+        playerId: playerId,
+        snapshot: patchedSnapshot,
+      ),
+    );
+  }
+
+  void _advanceTimelineRevision() {
+    _timelineRevision += 1;
+  }
+
+  void _resetProgressRefreshBackoff() {
+    _progressRefreshDelay = _progressRefreshInterval;
+  }
+
+  void _increaseProgressRefreshBackoff() {
+    final nextMilliseconds = _progressRefreshDelay.inMilliseconds * 2;
+    _progressRefreshDelay = Duration(
+      milliseconds: nextMilliseconds > _maxProgressRefreshBackoff.inMilliseconds
+          ? _maxProgressRefreshBackoff.inMilliseconds
+          : nextMilliseconds,
+    );
   }
 
   Future<void> _runVoidOperation(Future<void> Function() operation) async {
     _ensureActive();
+    _advanceTimelineRevision();
     try {
       await operation();
     } catch (error, stackTrace) {
@@ -423,6 +472,9 @@ class VesperPlayerController {
     if (_disposed || _eventsController.isClosed) {
       return;
     }
+
+    _advanceTimelineRevision();
+    _resetProgressRefreshBackoff();
 
     final vesperError = error is VesperSubtitleException
         ? VesperPlayerError(
@@ -529,6 +581,7 @@ class VesperPlayerController {
 }
 
 bool _shouldRefreshProgress(VesperPlayerSnapshot snapshot) {
-  return snapshot.playbackState == VesperPlaybackState.playing ||
-      snapshot.isBuffering;
+  return snapshot.lastError == null &&
+      (snapshot.playbackState == VesperPlaybackState.playing ||
+          snapshot.isBuffering);
 }

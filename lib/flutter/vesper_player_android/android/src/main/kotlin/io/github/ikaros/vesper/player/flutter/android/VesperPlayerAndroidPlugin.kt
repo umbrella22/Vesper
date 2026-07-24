@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
+import android.os.Trace
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -246,6 +247,15 @@ class VesperPlayerAndroidPlugin :
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        Trace.beginSection("VesperMethod#${call.method.take(114)}")
+        try {
+            dispatchMethodCall(call, result)
+        } finally {
+            Trace.endSection()
+        }
+    }
+
+    private fun dispatchMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "createPlayer" -> handleCreatePlayer(call, result)
             "probePlaybackCapability" -> handleProbePlaybackCapability(call, result)
@@ -260,6 +270,7 @@ class VesperPlayerAndroidPlugin :
                 emitSnapshot(session)
                 null
             }
+            "sampleTimeline" -> handleTimelineSample(call, result)
             "refreshDownloadManager" -> handleDownloadSessionCommand(call, result) { session ->
                 session.lastError = null
                 session.manager.refresh()
@@ -1026,6 +1037,67 @@ class VesperPlayerAndroidPlugin :
             }
     }
 
+    /**
+     * Timeline samples are a progress diagnostic, not a playback command.
+     * Their failures must not mutate `lastError` or emit a playback error
+     * event. A missing native implementation is treated as an old host-kit
+     * compatibility signal so the Dart platform adapter can use its full
+     * refresh fallback.
+     */
+    private fun handleTimelineSample(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val sessionId = call.argumentMap()["playerId"] as? String
+        if (sessionId.isNullOrBlank()) {
+            result.error(
+                "vesper_missing_player_id",
+                "Missing playerId.",
+                mapOf(
+                    "message" to "Missing playerId.",
+                    "code" to "backendFailure",
+                    "category" to "platform",
+                    "retriable" to false,
+                ),
+            )
+            return
+        }
+
+        val session = sessions[sessionId]
+        if (session == null) {
+            result.error(
+                "vesper_unknown_player",
+                "Unknown playerId: $sessionId",
+                mapOf(
+                    "message" to "Unknown playerId: $sessionId",
+                    "code" to "backendFailure",
+                    "category" to "platform",
+                    "retriable" to false,
+                ),
+            )
+            return
+        }
+
+        runCatching { session.controller.sampleTimeline()?.toMap() }
+            .onSuccess(result::success)
+            .onFailure { error ->
+                if (error is LinkageError) {
+                    // Older AAR/native combinations do not expose the SPI.
+                    // Return the compatibility signal and let the Dart
+                    // adapter issue the authoritative full refresh. Keeping
+                    // the fallback in one layer avoids duplicate refreshes
+                    // and ensures the MethodChannel result is always settled.
+                    result.success(null)
+                } else {
+                    result.error(
+                        "vesper_timeline_sample_failed",
+                        error.message,
+                        error.toErrorMap(),
+                    )
+                }
+            }
+    }
+
     private fun handleSessionCommandAsync(
         call: MethodCall,
         result: MethodChannel.Result,
@@ -1530,27 +1602,32 @@ class VesperPlayerAndroidPlugin :
         session: PlayerSession,
         snapshot: Map<String, Any?>,
     ) {
-        if (!isCurrentSession(session)) {
-            return
-        }
-        val sink = eventSink
-        if (sink == null) {
+        Trace.beginSection("VesperRefresh#emitSnapshot")
+        try {
+            if (!isCurrentSession(session)) {
+                return
+            }
+            val sink = eventSink
+            if (sink == null) {
+                emitBenchmarkConsoleLog(session)
+                return
+            }
+            if (session.lastEmittedSnapshot == snapshot) {
+                emitBenchmarkConsoleLog(session)
+                return
+            }
+            session.lastEmittedSnapshot = snapshot
+            sink.success(
+                mapOf(
+                    "playerId" to session.id,
+                    "type" to "snapshot",
+                    "snapshot" to snapshot,
+                ),
+            )
             emitBenchmarkConsoleLog(session)
-            return
+        } finally {
+            Trace.endSection()
         }
-        if (session.lastEmittedSnapshot == snapshot) {
-            emitBenchmarkConsoleLog(session)
-            return
-        }
-        session.lastEmittedSnapshot = snapshot
-        sink.success(
-            mapOf(
-                "playerId" to session.id,
-                "type" to "snapshot",
-                "snapshot" to snapshot,
-            ),
-        )
-        emitBenchmarkConsoleLog(session)
     }
 
     private fun isCurrentSession(session: PlayerSession): Boolean =
@@ -1780,51 +1857,56 @@ class VesperPlayerAndroidPlugin :
     }
 
     private fun buildSnapshotMap(session: PlayerSession): Map<String, Any?> {
-        val uiState = session.controller.uiState.value
-        val trackCatalog = session.controller.trackCatalog.value
-        val trackSelection = session.controller.trackSelection.value
-        val effectiveVideoTrackId = session.controller.effectiveVideoTrackId.value
-        val videoVariantObservation = session.controller.videoVariantObservation.value
-        val resiliencePolicy = session.controller.resiliencePolicy.value
-        val hostLastError = uiState.lastError?.toMap()
-        if (hostLastError != null) {
-            session.lastError = hostLastError
-        }
-        val resolvedLastError = hostLastError ?: session.lastError
+        Trace.beginSection("VesperRefresh#buildSnapshotMap")
+        try {
+            val uiState = session.controller.uiState.value
+            val trackCatalog = session.controller.trackCatalog.value
+            val trackSelection = session.controller.trackSelection.value
+            val effectiveVideoTrackId = session.controller.effectiveVideoTrackId.value
+            val videoVariantObservation = session.controller.videoVariantObservation.value
+            val resiliencePolicy = session.controller.resiliencePolicy.value
+            val hostLastError = uiState.lastError?.toMap()
+            if (hostLastError != null) {
+                session.lastError = hostLastError
+            }
+            val resolvedLastError = hostLastError ?: session.lastError
 
-        return mapOf(
-            "title" to uiState.title,
-            "subtitle" to uiState.subtitle,
-            "sourceLabel" to uiState.sourceLabel,
-            "playbackState" to uiState.playbackState.toWireName(),
-            "playbackRate" to uiState.playbackRate.toDouble(),
-            "isBuffering" to uiState.isBuffering,
-            "isInterrupted" to uiState.isInterrupted,
-            "hasVideoSurface" to session.hasAttachedHost(),
-            "timeline" to uiState.timeline.toMap(),
-            "viewport" to session.viewport?.toMap(),
-            "viewportHint" to session.viewportHint.toMap(),
-            "backendFamily" to session.controller.backendFamily.toBackendFamilyWireName(),
-            "capabilities" to buildCapabilitiesMap(),
-            "trackCatalog" to trackCatalog.toMap(),
-            "trackSelection" to trackSelection.toMap(),
-            // Deprecated aliases are derived from the same immutable
-            // snapshot so they cannot diverge from the canonical fields.
-            "requestedSubtitleSelection" to trackSelection.subtitle.toMap(),
-            "confirmedSubtitleSelection" to trackSelection.confirmedSubtitle.toMap(),
-            "effectiveSubtitleTrackId" to trackSelection.effectiveSubtitleTrackId,
-            "effectiveVideoTrackId" to effectiveVideoTrackId,
-            "videoVariantObservation" to videoVariantObservation?.toMap(),
-            "resiliencePolicy" to resiliencePolicy.toMap(),
-            "pluginDiagnostics" to session.controller.pluginDiagnostics,
-            "lastError" to resolvedLastError,
-            // Read the first-class subtitle state directly from the
-            // controller. This replaces the previous derive-from-catalog-
-            // and-warnings logic that (a) could not produce `loading`,
-            // (b) always set advertised == selectable, and (c) permanently
-            // polluted the state across source switches.
-            "subtitleState" to session.controller.subtitleState.value.toMap(),
-        )
+            return mapOf(
+                "title" to uiState.title,
+                "subtitle" to uiState.subtitle,
+                "sourceLabel" to uiState.sourceLabel,
+                "playbackState" to uiState.playbackState.toWireName(),
+                "playbackRate" to uiState.playbackRate.toDouble(),
+                "isBuffering" to uiState.isBuffering,
+                "isInterrupted" to uiState.isInterrupted,
+                "hasVideoSurface" to session.hasAttachedHost(),
+                "timeline" to uiState.timeline.toMap(),
+                "viewport" to session.viewport?.toMap(),
+                "viewportHint" to session.viewportHint.toMap(),
+                "backendFamily" to session.controller.backendFamily.toBackendFamilyWireName(),
+                "capabilities" to buildCapabilitiesMap(),
+                "trackCatalog" to trackCatalog.toMap(),
+                "trackSelection" to trackSelection.toMap(),
+                // Deprecated aliases are derived from the same immutable
+                // snapshot so they cannot diverge from the canonical fields.
+                "requestedSubtitleSelection" to trackSelection.subtitle.toMap(),
+                "confirmedSubtitleSelection" to trackSelection.confirmedSubtitle.toMap(),
+                "effectiveSubtitleTrackId" to trackSelection.effectiveSubtitleTrackId,
+                "effectiveVideoTrackId" to effectiveVideoTrackId,
+                "videoVariantObservation" to videoVariantObservation?.toMap(),
+                "resiliencePolicy" to resiliencePolicy.toMap(),
+                "pluginDiagnostics" to session.controller.pluginDiagnostics,
+                "lastError" to resolvedLastError,
+                // Read the first-class subtitle state directly from the
+                // controller. This replaces the previous derive-from-catalog-
+                // and-warnings logic that (a) could not produce `loading`,
+                // (b) always set advertised == selectable, and (c) permanently
+                // polluted the state across source switches.
+                "subtitleState" to session.controller.subtitleState.value.toMap(),
+            )
+        } finally {
+            Trace.endSection()
+        }
     }
 
     private fun buildCapabilitiesMap(): Map<String, Any?> {

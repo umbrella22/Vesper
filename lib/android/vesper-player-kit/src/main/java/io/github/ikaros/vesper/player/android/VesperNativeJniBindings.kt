@@ -3,6 +3,7 @@ package io.github.ikaros.vesper.player.android
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.Trace
 import android.util.Log
 import android.view.Surface
 import androidx.annotation.OptIn
@@ -618,7 +619,31 @@ internal class VesperNativeJniBindings(
         if (isDisposed.get()) {
             return
         }
-        pushSnapshotToRust()
+        Trace.beginSection("VesperRefresh#pushSnapshotToRust")
+        try {
+            pushSnapshotToRust()
+        } finally {
+            Trace.endSection()
+        }
+    }
+
+    override fun sampleTimeline(): TimelineUiState? {
+        if (isDisposed.get()) {
+            return null
+        }
+        val handle = sessionHandle ?: return null
+        val exoPlayer = player ?: return null
+        val sample = exoPlayer.currentTimelineSample()
+        return VesperNativeJni.sampleTimeline(
+            sessionHandle = handle,
+            positionMs = sample.timelinePositionMs,
+            durationMs = sample.durationMs,
+            isLive = sample.isLive,
+            isSeekable = sample.isSeekable,
+            seekableStartMs = sample.seekableStartMs,
+            seekableEndMs = sample.seekableEndMs,
+            liveEdgeMs = sample.liveEdgeMs,
+        )
     }
 
     override fun currentTrackCatalog(): VesperTrackCatalog = currentTrackCatalogState

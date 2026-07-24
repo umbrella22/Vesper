@@ -129,6 +129,32 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
   }
 
   @override
+  Future<VesperTimeline?> sampleTimeline(String playerId) async {
+    Object? raw;
+    try {
+      raw = await _invokeMethod<Object?>('sampleTimeline', <String, Object?>{
+        'playerId': playerId,
+      });
+    } on MissingPluginException {
+      await refreshPlayer(playerId);
+      return null;
+    }
+    if (raw == null) {
+      // A null sample is the compatibility signal for an older or
+      // temporarily unavailable native sampler. Keep the full-refresh
+      // fallback in this adapter so every platform has the same contract.
+      await refreshPlayer(playerId);
+      return null;
+    }
+    if (raw is! Map) {
+      throw const FormatException('sampleTimeline returned a non-map value.');
+    }
+    return VesperTimeline.fromSampleMap(
+      Map<Object?, Object?>.from(raw),
+    );
+  }
+
+  @override
   Future<void> selectSource(String playerId, VesperPlayerSource source) {
     return _invokeVoid('selectSource', <String, Object?>{
       'playerId': playerId,

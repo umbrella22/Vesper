@@ -82,6 +82,8 @@ class VesperPlayerController internal constructor(
 
     fun refresh() = bridge.refresh()
 
+    fun sampleTimeline(): TimelineUiState? = bridge.sampleTimeline()
+
     /**
      * Enqueues source selection and returns after the request is accepted.
      * Use [selectSourceAsync] when the caller needs to wait for source startup.

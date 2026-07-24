@@ -311,6 +311,7 @@ internal interface PlayerBridge {
     suspend fun initializeAsync()
     fun dispose()
     fun refresh()
+    fun sampleTimeline(): TimelineUiState?
     fun selectSource(source: VesperPlayerSource)
     suspend fun selectSourceAsync(source: VesperPlayerSource)
 

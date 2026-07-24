@@ -2043,6 +2043,69 @@ fn android_managed_session_updates_from_native_snapshot() {
 }
 
 #[test]
+fn android_managed_session_sample_uses_media_info_duration_without_mutating_state() {
+    let commands = Arc::new(Mutex::new(Vec::new()));
+    let sink = RecordingAndroidCommandSink::new(commands);
+    let session = AndroidManagedNativeSession::new("placeholder.mp4", test_media_info(), sink);
+    let snapshot = AndroidExoPlaybackSnapshot {
+        playback_state: AndroidExoPlaybackState::Ready,
+        play_when_ready: true,
+        playback_rate: 1.0,
+        position: Duration::from_secs(3),
+        duration: None,
+        is_live: false,
+        is_seekable: true,
+        seekable_range: None,
+        live_edge: None,
+    };
+
+    let sampled = session.sample_timeline(&snapshot);
+
+    assert_eq!(sampled.kind, player_runtime::PlayerTimelineKind::Vod);
+    assert_eq!(sampled.position, Duration::from_secs(3));
+    assert_eq!(sampled.duration, Some(Duration::from_secs(12)));
+    assert_eq!(
+        sampled.seekable_range.expect("VOD range").end,
+        Duration::from_secs(12)
+    );
+    assert_eq!(session.pending_update_count(), 0);
+}
+
+#[test]
+fn android_managed_session_sample_preserves_live_dvr_coordinates() {
+    let commands = Arc::new(Mutex::new(Vec::new()));
+    let sink = RecordingAndroidCommandSink::new(commands);
+    let session =
+        AndroidManagedNativeSession::new("https://example.com/live.m3u8", test_media_info(), sink);
+    let snapshot = AndroidExoPlaybackSnapshot {
+        playback_state: AndroidExoPlaybackState::Ready,
+        play_when_ready: true,
+        playback_rate: 1.0,
+        position: Duration::from_secs(84),
+        duration: None,
+        is_live: true,
+        is_seekable: true,
+        seekable_range: Some(AndroidExoSeekableRange {
+            start: Duration::from_secs(60),
+            end: Duration::from_secs(120),
+        }),
+        live_edge: Some(Duration::from_secs(120)),
+    };
+
+    let sampled = session.sample_timeline(&snapshot);
+
+    assert_eq!(sampled.kind, player_runtime::PlayerTimelineKind::LiveDvr);
+    assert_eq!(sampled.position, Duration::from_secs(84));
+    assert_eq!(sampled.duration, Some(Duration::from_secs(60)));
+    assert_eq!(
+        sampled.seekable_range.expect("DVR range").start,
+        Duration::from_secs(60)
+    );
+    assert_eq!(sampled.live_edge, Some(Duration::from_secs(120)));
+    assert_eq!(session.pending_update_count(), 0);
+}
+
+#[test]
 fn android_managed_session_controller_delivers_async_updates() {
     let commands = Arc::new(Mutex::new(Vec::new()));
     let sink = RecordingAndroidCommandSink::new(commands);

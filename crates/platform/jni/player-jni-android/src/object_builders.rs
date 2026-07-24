@@ -8,8 +8,8 @@ use player_platform_android::{
 use player_runtime::{
     MediaAbrMode, MediaAbrPolicy, MediaTrackSelection, MediaTrackSelectionMode,
     PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
-    PlayerResolvedResiliencePolicy, PlayerRetryBackoff, PlayerRetryPolicy,
-    PlayerTrackPreferencePolicy, PresentationState,
+    PlayerResolvedResiliencePolicy, PlayerRetryBackoff, PlayerRetryPolicy, PlayerTimelineKind,
+    PlayerTimelineSnapshot, PlayerTrackPreferencePolicy, PresentationState,
 };
 
 use crate::{
@@ -68,6 +68,56 @@ pub(crate) fn timeline_kind_object<'local>(
         field_sig(format!("L{PKG}/TimelineKind;")).field_signature(),
     )?
     .l()
+}
+
+pub(crate) fn timeline_object<'local>(
+    env: &mut Env<'local>,
+    timeline: &PlayerTimelineSnapshot,
+) -> JniResult<JObject<'local>> {
+    let seekable_range = match timeline.seekable_range {
+        Some(range) => {
+            let class = env.find_class(jni_name(format!("{PKG}/SeekableRangeUi")))?;
+            env.new_object(
+                class,
+                method_sig("(JJ)V").method_signature(),
+                &[
+                    JValue::Long(u64_to_jlong_saturating(duration_to_millis(range.start))),
+                    JValue::Long(u64_to_jlong_saturating(duration_to_millis(range.end))),
+                ],
+            )?
+        }
+        None => JObject::null(),
+    };
+    let kind = match timeline.kind {
+        PlayerTimelineKind::Vod => AndroidHostTimelineKind::Vod,
+        PlayerTimelineKind::Live => AndroidHostTimelineKind::Live,
+        PlayerTimelineKind::LiveDvr => AndroidHostTimelineKind::LiveDvr,
+    };
+    let timeline_kind = timeline_kind_object(env, kind)?;
+    let live_edge = boxed_long(env, timeline.live_edge.map(duration_to_millis))?;
+    let duration = boxed_long(env, timeline.duration.map(duration_to_millis))?;
+    let timeline_class = env.find_class(jni_name(format!("{PKG}/TimelineUiState")))?;
+    env.new_object(
+        timeline_class,
+        method_sig(&format!(
+            "(L{PKG}/TimelineKind;ZL{PKG}/SeekableRangeUi;Ljava/lang/Long;JLjava/lang/Long;)V"
+        ))
+        .method_signature(),
+        &[
+            JValue::Object(&timeline_kind),
+            JValue::Bool(timeline.is_seekable),
+            JValue::Object(&seekable_range),
+            JValue::Object(&live_edge),
+            JValue::Long(u64_to_jlong_saturating(duration_to_millis(
+                timeline.position,
+            ))),
+            JValue::Object(&duration),
+        ],
+    )
+}
+
+fn duration_to_millis(duration: std::time::Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 pub(crate) fn host_snapshot_object<'local>(

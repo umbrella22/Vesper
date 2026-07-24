@@ -430,6 +430,53 @@ void main() {
     );
   });
 
+  test('sampleTimeline forwards player id and decodes only the timeline',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      if (call.method == 'sampleTimeline') {
+        return <String, Object?>{
+          'kind': 'vod',
+          'isSeekable': true,
+          'seekableRange': <String, Object?>{
+            'startMs': 0,
+            'endMs': 120000,
+          },
+          'liveEdgeMs': null,
+          'positionMs': 45000,
+          'durationMs': 120000,
+        };
+      }
+      return null;
+    });
+    final platform = MethodChannelVesperPlayerIos();
+
+    final timeline = await platform.sampleTimeline('ios-player');
+
+    expect(timeline?.kind, VesperTimelineKind.vod);
+    expect(timeline?.positionMs, 45000);
+    expect(timeline?.durationMs, 120000);
+    expect(calls.single.method, 'sampleTimeline');
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      <Object?, Object?>{'playerId': 'ios-player'},
+    );
+  });
+
+  test('null sample falls back to one full refresh', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return null;
+    });
+    final platform = MethodChannelVesperPlayerIos();
+
+    expect(await platform.sampleTimeline('ios-player'), isNull);
+    expect(calls.map((call) => call.method),
+        <String>['sampleTimeline', 'refreshPlayer']);
+  });
+
   test('subtitle selection forwards the requested mode and opaque id',
       () async {
     final platform = MethodChannelVesperPlayerIos();
@@ -748,6 +795,10 @@ void main() {
         'licenseUriHost': 'license.example.com',
         'certificateUriHost': 'cert.example.com',
         'httpStatusCode': '503',
+        'nativeErrorDomain': 'AVFoundationErrorDomain',
+        'nativeErrorCode': '-11828',
+        'sourceUri': 'https://example.com/movie.m3u8',
+        'sourceProtocol': 'hls',
         'attemptsExhausted': true,
         'maxAttempts': 3,
       },
@@ -785,6 +836,10 @@ void main() {
     expect(event.error.details['keySystem'], 'fairPlay');
     expect(event.error.details['licenseUriHost'], 'license.example.com');
     expect(event.error.details['certificateUriHost'], 'cert.example.com');
+    expect(event.error.details['nativeErrorDomain'], 'AVFoundationErrorDomain');
+    expect(event.error.details['nativeErrorCode'], '-11828');
+    expect(event.error.details['sourceUri'], 'https://example.com/movie.m3u8');
+    expect(event.error.details['sourceProtocol'], 'hls');
     expect(event.error.details['attemptsExhausted'], isTrue);
     expect(event.snapshot?.playbackState, VesperPlaybackState.paused);
     expect(event.snapshot?.isBuffering, isFalse);

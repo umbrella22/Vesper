@@ -18,7 +18,7 @@ use jni::objects::{JClass, JObject, JObjectArray, JString};
 use jni::signature::{RuntimeFieldSignature, RuntimeMethodSignature};
 use jni::strings::JNIString;
 use jni::sys::{jboolean, jfloat, jint, jlong, jobject, jobjectArray, jstring};
-use player_platform_android::AndroidExoPlaybackSnapshot;
+use player_platform_android::{AndroidExoPlaybackSnapshot, AndroidExoSeekableRange};
 use player_platform_android::{
     AndroidNativeFramePipelineOpenConfig, AndroidNativeFramePipelineSession,
     AndroidNativeFramePresenterProfile, android_native_frame_pipeline_frame_json,
@@ -46,7 +46,7 @@ pub(crate) use handles::{
 use native_frame_presenter::AndroidNativeWindowPresenterSink;
 use object_builders::{
     host_event_object, host_snapshot_object, native_command_object,
-    resolved_resilience_policy_object, track_preferences_object,
+    resolved_resilience_policy_object, timeline_object, track_preferences_object,
 };
 pub(crate) use parsers::{error_category_from_jni_ordinal, error_code_from_jni_ordinal};
 use parsers::{
@@ -833,6 +833,50 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                     return Ok(JObject::null().into_raw());
                 };
                 Ok(host_snapshot_object(env, &snapshot)?.into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_sampleTimeline(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    position_ms: jlong,
+    duration_ms: jlong,
+    is_live: jboolean,
+    is_seekable: jboolean,
+    seekable_start_ms: jlong,
+    seekable_end_ms: jlong,
+    live_edge_ms: jlong,
+) -> jobject {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jobject> {
+                let snapshot = AndroidExoPlaybackSnapshot {
+                    playback_state: player_platform_android::AndroidExoPlaybackState::Ready,
+                    play_when_ready: false,
+                    playback_rate: 1.0,
+                    position: Duration::from_millis(position_ms.max(0) as u64),
+                    duration: (duration_ms >= 0).then(|| Duration::from_millis(duration_ms as u64)),
+                    is_live,
+                    is_seekable,
+                    seekable_range: (seekable_start_ms >= 0
+                        && seekable_end_ms >= seekable_start_ms)
+                        .then(|| AndroidExoSeekableRange {
+                            start: Duration::from_millis(seekable_start_ms as u64),
+                            end: Duration::from_millis(seekable_end_ms as u64),
+                        }),
+                    live_edge: (live_edge_ms >= 0)
+                        .then(|| Duration::from_millis(live_edge_ms as u64)),
+                };
+                let Some(timeline) = with_session_mut(env, session_handle, |session| {
+                    session.sample_timeline(&snapshot)
+                }) else {
+                    return Ok(JObject::null().into_raw());
+                };
+                Ok(timeline_object(env, &timeline)?.into_raw())
             })
             .resolve::<ThrowRuntimeExAndDefault>()
     })

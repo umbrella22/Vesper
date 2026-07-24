@@ -55,6 +55,58 @@ final class VesperTimeline {
     );
   }
 
+  /// Decodes a timeline returned by the timeline-only platform operation.
+  ///
+  /// Unlike legacy full snapshots, a malformed or forward-version sample is
+  /// rejected instead of being silently converted to the initial VOD value.
+  factory VesperTimeline.fromSampleMap(Map<Object?, Object?> map) {
+    final rawKind = map['kind'];
+    VesperTimelineKind? kind;
+    if (rawKind is String) {
+      for (final value in VesperTimelineKind.values) {
+        if (value.name == rawKind) {
+          kind = value;
+          break;
+        }
+      }
+    }
+    if (kind == null) {
+      throw FormatException('Unknown timeline kind: $rawKind');
+    }
+
+    final rawSeekable = map['isSeekable'];
+    if (rawSeekable is! bool) {
+      throw const FormatException('Timeline isSeekable is missing or invalid.');
+    }
+
+    final positionMs = _strictTimelineInt(map['positionMs'], 'positionMs');
+    final durationMs =
+        _strictOptionalTimelineInt(map['durationMs'], 'durationMs');
+    final liveEdgeMs =
+        _strictOptionalTimelineInt(map['liveEdgeMs'], 'liveEdgeMs');
+    final rawRange = map['seekableRange'];
+    VesperSeekableRange? seekableRange;
+    if (rawRange != null) {
+      if (rawRange is! Map) {
+        throw const FormatException('Timeline seekableRange is invalid.');
+      }
+      final range = Map<Object?, Object?>.from(rawRange);
+      seekableRange = VesperSeekableRange(
+        startMs: _strictTimelineInt(range['startMs'], 'seekableRange.startMs'),
+        endMs: _strictTimelineInt(range['endMs'], 'seekableRange.endMs'),
+      );
+    }
+
+    return VesperTimeline(
+      kind: kind,
+      isSeekable: rawSeekable,
+      seekableRange: seekableRange,
+      liveEdgeMs: liveEdgeMs,
+      positionMs: positionMs,
+      durationMs: durationMs,
+    );
+  }
+
   final VesperTimelineKind kind;
   final bool isSeekable;
   final VesperSeekableRange? seekableRange;
@@ -138,6 +190,20 @@ final class VesperTimeline {
       'durationMs': durationMs,
     };
   }
+}
+
+int _strictTimelineInt(Object? raw, String field) {
+  if (raw is int) {
+    return raw;
+  }
+  throw FormatException('Timeline $field is missing or invalid.');
+}
+
+int? _strictOptionalTimelineInt(Object? raw, String field) {
+  if (raw == null) {
+    return null;
+  }
+  return _strictTimelineInt(raw, field);
 }
 
 final class VesperMediaTrack {

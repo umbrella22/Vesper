@@ -105,6 +105,8 @@ internal class FakePlayerBridge(
 
     override fun refresh() = Unit
 
+    override fun sampleTimeline(): TimelineUiState? = uiState.value.timeline
+
     override fun selectSource(source: VesperPlayerSource) {
         selectPreviewSource(source)
     }

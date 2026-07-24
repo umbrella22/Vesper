@@ -25,7 +25,8 @@ val relayFfmpegBuildProfile =
         .orElse(
             providers.provider {
                 if (gradle.startParameter.taskNames.any { taskName ->
-                        taskName.contains("Release", ignoreCase = true)
+                        taskName.contains("Release", ignoreCase = true) ||
+                            taskName.contains("Profile", ignoreCase = true)
                     }
                 ) {
                     "release"
@@ -56,6 +57,15 @@ android {
     defaultConfig {
         minSdk = 26
         consumerProguardFiles("consumer-rules.pro")
+    }
+
+    buildTypes {
+        val releaseBuildType = getByName("release")
+        maybeCreate("profile").apply {
+            initWith(releaseBuildType)
+            matchingFallbacks.clear()
+            matchingFallbacks.add("release")
+        }
     }
 
     compileOptions {

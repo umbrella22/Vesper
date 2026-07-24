@@ -37,6 +37,15 @@ android {
         consumerProguardFiles "consumer-rules.pro"
     }
 
+    // Flutter creates a profile build type for the host application. Keep the
+    // plugin's profile artifact aligned with the optimized release host kit.
+    buildTypes {
+        profile {
+            initWith release
+            matchingFallbacks = ["release"]
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

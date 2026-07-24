@@ -17,6 +17,15 @@ android {
         consumerProguardFiles("consumer-rules.pro")
     }
 
+    buildTypes {
+        val releaseBuildType = getByName("release")
+        maybeCreate("profile").apply {
+            initWith(releaseBuildType)
+            matchingFallbacks.clear()
+            matchingFallbacks.add("release")
+        }
+    }
+
     publishing {
         singleVariant("release") {
             withSourcesJar()
