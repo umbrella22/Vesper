@@ -11,6 +11,7 @@ extension VesperForegroundDownloadExecutor {
         allowRestartAfterRangeMismatch: Bool,
         onProgress: (UInt64) async -> Void
     ) async throws -> UInt64 {
+        let sourceDescription = downloadURLDescriptionForDiagnostics(sourceURL)
         var offset = resumeFromBytes
         if offset >= expectedSizeBytes {
             return expectedSizeBytes
@@ -31,7 +32,7 @@ extension VesperForegroundDownloadExecutor {
             )
             guard nextOffset > offset else {
                 throw VesperForegroundDownloadPreparationError.invalidSource(
-                    "download range transfer did not advance for \(sourceURL.absoluteString)"
+                    "download range transfer did not advance for \(sourceDescription)"
                 )
             }
             offset = nextOffset
@@ -50,6 +51,7 @@ extension VesperForegroundDownloadExecutor {
         allowRestartAfterRangeMismatch: Bool,
         onProgress: (UInt64) async -> Void
     ) async throws -> UInt64 {
+        let sourceDescription = downloadURLDescriptionForDiagnostics(sourceURL)
         var request = URLRequest(url: sourceURL)
         request.applyDownloadHttpHeaders(requestHeaders)
         request.setValue("bytes=\(rangeStart)-\(rangeEndInclusive)", forHTTPHeaderField: "Range")
@@ -59,7 +61,7 @@ extension VesperForegroundDownloadExecutor {
         let response = stream.response
         guard let http = response as? HTTPURLResponse else {
             throw VesperForegroundDownloadPreparationError.invalidSource(
-                "remote resource did not return an HTTP response for \(sourceURL.absoluteString)"
+                "remote resource did not return an HTTP response for \(sourceDescription)"
             )
         }
         let statusCode = http.statusCode
@@ -75,7 +77,7 @@ extension VesperForegroundDownloadExecutor {
                     requestedEndInclusive: rangeEndInclusive,
                     expectedBodyLength: rangeEndInclusive - rangeStart + 1,
                     expectedTotalSizeBytes: expectedSizeBytes,
-                    sourceDescription: sourceURL.absoluteString
+                    sourceURL: sourceURL
                 )
             } catch {
                 throw staleDownloadResource(
@@ -102,13 +104,13 @@ extension VesperForegroundDownloadExecutor {
                     )
                 }
                 throw staleDownloadResource(
-                    "remote server did not honor the requested byte range for \(sourceURL.absoluteString)"
+                    "remote server did not honor the requested byte range for \(sourceDescription)"
                 )
             }
             if let contentLength = parseHttpContentLength(http.value(forHTTPHeaderField: "Content-Length")),
                contentLength != expectedSizeBytes {
                 throw staleDownloadResource(
-                    "remote server reported Content-Length \(contentLength), expected \(expectedSizeBytes) for \(sourceURL.absoluteString)"
+                    "remote server reported Content-Length \(contentLength), expected \(expectedSizeBytes) for \(sourceDescription)"
                 )
             }
         case 416:
@@ -127,17 +129,20 @@ extension VesperForegroundDownloadExecutor {
                 )
             }
             throw staleDownloadResource(
-                "remote resource rejected the requested byte range for \(sourceURL.absoluteString)"
+                "remote resource rejected the requested byte range for \(sourceDescription)"
             )
         case 401, 403, 404, 410:
-            throw staleDownloadResource(
-                "offline download resource is stale or expired (HTTP \(statusCode)) for \(sourceURL.absoluteString); refresh the media link and prepare the task again"
+            throw expiredDownloadResource(
+                sourceURL: sourceURL,
+                statusCode: statusCode,
+                phase: .download,
+                receivedBytes: rangeStart
             )
         case 200..<300:
             break
         default:
             throw staleDownloadResource(
-                "remote resource returned HTTP \(statusCode) for \(sourceURL.absoluteString)"
+                "remote resource returned HTTP \(statusCode) for \(sourceDescription)"
             )
         }
 
@@ -221,14 +226,14 @@ extension VesperForegroundDownloadExecutor {
             let expectedNextOffset = rangeEndInclusive + 1
             guard totalWritten == expectedNextOffset else {
                 throw staleDownloadResource(
-                    "downloaded range ended at \(totalWritten) for \(sourceURL.absoluteString), expected \(expectedNextOffset)"
+                    "downloaded range ended at \(totalWritten) for \(sourceDescription), expected \(expectedNextOffset)"
                 )
             }
             return totalWritten
         }
         guard totalWritten == expectedSizeBytes else {
             throw staleDownloadResource(
-                "downloaded \(totalWritten) bytes for \(sourceURL.absoluteString), expected \(expectedSizeBytes)"
+                "downloaded \(totalWritten) bytes for \(sourceDescription), expected \(expectedSizeBytes)"
             )
         }
         return totalWritten
@@ -242,16 +247,17 @@ extension VesperForegroundDownloadExecutor {
         sourceURL: URL,
         destinationURL: URL
     ) throws {
+        let sourceDescription = downloadURLDescriptionForDiagnostics(sourceURL)
         if totalWritten > expectedSizeBytes {
             try? fileManager.removeItem(at: destinationURL)
             throw staleDownloadResource(
-                "remote server sent more bytes than expected for \(sourceURL.absoluteString)"
+                "remote server sent more bytes than expected for \(sourceDescription)"
             )
         }
         if isPartialResponse, totalWritten > rangeEndInclusive + 1 {
             try? fileManager.removeItem(at: destinationURL)
             throw staleDownloadResource(
-                "remote server sent more bytes than the requested byte range for \(sourceURL.absoluteString)"
+                "remote server sent more bytes than the requested byte range for \(sourceDescription)"
             )
         }
     }

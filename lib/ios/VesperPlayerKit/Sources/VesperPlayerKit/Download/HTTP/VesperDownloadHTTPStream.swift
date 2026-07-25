@@ -7,7 +7,7 @@ struct VesperHTTPBodyStream {
 }
 
 final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    private let sourceDescription: String
+    private let diagnosticSourceDescription: String
     private let stalledTransferTimeoutNs: UInt64
     private let lock = NSLock()
     private let watchdogQueue: DispatchQueue
@@ -22,8 +22,8 @@ final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate
 
     let chunks: AsyncThrowingStream<Data, Error>
 
-    init(stalledTransferTimeoutMs: UInt64, sourceDescription: String) {
-        self.sourceDescription = sourceDescription
+    init(stalledTransferTimeoutMs: UInt64, sourceURL: URL) {
+        diagnosticSourceDescription = downloadURLDescriptionForDiagnostics(sourceURL)
         let (timeoutNs, overflow) = stalledTransferTimeoutMs.multipliedReportingOverflow(by: 1_000_000)
         stalledTransferTimeoutNs = overflow ? UInt64.max : timeoutNs
         watchdogQueue = DispatchQueue(
@@ -103,7 +103,7 @@ final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate
         // byte stream). Detect the drop and fail the download loudly instead.
         if case .dropped = chunksContinuation.yield(data) {
             let error = VesperForegroundDownloadPreparationError.invalidSource(
-                "download stream buffer overflowed for \(sourceDescription); consumer fell behind and a chunk would have been dropped"
+                "download stream buffer overflowed for \(diagnosticSourceDescription); consumer fell behind and a chunk would have been dropped"
             )
             finish(throwing: error)
             session.invalidateAndCancel()
@@ -166,7 +166,7 @@ final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate
         lock.unlock()
         guard shouldFail else { return }
         let error = VesperForegroundDownloadPreparationError.invalidSource(
-            "network transfer stalled without progress for \(sourceDescription)"
+            "network transfer stalled without progress for \(diagnosticSourceDescription)"
         )
         finish(throwing: error)
         task?.cancel()
@@ -191,7 +191,7 @@ final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate
             completeResponse(.failure(error))
         } else {
             completeResponse(.failure(VesperForegroundDownloadPreparationError.invalidSource(
-                "remote resource did not return a response for \(sourceDescription)"
+                "remote resource did not return a response for \(diagnosticSourceDescription)"
             )))
         }
         localWatchdog?.cancel()
@@ -205,4 +205,3 @@ final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate
         }
     }
 }
-

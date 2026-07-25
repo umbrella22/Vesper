@@ -6,6 +6,7 @@ extension VesperForegroundDownloadExecutor {
         requestHeaders: [String: String]
     ) async throws -> String {
         let sourceURL = try resolveURL(sourceUri)
+        let sourceDescription = downloadURLDescriptionForDiagnostics(sourceURL)
         let data: Data
         if sourceURL.isFileURL {
             data = try Data(contentsOf: sourceURL)
@@ -15,13 +16,15 @@ extension VesperForegroundDownloadExecutor {
             let (responseData, response) = try await httpData(for: request, sourceURL: sourceURL)
             if let http = response as? HTTPURLResponse {
                 if isExpiredHttpStatus(http.statusCode) {
-                    throw staleDownloadResource(
-                        "offline download resource is stale or expired (HTTP \(http.statusCode)) for \(sourceURL.absoluteString); refresh the media link and prepare the task again"
+                    throw expiredDownloadResource(
+                        sourceURL: sourceURL,
+                        statusCode: http.statusCode,
+                        phase: .prepare
                     )
                 }
                 if !(200..<300).contains(http.statusCode) {
                     throw VesperForegroundDownloadPreparationError.invalidSource(
-                        "remote resource returned HTTP \(http.statusCode) for \(sourceURL.absoluteString)"
+                        "remote resource returned HTTP \(http.statusCode) for \(sourceDescription)"
                     )
                 }
             }
@@ -62,8 +65,10 @@ extension VesperForegroundDownloadExecutor {
         let (_, response) = try await httpData(for: request, sourceURL: sourceURL)
         if let http = response as? HTTPURLResponse,
            isExpiredHttpStatus(http.statusCode) {
-            throw staleDownloadResource(
-                "offline download resource is stale or expired (HTTP \(http.statusCode)) for \(sourceURL.absoluteString); refresh the media link and prepare the task again"
+            throw expiredDownloadResource(
+                sourceURL: sourceURL,
+                statusCode: http.statusCode,
+                phase: .prepare
             )
         }
         if let http = response as? HTTPURLResponse,
@@ -79,8 +84,10 @@ extension VesperForegroundDownloadExecutor {
         let (_, rangeResponse) = try await httpData(for: rangeRequest, sourceURL: sourceURL)
         if let http = rangeResponse as? HTTPURLResponse,
            isExpiredHttpStatus(http.statusCode) {
-            throw staleDownloadResource(
-                "offline download resource is stale or expired (HTTP \(http.statusCode)) for \(sourceURL.absoluteString); refresh the media link and prepare the task again"
+            throw expiredDownloadResource(
+                sourceURL: sourceURL,
+                statusCode: http.statusCode,
+                phase: .prepare
             )
         }
         if let http = rangeResponse as? HTTPURLResponse,

@@ -371,8 +371,11 @@ final class PlayerErrorStateTests: XCTestCase {
     }
 
     func testNativeBridgeAddsHdrFailureEvidenceToDecodeErrors() {
-        let source = VesperPlayerSource.localFile(
-            url: URL(fileURLWithPath: "/tmp/local-dv-profile8.mov"),
+        let source = VesperPlayerSource.hls(
+            url: URL(
+                string:
+                    "https://viewer:password@media.example.invalid:4483/profile8.m3u8?deadline=123&upsig=secret#fragment"
+            )!,
             label: "DV Profile 8"
         )
         let bridge = VesperNativePlayerBridge(initialSource: source)
@@ -429,10 +432,15 @@ final class PlayerErrorStateTests: XCTestCase {
             "compatibleBaseLayerSystemPlayer"
         )
         XCTAssertEqual(bridge.lastError?.details["dolbyVisionCodec"], "dvhe.08.07")
+        XCTAssertEqual(
+            bridge.lastError?.details["sourceUri"],
+            "https://media.example.invalid:4483/profile8.m3u8"
+        )
     }
 
     func testNativeBridgeMapsBadServerResponseToRetriableNetworkError() {
-        let sourceUri = "https://media.example.invalid/video.m3u8"
+        let sourceUri =
+            "https://viewer:password@media.example.invalid:4483/video.m3u8?deadline=123&upsig=secret#fragment"
         let bridge = VesperNativePlayerBridge(
             initialSource: .hls(
                 url: URL(string: sourceUri)!,
@@ -460,7 +468,36 @@ final class PlayerErrorStateTests: XCTestCase {
             bridge.lastError?.details["nativeErrorCode"],
             String(NSURLErrorBadServerResponse)
         )
-        XCTAssertEqual(bridge.lastError?.details["sourceUri"], sourceUri)
+        XCTAssertEqual(
+            bridge.lastError?.details["sourceUri"],
+            "https://media.example.invalid:4483/video.m3u8"
+        )
+        XCTAssertEqual(bridge.lastError?.details["sourceProtocol"], "hls")
+    }
+
+    func testMalformedDiagnosticSourceUriIsOmittedWithoutDroppingProtocol() {
+        let bridge = VesperNativePlayerBridge(
+            initialSource: VesperPlayerSource(
+                uri: "not an absolute URL?upsig=secret",
+                label: "Malformed source",
+                kind: .remote,
+                protocol: .hls
+            ),
+            resiliencePolicy: VesperPlaybackResiliencePolicy(
+                retry: VesperRetryPolicy(maxAttempts: 0)
+            )
+        )
+
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(
+                domain: NSURLErrorDomain,
+                code: NSURLErrorBadServerResponse,
+                userInfo: [NSLocalizedDescriptionKey: "bad response"]
+            ),
+            fallbackMessage: "bad response"
+        )
+
+        XCTAssertNil(bridge.lastError?.details["sourceUri"])
         XCTAssertEqual(bridge.lastError?.details["sourceProtocol"], "hls")
     }
 
@@ -782,7 +819,8 @@ final class PlayerErrorStateTests: XCTestCase {
             eventCount: 6,
             events: (1...6).map {
                 [
-                    "uri": "https://media.example.invalid/\($0).m4s",
+                    "uri":
+                        "https://viewer:password@media.example.invalid/\($0).m4s?deadline=123&upsig=secret-\($0)#fragment",
                     "serverAddress": "203.0.113.\($0)",
                     "playbackSessionID": "session-\($0)",
                     "errorStatusCode": -12900 - $0,
@@ -796,15 +834,74 @@ final class PlayerErrorStateTests: XCTestCase {
         XCTAssertEqual(details["avPlayerItemErrorLogRecentEventCount"], "5")
         XCTAssertEqual(details["avPlayerItemErrorStatusCode"], "-12906")
         XCTAssertEqual(details["avPlayerItemErrorComment"], "event-6")
+        XCTAssertEqual(
+            details["avPlayerItemErrorUri"],
+            "https://media.example.invalid/6.m4s"
+        )
 
         let eventSummary = try XCTUnwrap(details["avPlayerItemErrorLogEvents"])
+        XCTAssertFalse(eventSummary.contains("password"))
+        XCTAssertFalse(eventSummary.contains("upsig"))
+        XCTAssertFalse(eventSummary.contains("secret"))
         let data = try XCTUnwrap(eventSummary.data(using: .utf8))
         let events = try XCTUnwrap(
             JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         )
         XCTAssertEqual(events.count, 5)
         XCTAssertEqual(events.first?["errorComment"] as? String, "event-2")
+        XCTAssertEqual(
+            events.first?["uri"] as? String,
+            "https://media.example.invalid/2.m4s"
+        )
         XCTAssertEqual(events.last?["errorComment"] as? String, "event-6")
+        XCTAssertEqual(
+            events.last?["uri"] as? String,
+            "https://media.example.invalid/6.m4s"
+        )
+    }
+
+    func testPlayerItemErrorLogMessageRedactsUri() {
+        let message = playerItemErrorLogMessage(
+            uri:
+                "https://viewer:password@media.example.invalid:4483/segment.m4s?deadline=123&upsig=secret#fragment",
+            errorStatusCode: -12900,
+            errorDomain: "CoreMediaErrorDomain",
+            errorComment: "request failed"
+        )
+
+        XCTAssertEqual(
+            message,
+            "itemErrorLog uri=https://media.example.invalid:4483/segment.m4s status=-12900 domain=CoreMediaErrorDomain comment=request failed"
+        )
+        XCTAssertFalse(message.contains("password"))
+        XCTAssertFalse(message.contains("upsig"))
+        XCTAssertFalse(message.contains("secret"))
+    }
+
+    func testStaleRetryDiagnosticMessageRedactsBothUris() {
+        let message = staleRetryDiagnosticMessage(
+            expectedUri:
+                "https://old-user:old-password@media.example.invalid/old.m3u8?deadline=123&upsig=old-secret#old",
+            currentUri:
+                "https://new-user:new-password@media.example.invalid/new.m3u8?deadline=456&upsig=new-secret#new",
+            attempt: 2
+        )
+
+        XCTAssertEqual(
+            message,
+            "ignored stale retry task sourceUri=https://media.example.invalid/old.m3u8 currentSource=https://media.example.invalid/new.m3u8 attempt=2"
+        )
+        XCTAssertFalse(message.contains("password"))
+        XCTAssertFalse(message.contains("upsig"))
+        XCTAssertFalse(message.contains("secret"))
+    }
+
+    func testDiagnosticURLDescriptionOmitsMalformedValues() {
+        XCTAssertEqual(
+            diagnosticURLDescription("not an absolute URL?upsig=secret"),
+            "omitted"
+        )
+        XCTAssertEqual(diagnosticURLDescription(nil), "nil")
     }
 
     func testNativeBridgeAddsAssetVideoCombinationEvidenceToHdrDecodeErrors() {

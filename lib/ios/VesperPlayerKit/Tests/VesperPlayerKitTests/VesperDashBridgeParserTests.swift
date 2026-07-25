@@ -18,13 +18,22 @@ final class VesperDashBridgeParserTests: XCTestCase {
 
     func testDashNetworkClientRejectsInsecureHTTPBeforeATS() async {
         let client = VesperDashNetworkClient()
+        let url = URL(
+            string:
+                "http://viewer:password@cdn.example.com:8080/master.mpd?deadline=123&upsig=secret#fragment"
+        )!
 
         do {
-            _ = try await client.data(for: URL(string: "http://cdn.example.com/master.mpd")!)
+            _ = try await client.data(for: url)
             XCTFail("insecure DASH HTTP request should fail")
         } catch {
             XCTAssertTrue(error.localizedDescription.contains("App Transport Security"))
-            XCTAssertTrue(error.localizedDescription.contains("http://cdn.example.com/master.mpd"))
+            XCTAssertTrue(
+                error.localizedDescription.contains("http://cdn.example.com:8080/master.mpd")
+            )
+            XCTAssertFalse(error.localizedDescription.contains("password"))
+            XCTAssertFalse(error.localizedDescription.contains("upsig"))
+            XCTAssertFalse(error.localizedDescription.contains("secret"))
         }
     }
 

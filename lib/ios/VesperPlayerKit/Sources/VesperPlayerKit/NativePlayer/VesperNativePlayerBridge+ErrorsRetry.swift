@@ -3,6 +3,17 @@ import Foundation
 import UIKit
 internal import VesperPlayerKitBridgeShim
 
+func staleRetryDiagnosticMessage(
+    expectedUri: String,
+    currentUri: String?,
+    attempt: Int
+) -> String {
+    let expectedDescription = diagnosticURLDescription(expectedUri)
+    let currentDescription = diagnosticURLDescription(currentUri)
+    return "ignored stale retry task sourceUri=\(expectedDescription) "
+        + "currentSource=\(currentDescription) attempt=\(attempt)"
+}
+
 extension VesperNativePlayerBridge {
     func sourceSubtitle(for source: VesperPlayerSource) -> String {
         switch source.kind {
@@ -208,7 +219,11 @@ extension VesperNativePlayerBridge {
     ) {
         guard currentSource?.uri == expectedUri else {
             iosHostLog(
-                "ignored stale retry task sourceUri=\(expectedUri) currentSource=\(currentSource?.uri ?? "nil") attempt=\(attempt)"
+                staleRetryDiagnosticMessage(
+                    expectedUri: expectedUri,
+                    currentUri: currentSource?.uri,
+                    attempt: attempt
+                )
             )
             return
         }
@@ -462,8 +477,10 @@ extension VesperNativePlayerBridge {
             details["nativeErrorCode"] = String(nsError.code)
         }
         if let source = currentSource {
-            details["sourceUri"] = source.uri
             details["sourceProtocol"] = source.protocol.rawValue
+            if let redactedSourceUri = redactedURLForDiagnostics(source.uri) {
+                details["sourceUri"] = redactedSourceUri
+            }
         }
         return details
     }

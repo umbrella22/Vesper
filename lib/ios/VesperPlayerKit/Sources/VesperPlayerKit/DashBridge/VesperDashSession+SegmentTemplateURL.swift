@@ -71,7 +71,9 @@ extension VesperDashSession {
         )
         let resolved = resolveDashURI(base: playable.representation.baseURL, reference: expanded)
         guard let url = URL(string: resolved) else {
-            throw VesperDashBridgeError.invalidManifest("invalid segment URL \(resolved)")
+            throw VesperDashBridgeError.invalidManifest(
+                "invalid segment URL \(diagnosticURLDescription(resolved))"
+            )
         }
         return url
     }

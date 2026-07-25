@@ -38,6 +38,7 @@ extension VesperForegroundDownloadExecutor {
             )
         }
 
+        let sourceDescription = downloadURLDescriptionForDiagnostics(sourceURL)
         var request = URLRequest(url: sourceURL)
         request.applyDownloadHttpHeaders(requestHeaders)
         var requestedRangeStart: UInt64?
@@ -70,7 +71,7 @@ extension VesperForegroundDownloadExecutor {
             case 206:
                 guard let requestedRangeStart else {
                     throw VesperForegroundDownloadPreparationError.invalidSource(
-                        "remote server returned an unexpected Content-Range for \(sourceURL.absoluteString)"
+                        "remote server returned an unexpected Content-Range for \(sourceDescription)"
                     )
                 }
                 let contentRange = try validateHTTPPartialContentRange(
@@ -80,7 +81,7 @@ extension VesperForegroundDownloadExecutor {
                     requestedEndInclusive: requestedRangeEndInclusive,
                     expectedBodyLength: expectedResponseBodyBytes,
                     expectedTotalSizeBytes: byteRange == nil ? expectedSizeBytes : nil,
-                    sourceDescription: sourceURL.absoluteString
+                    sourceURL: sourceURL
                 )
                 if let responseBytes = contentRange.length {
                     expectedFinalBytesAfterResponse = resumeFromBytes + responseBytes
@@ -102,14 +103,14 @@ extension VesperForegroundDownloadExecutor {
                         )
                     }
                     throw VesperForegroundDownloadPreparationError.invalidSource(
-                        "remote server did not honor the requested byte range for \(sourceURL.absoluteString)"
+                        "remote server did not honor the requested byte range for \(sourceDescription)"
                     )
                 }
                 if let expectedSizeBytes,
                    let contentLength = parseHttpContentLength(http.value(forHTTPHeaderField: "Content-Length")),
                    contentLength != expectedSizeBytes {
                     throw VesperForegroundDownloadPreparationError.invalidSource(
-                        "remote server reported Content-Length \(contentLength), expected \(expectedSizeBytes) for \(sourceURL.absoluteString)"
+                        "remote server reported Content-Length \(contentLength), expected \(expectedSizeBytes) for \(sourceDescription)"
                     )
                 }
             case 416:
@@ -128,20 +129,19 @@ extension VesperForegroundDownloadExecutor {
                     )
                 }
                 throw VesperForegroundDownloadPreparationError.invalidSource(
-                    "remote resource rejected the requested byte range for \(sourceURL.absoluteString)"
+                    "remote resource rejected the requested byte range for \(sourceDescription)"
                 )
             case 401, 403, 404, 410:
-                throw staleDownloadResource(
-                    "offline download resource is stale or expired (HTTP \(http.statusCode)) for \(sourceURL.absoluteString); refresh the media link and prepare the task again",
-                    uri: sourceURL.absoluteString,
-                    phase: .download,
-                    statusCode: http.statusCode
+                throw expiredDownloadResource(
+                    sourceURL: sourceURL,
+                    statusCode: http.statusCode,
+                    phase: .download
                 )
             case 200..<300:
                 break
             default:
                 throw VesperForegroundDownloadPreparationError.invalidSource(
-                    "remote resource returned HTTP \(http.statusCode) for \(sourceURL.absoluteString)"
+                    "remote resource returned HTTP \(http.statusCode) for \(sourceDescription)"
                 )
             }
         }
@@ -174,13 +174,13 @@ extension VesperForegroundDownloadExecutor {
                        totalWritten > expectedFinalBytesAfterResponse {
                         try? fileManager.removeItem(at: destinationURL)
                         throw VesperForegroundDownloadPreparationError.invalidSource(
-                            "remote server sent more bytes than its Content-Range for \(sourceURL.absoluteString)"
+                            "remote server sent more bytes than its Content-Range for \(sourceDescription)"
                         )
                     }
                     if let expectedSizeBytes, totalWritten > expectedSizeBytes {
                         try? fileManager.removeItem(at: destinationURL)
                         throw VesperForegroundDownloadPreparationError.invalidSource(
-                            "remote server sent more bytes than expected for \(sourceURL.absoluteString)"
+                            "remote server sent more bytes than expected for \(sourceDescription)"
                         )
                     }
                     buffer.removeAll(keepingCapacity: true)
@@ -195,13 +195,13 @@ extension VesperForegroundDownloadExecutor {
                    totalWritten > expectedFinalBytesAfterResponse {
                     try? fileManager.removeItem(at: destinationURL)
                     throw VesperForegroundDownloadPreparationError.invalidSource(
-                        "remote server sent more bytes than its Content-Range for \(sourceURL.absoluteString)"
+                        "remote server sent more bytes than its Content-Range for \(sourceDescription)"
                     )
                 }
                 if let expectedSizeBytes, totalWritten > expectedSizeBytes {
                     try? fileManager.removeItem(at: destinationURL)
                     throw VesperForegroundDownloadPreparationError.invalidSource(
-                        "remote server sent more bytes than expected for \(sourceURL.absoluteString)"
+                        "remote server sent more bytes than expected for \(sourceDescription)"
                     )
                 }
                 buffer.removeAll(keepingCapacity: true)

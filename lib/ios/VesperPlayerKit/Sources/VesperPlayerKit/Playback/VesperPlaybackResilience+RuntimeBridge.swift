@@ -217,7 +217,7 @@ enum VesperRuntimeResilienceResolver {
         guard !loggedRuntime else { return }
         loggedRuntime = true
         iosHostLog(
-            "runtime defaults resolver active for source=\(source.uri)"
+            "runtime defaults resolver active for source=\(diagnosticURLDescription(source.uri))"
         )
     }
 }

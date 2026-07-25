@@ -8,7 +8,9 @@ extension VesperNativePlayerBridge {
         source: VesperPlayerSource,
         session: VesperNativeFramePipelineSession
     ) {
-        iosHostLog("configured iOS native-frame pipeline source=\(source.uri)")
+        iosHostLog(
+            "configured iOS native-frame pipeline source=\(diagnosticURLDescription(source.uri))"
+        )
         recordBenchmark("native_frame_pipeline_configured")
         releaseDashStartupAbrLimitIfNeeded(reason: "nativeFrameSourceReload", item: player?.currentItem)
         removeObservers()

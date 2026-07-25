@@ -33,6 +33,11 @@
 
 ### Fixed
 
+- Playback diagnostics now remove credentials, query parameters, and fragments
+  from current-source details, lifecycle and retry logs, HDR evidence, DASH
+  network errors, and AVPlayer error-log URLs.
+- Foreground-download errors now redact diagnostic URLs while retaining complete
+  stale-resource URIs for recovery callbacks and retried requests.
 - Release framework archives now hide the static BridgeShim module from public
   and private textual interfaces, share the canonical XCFramework slices, omit
   AppleDouble metadata, and pass an isolated import and link smoke.

@@ -25,7 +25,9 @@ class VesperDashNetworkClient {
         let (data, response) = try await session.data(for: request)
         if let httpResponse = response as? HTTPURLResponse,
            !(200...299).contains(httpResponse.statusCode) {
-            throw VesperDashBridgeError.network("HTTP \(httpResponse.statusCode) for \(url.absoluteString)")
+            throw VesperDashBridgeError.network(
+                "HTTP \(httpResponse.statusCode) for \(diagnosticURLDescription(url.absoluteString))"
+            )
         }
         return data
     }
@@ -59,7 +61,9 @@ class VesperDashNetworkClient {
         if let httpResponse = response as? HTTPURLResponse,
            !(200...299).contains(httpResponse.statusCode) {
             removeFileIfPresent(temporaryURL, context: "failed DASH download temporary file")
-            throw VesperDashBridgeError.network("HTTP \(httpResponse.statusCode) for \(url.absoluteString)")
+            throw VesperDashBridgeError.network(
+                "HTTP \(httpResponse.statusCode) for \(diagnosticURLDescription(url.absoluteString))"
+            )
         }
         try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
         return fileSize(at: destinationURL) ?? 0
@@ -77,7 +81,9 @@ class VesperDashNetworkClient {
         guard url.scheme?.lowercased() == "http" else {
             return
         }
-        throw VesperDashBridgeError.network("\(vesperDashATSFailureMessage) URL: \(url.absoluteString)")
+        throw VesperDashBridgeError.network(
+            "\(vesperDashATSFailureMessage) URL: \(diagnosticURLDescription(url.absoluteString))"
+        )
     }
 
     private func readLocalFile(url: URL, byteRange: VesperDashByteRange?) throws -> Data {

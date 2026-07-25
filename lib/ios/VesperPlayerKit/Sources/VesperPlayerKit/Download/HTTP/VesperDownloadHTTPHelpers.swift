@@ -1,5 +1,9 @@
 import Foundation
 
+func downloadURLDescriptionForDiagnostics(_ url: URL) -> String {
+    diagnosticURLDescription(url.absoluteString)
+}
+
 func sanitizedDownloadHttpHeaders(_ headers: [String: String]) -> [String: String] {
     var result: [String: String] = [:]
     for (name, value) in headers {
@@ -18,7 +22,7 @@ func rejectInsecureHTTPURL(_ url: URL) throws {
         return
     }
     throw VesperForegroundDownloadPreparationError.invalidSource(
-        "\(vesperDownloadATSFailureMessage) URL: \(url.absoluteString)"
+        "\(vesperDownloadATSFailureMessage) URL: \(downloadURLDescriptionForDiagnostics(url))"
     )
 }
 
@@ -41,4 +45,3 @@ extension URLRequest {
         }
     }
 }
-

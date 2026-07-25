@@ -47,7 +47,9 @@ extension VesperNativePlayerBridge {
                 queue: loaderDelegate.resourceLoadingQueue
             )
             sourceNormalizerResourceLoaderDelegate = loaderDelegate
-            iosHostLog("configured SourceNormalizer resource loader url=\(url.absoluteString)")
+            iosHostLog(
+                "configured SourceNormalizer resource loader url=\(diagnosticURLDescription(url.absoluteString))"
+            )
             recordBenchmark("source_normalizer_resource_loader_configured")
             return AVPlayerItem(asset: asset)
         }
@@ -104,7 +106,9 @@ extension VesperNativePlayerBridge {
         currentDashSession = session
         dashResourceLoaderDelegate = loaderDelegate
         sourceNormalizerResourceLoaderDelegate = nil
-        iosHostLog("configured DASH bridge master=\(session.masterPlaylistURL.absoluteString)")
+        iosHostLog(
+            "configured DASH bridge master=\(diagnosticURLDescription(session.masterPlaylistURL.absoluteString))"
+        )
         recordBenchmark("dash_bridge_configured")
         return AVPlayerItem(asset: asset)
     }
@@ -208,7 +212,9 @@ extension VesperNativePlayerBridge {
         fairPlayDrmCoordinator = coordinator
         fairPlayDrmCoordinatorId = coordinatorId
         coordinator.attach(to: asset)
-        iosHostLog("configured FairPlay DRM content key session source=\(source.uri)")
+        iosHostLog(
+            "configured FairPlay DRM content key session source=\(diagnosticURLDescription(source.uri))"
+        )
         recordBenchmark("fairplay_drm_configured")
     }
 }

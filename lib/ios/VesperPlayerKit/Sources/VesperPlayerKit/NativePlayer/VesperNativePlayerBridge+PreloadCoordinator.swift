@@ -107,7 +107,7 @@ final class VesperNativePreloadCoordinator {
             let (_, response) = try await URLSession.shared.data(for: request)
             if let httpResponse = response as? HTTPURLResponse {
                 iosHostLog(
-                    "preload warmup completed status=\(httpResponse.statusCode) url=\(url.absoluteString)"
+                    "preload warmup completed status=\(httpResponse.statusCode) url=\(diagnosticURLDescription(url.absoluteString))"
                 )
             }
             _ = vesper_runtime_preload_session_complete(handle, task.task_id)

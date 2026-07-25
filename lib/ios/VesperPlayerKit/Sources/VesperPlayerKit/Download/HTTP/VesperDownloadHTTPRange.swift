@@ -66,8 +66,9 @@ func validateHTTPPartialContentRange(
     requestedEndInclusive: UInt64?,
     expectedBodyLength: UInt64?,
     expectedTotalSizeBytes: UInt64?,
-    sourceDescription: String
+    sourceURL: URL
 ) throws -> VesperHTTPContentRange {
+    let sourceDescription = downloadURLDescriptionForDiagnostics(sourceURL)
     guard let contentRange = parseHttpContentRange(contentRangeHeader),
           !contentRange.isUnsatisfied,
           contentRange.start == requestedStart,
@@ -104,4 +105,3 @@ func validateHTTPPartialContentRange(
     }
     return contentRange
 }
-

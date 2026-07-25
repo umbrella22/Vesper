@@ -150,12 +150,15 @@ final class VesperNativeFramePipelineSession {
             return .failure(Self.closedStartupError())
         }
         applyAudioBridgeState(audioState)
+        let sourceDescription = diagnosticURLDescription(source.uri)
         if audioState.outputKind == "swiftNativeAudioBridge" {
-            iosHostLog("native audio pipeline configured audioPipeline=\(audioPipelineKind) source=\(source.uri)")
+            iosHostLog(
+                "native audio pipeline configured audioPipeline=\(audioPipelineKind) source=\(sourceDescription)"
+            )
         } else if audioState.hasAudioTrack {
             let reason = audioState.issue ?? "Swift native audio bridge is unavailable."
             iosHostLog(
-                "native audio pipeline unavailable audioPipeline=\(audioPipelineKind); playback cannot start source=\(source.uri) reason=\(reason)"
+                "native audio pipeline unavailable audioPipeline=\(audioPipelineKind); playback cannot start source=\(sourceDescription) reason=\(reason)"
             )
             runtime = nil
             await closeOpenedHandleOffMain(opened.handle)
@@ -168,7 +171,7 @@ final class VesperNativeFramePipelineSession {
         } else {
             let reason = audioState.issue.map { " reason=\($0)" } ?? ""
             iosHostLog(
-                "native audio pipeline unavailable audioPipeline=\(audioPipelineKind); using video clock source=\(source.uri)\(reason)"
+                "native audio pipeline unavailable audioPipeline=\(audioPipelineKind); using video clock source=\(sourceDescription)\(reason)"
             )
         }
         return .success(self)

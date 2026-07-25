@@ -78,6 +78,21 @@ func staleDownloadResource(
     )
 }
 
+func expiredDownloadResource(
+    sourceURL: URL,
+    statusCode: Int,
+    phase: VesperDownloadStaleResourcePhase,
+    receivedBytes: UInt64 = 0
+) -> VesperStaleDownloadResourceError {
+    staleDownloadResource(
+        "offline download resource is stale or expired (HTTP \(statusCode)) for \(downloadURLDescriptionForDiagnostics(sourceURL)); refresh the media link and prepare the task again",
+        uri: sourceURL.absoluteString,
+        phase: phase,
+        statusCode: statusCode,
+        receivedBytes: receivedBytes
+    )
+}
+
 struct DownloadProgressThrottle {
     private let minProgressBytes: UInt64
     private let minProgressIntervalNs: UInt64

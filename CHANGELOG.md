@@ -48,6 +48,11 @@
 
 ### Fixed
 
+- Redacted credentials, query parameters, and fragments from iOS playback
+  diagnostics, including current-source details, lifecycle and retry logs, HDR
+  evidence, DASH network errors, and AVPlayer error-log evidence.
+- Redacted iOS foreground-download diagnostic URLs while preserving complete
+  stale-resource URIs for recovery callbacks and retried requests.
 - Preserved structured subtitle error details across Rust, C FFI, Android
   JNI/Kotlin, and Flutter boundaries, including malformed JSON payloads and
   unknown enum values.

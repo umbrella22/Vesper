@@ -15,9 +15,11 @@ final class VesperDownloadHTTPStreamOverflowTests: XCTestCase {
     /// next yielded chunk is reported as `.dropped` and the delegate must finish
     /// the stream with an error rather than losing the byte silently.
     func testDroppedChunkSurfacesAsStreamFailure() async {
+        let signedSource =
+            "https://viewer:password@cdn.example.com:8443/video.mp4?deadline=123&upsig=secret#fragment"
         let delegate = VesperURLSessionDataStreamDelegate(
             stalledTransferTimeoutMs: 0,
-            sourceDescription: "test://overflow"
+            sourceURL: URL(string: signedSource)!
         )
         // A stand-in task is required by the delegate signature but the method
         // never inspects it; the session is only used for invalidation.
@@ -46,6 +48,10 @@ final class VesperDownloadHTTPStreamOverflowTests: XCTestCase {
                 message.contains("overflowed"),
                 "Expected overflow error message, got: \(message)"
             )
+            XCTAssertTrue(message.contains("https://cdn.example.com:8443/video.mp4"))
+            XCTAssertFalse(message.contains("password"))
+            XCTAssertFalse(message.contains("upsig"))
+            XCTAssertFalse(message.contains("secret"))
         }
 
         task.cancel()
@@ -58,7 +64,7 @@ final class VesperDownloadHTTPStreamOverflowTests: XCTestCase {
     func testSteadyDeliveryDoesNotOverflow() async throws {
         let delegate = VesperURLSessionDataStreamDelegate(
             stalledTransferTimeoutMs: 0,
-            sourceDescription: "test://steady"
+            sourceURL: URL(string: "test://steady")!
         )
         let session = URLSession(configuration: .ephemeral)
         let task = session.dataTask(with: URL(string: "https://example.com")!)

@@ -404,7 +404,10 @@ final class VesperDownloadManagerTests: XCTestCase {
             assetId: "asset-http",
             source: VesperDownloadSource(
                 source: .hls(
-                    url: URL(string: "http://cdn.example.com/index.m3u8")!,
+                    url: URL(
+                        string:
+                            "http://viewer:password@cdn.example.com:8080/index.m3u8?deadline=123&upsig=secret#fragment"
+                    )!,
                     label: "HTTP HLS"
                 )
             ),
@@ -418,7 +421,12 @@ final class VesperDownloadManagerTests: XCTestCase {
         await fulfillment(of: [failure], timeout: 2)
 
         XCTAssertTrue(reporter.failure?.message.contains("App Transport Security") == true)
-        XCTAssertTrue(reporter.failure?.message.contains("http://cdn.example.com/index.m3u8") == true)
+        XCTAssertTrue(
+            reporter.failure?.message.contains("http://cdn.example.com:8080/index.m3u8") == true
+        )
+        XCTAssertFalse(reporter.failure?.message.contains("password") == true)
+        XCTAssertFalse(reporter.failure?.message.contains("upsig") == true)
+        XCTAssertFalse(reporter.failure?.message.contains("secret") == true)
     }
 
     func testForegroundExecutorRejectsInsecureHTTPSizeProbeBeforeATS() async throws {
@@ -443,7 +451,8 @@ final class VesperDownloadManagerTests: XCTestCase {
                 resources: [
                     VesperDownloadResourceRecord(
                         resourceId: "video",
-                        uri: "http://cdn.example.com/video.mp4",
+                        uri:
+                            "http://viewer:password@cdn.example.com:8080/video.mp4?deadline=123&upsig=secret#fragment",
                         relativePath: "video.mp4"
                     ),
                 ]
@@ -454,7 +463,12 @@ final class VesperDownloadManagerTests: XCTestCase {
         await fulfillment(of: [failure], timeout: 2)
 
         XCTAssertTrue(reporter.failure?.message.contains("App Transport Security") == true)
-        XCTAssertTrue(reporter.failure?.message.contains("http://cdn.example.com/video.mp4") == true)
+        XCTAssertTrue(
+            reporter.failure?.message.contains("http://cdn.example.com:8080/video.mp4") == true
+        )
+        XCTAssertFalse(reporter.failure?.message.contains("password") == true)
+        XCTAssertFalse(reporter.failure?.message.contains("upsig") == true)
+        XCTAssertFalse(reporter.failure?.message.contains("secret") == true)
     }
 
     func testForegroundExecutorRejectsInsecureHTTPMediaTransferBeforeATS() async throws {
@@ -480,7 +494,8 @@ final class VesperDownloadManagerTests: XCTestCase {
                 resources: [
                     VesperDownloadResourceRecord(
                         resourceId: "video",
-                        uri: "http://cdn.example.com/video.mp4",
+                        uri:
+                            "http://viewer:password@cdn.example.com:8080/video.mp4?deadline=123&upsig=secret#fragment",
                         relativePath: "video.mp4",
                         sizeBytes: 4
                     ),
@@ -492,7 +507,12 @@ final class VesperDownloadManagerTests: XCTestCase {
         await fulfillment(of: [failure], timeout: 2)
 
         XCTAssertTrue(reporter.failure?.message.contains("App Transport Security") == true)
-        XCTAssertTrue(reporter.failure?.message.contains("http://cdn.example.com/video.mp4") == true)
+        XCTAssertTrue(
+            reporter.failure?.message.contains("http://cdn.example.com:8080/video.mp4") == true
+        )
+        XCTAssertFalse(reporter.failure?.message.contains("password") == true)
+        XCTAssertFalse(reporter.failure?.message.contains("upsig") == true)
+        XCTAssertFalse(reporter.failure?.message.contains("secret") == true)
     }
 
     func testHTTPContentRangeParserHandlesConcreteAndUnsatisfiedRanges() throws {
@@ -509,6 +529,10 @@ final class VesperDownloadManagerTests: XCTestCase {
     }
 
     func testHTTPPartialContentRangeValidationRejectsMalformedAndMismatchedHeaders() throws {
+        let signedSource = URL(
+            string:
+                "https://viewer:password@cdn.example.com:8443/video.mp4?deadline=123&upsig=secret#fragment"
+        )!
         XCTAssertNoThrow(try validateHTTPPartialContentRange(
             contentRangeHeader: "bytes 100-199/1000",
             contentLengthHeader: "100",
@@ -516,7 +540,7 @@ final class VesperDownloadManagerTests: XCTestCase {
             requestedEndInclusive: 199,
             expectedBodyLength: 100,
             expectedTotalSizeBytes: 1000,
-            sourceDescription: "https://example.com/video.mp4"
+            sourceURL: signedSource
         ))
         XCTAssertThrowsError(try validateHTTPPartialContentRange(
             contentRangeHeader: "bytes */1000",
@@ -525,8 +549,13 @@ final class VesperDownloadManagerTests: XCTestCase {
             requestedEndInclusive: 199,
             expectedBodyLength: 100,
             expectedTotalSizeBytes: 1000,
-            sourceDescription: "https://example.com/video.mp4"
-        ))
+            sourceURL: signedSource
+        )) { error in
+            XCTAssertTrue(error.localizedDescription.contains("https://cdn.example.com:8443/video.mp4"))
+            XCTAssertFalse(error.localizedDescription.contains("password"))
+            XCTAssertFalse(error.localizedDescription.contains("upsig"))
+            XCTAssertFalse(error.localizedDescription.contains("secret"))
+        }
         XCTAssertThrowsError(try validateHTTPPartialContentRange(
             contentRangeHeader: "bytes 0-999/1000",
             contentLengthHeader: "1000",
@@ -534,7 +563,7 @@ final class VesperDownloadManagerTests: XCTestCase {
             requestedEndInclusive: 199,
             expectedBodyLength: 100,
             expectedTotalSizeBytes: 1000,
-            sourceDescription: "https://example.com/video.mp4"
+            sourceURL: signedSource
         ))
         XCTAssertThrowsError(try validateHTTPPartialContentRange(
             contentRangeHeader: "bytes 100-199/1000",
@@ -543,8 +572,31 @@ final class VesperDownloadManagerTests: XCTestCase {
             requestedEndInclusive: 199,
             expectedBodyLength: 100,
             expectedTotalSizeBytes: 1000,
-            sourceDescription: "https://example.com/video.mp4"
+            sourceURL: signedSource
         ))
+    }
+
+    func testExpiredDownloadResourceRedactsMessageAndPreservesRecoveryUri() {
+        let sourceURL = URL(
+            string:
+                "https://viewer:password@cdn.example.com:8443/video.mp4?deadline=123&upsig=secret#fragment"
+        )!
+        let error = expiredDownloadResource(
+            sourceURL: sourceURL,
+            statusCode: 403,
+            phase: .prepare,
+            receivedBytes: 128
+        )
+        let staleResource = error.staleResource(taskId: 42, phase: .prepare)
+
+        XCTAssertEqual(staleResource.uri, sourceURL.absoluteString)
+        XCTAssertEqual(staleResource.phase, .prepare)
+        XCTAssertEqual(staleResource.statusCode, 403)
+        XCTAssertEqual(staleResource.receivedBytes, 128)
+        XCTAssertTrue(staleResource.message.contains("https://cdn.example.com:8443/video.mp4"))
+        XCTAssertFalse(staleResource.message.contains("password"))
+        XCTAssertFalse(staleResource.message.contains("upsig"))
+        XCTAssertFalse(staleResource.message.contains("secret"))
     }
 
     func testExportTaskOutputForwardsProgressAndCancellationToBindings() async throws {

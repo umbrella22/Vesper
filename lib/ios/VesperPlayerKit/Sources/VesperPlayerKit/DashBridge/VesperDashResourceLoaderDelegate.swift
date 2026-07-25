@@ -123,7 +123,7 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
                 loadingRequest.redirect = request
 #if DEBUG
                 iosHostLog(
-                    "dashResourceRedirect from=\(loadingRequest.request.url?.absoluteString ?? "nil") to=\(url.absoluteString)"
+                    "dashResourceRedirect from=\(diagnosticURLDescription(loadingRequest.request.url?.absoluteString)) to=\(diagnosticURLDescription(url.absoluteString))"
                 )
 #endif
                 loadingRequest.response = HTTPURLResponse(

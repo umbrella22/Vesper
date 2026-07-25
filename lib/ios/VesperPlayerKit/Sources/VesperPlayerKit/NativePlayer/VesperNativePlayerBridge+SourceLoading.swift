@@ -123,8 +123,9 @@ extension VesperNativePlayerBridge {
         } else {
             url = try resolvedUrl(for: source)
         }
+        let urlDescription = diagnosticURLDescription(url.absoluteString)
         iosHostLog(
-            "loadCurrentSource url=\(url.absoluteString) sourceNormalizerRoute=\(normalizedResource?.outputRoute ?? "native")"
+            "loadCurrentSource url=\(urlDescription) sourceNormalizerRoute=\(normalizedResource?.outputRoute ?? "native")"
         )
         try Task.checkCancellation()
         guard currentSource == source else {

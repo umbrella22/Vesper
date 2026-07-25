@@ -78,7 +78,7 @@ struct VesperNativePlayerItemErrorLogEvidence {
             "avPlayerItemErrorStatusCode": String(latest.errorStatusCode),
             "avPlayerItemErrorDomain": truncatedErrorLogValue(latest.errorDomain),
         ]
-        putTruncated(latest.uri, for: "avPlayerItemErrorUri", into: &details)
+        putRedactedURL(latest.uri, for: "avPlayerItemErrorUri", into: &details)
         putTruncated(latest.serverAddress, for: "avPlayerItemErrorServerAddress", into: &details)
         putTruncated(latest.playbackSessionID, for: "avPlayerItemErrorPlaybackSessionID", into: &details)
         putTruncated(latest.errorComment, for: "avPlayerItemErrorComment", into: &details)
@@ -109,6 +109,18 @@ struct VesperNativePlayerItemErrorLogEvidence {
         }
         details[key] = truncatedErrorLogValue(value)
     }
+
+    private func putRedactedURL(
+        _ value: String?,
+        for key: String,
+        into details: inout [String: String]
+    ) {
+        guard let value,
+              let redactedValue = redactedURLForDiagnostics(value) else {
+            return
+        }
+        details[key] = truncatedErrorLogValue(redactedValue)
+    }
 }
 
 struct VesperNativePlayerItemErrorLogEventEvidence {
@@ -124,7 +136,7 @@ struct VesperNativePlayerItemErrorLogEventEvidence {
             "errorStatusCode": errorStatusCode,
             "errorDomain": truncatedErrorLogValue(errorDomain),
         ]
-        putTruncated(uri, for: "uri", into: &values)
+        putRedactedURL(uri, for: "uri", into: &values)
         putTruncated(serverAddress, for: "serverAddress", into: &values)
         putTruncated(playbackSessionID, for: "playbackSessionID", into: &values)
         putTruncated(errorComment, for: "errorComment", into: &values)
@@ -141,6 +153,18 @@ struct VesperNativePlayerItemErrorLogEventEvidence {
         }
         values[key] = truncatedErrorLogValue(value)
     }
+
+    private func putRedactedURL(
+        _ value: String?,
+        for key: String,
+        into values: inout [String: Any]
+    ) {
+        guard let value,
+              let redactedValue = redactedURLForDiagnostics(value) else {
+            return
+        }
+        values[key] = truncatedErrorLogValue(redactedValue)
+    }
 }
 
 func playerItemErrorLogDetails(_ item: AVPlayerItem) -> [String: String] {
@@ -150,7 +174,12 @@ func playerItemErrorLogDetails(_ item: AVPlayerItem) -> [String: String] {
     let recentEvents = Array(events.suffix(maxPlayerItemErrorLogEvents))
     for event in recentEvents {
         iosHostLog(
-            "itemErrorLog uri=\(event.uri ?? "nil") status=\(event.errorStatusCode) domain=\(event.errorDomain) comment=\(event.errorComment ?? "nil")"
+            playerItemErrorLogMessage(
+                uri: event.uri,
+                errorStatusCode: event.errorStatusCode,
+                errorDomain: event.errorDomain,
+                errorComment: event.errorComment
+            )
         )
     }
     return playerItemErrorLogDetails(
@@ -166,6 +195,17 @@ func playerItemErrorLogDetails(_ item: AVPlayerItem) -> [String: String] {
             )
         }
     )
+}
+
+func playerItemErrorLogMessage(
+    uri: String?,
+    errorStatusCode: Int,
+    errorDomain: String,
+    errorComment: String?
+) -> String {
+    let uriDescription = diagnosticURLDescription(uri)
+    return "itemErrorLog uri=\(uriDescription) status=\(errorStatusCode) "
+        + "domain=\(errorDomain) comment=\(errorComment ?? "nil")"
 }
 
 func playerItemErrorLogDetailsForTesting(

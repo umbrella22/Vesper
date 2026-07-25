@@ -34,7 +34,10 @@ extension VesperNativePlayerBridge {
         if let nativeSession = nativeFramePipelineCoordinator.activeSession,
            nativeSession.didStart,
            nativeSession.source == currentSource {
-            iosHostLog("initialize ignored: native-frame pipeline already configured source=\(currentSource.uri)")
+            let sourceDescription = diagnosticURLDescription(currentSource.uri)
+            iosHostLog(
+                "initialize ignored: native-frame pipeline already configured source=\(sourceDescription)"
+            )
             recordBenchmark("initialize_native_frame_already_active")
             if pendingAutoPlay {
                 pendingAutoPlay = false
@@ -55,8 +58,9 @@ extension VesperNativePlayerBridge {
             return
         }
         let shouldAutoPlay = pendingAutoPlay || player == nil
+        let sourceDescription = diagnosticURLDescription(currentSource.uri)
         iosHostLog(
-            "initialize source=\(currentSource.uri) label=\(currentSource.label) kind=\(currentSource.kind.rawValue) protocol=\(currentSource.protocol.rawValue) autoPlay=\(shouldAutoPlay)"
+            "initialize source=\(sourceDescription) kind=\(currentSource.kind.rawValue) protocol=\(currentSource.protocol.rawValue) autoPlay=\(shouldAutoPlay)"
         )
         configureAudioSessionIfNeeded()
         pendingAutoPlay = shouldAutoPlay
@@ -98,8 +102,9 @@ extension VesperNativePlayerBridge {
             "select_source_start",
             attributes: ["targetProtocol": source.protocol.rawValue]
         )
+        let sourceDescription = diagnosticURLDescription(source.uri)
         iosHostLog(
-            "selectSource source=\(source.uri) label=\(source.label) kind=\(source.kind.rawValue) protocol=\(source.protocol.rawValue)"
+            "selectSource source=\(sourceDescription) kind=\(source.kind.rawValue) protocol=\(source.protocol.rawValue)"
         )
         advanceSubtitleSourceEpoch()
         currentSource = source
@@ -153,7 +158,9 @@ extension VesperNativePlayerBridge {
                 let shouldStartAfterLoad = shouldAutoPlay && self.pendingAutoPlay
                 self.pendingAutoPlay = false
                 if shouldStartAfterLoad {
-                    iosHostLog("auto-playing source=\(source.uri)")
+                    iosHostLog(
+                        "auto-playing source=\(diagnosticURLDescription(source.uri))"
+                    )
                     self.startPlayback()
                 }
                 self.refreshPlaybackState()

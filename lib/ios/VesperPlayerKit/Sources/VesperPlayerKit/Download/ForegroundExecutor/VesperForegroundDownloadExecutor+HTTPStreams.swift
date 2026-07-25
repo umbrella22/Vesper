@@ -12,7 +12,7 @@ extension VesperForegroundDownloadExecutor {
 
         let delegate = VesperURLSessionDataStreamDelegate(
             stalledTransferTimeoutMs: stalledTransferTimeoutMs,
-            sourceDescription: sourceURL.absoluteString
+            sourceURL: sourceURL
         )
         let delegateQueue = OperationQueue()
         delegateQueue.maxConcurrentOperationCount = 1

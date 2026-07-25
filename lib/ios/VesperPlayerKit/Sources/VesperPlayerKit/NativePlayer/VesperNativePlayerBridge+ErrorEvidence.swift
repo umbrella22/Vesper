@@ -1,5 +1,37 @@
 import Foundation
 
+/// Produces a diagnostic locator without replay credentials.
+/// Invalid or non-absolute values are omitted instead of falling back to raw input.
+func redactedURLForDiagnostics(_ rawValue: String) -> String? {
+    guard var components = URLComponents(string: rawValue),
+          let scheme = components.scheme?.lowercased(),
+          !scheme.isEmpty
+    else {
+        return nil
+    }
+    if scheme == "http" || scheme == "https" {
+        guard let host = components.host, !host.isEmpty else {
+            return nil
+        }
+    }
+
+    components.user = nil
+    components.password = nil
+    components.query = nil
+    components.fragment = nil
+    guard let redactedValue = components.string, !redactedValue.isEmpty else {
+        return nil
+    }
+    return redactedValue
+}
+
+func diagnosticURLDescription(_ rawValue: String?) -> String {
+    guard let rawValue else {
+        return "nil"
+    }
+    return redactedURLForDiagnostics(rawValue) ?? "omitted"
+}
+
 struct ResolvedBridgeError {
     let code: VesperPlayerErrorCode
     let category: VesperPlayerErrorCategory
@@ -130,7 +162,7 @@ struct VesperNativeHdrRuntimeFailureEvidence {
 }
 
 struct VesperNativeHdrFailureEvidence {
-    let sourceUri: String
+    let redactedSourceUri: String?
     let sourceProtocol: VesperPlayerSourceProtocol
     let hdrKind: VesperPlaybackCapabilityHdrKind
     let recommendedPlaybackPath: VesperRecommendedPlaybackPath
@@ -146,7 +178,7 @@ struct VesperNativeHdrFailureEvidence {
         else {
             return nil
         }
-        sourceUri = source.uri
+        redactedSourceUri = redactedURLForDiagnostics(source.uri)
         sourceProtocol = source.protocol
         hdrKind = result.hdrKind
         recommendedPlaybackPath = result.recommendedPlaybackPath
@@ -163,8 +195,10 @@ struct VesperNativeHdrFailureEvidence {
             "recommendedPlaybackPath": recommendedPlaybackPath.rawValue,
             "confidence": confidence.rawValue,
             "sourceProtocol": sourceProtocol.rawValue,
-            "sourceUri": sourceUri,
         ]
+        if let redactedSourceUri {
+            values["sourceUri"] = redactedSourceUri
+        }
         values.merge(hdrMetadata?.failureEvidenceDetails ?? [:]) { current, _ in current }
         if !missingCapabilities.isEmpty {
             values["missingCapabilities"] = missingCapabilities.joined(separator: ",")
