@@ -67,7 +67,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
         },
         descriptor: VesperPluginDescriptor {
             abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-            plugin_kind: VesperPluginKind::SourceNormalizer,
+            plugin_kind: VesperPluginKind::SourceNormalizer as u32,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
         },
@@ -138,7 +138,7 @@ unsafe extern "C" fn normalizer_open_packet_session_json(
             closed: false,
         }));
         VesperSourceNormalizerOpenPacketSessionResult {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             session: session.cast::<c_void>(),
             payload: serialize_payload(&stream_info),
         }
@@ -165,7 +165,7 @@ unsafe extern "C" fn normalizer_read_packet(
         }
         if session.emitted_packet {
             return VesperSourceNormalizerReadPacketResult {
-                status: VesperPluginResultStatus::Success,
+                status: VesperPluginResultStatus::Success as u32,
                 metadata: serialize_payload(&SourceNormalizerReadPacketMetadata::end_of_stream()),
                 data: std::ptr::null(),
                 data_len: 0,
@@ -198,7 +198,7 @@ unsafe extern "C" fn normalizer_read_packet(
             end_of_stream: false,
         });
         VesperSourceNormalizerReadPacketResult {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             metadata: serialize_payload(&metadata),
             data: packet.data.as_ptr(),
             data_len: packet.data.len(),
@@ -335,6 +335,7 @@ fn diagnostic_video_track() -> SourceNormalizerPacketTrackInfo {
         color: None,
         hdr: None,
         frame_rate: Some(30.0),
+        reorder_depth: None,
         time_base_num: Some(1),
         time_base_den: Some(90_000),
     }
@@ -362,7 +363,7 @@ fn decode_json<T: serde::de::DeserializeOwned>(
 
 fn open_error(error: SourceNormalizerError) -> VesperSourceNormalizerOpenPacketSessionResult {
     VesperSourceNormalizerOpenPacketSessionResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         session: std::ptr::null_mut(),
         payload: serialize_payload(&error),
     }
@@ -370,7 +371,7 @@ fn open_error(error: SourceNormalizerError) -> VesperSourceNormalizerOpenPacketS
 
 fn read_packet_error(error: SourceNormalizerError) -> VesperSourceNormalizerReadPacketResult {
     VesperSourceNormalizerReadPacketResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         metadata: serialize_payload(&error),
         data: std::ptr::null(),
         data_len: 0,
@@ -380,7 +381,7 @@ fn read_packet_error(error: SourceNormalizerError) -> VesperSourceNormalizerRead
 
 fn process_success() -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: serialize_payload(&SourceNormalizerOperationStatus {
             completed: true,
             message: None,
@@ -390,7 +391,7 @@ fn process_success() -> VesperPluginProcessResult {
 
 fn process_error(error: SourceNormalizerError) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         payload: serialize_payload(&error),
     }
 }
@@ -466,7 +467,10 @@ mod tests {
             descriptor.abi_version,
             VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT
         );
-        assert_eq!(descriptor.plugin_kind, VesperPluginKind::SourceNormalizer);
+        assert_eq!(
+            descriptor.plugin_kind,
+            VesperPluginKind::SourceNormalizer as u32
+        );
         // SAFETY: plugin_name is a valid NUL-terminated static string.
         let name = unsafe { CStr::from_ptr(descriptor.plugin_name) }
             .to_str()
@@ -511,7 +515,7 @@ mod tests {
                 config_json.len(),
             )
         };
-        assert_eq!(open.status, VesperPluginResultStatus::Success);
+        assert_eq!(open.status, VesperPluginResultStatus::Success as u32);
         assert!(!open.session.is_null());
         let info: SourceNormalizerPacketStreamInfo = take_plugin_bytes(open.payload);
         assert_eq!(
@@ -521,7 +525,7 @@ mod tests {
 
         // SAFETY: the session pointer was returned by this plugin's open call.
         let packet = unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
-        assert_eq!(packet.status, VesperPluginResultStatus::Success);
+        assert_eq!(packet.status, VesperPluginResultStatus::Success as u32);
         assert!(!packet.data.is_null());
         assert!(packet.data_len > 0);
         assert_eq!(packet.packet_handle, 1);
@@ -532,12 +536,12 @@ mod tests {
         let release = unsafe {
             normalizer_release_packet(std::ptr::null_mut(), open.session, packet.packet_handle)
         };
-        assert_eq!(release.status, VesperPluginResultStatus::Success);
+        assert_eq!(release.status, VesperPluginResultStatus::Success as u32);
         take_plugin_bytes::<player_plugin::SourceNormalizerOperationStatus>(release.payload);
 
         // SAFETY: the session pointer remains open after releasing the first packet.
         let eos = unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
-        assert_eq!(eos.status, VesperPluginResultStatus::Success);
+        assert_eq!(eos.status, VesperPluginResultStatus::Success as u32);
         assert_eq!(eos.packet_handle, 0);
         let metadata: SourceNormalizerReadPacketMetadata = take_plugin_bytes(eos.metadata);
         assert_eq!(
@@ -547,7 +551,7 @@ mod tests {
 
         // SAFETY: the session pointer was returned by open and is closed once.
         let close = unsafe { normalizer_close_packet_session(std::ptr::null_mut(), open.session) };
-        assert_eq!(close.status, VesperPluginResultStatus::Success);
+        assert_eq!(close.status, VesperPluginResultStatus::Success as u32);
         take_plugin_bytes::<player_plugin::SourceNormalizerOperationStatus>(close.payload);
     }
 
@@ -574,12 +578,12 @@ mod tests {
 
         // SAFETY: the session pointer was returned by this plugin's open call.
         let first = unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
-        assert_eq!(first.status, VesperPluginResultStatus::Success);
+        assert_eq!(first.status, VesperPluginResultStatus::Success as u32);
         take_plugin_bytes::<SourceNormalizerReadPacketMetadata>(first.metadata);
 
         // SAFETY: the same still-open session is used intentionally without release.
         let second = unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
-        assert_eq!(second.status, VesperPluginResultStatus::Failure);
+        assert_eq!(second.status, VesperPluginResultStatus::Failure as u32);
         let error: SourceNormalizerError = take_plugin_bytes(second.metadata);
         assert!(matches!(error, SourceNormalizerError::AbiViolation { .. }));
 
@@ -628,7 +632,7 @@ mod tests {
                 seek_json.len(),
             )
         };
-        assert_eq!(seek.status, VesperPluginResultStatus::Success);
+        assert_eq!(seek.status, VesperPluginResultStatus::Success as u32);
         take_plugin_bytes::<player_plugin::SourceNormalizerOperationStatus>(seek.payload);
 
         // SAFETY: the session pointer remains open after seek.
@@ -668,7 +672,7 @@ mod tests {
                 config_json.len(),
             )
         };
-        assert_eq!(open.status, VesperPluginResultStatus::Failure);
+        assert_eq!(open.status, VesperPluginResultStatus::Failure as u32);
         assert!(open.session.is_null());
         let error: SourceNormalizerError = take_plugin_bytes(open.payload);
         assert!(matches!(error, SourceNormalizerError::InvalidInput { .. }));

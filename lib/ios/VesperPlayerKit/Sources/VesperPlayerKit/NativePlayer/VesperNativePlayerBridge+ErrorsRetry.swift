@@ -526,20 +526,12 @@ extension VesperNativePlayerBridge {
     }
 
     func configureAudioSessionIfNeeded() {
-        guard !audioSessionActive else {
-            return
-        }
-        if VesperSharedAudioSession.activate(owner: self) {
-            audioSessionActive = true
-            iosHostLog("audio session configured")
-        }
+        guard !audioSessionLease.isActive else { return }
+        audioSessionLease.activate()
+        iosHostLog("audio session activation requested")
     }
 
     func deactivateAudioSessionIfNeeded() {
-        guard audioSessionActive else {
-            return
-        }
-        VesperSharedAudioSession.deactivate(owner: self)
-        audioSessionActive = false
+        audioSessionLease.deactivate()
     }
 }

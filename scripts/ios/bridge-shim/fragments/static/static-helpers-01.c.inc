@@ -103,7 +103,7 @@ static PlayerFfiDownloadSource ffi_download_source_from_runtime(
     const VesperRuntimeDownloadSource *source) {
   PlayerFfiDownloadSource ffi_source = {
       .source_uri = source->source_uri,
-      .content_format = (PlayerFfiDownloadContentFormat)source->content_format,
+      .content_format = (uint32_t)source->content_format,
       .manifest_uri = source->manifest_uri,
       .header_names = source->header_names,
       .header_values = source->header_values,
@@ -121,7 +121,7 @@ static PlayerFfiDownloadProfile ffi_download_profile_from_runtime(
       .selected_track_ids = profile->selected_track_ids,
       .selected_track_ids_len = profile->selected_track_ids_len,
       .has_target_output_format = profile->has_target_output_format,
-      .target_output_format = (PlayerFfiDownloadOutputFormat)profile->target_output_format,
+      .target_output_format = (uint32_t)profile->target_output_format,
       .target_directory = profile->target_directory,
       .allow_metered_network = profile->allow_metered_network,
   };
@@ -166,7 +166,7 @@ static PlayerFfiDownloadAssetStream ffi_download_stream_from_runtime(
     const VesperRuntimeDownloadAssetStream *stream) {
   PlayerFfiDownloadAssetStream ffi_stream = {
       .stream_id = stream->stream_id,
-      .kind = (PlayerFfiDownloadStreamKind)stream->kind,
+      .kind = (uint32_t)stream->kind,
       .language = stream->language,
       .codec = stream->codec,
       .label = stream->label,
@@ -282,7 +282,7 @@ static bool ffi_download_asset_index_from_runtime(
   }
   memset(out_asset_index, 0, sizeof(*out_asset_index));
 
-  out_asset_index->content_format = (PlayerFfiDownloadContentFormat)asset_index->content_format;
+  out_asset_index->content_format = (uint32_t)asset_index->content_format;
   out_asset_index->version = asset_index->version;
   out_asset_index->etag = asset_index->etag;
   out_asset_index->checksum = asset_index->checksum;
@@ -344,11 +344,11 @@ static bool ffi_download_task_from_runtime(
   out_task->asset_id = task->asset_id;
   out_task->source = ffi_download_source_from_runtime(&task->source);
   out_task->profile = ffi_download_profile_from_runtime(&task->profile);
-  out_task->status = (PlayerFfiDownloadTaskStatus)task->status;
+  out_task->status = (uint32_t)task->status;
   out_task->progress = ffi_download_progress_from_runtime(task->progress);
   out_task->has_error = task->has_error;
-  out_task->error_code = task->error_code;
-  out_task->error_category = task->error_category;
+  out_task->error_code = (uint32_t)task->error_code;
+  out_task->error_category = (uint32_t)task->error_category;
   out_task->error_retriable = task->error_retriable;
   out_task->error_message = task->error_message;
   if (!ffi_download_asset_index_from_runtime(&task->asset_index, &out_task->asset_index)) {

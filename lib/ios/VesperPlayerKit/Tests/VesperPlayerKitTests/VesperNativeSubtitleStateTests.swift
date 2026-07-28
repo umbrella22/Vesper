@@ -440,12 +440,16 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
         }
         try await waitForPendingSubtitleSelection(bridge)
 
+        let secondTask = Task { @MainActor in
+            try await bridge.setSubtitleTrackSelection(.track(secondTrack.id))
+        }
+        try await waitForPendingSubtitleSelection(bridge, expectedCommandId: 2)
         bridge.publishedTrackCatalog = subtitleCatalog(tracks: tracks)
         bridge.publishedSubtitleState = .ready(
             advertisedTrackCount: tracks.count,
             selectableTrackCount: tracks.count
         )
-        try await bridge.setSubtitleTrackSelection(.track(secondTrack.id))
+        try await secondTask.value
         let firstError = try await subtitleCommandError(from: firstTask)
 
         XCTAssertEqual(firstError.code, "subtitle_selection_superseded")
@@ -542,14 +546,20 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
 
     @MainActor
     private func waitForPendingSubtitleSelection(
-        _ bridge: VesperNativePlayerBridge
+        _ bridge: VesperNativePlayerBridge,
+        expectedCommandId: UInt64? = nil
     ) async throws {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .milliseconds(250))
-        while bridge.pendingSubtitleSelection == nil, clock.now < deadline {
+        while clock.now < deadline {
+            if let pending = bridge.pendingSubtitleSelection,
+               expectedCommandId == nil || pending.commandId == expectedCommandId {
+                return
+            }
             try await clock.sleep(for: .milliseconds(1))
         }
-        _ = try XCTUnwrap(bridge.pendingSubtitleSelection)
+        let pending = try XCTUnwrap(bridge.pendingSubtitleSelection)
+        XCTAssertEqual(pending.commandId, expectedCommandId)
     }
 
     @MainActor

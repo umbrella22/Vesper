@@ -374,6 +374,14 @@ mod windows_d3d11_presenter {
                 if self.swap_chain_size == Some(size) {
                     return Ok(());
                 }
+                self.nv12_cache.take();
+                // SAFETY: this is the immediate context owned by the presenter.
+                // Clearing and flushing it releases indirect back-buffer
+                // references before DXGI resizes the swapchain buffers.
+                unsafe {
+                    self.context.ClearState();
+                    self.context.Flush();
+                }
                 // SAFETY: the swapchain belongs to this presenter and is not
                 // accessed concurrently while the runtime is presenting.
                 unsafe {
@@ -387,7 +395,6 @@ mod windows_d3d11_presenter {
                 }
                 .map_err(|error| player_error("IDXGISwapChain::ResizeBuffers", error))?;
                 self.swap_chain_size = Some(size);
-                self.nv12_cache = None;
                 return Ok(());
             }
 
@@ -1165,6 +1172,7 @@ impl DesktopVideoSourceFactory for WindowsNativeFrameVideoSourceFactory {
                 height: stream_info.height,
                 coded_width: stream_info.width,
                 coded_height: stream_info.height,
+                reorder_depth: stream_info.reorder_depth,
                 prefer_hardware: true,
                 require_cpu_output: false,
                 native_device_context: presenter.decoder_device_context(),
@@ -3031,6 +3039,7 @@ mod tests {
             width: Some(1920),
             height: Some(1080),
             frame_rate: Some(60.0),
+            reorder_depth: None,
             extradata: Vec::new(),
         }
     }

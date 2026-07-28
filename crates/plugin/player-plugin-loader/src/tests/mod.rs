@@ -68,11 +68,15 @@ static NATIVE_FRAME_RELEASE_FAILURES: LazyLock<Mutex<Vec<(ThreadId, usize)>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 static NATIVE_DECODER_CLOSES: LazyLock<Mutex<Vec<ThreadId>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
+static NATIVE_DECODER_CLOSE_RECLAIMS: LazyLock<Mutex<Vec<usize>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
 static FRAME_PROCESSOR_RELEASES: LazyLock<Mutex<Vec<usize>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 static FRAME_PROCESSOR_RELEASE_FAILURES: LazyLock<Mutex<Vec<usize>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 static FRAME_PROCESSOR_CLOSES: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
+static FRAME_PROCESSOR_CLOSE_RECLAIMS: LazyLock<Mutex<Vec<usize>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
 static SOURCE_NORMALIZER_PACKET_RELEASES: LazyLock<Mutex<Vec<usize>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 static SOURCE_NORMALIZER_PACKET_CLOSES: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
@@ -143,7 +147,7 @@ fn fixture_source_normalizer_packet_factory() -> Arc<dyn SourceNormalizerPacketP
     let api = fixture_source_normalizer_packet_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
@@ -403,7 +407,7 @@ unsafe extern "C" fn fixture_benchmark_on_event_batch_json(
         batches.push(batch);
     }
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(&BenchmarkSinkStatus { accepted_events })
                 .expect("serialize benchmark status"),
@@ -424,7 +428,7 @@ unsafe extern "C" fn fixture_benchmark_flush_json(
         })
         .unwrap_or_default();
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(&BenchmarkSinkReport {
                 accepted_events,
@@ -482,7 +486,7 @@ unsafe extern "C" fn fixture_processor_process_json(
     };
     let payload = serde_json::to_vec(&output).expect("serialize output");
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: VesperPluginBytes::from_vec(payload),
     }
 }
@@ -607,6 +611,8 @@ unsafe extern "C" fn fixture_native_decoder_requirements_json(
 struct FixtureDecoderSession {
     last_pts_us: Option<i64>,
     pending_frame: Option<Vec<u8>>,
+    pending_unknown_frame_handle: Option<usize>,
+    next_frame_id: u64,
 }
 
 #[derive(Debug, Default)]
@@ -693,7 +699,7 @@ unsafe extern "C" fn fixture_native_decoder_open_session_json(
         }),
     };
     VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         session: session.cast::<c_void>(),
         payload: VesperPluginBytes::from_vec(serde_json::to_vec(&info).expect("serialize info")),
     }
@@ -706,7 +712,7 @@ unsafe extern "C" fn fixture_native_decoder_open_session_malformed_payload_json(
 ) -> VesperDecoderOpenSessionResult {
     let session = Box::into_raw(Box::new(FixtureDecoderSession::default()));
     VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         session: session.cast::<c_void>(),
         payload: VesperPluginBytes::from_vec(b"{".to_vec()),
     }
@@ -897,6 +903,52 @@ unsafe extern "C" fn fixture_decoder_receive_static_native_frame(
     decoder_native_frame_success(&DecoderReceiveNativeFrameMetadata::frame(metadata), handle)
 }
 
+unsafe extern "C" fn fixture_decoder_receive_reused_handle_native_frame(
+    _context: *mut c_void,
+    session: *mut c_void,
+) -> VesperDecoderReceiveNativeFrameResult {
+    // SAFETY: fixture tests pass the session pointer allocated by the
+    // matching open-session callback for this ABI table.
+    let Some(session) = (unsafe { session.cast::<FixtureDecoderSession>().as_mut() }) else {
+        return decoder_native_frame_error(DecoderError::NotConfigured);
+    };
+    if session.pending_frame.take().is_none() {
+        return decoder_native_frame_success(
+            &DecoderReceiveNativeFrameMetadata::need_more_input(),
+            0,
+        );
+    }
+    session.next_frame_id = session.next_frame_id.saturating_add(1);
+    let handle = 0xdec0_deusize;
+    let frame_id = session.next_frame_id;
+    let metadata = DecoderNativeFrameMetadata {
+        media_kind: DecoderMediaKind::Video,
+        format: DecoderFrameFormat::Nv12,
+        codec: "fixture-video".to_owned(),
+        pts_us: session.last_pts_us,
+        duration_us: Some(33_333),
+        width: 2,
+        height: 2,
+        coded_width: Some(2),
+        coded_height: Some(2),
+        visible_rect: None,
+        handle_kind: DecoderNativeHandleKind::IoSurface,
+        pipeline_profile: Some(NativeFramePipelineProfile::Unknown("io_surface".to_owned())),
+        color_space: None,
+        hdr_metadata: None,
+        color: None,
+        hdr: None,
+        sync_info: None,
+        transform: None,
+        frame_id: Some(frame_id),
+        release_tracking: Some(DecoderNativeFrameReleaseTracking {
+            frame_id: Some(frame_id),
+            requires_release: true,
+        }),
+    };
+    decoder_native_frame_success(&DecoderReceiveNativeFrameMetadata::frame(metadata), handle)
+}
+
 unsafe extern "C" fn fixture_decoder_receive_pcm_frame(
     _context: *mut c_void,
     session: *mut c_void,
@@ -935,7 +987,7 @@ unsafe extern "C" fn fixture_decoder_receive_pcm_frame_missing_frame(
         frame: None,
     };
     VesperDecoderReceivePcmFrameResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         metadata: VesperPluginBytes::from_vec(
             serde_json::to_vec(&metadata).expect("serialize malformed PCM metadata"),
         ),
@@ -1003,6 +1055,20 @@ unsafe extern "C" fn fixture_decoder_release_native_frame_error(
     ))
 }
 
+unsafe extern "C" fn fixture_decoder_release_reused_handle_native_frame(
+    _context: *mut c_void,
+    _session: *mut c_void,
+    handle_kind: u32,
+    handle: usize,
+) -> VesperPluginProcessResult {
+    if handle_kind != 2 || handle != 0xdec0_deusize {
+        return decoder_process_error(DecoderError::abi_violation(
+            "fixture reused native frame release received an invalid handle",
+        ));
+    }
+    decoder_process_success(&DecoderOperationStatus { completed: true })
+}
+
 unsafe extern "C" fn fixture_decoder_flush_session(
     _context: *mut c_void,
     session: *mut c_void,
@@ -1014,6 +1080,20 @@ unsafe extern "C" fn fixture_decoder_flush_session(
     };
     session.pending_frame = None;
     decoder_process_success(&DecoderOperationStatus { completed: true })
+}
+
+unsafe extern "C" fn fixture_decoder_flush_session_after_native_frame_release(
+    context: *mut c_void,
+    session: *mut c_void,
+) -> VesperPluginProcessResult {
+    if native_frame_releases().is_empty() {
+        return decoder_process_error(DecoderError::abi_violation(
+            "fixture decoder flush ran before the outstanding native frame was released",
+        ));
+    }
+    // SAFETY: this callback receives the same validated fixture context and
+    // session pointer as the delegated flush callback.
+    unsafe { fixture_decoder_flush_session(context, session) }
 }
 
 unsafe extern "C" fn fixture_decoder_close_session(
@@ -1035,6 +1115,19 @@ unsafe extern "C" fn fixture_decoder_recording_close_session(
 ) -> VesperPluginProcessResult {
     if let Ok(mut closes) = NATIVE_DECODER_CLOSES.lock() {
         closes.push(std::thread::current().id());
+    }
+    // SAFETY: the recording callback receives the live fixture session pointer
+    // and consumes the handle that the unknown-status fixture retained for
+    // close-session cleanup.
+    if let Some(session) = unsafe { session.cast::<FixtureDecoderSession>().as_mut() }
+        && let Some(handle) = session.pending_unknown_frame_handle.take()
+    {
+        if let Ok(mut reclaims) = NATIVE_DECODER_CLOSE_RECLAIMS.lock() {
+            reclaims.push(handle);
+        }
+        // SAFETY: the unknown-status fixture allocated this handle with
+        // `Box::into_raw`, and close consumes it exactly once.
+        let _ = unsafe { Box::from_raw(handle as *mut Vec<u8>) };
     }
     // SAFETY: this recording fixture preserves the base close-session
     // ownership contract for the same session pointer.
@@ -1096,7 +1189,7 @@ unsafe extern "C" fn fixture_frame_processor_open_session_json(
         max_in_flight_frames: Some(1),
     };
     VesperFrameProcessorOpenSessionResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         session: session.cast::<c_void>(),
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(&info).expect("serialize frame processor info"),
@@ -1111,7 +1204,7 @@ unsafe extern "C" fn fixture_frame_processor_open_session_malformed_payload_json
 ) -> VesperFrameProcessorOpenSessionResult {
     let session = Box::into_raw(Box::new(FixtureFrameProcessorSession::default()));
     VesperFrameProcessorOpenSessionResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         session: session.cast::<c_void>(),
         payload: VesperPluginBytes::from_vec(b"{".to_vec()),
     }
@@ -1317,6 +1410,9 @@ unsafe extern "C" fn fixture_frame_processor_close_session(
     // the matching open-session callback and close is called once.
     let mut session = unsafe { Box::from_raw(session.cast::<FixtureFrameProcessorSession>()) };
     if let Some(output) = session.pending_output.take() {
+        if let Ok(mut reclaims) = FRAME_PROCESSOR_CLOSE_RECLAIMS.lock() {
+            reclaims.push(output.handle);
+        }
         // SAFETY: pending fixture outputs are owned by this session and can
         // be reclaimed on close when the host never received them.
         let _ = unsafe { Box::from_raw(output.handle as *mut Vec<u8>) };
@@ -1417,6 +1513,7 @@ unsafe extern "C" fn fixture_source_normalizer_open_packet_session_json(
             height: Some(16),
             coded_width: Some(16),
             coded_height: Some(16),
+            reorder_depth: None,
             sample_rate: None,
             channels: None,
             channel_layout: None,
@@ -1440,7 +1537,7 @@ unsafe extern "C" fn fixture_source_normalizer_open_packet_session_json(
         last_seek: None,
     }));
     VesperSourceNormalizerOpenPacketSessionResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         session: session.cast::<c_void>(),
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(&info).expect("serialize source normalizer packet info"),
@@ -1459,7 +1556,7 @@ unsafe extern "C" fn fixture_source_normalizer_open_packet_session_malformed_pay
         last_seek: None,
     }));
     VesperSourceNormalizerOpenPacketSessionResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         session: session.cast::<c_void>(),
         payload: VesperPluginBytes::from_vec(b"not-json".to_vec()),
     }
@@ -1477,7 +1574,7 @@ unsafe extern "C" fn fixture_source_normalizer_open_resource_session_json(
         Ok(config) => config,
         Err(error) => {
             return VesperSourceNormalizerOpenResourceSessionResult {
-                status: VesperPluginResultStatus::Failure,
+                status: VesperPluginResultStatus::Failure as u32,
                 session: std::ptr::null_mut(),
                 payload: VesperPluginBytes::from_vec(
                     serde_json::to_vec(&error).expect("serialize source normalizer error"),
@@ -1508,7 +1605,7 @@ unsafe extern "C" fn fixture_source_normalizer_open_resource_session_json(
     };
     let session = Box::into_raw(Box::new(FixtureSourceNormalizerResourceSession));
     VesperSourceNormalizerOpenResourceSessionResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         session: session.cast::<c_void>(),
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(&info).expect("serialize source normalizer resource info"),
@@ -1523,7 +1620,7 @@ unsafe extern "C" fn fixture_source_normalizer_open_resource_session_malformed_p
 ) -> VesperSourceNormalizerOpenResourceSessionResult {
     let session = Box::into_raw(Box::new(FixtureSourceNormalizerResourceSession));
     VesperSourceNormalizerOpenResourceSessionResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         session: session.cast::<c_void>(),
         payload: VesperPluginBytes::from_vec(b"not-json".to_vec()),
     }
@@ -1543,7 +1640,7 @@ unsafe extern "C" fn fixture_source_normalizer_poll_resource_session(
         disk_bytes_used: Some(0),
     };
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(&status).expect("serialize source normalizer resource status"),
         ),
@@ -1664,7 +1761,7 @@ unsafe extern "C" fn fixture_source_normalizer_read_packet_malformed_metadata(
     });
     let packet = session.leased_packet.as_ref().expect("stored packet");
     VesperSourceNormalizerReadPacketResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         metadata: VesperPluginBytes::from_vec(b"not-json".to_vec()),
         data: packet.data.as_ptr(),
         data_len: packet.data.len(),
@@ -1810,7 +1907,7 @@ unsafe extern "C" fn fixture_payload_codec_process_json(
     _progress: player_plugin::VesperPluginProgressCallbacks,
 ) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: VesperPluginBytes::from_vec(b"not-json".to_vec()),
     }
 }
@@ -1823,7 +1920,7 @@ unsafe extern "C" fn fixture_null_payload_process_json(
     _progress: player_plugin::VesperPluginProgressCallbacks,
 ) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: VesperPluginBytes {
             data: std::ptr::null_mut(),
             len: 4,
@@ -1867,7 +1964,7 @@ fn decode_fixture_json<T: serde::de::DeserializeOwned>(
 
 fn decoder_open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
     VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         session: std::ptr::null_mut(),
         payload: VesperPluginBytes::from_vec(serde_json::to_vec(&error).expect("serialize error")),
     }
@@ -1875,14 +1972,14 @@ fn decoder_open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
 
 fn decoder_process_success<T: serde::Serialize>(value: &T) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: VesperPluginBytes::from_vec(serde_json::to_vec(value).expect("serialize value")),
     }
 }
 
 fn decoder_process_error(error: DecoderError) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         payload: VesperPluginBytes::from_vec(serde_json::to_vec(&error).expect("serialize error")),
     }
 }
@@ -1892,7 +1989,7 @@ fn decoder_native_frame_success(
     handle: usize,
 ) -> VesperDecoderReceiveNativeFrameResult {
     VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         metadata: VesperPluginBytes::from_vec(
             serde_json::to_vec(metadata).expect("serialize native frame metadata"),
         ),
@@ -1902,7 +1999,7 @@ fn decoder_native_frame_success(
 
 fn decoder_native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameResult {
     VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         metadata: VesperPluginBytes::from_vec(serde_json::to_vec(&error).expect("serialize error")),
         handle: 0,
     }
@@ -1913,7 +2010,7 @@ fn decoder_pcm_frame_success(
     data: Option<Vec<u8>>,
 ) -> VesperDecoderReceivePcmFrameResult {
     VesperDecoderReceivePcmFrameResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         metadata: VesperPluginBytes::from_vec(
             serde_json::to_vec(metadata).expect("serialize PCM frame metadata"),
         ),
@@ -1925,7 +2022,7 @@ fn decoder_pcm_frame_success(
 
 fn decoder_pcm_frame_error(error: DecoderError) -> VesperDecoderReceivePcmFrameResult {
     VesperDecoderReceivePcmFrameResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         metadata: VesperPluginBytes::from_vec(serde_json::to_vec(&error).expect("serialize error")),
         data: VesperPluginBytes::null(),
     }
@@ -1953,7 +2050,7 @@ fn decode_frame_processor_fixture_json<T: serde::de::DeserializeOwned>(
 
 fn frame_processor_open_error(error: FrameProcessorError) -> VesperFrameProcessorOpenSessionResult {
     VesperFrameProcessorOpenSessionResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         session: std::ptr::null_mut(),
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(&error).expect("serialize frame processor error"),
@@ -1963,7 +2060,7 @@ fn frame_processor_open_error(error: FrameProcessorError) -> VesperFrameProcesso
 
 fn frame_processor_process_success<T: serde::Serialize>(value: &T) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(value).expect("serialize frame processor value"),
         ),
@@ -1972,7 +2069,7 @@ fn frame_processor_process_success<T: serde::Serialize>(value: &T) -> VesperPlug
 
 fn frame_processor_process_error(error: FrameProcessorError) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(&error).expect("serialize frame processor error"),
         ),
@@ -1984,7 +2081,7 @@ fn frame_processor_receive_success(
     handle: usize,
 ) -> VesperFrameProcessorReceiveFrameResult {
     VesperFrameProcessorReceiveFrameResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         metadata: VesperPluginBytes::from_vec(
             serde_json::to_vec(metadata).expect("serialize frame processor metadata"),
         ),
@@ -1996,7 +2093,7 @@ fn frame_processor_receive_error(
     error: FrameProcessorError,
 ) -> VesperFrameProcessorReceiveFrameResult {
     VesperFrameProcessorReceiveFrameResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         metadata: VesperPluginBytes::from_vec(
             serde_json::to_vec(&error).expect("serialize frame processor error"),
         ),
@@ -2028,7 +2125,7 @@ fn source_normalizer_packet_open_error(
     error: SourceNormalizerError,
 ) -> VesperSourceNormalizerOpenPacketSessionResult {
     VesperSourceNormalizerOpenPacketSessionResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         session: std::ptr::null_mut(),
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(&error).expect("serialize source normalizer packet error"),
@@ -2038,7 +2135,7 @@ fn source_normalizer_packet_open_error(
 
 fn source_normalizer_process_success<T: serde::Serialize>(value: &T) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(value).expect("serialize source normalizer value"),
         ),
@@ -2047,7 +2144,7 @@ fn source_normalizer_process_success<T: serde::Serialize>(value: &T) -> VesperPl
 
 fn source_normalizer_process_error(error: SourceNormalizerError) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         payload: VesperPluginBytes::from_vec(
             serde_json::to_vec(&error).expect("serialize source normalizer error"),
         ),
@@ -2060,7 +2157,7 @@ fn source_normalizer_read_packet_success(
 ) -> VesperSourceNormalizerReadPacketResult {
     let (data, data_len, packet_handle) = packet.unwrap_or((std::ptr::null(), 0, 0));
     VesperSourceNormalizerReadPacketResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         metadata: VesperPluginBytes::from_vec(
             serde_json::to_vec(metadata).expect("serialize source normalizer packet metadata"),
         ),
@@ -2074,7 +2171,7 @@ fn source_normalizer_read_packet_error(
     error: SourceNormalizerError,
 ) -> VesperSourceNormalizerReadPacketResult {
     VesperSourceNormalizerReadPacketResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         metadata: VesperPluginBytes::from_vec(
             serde_json::to_vec(&error).expect("serialize source normalizer packet error"),
         ),
@@ -2332,7 +2429,7 @@ unsafe extern "C" fn fixture_error_process_json(
     ))
     .expect("serialize error");
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         payload: VesperPluginBytes::from_vec(payload),
     }
 }
@@ -2343,4 +2440,5 @@ mod frame_processor_tests;
 mod panic_boundary_tests;
 mod post_download_tests;
 mod registry_tests;
+mod result_status_tests;
 mod source_normalizer_tests;

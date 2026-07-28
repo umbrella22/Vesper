@@ -3,34 +3,58 @@ package io.github.ikaros.vesper.player.android
 import android.util.Log
 
 internal fun VesperNativePlayerBridge.startNativeFramePipelinePump(reason: String) {
-    if (
-        isDisposed.get() ||
-            nativeFramePipelineOpenStatus == null ||
-            nativeFramePipelineFallbackReason != null
-    ) {
-        return
-    }
-    if (nativeFramePipelinePumpRunning) {
-        markNativeFramePipelineDiagnosticsDirty()
+    var alreadyRunning = false
+    val started =
+        synchronized(nativeFramePipelineRuntimeLock) {
+            if (
+                isDisposed.get() ||
+                    nativeFramePipelineOpenStatus == null ||
+                    nativeFramePipelineFallbackReason != null
+            ) {
+                return@synchronized false
+            }
+            if (nativeFramePipelinePumpRunning) {
+                alreadyRunning = true
+                return@synchronized false
+            }
+            nativeFramePipelinePumpRunning = true
+            nativeFramePipelineFirstFrameWatchdogStartedAtMs = null
+            scheduleNativeFramePipelinePump(delayMs = 0L)
+            true
+        }
+    if (!started) {
+        if (alreadyRunning) {
+            markNativeFramePipelineDiagnosticsDirty()
+        }
         return
     }
     Log.d(NATIVE_PLAYER_BRIDGE_TAG, "starting native-frame pipeline pump reason=$reason")
-    nativeFramePipelinePumpRunning = true
-    nativeFramePipelineFirstFrameWatchdogStartedAtMs = null
-    scheduleNativeFramePipelinePump(delayMs = 0L)
     markNativeFramePipelineDiagnosticsDirty()
 }
 
 internal fun VesperNativePlayerBridge.stopNativeFramePipelinePump() {
-    if (!nativeFramePipelinePumpRunning) {
+    var stopped = false
+    var hadPendingFrame = false
+    synchronized(nativeFramePipelineRuntimeLock) {
+        hadPendingFrame = pendingTimedNativeFrame != null
+        if (nativeFramePipelinePumpRunning) {
+            nativeFramePipelinePumpRunning = false
+            nativeFramePipelinePumpEpoch += 1
+            nativeFramePipelineFirstFrameWatchdogStartedAtMs = null
+            nativeFramePipelinePumpScheduler.cancel()
+            stopped = true
+        }
+    }
+    if (!stopped && !hadPendingFrame) {
         return
     }
-    Log.d(NATIVE_PLAYER_BRIDGE_TAG, "stopping native-frame pipeline pump")
-    nativeFramePipelinePumpRunning = false
-    nativeFramePipelinePumpEpoch += 1
-    nativeFramePipelineFirstFrameWatchdogStartedAtMs = null
-    nativeFramePipelinePumpScheduler.cancel()
-    markNativeFramePipelineDiagnosticsDirty()
+    if (stopped) {
+        Log.d(NATIVE_PLAYER_BRIDGE_TAG, "stopping native-frame pipeline pump")
+        markNativeFramePipelineDiagnosticsDirty()
+    }
+    if (hadPendingFrame) {
+        releasePendingTimedNativeFrameOnRuntime(presented = false)
+    }
 }
 
 internal fun VesperNativePlayerBridge.scheduleNativeFramePipelinePump(delayMs: Long) {
@@ -59,7 +83,7 @@ internal fun VesperNativePlayerBridge.runNativeFramePipelinePumpTickWorkerUnchec
     }
     val pendingRelease = takePendingTimedNativeFrameForRuntime()
     if (pendingRelease != null) {
-        if (!canContinueNativeFramePump(epoch)) {
+        if (pendingRelease.pumpEpoch != epoch || !canContinueNativeFramePump(epoch)) {
             releaseStaleNativeFramePipelineFrame(pendingRelease.handle)
             return
         }
@@ -78,6 +102,16 @@ internal fun VesperNativePlayerBridge.runNativeFramePipelinePumpTickWorkerUnchec
     }
 
     val advanceResult = runCatching { advanceNativeFramePipelineOnce() }
+    val advanceStatus = advanceResult.getOrNull()
+    if (
+        advanceStatus != null &&
+            !registerAdvancedNativeFrameForCurrentPumpFromRuntime(epoch, advanceStatus)
+    ) {
+        return
+    }
+    if (!canContinueNativeFramePump(epoch)) {
+        return
+    }
     runOnMainThread {
         applyNativeFramePipelineAdvanceResult(epoch, advanceResult)
     }
@@ -130,23 +164,14 @@ internal fun VesperNativePlayerBridge.runNativeFramePipelinePumpTick(
 
     nativeFramePipelineLastStatus = status ?: nativeFramePipelineLastStatus
     publishNativeFramePipelinePumpStatus(nativeFramePipelineLastStatus)
-    val timedFrame = status?.nativeFramePipelineTimedFrame()
+    val timedFrame = status?.nativeFramePipelineTimedFrame(epoch)
     if (timedFrame != null) {
+        if (!registerAdvancedNativeFrameForCurrentPumpFromRuntime(epoch, status)) {
+            return
+        }
         val delayMs = nativeFramePipelineDelayUntilPresentation(timedFrame.presentationTimeUs)
-        if (delayMs > 0L) {
-            storePendingTimedNativeFrameFromRuntime(timedFrame)
-            scheduleNativeFramePipelinePump(delayMs)
-            return
-        }
-        val releaseResult =
-            runCatching {
-                bindings.releaseNativeFramePipelineFrame(timedFrame.handle, presented = true)
-            }
-        applyNativeFramePipelineReleaseResult(epoch, releaseResult)
-        if (nativeFramePipelineOpenStatus == null || nativeFramePipelineFallbackReason != null) {
-            return
-        }
-        publishNativeFramePipelinePumpStatus(nativeFramePipelineLastStatus)
+        scheduleNativeFramePipelinePump(delayMs)
+        return
     }
     if (enforceNativeFramePipelineFirstFrameWatchdog()) {
         return

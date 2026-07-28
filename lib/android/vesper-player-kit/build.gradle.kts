@@ -13,10 +13,22 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
 
 val repoRoot = projectDir.resolve("../../..").canonicalFile
 val rustAndroidBuildScript = repoRoot.resolve("scripts/android/build-vesper-player-kit-jni.sh")
+val androidTestNativeProvisionScript =
+    repoRoot.resolve("scripts/android/internal/provision-player-kit-android-test-jni.sh")
+val androidTestJniLibsDir = layout.buildDirectory.dir("generated/androidTestJniLibs")
 val rustAndroidAbis = providers.gradleProperty("vesper.player.android.abis").orNull
+val extractsInstrumentationNativeLibraries =
+    gradle.startParameter.taskNames.any { taskName ->
+        taskName.contains("AndroidTest", ignoreCase = true) ||
+            taskName.endsWith("connectedCheck", ignoreCase = true) ||
+            taskName.endsWith("deviceCheck", ignoreCase = true)
+    }
 
 require(rustAndroidBuildScript.isFile) {
     "Rust Android build script not found: ${rustAndroidBuildScript.absolutePath}"
+}
+require(androidTestNativeProvisionScript.isFile) {
+    "Android instrumentation JNI provisioning script not found: ${androidTestNativeProvisionScript.absolutePath}"
 }
 
 val buildRustAndroidHostDebug = tasks.register<Exec>("buildRustAndroidHostDebug") {
@@ -37,6 +49,24 @@ val buildRustAndroidHostRelease = tasks.register<Exec>("buildRustAndroidHostRele
     if (!rustAndroidAbis.isNullOrBlank()) {
         environment("RUST_ANDROID_ABIS", rustAndroidAbis)
     }
+}
+
+val provisionAndroidTestNativeLibraries = tasks.register<Exec>("provisionAndroidTestNativeLibraries") {
+    group = "rust"
+    description = "Builds test-only decoder, SourceNormalizer, and FFmpeg JNI libraries."
+    dependsOn(buildRustAndroidHostDebug)
+    workingDir = repoRoot
+    commandLine(
+        androidTestNativeProvisionScript.absolutePath,
+        androidTestJniLibsDir.get().asFile.absolutePath,
+        "debug",
+        "default",
+    )
+    if (!rustAndroidAbis.isNullOrBlank()) {
+        environment("RUST_ANDROID_ABIS", rustAndroidAbis)
+    }
+    outputs.dir(androidTestJniLibsDir)
+    outputs.upToDateWhen { false }
 }
 
 android {
@@ -68,7 +98,14 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
-    sourceSets.getByName("androidTest").assets.srcDir(repoRoot.resolve("fixtures/media"))
+    packaging {
+        jniLibs.useLegacyPackaging = extractsInstrumentationNativeLibraries
+    }
+
+    sourceSets.getByName("androidTest").apply {
+        assets.srcDir(repoRoot.resolve("fixtures/media"))
+        jniLibs.srcDir(androidTestJniLibsDir.get().asFile)
+    }
 
     publishing {
         singleVariant("release") {
@@ -163,6 +200,14 @@ tasks.matching {
         (it.name.startsWith("generateDebug") && it.name.contains("Lint") && it.name.endsWith("Model"))
 }.configureEach {
     dependsOn(buildRustAndroidHostDebug)
+}
+
+tasks.matching {
+    it.name == "preDebugAndroidTestBuild" ||
+        it.name == "mergeDebugAndroidTestJniLibFolders" ||
+        it.name == "mergeDebugAndroidTestNativeLibs"
+}.configureEach {
+    dependsOn(provisionAndroidTestNativeLibraries)
 }
 
 tasks.matching {

@@ -267,29 +267,28 @@ fn remux_input_to_mp4(
         }
 
         let input_stream_index = stream.index();
-        let mapped_stream_index = stream_mapping[input_stream_index];
-        if mapped_stream_index < 0 {
+        let Some((mapped_stream_index, input_time_base)) =
+            packet_stream_route(&stream_mapping, &input_time_bases, input_stream_index)?
+        else {
             continue;
-        }
-        repair_packet_timestamps(&mut packet, &mut timestamp_state[input_stream_index])?;
+        };
+        let timestamp_state = timestamp_state
+            .get_mut(input_stream_index)
+            .ok_or_else(|| unsupported_dynamic_stream(input_stream_index))?;
+        repair_packet_timestamps(&mut packet, timestamp_state)?;
 
-        let output_stream = output_context
-            .stream(mapped_stream_index as _)
-            .ok_or_else(|| {
-                FfmpegProcessorError::Remux(format!(
-                    "missing mapped output stream index {} for `{}`",
-                    mapped_stream_index,
-                    output_path.display()
-                ))
-                .into_processor_error()
-            })?;
+        let output_stream = output_context.stream(mapped_stream_index).ok_or_else(|| {
+            FfmpegProcessorError::Remux(format!(
+                "missing mapped output stream index {} for `{}`",
+                mapped_stream_index,
+                output_path.display()
+            ))
+            .into_processor_error()
+        })?;
 
-        packet.rescale_ts(
-            input_time_bases[input_stream_index],
-            output_stream.time_base(),
-        );
+        packet.rescale_ts(input_time_base, output_stream.time_base());
         packet.set_position(-1);
-        packet.set_stream(mapped_stream_index as _);
+        packet.set_stream(mapped_stream_index);
         packet
             .write_interleaved(&mut output_context)
             .map_err(|error| {
@@ -507,29 +506,32 @@ fn remux_sources_to_output(
             }
 
             let input_stream_index = stream.index();
-            let mapped_stream_index = state.stream_mapping[input_stream_index];
-            if mapped_stream_index < 0 {
+            let Some((mapped_stream_index, input_time_base)) = packet_stream_route(
+                &state.stream_mapping,
+                &state.input_time_bases,
+                input_stream_index,
+            )?
+            else {
                 continue;
-            }
+            };
 
-            repair_packet_timestamps(&mut packet, &mut state.timestamp_state[input_stream_index])?;
-            let output_stream = output_context
-                .stream(mapped_stream_index as usize)
-                .ok_or_else(|| {
-                    FfmpegProcessorError::Remux(format!(
-                        "missing mapped output stream index {} for `{}`",
-                        mapped_stream_index,
-                        output_path.display()
-                    ))
-                    .into_processor_error()
-                })?;
+            let timestamp_state = state
+                .timestamp_state
+                .get_mut(input_stream_index)
+                .ok_or_else(|| unsupported_dynamic_stream(input_stream_index))?;
+            repair_packet_timestamps(&mut packet, timestamp_state)?;
+            let output_stream = output_context.stream(mapped_stream_index).ok_or_else(|| {
+                FfmpegProcessorError::Remux(format!(
+                    "missing mapped output stream index {} for `{}`",
+                    mapped_stream_index,
+                    output_path.display()
+                ))
+                .into_processor_error()
+            })?;
 
-            packet.rescale_ts(
-                state.input_time_bases[input_stream_index],
-                output_stream.time_base(),
-            );
+            packet.rescale_ts(input_time_base, output_stream.time_base());
             packet.set_position(-1);
-            packet.set_stream(mapped_stream_index as usize);
+            packet.set_stream(mapped_stream_index);
             packet
                 .write_interleaved(&mut output_context)
                 .map_err(|error| {
@@ -553,6 +555,33 @@ fn remux_sources_to_output(
     })?;
     progress.on_progress(1.0);
     Ok(())
+}
+
+fn packet_stream_route(
+    stream_mapping: &[i32],
+    input_time_bases: &[Rational],
+    input_stream_index: usize,
+) -> Result<Option<(usize, Rational)>, ProcessorError> {
+    let mapped_stream_index = stream_mapping
+        .get(input_stream_index)
+        .copied()
+        .ok_or_else(|| unsupported_dynamic_stream(input_stream_index))?;
+    if mapped_stream_index < 0 {
+        return Ok(None);
+    }
+    let input_time_base = input_time_bases
+        .get(input_stream_index)
+        .copied()
+        .ok_or_else(|| unsupported_dynamic_stream(input_stream_index))?;
+    let mapped_stream_index = usize::try_from(mapped_stream_index)
+        .map_err(|_| unsupported_dynamic_stream(input_stream_index))?;
+    Ok(Some((mapped_stream_index, input_time_base)))
+}
+
+fn unsupported_dynamic_stream(input_stream_index: usize) -> ProcessorError {
+    ProcessorError::UnsupportedDynamicStream {
+        stream_index: u32::try_from(input_stream_index).unwrap_or(u32::MAX),
+    }
 }
 
 fn prepare_output_path(output_path: &Path) -> Result<(), ProcessorError> {
@@ -694,11 +723,13 @@ impl IntoProcessorError for FfmpegProcessorError {
 #[cfg(test)]
 mod tests {
     use super::{
-        FfmpegRemuxProcessor, PacketTimestampValues, TimestampRepairState, repair_timestamp_values,
+        FfmpegRemuxProcessor, PacketTimestampValues, TimestampRepairState, packet_stream_route,
+        repair_timestamp_values,
     };
     use player_plugin::{
         AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind,
-        DownloadMetadata, OutputFormat, PostDownloadProcessor, ProcessorOutput, ProcessorProgress,
+        DownloadMetadata, OutputFormat, PostDownloadProcessor, ProcessorError, ProcessorOutput,
+        ProcessorProgress,
     };
     use std::path::PathBuf;
 
@@ -722,6 +753,21 @@ mod tests {
                 ratios.push(ratio);
             }
         }
+    }
+
+    #[test]
+    fn packet_stream_route_rejects_stream_added_after_header() {
+        let time_base = ffmpeg_next::Rational(1, 1_000);
+
+        assert_eq!(
+            packet_stream_route(&[0], &[time_base], 0).expect("header stream should be routable"),
+            Some((0, time_base))
+        );
+        assert_eq!(
+            packet_stream_route(&[0], &[time_base], 1)
+                .expect_err("post-header stream should be rejected"),
+            ProcessorError::UnsupportedDynamicStream { stream_index: 1 }
+        );
     }
 
     #[test]

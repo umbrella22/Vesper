@@ -51,7 +51,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
         },
         descriptor: VesperPluginDescriptor {
             abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-            plugin_kind: VesperPluginKind::Decoder,
+            plugin_kind: VesperPluginKind::Decoder as u32,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
         },
@@ -256,7 +256,7 @@ where
 
 fn open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
     VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         session: std::ptr::null_mut(),
         payload: serialize_payload(&error),
     }
@@ -264,7 +264,7 @@ fn open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
 
 fn open_success(session: *mut c_void, info: &DecoderSessionInfo) -> VesperDecoderOpenSessionResult {
     VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         session,
         payload: serialize_payload(info),
     }
@@ -272,21 +272,21 @@ fn open_success(session: *mut c_void, info: &DecoderSessionInfo) -> VesperDecode
 
 fn process_success(status: &DecoderOperationStatus) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: serialize_payload(status),
     }
 }
 
 fn packet_success(result: &DecoderPacketResult) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: serialize_payload(result),
     }
 }
 
 fn process_error(error: DecoderError) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         payload: serialize_payload(&error),
     }
 }
@@ -296,7 +296,7 @@ fn native_frame_success(
     handle: usize,
 ) -> VesperDecoderReceiveNativeFrameResult {
     VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         metadata: serialize_payload(metadata),
         handle,
     }
@@ -304,7 +304,7 @@ fn native_frame_success(
 
 fn native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameResult {
     VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         metadata: serialize_payload(&error),
         handle: 0,
     }
@@ -409,7 +409,8 @@ mod platform {
     const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR8_BIPLANAR_FULL_RANGE: u32 = fourcc_u32(*b"420f");
     const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_VIDEO_RANGE: i32 = fourcc(*b"x420");
     const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_FULL_RANGE: u32 = fourcc_u32(*b"xf20");
-    const MAX_PENDING_NATIVE_FRAMES: usize = 16;
+    const MAX_REORDER_DEPTH: usize = 16;
+    const MAX_PENDING_NATIVE_FRAMES: usize = MAX_REORDER_DEPTH + 1;
 
     const fn fourcc(code: [u8; 4]) -> i32 {
         ((code[0] as i32) << 24)
@@ -713,6 +714,7 @@ mod platform {
         decompression_session: VTDecompressionSessionRef,
         callback_state: Arc<CallbackState>,
         callback_state_ref_con: *const CallbackState,
+        reorder_depth: usize,
         end_of_stream_sent: bool,
         closed: bool,
     }
@@ -747,6 +749,7 @@ mod platform {
                 decompression_session: ptr::null_mut(),
                 callback_state: Arc::new(CallbackState::default()),
                 callback_state_ref_con: ptr::null(),
+                reorder_depth: bounded_reorder_depth(config.reorder_depth),
                 end_of_stream_sent: false,
                 closed: false,
             };
@@ -841,7 +844,11 @@ mod platform {
                 .frames
                 .lock()
                 .map_err(|_| DecoderError::internal("VideoToolbox frame queue is poisoned"))?;
-            let Some(frame) = frames.pop_front() else {
+            let Some(frame) = dequeue_pending_native_frame(
+                &mut frames,
+                self.reorder_depth,
+                self.end_of_stream_sent,
+            ) else {
                 return if self.end_of_stream_sent {
                     Ok(NativeReceiveResult::Eof)
                 } else {
@@ -1137,8 +1144,36 @@ mod platform {
         if frames.len() >= MAX_PENDING_NATIVE_FRAMES {
             return Err(frame);
         }
-        frames.push_back(frame);
+        let insert_at = frame.pts_us.and_then(|pts_us| {
+            frames.iter().position(|queued| {
+                queued
+                    .pts_us
+                    .is_none_or(|queued_pts_us| pts_us < queued_pts_us)
+            })
+        });
+        if let Some(insert_at) = insert_at {
+            frames.insert(insert_at, frame);
+        } else {
+            frames.push_back(frame);
+        }
         Ok(())
+    }
+
+    fn dequeue_pending_native_frame(
+        frames: &mut VecDeque<PendingNativeFrame>,
+        reorder_depth: usize,
+        draining: bool,
+    ) -> Option<PendingNativeFrame> {
+        if !draining && frames.len() <= reorder_depth {
+            return None;
+        }
+        frames.pop_front()
+    }
+
+    fn bounded_reorder_depth(reorder_depth: Option<u32>) -> usize {
+        usize::try_from(reorder_depth.unwrap_or_default())
+            .unwrap_or(MAX_REORDER_DEPTH)
+            .min(MAX_REORDER_DEPTH)
     }
 
     struct ParsedVideoConfig {
@@ -1727,8 +1762,9 @@ mod platform {
     mod tests {
         use super::{
             K_CV_PIXEL_FORMAT_TYPE_420YPCBCR10_BIPLANAR_VIDEO_RANGE, MAX_PENDING_NATIVE_FRAMES,
-            PendingNativeFrame, VideoCodecKind, annexb_to_length_prefixed,
-            color_metadata_for_pixel_format, decoder_frame_format_from_pixel_format,
+            MAX_REORDER_DEPTH, PendingNativeFrame, VideoCodecKind, annexb_to_length_prefixed,
+            bounded_reorder_depth, color_metadata_for_pixel_format,
+            decoder_frame_format_from_pixel_format, dequeue_pending_native_frame,
             enqueue_pending_native_frame, length_prefixed_sample_is_well_formed,
             normalize_sample_data, parse_annexb_parameter_sets, parse_avcc_extradata,
             requested_output_format,
@@ -1825,6 +1861,55 @@ mod platform {
 
             assert_eq!(frames.len(), MAX_PENDING_NATIVE_FRAMES);
             assert_eq!(rejected.pixel_buffer as usize, 999);
+        }
+
+        #[test]
+        fn pending_native_frame_queue_orders_b_frames_by_presentation_time() {
+            let mut frames = VecDeque::new();
+            for (handle, pts_us) in [(1, 0), (2, 66_667), (3, 33_333)] {
+                let mut frame = pending_frame(handle);
+                frame.pts_us = Some(pts_us);
+                enqueue_pending_native_frame(&mut frames, frame)
+                    .expect("frame should fit under limit");
+            }
+
+            assert_eq!(
+                frames.iter().map(|frame| frame.pts_us).collect::<Vec<_>>(),
+                vec![Some(0), Some(33_333), Some(66_667)]
+            );
+        }
+
+        #[test]
+        fn pending_native_frame_queue_holds_reorder_window_until_ready() {
+            let mut frames = VecDeque::new();
+            for (handle, pts_us) in [(1, 0), (2, 66_667), (3, 33_333)] {
+                let mut frame = pending_frame(handle);
+                frame.pts_us = Some(pts_us);
+                enqueue_pending_native_frame(&mut frames, frame)
+                    .expect("frame should fit under limit");
+            }
+
+            assert!(dequeue_pending_native_frame(&mut frames, 3, false).is_none());
+            let mut fourth = pending_frame(4);
+            fourth.pts_us = Some(100_000);
+            enqueue_pending_native_frame(&mut frames, fourth)
+                .expect("frame should fit under limit");
+
+            assert_eq!(
+                dequeue_pending_native_frame(&mut frames, 3, false).and_then(|frame| frame.pts_us),
+                Some(0)
+            );
+            assert_eq!(
+                dequeue_pending_native_frame(&mut frames, 3, true).and_then(|frame| frame.pts_us),
+                Some(33_333)
+            );
+        }
+
+        #[test]
+        fn video_reorder_depth_is_capped_at_sixteen_frames() {
+            assert_eq!(bounded_reorder_depth(None), 0);
+            assert_eq!(bounded_reorder_depth(Some(4)), 4);
+            assert_eq!(bounded_reorder_depth(Some(64)), MAX_REORDER_DEPTH);
         }
 
         fn pending_frame(handle: usize) -> PendingNativeFrame {
@@ -1931,7 +2016,7 @@ mod tests {
             )
         };
 
-        assert_eq!(result.status, VesperPluginResultStatus::Failure);
+        assert_eq!(result.status, VesperPluginResultStatus::Failure as u32);
         // SAFETY: the plugin produced this payload in the current dynamic
         // library and the test has not reclaimed it yet.
         let payload = unsafe { result.payload.into_vec() };

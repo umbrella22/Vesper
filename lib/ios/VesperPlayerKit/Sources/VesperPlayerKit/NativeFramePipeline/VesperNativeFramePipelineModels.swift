@@ -118,6 +118,7 @@ struct VesperNativeFramePipelineIssue: Equatable {
         case sessionNotPrepared
         case sessionClosed
         case nativeAudioBridgeUnavailable
+        case unsupportedOperation
         case startupFailure
     }
 

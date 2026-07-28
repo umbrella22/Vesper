@@ -3,20 +3,55 @@ import CoreAudio
 import Foundation
 internal import VesperPlayerKitBridgeShim
 extension VesperNativeFramePipelineSession {
-    func play(rate: Float = 1.0) {
-        guard didStart, !isClosed else { return }
+    @discardableResult
+    func play(rate: Float = 1.0) -> Bool {
+        guard didStart, !isClosed else { return false }
         playbackRate = max(rate, 0.01)
+        desiredPlaybackActive = true
+        if hasReachedEnd {
+            guard seekable else {
+                desiredPlaybackActive = false
+                isPlaying = false
+                let issue = VesperNativeFramePipelineIssue(
+                    kind: .unsupportedOperation,
+                    message: "nativeFrameIssueKind=unsupportedOperation; end-of-stream replay requires a seekable source."
+                )
+                iosHostLog("native-frame replay failed: \(issue.message)")
+                onPlaybackFailed?(issue)
+                return false
+            }
+            return seek(toMs: 0) { [weak self] didApply in
+                guard let self, !didApply, !self.isClosed else { return }
+                self.desiredPlaybackActive = false
+                self.isPlaying = false
+                self.audioOutput.pause()
+                self.onPlaybackFailed?(
+                    VesperNativeFramePipelineIssue(
+                        kind: .unsupportedOperation,
+                        message: "nativeFrameIssueKind=unsupportedOperation; failed to rewind the native-frame source for replay."
+                    )
+                )
+            }
+        }
+        if pendingSeekGeneration != nil {
+            return true
+        }
         isPlaying = true
         audioOutput.play(rate: playbackRate)
-        guard let runtime else { return }
+        guard let runtime else { return false }
         commandQueue.submit { [runtime, playbackRate] _ in
             await runtime.play(rate: playbackRate)
         }
+        return true
     }
 
     func pause() {
+        desiredPlaybackActive = false
         isPlaying = false
         audioOutput.pause()
+        if pendingSeekGeneration != nil {
+            return
+        }
         guard let runtime else { return }
         commandQueue.submit { [runtime] _ in
             await runtime.pause()
@@ -24,13 +59,23 @@ extension VesperNativeFramePipelineSession {
     }
 
     func stop() {
+        desiredPlaybackActive = false
         isPlaying = false
         audioOutput.stop()
-        seek(toMs: 0)
+        guard let runtime else { return }
+        commandQueue.submit { [runtime] _ in
+            await runtime.pause()
+        }
+        guard seekable else {
+            iosHostLog("native-frame stop paused an unseekable source without rewinding")
+            return
+        }
+        _ = seek(toMs: 0)
     }
 
     func flush() {
         guard didStart else { return }
+        desiredPlaybackActive = false
         isPlaying = false
         audioOutput.pause()
         guard let runtime else { return }
@@ -68,29 +113,45 @@ extension VesperNativeFramePipelineSession {
             return false
         }
         let targetMs = clampedSeekPositionMs(positionMs)
-        let wasPlaying = isPlaying
+        seekGeneration &+= 1
+        if seekGeneration == 0 {
+            seekGeneration = 1
+        }
+        let submittedSeekGeneration = seekGeneration
+        pendingSeekGeneration = submittedSeekGeneration
         isPlaying = false
         audioOutput.pause()
-        guard let runtime else { return false }
+        guard let runtime else {
+            pendingSeekGeneration = nil
+            return false
+        }
         let submittedToken = commandQueue.submit(
             policy: .replacingPending("seek"),
-            onDropped: {
+            onDropped: { [weak self] in
+                if self?.pendingSeekGeneration == submittedSeekGeneration {
+                    self?.pendingSeekGeneration = nil
+                }
                 completion?(false)
             }
-        ) { [self, runtime] token in
+        ) { [self, runtime] _ in
             let result = await runtime.seek(positionMs: targetMs)
             await MainActor.run {
-                guard commandQueue.isLatest(token) else {
+                guard !isClosed,
+                      seekGeneration == submittedSeekGeneration,
+                      pendingSeekGeneration == submittedSeekGeneration else {
                     completion?(false)
                     return
                 }
+                pendingSeekGeneration = nil
                 let didApply = applyRuntimeSeekResult(
                     result,
-                    targetMs: targetMs,
-                    resumePlayback: wasPlaying
+                    targetMs: targetMs
                 )
                 completion?(didApply)
             }
+        }
+        if submittedToken == nil, pendingSeekGeneration == submittedSeekGeneration {
+            pendingSeekGeneration = nil
         }
         return submittedToken != nil
     }

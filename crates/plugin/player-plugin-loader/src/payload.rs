@@ -158,6 +158,14 @@ pub(crate) fn reclaim_plugin_payload(
     unsafe { free_bytes(context, payload) };
 }
 
+pub(crate) fn unknown_plugin_result_status_message(
+    plugin_name: &str,
+    operation: &str,
+    raw: u32,
+) -> String {
+    format!("plugin `{plugin_name}` returned unknown status {raw} from `{operation}`")
+}
+
 pub(crate) fn decode_plugin_bytes<T: DeserializeOwned>(
     payload: VesperPluginBytes,
     free_bytes: FreeBytesFn,

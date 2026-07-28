@@ -174,7 +174,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
         },
         descriptor: VesperPluginDescriptor {
             abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-            plugin_kind: VesperPluginKind::Decoder,
+            plugin_kind: VesperPluginKind::Decoder as u32,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
         },
@@ -410,7 +410,7 @@ fn serialize_payload<T: serde::Serialize>(value: &T) -> VesperPluginBytes {
 
 fn open_success(session: *mut c_void, info: &DecoderSessionInfo) -> VesperDecoderOpenSessionResult {
     VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         session,
         payload: serialize_payload(info),
     }
@@ -418,7 +418,7 @@ fn open_success(session: *mut c_void, info: &DecoderSessionInfo) -> VesperDecode
 
 fn open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
     VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         session: std::ptr::null_mut(),
         payload: serialize_payload(&error),
     }
@@ -426,14 +426,14 @@ fn open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
 
 fn process_success<T: serde::Serialize>(value: &T) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: serialize_payload(value),
     }
 }
 
 fn process_error(error: DecoderError) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         payload: serialize_payload(&error),
     }
 }
@@ -443,7 +443,7 @@ fn native_frame_success(
     handle: usize,
 ) -> VesperDecoderReceiveNativeFrameResult {
     VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         metadata: serialize_payload(metadata),
         handle,
     }
@@ -451,7 +451,7 @@ fn native_frame_success(
 
 fn native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameResult {
     VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         metadata: serialize_payload(&error),
         handle: 0,
     }
@@ -1066,7 +1066,7 @@ mod tests {
             descriptor.abi_version,
             VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT
         );
-        assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder);
+        assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder as u32);
         assert!(!descriptor.api.is_null());
         assert!(!descriptor.plugin_name.is_null());
     }
@@ -1164,7 +1164,7 @@ mod tests {
             super::decoder_open_session_json(std::ptr::null_mut(), payload.as_ptr(), payload.len())
         };
 
-        assert_eq!(result.status, VesperPluginResultStatus::Failure);
+        assert_eq!(result.status, VesperPluginResultStatus::Failure as u32);
         assert!(result.session.is_null());
         let error = decode_json::<DecoderError>(result.payload.data, result.payload.len)
             .expect("error payload");

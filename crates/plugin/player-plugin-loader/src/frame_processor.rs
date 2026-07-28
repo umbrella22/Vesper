@@ -103,8 +103,8 @@ impl FrameProcessorPluginFactory for DynamicFrameProcessorPluginFactory {
                 )
             })?;
 
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 if result.session.is_null() {
                     reclaim_plugin_payload(
                         result.payload,
@@ -137,7 +137,7 @@ impl FrameProcessorPluginFactory for DynamicFrameProcessorPluginFactory {
                     outstanding_frames: Vec::new(),
                 }))
             }
-            VesperPluginResultStatus::Failure => {
+            Some(VesperPluginResultStatus::Failure) => {
                 let error = decode_frame_processor_error_payload(
                     result.payload,
                     self.inner.api.free_bytes,
@@ -146,6 +146,25 @@ impl FrameProcessorPluginFactory for DynamicFrameProcessorPluginFactory {
                     "open_session",
                 );
                 Err(error)
+            }
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                );
+                close_frame_processor_session_after_open_failure(
+                    &self.inner,
+                    result.session,
+                    "close_frame_processor_after_unknown_open_status",
+                );
+                Err(FrameProcessorError::abi_violation(
+                    unknown_plugin_result_status_message(
+                        &self.inner.name,
+                        "open_session",
+                        result.status,
+                    ),
+                ))
             }
         }
     }
@@ -198,8 +217,8 @@ impl DynamicFrameProcessorSession {
         result: VesperPluginProcessResult,
         operation: &'static str,
     ) -> Result<(), FrameProcessorError> {
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 let _ = decode_plugin_bytes_or_default::<FrameProcessorOperationStatus>(
                     result.payload,
                     self.factory.api.free_bytes,
@@ -210,13 +229,48 @@ impl DynamicFrameProcessorSession {
                 })?;
                 Ok(())
             }
-            VesperPluginResultStatus::Failure => Err(decode_frame_processor_error_payload(
+            Some(VesperPluginResultStatus::Failure) => Err(decode_frame_processor_error_payload(
                 result.payload,
                 self.factory.api.free_bytes,
                 self.factory.api.context,
                 &self.factory.name,
                 operation,
             )),
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                Err(FrameProcessorError::abi_violation(
+                    unknown_plugin_result_status_message(
+                        &self.factory.name,
+                        operation,
+                        result.status,
+                    ),
+                ))
+            }
+        }
+    }
+
+    fn close_after_abi_violation(&mut self, operation: &'static str) {
+        if self.closed || self.session.is_null() {
+            return;
+        }
+        let _ = self.release_outstanding_frames("release_frame_after_abi_violation");
+        // SAFETY: the validated API guarantees close_session is present. The
+        // strengthened ABI contract requires close to reclaim unreturned handles.
+        let result = catch_frame_processor_plugin_call(&self.factory.name, operation, || unsafe {
+            (self.factory.api.close_session)(self.factory.api.context, self.session)
+        });
+        self.closed = true;
+        self.session = std::ptr::null_mut();
+        if let Ok(result) = result {
+            reclaim_plugin_payload(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+            );
         }
     }
 
@@ -328,8 +382,8 @@ impl FrameProcessorSession for DynamicFrameProcessorSession {
                 }
             };
 
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 decode_plugin_bytes_or_default::<FrameProcessorSubmitResult>(
                     result.payload,
                     self.factory.api.free_bytes,
@@ -339,13 +393,28 @@ impl FrameProcessorSession for DynamicFrameProcessorSession {
                     map_frame_processor_payload_error(&self.factory.name, "submit_frame", error)
                 })
             }
-            VesperPluginResultStatus::Failure => Err(decode_frame_processor_error_payload(
+            Some(VesperPluginResultStatus::Failure) => Err(decode_frame_processor_error_payload(
                 result.payload,
                 self.factory.api.free_bytes,
                 self.factory.api.context,
                 &self.factory.name,
                 "submit_frame",
             )),
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                let error =
+                    FrameProcessorError::abi_violation(unknown_plugin_result_status_message(
+                        &self.factory.name,
+                        "submit_frame",
+                        result.status,
+                    ));
+                self.close_after_abi_violation("close_after_unknown_submit_status");
+                Err(error)
+            }
         }
     }
 
@@ -365,8 +434,8 @@ impl FrameProcessorSession for DynamicFrameProcessorSession {
             }
         };
 
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 let metadata = decode_plugin_bytes::<FrameProcessorReceiveFrameMetadata>(
                     result.metadata,
                     self.factory.api.free_bytes,
@@ -430,13 +499,28 @@ impl FrameProcessorSession for DynamicFrameProcessorSession {
                     }
                 }
             }
-            VesperPluginResultStatus::Failure => Err(decode_frame_processor_error_payload(
+            Some(VesperPluginResultStatus::Failure) => Err(decode_frame_processor_error_payload(
                 result.metadata,
                 self.factory.api.free_bytes,
                 self.factory.api.context,
                 &self.factory.name,
                 "receive_frame",
             )),
+            None => {
+                reclaim_plugin_payload(
+                    result.metadata,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                let error =
+                    FrameProcessorError::abi_violation(unknown_plugin_result_status_message(
+                        &self.factory.name,
+                        "receive_frame",
+                        result.status,
+                    ));
+                self.close_after_abi_violation("close_after_unknown_receive_status");
+                Err(error)
+            }
         }
     }
 

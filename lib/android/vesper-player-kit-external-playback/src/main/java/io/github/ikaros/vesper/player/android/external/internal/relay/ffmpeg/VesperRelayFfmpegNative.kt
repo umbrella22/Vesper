@@ -37,10 +37,30 @@ internal class VesperRelayFfmpegInputStream(
             return -1
         }
         val read = native.read(handle, buffer, offset, length)
-        if (read == -2) {
-            throw IOException("native FFmpeg relay stream handle is invalid")
+        return when (read) {
+            NATIVE_READ_COMPLETE -> -1
+            NATIVE_READ_INVALID_HANDLE -> throw VesperRelayIOException(
+                code = "native_stream_invalid",
+                message = "Native FFmpeg relay stream handle is invalid.",
+            )
+            NATIVE_READ_FAILED -> throw VesperRelayIOException(
+                code = "native_stream_failed",
+                message = "Native FFmpeg relay stream failed before completion.",
+            )
+            NATIVE_READ_STALLED -> throw VesperRelayIOException(
+                code = "native_stream_stalled",
+                message = "Native FFmpeg relay stream made no progress before its deadline.",
+            )
+            NATIVE_READ_CANCELLED -> throw VesperRelayIOException(
+                code = "native_stream_cancelled",
+                message = "Native FFmpeg relay stream was cancelled.",
+            )
+            in Int.MIN_VALUE until 0 -> throw VesperRelayIOException(
+                code = "native_stream_protocol_error",
+                message = "Native FFmpeg relay stream returned unknown outcome $read.",
+            )
+            else -> read
         }
-        return read
     }
 
     override fun close() {
@@ -51,6 +71,11 @@ internal class VesperRelayFfmpegInputStream(
         }
     }
 }
+
+internal class VesperRelayIOException(
+    val code: String,
+    message: String,
+) : IOException("[$code] $message")
 
 internal interface VesperRelayFfmpegNativeApi {
     fun read(handle: Long, buffer: ByteArray, offset: Int, length: Int): Int
@@ -105,3 +130,9 @@ private object VesperRelayFfmpegNativeBridge : VesperRelayFfmpegNativeApi {
         VesperRelayFfmpegNative.close(handle)
     }
 }
+
+private const val NATIVE_READ_COMPLETE = -1
+private const val NATIVE_READ_INVALID_HANDLE = -2
+private const val NATIVE_READ_FAILED = -3
+private const val NATIVE_READ_STALLED = -4
+private const val NATIVE_READ_CANCELLED = -5

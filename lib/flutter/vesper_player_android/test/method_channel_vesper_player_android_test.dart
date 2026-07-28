@@ -292,6 +292,19 @@ void main() {
       result.missingCapabilities,
       <String>['hdrProgrammableProcessingNotSupported'],
     );
+
+    await platform.probePlaybackCapability(
+      request,
+      playerId: 'android-player',
+    );
+    expect(calls, hasLength(2));
+    expect(
+      Map<Object?, Object?>.from(calls[1].arguments as Map),
+      <Object?, Object?>{
+        ...request.toMap(),
+        'playerId': 'android-player',
+      },
+    );
   });
 
   test('snapshot decodes native HDR failure evidence details', () async {

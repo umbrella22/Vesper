@@ -46,6 +46,30 @@ class VesperRelayHostPreparedDashTest {
     }
 
     @Test
+    fun ffmpegInputStreamOnlyMapsCompleteToEofAndThrowsStableTerminalCodes() {
+        assertEquals(-1, VesperRelayFfmpegInputStream(7L, FixedReadFfmpegNativeApi(-1)).read(ByteArray(1)))
+        val expectedCodes = listOf(
+            -2 to "native_stream_invalid",
+            -3 to "native_stream_failed",
+            -4 to "native_stream_stalled",
+            -5 to "native_stream_cancelled",
+            -99 to "native_stream_protocol_error",
+        )
+
+        expectedCodes.forEach { (nativeResult, expectedCode) ->
+            val error = try {
+                VesperRelayFfmpegInputStream(7L, FixedReadFfmpegNativeApi(nativeResult)).read(ByteArray(1))
+                fail("expected IOException for native result $nativeResult")
+                return@forEach
+            } catch (error: VesperRelayIOException) {
+                error
+            }
+            assertEquals(expectedCode, error.code)
+            assertTrue(error.message.orEmpty().contains("[$expectedCode]"))
+        }
+    }
+
+    @Test
     fun plansStaticSegmentTemplateVideoAndAudioTracks() {
         val plan = planHostPreparedDash(
             manifestText = """
@@ -999,6 +1023,14 @@ private class RecordingFfmpegNativeApi(
     override fun close(handle: Long) {
         closedHandle = handle
     }
+}
+
+private class FixedReadFfmpegNativeApi(
+    private val result: Int,
+) : VesperRelayFfmpegNativeApi {
+    override fun read(handle: Long, buffer: ByteArray, offset: Int, length: Int): Int = result
+
+    override fun close(handle: Long) = Unit
 }
 
 private class ByteArrayRangeResolver(

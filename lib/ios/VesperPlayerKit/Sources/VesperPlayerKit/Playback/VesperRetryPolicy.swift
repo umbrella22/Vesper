@@ -63,7 +63,7 @@ public struct VesperRetryPolicy: Equatable {
         VesperRuntimeRetryPolicy(
             uses_default_max_attempts: usesDefaultMaxAttempts,
             has_max_attempts: rawMaxAttempts != nil,
-            max_attempts: Int32(rawMaxAttempts ?? 0),
+            max_attempts: encodeRuntimeInt32(rawMaxAttempts, field: "maxAttempts"),
             has_base_delay_ms: rawBaseDelayMs != nil,
             base_delay_ms: rawBaseDelayMs ?? 0,
             has_max_delay_ms: rawMaxDelayMs != nil,

@@ -136,7 +136,7 @@ pub struct PlayerFfiDownloadExportCallbacks {
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PlayerFfiBufferingPolicy {
-    pub preset: PlayerFfiBufferingPreset,
+    pub preset: u32,
     pub has_min_buffer_ms: bool,
     pub min_buffer_ms: u64,
     pub has_max_buffer_ms: bool,
@@ -158,13 +158,13 @@ pub struct PlayerFfiRetryPolicy {
     pub has_max_delay_ms: bool,
     pub max_delay_ms: u64,
     pub has_backoff: bool,
-    pub backoff: PlayerFfiRetryBackoff,
+    pub backoff: u32,
 }
 
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PlayerFfiCachePolicy {
-    pub preset: PlayerFfiCachePreset,
+    pub preset: u32,
     pub has_max_memory_bytes: bool,
     pub max_memory_bytes: u64,
     pub has_max_disk_bytes: bool,
@@ -204,14 +204,14 @@ pub struct PlayerFfiResolvedPreloadBudgetPolicy {
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PlayerFfiTrackSelection {
-    pub mode: PlayerFfiTrackSelectionMode,
+    pub mode: u32,
     pub track_id: *mut c_char,
 }
 
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PlayerFfiAbrPolicy {
-    pub mode: PlayerFfiAbrMode,
+    pub mode: u32,
     pub track_id: *mut c_char,
     pub has_max_bit_rate: bool,
     pub max_bit_rate: u64,
@@ -289,11 +289,11 @@ pub enum PlayerFfiPreloadTaskStatus {
 #[derive(Debug, Default)]
 pub struct PlayerFfiPreloadCandidate {
     pub source_uri: *const c_char,
-    pub scope_kind: PlayerFfiPreloadScopeKind,
+    pub scope_kind: u32,
     pub scope_id: *const c_char,
-    pub candidate_kind: PlayerFfiPreloadCandidateKind,
-    pub selection_hint: PlayerFfiPreloadSelectionHint,
-    pub priority: PlayerFfiPreloadPriority,
+    pub candidate_kind: u32,
+    pub selection_hint: u32,
+    pub priority: u32,
     pub expected_memory_bytes: u64,
     pub expected_disk_bytes: u64,
     pub has_ttl_ms: bool,
@@ -384,8 +384,8 @@ pub struct PlayerFfiPlaylistConfig {
     pub preload_near_visible: u32,
     pub preload_prefetch_only: u32,
     pub auto_advance: bool,
-    pub repeat_mode: PlayerFfiPlaylistRepeatMode,
-    pub failure_strategy: PlayerFfiPlaylistFailureStrategy,
+    pub repeat_mode: u32,
+    pub failure_strategy: u32,
 }
 
 #[repr(C)]
@@ -405,7 +405,7 @@ pub struct PlayerFfiPlaylistQueueItem {
 #[derive(Debug, Default)]
 pub struct PlayerFfiPlaylistViewportHint {
     pub item_id: *const c_char,
-    pub kind: PlayerFfiPlaylistViewportHintKind,
+    pub kind: u32,
     pub order: u32,
 }
 
@@ -468,7 +468,7 @@ pub enum PlayerFfiDownloadStreamKind {
 #[derive(Debug, Default)]
 pub struct PlayerFfiDownloadSource {
     pub source_uri: *mut c_char,
-    pub content_format: PlayerFfiDownloadContentFormat,
+    pub content_format: u32,
     pub manifest_uri: *mut c_char,
     pub header_names: *mut *mut c_char,
     pub header_values: *mut *mut c_char,
@@ -484,7 +484,7 @@ pub struct PlayerFfiDownloadProfile {
     pub selected_track_ids: *mut *mut c_char,
     pub selected_track_ids_len: usize,
     pub has_target_output_format: bool,
-    pub target_output_format: PlayerFfiDownloadOutputFormat,
+    pub target_output_format: u32,
     pub target_directory: *mut c_char,
     pub allow_metered_network: bool,
 }
@@ -530,7 +530,7 @@ pub struct PlayerFfiDownloadSegmentRecord {
 #[derive(Debug, Default)]
 pub struct PlayerFfiDownloadAssetStream {
     pub stream_id: *mut c_char,
-    pub kind: PlayerFfiDownloadStreamKind,
+    pub kind: u32,
     pub language: *mut c_char,
     pub codec: *mut c_char,
     pub label: *mut c_char,
@@ -548,7 +548,7 @@ pub struct PlayerFfiDownloadAssetStream {
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PlayerFfiDownloadAssetIndex {
-    pub content_format: PlayerFfiDownloadContentFormat,
+    pub content_format: u32,
     pub version: *mut c_char,
     pub etag: *mut c_char,
     pub checksum: *mut c_char,
@@ -594,12 +594,12 @@ pub struct PlayerFfiDownloadTask {
     pub asset_id: *mut c_char,
     pub source: PlayerFfiDownloadSource,
     pub profile: PlayerFfiDownloadProfile,
-    pub status: PlayerFfiDownloadTaskStatus,
+    pub status: u32,
     pub progress: PlayerFfiDownloadProgressSnapshot,
     pub asset_index: PlayerFfiDownloadAssetIndex,
     pub has_error: bool,
-    pub error_code: PlayerFfiErrorCode,
-    pub error_category: PlayerFfiErrorCategory,
+    pub error_code: u32,
+    pub error_category: u32,
     pub error_retriable: bool,
     pub error_message: *mut c_char,
 }

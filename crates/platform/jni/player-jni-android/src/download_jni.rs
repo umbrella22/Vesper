@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use jni::errors::{Result as JniResult, ThrowRuntimeExAndDefault};
 use jni::objects::{Global, JClass, JObject, JObjectArray, JString, JValue};
@@ -25,7 +26,86 @@ use crate::{
     run_jni_entry, u64_to_jlong_saturating,
 };
 
-type AndroidJniDownloadSession = Arc<Mutex<AndroidDownloadBridgeSession>>;
+const EXPORT_CALLBACK_QUEUE_CAPACITY: usize = 32;
+const EXPORT_CALLBACK_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
+
+struct PersistentBoundedWorker<M> {
+    sender: Mutex<Option<mpsc::SyncSender<M>>>,
+    finished: Mutex<mpsc::Receiver<()>>,
+    join: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl<M: Send + 'static> PersistentBoundedWorker<M> {
+    fn spawn(
+        name: &str,
+        capacity: usize,
+        run: impl FnOnce(mpsc::Receiver<M>) + Send + 'static,
+    ) -> std::io::Result<Self> {
+        let (sender, receiver) = mpsc::sync_channel(capacity.max(1));
+        let (finished_tx, finished_rx) = mpsc::sync_channel(1);
+        let join = std::thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(move || {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(receiver)));
+                let _ = finished_tx.send(());
+            })?;
+        Ok(Self {
+            sender: Mutex::new(Some(sender)),
+            finished: Mutex::new(finished_rx),
+            join: Mutex::new(Some(join)),
+        })
+    }
+
+    fn try_send(&self, message: M) -> Result<(), mpsc::TrySendError<M>> {
+        let sender = lock_or_recover(&self.sender).clone();
+        match sender {
+            Some(sender) => sender.try_send(message),
+            None => Err(mpsc::TrySendError::Disconnected(message)),
+        }
+    }
+
+    fn send_timeout(&self, message: M, timeout: Duration) -> Result<(), M> {
+        let deadline = Instant::now() + timeout;
+        let mut pending = message;
+        loop {
+            match self.try_send(pending) {
+                Ok(()) => return Ok(()),
+                Err(mpsc::TrySendError::Disconnected(message)) => return Err(message),
+                Err(mpsc::TrySendError::Full(message)) => {
+                    pending = message;
+                    if Instant::now() >= deadline {
+                        return Err(pending);
+                    }
+                    std::thread::park_timeout(
+                        deadline
+                            .saturating_duration_since(Instant::now())
+                            .min(Duration::from_millis(5)),
+                    );
+                }
+            }
+        }
+    }
+}
+
+impl<M> Drop for PersistentBoundedWorker<M> {
+    fn drop(&mut self) {
+        lock_or_recover(&self.sender).take();
+        let finished = lock_or_recover(&self.finished)
+            .recv_timeout(EXPORT_CALLBACK_WAIT_TIMEOUT)
+            .is_ok();
+        let join = lock_or_recover(&self.join).take();
+        if finished && let Some(join) = join {
+            let _ = join.join();
+        }
+    }
+}
+
+struct AndroidJniDownloadSession {
+    bridge: Mutex<AndroidDownloadBridgeSession>,
+    export_worker: Arc<JniDownloadExportCallbackWorker>,
+}
+
+type SharedAndroidJniDownloadSession = Arc<AndroidJniDownloadSession>;
 
 #[derive(Debug)]
 struct AndroidDownloadSessionConfig {
@@ -35,109 +115,137 @@ struct AndroidDownloadSessionConfig {
 }
 
 struct JniDownloadExportProgress {
-    java_vm: JavaVM,
+    worker: Arc<JniDownloadExportCallbackWorker>,
     callback: Option<Arc<Global<JObject<'static>>>>,
 }
 
-impl JniDownloadExportProgress {
-    /// Runs the supplied Java callback invocation on a freshly spawned worker
-    /// thread and returns its result via a oneshot channel.
-    ///
-    /// `export_task_output` is driven while the per-session `Mutex` is held by
-    /// the calling (runtime-dispatcher) thread. If the host's Java callback
-    /// re-enters the same download session through another JNI method, that
-    /// call would route through `runBlocking(runtimeDispatcher)` on the very
-    /// thread we are blocking here — a guaranteed self-deadlock. Off-loading
-    /// the Java upcall to a separate thread leaves the runtime-dispatcher
-    /// thread's run-loop free to service that re-entrant call, while still
-    /// preserving the synchronous cancel/progress contract expected by
-    /// `ProcessorProgress`.
-    fn invoke_on_worker_thread<R: Send + 'static>(
-        &self,
-        run: impl FnOnce(&JavaVM, &Global<JObject<'static>>) -> R + Send + 'static,
-    ) -> Option<R> {
-        let (tx, rx) = mpsc::channel::<std::thread::Result<R>>();
-        let java_vm = self.java_vm.clone();
-        let callback = self.callback.clone()?;
-        std::thread::Builder::new()
-            .name("vesper-jni-export-cb".to_owned())
-            .spawn(move || {
-                // Catch panics from the Java upcall (e.g. an unexpected return
-                // type, or a Java `Error` propagated through JNI). Without this
-                // the worker thread dies silently and the export thread would
-                // observe only a disconnected channel — debugging "export ran
-                // to completion with no cancellation" would be impossible.
-                // Print to stderr (Android routes stderr to logcat) so the
-                // failure is observable without pulling in a logging crate.
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run(&java_vm, callback.as_ref())
-                }));
-                if let Err(ref payload) = result {
-                    let message = payload
-                        .downcast_ref::<&'static str>()
-                        .copied()
-                        .map(|s| s.to_owned())
-                        .or_else(|| {
-                            payload
-                                .downcast_ref::<String>()
-                                .map(|s| s.as_str().to_owned())
-                        })
-                        .map(|m| format!("vesper export progress worker panicked: {m}"))
-                        .unwrap_or_else(|| "vesper export progress worker panicked".to_owned());
-                    eprintln!("{message}");
+enum JniDownloadExportCallbackRequest {
+    Progress {
+        callback: Arc<Global<JObject<'static>>>,
+        ratio: f32,
+    },
+    IsCancelled {
+        callback: Arc<Global<JObject<'static>>>,
+        reply: mpsc::SyncSender<bool>,
+    },
+    Barrier {
+        reply: mpsc::SyncSender<()>,
+    },
+}
+
+struct JniDownloadExportCallbackWorker {
+    worker: PersistentBoundedWorker<JniDownloadExportCallbackRequest>,
+}
+
+impl JniDownloadExportCallbackWorker {
+    fn new(java_vm: JavaVM) -> Result<Self, String> {
+        let worker = PersistentBoundedWorker::spawn(
+            "vesper-jni-export-cb",
+            EXPORT_CALLBACK_QUEUE_CAPACITY,
+            move |receiver| {
+                let result: JniResult<()> = java_vm.attach_current_thread(|env| {
+                    while let Ok(request) = receiver.recv() {
+                        match request {
+                            JniDownloadExportCallbackRequest::Progress { callback, ratio } => {
+                                if env
+                                    .call_method(
+                                        callback.as_obj(),
+                                        jni_name("onProgress"),
+                                        method_sig("(F)V").method_signature(),
+                                        &[JValue::Float(ratio)],
+                                    )
+                                    .is_err()
+                                {
+                                    let _ = env.exception_clear();
+                                }
+                            }
+                            JniDownloadExportCallbackRequest::IsCancelled { callback, reply } => {
+                                let cancelled = env
+                                    .call_method(
+                                        callback.as_obj(),
+                                        jni_name("isCancelled"),
+                                        method_sig("()Z").method_signature(),
+                                        &[],
+                                    )
+                                    .and_then(|value| value.z())
+                                    .unwrap_or_else(|_| {
+                                        let _ = env.exception_clear();
+                                        true
+                                    });
+                                let _ = reply.send(cancelled);
+                            }
+                            JniDownloadExportCallbackRequest::Barrier { reply } => {
+                                let _ = reply.send(());
+                            }
+                        }
+                    }
+                    Ok(())
+                });
+                if let Err(error) = result {
+                    eprintln!("vesper export progress worker failed: {error}");
                 }
-                let _ = tx.send(result);
-            })
-            .ok()?;
-        // A send-side panic (or spawn failure) disconnects the channel and
-        // `recv()` returns `Err`; `.ok()?` then yields `None`, which each
-        // caller interprets as a benign "no value / not cancelled" outcome.
-        rx.recv().ok()?.ok()
+            },
+        )
+        .map_err(|error| format!("failed to start Android export callback worker: {error}"))?;
+        Ok(Self { worker })
+    }
+
+    fn on_progress(&self, callback: Arc<Global<JObject<'static>>>, ratio: f32) {
+        let _ = self
+            .worker
+            .try_send(JniDownloadExportCallbackRequest::Progress { callback, ratio });
+    }
+
+    fn is_cancelled(&self, callback: Arc<Global<JObject<'static>>>) -> bool {
+        let (reply, response) = mpsc::sync_channel(1);
+        if self
+            .worker
+            .send_timeout(
+                JniDownloadExportCallbackRequest::IsCancelled { callback, reply },
+                EXPORT_CALLBACK_WAIT_TIMEOUT,
+            )
+            .is_err()
+        {
+            return true;
+        }
+        response
+            .recv_timeout(EXPORT_CALLBACK_WAIT_TIMEOUT)
+            .unwrap_or(true)
+    }
+
+    fn flush(&self) {
+        let (reply, response) = mpsc::sync_channel(1);
+        if self
+            .worker
+            .send_timeout(
+                JniDownloadExportCallbackRequest::Barrier { reply },
+                EXPORT_CALLBACK_WAIT_TIMEOUT,
+            )
+            .is_ok()
+        {
+            let _ = response.recv_timeout(EXPORT_CALLBACK_WAIT_TIMEOUT);
+        }
     }
 }
 
 impl ProcessorProgress for JniDownloadExportProgress {
     fn on_progress(&self, ratio: f32) {
-        // Route through the shared worker (see invoke_on_worker_thread) so we
-        // don't spawn a fresh OS thread on every muxer progress tick. Progress
-        // is best-effort: if the worker thread is gone (panic / shutdown) we
-        // silently drop the tick, which is safe — the export continues and the
-        // next tick reuses the same single-offload model.
-        let _ = self.invoke_on_worker_thread(move |java_vm, callback| {
-            let _: JniResult<()> = java_vm.attach_current_thread_for_scope(|env| {
-                env.call_method(
-                    callback.as_obj(),
-                    jni_name("onProgress"),
-                    method_sig("(F)V").method_signature(),
-                    &[JValue::Float(ratio)],
-                )?;
-                Ok(())
-            });
-        });
+        if let Some(callback) = self.callback.clone() {
+            self.worker.on_progress(callback, ratio);
+        }
     }
 
     fn is_cancelled(&self) -> bool {
-        self.invoke_on_worker_thread(|java_vm, callback| {
-            java_vm
-                .attach_current_thread_for_scope(|env| {
-                    let value = env.call_method(
-                        callback.as_obj(),
-                        jni_name("isCancelled"),
-                        method_sig("()Z").method_signature(),
-                        &[],
-                    )?;
-                    value.z()
-                })
-                .unwrap_or(false)
-        })
-        .unwrap_or(false)
+        self.callback
+            .clone()
+            .is_some_and(|callback| self.worker.is_cancelled(callback))
     }
 }
 
-static DOWNLOAD_SESSIONS: OnceLock<Mutex<HandleRegistry<AndroidJniDownloadSession>>> =
+static DOWNLOAD_SESSIONS: OnceLock<Mutex<HandleRegistry<SharedAndroidJniDownloadSession>>> =
     OnceLock::new();
 
-fn download_sessions() -> &'static Mutex<HandleRegistry<AndroidJniDownloadSession>> {
+fn download_sessions() -> &'static Mutex<HandleRegistry<SharedAndroidJniDownloadSession>> {
     DOWNLOAD_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
@@ -145,25 +253,27 @@ fn invalid_download_handle_error() -> &'static str {
     "invalid android JNI download session handle"
 }
 
+fn download_session(env: &mut Env<'_>, handle: jlong) -> Option<SharedAndroidJniDownloadSession> {
+    let guard = lock_or_recover(download_sessions());
+    let Some(session) = guard.get(handle).cloned() else {
+        let _ = env.throw_new(
+            jni_name("java/lang/IllegalArgumentException"),
+            jni_name(invalid_download_handle_error()),
+        );
+        return None;
+    };
+    Some(session)
+}
+
 fn with_download_session_mut<R>(
     env: &mut Env<'_>,
     handle: jlong,
     f: impl FnOnce(&mut AndroidDownloadBridgeSession) -> R,
 ) -> Option<R> {
-    let session = {
-        let guard = lock_or_recover(download_sessions());
-        let Some(session) = guard.get(handle).cloned() else {
-            let _ = env.throw_new(
-                jni_name("java/lang/IllegalArgumentException"),
-                jni_name(invalid_download_handle_error()),
-            );
-            return None;
-        };
-        session
-    };
+    let session = download_session(env, handle)?;
 
     // Do not call back into Java while the session lock is held; the same handle could reenter.
-    let mut session = lock_or_recover(session.as_ref());
+    let mut session = lock_or_recover(&session.bridge);
     Some(f(&mut session))
 }
 
@@ -172,32 +282,28 @@ fn with_download_session<R>(
     handle: jlong,
     f: impl FnOnce(&AndroidDownloadBridgeSession) -> R,
 ) -> Option<R> {
-    let session = {
-        let guard = lock_or_recover(download_sessions());
-        let Some(session) = guard.get(handle).cloned() else {
-            let _ = env.throw_new(
-                jni_name("java/lang/IllegalArgumentException"),
-                jni_name(invalid_download_handle_error()),
-            );
-            return None;
-        };
-        session
-    };
+    let session = download_session(env, handle)?;
 
     // Read-only paths still hold the session lock; closures must not trigger reentrant JNI callbacks.
-    let session = lock_or_recover(session.as_ref());
+    let session = lock_or_recover(&session.bridge);
     Some(f(&session))
 }
 
-fn new_download_session(config: AndroidDownloadSessionConfig) -> Result<jlong, String> {
-    let session = Arc::new(Mutex::new(
-        AndroidDownloadBridgeSession::new_with_plugin_library_paths(
-            config.auto_start,
-            config.run_post_processors_on_completion,
-            config.plugin_library_paths,
-        )
-        .map_err(|error| error.to_string())?,
-    ));
+fn new_download_session(
+    config: AndroidDownloadSessionConfig,
+    java_vm: JavaVM,
+) -> Result<jlong, String> {
+    let bridge = AndroidDownloadBridgeSession::new_with_plugin_library_paths(
+        config.auto_start,
+        config.run_post_processors_on_completion,
+        config.plugin_library_paths,
+    )
+    .map_err(|error| error.to_string())?;
+    let export_worker = Arc::new(JniDownloadExportCallbackWorker::new(java_vm)?);
+    let session = Arc::new(AndroidJniDownloadSession {
+        bridge: Mutex::new(bridge),
+        export_worker,
+    });
     let mut guard = lock_or_recover(download_sessions());
     let handle = guard.insert(session);
     if handle == 0 {
@@ -1196,7 +1302,8 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
         unowned_env
             .with_env(|env| -> JniResult<jlong> {
                 let config = download_config_from_java(env, config)?;
-                match new_download_session(config) {
+                let java_vm = env.get_java_vm()?;
+                match new_download_session(config, java_vm) {
                     Ok(handle) => Ok(handle),
                     Err(message) => {
                         env.throw_new(
@@ -1509,22 +1616,27 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
         unowned_env
             .with_env(|env| -> JniResult<jboolean> {
                 let output_path = output_path.try_to_string(env)?;
-                let java_vm = env.get_java_vm()?;
                 let callback = if progress_callback.is_null() {
                     None
                 } else {
                     Some(Arc::new(env.new_global_ref(progress_callback)?))
                 };
-                let progress = JniDownloadExportProgress { java_vm, callback };
-                let Some(result) = with_download_session(env, session_handle, |session| {
-                    session.export_task_output(
-                        player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
-                        Some(PathBuf::from(output_path)),
-                        &progress,
-                    )
-                }) else {
+                let Some(session) = download_session(env, session_handle) else {
                     return Ok(false as jboolean);
                 };
+                let progress = JniDownloadExportProgress {
+                    worker: session.export_worker.clone(),
+                    callback,
+                };
+                let export_plan = {
+                    let session = lock_or_recover(&session.bridge);
+                    session.prepare_export_task_output(
+                        player_runtime::DownloadTaskId::from_raw(task_id.max(0) as u64),
+                        Some(PathBuf::from(output_path)),
+                    )
+                };
+                let result = export_plan.and_then(|plan| plan.execute(&progress));
+                progress.worker.flush();
                 match result {
                     Ok(_) => Ok(true as jboolean),
                     Err(error) => {
@@ -1691,4 +1803,44 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
             })
             .resolve::<ThrowRuntimeExAndDefault>()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::PersistentBoundedWorker;
+
+    #[test]
+    fn persistent_worker_reuses_one_thread_and_bounds_queued_work() {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (processed_tx, processed_rx) = mpsc::channel();
+        let worker = PersistentBoundedWorker::spawn("vesper-jni-worker-test", 1, move |receiver| {
+            while let Ok(value) = receiver.recv() {
+                let thread_id = std::thread::current().id();
+                if value == 1 {
+                    entered_tx.send(()).expect("entered");
+                    release_rx.recv().expect("release");
+                }
+                processed_tx.send((value, thread_id)).expect("processed");
+            }
+        })
+        .expect("worker");
+
+        worker.try_send(1).expect("running task");
+        entered_rx.recv().expect("worker entered first task");
+        worker.try_send(2).expect("queued task");
+        assert!(matches!(
+            worker.try_send(3),
+            Err(mpsc::TrySendError::Full(3))
+        ));
+        release_tx.send(()).expect("release worker");
+
+        let first = processed_rx.recv().expect("first result");
+        let second = processed_rx.recv().expect("second result");
+        assert_eq!((first.0, second.0), (1, 2));
+        assert_eq!(first.1, second.1);
+        drop(worker);
+    }
 }

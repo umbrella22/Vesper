@@ -4,14 +4,16 @@ use std::ptr;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use ffmpeg_next as ffmpeg;
 use player_model::{MediaSource, MediaSourceKind, MediaSourceProtocol};
 use tracing::info;
+use url::Url;
 
 use crate::input::FfmpegInputInterrupt;
 
 const MAX_RESOLVED_HLS_SOURCE_CACHE_ENTRIES: usize = 32;
+pub(crate) const MAX_REMOTE_HLS_MANIFEST_BYTES: usize = 512 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HlsAudioRendition {
@@ -100,6 +102,9 @@ fn resolve_remote_hls_sources(
     manifest_uri: &str,
     interrupt_flag: Option<Arc<AtomicBool>>,
 ) -> Result<ResolvedRemoteHlsSources> {
+    let manifest_url = parse_remote_hls_http_url(manifest_uri)
+        .with_context(|| format!("invalid remote HLS manifest URI: {manifest_uri}"))?;
+    let manifest_uri = manifest_url.as_str();
     if let Some(cached) = resolved_hls_source_cache()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -109,9 +114,9 @@ fn resolve_remote_hls_sources(
         return Ok(cached);
     }
 
-    let manifest_text = fetch_text_resource_via_ffmpeg(manifest_uri, interrupt_flag)
+    let manifest_text = fetch_text_resource_via_ffmpeg(&manifest_url, interrupt_flag)
         .with_context(|| format!("failed to fetch remote HLS manifest: {manifest_uri}"))?;
-    let resolved = resolve_hls_master_manifest_sources(manifest_uri, &manifest_text);
+    let resolved = resolve_hls_master_manifest_sources(manifest_uri, &manifest_text)?;
 
     let mut cache = resolved_hls_source_cache()
         .lock()
@@ -132,18 +137,19 @@ fn resolved_hls_source_cache() -> &'static Mutex<HashMap<String, ResolvedRemoteH
 pub(crate) fn resolve_hls_master_manifest_sources(
     manifest_uri: &str,
     manifest_text: &str,
-) -> ResolvedRemoteHlsSources {
-    ResolvedRemoteHlsSources {
-        audio_rendition_uri: select_hls_audio_rendition_uri(manifest_uri, manifest_text),
-        video_variant_uri: select_hls_video_variant_uri(manifest_uri, manifest_text),
-    }
+) -> Result<ResolvedRemoteHlsSources> {
+    Ok(ResolvedRemoteHlsSources {
+        audio_rendition_uri: select_hls_audio_rendition_uri(manifest_uri, manifest_text)?,
+        video_variant_uri: select_hls_video_variant_uri(manifest_uri, manifest_text)?,
+    })
 }
 
 fn fetch_text_resource_via_ffmpeg(
-    uri: &str,
+    uri: &Url,
     interrupt_flag: Option<Arc<AtomicBool>>,
 ) -> Result<String> {
-    let uri_cstr = CString::new(uri).context("resource URI contained an interior NUL byte")?;
+    let uri_cstr =
+        CString::new(uri.as_str()).context("resource URI contained an interior NUL byte")?;
     let interrupt = interrupt_flag.map(FfmpegInputInterrupt::new);
     let interrupt_callback = interrupt.as_ref().map(FfmpegInputInterrupt::callback);
     let interrupt_ptr = interrupt_callback
@@ -192,7 +198,12 @@ fn fetch_text_resource_via_ffmpeg(
                     .context(format!("failed to read FFmpeg IO resource {uri}")));
             }
 
-            bytes.extend_from_slice(&buffer[..read_result as usize]);
+            if let Err(error) =
+                append_remote_hls_manifest_chunk(&mut bytes, &buffer[..read_result as usize])
+            {
+                ffmpeg::ffi::avio_closep(&mut io_context);
+                return Err(error);
+            }
         }
 
         ffmpeg::ffi::avio_closep(&mut io_context);
@@ -200,13 +211,27 @@ fn fetch_text_resource_via_ffmpeg(
     }
 }
 
+pub(crate) fn append_remote_hls_manifest_chunk(bytes: &mut Vec<u8>, chunk: &[u8]) -> Result<()> {
+    let next_len = bytes
+        .len()
+        .checked_add(chunk.len())
+        .ok_or_else(|| anyhow!("remote HLS manifest byte count overflowed"))?;
+    if next_len > MAX_REMOTE_HLS_MANIFEST_BYTES {
+        return Err(anyhow!(
+            "remote HLS manifest exceeds the {MAX_REMOTE_HLS_MANIFEST_BYTES}-byte limit"
+        ));
+    }
+    bytes.extend_from_slice(chunk);
+    Ok(())
+}
+
 pub(crate) fn select_hls_audio_rendition_uri(
     manifest_uri: &str,
     manifest_text: &str,
-) -> Option<String> {
+) -> Result<Option<String>> {
     let (audio_renditions, variants) = parse_hls_master_manifest(manifest_text);
     if audio_renditions.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let preferred_group = variants
@@ -214,18 +239,25 @@ pub(crate) fn select_hls_audio_rendition_uri(
         .and_then(|variant| variant.audio_group_id.as_deref());
     let selected = preferred_group
         .and_then(|group_id| choose_hls_audio_rendition(&audio_renditions, Some(group_id)))
-        .or_else(|| choose_hls_audio_rendition(&audio_renditions, None))?;
+        .or_else(|| choose_hls_audio_rendition(&audio_renditions, None))
+        .ok_or_else(|| anyhow!("remote HLS manifest has no selectable audio rendition"))?;
 
     resolve_uri_relative_to(manifest_uri, &selected.uri)
+        .map(Some)
+        .ok_or_else(|| anyhow!("remote HLS audio rendition URI must resolve to HTTP(S)"))
 }
 
 pub(crate) fn select_hls_video_variant_uri(
     manifest_uri: &str,
     manifest_text: &str,
-) -> Option<String> {
+) -> Result<Option<String>> {
     let (_, variants) = parse_hls_master_manifest(manifest_text);
-    let selected = variants.first()?;
+    let Some(selected) = variants.first() else {
+        return Ok(None);
+    };
     resolve_uri_relative_to(manifest_uri, &selected.uri)
+        .map(Some)
+        .ok_or_else(|| anyhow!("remote HLS video variant URI must resolve to HTTP(S)"))
 }
 
 pub(crate) fn parse_hls_master_manifest(
@@ -346,61 +378,19 @@ pub(crate) fn resolve_uri_relative_to(base_uri: &str, reference: &str) -> Option
     if reference.is_empty() {
         return None;
     }
-
-    if reference.contains("://") {
-        return Some(reference.to_owned());
-    }
-
-    if reference.starts_with("//") {
-        let (scheme, _) = base_uri.split_once("://")?;
-        return Some(format!("{scheme}:{reference}"));
-    }
-
-    let base_uri = base_uri
-        .split_once('#')
-        .map(|(value, _)| value)
-        .unwrap_or(base_uri);
-    let base_uri = base_uri
-        .split_once('?')
-        .map(|(value, _)| value)
-        .unwrap_or(base_uri);
-    let (scheme, rest) = base_uri.split_once("://")?;
-    let (authority, raw_path) = rest.split_once('/').unwrap_or((rest, ""));
-    let base_path = format!("/{}", raw_path);
-    let joined_path = if reference.starts_with('/') {
-        reference.to_owned()
-    } else {
-        let base_dir = base_path
-            .rsplit_once('/')
-            .map(|(dir, _)| dir)
-            .filter(|dir| !dir.is_empty())
-            .unwrap_or("/");
-        if base_dir.ends_with('/') {
-            format!("{base_dir}{reference}")
-        } else {
-            format!("{base_dir}/{reference}")
-        }
-    };
-    let normalized_path = normalize_url_path(&joined_path);
-
-    Some(format!("{scheme}://{authority}{normalized_path}"))
+    let base_url = parse_remote_hls_http_url(base_uri).ok()?;
+    let resolved = base_url.join(reference).ok()?;
+    is_remote_hls_http_url(&resolved).then(|| resolved.into())
 }
 
-fn normalize_url_path(path: &str) -> String {
-    let mut segments = Vec::new();
-    for segment in path.split('/') {
-        match segment {
-            "" | "." => {}
-            ".." => {
-                segments.pop();
-            }
-            _ => segments.push(segment),
-        }
+fn parse_remote_hls_http_url(value: &str) -> Result<Url> {
+    let url = Url::parse(value).with_context(|| format!("invalid remote HLS URI: {value}"))?;
+    if !is_remote_hls_http_url(&url) {
+        return Err(anyhow!("remote HLS URI must use HTTP(S): {value}"));
     }
+    Ok(url)
+}
 
-    if segments.is_empty() {
-        "/".to_owned()
-    } else {
-        format!("/{}", segments.join("/"))
-    }
+fn is_remote_hls_http_url(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
 }

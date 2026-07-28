@@ -31,7 +31,12 @@ internal fun VesperNativePlayerBridge.openNativeFramePipelineAfterSystemStartup(
                         if (!isCurrentSourceLoad(epoch)) {
                             return@runCatching openStatus to null
                         }
-                        openStatus to advanceNativeFramePipelineOnce()
+                        val firstAdvance = advanceNativeFramePipelineOnce()
+                        registerAdvancedNativeFrameFromRuntime(
+                            nativeFramePipelinePumpEpoch,
+                            firstAdvance,
+                        )
+                        openStatus to firstAdvance
                     }
                 if (!isCurrentSourceLoad(epoch)) {
                     discardStaleNativeFramePipelineOpenResult(result)
@@ -80,14 +85,8 @@ internal fun VesperNativePlayerBridge.applyNativeFramePipelineOpenResult(
 }
 
 internal fun VesperNativePlayerBridge.discardStaleNativeFramePipelineOpenResult(
-    result: Result<Pair<Map<String, Any?>, Map<String, Any?>?>>,
+    _result: Result<Pair<Map<String, Any?>, Map<String, Any?>?>>,
 ) {
-    result.getOrNull()?.second?.nativeFramePipelineFrameHandle()?.let { handle ->
-        runCatching { releaseStaleNativeFramePipelineFrame(handle) }
-            .onFailure { error ->
-                Log.w(NATIVE_PLAYER_BRIDGE_TAG, "stale native-frame pipeline frame release failed", error)
-            }
-    }
     runCatching {
         releasePendingTimedNativeFrameFromRuntime(presented = false)
         bindings.closeNativeFramePipeline()

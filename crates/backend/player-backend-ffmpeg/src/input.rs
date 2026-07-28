@@ -240,6 +240,8 @@ pub(crate) fn input_open_tuning_options(
     match (profile, purpose) {
         (InputOpenProfile::Default, _) => &[],
         (InputOpenProfile::RemoteHls, InputOpenPurpose::AudioDecode) => &[
+            ("protocol_whitelist", "http,https,tcp,tls,crypto"),
+            ("protocol_blacklist", "file,concat,subfile"),
             ("http_multiple", "0"),
             ("probesize", "524288"),
             ("formatprobesize", "524288"),
@@ -249,6 +251,8 @@ pub(crate) fn input_open_tuning_options(
             ("allowed_media_types", "audio"),
         ],
         (InputOpenProfile::RemoteHls, _) => &[
+            ("protocol_whitelist", "http,https,tcp,tls,crypto"),
+            ("protocol_blacklist", "file,concat,subfile"),
             ("http_multiple", "0"),
             ("probesize", "524288"),
             ("formatprobesize", "524288"),
@@ -341,10 +345,10 @@ pub(crate) fn input_open_tuning_summary(
     match (profile, purpose) {
         (InputOpenProfile::Default, _) => "default",
         (InputOpenProfile::RemoteHls, InputOpenPurpose::AudioDecode) => {
-            "http_multiple=0,probesize=524288,formatprobesize=524288,analyzeduration=2000000,fpsprobesize=4,rw_timeout=15000000,allowed_media_types=audio"
+            "protocol_whitelist=http,https,tcp,tls,crypto,protocol_blacklist=file,concat,subfile,http_multiple=0,probesize=524288,formatprobesize=524288,analyzeduration=2000000,fpsprobesize=4,rw_timeout=15000000,allowed_media_types=audio"
         }
         (InputOpenProfile::RemoteHls, _) => {
-            "http_multiple=0,probesize=524288,formatprobesize=524288,analyzeduration=2000000,fpsprobesize=4,rw_timeout=15000000"
+            "protocol_whitelist=http,https,tcp,tls,crypto,protocol_blacklist=file,concat,subfile,http_multiple=0,probesize=524288,formatprobesize=524288,analyzeduration=2000000,fpsprobesize=4,rw_timeout=15000000"
         }
     }
 }

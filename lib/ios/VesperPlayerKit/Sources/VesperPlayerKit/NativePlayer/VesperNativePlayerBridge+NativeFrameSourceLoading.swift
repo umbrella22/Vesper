@@ -61,7 +61,7 @@ extension VesperNativePlayerBridge {
     }
 
     func startNativeFrameSessionPlayback(_ session: VesperNativeFramePipelineSession) {
-        session.play(rate: desiredPlaybackRate)
+        guard session.play(rate: desiredPlaybackRate) else { return }
         updateState {
             PlayerHostUiState(
                 title: $0.title,

@@ -41,19 +41,7 @@ extension VesperNativePlayerBridge {
             recordBenchmark("initialize_native_frame_already_active")
             if pendingAutoPlay {
                 pendingAutoPlay = false
-                nativeSession.play(rate: desiredPlaybackRate)
-                updateState {
-                    PlayerHostUiState(
-                        title: $0.title,
-                        subtitle: $0.subtitle,
-                        sourceLabel: $0.sourceLabel,
-                        playbackState: .playing,
-                        playbackRate: $0.playbackRate,
-                        isBuffering: false,
-                        isInterrupted: $0.isInterrupted,
-                        timeline: $0.timeline
-                    )
-                }
+                startNativeFrameSessionPlayback(nativeSession)
             }
             return
         }

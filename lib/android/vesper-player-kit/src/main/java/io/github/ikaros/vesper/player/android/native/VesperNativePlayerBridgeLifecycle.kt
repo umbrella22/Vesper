@@ -252,7 +252,6 @@ private fun VesperNativePlayerBridge.prepareSourceLoadOnMain(
     closeNativeFramePipelineOnRuntime()
     nativeFramePipelineOpenStatus = null
     nativeFramePipelineLastStatus = null
-    clearPendingTimedNativeFrameFromRuntime()
     nativeFramePipelinePlaybackRequested = false
     resetNativeFramePipelineRuntimeMarkers()
     val nativeFrameDecision = evaluateNativeFramePipelineRoute()
@@ -483,7 +482,6 @@ private fun VesperNativePlayerBridge.disposeNativeBridgeOnMain() {
     clearTrackState()
     nativeFramePipelineOpenStatus = null
     nativeFramePipelineLastStatus = null
-    clearPendingTimedNativeFrameFromRuntime()
     nativeFramePipelinePlaybackRequested = false
     resetNativeFramePipelineRuntimeMarkers()
     bindings.clearSystemPlayback()
@@ -583,7 +581,6 @@ private fun VesperNativePlayerBridge.beginNativeSourceSelectionOnMain(
     closeNativeFramePipelineOnRuntime()
     nativeFramePipelineOpenStatus = null
     nativeFramePipelineLastStatus = null
-    clearPendingTimedNativeFrameFromRuntime()
     resetNativeFramePipelineRuntimeMarkers()
     currentSource = source
     pendingAutoPlay = true

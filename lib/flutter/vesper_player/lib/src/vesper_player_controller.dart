@@ -69,6 +69,13 @@ class VesperPlayerController {
     return VesperPlayerPlatform.instance.probePlaybackCapability(request);
   }
 
+  Future<VesperPlaybackCapabilityProbeResult> probeAssociatedPlaybackCapability(
+    VesperPlaybackCapabilityProbeRequest request,
+  ) {
+    _ensureActive();
+    return _platform.probePlaybackCapability(request, playerId: playerId);
+  }
+
   final String playerId;
   final VesperPlayerPlatform _platform;
   List<VesperPluginDiagnostic> _pluginDiagnostics;
@@ -581,7 +588,10 @@ class VesperPlayerController {
 }
 
 bool _shouldRefreshProgress(VesperPlayerSnapshot snapshot) {
-  return snapshot.lastError == null &&
-      (snapshot.playbackState == VesperPlaybackState.playing ||
-          snapshot.isBuffering);
+  if (snapshot.playbackState == VesperPlaybackState.paused ||
+      snapshot.playbackState == VesperPlaybackState.finished) {
+    return false;
+  }
+  return snapshot.playbackState == VesperPlaybackState.playing ||
+      snapshot.isBuffering;
 }

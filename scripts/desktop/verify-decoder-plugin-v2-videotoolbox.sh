@@ -68,7 +68,7 @@ build_frame_processor_plugin() {
 
 resolve_smoke_source() {
   local target_dir="$1"
-  local generated="$target_dir/videotoolbox-smoke-h264.mp4"
+  local generated="$target_dir/videotoolbox-smoke-h264-bframes.mp4"
 
   if [[ -n "$SOURCE_PATH_OVERRIDE" ]]; then
     if [[ ! -f "$SOURCE_PATH_OVERRIDE" ]]; then
@@ -97,12 +97,35 @@ resolve_smoke_source() {
     -f lavfi \
     -i testsrc2=size=320x180:rate=24:duration=2 \
     -c:v libx264 \
-    -profile:v baseline \
+    -profile:v main \
     -level:v 3.1 \
+    -bf 3 \
+    -g 48 \
+    -x264-params b-adapt=0:keyint=48:min-keyint=48:scenecut=0 \
     -pix_fmt yuv420p \
     -movflags +faststart \
     "$generated"
   printf '%s\n' "$generated"
+}
+
+require_b_frame_source() {
+  local source_path="$1"
+  local has_b_frames
+  if ! command -v ffprobe >/dev/null 2>&1; then
+    echo "ffprobe is required to validate the VideoToolbox B-frame smoke source." >&2
+    exit 1
+  fi
+  has_b_frames="$(ffprobe -v error -select_streams v:0 -show_entries stream=has_b_frames -of default=nw=1:nk=1 "$source_path")"
+  case "$has_b_frames" in
+    ''|*[!0-9]*)
+      echo "Could not read has_b_frames from VideoToolbox smoke source: $source_path" >&2
+      exit 1
+      ;;
+  esac
+  if [[ "$has_b_frames" -le 0 ]]; then
+    echo "VideoToolbox smoke source must contain B-frames: $source_path" >&2
+    exit 1
+  fi
 }
 
 run_loader_test() {
@@ -352,6 +375,7 @@ main() {
   echo "Using VideoToolbox decoder plugin: $VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH"
 
   smoke_source="$(resolve_smoke_source "$target_dir")"
+  require_b_frame_source "$smoke_source"
   export VESPER_DECODER_VIDEOTOOLBOX_SOURCE="$smoke_source"
   echo "Using VideoToolbox smoke source: $VESPER_DECODER_VIDEOTOOLBOX_SOURCE"
 

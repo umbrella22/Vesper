@@ -70,8 +70,8 @@ pub(crate) use decoder::DynamicNativeDecoderPluginFactory;
 pub(crate) use dynamic_api::{
     CheckedBenchmarkSinkApi, CheckedFrameProcessorPluginApi, CheckedNativeDecoderPluginApi,
     CheckedPipelineEventHookApi, CheckedPostDownloadProcessorApi,
-    CheckedSourceNormalizerPacketPluginApi, CheckedSourceNormalizerResourcePluginApi, FreeBytesFn,
-    LibraryHolder, ProcessJsonFn, native_handle_kind_code,
+    CheckedSourceNormalizerPacketPluginApi, CheckedSourceNormalizerResourcePluginApi, DestroyFn,
+    FreeBytesFn, LibraryHolder, ProcessJsonFn, native_handle_kind_code,
 };
 pub(crate) use frame_processor::DynamicFrameProcessorPluginFactory;
 pub(crate) use payload::*;
@@ -79,6 +79,7 @@ pub(crate) use pipeline_event::DynamicPipelineEventHook;
 pub(crate) use post_download::DynamicPostDownloadProcessor;
 pub(crate) use source_normalizer::{
     DynamicSourceNormalizerPacketPluginFactory, DynamicSourceNormalizerResourcePluginFactory,
+    PluginContextOwner,
 };
 
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {

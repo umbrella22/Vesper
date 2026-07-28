@@ -13,6 +13,22 @@ import org.junit.Test
 
 class VesperExternalPlaybackRelayLifecycleTest {
     @Test
+    fun prepareFailuresAreControllerScoped() {
+        val first = VesperExternalPreparationState()
+        val second = VesperExternalPreparationState()
+        first.lastFailure = VesperExternalPlaybackResult.Unsupported("first controller failure")
+
+        assertEquals(
+            VesperExternalPlaybackResult.Unsupported("first controller failure"),
+            first.lastFailure,
+        )
+        assertEquals(
+            VesperExternalPlaybackResult.Unsupported("No playable external playback source is available."),
+            second.lastFailure,
+        )
+    }
+
+    @Test
     fun replaceActiveRelayTokensInvalidatesPreviousTokensAndKeepsCurrentToken() {
         val tokens = ConcurrentHashMap.newKeySet<String>()
         tokens.add("old-a")

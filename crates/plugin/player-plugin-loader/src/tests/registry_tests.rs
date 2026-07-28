@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn descriptor_rejects_unknown_plugin_kind_before_reading_other_fields() {
+    let descriptor = VesperPluginDescriptor {
+        abi_version: u32::MAX,
+        plugin_kind: 7,
+        plugin_name: std::ptr::without_provenance(1),
+        api: std::ptr::without_provenance(1),
+    };
+
+    let error = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect_err("unknown plugin kind must be rejected");
+
+    assert!(matches!(
+        error,
+        PluginLoadError::UnsupportedPluginKind { raw: 7 }
+    ));
+}
+
+#[test]
 fn plugin_diagnostic_status_wire_names_match_runtime_contract() {
     assert_eq!(PluginDiagnosticStatus::Loaded.wire_name(), "loaded");
     assert_eq!(PluginDiagnosticStatus::LoadFailed.wire_name(), "loadFailed");
@@ -58,7 +76,7 @@ fn plugin_registry_reports_non_decoder_plugin() {
     let api = fixture_processor_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
-        plugin_kind: VesperPluginKind::PostDownloadProcessor,
+        plugin_kind: VesperPluginKind::PostDownloadProcessor as u32,
         plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperPostDownloadProcessorApi).cast(),
     };
@@ -85,7 +103,7 @@ fn plugin_registry_reports_decoder_codec_match() {
     let api = fixture_native_decoder_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::Decoder,
+        plugin_kind: VesperPluginKind::Decoder as u32,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
@@ -124,7 +142,7 @@ fn plugin_registry_reports_decoder_codec_mismatch() {
     let api = fixture_native_decoder_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::Decoder,
+        plugin_kind: VesperPluginKind::Decoder as u32,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
@@ -151,7 +169,7 @@ fn plugin_registry_report_counts_and_best_decoder_are_stable() {
     let api = fixture_native_decoder_api();
     let decoder_descriptor = VesperPluginDescriptor {
         abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::Decoder,
+        plugin_kind: VesperPluginKind::Decoder as u32,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperDecoderPluginApiV5).cast(),
     };
@@ -160,7 +178,7 @@ fn plugin_registry_report_counts_and_best_decoder_are_stable() {
     let processor_api = fixture_processor_api();
     let processor_descriptor = VesperPluginDescriptor {
         abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
-        plugin_kind: VesperPluginKind::PostDownloadProcessor,
+        plugin_kind: VesperPluginKind::PostDownloadProcessor as u32,
         plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&processor_api as *const VesperPostDownloadProcessorApi).cast(),
     };
@@ -222,7 +240,7 @@ fn plugin_registry_prefers_native_decoder_candidates_when_requested() {
     let native_api = fixture_native_decoder_api();
     let native_descriptor = VesperPluginDescriptor {
         abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::Decoder,
+        plugin_kind: VesperPluginKind::Decoder as u32,
         plugin_name: DECODER_NAME.as_ptr().cast::<c_char>(),
         api: (&native_api as *const VesperDecoderPluginApiV5).cast(),
     };

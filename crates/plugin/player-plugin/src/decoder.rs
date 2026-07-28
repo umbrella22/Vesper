@@ -166,6 +166,8 @@ pub struct DecoderSessionConfig {
     pub coded_width: Option<u32>,
     #[serde(default)]
     pub coded_height: Option<u32>,
+    #[serde(default)]
+    pub reorder_depth: Option<u32>,
     pub sample_rate: Option<u32>,
     pub channels: Option<u16>,
     #[serde(default)]
@@ -1173,6 +1175,7 @@ mod tests {
             height: None,
             coded_width: None,
             coded_height: None,
+            reorder_depth: None,
             sample_rate: Some(48_000),
             channels: Some(2),
             channel_layout: Some("stereo".to_owned()),
@@ -1235,6 +1238,7 @@ mod tests {
             height: Some(1_080),
             coded_width: Some(1_920),
             coded_height: Some(1_080),
+            reorder_depth: None,
             sample_rate: None,
             channels: None,
             channel_layout: None,

@@ -15,7 +15,7 @@ public final class VesperSystemPlaybackCoordinator {
     private var interruptionObserver: NSObjectProtocol?
     private var routeChangeObserver: NSObjectProtocol?
     private var wasPlayingBeforeInterruption = false
-    private var audioSessionActive = false
+    private let audioSessionLease = VesperSharedAudioSessionLease()
 
     public init(controller: VesperPlayerController) {
         self.controller = controller
@@ -29,6 +29,17 @@ public final class VesperSystemPlaybackCoordinator {
         }
         if let routeChangeObserver {
             NotificationCenter.default.removeObserver(routeChangeObserver)
+        }
+        let commandTargets = commandTargets
+        let shouldClearNowPlayingInfo = configuration != nil
+        Task { @MainActor in
+            for (command, target) in commandTargets {
+                command.removeTarget(target)
+            }
+            Self.resetRemoteCommandConfiguration()
+            if shouldClearNowPlayingInfo {
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            }
         }
     }
 
@@ -46,6 +57,8 @@ public final class VesperSystemPlaybackCoordinator {
 
         if configuration.backgroundMode == .continueAudio {
             activatePlaybackAudioSession()
+        } else {
+            deactivatePlaybackAudioSessionIfNeeded()
         }
 
         if configuration.showSystemControls {
@@ -80,20 +93,11 @@ public final class VesperSystemPlaybackCoordinator {
     }
 
     private func activatePlaybackAudioSession() {
-        guard !audioSessionActive else {
-            return
-        }
-        if VesperSharedAudioSession.activate(owner: self) {
-            audioSessionActive = true
-        }
+        audioSessionLease.activate()
     }
 
     private func deactivatePlaybackAudioSessionIfNeeded() {
-        guard audioSessionActive else {
-            return
-        }
-        VesperSharedAudioSession.deactivate(owner: self)
-        audioSessionActive = false
+        audioSessionLease.deactivate()
     }
 
     private func registerAudioSessionObservers() {
@@ -248,6 +252,10 @@ public final class VesperSystemPlaybackCoordinator {
         }
         commandTargets.removeAll()
 
+        Self.resetRemoteCommandConfiguration()
+    }
+
+    private static func resetRemoteCommandConfiguration() {
         let commandCenter = MPRemoteCommandCenter.shared()
         commandCenter.playCommand.isEnabled = false
         commandCenter.pauseCommand.isEnabled = false
@@ -258,6 +266,14 @@ public final class VesperSystemPlaybackCoordinator {
         commandCenter.skipBackwardCommand.isEnabled = false
         commandCenter.skipForwardCommand.preferredIntervals = []
         commandCenter.skipBackwardCommand.preferredIntervals = []
+    }
+
+    var registeredRemoteCommandCountForTesting: Int {
+        commandTargets.count
+    }
+
+    var hasActiveAudioSessionLeaseForTesting: Bool {
+        audioSessionLease.isActive
     }
 
     private func updateNowPlayingInfo(uiState explicitUiState: PlayerHostUiState? = nil) {
@@ -331,37 +347,101 @@ public final class VesperSystemPlaybackCoordinator {
 
 @MainActor
 enum VesperSharedAudioSession {
-    private static var activeOwners: Set<ObjectIdentifier> = []
+    private static var activeOwners: Set<UUID> = []
+    private nonisolated static let operationQueue = DispatchQueue(
+        label: "io.github.ikaros.vesper-player.audio-session",
+        qos: .userInitiated
+    )
+    private static var operationThreadObserverForTesting: (@Sendable (Bool) -> Void)?
 
     @discardableResult
-    static func activate(owner: AnyObject) -> Bool {
-        assert(Thread.isMainThread)
-        let ownerId = ObjectIdentifier(owner)
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .moviePlayback, options: [])
-            try session.setActive(true)
-            activeOwners.insert(ownerId)
-            return true
-        } catch {
-            iosHostLog("audio session activation failed: \(error.localizedDescription)")
+    static func activate(ownerId: UUID) -> Bool {
+        let shouldActivate = activeOwners.isEmpty
+        guard activeOwners.insert(ownerId).inserted else {
             return false
+        }
+        if shouldActivate {
+            enqueueActivation()
+        }
+        return true
+    }
+
+    static func deactivate(ownerId: UUID) {
+        guard activeOwners.remove(ownerId) != nil, activeOwners.isEmpty else {
+            return
+        }
+        enqueueDeactivation()
+    }
+
+    private static func enqueueActivation() {
+        let operationThreadObserver = operationThreadObserverForTesting
+        operationQueue.async {
+            operationThreadObserver?(Thread.isMainThread)
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .moviePlayback, options: [])
+                try session.setActive(true)
+            } catch {
+                iosHostLog("audio session activation failed: \(error.localizedDescription)")
+            }
         }
     }
 
-    static func deactivate(owner: AnyObject) {
-        assert(Thread.isMainThread)
-        activeOwners.remove(ObjectIdentifier(owner))
-        guard activeOwners.isEmpty else {
-            return
+    private static func enqueueDeactivation() {
+        let operationThreadObserver = operationThreadObserverForTesting
+        operationQueue.async {
+            operationThreadObserver?(Thread.isMainThread)
+            do {
+                try AVAudioSession.sharedInstance().setActive(
+                    false,
+                    options: .notifyOthersOnDeactivation
+                )
+            } catch {
+                iosHostLog("audio session deactivation failed: \(error.localizedDescription)")
+            }
         }
-        do {
-            try AVAudioSession.sharedInstance().setActive(
-                false,
-                options: .notifyOthersOnDeactivation
-            )
-        } catch {
-            iosHostLog("audio session deactivation failed: \(error.localizedDescription)")
+    }
+
+    static var activeOwnerCountForTesting: Int {
+        activeOwners.count
+    }
+
+    static func setOperationThreadObserverForTesting(
+        _ observer: (@Sendable (Bool) -> Void)?
+    ) {
+        operationThreadObserverForTesting = observer
+    }
+
+    static func waitForPendingOperationsForTesting() async {
+        await withCheckedContinuation { continuation in
+            operationQueue.async {
+                continuation.resume()
+            }
+        }
+    }
+}
+
+final class VesperSharedAudioSessionLease: @unchecked Sendable {
+    let ownerId = UUID()
+    @MainActor private(set) var isActive = false
+
+    @MainActor
+    func activate() {
+        guard !isActive else { return }
+        isActive = VesperSharedAudioSession.activate(ownerId: ownerId)
+    }
+
+    @MainActor
+    func deactivate() {
+        guard isActive else { return }
+        isActive = false
+        VesperSharedAudioSession.deactivate(ownerId: ownerId)
+    }
+
+    deinit {
+        let ownerId = ownerId
+        Task { @MainActor in
+            VesperSharedAudioSession.deactivate(ownerId: ownerId)
         }
     }
 }

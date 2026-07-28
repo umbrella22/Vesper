@@ -129,7 +129,10 @@ final class VesperNativePreloadCoordinator {
 
 func createPreloadSession(_ budgetPolicy: VesperPreloadBudgetPolicy) -> UInt64 {
     var resolved = VesperRuntimeResolvedPreloadBudgetPolicy(
-        max_concurrent_tasks: UInt32(max(budgetPolicy.maxConcurrentTasks ?? 0, 0)),
+        max_concurrent_tasks: encodeRuntimeUInt32(
+            budgetPolicy.maxConcurrentTasks,
+            field: "maxConcurrentTasks"
+        ),
         max_memory_bytes: budgetPolicy.maxMemoryBytes ?? 0,
         max_disk_bytes: budgetPolicy.maxDiskBytes ?? 0,
         warmup_window_ms: UInt64(max(budgetPolicy.warmupWindowMs ?? 0, 0))

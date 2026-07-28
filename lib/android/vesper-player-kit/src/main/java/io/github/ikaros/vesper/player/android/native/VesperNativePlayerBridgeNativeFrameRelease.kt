@@ -23,10 +23,51 @@ internal fun VesperNativePlayerBridge.takePendingTimedNativeFrameForRuntime(): T
         }
     }
 
-internal fun VesperNativePlayerBridge.storePendingTimedNativeFrameFromRuntime(timedFrame: TimedNativeFrameRelease) {
+internal fun VesperNativePlayerBridge.storePendingTimedNativeFrameFromRuntime(
+    timedFrame: TimedNativeFrameRelease,
+): TimedNativeFrameRelease? =
     synchronized(nativeFramePipelineRuntimeLock) {
-        pendingTimedNativeFrame = timedFrame
+        pendingTimedNativeFrame.also {
+            pendingTimedNativeFrame = timedFrame
+        }
     }
+
+internal fun VesperNativePlayerBridge.registerAdvancedNativeFrameFromRuntime(
+    pumpEpoch: Long,
+    status: Map<String, Any?>?,
+) {
+    val timedFrame = status?.nativeFramePipelineTimedFrame(pumpEpoch) ?: return
+    val displaced = storePendingTimedNativeFrameFromRuntime(timedFrame)
+    if (displaced != null && displaced.handle != timedFrame.handle) {
+        releaseStaleNativeFramePipelineFrame(displaced.handle)
+    }
+}
+
+internal fun VesperNativePlayerBridge.registerAdvancedNativeFrameForCurrentPumpFromRuntime(
+    pumpEpoch: Long,
+    status: Map<String, Any?>?,
+): Boolean {
+    val timedFrame = status?.nativeFramePipelineTimedFrame(pumpEpoch)
+    var displaced: TimedNativeFrameRelease? = null
+    val registered =
+        synchronized(nativeFramePipelineRuntimeLock) {
+            if (!canContinueNativeFramePump(pumpEpoch)) {
+                return@synchronized false
+            }
+            if (timedFrame != null) {
+                displaced = pendingTimedNativeFrame
+                pendingTimedNativeFrame = timedFrame
+            }
+            true
+        }
+    if (!registered) {
+        timedFrame?.let { releaseStaleNativeFramePipelineFrame(it.handle) }
+        return false
+    }
+    if (timedFrame != null && displaced?.handle != timedFrame.handle) {
+        displaced?.let { releaseStaleNativeFramePipelineFrame(it.handle) }
+    }
+    return true
 }
 
 internal fun VesperNativePlayerBridge.clearPendingTimedNativeFrameFromRuntime(): TimedNativeFrameRelease? =
@@ -170,7 +211,9 @@ internal fun Map<String, Any?>.nativeFramePipelineFrameHandle(): Long? {
     }?.takeIf { it > 0L }
 }
 
-internal fun Map<String, Any?>.nativeFramePipelineTimedFrame(): TimedNativeFrameRelease? {
+internal fun Map<String, Any?>.nativeFramePipelineTimedFrame(
+    pumpEpoch: Long,
+): TimedNativeFrameRelease? {
     if (this["status"] != "frame") {
         return null
     }
@@ -181,7 +224,7 @@ internal fun Map<String, Any?>.nativeFramePipelineTimedFrame(): TimedNativeFrame
             is String -> value.toLongOrNull()
             else -> null
         } ?: return null
-    return TimedNativeFrameRelease(handle, presentationTimeUs)
+    return TimedNativeFrameRelease(handle, presentationTimeUs, pumpEpoch)
 }
 
 internal fun VesperNativePlayerBridge.nativeFramePresenterProfileName(): String =

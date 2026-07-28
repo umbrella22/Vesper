@@ -65,6 +65,7 @@ internal const val NATIVE_FRAME_PIPELINE_RUNTIME_COMMAND_QUEUE_CAPACITY = 32
 internal data class TimedNativeFrameRelease(
     val handle: Long,
     val presentationTimeUs: Long,
+    val pumpEpoch: Long,
 )
 
 internal interface NativeFramePipelinePumpScheduler {

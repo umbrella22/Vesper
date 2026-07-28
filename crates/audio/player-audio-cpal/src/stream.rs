@@ -3,32 +3,31 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use cpal::traits::DeviceTrait;
 use cpal::{FromSample, OutputCallbackInfo, Sample, SampleFormat, SizedSample, Stream};
-use rtrb::Consumer;
 
-use crate::ring::{AudioRingSample, STALE_DRAIN_MULTIPLIER};
+use crate::ring::AudioRingBlock;
 use crate::timeline::SharedPlaybackState;
 use crate::types::AudioOutputConfig;
 
 pub(crate) fn build_output_stream(
     device: &cpal::Device,
     output_config: &AudioOutputConfig,
-    mut consumer: Consumer<AudioRingSample>,
     state: Arc<SharedPlaybackState>,
 ) -> Result<Stream> {
-    let error_callback = |error| eprintln!("audio output stream error: {error}");
     let sample_rate = output_config.sample_rate;
     let channels = output_config.channels;
 
     macro_rules! build_stream {
         ($sample_type:ty, $context:literal) => {{
             let state = state.clone();
+            let error_state = state.clone();
+            let mut cursor = AudioCallbackCursor::default();
             device
                 .build_output_stream(
                     output_config.stream_config.clone(),
                     move |data: &mut [$sample_type], info| {
-                        write_output_data(data, &mut consumer, &state, sample_rate, channels, info)
+                        write_output_data(data, &state, &mut cursor, sample_rate, channels, info)
                     },
-                    error_callback,
+                    move |_error| error_state.record_stream_error(),
                     None,
                 )
                 .context($context)
@@ -52,10 +51,50 @@ pub(crate) fn build_output_stream(
     }
 }
 
-pub(crate) fn write_output_data<T>(
+#[derive(Debug, Default)]
+struct AudioCallbackCursor {
+    block: Option<AudioRingBlock>,
+    offset: usize,
+}
+
+impl AudioCallbackCursor {
+    fn next_sample(&mut self, state: &SharedPlaybackState, generation: u64) -> Option<f32> {
+        loop {
+            if state.generation() != generation {
+                return None;
+            }
+            if let Some(block) = self.block.as_ref()
+                && block.generation == generation
+                && self.offset < block.len
+            {
+                let sample = block.samples[self.offset];
+                self.offset += 1;
+                if self.offset == block.len {
+                    self.block = None;
+                    self.offset = 0;
+                }
+                return Some(sample);
+            }
+
+            if self
+                .block
+                .as_ref()
+                .is_some_and(|block| block.generation == state.generation())
+            {
+                return None;
+            }
+
+            self.block = state.pop_audio_block();
+            self.offset = 0;
+            self.block.as_ref()?;
+        }
+    }
+}
+
+fn write_output_data<T>(
     data: &mut [T],
-    consumer: &mut Consumer<AudioRingSample>,
     state: &SharedPlaybackState,
+    cursor: &mut AudioCallbackCursor,
     sample_rate: u32,
     channels: u16,
     info: &OutputCallbackInfo,
@@ -67,34 +106,34 @@ pub(crate) fn write_output_data<T>(
         return;
     }
 
-    let current_generation = state.ring_generation();
-    let max_pops = data.len().saturating_mul(STALE_DRAIN_MULTIPLIER).max(1);
-    let mut written = 0usize;
-    let mut popped = 0usize;
+    let mut counted_generation = None;
     let mut played = 0usize;
 
-    while written < data.len() && popped < max_pops {
-        let Ok(sample) = consumer.pop() else {
-            break;
-        };
-        popped = popped.saturating_add(1);
-        if sample.generation != current_generation {
+    for output in data.iter_mut() {
+        let current_generation = state.generation();
+        let Some(sample) = cursor.next_sample(state, current_generation) else {
+            *output = T::EQUILIBRIUM;
             continue;
+        };
+        if counted_generation != Some(current_generation) {
+            if let Some(generation) = counted_generation {
+                state.mark_samples_played(generation, played);
+            }
+            counted_generation = Some(current_generation);
+            played = 0;
         }
-
-        data[written] = T::from_sample(sample.value);
-        written = written.saturating_add(1);
+        *output = T::from_sample(sample);
         played = played.saturating_add(1);
     }
 
-    state.mark_samples_played(played);
-
-    for output in &mut data[written..] {
-        *output = T::EQUILIBRIUM;
+    if let Some(generation) = counted_generation {
+        state.mark_samples_played(generation, played);
     }
 
-    if state.is_current_generation_complete_and_drained() {
-        state.set_finished(true);
+    if let Some(generation) = counted_generation
+        && state.is_generation_complete_and_drained(generation)
+    {
+        state.mark_generation_finished(generation);
     }
 
     let _ = (sample_rate, channels, info);

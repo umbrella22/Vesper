@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use player_download::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
@@ -13,6 +13,8 @@ pub const DEFAULT_PRELOAD_MAX_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
 pub const DEFAULT_PRELOAD_MAX_DISK_BYTES: u64 = 256 * 1024 * 1024;
 /// Default window used when a candidate does not provide a warmup duration.
 pub const DEFAULT_PRELOAD_WARMUP_WINDOW: Duration = Duration::from_secs(30);
+
+const MAX_RETAINED_TERMINAL_TASKS: usize = 256;
 
 /// User-provided preload budget overrides.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -82,6 +84,10 @@ fn next_non_zero_preload_task_id(current: u64) -> PlayerResult<u64> {
             "preload task id space is exhausted",
         )
     })
+}
+
+fn preload_expiration(now: Instant, ttl: Option<Duration>) -> Option<Instant> {
+    ttl.and_then(|ttl| now.checked_add(ttl))
 }
 
 /// Normalized source identity used to compare preload candidates.
@@ -511,6 +517,7 @@ pub struct PreloadPlanner<P, E> {
     executor: E,
     next_task_id: u64,
     tasks: HashMap<PreloadTaskId, PreloadTaskRecord>,
+    terminal_order: VecDeque<PreloadTaskId>,
     events: Vec<PreloadEvent>,
 }
 
@@ -526,6 +533,7 @@ where
             executor,
             next_task_id: 1,
             tasks: HashMap::new(),
+            terminal_order: VecDeque::new(),
             events: Vec::new(),
         }
     }
@@ -607,7 +615,7 @@ where
                             .config
                             .warmup_window
                             .unwrap_or(budget.warmup_window),
-                        expires_at: candidate.config.ttl.map(|ttl| now + ttl),
+                        expires_at: preload_expiration(now, candidate.config.ttl),
                         config: candidate.config,
                         status: PreloadTaskStatus::Failed,
                         error_summary: Some(error.into()),
@@ -615,6 +623,7 @@ where
                     let failed_snapshot = failed_record.snapshot();
                     self.tasks.insert(task_id, failed_record);
                     self.events.push(PreloadEvent::Failed(failed_snapshot));
+                    self.remember_terminal_task(task_id);
                     continue;
                 }
             };
@@ -632,7 +641,7 @@ where
                     .config
                     .warmup_window
                     .unwrap_or(budget.warmup_window),
-                expires_at: candidate.config.ttl.map(|ttl| now + ttl),
+                expires_at: preload_expiration(now, candidate.config.ttl),
                 config: candidate.config,
                 status: PreloadTaskStatus::Planned,
                 error_summary: None,
@@ -658,6 +667,7 @@ where
                     let failed_snapshot = failed_record.snapshot();
                     self.events.push(PreloadEvent::Failed(failed_snapshot));
                     self.tasks.insert(task_id, failed_record);
+                    self.remember_terminal_task(task_id);
                 }
             }
         }
@@ -682,6 +692,7 @@ where
         record.status = PreloadTaskStatus::Cancelled;
         let snapshot = record.snapshot();
         self.events.push(PreloadEvent::Cancelled(snapshot.clone()));
+        self.remember_terminal_task(task_id);
         Ok(Some(snapshot))
     }
 
@@ -705,6 +716,7 @@ where
         record.error_summary = None;
         let snapshot = record.snapshot();
         self.events.push(PreloadEvent::Completed(snapshot.clone()));
+        self.remember_terminal_task(task_id);
         Ok(Some(snapshot))
     }
 
@@ -729,6 +741,7 @@ where
         record.error_summary = Some(error.into());
         let snapshot = record.snapshot();
         self.events.push(PreloadEvent::Failed(snapshot.clone()));
+        self.remember_terminal_task(task_id);
         Ok(Some(snapshot))
     }
 
@@ -759,6 +772,7 @@ where
             record.status = PreloadTaskStatus::Expired;
             let snapshot = record.snapshot();
             self.events.push(PreloadEvent::Expired(snapshot.clone()));
+            self.remember_terminal_task(task_id);
             return Ok(Some(snapshot));
         }
 
@@ -775,6 +789,7 @@ where
             let started_snapshot = record.snapshot();
             self.events
                 .push(PreloadEvent::Started(started_snapshot.clone()));
+            self.forget_terminal_task(task_id);
             return Ok(Some(started_snapshot));
         }
 
@@ -783,7 +798,7 @@ where
 
     /// Expires all non-terminal tasks whose time-to-live has elapsed.
     pub fn expire_due_tasks(&mut self, now: Instant) {
-        let expired_ids = self
+        let mut expired_ids = self
             .tasks
             .iter()
             .filter_map(|(task_id, record)| {
@@ -793,6 +808,7 @@ where
                     .map(|_| *task_id)
             })
             .collect::<Vec<_>>();
+        expired_ids.sort_by_key(|task_id| task_id.get());
 
         for task_id in expired_ids {
             let should_cancel = self
@@ -807,8 +823,39 @@ where
                 record.status = PreloadTaskStatus::Expired;
                 let snapshot = record.snapshot();
                 self.events.push(PreloadEvent::Expired(snapshot));
+                self.remember_terminal_task(task_id);
             }
         }
+    }
+
+    fn remember_terminal_task(&mut self, task_id: PreloadTaskId) {
+        if !self
+            .tasks
+            .get(&task_id)
+            .is_some_and(PreloadTaskRecord::is_terminal)
+        {
+            return;
+        }
+        self.terminal_order
+            .retain(|existing_task_id| *existing_task_id != task_id);
+        self.terminal_order.push_back(task_id);
+        while self.terminal_order.len() > MAX_RETAINED_TERMINAL_TASKS {
+            let Some(expired_task_id) = self.terminal_order.pop_front() else {
+                break;
+            };
+            if self
+                .tasks
+                .get(&expired_task_id)
+                .is_some_and(PreloadTaskRecord::is_terminal)
+            {
+                self.tasks.remove(&expired_task_id);
+            }
+        }
+    }
+
+    fn forget_terminal_task(&mut self, task_id: PreloadTaskId) {
+        self.terminal_order
+            .retain(|existing_task_id| *existing_task_id != task_id);
     }
 
     fn has_live_task_for_cache_key(&self, cache_key: &PreloadCacheKey) -> bool {
@@ -1311,6 +1358,77 @@ mod tests {
             now,
         );
         assert_eq!(next_task_ids.len(), 1);
+    }
+
+    #[test]
+    fn planner_retains_all_active_and_latest_256_terminal_tasks_by_completion_order() {
+        let provider = InMemoryPreloadBudgetProvider::new(budget(258, 258, 0));
+        let executor = InMemoryPreloadExecutor::default();
+        let mut planner = PreloadPlanner::new(provider, executor);
+        let now = Instant::now();
+        let task_ids = planner.plan(
+            (0..258).map(|index| {
+                candidate(
+                    &format!("https://example.com/item-{index}.m3u8"),
+                    PreloadBudgetScope::App,
+                    PreloadCandidateKind::Neighbor,
+                    PreloadPriority::Normal,
+                    1,
+                )
+            }),
+            now,
+        );
+        assert_eq!(task_ids.len(), 258);
+
+        let first_completed = task_ids[256];
+        planner
+            .complete(first_completed)
+            .expect("complete first terminal task");
+        for task_id in task_ids.iter().take(256).copied() {
+            planner.complete(task_id).expect("complete terminal task");
+        }
+
+        let snapshot = planner.snapshot();
+        assert_eq!(snapshot.tasks.len(), 257);
+        assert!(
+            snapshot
+                .tasks
+                .iter()
+                .all(|task| task.task_id != first_completed)
+        );
+        assert!(snapshot.tasks.iter().any(|task| {
+            task.task_id == task_ids[257] && task.status == PreloadTaskStatus::Active
+        }));
+        assert!(
+            snapshot
+                .tasks
+                .iter()
+                .any(|task| task.task_id == task_ids[0])
+        );
+    }
+
+    #[test]
+    fn planner_treats_overflowing_ttl_as_no_finite_expiration() {
+        let provider = InMemoryPreloadBudgetProvider::new(budget(1, 1, 0));
+        let executor = InMemoryPreloadExecutor::default();
+        let mut planner = PreloadPlanner::new(provider, executor);
+        let now = Instant::now();
+        let mut candidate = candidate(
+            "https://example.com/current.m3u8",
+            PreloadBudgetScope::App,
+            PreloadCandidateKind::Current,
+            PreloadPriority::Critical,
+            1,
+        );
+        candidate.config.ttl = Some(Duration::MAX);
+
+        let task_id = planner
+            .plan([candidate], now)
+            .into_iter()
+            .next()
+            .expect("task should be planned without panicking");
+
+        assert_eq!(planner.task(task_id).expect("task").expires_at, None);
     }
 
     #[test]

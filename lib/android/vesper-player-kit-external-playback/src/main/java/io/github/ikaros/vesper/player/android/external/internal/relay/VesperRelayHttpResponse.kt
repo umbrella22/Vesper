@@ -58,6 +58,46 @@ internal fun OutputStream.writeStatusAndHeaders(
     write("Connection: close\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
 }
 
+internal class VesperRelayChunkedOutputStream(
+    private val output: OutputStream,
+) : OutputStream() {
+    private var finished = false
+
+    override fun write(byte: Int) {
+        write(byteArrayOf(byte.toByte()), 0, 1)
+    }
+
+    override fun write(buffer: ByteArray, offset: Int, length: Int) {
+        if (offset < 0 || length < 0 || length > buffer.size - offset) {
+            throw IndexOutOfBoundsException(
+                "offset=$offset length=$length bufferSize=${buffer.size}",
+            )
+        }
+        check(!finished) { "Relay chunked response is already complete" }
+        if (length == 0) {
+            return
+        }
+        output.write(length.toString(16).toByteArray(Charsets.US_ASCII))
+        output.write(CRLF)
+        output.write(buffer, offset, length)
+        output.write(CRLF)
+    }
+
+    fun finish() {
+        if (finished) {
+            return
+        }
+        finished = true
+        output.write(TERMINAL_CHUNK)
+        output.flush()
+    }
+
+    private companion object {
+        val CRLF = "\r\n".toByteArray(Charsets.US_ASCII)
+        val TERMINAL_CHUNK = "0\r\n\r\n".toByteArray(Charsets.US_ASCII)
+    }
+}
+
 internal fun InputStream.copyLimitedTo(output: OutputStream, length: Long) {
     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
     var remaining = length

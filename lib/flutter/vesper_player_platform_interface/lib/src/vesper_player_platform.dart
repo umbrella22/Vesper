@@ -99,8 +99,8 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
   });
 
   Future<VesperPlaybackCapabilityProbeResult> probePlaybackCapability(
-    VesperPlaybackCapabilityProbeRequest request,
-  ) async {
+      VesperPlaybackCapabilityProbeRequest request,
+      {String? playerId}) async {
     return const VesperPlaybackCapabilityProbeResult(
       status: VesperPlaybackCapabilityProbeStatus.unknown,
       codecFamily: VesperPlaybackCodecFamily.unknown,
@@ -345,8 +345,8 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
 
   @override
   Future<VesperPlaybackCapabilityProbeResult> probePlaybackCapability(
-    VesperPlaybackCapabilityProbeRequest request,
-  ) async =>
+          VesperPlaybackCapabilityProbeRequest request,
+          {String? playerId}) async =>
       throw VesperUnsupportedError();
 
   @override

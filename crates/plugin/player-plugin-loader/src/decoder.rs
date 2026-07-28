@@ -145,8 +145,8 @@ impl NativeDecoderPluginFactory for DynamicNativeDecoderPluginFactory {
             )
         })?;
 
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 if result.session.is_null() {
                     reclaim_plugin_payload(
                         result.payload,
@@ -179,7 +179,7 @@ impl NativeDecoderPluginFactory for DynamicNativeDecoderPluginFactory {
                     outstanding_frames: Vec::new(),
                 }))
             }
-            VesperPluginResultStatus::Failure => {
+            Some(VesperPluginResultStatus::Failure) => {
                 let error = decode_decoder_error_payload(
                     result.payload,
                     self.inner.api.free_bytes,
@@ -188,6 +188,25 @@ impl NativeDecoderPluginFactory for DynamicNativeDecoderPluginFactory {
                     "open_native",
                 );
                 Err(error)
+            }
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                );
+                close_native_decoder_session_after_open_failure(
+                    &self.inner,
+                    result.session,
+                    "close_native_after_unknown_open_status",
+                );
+                Err(DecoderError::abi_violation(
+                    unknown_plugin_result_status_message(
+                        &self.inner.name,
+                        "open_native",
+                        result.status,
+                    ),
+                ))
             }
         }
     }
@@ -204,9 +223,12 @@ fn close_native_decoder_session_after_open_failure(
     // SAFETY: the validated decoder API guarantees `close_session` is present
     // and consumes the opaque session pointer returned by the matching
     // successful open call.
-    let _ = catch_decoder_plugin_call(&factory.name, operation, || unsafe {
+    let result = catch_decoder_plugin_call(&factory.name, operation, || unsafe {
         (factory.api.close_session)(factory.api.context, session)
     });
+    if let Ok(result) = result {
+        reclaim_plugin_payload(result.payload, factory.api.free_bytes, factory.api.context);
+    }
 }
 
 #[derive(Debug)]
@@ -237,8 +259,8 @@ impl DynamicNativeDecoderSession {
         result: VesperPluginProcessResult,
         operation: &'static str,
     ) -> Result<(), DecoderError> {
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 let _ = decode_plugin_bytes_or_default::<DecoderOperationStatus>(
                     result.payload,
                     self.factory.api.free_bytes,
@@ -247,13 +269,46 @@ impl DynamicNativeDecoderSession {
                 .map_err(|error| map_decoder_payload_error(&self.factory.name, operation, error))?;
                 Ok(())
             }
-            VesperPluginResultStatus::Failure => Err(decode_decoder_error_payload(
+            Some(VesperPluginResultStatus::Failure) => Err(decode_decoder_error_payload(
                 result.payload,
                 self.factory.api.free_bytes,
                 self.factory.api.context,
                 &self.factory.name,
                 operation,
             )),
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                Err(DecoderError::abi_violation(
+                    unknown_plugin_result_status_message(
+                        &self.factory.name,
+                        operation,
+                        result.status,
+                    ),
+                ))
+            }
+        }
+    }
+
+    fn close_after_abi_violation(&mut self, operation: &'static str) {
+        if self.closed || self.session.is_null() {
+            return;
+        }
+        let _ = self.release_outstanding_native_frames("release_native_frame_after_abi_violation");
+        let result = catch_decoder_plugin_call(&self.factory.name, operation, || unsafe {
+            (self.factory.api.close_session)(self.factory.api.context, self.session)
+        });
+        self.closed = true;
+        self.session = std::ptr::null_mut();
+        if let Ok(result) = result {
+            reclaim_plugin_payload(
+                result.payload,
+                self.factory.api.free_bytes,
+                self.factory.api.context,
+            );
         }
     }
 
@@ -261,12 +316,18 @@ impl DynamicNativeDecoderSession {
         &self,
         frame: &DecoderNativeFrame,
     ) -> Result<usize, DecoderError> {
+        let frame_id = decoder_native_frame_id(frame);
         self.outstanding_frames
             .iter()
-            .position(|candidate| candidate.handle == frame.handle)
+            .position(|candidate| {
+                frame_id.map_or_else(
+                    || candidate.handle == frame.handle,
+                    |frame_id| decoder_native_frame_id(candidate) == Some(frame_id),
+                )
+            })
             .ok_or_else(|| {
                 DecoderError::abi_violation(format!(
-                    "native decoder plugin `{}` was asked to release an untracked native frame handle",
+                    "native decoder plugin `{}` was asked to release an untracked native frame identity",
                     self.factory.name
                 ))
             })
@@ -353,6 +414,15 @@ impl DynamicNativeDecoderSession {
     }
 }
 
+fn decoder_native_frame_id(frame: &DecoderNativeFrame) -> Option<u64> {
+    frame
+        .metadata
+        .release_tracking
+        .as_ref()
+        .and_then(|tracking| tracking.frame_id)
+        .or(frame.metadata.frame_id)
+}
+
 impl NativeDecoderSession for DynamicNativeDecoderSession {
     fn session_info(&self) -> DecoderSessionInfo {
         self.session_info.clone()
@@ -395,8 +465,8 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
             }
         };
 
-        match result.status {
-            VesperPluginResultStatus::Success => decode_plugin_bytes_or_default::<
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => decode_plugin_bytes_or_default::<
                 DecoderPacketResult,
             >(
                 result.payload,
@@ -404,13 +474,27 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
                 self.factory.api.context,
             )
             .map_err(|error| map_decoder_payload_error(&self.factory.name, "send_packet", error)),
-            VesperPluginResultStatus::Failure => Err(decode_decoder_error_payload(
+            Some(VesperPluginResultStatus::Failure) => Err(decode_decoder_error_payload(
                 result.payload,
                 self.factory.api.free_bytes,
                 self.factory.api.context,
                 &self.factory.name,
                 "send_packet",
             )),
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                let error = DecoderError::abi_violation(unknown_plugin_result_status_message(
+                    &self.factory.name,
+                    "send_packet",
+                    result.status,
+                ));
+                self.close_after_abi_violation("close_after_unknown_send_packet_status");
+                Err(error)
+            }
         }
     }
 
@@ -429,8 +513,8 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
                 }
             };
 
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 let metadata = decode_plugin_bytes::<DecoderReceiveNativeFrameMetadata>(
                     result.metadata,
                     self.factory.api.free_bytes,
@@ -483,13 +567,27 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
                     DecoderReceiveFrameStatus::Eof => Ok(DecoderReceiveNativeFrameOutput::Eof),
                 }
             }
-            VesperPluginResultStatus::Failure => Err(decode_decoder_error_payload(
+            Some(VesperPluginResultStatus::Failure) => Err(decode_decoder_error_payload(
                 result.metadata,
                 self.factory.api.free_bytes,
                 self.factory.api.context,
                 &self.factory.name,
                 "receive_native_frame",
             )),
+            None => {
+                reclaim_plugin_payload(
+                    result.metadata,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                let error = DecoderError::abi_violation(unknown_plugin_result_status_message(
+                    &self.factory.name,
+                    "receive_native_frame",
+                    result.status,
+                ));
+                self.close_after_abi_violation("close_after_unknown_native_frame_status");
+                Err(error)
+            }
         }
     }
 
@@ -513,8 +611,8 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
                 }
             };
 
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 let metadata = match decode_plugin_bytes::<DecoderReceivePcmFrameMetadata>(
                     result.metadata,
                     self.factory.api.free_bytes,
@@ -587,7 +685,7 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
                     }
                 }
             }
-            VesperPluginResultStatus::Failure => {
+            Some(VesperPluginResultStatus::Failure) => {
                 reclaim_plugin_payload(
                     result.data,
                     self.factory.api.free_bytes,
@@ -600,6 +698,25 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
                     &self.factory.name,
                     "receive_pcm_frame",
                 ))
+            }
+            None => {
+                reclaim_plugin_payload(
+                    result.metadata,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                reclaim_plugin_payload(
+                    result.data,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                let error = DecoderError::abi_violation(unknown_plugin_result_status_message(
+                    &self.factory.name,
+                    "receive_pcm_frame",
+                    result.status,
+                ));
+                self.close_after_abi_violation("close_after_unknown_pcm_frame_status");
+                Err(error)
             }
         }
     }
@@ -628,6 +745,7 @@ impl NativeDecoderSession for DynamicNativeDecoderSession {
 
     fn flush(&mut self) -> Result<(), DecoderError> {
         self.ensure_open()?;
+        self.release_outstanding_native_frames("release_native_frame_on_flush")?;
         // SAFETY: the validated plugin API guarantees `flush_session` is present.
         let result = match catch_decoder_plugin_call(&self.factory.name, "flush", || unsafe {
             (self.factory.api.flush_session)(self.factory.api.context, self.session)

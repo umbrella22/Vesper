@@ -27,7 +27,10 @@ extension VesperPreloadBudgetPolicy {
     func toRuntimeBridgePayload() -> VesperRuntimePreloadBudgetPolicy {
         VesperRuntimePreloadBudgetPolicy(
             has_max_concurrent_tasks: maxConcurrentTasks != nil,
-            max_concurrent_tasks: UInt32(maxConcurrentTasks ?? 0),
+            max_concurrent_tasks: encodeRuntimeUInt32(
+                maxConcurrentTasks,
+                field: "maxConcurrentTasks"
+            ),
             has_max_memory_bytes: maxMemoryBytes != nil,
             max_memory_bytes: maxMemoryBytes ?? 0,
             has_max_disk_bytes: maxDiskBytes != nil,

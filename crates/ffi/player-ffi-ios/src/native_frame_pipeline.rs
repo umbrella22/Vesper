@@ -17,7 +17,7 @@ use player_plugin::{
     NativeFrameHdrMetadata, NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind,
     SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
     SourceNormalizerPacketSessionConfig, SourceNormalizerPacketSessionRequirements,
-    SourceNormalizerReadPacketStatus,
+    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketStatus,
 };
 use player_plugin_loader::{
     DecoderPluginMatchRequest, LoadedDynamicPlugin, PluginDiagnosticRecord, PluginRegistry,
@@ -97,6 +97,7 @@ pub struct IosNativeFramePipelineSession {
     frame_processor_chain: Option<IosFrameProcessorChain>,
     end_of_input_sent: bool,
     end_of_stream_received: bool,
+    exact_seek_target_us: Option<i64>,
     next_frame_handle: u64,
     pending_frames: HashMap<u64, IosNativeFramePipelineFrame>,
     rejected_frames_pending_cleanup: Vec<IosNativeFramePipelineFrame>,
@@ -431,26 +432,8 @@ impl IosNativeFramePipelineSession {
                 )
             })?;
         let decoder_plugin_name = decoder_factory.name().to_owned();
-        let decoder_bitstream_format = track
-            .bitstream_format
-            .clone()
-            .unwrap_or_else(|| decoder_bitstream_format(&track.codec));
         let decoder_session = decoder_factory
-            .open_native_session(&DecoderSessionConfig {
-                codec: track.codec.clone(),
-                media_kind: DecoderMediaKind::Video,
-                extradata: track.extradata.clone(),
-                bitstream_format: Some(decoder_bitstream_format),
-                width: track.width,
-                height: track.height,
-                coded_width: track.coded_width.or(track.width),
-                coded_height: track.coded_height.or(track.height),
-                prefer_hardware: true,
-                require_cpu_output: false,
-                color: track.color.clone(),
-                hdr: track.hdr.clone(),
-                ..DecoderSessionConfig::default()
-            })
+            .open_native_session(&video_decoder_session_config(&track))
             .map_err(|error| {
                 IosNativeFramePipelineOpenError::new(
                     "unsupportedCodec",
@@ -510,6 +493,7 @@ impl IosNativeFramePipelineSession {
             frame_processor_chain,
             end_of_input_sent: false,
             end_of_stream_received: false,
+            exact_seek_target_us: None,
             next_frame_handle: 1,
             pending_frames: HashMap::new(),
             rejected_frames_pending_cleanup: Vec::new(),
@@ -663,6 +647,7 @@ impl IosNativeFramePipelineSession {
 
     pub fn flush(&mut self) -> Result<(), String> {
         self.release_all_pending_frames()?;
+        self.exact_seek_target_us = None;
         if let Some(chain) = self.frame_processor_chain.as_mut() {
             chain.flush();
         }
@@ -682,6 +667,7 @@ impl IosNativeFramePipelineSession {
             return Err("iOS native-frame pipeline source is not seekable".to_owned());
         }
         self.release_all_pending_frames()?;
+        self.exact_seek_target_us = None;
         if let Some(chain) = self.frame_processor_chain.as_mut() {
             chain.flush();
         }
@@ -697,6 +683,8 @@ impl IosNativeFramePipelineSession {
                 exact: true,
             })
             .map_err(|error| format!("source normalizer packet seek failed: {error}"))?;
+        self.exact_seek_target_us =
+            Some(position_millis.saturating_mul(1_000).min(i64::MAX as u64) as i64);
         self.end_of_input_sent = false;
         self.end_of_stream_received = false;
         self.counters.seek_count = self.counters.seek_count.saturating_add(1);
@@ -724,6 +712,22 @@ impl IosNativeFramePipelineSession {
             return Ok(None);
         };
         self.counters.decoded_frames = self.counters.decoded_frames.saturating_add(1);
+        if let Some(target_us) = self.exact_seek_target_us {
+            if frame
+                .metadata
+                .pts_us
+                .is_none_or(|pts_us| pts_us < target_us)
+            {
+                self.decoder_session
+                    .release_native_frame(frame)
+                    .map_err(|error| {
+                        format!("VideoToolbox exact-seek preroll frame release failed: {error}")
+                    })?;
+                self.counters.released_frames = self.counters.released_frames.saturating_add(1);
+                return Ok(None);
+            }
+            self.exact_seek_target_us = None;
+        }
         let pipeline_frame = match process_frame(
             self.frame_processor_chain.as_mut(),
             &mut self.counters,
@@ -1717,6 +1721,30 @@ fn decoder_bitstream_format(codec: &str) -> DecoderBitstreamFormat {
     }
 }
 
+fn video_decoder_session_config(track: &SourceNormalizerPacketTrackInfo) -> DecoderSessionConfig {
+    DecoderSessionConfig {
+        codec: track.codec.clone(),
+        media_kind: DecoderMediaKind::Video,
+        extradata: track.extradata.clone(),
+        bitstream_format: Some(
+            track
+                .bitstream_format
+                .clone()
+                .unwrap_or_else(|| decoder_bitstream_format(&track.codec)),
+        ),
+        width: track.width,
+        height: track.height,
+        coded_width: track.coded_width.or(track.width),
+        coded_height: track.coded_height.or(track.height),
+        reorder_depth: track.reorder_depth,
+        prefer_hardware: true,
+        require_cpu_output: false,
+        color: track.color.clone(),
+        hdr: track.hdr.clone(),
+        ..DecoderSessionConfig::default()
+    }
+}
+
 fn apple_native_frame_video_codec_supported(codec: &str) -> bool {
     let codec = codec.trim().to_ascii_lowercase();
     let codec = codec.strip_prefix("video/").unwrap_or(&codec);
@@ -1820,6 +1848,7 @@ fn diagnostic_from_runtime(value: &PlayerPluginDiagnostic) -> IosNativeFramePipe
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -1843,6 +1872,7 @@ mod tests {
     enum FlushEvent {
         ReleaseDecoder(usize),
         ReleaseProcessor(usize),
+        SubmitProcessor(usize),
         Processor,
         Decoder,
         Packet,
@@ -1898,6 +1928,100 @@ mod tests {
                 FlushEvent::Seek(42_000)
             ]
         );
+    }
+
+    #[test]
+    fn exact_seek_releases_preroll_before_frame_processor() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut session = test_session(events.clone());
+        session.seek_to(1_000).expect("seek should succeed");
+        assert_eq!(session.exact_seek_target_us, Some(1_000_000));
+        session.decoder_session = Box::new(TestDecoderSession {
+            events: events.clone(),
+            release_failures_remaining: Arc::new(AtomicUsize::new(0)),
+            frames: VecDeque::from([
+                test_decoder_frame(501, None),
+                test_decoder_frame(502, Some(0)),
+                test_decoder_frame(503, Some(1_000_000)),
+            ]),
+        });
+
+        assert!(
+            session
+                .receive_frame()
+                .expect("missing-PTS preroll should be handled")
+                .is_none()
+        );
+        assert!(
+            session
+                .receive_frame()
+                .expect("pre-target preroll should be handled")
+                .is_none()
+        );
+        let visible = session
+            .receive_frame()
+            .expect("target frame should be handled")
+            .expect("target frame should be visible");
+
+        assert_eq!(visible.presentation_time_us, 1_000_000);
+        assert_eq!(session.exact_seek_target_us, None);
+        assert!(session.pending_frames.is_empty());
+        assert_eq!(session.counters.decoded_frames, 3);
+        assert_eq!(session.counters.released_frames, 2);
+        assert_eq!(
+            events
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_slice(),
+            &[
+                FlushEvent::Processor,
+                FlushEvent::Decoder,
+                FlushEvent::Packet,
+                FlushEvent::Seek(1_000),
+                FlushEvent::ReleaseDecoder(501),
+                FlushEvent::ReleaseDecoder(502),
+                FlushEvent::SubmitProcessor(503),
+            ]
+        );
+        session
+            .release_pipeline_frame(visible.frame)
+            .expect("visible frame should be released");
+    }
+
+    #[test]
+    fn flush_clears_exact_seek_target() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut session = test_session(events.clone());
+        session.seek_to(1_000).expect("seek should succeed");
+        events
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+
+        session.flush().expect("flush should succeed");
+
+        assert_eq!(session.exact_seek_target_us, None);
+        assert_eq!(
+            events
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_slice(),
+            &[
+                FlushEvent::Processor,
+                FlushEvent::Decoder,
+                FlushEvent::Packet
+            ]
+        );
+    }
+
+    #[test]
+    fn exact_seek_target_saturates_to_decoder_timestamp_range() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut session = test_session(events);
+
+        session.seek_to(u64::MAX).expect("seek should succeed");
+
+        assert_eq!(session.exact_seek_target_us, Some(i64::MAX));
     }
 
     #[test]
@@ -2556,6 +2680,22 @@ mod tests {
     }
 
     #[test]
+    fn video_decoder_session_config_preserves_reorder_depth() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut track = TestPacketSession { events }
+            .stream_info()
+            .tracks
+            .into_iter()
+            .next()
+            .expect("test packet session should expose a video track");
+        track.reorder_depth = Some(4);
+
+        let config = video_decoder_session_config(&track);
+
+        assert_eq!(config.reorder_depth, Some(4));
+    }
+
+    #[test]
     fn hdr_track_reports_programmable_processing_rejection() {
         let mut track = SourceNormalizerPacketTrackInfo {
             stream_index: 0,
@@ -2567,6 +2707,7 @@ mod tests {
             height: Some(1_080),
             coded_width: Some(1_920),
             coded_height: Some(1_080),
+            reorder_depth: None,
             sample_rate: None,
             channels: None,
             channel_layout: None,
@@ -2625,6 +2766,7 @@ mod tests {
             decoder_session: Box::new(TestDecoderSession {
                 events: events.clone(),
                 release_failures_remaining,
+                frames: VecDeque::new(),
             }),
             frame_processor_chain: Some(IosFrameProcessorChain {
                 processors: vec![IosFrameProcessorNode {
@@ -2638,6 +2780,7 @@ mod tests {
             }),
             end_of_input_sent: true,
             end_of_stream_received: true,
+            exact_seek_target_us: None,
             next_frame_handle: 1,
             pending_frames: HashMap::new(),
             rejected_frames_pending_cleanup: Vec::new(),
@@ -2807,6 +2950,7 @@ mod tests {
                         height: Some(2),
                         coded_width: Some(2),
                         coded_height: Some(2),
+                        reorder_depth: None,
                         sample_rate: None,
                         channels: None,
                         channel_layout: None,
@@ -2830,6 +2974,7 @@ mod tests {
                         height: None,
                         coded_width: None,
                         coded_height: None,
+                        reorder_depth: None,
                         sample_rate: Some(48_000),
                         channels: Some(2),
                         channel_layout: Some("stereo".to_owned()),
@@ -2909,6 +3054,7 @@ mod tests {
     struct TestDecoderSession {
         events: Arc<Mutex<Vec<FlushEvent>>>,
         release_failures_remaining: Arc<AtomicUsize>,
+        frames: VecDeque<DecoderNativeFrame>,
     }
 
     impl NativeDecoderSession for TestDecoderSession {
@@ -2927,7 +3073,12 @@ mod tests {
         fn receive_native_frame(
             &mut self,
         ) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
-            Ok(DecoderReceiveNativeFrameOutput::NeedMoreInput)
+            Ok(self
+                .frames
+                .pop_front()
+                .map_or(DecoderReceiveNativeFrameOutput::NeedMoreInput, |frame| {
+                    DecoderReceiveNativeFrameOutput::Frame(frame)
+                }))
         }
 
         fn release_native_frame(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError> {
@@ -2995,9 +3146,13 @@ mod tests {
 
         fn submit_frame(
             &mut self,
-            _frame: &NativeFrame,
+            frame: &NativeFrame,
             _submit: &FrameProcessorSubmitFrame,
         ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
+            self.events
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(FlushEvent::SubmitProcessor(frame.handle));
             Ok(FrameProcessorSubmitResult::default())
         }
 

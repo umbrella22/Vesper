@@ -3,45 +3,63 @@ use std::time::Duration;
 use super::*;
 
 #[derive(Debug)]
-pub(crate) struct DynamicSourceNormalizerPacketPluginFactoryInner {
-    // Held so the dynamic library stays loaded for the whole factory/session lifetime.
+pub(crate) struct PluginContextOwner {
+    // Dynamic callbacks remain callable until the final factory or session drops.
     _library_holder: Option<Arc<LibraryHolder>>,
     name: String,
-    api: CheckedSourceNormalizerPacketPluginApi,
-    capabilities: SourceNormalizerPacketCapabilities,
+    context: *mut c_void,
+    destroy: Option<DestroyFn>,
 }
 
-impl Drop for DynamicSourceNormalizerPacketPluginFactoryInner {
+impl PluginContextOwner {
+    pub(crate) fn new(
+        library: Option<Arc<LibraryHolder>>,
+        name: String,
+        context: *mut c_void,
+        destroy: Option<DestroyFn>,
+    ) -> Self {
+        Self {
+            _library_holder: library,
+            name,
+            context,
+            destroy,
+        }
+    }
+}
+
+// SAFETY: the owner only stores the validated opaque context and callback.
+// Source-normalizer plugin implementations must uphold the shared Send contract.
+unsafe impl Send for PluginContextOwner {}
+// SAFETY: the plugin contract requires context destruction to be valid after
+// all concurrently usable packet/resource factories and sessions are gone.
+unsafe impl Sync for PluginContextOwner {}
+
+impl Drop for PluginContextOwner {
     fn drop(&mut self) {
-        if let Some(destroy) = self.api.destroy {
-            // SAFETY: `destroy` and `context` come from the validated plugin ABI
-            // table and are only invoked once when this wrapper is dropped.
+        if let Some(destroy) = self.destroy {
+            // SAFETY: this is the only owner of the destroy callback, and Arc
+            // drop guarantees no packet/resource factory or session remains.
             let _ = catch_source_normalizer_plugin_call(&self.name, "destroy", || unsafe {
-                destroy(self.api.context)
+                destroy(self.context)
             });
         }
     }
 }
 
 #[derive(Debug)]
+pub(crate) struct DynamicSourceNormalizerPacketPluginFactoryInner {
+    _context_owner: Arc<PluginContextOwner>,
+    name: String,
+    api: CheckedSourceNormalizerPacketPluginApi,
+    capabilities: SourceNormalizerPacketCapabilities,
+}
+
+#[derive(Debug)]
 pub(crate) struct DynamicSourceNormalizerResourcePluginFactoryInner {
-    // Held so the dynamic library stays loaded for the whole factory/session lifetime.
-    _library_holder: Option<Arc<LibraryHolder>>,
+    _context_owner: Arc<PluginContextOwner>,
     name: String,
     api: CheckedSourceNormalizerResourcePluginApi,
     capabilities: SourceNormalizerResourceCapabilities,
-}
-
-impl Drop for DynamicSourceNormalizerResourcePluginFactoryInner {
-    fn drop(&mut self) {
-        if let Some(destroy) = self.api.destroy {
-            // SAFETY: `destroy` and `context` come from the validated plugin ABI
-            // table and are only invoked once when this wrapper is dropped.
-            let _ = catch_source_normalizer_plugin_call(&self.name, "destroy", || unsafe {
-                destroy(self.api.context)
-            });
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -55,8 +73,8 @@ pub(crate) struct DynamicSourceNormalizerResourcePluginFactory {
 }
 
 impl DynamicSourceNormalizerPacketPluginFactory {
-    pub(crate) fn new(
-        library: Option<Arc<LibraryHolder>>,
+    pub(crate) fn new_with_context_owner(
+        context_owner: Arc<PluginContextOwner>,
         fallback_name: String,
         api: CheckedSourceNormalizerPacketPluginApi,
     ) -> Result<Self, PluginLoadError> {
@@ -87,7 +105,7 @@ impl DynamicSourceNormalizerPacketPluginFactory {
 
         Ok(Self {
             inner: Arc::new(DynamicSourceNormalizerPacketPluginFactoryInner {
-                _library_holder: library,
+                _context_owner: context_owner,
                 name,
                 api,
                 capabilities,
@@ -97,8 +115,8 @@ impl DynamicSourceNormalizerPacketPluginFactory {
 }
 
 impl DynamicSourceNormalizerResourcePluginFactory {
-    pub(crate) fn new(
-        library: Option<Arc<LibraryHolder>>,
+    pub(crate) fn new_with_context_owner(
+        context_owner: Arc<PluginContextOwner>,
         fallback_name: String,
         api: CheckedSourceNormalizerResourcePluginApi,
     ) -> Result<Self, PluginLoadError> {
@@ -129,7 +147,7 @@ impl DynamicSourceNormalizerResourcePluginFactory {
 
         Ok(Self {
             inner: Arc::new(DynamicSourceNormalizerResourcePluginFactoryInner {
-                _library_holder: library,
+                _context_owner: context_owner,
                 name,
                 api,
                 capabilities,
@@ -173,8 +191,8 @@ impl SourceNormalizerPacketPluginFactory for DynamicSourceNormalizerPacketPlugin
             },
         )?;
 
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 if result.session.is_null() {
                     reclaim_plugin_payload(
                         result.payload,
@@ -212,13 +230,32 @@ impl SourceNormalizerPacketPluginFactory for DynamicSourceNormalizerPacketPlugin
                     poisoned: false,
                 }))
             }
-            VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
+            Some(VesperPluginResultStatus::Failure) => Err(decode_source_normalizer_error_payload(
                 result.payload,
                 self.inner.api.free_bytes,
                 self.inner.api.context,
                 &self.inner.name,
                 "open_packet_session",
             )),
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                );
+                close_source_normalizer_packet_session_after_open_failure(
+                    &self.inner,
+                    result.session,
+                    "close_packet_after_unknown_open_status",
+                );
+                Err(SourceNormalizerError::abi_violation(
+                    unknown_plugin_result_status_message(
+                        &self.inner.name,
+                        "open_packet_session",
+                        result.status,
+                    ),
+                ))
+            }
         }
     }
 }
@@ -258,8 +295,8 @@ impl SourceNormalizerResourcePluginFactory for DynamicSourceNormalizerResourcePl
             },
         )?;
 
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 if result.session.is_null() {
                     reclaim_plugin_payload(
                         result.payload,
@@ -296,13 +333,32 @@ impl SourceNormalizerResourcePluginFactory for DynamicSourceNormalizerResourcePl
                     poisoned: false,
                 }))
             }
-            VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
+            Some(VesperPluginResultStatus::Failure) => Err(decode_source_normalizer_error_payload(
                 result.payload,
                 self.inner.api.free_bytes,
                 self.inner.api.context,
                 &self.inner.name,
                 "open_resource_session",
             )),
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                );
+                close_source_normalizer_resource_session_after_open_failure(
+                    &self.inner,
+                    result.session,
+                    "close_resource_after_unknown_open_status",
+                );
+                Err(SourceNormalizerError::abi_violation(
+                    unknown_plugin_result_status_message(
+                        &self.inner.name,
+                        "open_resource_session",
+                        result.status,
+                    ),
+                ))
+            }
         }
     }
 }
@@ -391,12 +447,12 @@ impl DynamicSourceNormalizerPacketSession {
     }
 
     fn decode_operation_result(
-        &self,
+        &mut self,
         result: VesperPluginProcessResult,
         operation: &'static str,
     ) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 decode_plugin_bytes_or_default::<SourceNormalizerOperationStatus>(
                     result.payload,
                     self.factory.api.free_bytes,
@@ -406,13 +462,28 @@ impl DynamicSourceNormalizerPacketSession {
                     map_source_normalizer_payload_error(&self.factory.name, operation, error)
                 })
             }
-            VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
+            Some(VesperPluginResultStatus::Failure) => Err(decode_source_normalizer_error_payload(
                 result.payload,
                 self.factory.api.free_bytes,
                 self.factory.api.context,
                 &self.factory.name,
                 operation,
             )),
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                self.poisoned = true;
+                Err(SourceNormalizerError::abi_violation(
+                    unknown_plugin_result_status_message(
+                        &self.factory.name,
+                        operation,
+                        result.status,
+                    ),
+                ))
+            }
         }
     }
 
@@ -446,7 +517,7 @@ impl DynamicSourceNormalizerPacketSession {
     }
 
     fn release_packet_result(
-        &self,
+        &mut self,
         packet_handle: usize,
     ) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
         // SAFETY: `release_packet` is present in the validated v2 API and this
@@ -511,12 +582,12 @@ impl DynamicSourceNormalizerResourceSession {
     }
 
     fn decode_operation_result(
-        &self,
+        &mut self,
         result: VesperPluginProcessResult,
         operation: &'static str,
     ) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 decode_plugin_bytes_or_default::<SourceNormalizerOperationStatus>(
                     result.payload,
                     self.factory.api.free_bytes,
@@ -526,13 +597,28 @@ impl DynamicSourceNormalizerResourceSession {
                     map_source_normalizer_payload_error(&self.factory.name, operation, error)
                 })
             }
-            VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
+            Some(VesperPluginResultStatus::Failure) => Err(decode_source_normalizer_error_payload(
                 result.payload,
                 self.factory.api.free_bytes,
                 self.factory.api.context,
                 &self.factory.name,
                 operation,
             )),
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                self.poisoned = true;
+                Err(SourceNormalizerError::abi_violation(
+                    unknown_plugin_result_status_message(
+                        &self.factory.name,
+                        operation,
+                        result.status,
+                    ),
+                ))
+            }
         }
     }
 }
@@ -566,8 +652,8 @@ impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
             }
         };
 
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 let metadata = match decode_plugin_bytes::<SourceNormalizerReadPacketMetadata>(
                     result.metadata,
                     self.factory.api.free_bytes,
@@ -635,7 +721,7 @@ impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
                     handle: result.packet_handle,
                 })
             }
-            VesperPluginResultStatus::Failure => {
+            Some(VesperPluginResultStatus::Failure) => {
                 if result.packet_handle != 0 {
                     self.reclaim_unexpected_packet_handle(result.packet_handle);
                 }
@@ -645,6 +731,22 @@ impl SourceNormalizerPacketSession for DynamicSourceNormalizerPacketSession {
                     self.factory.api.context,
                     &self.factory.name,
                     "read_packet",
+                ))
+            }
+            None => {
+                reclaim_plugin_payload(
+                    result.metadata,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                self.reclaim_unexpected_packet_handle(result.packet_handle);
+                self.poisoned = true;
+                Err(SourceNormalizerError::abi_violation(
+                    unknown_plugin_result_status_message(
+                        &self.factory.name,
+                        "read_packet",
+                        result.status,
+                    ),
                 ))
             }
         }
@@ -782,8 +884,8 @@ impl SourceNormalizerResourceSession for DynamicSourceNormalizerResourceSession 
                 return Err(error);
             }
         };
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 decode_plugin_bytes::<SourceNormalizerResourceSessionStatus>(
                     result.payload,
                     self.factory.api.free_bytes,
@@ -793,13 +895,28 @@ impl SourceNormalizerResourceSession for DynamicSourceNormalizerResourceSession 
                     map_source_normalizer_payload_error(&self.factory.name, "poll_resource", error)
                 })
             }
-            VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
+            Some(VesperPluginResultStatus::Failure) => Err(decode_source_normalizer_error_payload(
                 result.payload,
                 self.factory.api.free_bytes,
                 self.factory.api.context,
                 &self.factory.name,
                 "poll_resource",
             )),
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                self.poisoned = true;
+                Err(SourceNormalizerError::abi_violation(
+                    unknown_plugin_result_status_message(
+                        &self.factory.name,
+                        "poll_resource",
+                        result.status,
+                    ),
+                ))
+            }
         }
     }
 
@@ -829,8 +946,8 @@ impl SourceNormalizerResourceSession for DynamicSourceNormalizerResourceSession 
                 return Err(error);
             }
         };
-        match result.status {
-            VesperPluginResultStatus::Success => {
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => {
                 decode_plugin_bytes::<SourceNormalizerResourceSessionWaitStatus>(
                     result.payload,
                     self.factory.api.free_bytes,
@@ -844,13 +961,28 @@ impl SourceNormalizerResourceSession for DynamicSourceNormalizerResourceSession 
                     )
                 })
             }
-            VesperPluginResultStatus::Failure => Err(decode_source_normalizer_error_payload(
+            Some(VesperPluginResultStatus::Failure) => Err(decode_source_normalizer_error_payload(
                 result.payload,
                 self.factory.api.free_bytes,
                 self.factory.api.context,
                 &self.factory.name,
                 "wait_resource_update",
             )),
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.factory.api.free_bytes,
+                    self.factory.api.context,
+                );
+                self.poisoned = true;
+                Err(SourceNormalizerError::abi_violation(
+                    unknown_plugin_result_status_message(
+                        &self.factory.name,
+                        "wait_resource_update",
+                        result.status,
+                    ),
+                ))
+            }
         }
     }
 
@@ -1003,7 +1135,12 @@ mod lifecycle_tests {
 
     fn packet_factory_inner() -> Arc<DynamicSourceNormalizerPacketPluginFactoryInner> {
         Arc::new(DynamicSourceNormalizerPacketPluginFactoryInner {
-            _library_holder: None,
+            _context_owner: Arc::new(PluginContextOwner::new(
+                None,
+                "lifecycle-packet".to_owned(),
+                std::ptr::null_mut(),
+                None,
+            )),
             name: "lifecycle-packet".to_owned(),
             api: CheckedSourceNormalizerPacketPluginApi {
                 context: std::ptr::null_mut(),
@@ -1024,7 +1161,12 @@ mod lifecycle_tests {
 
     fn resource_factory_inner() -> Arc<DynamicSourceNormalizerResourcePluginFactoryInner> {
         Arc::new(DynamicSourceNormalizerResourcePluginFactoryInner {
-            _library_holder: None,
+            _context_owner: Arc::new(PluginContextOwner::new(
+                None,
+                "lifecycle-resource".to_owned(),
+                std::ptr::null_mut(),
+                None,
+            )),
             name: "lifecycle-resource".to_owned(),
             api: CheckedSourceNormalizerResourcePluginApi {
                 context: std::ptr::null_mut(),

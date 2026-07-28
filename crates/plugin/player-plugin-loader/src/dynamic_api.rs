@@ -18,6 +18,8 @@ pub enum PluginLoadError {
     },
     #[error("plugin descriptor pointer is null")]
     NullDescriptor,
+    #[error("unsupported plugin kind {raw}")]
+    UnsupportedPluginKind { raw: u32 },
     #[error("plugin ABI version mismatch: expected {expected}, got {actual}")]
     AbiVersionMismatch { expected: String, actual: u32 },
     #[error("plugin field `{field}` is missing")]
@@ -137,7 +139,8 @@ impl LoadedDynamicPlugin {
         library: Option<Arc<LibraryHolder>>,
         descriptor: &VesperPluginDescriptor,
     ) -> Result<Self, PluginLoadError> {
-        let expected_abi_version = match descriptor.plugin_kind {
+        let plugin_kind = plugin_kind_from_u32(descriptor.plugin_kind)?;
+        let expected_abi_version = match plugin_kind {
             VesperPluginKind::PostDownloadProcessor => VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
             VesperPluginKind::PipelineEventHook | VesperPluginKind::BenchmarkSink => {
                 VESPER_PLUGIN_ABI_VERSION_V2
@@ -156,7 +159,7 @@ impl LoadedDynamicPlugin {
         }
 
         let descriptor_name = c_string_field(descriptor.plugin_name, "plugin_name")?;
-        match descriptor.plugin_kind {
+        match plugin_kind {
             VesperPluginKind::PostDownloadProcessor => {
                 let api_ptr = descriptor.api.cast::<VesperPostDownloadProcessorApi>();
                 let api =
@@ -173,7 +176,7 @@ impl LoadedDynamicPlugin {
                 )?;
                 Ok(Self {
                     name: descriptor_name,
-                    plugin_kind: descriptor.plugin_kind,
+                    plugin_kind,
                     post_download_processor: Some(Arc::new(processor)),
                     pipeline_event_hook: None,
                     benchmark_sink: None,
@@ -199,7 +202,7 @@ impl LoadedDynamicPlugin {
                 )?;
                 Ok(Self {
                     name: descriptor_name,
-                    plugin_kind: descriptor.plugin_kind,
+                    plugin_kind,
                     post_download_processor: None,
                     pipeline_event_hook: Some(Arc::new(hook)),
                     benchmark_sink: None,
@@ -225,7 +228,7 @@ impl LoadedDynamicPlugin {
                 )?;
                 Ok(Self {
                     name: descriptor_name,
-                    plugin_kind: descriptor.plugin_kind,
+                    plugin_kind,
                     post_download_processor: None,
                     pipeline_event_hook: None,
                     benchmark_sink: Some(Arc::new(sink)),
@@ -248,7 +251,7 @@ impl LoadedDynamicPlugin {
                     DynamicNativeDecoderPluginFactory::new(library, descriptor_name.clone(), api)?;
                 Ok(Self {
                     name: descriptor_name,
-                    plugin_kind: descriptor.plugin_kind,
+                    plugin_kind,
                     post_download_processor: None,
                     pipeline_event_hook: None,
                     benchmark_sink: None,
@@ -273,7 +276,7 @@ impl LoadedDynamicPlugin {
                 )?;
                 Ok(Self {
                     name: descriptor_name,
-                    plugin_kind: descriptor.plugin_kind,
+                    plugin_kind,
                     post_download_processor: None,
                     pipeline_event_hook: None,
                     benchmark_sink: None,
@@ -293,27 +296,36 @@ impl LoadedDynamicPlugin {
                     })?;
                 let has_packet_callbacks = source_normalizer_packet_callbacks_present(api);
                 let has_resource_callbacks = source_normalizer_resource_callbacks_present(api);
+                let context_owner = Arc::new(PluginContextOwner::new(
+                    library,
+                    descriptor_name.clone(),
+                    api.context,
+                    api.destroy,
+                ));
                 let packet_factory = if has_packet_callbacks {
-                    let packet_api = CheckedSourceNormalizerPacketPluginApi::try_from(*api)?;
-                    Some(Arc::new(DynamicSourceNormalizerPacketPluginFactory::new(
-                        library.clone(),
-                        descriptor_name.clone(),
-                        packet_api,
-                    )?))
+                    let mut packet_api = CheckedSourceNormalizerPacketPluginApi::try_from(*api)?;
+                    packet_api.destroy = None;
+                    Some(Arc::new(
+                        DynamicSourceNormalizerPacketPluginFactory::new_with_context_owner(
+                            context_owner.clone(),
+                            descriptor_name.clone(),
+                            packet_api,
+                        )?,
+                    ))
                 } else {
                     None
                 };
                 let resource_factory = if has_resource_callbacks {
                     let mut resource_api =
                         CheckedSourceNormalizerResourcePluginApi::try_from(*api)?;
-                    if has_packet_callbacks {
-                        resource_api.destroy = None;
-                    }
-                    Some(Arc::new(DynamicSourceNormalizerResourcePluginFactory::new(
-                        library,
-                        descriptor_name.clone(),
-                        resource_api,
-                    )?))
+                    resource_api.destroy = None;
+                    Some(Arc::new(
+                        DynamicSourceNormalizerResourcePluginFactory::new_with_context_owner(
+                            context_owner,
+                            descriptor_name.clone(),
+                            resource_api,
+                        )?,
+                    ))
                 } else {
                     None
                 };
@@ -324,7 +336,7 @@ impl LoadedDynamicPlugin {
                 }
                 Ok(Self {
                     name: descriptor_name,
-                    plugin_kind: descriptor.plugin_kind,
+                    plugin_kind,
                     post_download_processor: None,
                     pipeline_event_hook: None,
                     benchmark_sink: None,
@@ -335,6 +347,28 @@ impl LoadedDynamicPlugin {
                 })
             }
         }
+    }
+}
+
+fn plugin_kind_from_u32(raw: u32) -> Result<VesperPluginKind, PluginLoadError> {
+    match raw {
+        value if value == VesperPluginKind::PostDownloadProcessor as u32 => {
+            Ok(VesperPluginKind::PostDownloadProcessor)
+        }
+        value if value == VesperPluginKind::PipelineEventHook as u32 => {
+            Ok(VesperPluginKind::PipelineEventHook)
+        }
+        value if value == VesperPluginKind::Decoder as u32 => Ok(VesperPluginKind::Decoder),
+        value if value == VesperPluginKind::BenchmarkSink as u32 => {
+            Ok(VesperPluginKind::BenchmarkSink)
+        }
+        value if value == VesperPluginKind::FrameProcessor as u32 => {
+            Ok(VesperPluginKind::FrameProcessor)
+        }
+        value if value == VesperPluginKind::SourceNormalizer as u32 => {
+            Ok(VesperPluginKind::SourceNormalizer)
+        }
+        raw => Err(PluginLoadError::UnsupportedPluginKind { raw }),
     }
 }
 

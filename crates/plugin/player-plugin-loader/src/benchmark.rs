@@ -153,8 +153,8 @@ impl DynamicBenchmarkSink {
         result: VesperPluginProcessResult,
         operation: &'static str,
     ) -> Result<T, BenchmarkSinkError> {
-        match result.status {
-            VesperPluginResultStatus::Success => decode_plugin_bytes::<T>(
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => decode_plugin_bytes::<T>(
                 result.payload,
                 self.inner.api.free_bytes,
                 self.inner.api.context,
@@ -165,7 +165,7 @@ impl DynamicBenchmarkSink {
                     self.inner.name
                 ))
             }),
-            VesperPluginResultStatus::Failure => {
+            Some(VesperPluginResultStatus::Failure) => {
                 let decoded = decode_plugin_bytes::<BenchmarkSinkError>(
                     result.payload,
                     self.inner.api.free_bytes,
@@ -178,6 +178,20 @@ impl DynamicBenchmarkSink {
                     ))
                 });
                 Err(decoded)
+            }
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                );
+                Err(BenchmarkSinkError::AbiViolation(
+                    unknown_plugin_result_status_message(
+                        &self.inner.name,
+                        operation,
+                        result.status,
+                    ),
+                ))
             }
         }
     }

@@ -5,7 +5,7 @@
   }
 
   PlayerFfiBufferingPolicy ffi_buffering_policy = {
-      .preset = (PlayerFfiBufferingPreset)buffering_policy->preset_ordinal,
+      .preset = (uint32_t)buffering_policy->preset_ordinal,
       .has_min_buffer_ms = buffering_policy->has_min_buffer_ms,
       .min_buffer_ms = non_negative_u64(buffering_policy->min_buffer_ms),
       .has_max_buffer_ms = buffering_policy->has_max_buffer_ms,
@@ -25,10 +25,10 @@
       .has_max_delay_ms = retry_policy->has_max_delay_ms,
       .max_delay_ms = retry_policy->max_delay_ms,
       .has_backoff = retry_policy->has_backoff,
-      .backoff = (PlayerFfiRetryBackoff)retry_policy->backoff_ordinal,
+      .backoff = (uint32_t)retry_policy->backoff_ordinal,
   };
   PlayerFfiCachePolicy ffi_cache_policy = {
-      .preset = (PlayerFfiCachePreset)cache_policy->preset_ordinal,
+      .preset = (uint32_t)cache_policy->preset_ordinal,
       .has_max_memory_bytes = cache_policy->has_max_memory_bytes,
       .max_memory_bytes = non_negative_u64(cache_policy->max_memory_bytes),
       .has_max_disk_bytes = cache_policy->has_max_disk_bytes,

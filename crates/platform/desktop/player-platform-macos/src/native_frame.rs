@@ -115,6 +115,7 @@ pub(crate) struct MacosNativeFrameVideoSource {
     pub(crate) buffered_frame_count: Arc<AtomicUsize>,
     pub(crate) prefetch_limit: Arc<AtomicUsize>,
     pub(crate) prefetch_wakeup: Arc<MacosNativeFramePrefetchWakeup>,
+    pub(crate) shutdown_requested: Arc<AtomicBool>,
     pub(crate) end_of_input_sent: bool,
     pub(crate) end_of_stream_received: bool,
     pub(crate) worker: Option<JoinHandle<()>>,
@@ -494,11 +495,19 @@ impl std::fmt::Debug for MacosNativeFrameDecoderState {
 
 impl Drop for MacosNativeFrameVideoSource {
     fn drop(&mut self) {
+        self.shutdown_requested.store(true, Ordering::SeqCst);
         let _ = self
             .command_tx
             .send(MacosNativeFrameWorkerCommand::Shutdown);
         self.prefetch_wakeup.notify();
         if let Some(worker) = self.worker.take() {
+            if !wait_for_macos_native_frame_worker_shutdown(&worker) {
+                tracing::warn!(
+                    timeout_ms = MACOS_NATIVE_FRAME_WORKER_SHUTDOWN_TIMEOUT.as_millis(),
+                    "macOS native-frame worker did not stop before the shutdown deadline; decoder and processor close are deferred to worker-owned cleanup"
+                );
+                return;
+            }
             let _ = worker.join();
         }
         self.release_queued_prefetch_events();
@@ -766,6 +775,7 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
                 height: packet_stream_info.height,
                 coded_width: packet_stream_info.width,
                 coded_height: packet_stream_info.height,
+                reorder_depth: packet_stream_info.reorder_depth,
                 prefer_hardware: true,
                 require_cpu_output: false,
                 color: stream_info.color.clone(),
@@ -823,6 +833,7 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
         let buffered_frame_count = Arc::new(AtomicUsize::new(0));
         let prefetch_limit = Arc::new(AtomicUsize::new(1));
         let prefetch_wakeup = Arc::new(MacosNativeFramePrefetchWakeup::default());
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
         let worker = spawn_macos_native_frame_prefetch_worker(
             Box::new(SourceNormalizerPacketSource::new(
                 self.packet_session.clone(),
@@ -836,6 +847,7 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
             buffered_frame_count.clone(),
             prefetch_limit.clone(),
             prefetch_wakeup.clone(),
+            shutdown_requested.clone(),
         )?;
 
         Ok(DesktopVideoSourceBootstrap {
@@ -851,6 +863,7 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
                 buffered_frame_count,
                 prefetch_limit,
                 prefetch_wakeup,
+                shutdown_requested,
                 end_of_input_sent: false,
                 end_of_stream_received: false,
                 worker: Some(worker),
@@ -868,12 +881,15 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
         _buffer_capacity: usize,
         interrupt_flag: Option<Arc<AtomicBool>>,
     ) -> anyhow::Result<DesktopVideoSourceBootstrap> {
+        let shutdown_requested = interrupt_flag
+            .clone()
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let backend = FfmpegBackend::new().context("failed to initialize FFmpeg backend")?;
         let probe = backend
-            .probe_with_interrupt(source.clone(), interrupt_flag.clone())
+            .probe_with_interrupt(source.clone(), Some(shutdown_requested.clone()))
             .context("failed to probe media source for native-frame decoder")?;
         let packet_source = backend
-            .open_video_packet_source_with_interrupt(source, interrupt_flag)
+            .open_video_packet_source_with_interrupt(source, Some(shutdown_requested.clone()))
             .context("failed to open FFmpeg packet source for native-frame decoder")?;
         let stream_info = packet_source.stream_info().clone();
         if macos_codec_requires_source_aware_hdr_probe(&stream_info.codec) {
@@ -917,6 +933,7 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
                 height: stream_info.height,
                 coded_width: stream_info.width,
                 coded_height: stream_info.height,
+                reorder_depth: stream_info.reorder_depth,
                 prefer_hardware: true,
                 require_cpu_output: false,
                 ..DecoderSessionConfig::default()
@@ -966,6 +983,7 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
             buffered_frame_count.clone(),
             prefetch_limit.clone(),
             prefetch_wakeup.clone(),
+            shutdown_requested.clone(),
         )?;
 
         Ok(DesktopVideoSourceBootstrap {
@@ -981,6 +999,7 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
                 buffered_frame_count,
                 prefetch_limit,
                 prefetch_wakeup,
+                shutdown_requested,
                 end_of_input_sent: false,
                 end_of_stream_received: false,
                 worker: Some(worker),
@@ -1215,6 +1234,7 @@ pub(crate) fn spawn_macos_native_frame_prefetch_worker(
     buffered_frame_count: Arc<AtomicUsize>,
     prefetch_limit: Arc<AtomicUsize>,
     prefetch_wakeup: Arc<MacosNativeFramePrefetchWakeup>,
+    shutdown_requested: Arc<AtomicBool>,
 ) -> anyhow::Result<JoinHandle<()>> {
     thread::Builder::new()
         .name("macos-native-frame-prefetch".to_owned())
@@ -1230,6 +1250,7 @@ pub(crate) fn spawn_macos_native_frame_prefetch_worker(
                 buffered_frame_count,
                 prefetch_limit,
                 prefetch_wakeup,
+                shutdown_requested,
             );
         })
         .context("failed to spawn macOS native-frame prefetch worker")
@@ -1246,6 +1267,7 @@ pub(crate) fn macos_native_frame_prefetch_worker_loop(
     buffered_frame_count: Arc<AtomicUsize>,
     prefetch_limit: Arc<AtomicUsize>,
     prefetch_wakeup: Arc<MacosNativeFramePrefetchWakeup>,
+    shutdown_requested: Arc<AtomicBool>,
 ) {
     let mut generation = 0u64;
     let mut end_of_input_sent = false;
@@ -1254,6 +1276,9 @@ pub(crate) fn macos_native_frame_prefetch_worker_loop(
     let mut wakeup_sequence = 0u64;
 
     loop {
+        if shutdown_requested.load(Ordering::SeqCst) {
+            break;
+        }
         match latest_macos_native_frame_worker_command(&command_rx) {
             Some(MacosNativeFrameWorkerCommand::Shutdown) => break,
             Some(MacosNativeFrameWorkerCommand::Seek {
@@ -1311,8 +1336,10 @@ pub(crate) fn macos_native_frame_prefetch_worker_loop(
                     &mut end_of_stream_received,
                     &prefetch_wakeup,
                     &mut wakeup_sequence,
+                    &shutdown_requested,
                 ) {
-                    Ok(event) => event,
+                    Ok(Some(event)) => event,
+                    Ok(None) => break,
                     Err(error) => MacosNativeFrameWorkerEvent::Error {
                         generation,
                         message: error.to_string(),
@@ -1436,28 +1463,46 @@ pub(crate) fn decode_next_macos_native_frame_worker_event(
     end_of_stream_received: &mut bool,
     wakeup: &MacosNativeFramePrefetchWakeup,
     observed_sequence: &mut u64,
-) -> anyhow::Result<MacosNativeFrameWorkerEvent> {
+    shutdown_requested: &AtomicBool,
+) -> anyhow::Result<Option<MacosNativeFrameWorkerEvent>> {
     loop {
+        if shutdown_requested.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
         match receive_macos_native_frame_from_decoder(shared, session, outstanding_frames)? {
             MacosNativeFramePoll::Frame(frame) => {
-                return Ok(MacosNativeFrameWorkerEvent::Frame { generation, frame });
+                return Ok(Some(MacosNativeFrameWorkerEvent::Frame {
+                    generation,
+                    frame,
+                }));
             }
             MacosNativeFramePoll::Decoder(DecoderReceiveNativeFrameOutput::Eof) => {
                 *end_of_stream_received = true;
-                return Ok(MacosNativeFrameWorkerEvent::EndOfStream { generation });
+                return Ok(Some(MacosNativeFrameWorkerEvent::EndOfStream {
+                    generation,
+                }));
             }
             MacosNativeFramePoll::Decoder(DecoderReceiveNativeFrameOutput::NeedMoreInput) => {}
             MacosNativeFramePoll::Decoder(DecoderReceiveNativeFrameOutput::Frame(_)) => {}
         }
 
         if *end_of_input_sent {
+            if shutdown_requested.load(Ordering::SeqCst) {
+                return Ok(None);
+            }
             wait_for_macos_native_frame_decoder_retry(wakeup, observed_sequence);
             continue;
         }
 
+        if shutdown_requested.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
         match packet_source.send_next_packet(session)? {
             MacosNativeFramePacketSendStatus::Sent => {}
             MacosNativeFramePacketSendStatus::NeedMoreData => {
+                if shutdown_requested.load(Ordering::SeqCst) {
+                    return Ok(None);
+                }
                 wait_for_macos_native_frame_decoder_retry(wakeup, observed_sequence);
             }
             MacosNativeFramePacketSendStatus::EndOfStream => {
@@ -1466,6 +1511,21 @@ pub(crate) fn decode_next_macos_native_frame_worker_event(
             }
         }
     }
+}
+
+pub(crate) fn wait_for_macos_native_frame_worker_shutdown(worker: &JoinHandle<()>) -> bool {
+    let deadline = Instant::now() + MACOS_NATIVE_FRAME_WORKER_SHUTDOWN_TIMEOUT;
+    while !worker.is_finished() {
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        thread::sleep(
+            MACOS_NATIVE_FRAME_WORKER_SHUTDOWN_POLL_INTERVAL
+                .min(deadline.saturating_duration_since(now)),
+        );
+    }
+    true
 }
 
 pub(crate) fn wait_for_macos_native_frame_decoder_retry(

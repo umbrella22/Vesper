@@ -60,6 +60,8 @@ targets:
       - Tests/VesperPlayerHostDemoTests
       - path: ../../fixtures/media/tiny-h264-aac.m4v
         buildPhase: resources
+      - path: ../../fixtures/media/tiny-h264-bframes.m4v
+        buildPhase: resources
     dependencies:
       - target: VesperPlayerHostDemo
       - package: VesperPlayerKit

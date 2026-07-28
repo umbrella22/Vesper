@@ -65,7 +65,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
         },
         descriptor: VesperPluginDescriptor {
             abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-            plugin_kind: VesperPluginKind::Decoder,
+            plugin_kind: VesperPluginKind::Decoder as u32,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
         },
@@ -738,6 +738,40 @@ enum MediaCodecPendingOutputEosAction {
     ReportEof,
 }
 
+#[derive(Debug)]
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+struct MediaCodecFrameLeaseIds {
+    next: usize,
+}
+
+impl Default for MediaCodecFrameLeaseIds {
+    fn default() -> Self {
+        Self { next: 1 }
+    }
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+impl MediaCodecFrameLeaseIds {
+    fn allocate(&mut self) -> Result<usize, DecoderError> {
+        let lease_id = self.next;
+        self.next = lease_id.checked_add(1).ok_or_else(|| {
+            DecoderError::internal("MediaCodec native-frame lease id space is exhausted")
+        })?;
+        Ok(lease_id)
+    }
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn complete_mediacodec_frame_release<T>(
+    outstanding: &mut std::collections::HashMap<usize, T>,
+    handle: usize,
+    release_result: Result<(), DecoderError>,
+) -> Result<(), DecoderError> {
+    release_result?;
+    outstanding.remove(&handle);
+    Ok(())
+}
+
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn mediacodec_output_buffer_kind(flags: u32, size: i32) -> MediaCodecOutputBufferKind {
     const CODEC_CONFIG: u32 = 2;
@@ -889,13 +923,14 @@ mod android_media {
     };
 
     use super::{
-        AMEDIA_OK, MediaCodecOutputBufferKind, MediaCodecPendingOutputEosAction, MediaStatus,
-        android_color_range_label, android_color_standard_label,
-        android_color_standard_matrix_label, android_color_transfer_label, codec_config_buffers,
-        codec_mime, media_codec_close_result, mediacodec_hdr_metadata_from_color,
-        mediacodec_output_buffer_kind, mediacodec_pending_output_eos_action,
-        mediacodec_surface_texture_format, merge_mediacodec_color_metadata,
-        merge_mediacodec_hdr_metadata, nal_length_size_for_config,
+        AMEDIA_OK, MediaCodecFrameLeaseIds, MediaCodecOutputBufferKind,
+        MediaCodecPendingOutputEosAction, MediaStatus, android_color_range_label,
+        android_color_standard_label, android_color_standard_matrix_label,
+        android_color_transfer_label, codec_config_buffers, codec_mime,
+        complete_mediacodec_frame_release, media_codec_close_result,
+        mediacodec_hdr_metadata_from_color, mediacodec_output_buffer_kind,
+        mediacodec_pending_output_eos_action, mediacodec_surface_texture_format,
+        merge_mediacodec_color_metadata, merge_mediacodec_hdr_metadata, nal_length_size_for_config,
         packet_input_data_for_mediacodec,
     };
 
@@ -1010,6 +1045,7 @@ mod android_media {
         output_format: MediaCodecOutputFormat,
         bitstream_format: Option<DecoderBitstreamFormat>,
         nal_length_size: usize,
+        frame_lease_ids: MediaCodecFrameLeaseIds,
         outstanding: HashMap<usize, MediaCodecOutputFrame>,
         saw_input_eos: bool,
         saw_output_eos: bool,
@@ -1146,6 +1182,7 @@ mod android_media {
                 ),
                 bitstream_format: config.bitstream_format.clone(),
                 nal_length_size: nal_length_size_for_config(config),
+                frame_lease_ids: MediaCodecFrameLeaseIds::default(),
                 outstanding: HashMap::new(),
                 saw_input_eos: false,
                 saw_output_eos: false,
@@ -1272,11 +1309,17 @@ mod android_media {
                                 }
                             }
                         }
-                        let handle = output_handle(index)?;
+                        let handle = match self.frame_lease_ids.allocate() {
+                            Ok(handle) => handle,
+                            Err(error) => {
+                                self.release_output_index(index, false)?;
+                                return Err(error);
+                            }
+                        };
                         if self.outstanding.contains_key(&handle) {
                             self.release_output_index(index, false)?;
                             return Err(DecoderError::abi_violation(format!(
-                                "MediaCodec output handle collision for index {index}"
+                                "MediaCodec native-frame lease id collision for handle {handle}"
                             )));
                         }
                         self.outstanding
@@ -1320,12 +1363,13 @@ mod android_media {
             handle: usize,
             presented: bool,
         ) -> Result<(), DecoderError> {
-            let Some(frame) = self.outstanding.remove(&handle) else {
+            let Some(frame) = self.outstanding.get(&handle).copied() else {
                 return Err(DecoderError::abi_violation(format!(
                     "unknown MediaCodec output frame handle {handle}"
                 )));
             };
-            self.release_output_index(frame.index, presented)
+            let release_result = self.release_output_index(frame.index, presented);
+            complete_mediacodec_frame_release(&mut self.outstanding, handle, release_result)
         }
 
         pub(super) fn flush(&mut self) -> Result<(), DecoderError> {
@@ -1490,12 +1534,6 @@ mod android_media {
                 let _ = AMediaFormat_delete(self.format.as_ptr());
             }
         }
-    }
-
-    fn output_handle(index: usize) -> Result<usize, DecoderError> {
-        index
-            .checked_add(1)
-            .ok_or_else(|| DecoderError::internal("MediaCodec output handle overflowed usize"))
     }
 
     fn output_format_from_media_format(
@@ -1663,7 +1701,7 @@ where
 
 fn open_success(session: *mut c_void, info: &DecoderSessionInfo) -> VesperDecoderOpenSessionResult {
     VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         session,
         payload: serialize_payload(info),
     }
@@ -1671,7 +1709,7 @@ fn open_success(session: *mut c_void, info: &DecoderSessionInfo) -> VesperDecode
 
 fn open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
     VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         session: std::ptr::null_mut(),
         payload: serialize_payload(&error),
     }
@@ -1682,14 +1720,14 @@ where
     T: serde::Serialize,
 {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: serialize_payload(payload),
     }
 }
 
 fn process_error(error: DecoderError) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         payload: serialize_payload(&error),
     }
 }
@@ -1699,7 +1737,7 @@ fn native_frame_success(
     handle: usize,
 ) -> VesperDecoderReceiveNativeFrameResult {
     VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         metadata: serialize_payload(metadata),
         handle,
     }
@@ -1707,7 +1745,7 @@ fn native_frame_success(
 
 fn native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameResult {
     VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         metadata: serialize_payload(&error),
         handle: 0,
     }
@@ -1715,7 +1753,7 @@ fn native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameRes
 
 fn pcm_frame_error(error: DecoderError) -> VesperDecoderReceivePcmFrameResult {
     VesperDecoderReceivePcmFrameResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         metadata: serialize_payload(&error),
         data: VesperPluginBytes::default(),
     }
@@ -1756,11 +1794,12 @@ fn plugin_panic_error() -> DecoderError {
 #[cfg(test)]
 mod tests {
     use super::{
-        AMEDIA_OK, MediaCodecOutputBufferKind, MediaCodecPendingOutputEosAction,
-        android_color_standard_label, android_color_standard_matrix_label,
-        android_color_transfer_label, android_native_window_ptr, codec_config_buffers, codec_mime,
-        decoder_capabilities, decoder_native_requirements, decoder_open_session_json,
-        length_prefixed_sample_to_annex_b, media_codec_close_result,
+        AMEDIA_OK, MediaCodecFrameLeaseIds, MediaCodecOutputBufferKind,
+        MediaCodecPendingOutputEosAction, android_color_standard_label,
+        android_color_standard_matrix_label, android_color_transfer_label,
+        android_native_window_ptr, codec_config_buffers, codec_mime,
+        complete_mediacodec_frame_release, decoder_capabilities, decoder_native_requirements,
+        decoder_open_session_json, length_prefixed_sample_to_annex_b, media_codec_close_result,
         mediacodec_hdr_metadata_from_color, mediacodec_output_buffer_kind,
         mediacodec_pending_output_eos_action, mediacodec_surface_texture_format,
         merge_mediacodec_color_metadata, merge_mediacodec_hdr_metadata, nal_length_size_for_config,
@@ -1775,6 +1814,7 @@ mod tests {
         NativeFrameMasteringDisplayMetadata, NativeFramePipelineProfile,
         VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VesperPluginKind, VesperPluginResultStatus,
     };
+    use std::collections::HashMap;
 
     #[test]
     fn mediacodec_close_ignores_delete_failure_after_destructive_teardown() {
@@ -1812,7 +1852,7 @@ mod tests {
             descriptor.abi_version,
             VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT
         );
-        assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder);
+        assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder as u32);
         assert!(!descriptor.api.is_null());
         assert!(!descriptor.plugin_name.is_null());
     }
@@ -2228,6 +2268,48 @@ mod tests {
     }
 
     #[test]
+    fn mediacodec_frame_lease_ids_do_not_reuse_codec_output_indices() {
+        let mut lease_ids = MediaCodecFrameLeaseIds::default();
+
+        let first = lease_ids.allocate().expect("first frame lease id");
+        let second = lease_ids.allocate().expect("second frame lease id");
+
+        assert_eq!(first, 1);
+        assert_eq!(second, 2);
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn mediacodec_frame_lease_id_exhaustion_is_typed() {
+        let mut lease_ids = MediaCodecFrameLeaseIds { next: usize::MAX };
+
+        let error = lease_ids
+            .allocate()
+            .expect_err("lease id overflow must not wrap to a stale identity");
+
+        assert!(matches!(error, DecoderError::Internal { .. }));
+    }
+
+    #[test]
+    fn mediacodec_release_failure_keeps_frame_lease_retryable() {
+        let mut outstanding = HashMap::from([(7_usize, 3_usize)]);
+
+        let error = complete_mediacodec_frame_release(
+            &mut outstanding,
+            7,
+            Err(DecoderError::internal("release output buffer failed")),
+        )
+        .expect_err("the platform release failure must remain visible");
+
+        assert!(error.to_string().contains("release output buffer failed"));
+        assert_eq!(outstanding.get(&7), Some(&3));
+
+        complete_mediacodec_frame_release(&mut outstanding, 7, Ok(()))
+            .expect("retry should retire the lease after release succeeds");
+        assert!(!outstanding.contains_key(&7));
+    }
+
+    #[test]
     fn length_prefixed_sample_rejects_truncated_nal() {
         let error = length_prefixed_sample_to_annex_b(&[0, 0, 0, 4, 0x65], 4)
             .expect_err("truncated sample is invalid");
@@ -2258,7 +2340,7 @@ mod tests {
             )
         };
 
-        assert_eq!(result.status, VesperPluginResultStatus::Failure);
+        assert_eq!(result.status, VesperPluginResultStatus::Failure as u32);
         assert!(result.session.is_null());
         // SAFETY: the payload was produced by this plugin in the current
         // dynamic library and the test consumes it once.

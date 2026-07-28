@@ -10,9 +10,8 @@
       .preload_near_visible = config->preload_near_visible,
       .preload_prefetch_only = config->preload_prefetch_only,
       .auto_advance = config->auto_advance,
-      .repeat_mode = (PlayerFfiPlaylistRepeatMode)config->repeat_mode,
-      .failure_strategy =
-          (PlayerFfiPlaylistFailureStrategy)config->failure_strategy,
+      .repeat_mode = (uint32_t)config->repeat_mode,
+      .failure_strategy = (uint32_t)config->failure_strategy,
   };
   PlayerFfiResolvedPreloadBudgetPolicy ffi_budget = {
       .max_concurrent_tasks = preload_budget->max_concurrent_tasks,

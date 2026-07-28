@@ -45,7 +45,7 @@ android {
         applicationId = "io.github.ikaros.vesper.example.androidcomposehost"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
+        versionCode = 400
         versionName = "0.4.0"
 
         ndk {

@@ -16,3 +16,4 @@ ffmpeg-next = { workspace = true, features = [
 ] }
 player-model = { path = "../../model/player-model" }
 tracing.workspace = true
+url.workspace = true

@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::thread;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 pub mod diagnostics;
@@ -45,6 +45,9 @@ const DESKTOP_ACTIVE_VIDEO_PREFETCH_MEMORY_SCALE: u64 = 4;
 const MAX_DESKTOP_VIDEO_PREFETCH_CAPACITY: usize = 96;
 const DEFAULT_VIDEO_BUFFER_HEADROOM_DURATION: Duration = Duration::from_millis(500);
 const AUDIO_STREAM_BACKPRESSURE_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+const AUDIO_STREAM_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const AUDIO_STREAM_WORKER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(5);
+const MAX_MANAGED_AUDIO_STREAM_WORKERS: usize = 16;
 const AUDIO_OUTPUT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SOFTWARE_BUFFERING_GRACE_PERIOD: Duration = Duration::from_millis(120);
 
@@ -401,6 +404,37 @@ struct PendingAudioStreamWorker {
     receiver: Receiver<Result<AudioStreamWorkerEvent, String>>,
     controller: AudioSinkController,
     interrupt_flag: Option<Arc<AtomicBool>>,
+    managed_worker: Option<ManagedAudioStreamWorker>,
+}
+
+struct ManagedAudioStreamWorker {
+    generation: u64,
+    join_handle: JoinHandle<()>,
+    _permit: AudioStreamWorkerPermit,
+}
+
+struct AudioStreamWorkerPermit;
+
+static ACTIVE_AUDIO_STREAM_WORKERS: AtomicUsize = AtomicUsize::new(0);
+static QUARANTINED_AUDIO_STREAM_WORKERS: OnceLock<StdMutex<Vec<ManagedAudioStreamWorker>>> =
+    OnceLock::new();
+
+impl AudioStreamWorkerPermit {
+    fn try_acquire() -> Option<Self> {
+        reap_finished_audio_stream_workers();
+        ACTIVE_AUDIO_STREAM_WORKERS
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+                (active < MAX_MANAGED_AUDIO_STREAM_WORKERS).then_some(active + 1)
+            })
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+impl Drop for AudioStreamWorkerPermit {
+    fn drop(&mut self) {
+        ACTIVE_AUDIO_STREAM_WORKERS.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 enum AudioStreamWorkerEvent {
@@ -411,6 +445,13 @@ enum AudioStreamWorkerEvent {
 struct PendingAudioMetadataWorker {
     retry_attempt: u32,
     receiver: Receiver<Result<MediaProbe, String>>,
+}
+
+impl Drop for SoftwarePlayerRuntime {
+    fn drop(&mut self) {
+        self.next_frame.take();
+        self.cancel_pending_audio_stream_worker();
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -764,6 +805,7 @@ impl PlayerRuntimeAdapter for SoftwarePlayerRuntime {
 
     fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
         self.poll_scheduled_retries();
+        self.poll_audio_stream_error();
         self.poll_audio_output_device();
         self.poll_audio_metadata_worker();
         self.poll_audio_stream_worker();
@@ -1276,7 +1318,9 @@ impl SoftwarePlayerRuntime {
     }
 
     fn ensure_audio_output(&mut self, position: Duration, playback_rate: f32) -> PlayerResult<()> {
-        if !self.audio_output_enabled {
+        if !self.audio_output_enabled
+            || !should_start_audio_output_for_source(&self.source, &self.media_info)
+        {
             self.disable_audio_output_path();
             return Ok(());
         }
@@ -1576,7 +1620,9 @@ impl SoftwarePlayerRuntime {
                 }
                 self.pending_audio_stream_worker = Some(worker);
             }
-            Ok(Ok(AudioStreamWorkerEvent::Finished)) => {}
+            Ok(Ok(AudioStreamWorkerEvent::Finished)) => {
+                join_pending_audio_stream_worker(worker, false);
+            }
             Ok(Err(error)) => {
                 if is_active_generation {
                     if let Some(controller) = self.audio_sink_controller.as_ref() {
@@ -1597,6 +1643,7 @@ impl SoftwarePlayerRuntime {
                     }
                     self.refresh_playback_finished();
                 }
+                join_pending_audio_stream_worker(worker, false);
             }
             Err(TryRecvError::Empty) => {
                 self.pending_audio_stream_worker = Some(worker);
@@ -1621,6 +1668,7 @@ impl SoftwarePlayerRuntime {
                     }
                     self.refresh_playback_finished();
                 }
+                join_pending_audio_stream_worker(worker, false);
             }
         }
 
@@ -1695,8 +1743,14 @@ impl SoftwarePlayerRuntime {
             self.audio_stream_target_buffer_duration,
         );
         let worker_controller = controller.clone();
+        let worker_permit = AudioStreamWorkerPermit::try_acquire().ok_or_else(|| {
+            PlayerError::new(
+                PlayerErrorCode::BackendFailure,
+                "remote audio worker limit reached while unresolved workers are still shutting down",
+            )
+        })?;
 
-        thread::Builder::new()
+        let join_handle = thread::Builder::new()
             .name("player-remote-audio-stream".to_owned())
             .spawn(move || {
                 let backpressure_interrupt_flag = worker_interrupt_flag.clone();
@@ -1751,6 +1805,11 @@ impl SoftwarePlayerRuntime {
             receiver,
             controller,
             interrupt_flag: Some(interrupt_flag),
+            managed_worker: Some(ManagedAudioStreamWorker {
+                generation,
+                join_handle,
+                _permit: worker_permit,
+            }),
         });
         self.pending_audio_stream_retry = None;
         self.audio_buffering_window = AudioBufferingWindow::Startup;
@@ -1760,10 +1819,7 @@ impl SoftwarePlayerRuntime {
 
     fn cancel_pending_audio_stream_worker(&mut self) {
         if let Some(worker) = self.pending_audio_stream_worker.take() {
-            if let Some(interrupt_flag) = worker.interrupt_flag {
-                interrupt_flag.store(true, Ordering::SeqCst);
-            }
-            worker.controller.notify_backpressure_waiters();
+            join_pending_audio_stream_worker(worker, true);
         }
         self.pending_audio_stream_retry = None;
     }
@@ -1777,6 +1833,19 @@ impl SoftwarePlayerRuntime {
             audio_sink.pause();
         } else {
             audio_sink.play();
+        }
+    }
+
+    fn poll_audio_stream_error(&mut self) {
+        let stream_failed = self
+            .audio_sink
+            .as_ref()
+            .is_some_and(AudioSink::take_stream_error);
+        if stream_failed {
+            self.emit_event(PlayerRuntimeEvent::Error(PlayerError::new(
+                PlayerErrorCode::AudioOutputUnavailable,
+                "default audio output stream reported an error",
+            )));
         }
     }
 
@@ -1807,9 +1876,9 @@ impl SoftwarePlayerRuntime {
         self.audio_output_descriptor = descriptor.clone();
         self.audio_output_config = descriptor.default_output_config.clone();
         self.audio_output_enabled = self.audio_output_config.is_some();
+        self.cancel_pending_audio_stream_worker();
         self.audio_sink = None;
         self.audio_sink_controller = None;
-        self.cancel_pending_audio_stream_worker();
         self.set_playback_clock(current_position);
 
         match self.ensure_audio_output(current_position, current_rate) {
@@ -1837,9 +1906,9 @@ impl SoftwarePlayerRuntime {
             default_output_config: None,
         };
         self.audio_output_config = None;
+        self.cancel_pending_audio_stream_worker();
         self.audio_sink = None;
         self.audio_sink_controller = None;
-        self.cancel_pending_audio_stream_worker();
     }
 
     fn raw_is_buffering(&self) -> bool {
@@ -2060,6 +2129,93 @@ impl SoftwarePlayerRuntime {
     fn observe_resilience_event(&mut self, event: &PlayerRuntimeEvent) {
         observe_resilience_metrics_for_event(&mut self.resilience_metrics, event);
     }
+}
+
+fn join_pending_audio_stream_worker(mut worker: PendingAudioStreamWorker, cancel: bool) {
+    if cancel {
+        if let Some(interrupt_flag) = worker.interrupt_flag.as_ref() {
+            interrupt_flag.store(true, Ordering::SeqCst);
+        }
+        worker.controller.notify_backpressure_waiters();
+    }
+
+    let Some(managed_worker) = worker.managed_worker.take() else {
+        return;
+    };
+    if !wait_for_join_handle(
+        &managed_worker.join_handle,
+        AUDIO_STREAM_WORKER_SHUTDOWN_TIMEOUT,
+    ) {
+        tracing::warn!(
+            generation = worker.generation,
+            timeout_ms = AUDIO_STREAM_WORKER_SHUTDOWN_TIMEOUT.as_millis(),
+            "remote audio worker did not stop before the shutdown deadline; retaining it in the bounded cleanup owner"
+        );
+        quarantine_audio_stream_worker(managed_worker);
+        return;
+    }
+    if managed_worker.join_handle.join().is_err() {
+        tracing::warn!(
+            generation = worker.generation,
+            "remote audio worker panicked during shutdown"
+        );
+    }
+}
+
+fn audio_stream_worker_quarantine() -> &'static StdMutex<Vec<ManagedAudioStreamWorker>> {
+    QUARANTINED_AUDIO_STREAM_WORKERS.get_or_init(|| StdMutex::new(Vec::new()))
+}
+
+fn quarantine_audio_stream_worker(worker: ManagedAudioStreamWorker) {
+    reap_finished_audio_stream_workers();
+    let mut quarantined = audio_stream_worker_quarantine()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    debug_assert!(quarantined.len() < MAX_MANAGED_AUDIO_STREAM_WORKERS);
+    quarantined.push(worker);
+}
+
+fn reap_finished_audio_stream_workers() {
+    let Some(quarantine) = QUARANTINED_AUDIO_STREAM_WORKERS.get() else {
+        return;
+    };
+    let finished = {
+        let mut quarantined = quarantine.lock().unwrap_or_else(|error| error.into_inner());
+        let mut finished = Vec::new();
+        let mut index = 0;
+        while index < quarantined.len() {
+            if quarantined[index].join_handle.is_finished() {
+                finished.push(quarantined.swap_remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        finished
+    };
+    for worker in finished {
+        if worker.join_handle.join().is_err() {
+            tracing::warn!(
+                generation = worker.generation,
+                "quarantined remote audio worker panicked during shutdown"
+            );
+        }
+    }
+}
+
+fn wait_for_join_handle(join_handle: &JoinHandle<()>, timeout: Duration) -> bool {
+    let Some(deadline) = Instant::now().checked_add(timeout) else {
+        return false;
+    };
+    while !join_handle.is_finished() {
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        thread::sleep(
+            AUDIO_STREAM_WORKER_SHUTDOWN_POLL_INTERVAL.min(deadline.saturating_duration_since(now)),
+        );
+    }
+    true
 }
 
 fn buffered_sample_target(sample_rate: u32, channels: u16, duration: Duration) -> usize {
@@ -2354,6 +2510,15 @@ fn audio_output_info(descriptor: &AudioOutputDescriptor) -> Option<PlayerAudioOu
 
 fn should_defer_media_probe_for_source(source: &MediaSource) -> bool {
     source.kind() == MediaSourceKind::Remote && source.protocol() == MediaSourceProtocol::Hls
+}
+
+fn should_start_audio_output_for_source(
+    source: &MediaSource,
+    media_info: &PlayerMediaInfo,
+) -> bool {
+    media_info.audio_streams > 0
+        || media_info.best_audio.is_some()
+        || should_defer_media_probe_for_source(source)
 }
 
 fn player_video_info(video: &VideoStreamProbe) -> PlayerVideoInfo {
@@ -2895,6 +3060,31 @@ mod tests {
     }
 
     #[test]
+    fn audio_output_is_skipped_for_sources_probed_without_audio() {
+        let local_video = MediaSource::new("/tmp/video.mp4");
+        let local_video_info = unresolved_player_media_info(&local_video);
+        assert!(!should_start_audio_output_for_source(
+            &local_video,
+            &local_video_info
+        ));
+
+        let remote_video = MediaSource::new("https://example.com/video.mp4");
+        let mut remote_video_info = unresolved_player_media_info(&remote_video);
+        remote_video_info.audio_streams = 1;
+        assert!(should_start_audio_output_for_source(
+            &remote_video,
+            &remote_video_info
+        ));
+
+        let deferred_hls = MediaSource::new("https://example.com/live/master.m3u8");
+        let deferred_hls_info = unresolved_player_media_info(&deferred_hls);
+        assert!(should_start_audio_output_for_source(
+            &deferred_hls,
+            &deferred_hls_info
+        ));
+    }
+
+    #[test]
     fn seek_drops_pending_deferred_frame_before_video_source_seek() {
         let dropped_before_seek = Arc::new(StdAtomicBool::new(false));
         let seek_observed_drop = Arc::new(StdAtomicBool::new(false));
@@ -2917,6 +3107,99 @@ mod tests {
 
         assert!(dropped_before_seek.load(StdOrdering::SeqCst));
         assert!(seek_observed_drop.load(StdOrdering::SeqCst));
+    }
+
+    #[test]
+    fn runtime_drop_releases_deferred_frame_before_video_source() {
+        let frame_dropped = Arc::new(StdAtomicBool::new(false));
+        let source_observed_frame_drop = Arc::new(StdAtomicBool::new(false));
+        let mut runtime = test_runtime_with_video_source(Box::new(DropOrderVideoSource {
+            frame_dropped: frame_dropped.clone(),
+            source_observed_frame_drop: source_observed_frame_drop.clone(),
+        }));
+        runtime.next_frame = Some(DesktopVideoFrame::native_deferred(
+            Duration::from_millis(100),
+            16,
+            16,
+            Box::new(DropFlagPresentation {
+                dropped: frame_dropped.clone(),
+            }),
+        ));
+
+        drop(runtime);
+
+        assert!(frame_dropped.load(StdOrdering::SeqCst));
+        assert!(
+            source_observed_frame_drop.load(StdOrdering::SeqCst),
+            "video source teardown must observe the deferred frame already released"
+        );
+    }
+
+    #[test]
+    fn join_handle_wait_is_bounded_and_observes_worker_completion() {
+        let completed = thread::spawn(|| thread::sleep(Duration::from_millis(10)));
+        assert!(wait_for_join_handle(&completed, Duration::from_secs(1)));
+        completed.join().expect("completed worker");
+
+        let slow = thread::spawn(|| thread::sleep(Duration::from_millis(50)));
+        let started_at = Instant::now();
+        assert!(!wait_for_join_handle(&slow, Duration::from_millis(5)));
+        assert!(started_at.elapsed() < Duration::from_millis(40));
+        slow.join().expect("slow worker");
+    }
+
+    #[test]
+    fn timed_out_audio_worker_handle_stays_owned_until_reaped() {
+        let generation = u64::MAX - 1;
+        let permit = AudioStreamWorkerPermit::try_acquire().expect("audio worker slot");
+        let (release_sender, release_receiver) = mpsc::channel();
+        let join_handle = thread::spawn(move || {
+            let _ = release_receiver.recv();
+        });
+        quarantine_audio_stream_worker(ManagedAudioStreamWorker {
+            generation,
+            join_handle,
+            _permit: permit,
+        });
+
+        {
+            let quarantined = audio_stream_worker_quarantine()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            assert!(
+                quarantined
+                    .iter()
+                    .any(|worker| worker.generation == generation)
+            );
+        }
+
+        release_sender.send(()).expect("release quarantined worker");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let finished = {
+                let quarantined = audio_stream_worker_quarantine()
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                quarantined
+                    .iter()
+                    .find(|worker| worker.generation == generation)
+                    .is_some_and(|worker| worker.join_handle.is_finished())
+            };
+            if finished || Instant::now() >= deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        reap_finished_audio_stream_workers();
+
+        let quarantined = audio_stream_worker_quarantine()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(
+            quarantined
+                .iter()
+                .all(|worker| worker.generation != generation)
+        );
     }
 
     #[test]
@@ -2989,6 +3272,20 @@ mod tests {
     struct SeekOrderVideoSource {
         dropped_before_seek: Arc<StdAtomicBool>,
         seek_observed_drop: Arc<StdAtomicBool>,
+    }
+
+    struct DropOrderVideoSource {
+        frame_dropped: Arc<StdAtomicBool>,
+        source_observed_frame_drop: Arc<StdAtomicBool>,
+    }
+
+    impl Drop for DropOrderVideoSource {
+        fn drop(&mut self) {
+            self.source_observed_frame_drop.store(
+                self.frame_dropped.load(StdOrdering::SeqCst),
+                StdOrdering::SeqCst,
+            );
+        }
     }
 
     #[derive(Debug)]
@@ -3068,6 +3365,26 @@ mod tests {
                 16,
                 16,
             )))
+        }
+
+        fn buffered_frame_count(&self) -> usize {
+            0
+        }
+
+        fn set_prefetch_limit(&self, _limit: usize) {}
+    }
+
+    impl DesktopVideoSource for DropOrderVideoSource {
+        fn recv_frame(&mut self) -> anyhow::Result<Option<DesktopVideoFrame>> {
+            Ok(None)
+        }
+
+        fn try_recv_frame(&mut self) -> anyhow::Result<DesktopVideoFramePoll> {
+            Ok(DesktopVideoFramePoll::Pending)
+        }
+
+        fn seek_to(&mut self, _position: Duration) -> anyhow::Result<Option<DesktopVideoFrame>> {
+            Ok(None)
         }
 
         fn buffered_frame_count(&self) -> usize {

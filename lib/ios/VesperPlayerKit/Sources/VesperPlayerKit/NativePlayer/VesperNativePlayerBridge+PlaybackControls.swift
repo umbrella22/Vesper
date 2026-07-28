@@ -109,7 +109,7 @@ extension VesperNativePlayerBridge {
         if let nativeSession = nativeFramePipelineCoordinator.activeSession,
            nativeSession.didStart {
             pendingAutoPlay = false
-            nativeSession.play(rate: desiredPlaybackRate)
+            guard nativeSession.play(rate: desiredPlaybackRate) else { return }
             updateState {
                 PlayerHostUiState(
                     title: $0.title,

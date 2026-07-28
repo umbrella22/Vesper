@@ -16,11 +16,11 @@ use super::{
     MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
     MacosFrameProcessorChain, MacosHostPlayerRuntimeAdapterFactory, MacosNativeFrameDecoderState,
     MacosNativeFramePacketSendStatus, MacosNativeFramePacketSource, MacosNativeFramePrefetchWakeup,
-    MacosNativeFrameVideoSource, MacosNativeFrameWorkerEvent, MacosRuntimeActiveFallback,
-    MacosRuntimeAdapter, MacosRuntimeAdapterFallback, MacosRuntimeAdapterInitializer,
-    MacosRuntimeDiagnostics, MacosSoftwarePlayerRuntimeAdapterFactory,
-    MacosSourceNormalizationOutcome, apply_decoder_plugin_diagnostics,
-    apply_decoder_plugin_diagnostics_to_video_decode,
+    MacosNativeFrameVideoSource, MacosNativeFrameWorkerCommand, MacosNativeFrameWorkerEvent,
+    MacosRuntimeActiveFallback, MacosRuntimeAdapter, MacosRuntimeAdapterFallback,
+    MacosRuntimeAdapterInitializer, MacosRuntimeDiagnostics,
+    MacosSoftwarePlayerRuntimeAdapterFactory, MacosSourceNormalizationOutcome,
+    apply_decoder_plugin_diagnostics, apply_decoder_plugin_diagnostics_to_video_decode,
     apply_decoder_plugin_registry_to_video_decode, apply_source_normalizer_open_diagnostics,
     attach_source_normalizer_to_runtime, flush_and_seek_macos_native_frame_source,
     macos_decoder_bitstream_format, macos_native_frame_decoder_video_decode_info,
@@ -37,7 +37,7 @@ use super::{
     source_normalizer_packet_stream_summary,
     source_normalizer_packet_stream_summary_with_audio_decoder_readiness,
     spawn_macos_native_frame_prefetch_worker, strict_frame_processor_fallback_enabled,
-    without_source_normalizer_options,
+    wait_for_macos_native_frame_worker_shutdown, without_source_normalizer_options,
 };
 use player_backend_ffmpeg::{
     CompressedVideoPacket, FfmpegBackend, VideoPacketSource, VideoPacketStreamInfo,
@@ -1686,7 +1686,7 @@ fn macos_runtime_diagnostics_loads_real_videotoolbox_decoder_library() {
 }
 
 #[test]
-#[ignore = "requires a built player-decoder-videotoolbox shared library and a local H264/HEVC source"]
+#[ignore = "requires a built player-decoder-videotoolbox shared library and a local H264/HEVC B-frame source"]
 fn macos_videotoolbox_decoder_decodes_ffmpeg_packets_headless() {
     if !cfg!(target_os = "macos") {
         return;
@@ -1718,6 +1718,10 @@ fn macos_videotoolbox_decoder_decodes_ffmpeg_packets_headless() {
         .open_video_packet_source(MediaSource::new(source.clone()))
         .unwrap_or_else(|error| panic!("failed to open packet source `{source}`: {error}"));
     let stream_info = packet_source.stream_info().clone();
+    assert!(
+        stream_info.reorder_depth.unwrap_or_default() > 0,
+        "VideoToolbox reorder regression requires a source with decoder reorder depth: {source}"
+    );
     let plugin = LoadedDynamicPlugin::load(&plugin_path).unwrap_or_else(|error| {
         panic!(
             "failed to load VideoToolbox decoder plugin `{}`: {error}",
@@ -1745,6 +1749,7 @@ fn macos_videotoolbox_decoder_decodes_ffmpeg_packets_headless() {
             extradata: stream_info.extradata.clone(),
             width: stream_info.width,
             height: stream_info.height,
+            reorder_depth: stream_info.reorder_depth,
             prefer_hardware: true,
             require_cpu_output: false,
             ..DecoderSessionConfig::default()
@@ -1808,6 +1813,34 @@ fn macos_videotoolbox_decoder_decodes_ffmpeg_packets_headless() {
         }
     }
 
+    session
+        .send_packet(
+            &DecoderPacket {
+                end_of_stream: true,
+                ..DecoderPacket::default()
+            },
+            &[],
+        )
+        .expect("VideoToolbox should accept EOF packet");
+    loop {
+        match session
+            .receive_native_frame()
+            .expect("VideoToolbox EOS drain should succeed")
+        {
+            DecoderReceiveNativeFrameOutput::Frame(frame) => {
+                decoded_pts.push(frame.metadata.pts_us);
+                session
+                    .release_native_frame(frame)
+                    .expect("drained native frame release should succeed");
+                decoded_frames = decoded_frames.saturating_add(1);
+            }
+            DecoderReceiveNativeFrameOutput::Eof => break,
+            DecoderReceiveNativeFrameOutput::NeedMoreInput => {
+                panic!("VideoToolbox returned NeedMoreInput after EOF")
+            }
+        }
+    }
+
     assert!(
         decoded_frames > 0,
         "VideoToolbox did not produce a CVPixelBuffer after {submitted_packets} packets from {source}"
@@ -1822,6 +1855,11 @@ fn macos_videotoolbox_decoder_decodes_ffmpeg_packets_headless() {
             .flatten()
             .any(|pts| *pts > 0 && *pts < 1_000_000),
         "VideoToolbox output did not include non-keyframe-era PTS values from the first second: pts={decoded_pts:?}"
+    );
+    let known_pts = decoded_pts.iter().copied().flatten().collect::<Vec<_>>();
+    assert!(
+        known_pts.windows(2).all(|window| window[0] <= window[1]),
+        "VideoToolbox emitted B-frames out of presentation order: pts={known_pts:?}"
     );
 }
 
@@ -3024,6 +3062,7 @@ fn dropping_native_frame_source_releases_queued_processor_output() {
         buffered_frame_count,
         prefetch_limit: Arc::new(AtomicUsize::new(1)),
         prefetch_wakeup,
+        shutdown_requested: Arc::new(AtomicBool::new(false)),
         end_of_input_sent: false,
         end_of_stream_received: false,
         worker: None,
@@ -3046,6 +3085,116 @@ fn dropping_native_frame_source_releases_queued_processor_output() {
             .unwrap_or_default(),
         vec![1_009]
     );
+}
+
+#[test]
+fn dropping_native_frame_source_cancels_permanent_need_more_input_retry() {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let session_state = RecordingNativeDecoderState::shared(events.clone());
+    session_state
+        .lock()
+        .expect("recording decoder state")
+        .suppress_eof = true;
+    let packet_source =
+        FakeNativeFramePacketSource::with_seek_packets(Vec::new(), Vec::new(), events);
+    let source = native_frame_source_for_test(
+        packet_source,
+        session_state.clone(),
+        Arc::new(AtomicUsize::new(0)),
+        false,
+        false,
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !session_state
+        .lock()
+        .map(|state| state.sent_packets.iter().any(|packet| packet.end_of_stream))
+        .unwrap_or(false)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "worker did not submit end of input"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    let (dropped_tx, dropped_rx) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let started_at = Instant::now();
+        drop(source);
+        let _ = dropped_tx.send(started_at.elapsed());
+    });
+    let elapsed = dropped_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("drop must not wait forever on permanent NeedMoreInput");
+
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "cooperative worker cancellation should not consume the fallback timeout: {elapsed:?}"
+    );
+    assert_eq!(
+        session_state
+            .lock()
+            .map(|state| state.close_count)
+            .unwrap_or_default(),
+        1
+    );
+}
+
+#[test]
+fn native_frame_worker_cancels_permanent_need_more_data_retry() {
+    let polls = Arc::new(AtomicUsize::new(0));
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let session_state = RecordingNativeDecoderState::shared(events);
+    let session: Arc<Mutex<Box<dyn NativeDecoderSession>>> =
+        Arc::new(Mutex::new(Box::new(RecordingNativeDecoderSession {
+            state: session_state,
+        })));
+    let shared = Arc::new(Mutex::new(MacosNativeFrameDecoderState {
+        frame_processor_chain: None,
+        presenter: None,
+        presentation_epoch: 0,
+    }));
+    let (command_tx, command_rx) = mpsc::channel();
+    let (frame_tx, _frame_rx) = mpsc::channel();
+    let wakeup = Arc::new(MacosNativeFramePrefetchWakeup::default());
+    let shutdown_requested = Arc::new(AtomicBool::new(false));
+    let worker = spawn_macos_native_frame_prefetch_worker(
+        Box::new(AlwaysNeedMoreDataPacketSource {
+            polls: polls.clone(),
+        }),
+        session,
+        shared,
+        Arc::new(AtomicUsize::new(0)),
+        command_rx,
+        frame_tx,
+        Arc::new(AtomicU64::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(1)),
+        wakeup.clone(),
+        shutdown_requested.clone(),
+    )
+    .expect("test prefetch worker should spawn");
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while polls.load(Ordering::SeqCst) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "worker did not request packet data"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    shutdown_requested.store(true, Ordering::SeqCst);
+    command_tx
+        .send(MacosNativeFrameWorkerCommand::Shutdown)
+        .expect("shutdown command");
+    wakeup.notify();
+    assert!(
+        wait_for_macos_native_frame_worker_shutdown(&worker),
+        "NeedMoreData retry must observe shutdown"
+    );
+    worker.join().expect("worker shutdown");
 }
 
 #[test]
@@ -3152,6 +3301,7 @@ fn macos_native_frame_source_switch_releases_old_source_and_decodes_new_source()
         buffered_frame_count: Arc::new(AtomicUsize::new(1)),
         prefetch_limit: Arc::new(AtomicUsize::new(1)),
         prefetch_wakeup: Arc::new(MacosNativeFramePrefetchWakeup::default()),
+        shutdown_requested: Arc::new(AtomicBool::new(false)),
         end_of_input_sent: false,
         end_of_stream_received: false,
         worker: None,
@@ -3355,6 +3505,7 @@ fn source_normalizer_packet_source_skips_non_video_packets() {
         height: None,
         coded_width: None,
         coded_height: None,
+        reorder_depth: None,
         sample_rate: Some(48_000),
         channels: Some(2),
         channel_layout: Some("stereo".to_owned()),
@@ -3418,6 +3569,7 @@ fn source_normalizer_packet_source_skips_unselected_video_stream() {
         height: Some(360),
         coded_width: Some(640),
         coded_height: Some(360),
+        reorder_depth: None,
         sample_rate: None,
         channels: None,
         channel_layout: None,
@@ -4199,6 +4351,7 @@ fn open_videotoolbox_smoke_packet_source_and_session(
             extradata: stream_info.extradata.clone(),
             width: stream_info.width,
             height: stream_info.height,
+            reorder_depth: stream_info.reorder_depth,
             prefer_hardware: true,
             require_cpu_output: false,
             ..DecoderSessionConfig::default()
@@ -4687,6 +4840,25 @@ struct FakeNativeFramePacketSource {
     events: Arc<std::sync::Mutex<Vec<&'static str>>>,
 }
 
+#[derive(Debug)]
+struct AlwaysNeedMoreDataPacketSource {
+    polls: Arc<AtomicUsize>,
+}
+
+impl MacosNativeFramePacketSource for AlwaysNeedMoreDataPacketSource {
+    fn send_next_packet(
+        &mut self,
+        _decoder_session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
+    ) -> anyhow::Result<MacosNativeFramePacketSendStatus> {
+        self.polls.fetch_add(1, Ordering::SeqCst);
+        Ok(MacosNativeFramePacketSendStatus::NeedMoreData)
+    }
+
+    fn seek_to(&mut self, _position: Duration) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
 impl FakeNativeFramePacketSource {
     fn with_seek_packets(
         packets: Vec<CompressedVideoPacket>,
@@ -4729,6 +4901,7 @@ struct RecordingNativeDecoderState {
     sent_packets: Vec<DecoderPacket>,
     queued_frames: VecDeque<DecoderReceiveNativeFrameOutput>,
     reject_next_packet: bool,
+    suppress_eof: bool,
     next_handle: usize,
     released_handles: usize,
     flush_count: usize,
@@ -4779,7 +4952,7 @@ impl NativeDecoderSession for RecordingNativeDecoderSession {
             state.reject_next_packet = false;
             return Ok(DecoderPacketResult { accepted: false });
         }
-        if packet.end_of_stream {
+        if packet.end_of_stream && !state.suppress_eof {
             state
                 .queued_frames
                 .push_back(DecoderReceiveNativeFrameOutput::Eof);
@@ -4867,6 +5040,7 @@ fn native_frame_source_for_test(
     let buffered_frame_count = Arc::new(AtomicUsize::new(0));
     let prefetch_limit = Arc::new(AtomicUsize::new(1));
     let prefetch_wakeup = Arc::new(MacosNativeFramePrefetchWakeup::default());
+    let shutdown_requested = Arc::new(AtomicBool::new(false));
     let worker = spawn_macos_native_frame_prefetch_worker(
         Box::new(packet_source),
         session.clone(),
@@ -4878,6 +5052,7 @@ fn native_frame_source_for_test(
         buffered_frame_count.clone(),
         prefetch_limit.clone(),
         prefetch_wakeup.clone(),
+        shutdown_requested.clone(),
     )
     .expect("test prefetch worker should spawn");
     MacosNativeFrameVideoSource {
@@ -4892,6 +5067,7 @@ fn native_frame_source_for_test(
         buffered_frame_count,
         prefetch_limit,
         prefetch_wakeup,
+        shutdown_requested,
         end_of_input_sent,
         end_of_stream_received,
         worker: Some(worker),
@@ -4931,6 +5107,7 @@ fn test_video_packet_stream_info() -> VideoPacketStreamInfo {
         extradata: Vec::new(),
         width: Some(320),
         height: Some(180),
+        reorder_depth: None,
         frame_rate: Some(24.0),
     }
 }
@@ -4951,6 +5128,7 @@ fn fake_source_normalizer_packet_stream_info(codec: &str) -> SourceNormalizerPac
             height: Some(180),
             coded_width: Some(320),
             coded_height: Some(180),
+            reorder_depth: None,
             sample_rate: None,
             channels: None,
             channel_layout: None,
@@ -4985,6 +5163,7 @@ fn fake_source_normalizer_packet_stream_info_with_audio(
         height: None,
         coded_width: None,
         coded_height: None,
+        reorder_depth: None,
         sample_rate: Some(48_000),
         channels: Some(2),
         channel_layout: Some("stereo".to_owned()),

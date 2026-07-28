@@ -24,9 +24,9 @@ use player_plugin_loader::{
     SourceNormalizerPacketPluginCapabilitySummary, SourceNormalizerResourcePluginCapabilitySummary,
 };
 use player_runtime::{
-    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadExecutor, DownloadManager,
-    DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadSnapshot,
-    DownloadSource, DownloadTaskId, DownloadTaskSnapshot, FrameProcessorMode,
+    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadExecutor, DownloadExportPlan,
+    DownloadManager, DownloadManagerConfig, DownloadPrepareResult, DownloadProfile,
+    DownloadSnapshot, DownloadSource, DownloadTaskId, DownloadTaskSnapshot, FrameProcessorMode,
     InMemoryDownloadStore, InMemoryPreloadBudgetProvider, NativeFramePipelineMode, PlayerError,
     PlayerErrorCategory, PlayerErrorCode, PlayerPlaybackRoute, PlayerPluginCapabilitySummary,
     PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
@@ -401,6 +401,15 @@ impl MobileDownloadBridgeSession {
     ) -> PlayerResult<PathBuf> {
         self.manager
             .export_task_output(task_id, output_path.as_deref(), progress)
+    }
+
+    pub fn prepare_export_task_output(
+        &self,
+        task_id: DownloadTaskId,
+        output_path: Option<PathBuf>,
+    ) -> PlayerResult<DownloadExportPlan> {
+        self.manager
+            .prepare_export_task_output(task_id, output_path)
     }
 
     pub fn drain_events(&mut self) -> Vec<DownloadEvent> {
@@ -4714,6 +4723,7 @@ mod tests {
             height: Some(1080),
             coded_width: Some(1920),
             coded_height: Some(1080),
+            reorder_depth: None,
             sample_rate: None,
             channels: None,
             channel_layout: None,

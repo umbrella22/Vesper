@@ -199,7 +199,7 @@ impl From<PlayerFfiBufferingPreset> for BridgeBufferingPreset {
 impl From<BridgeBufferingPolicy> for PlayerFfiBufferingPolicy {
     fn from(value: BridgeBufferingPolicy) -> Self {
         Self {
-            preset: value.preset.into(),
+            preset: PlayerFfiBufferingPreset::from(value.preset) as u32,
             has_min_buffer_ms: value.min_buffer_ms.is_some(),
             min_buffer_ms: value.min_buffer_ms.unwrap_or_default(),
             has_max_buffer_ms: value.max_buffer_ms.is_some(),
@@ -243,7 +243,7 @@ impl From<BridgeRetryPolicy> for PlayerFfiRetryPolicy {
             has_max_delay_ms: true,
             max_delay_ms: value.max_delay_ms,
             has_backoff: true,
-            backoff: value.backoff.into(),
+            backoff: PlayerFfiRetryBackoff::from(value.backoff) as u32,
         }
     }
 }
@@ -273,7 +273,7 @@ impl From<PlayerFfiCachePreset> for BridgeCachePreset {
 impl From<BridgeCachePolicy> for PlayerFfiCachePolicy {
     fn from(value: BridgeCachePolicy) -> Self {
         Self {
-            preset: value.preset.into(),
+            preset: PlayerFfiCachePreset::from(value.preset) as u32,
             has_max_memory_bytes: value.max_memory_bytes.is_some(),
             max_memory_bytes: value.max_memory_bytes.unwrap_or_default(),
             has_max_disk_bytes: value.max_disk_bytes.is_some(),
@@ -480,7 +480,7 @@ impl From<BridgeTrackCatalog> for PlayerFfiTrackCatalog {
 impl From<BridgeTrackSelection> for PlayerFfiTrackSelection {
     fn from(value: BridgeTrackSelection) -> Self {
         Self {
-            mode: value.mode.into(),
+            mode: PlayerFfiTrackSelectionMode::from(value.mode) as u32,
             track_id: value
                 .track_id
                 .map(into_c_string_ptr)
@@ -492,7 +492,7 @@ impl From<BridgeTrackSelection> for PlayerFfiTrackSelection {
 impl From<BridgeAbrPolicy> for PlayerFfiAbrPolicy {
     fn from(value: BridgeAbrPolicy) -> Self {
         Self {
-            mode: value.mode.into(),
+            mode: PlayerFfiAbrMode::from(value.mode) as u32,
             track_id: value
                 .track_id
                 .map(into_c_string_ptr)

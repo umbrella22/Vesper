@@ -26,23 +26,30 @@ require_arg() {
   fi
 }
 
+validate_version_components() {
+  local version="$1"
+  local major minor patch
+
+  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Version must be numeric major.minor.patch: $version" >&2
+    exit 1
+  fi
+
+  IFS=. read -r major minor patch <<<"$version"
+  if ((10#$minor > 99 || 10#$patch > 99)); then
+    echo "Release versions require minor and patch in 0..99: $version" >&2
+    exit 1
+  fi
+}
+
 version_to_android_code() {
   local version="$1"
   local major minor patch
 
+  validate_version_components "$version"
   IFS=. read -r major minor patch <<<"$version"
-  if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ || ! "$patch" =~ ^[0-9]+$ ]]; then
-    echo "Version must be numeric major.minor.patch for Android versionCode inference: $version" >&2
-    exit 1
-  fi
 
-  # Preserve the existing pre-1.0 release-number convention: 0.3.0 -> 3.
-  if [[ "$major" -eq 0 && "$patch" -eq 0 ]]; then
-    printf '%d\n' "$minor"
-    return 0
-  fi
-
-  printf '%d\n' "$((major * 10000 + minor * 100 + patch))"
+  printf '%d\n' "$((10#$major * 10000 + 10#$minor * 100 + 10#$patch))"
 }
 
 version_from_tag() {
@@ -211,7 +218,7 @@ resolve_release_metadata() {
     esac
   done
 
-  [[ "$RESOLVED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Version must be numeric major.minor.patch: $RESOLVED_VERSION" >&2; exit 1; }
+  validate_version_components "$RESOLVED_VERSION"
 
   RESOLVED_ANDROID_VERSION_CODE="${RESOLVED_ANDROID_VERSION_CODE:-${VESPER_RELEASE_ANDROID_VERSION_CODE:-}}"
   RESOLVED_IOS_BUILD="${RESOLVED_IOS_BUILD:-${VESPER_RELEASE_IOS_BUILD:-${VESPER_RELEASE_BUILD:-}}}"
@@ -297,7 +304,7 @@ set_version() {
 
   replace_in_file "$ROOT_DIR/examples/android-compose-host/app/build.gradle.kts" 'versionCode = [0-9]+' "versionCode = $android_version_code"
   replace_in_file "$ROOT_DIR/examples/android-compose-host/app/build.gradle.kts" 'versionName = "[0-9]+\.[0-9]+\.[0-9]+"' "versionName = \"$version\""
-  replace_in_file "$ROOT_DIR/examples/flutter-host/pubspec.yaml" 'version: [0-9]+\.[0-9]+\.[0-9]\+[0-9]+' "version: $version+$android_version_code"
+  replace_in_file "$ROOT_DIR/examples/flutter-host/pubspec.yaml" 'version: [0-9]+\.[0-9]+\.[0-9]+\+[0-9]+' "version: $version+$android_version_code"
 
   for changelog in \
     "$ROOT_DIR/CHANGELOG.md" \
@@ -402,7 +409,7 @@ verify_version() {
     esac
   done
 
-  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Version must be numeric major.minor.patch: $version" >&2; exit 1; }
+  validate_version_components "$version"
   ios_build="${ios_build:-$(read_ios_build)}"
   android_version_code="${android_version_code:-$(read_android_version_code)}"
   [[ -n "$ios_build" ]] || { echo "Unable to resolve current iOS build version." >&2; exit 1; }
@@ -515,20 +522,15 @@ verify_version() {
 
 verify_current() {
   local version
-  local ios_build
-  local android_version_code
+  local expected_build
 
   version="$(read_workspace_version)"
-  ios_build="$(read_ios_build)"
-  android_version_code="$(read_android_version_code)"
-
   [[ -n "$version" ]] || { echo "Unable to resolve current workspace version." >&2; exit 1; }
-  [[ -n "$ios_build" ]] || { echo "Unable to resolve current iOS build version." >&2; exit 1; }
-  [[ -n "$android_version_code" ]] || { echo "Unable to resolve current Android versionCode." >&2; exit 1; }
+  expected_build="$(version_to_android_code "$version")"
 
   verify_version "$version" \
-    --ios-build "$ios_build" \
-    --android-version-code "$android_version_code"
+    --ios-build "$expected_build" \
+    --android-version-code "$expected_build"
 }
 
 if [[ $# -lt 1 ]]; then

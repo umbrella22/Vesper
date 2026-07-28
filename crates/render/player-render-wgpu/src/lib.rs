@@ -13,6 +13,7 @@ mod renderer;
 mod shaders;
 mod types;
 mod upload;
+mod validation;
 mod viewport;
 mod window;
 

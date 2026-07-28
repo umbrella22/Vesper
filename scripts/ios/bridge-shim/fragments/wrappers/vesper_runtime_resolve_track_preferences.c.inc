@@ -11,19 +11,17 @@
           track_preferences->select_undetermined_subtitle_language,
       .audio_selection =
           {
-              .mode =
-                  (PlayerFfiTrackSelectionMode)track_preferences->audio_selection.mode_ordinal,
+              .mode = (uint32_t)track_preferences->audio_selection.mode_ordinal,
               .track_id = (char *)track_preferences->audio_selection.track_id,
           },
       .subtitle_selection =
           {
-              .mode =
-                  (PlayerFfiTrackSelectionMode)track_preferences->subtitle_selection.mode_ordinal,
+              .mode = (uint32_t)track_preferences->subtitle_selection.mode_ordinal,
               .track_id = (char *)track_preferences->subtitle_selection.track_id,
           },
       .abr_policy =
           {
-              .mode = (PlayerFfiAbrMode)track_preferences->abr_policy.mode_ordinal,
+              .mode = (uint32_t)track_preferences->abr_policy.mode_ordinal,
               .track_id = (char *)track_preferences->abr_policy.track_id,
               .has_max_bit_rate = track_preferences->abr_policy.has_max_bit_rate,
               .max_bit_rate = non_negative_u64(track_preferences->abr_policy.max_bit_rate),

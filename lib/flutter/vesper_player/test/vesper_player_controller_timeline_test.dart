@@ -209,7 +209,8 @@ void main() {
     unawaited(controller.dispose());
   });
 
-  testWidgets('an error snapshot stops progress sampling', (tester) async {
+  testWidgets('an error remains diagnostic while playing sampling continues',
+      (tester) async {
     platform.initialSnapshot = _playingSnapshot();
     final controller = await VesperPlayerController.create();
     addTearDown(controller.dispose);
@@ -230,12 +231,18 @@ void main() {
 
     expect(controller.snapshot.lastError?.category,
         VesperPlayerErrorCategory.network);
-    expect(platform.sampleCalls, 0);
+    expect(platform.sampleCalls, greaterThanOrEqualTo(1));
+    unawaited(controller.dispose());
+    await tester.pump();
   });
 
-  testWidgets('an error event owns lastError even when its snapshot omits it',
+  testWidgets(
+      'an error event owns lastError while buffering sampling continues',
       (tester) async {
-    platform.initialSnapshot = _playingSnapshot();
+    platform.initialSnapshot = const VesperPlayerSnapshot.initial().copyWith(
+      playbackState: VesperPlaybackState.ready,
+      isBuffering: true,
+    );
     final controller = await VesperPlayerController.create();
     addTearDown(controller.dispose);
 
@@ -256,7 +263,57 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
 
     expect(controller.snapshot.lastError, error);
-    expect(platform.sampleCalls, 0);
+    expect(platform.sampleCalls, greaterThanOrEqualTo(1));
+    unawaited(controller.dispose());
+    await tester.pump();
+  });
+
+  testWidgets('paused finished and disposed controllers do not sample',
+      (tester) async {
+    for (final state in <VesperPlaybackState>[
+      VesperPlaybackState.paused,
+      VesperPlaybackState.finished,
+    ]) {
+      platform.initialSnapshot = const VesperPlayerSnapshot.initial().copyWith(
+        playbackState: state,
+        isBuffering: true,
+        lastError: const VesperPlayerError(
+          message: 'historical error',
+          code: VesperPlayerErrorCode.backendFailure,
+          category: VesperPlayerErrorCategory.network,
+          retriable: true,
+        ),
+      );
+      final controller = await VesperPlayerController.create();
+      await tester.pump(const Duration(seconds: 2));
+      expect(platform.sampleCalls, 0, reason: state.name);
+      unawaited(controller.dispose());
+      await tester.pump();
+    }
+
+    platform.initialSnapshot = _playingSnapshot();
+    final disposedController = await VesperPlayerController.create();
+    unawaited(disposedController.dispose());
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 2));
+    expect(platform.sampleCalls, 0, reason: 'disposed');
+  });
+
+  testWidgets('associated capability probes include only their controller id',
+      (tester) async {
+    platform.initialSnapshot = const VesperPlayerSnapshot.initial();
+    final controller = await VesperPlayerController.create();
+    const request = VesperPlaybackCapabilityProbeRequest(codec: 'avc1');
+
+    await controller.probeAssociatedPlaybackCapability(request);
+    await VesperPlayerController.probePlaybackCapability(request);
+
+    expect(
+      platform.probePlayerIds,
+      <String?>[_TimelineTestPlatform.playerId, null],
+    );
+    unawaited(controller.dispose());
+    await tester.pump();
   });
 }
 
@@ -278,6 +335,7 @@ final class _TimelineTestPlatform extends VesperPlayerPlatform {
   Future<VesperTimeline?>? sampleResult;
   Future<VesperTimeline?> Function()? sampleHandler;
   int sampleCalls = 0;
+  final List<String?> probePlayerIds = <String?>[];
 
   VesperTimeline get sampleTimelineValue => const VesperTimeline(
         kind: VesperTimelineKind.vod,
@@ -329,6 +387,15 @@ final class _TimelineTestPlatform extends VesperPlayerPlatform {
     }
     sampleCalls += 1;
     return sampleResult ?? Future<VesperTimeline?>.value(sampleTimelineValue);
+  }
+
+  @override
+  Future<VesperPlaybackCapabilityProbeResult> probePlaybackCapability(
+    VesperPlaybackCapabilityProbeRequest request, {
+    String? playerId,
+  }) {
+    probePlayerIds.add(playerId);
+    return super.probePlaybackCapability(request);
   }
 
   void emit(VesperPlayerEvent event) => _events.add(event);

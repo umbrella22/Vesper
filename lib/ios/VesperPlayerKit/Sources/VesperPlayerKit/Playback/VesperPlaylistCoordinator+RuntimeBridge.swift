@@ -35,10 +35,19 @@ extension VesperPlaylistConfiguration {
     func toRuntimeBridgePayload() -> VesperRuntimePlaylistConfig {
         VesperRuntimePlaylistConfig(
             playlist_id: duplicatePlaylistCString(playlistId),
-            neighbor_previous: UInt32(max(neighborWindow.previous, 0)),
-            neighbor_next: UInt32(max(neighborWindow.next, 0)),
-            preload_near_visible: UInt32(max(preloadWindow.nearVisible, 0)),
-            preload_prefetch_only: UInt32(max(preloadWindow.prefetchOnly, 0)),
+            neighbor_previous: encodeRuntimeUInt32(
+                neighborWindow.previous,
+                field: "neighborPrevious"
+            ),
+            neighbor_next: encodeRuntimeUInt32(neighborWindow.next, field: "neighborNext"),
+            preload_near_visible: encodeRuntimeUInt32(
+                preloadWindow.nearVisible,
+                field: "preloadNearVisible"
+            ),
+            preload_prefetch_only: encodeRuntimeUInt32(
+                preloadWindow.prefetchOnly,
+                field: "preloadPrefetchOnly"
+            ),
             auto_advance: switchPolicy.autoAdvance,
             repeat_mode: VesperRuntimePlaylistRepeatMode(rawValue: switchPolicy.repeatMode.rawValue)
                 ?? VesperRuntimePlaylistRepeatModeOff,

@@ -443,6 +443,7 @@ pub(crate) fn macos_native_frame_track_info_from_source_normalizer(
             extradata: track.extradata.clone(),
             width: track.width,
             height: track.height,
+            reorder_depth: track.reorder_depth,
             frame_rate: track.frame_rate,
         },
         color: track.color.clone(),

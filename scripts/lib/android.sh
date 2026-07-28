@@ -271,6 +271,71 @@ vesper_android_build_runtime_free_plugin() {
   echo "  $output_dir"
 }
 
+vesper_android_stage_ffmpeg_runtime_libraries() {
+  if [[ $# -lt 7 ]]; then
+    echo "Usage: vesper_android_stage_ffmpeg_runtime_libraries <output-dir> <ffmpeg-output-dir> <openssl-output-dir> <libxml2-output-dir> <use-openssl> <use-libxml2> <abi>..." >&2
+    return 1
+  fi
+
+  local output_dir="${1:-}"
+  local ffmpeg_output_dir="${2:-}"
+  local openssl_output_dir="${3:-}"
+  local libxml2_output_dir="${4:-}"
+  local use_openssl="${5:-0}"
+  local use_libxml2="${6:-0}"
+  local abi
+  local library
+  local runtime_lib_dir
+  local staged_count
+  shift 6
+  local selected_abis=("$@")
+
+  if [[ -z "$output_dir" || -z "$ffmpeg_output_dir" || ${#selected_abis[@]} -eq 0 ]]; then
+    echo "Usage: vesper_android_stage_ffmpeg_runtime_libraries <output-dir> <ffmpeg-output-dir> <openssl-output-dir> <libxml2-output-dir> <use-openssl> <use-libxml2> <abi>..." >&2
+    return 1
+  fi
+
+  rm -rf "$output_dir"
+  mkdir -p "$output_dir"
+  for abi in "${selected_abis[@]}"; do
+    runtime_lib_dir="$ffmpeg_output_dir/$abi/lib"
+    if [[ ! -d "$runtime_lib_dir" ]]; then
+      echo "Missing Android FFmpeg runtime library directory for ABI $abi:" >&2
+      echo "  $runtime_lib_dir" >&2
+      return 1
+    fi
+
+    mkdir -p "$output_dir/$abi"
+    staged_count=0
+    while IFS= read -r library; do
+      cp "$library" "$output_dir/$abi/"
+      staged_count=$((staged_count + 1))
+    done < <(find "$runtime_lib_dir" -maxdepth 1 -type f -name 'lib*.so' | sort)
+
+    if [[ "$use_openssl" == "1" && -d "$openssl_output_dir/$abi/lib" ]]; then
+      while IFS= read -r library; do
+        cp "$library" "$output_dir/$abi/"
+      done < <(
+        find "$openssl_output_dir/$abi/lib" -maxdepth 1 -type f \
+          \( -name 'libssl*.so' -o -name 'libcrypto*.so' \) | sort
+      )
+    fi
+    if [[ "$use_libxml2" == "1" && -d "$libxml2_output_dir/$abi/lib" ]]; then
+      while IFS= read -r library; do
+        cp "$library" "$output_dir/$abi/"
+      done < <(
+        find "$libxml2_output_dir/$abi/lib" -maxdepth 1 -type f -name 'libxml2*.so' | sort
+      )
+    fi
+
+    if [[ "$staged_count" -eq 0 ]]; then
+      echo "No Android FFmpeg runtime libraries were found for ABI $abi:" >&2
+      echo "  $runtime_lib_dir" >&2
+      return 1
+    fi
+  done
+}
+
 vesper_android_resolve_gradle() {
   local project_dir="$1"
   local fallback_project_dir="${2:-}"

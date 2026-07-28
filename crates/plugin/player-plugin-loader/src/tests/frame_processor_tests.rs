@@ -9,7 +9,7 @@ fn dynamic_frame_processor_plugin_open_closes_session_when_success_payload_is_ma
     let api = fixture_frame_processor_malformed_open_payload_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_kind: VesperPluginKind::FrameProcessor as u32,
         plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
     };
@@ -48,7 +48,7 @@ fn dynamic_frame_processor_plugin_adapter_round_trips_native_frame() {
     let api = fixture_frame_processor_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_kind: VesperPluginKind::FrameProcessor as u32,
         plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
     };
@@ -119,7 +119,7 @@ fn dynamic_frame_processor_plugin_close_releases_unreturned_outputs() {
     let api = fixture_frame_processor_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_kind: VesperPluginKind::FrameProcessor as u32,
         plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
     };
@@ -172,7 +172,7 @@ fn dynamic_frame_processor_plugin_close_stops_drain_when_output_release_fails() 
     let api = fixture_failing_release_frame_processor_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_kind: VesperPluginKind::FrameProcessor as u32,
         plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
     };
@@ -231,7 +231,7 @@ fn dynamic_frame_processor_plugin_failed_output_release_remains_retryable() {
     let api = fixture_failing_release_frame_processor_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_kind: VesperPluginKind::FrameProcessor as u32,
         plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
     };
@@ -287,7 +287,7 @@ fn dynamic_frame_processor_plugin_releases_output_returned_after_outstanding_lim
     let api = fixture_frame_processor_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_kind: VesperPluginKind::FrameProcessor as u32,
         plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
     };
@@ -349,7 +349,7 @@ fn dynamic_frame_processor_plugin_does_not_release_passthrough_outputs() {
     let api = fixture_frame_processor_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_kind: VesperPluginKind::FrameProcessor as u32,
         plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
     };
@@ -413,7 +413,7 @@ fn dynamic_frame_processor_plugin_rejects_missing_submit_entry() {
     };
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_kind: VesperPluginKind::FrameProcessor as u32,
         plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
     };
@@ -434,7 +434,7 @@ fn dynamic_frame_processor_plugin_rejects_old_abi_revision() {
     let api = fixture_frame_processor_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
-        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_kind: VesperPluginKind::FrameProcessor as u32,
         plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
     };
@@ -456,7 +456,7 @@ fn plugin_registry_reports_frame_processor_support() {
     let api = fixture_frame_processor_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::FrameProcessor,
+        plugin_kind: VesperPluginKind::FrameProcessor as u32,
         plugin_name: FRAME_PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperFrameProcessorPluginApiV1).cast(),
     };

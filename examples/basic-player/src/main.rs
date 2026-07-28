@@ -1522,7 +1522,7 @@ impl DesktopPlayerApp {
         }
 
         if let Some(frame_texture) = frame_texture.as_ref() {
-            renderer.upload_frame(frame_texture);
+            renderer.upload_frame(frame_texture)?;
             self.last_uploaded_frame_sequence = Some(self.frame_sequence);
             if !self.first_frame_upload_logged {
                 self.first_frame_upload_logged = true;
@@ -1541,7 +1541,7 @@ impl DesktopPlayerApp {
         }
         if upload_overlay {
             if let Some(overlay) = overlay {
-                renderer.upload_overlay(&overlay);
+                renderer.upload_overlay(&overlay)?;
             } else {
                 renderer.clear_overlay();
             }
@@ -1592,9 +1592,9 @@ impl DesktopPlayerApp {
             .renderer
             .as_mut()
             .context("renderer missing while host overlay is active")?;
-        renderer.upload_frame(&frame_texture);
+        renderer.upload_frame(&frame_texture)?;
         if let Some(overlay) = overlay {
-            renderer.upload_overlay(&overlay);
+            renderer.upload_overlay(&overlay)?;
         } else {
             renderer.clear_overlay();
         }
@@ -2178,17 +2178,16 @@ impl DesktopPlayerApp {
         result
     }
 
-    fn resize(&mut self, size: PhysicalSize<u32>) {
+    fn resize(&mut self, size: PhysicalSize<u32>) -> Result<()> {
         if let Some(renderer) = self.renderer.as_mut() {
-            renderer.resize(size);
+            renderer.resize(size)?;
         }
         self.sync_renderer_stage_viewport();
         #[cfg(target_os = "macos")]
         self.sync_native_video_surface_frame();
-        if let Err(error) = self.refresh_overlay_ui_only() {
-            error!(?error, "failed to refresh overlay during resize");
-        }
+        self.refresh_overlay_ui_only()?;
         self.sync_ui_presenter();
+        Ok(())
     }
 
     fn log_runtime_events(&mut self) {
@@ -2535,7 +2534,9 @@ impl ApplicationHandler for DesktopPlayerApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                self.resize(size);
+                if let Err(error) = self.resize(size) {
+                    error!(?error, "failed to resize desktop renderer");
+                }
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }

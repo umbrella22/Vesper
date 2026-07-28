@@ -717,19 +717,17 @@ impl From<PlayerErrorCategory> for FfiErrorCategory {
 
 impl From<PlayerError> for FfiError {
     fn from(value: PlayerError) -> Self {
-        let details_json = value
-            .subtitle_details()
-            .map(|details| {
-                let mut payload = match serde_json::to_value(details) {
-                    Ok(serde_json::Value::Object(payload)) => payload,
-                    _ => serde_json::Map::new(),
-                };
-                payload.insert(
-                    "domain".to_owned(),
-                    serde_json::Value::String("subtitle".to_owned()),
-                );
-                serde_json::Value::Object(payload).to_string()
-            });
+        let details_json = value.subtitle_details().map(|details| {
+            let mut payload = match serde_json::to_value(details) {
+                Ok(serde_json::Value::Object(payload)) => payload,
+                _ => serde_json::Map::new(),
+            };
+            payload.insert(
+                "domain".to_owned(),
+                serde_json::Value::String("subtitle".to_owned()),
+            );
+            serde_json::Value::Object(payload).to_string()
+        });
         Self {
             code: value.code().into(),
             category: value.category().into(),

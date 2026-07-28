@@ -209,11 +209,20 @@ vesper_ffmpeg_validate_metadata_tree() {
   local forbid_network="${2:-false}"
   local forbid_openssl="${3:-false}"
   local metadata_file
+  local metadata_count=0
 
-  [[ -d "$root" ]] || return 0
+  if [[ ! -d "$root" ]]; then
+    echo "FFmpeg metadata directory does not exist: $root" >&2
+    return 1
+  fi
   while IFS= read -r metadata_file; do
     vesper_ffmpeg_validate_metadata_file "$metadata_file" "$forbid_network" "$forbid_openssl"
+    metadata_count=$((metadata_count + 1))
   done < <(find "$root" -type f \( -name '*metadata.txt' -o -name 'vesper-ffmpeg-build-metadata.txt' \) 2>/dev/null | sort)
+  if [[ "$metadata_count" -eq 0 ]]; then
+    echo "FFmpeg metadata directory contains no metadata files: $root" >&2
+    return 1
+  fi
 }
 
 vesper_ffmpeg_validate_android_runtime_artifacts() {

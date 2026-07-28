@@ -22,6 +22,7 @@ void main() {
   final calls = <MethodCall>[];
 
   tearDown(() {
+    VesperExternalPlaybackController.debugResetSharedChannelState();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -272,6 +273,52 @@ void main() {
     expect(eventCancelCount, 2);
   });
 
+  test('temporary controller disposal preserves shared route replay', () async {
+    dynamic routeEvents;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(
+      routesChannel,
+      MockStreamHandler.inline(
+        onListen: (_, events) {
+          routeEvents = events;
+          events.success(<Object?>[
+            <String, Object?>{
+              'routeId': 'uuid:persistent-tv',
+              'name': 'Persistent TV',
+              'kind': 'dlna',
+            },
+          ]);
+        },
+      ),
+    );
+
+    final longLived = VesperExternalPlaybackController();
+    final temporary = VesperExternalPlaybackController();
+    final initialRoutes = <List<VesperExternalPlaybackRoute>>[];
+    final initialSubscription = longLived.routes.listen(initialRoutes.add);
+    await Future<void>.delayed(Duration.zero);
+    expect(initialRoutes.single.single.routeId, 'uuid:persistent-tv');
+
+    temporary.dispose();
+    final replayedRoutes = <List<VesperExternalPlaybackRoute>>[];
+    final replaySubscription = longLived.routes.listen(replayedRoutes.add);
+    await Future<void>.delayed(Duration.zero);
+    expect(replayedRoutes.single.single.routeId, 'uuid:persistent-tv');
+
+    routeEvents.success(<Object?>[]);
+    await Future<void>.delayed(Duration.zero);
+    final afterEmptyRoutes = <List<VesperExternalPlaybackRoute>>[];
+    final afterEmptySubscription =
+        longLived.routes.listen(afterEmptyRoutes.add);
+    await Future<void>.delayed(Duration.zero);
+    expect(afterEmptyRoutes, isEmpty);
+
+    await initialSubscription.cancel();
+    await replaySubscription.cancel();
+    await afterEmptySubscription.cancel();
+    longLived.dispose();
+  });
+
   test('connect decodes unsupported result', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
@@ -418,8 +465,7 @@ void main() {
     }
   });
 
-  testWidgets('route button treats picker failures as handled',
-      (tester) async {
+  testWidgets('route button treats picker failures as handled', (tester) async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
       calls.add(call);

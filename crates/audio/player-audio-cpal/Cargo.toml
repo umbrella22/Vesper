@@ -9,4 +9,4 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 cpal.workspace = true
-rtrb.workspace = true
+crossbeam-queue.workspace = true

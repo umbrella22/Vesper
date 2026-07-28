@@ -18,6 +18,16 @@ pub enum VesperPluginResultStatus {
     Failure = 1,
 }
 
+impl VesperPluginResultStatus {
+    pub const fn from_raw(raw: u32) -> Option<Self> {
+        match raw {
+            value if value == Self::Success as u32 => Some(Self::Success),
+            value if value == Self::Failure as u32 => Some(Self::Failure),
+            _ => None,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// ABI-safe byte buffer transferred between the host and a plugin.
@@ -76,7 +86,69 @@ impl VesperPluginBytes {
 
 #[cfg(test)]
 mod tests {
-    use super::VesperPluginBytes;
+    use std::ffi::{c_char, c_void};
+    use std::mem::{align_of, offset_of, size_of};
+
+    use super::{
+        VesperDecoderOpenSessionResult, VesperDecoderReceiveNativeFrameResult,
+        VesperDecoderReceivePcmFrameResult, VesperFrameProcessorOpenSessionResult,
+        VesperFrameProcessorReceiveFrameResult, VesperPluginBytes, VesperPluginDescriptor,
+        VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
+        VesperSourceNormalizerOpenPacketSessionResult,
+        VesperSourceNormalizerOpenResourceSessionResult, VesperSourceNormalizerReadPacketResult,
+    };
+
+    #[repr(C)]
+    struct LegacyProcessResult {
+        status: VesperPluginResultStatus,
+        payload: VesperPluginBytes,
+    }
+
+    #[repr(C)]
+    struct LegacyOpenResult {
+        status: VesperPluginResultStatus,
+        session: *mut c_void,
+        payload: VesperPluginBytes,
+    }
+
+    #[repr(C)]
+    struct LegacyReceiveHandleResult {
+        status: VesperPluginResultStatus,
+        metadata: VesperPluginBytes,
+        handle: usize,
+    }
+
+    #[repr(C)]
+    struct LegacyReceivePcmResult {
+        status: VesperPluginResultStatus,
+        metadata: VesperPluginBytes,
+        data: VesperPluginBytes,
+    }
+
+    #[repr(C)]
+    struct LegacyReadPacketResult {
+        status: VesperPluginResultStatus,
+        metadata: VesperPluginBytes,
+        data: *const u8,
+        data_len: usize,
+        packet_handle: usize,
+    }
+
+    #[repr(C)]
+    struct LegacyDescriptor {
+        abi_version: u32,
+        plugin_kind: VesperPluginKind,
+        plugin_name: *const c_char,
+        api: *const c_void,
+    }
+
+    macro_rules! assert_status_layout {
+        ($current:ty, $legacy:ty) => {
+            assert_eq!(size_of::<$current>(), size_of::<$legacy>());
+            assert_eq!(align_of::<$current>(), align_of::<$legacy>());
+            assert_eq!(offset_of!($current, status), offset_of!($legacy, status));
+        };
+    }
 
     #[test]
     fn plugin_bytes_round_trip_vec_with_extra_capacity() {
@@ -93,6 +165,125 @@ mod tests {
         let recovered = unsafe { payload.into_vec() };
 
         assert_eq!(recovered, b"decoder payload");
+    }
+
+    #[test]
+    fn raw_status_and_plugin_kind_preserve_wire_layout() {
+        assert_status_layout!(VesperPluginProcessResult, LegacyProcessResult);
+        assert_status_layout!(VesperDecoderOpenSessionResult, LegacyOpenResult);
+        assert_status_layout!(
+            VesperDecoderReceiveNativeFrameResult,
+            LegacyReceiveHandleResult
+        );
+        assert_status_layout!(VesperDecoderReceivePcmFrameResult, LegacyReceivePcmResult);
+        assert_status_layout!(VesperFrameProcessorOpenSessionResult, LegacyOpenResult);
+        assert_status_layout!(
+            VesperFrameProcessorReceiveFrameResult,
+            LegacyReceiveHandleResult
+        );
+        assert_status_layout!(
+            VesperSourceNormalizerOpenPacketSessionResult,
+            LegacyOpenResult
+        );
+        assert_status_layout!(
+            VesperSourceNormalizerOpenResourceSessionResult,
+            LegacyOpenResult
+        );
+        assert_status_layout!(
+            VesperSourceNormalizerReadPacketResult,
+            LegacyReadPacketResult
+        );
+
+        assert_eq!(
+            size_of::<VesperPluginDescriptor>(),
+            size_of::<LegacyDescriptor>()
+        );
+        assert_eq!(
+            align_of::<VesperPluginDescriptor>(),
+            align_of::<LegacyDescriptor>()
+        );
+        assert_eq!(
+            offset_of!(VesperPluginDescriptor, plugin_kind),
+            offset_of!(LegacyDescriptor, plugin_kind)
+        );
+    }
+
+    #[test]
+    fn all_result_status_fields_can_hold_unknown_raw_values() {
+        let raw = 2;
+        assert_eq!(
+            VesperPluginProcessResult {
+                status: raw,
+                ..Default::default()
+            }
+            .status,
+            raw
+        );
+        assert_eq!(
+            VesperDecoderOpenSessionResult {
+                status: raw,
+                ..Default::default()
+            }
+            .status,
+            raw
+        );
+        assert_eq!(
+            VesperDecoderReceiveNativeFrameResult {
+                status: raw,
+                ..Default::default()
+            }
+            .status,
+            raw
+        );
+        assert_eq!(
+            VesperDecoderReceivePcmFrameResult {
+                status: raw,
+                ..Default::default()
+            }
+            .status,
+            raw
+        );
+        assert_eq!(
+            VesperFrameProcessorOpenSessionResult {
+                status: raw,
+                ..Default::default()
+            }
+            .status,
+            raw
+        );
+        assert_eq!(
+            VesperFrameProcessorReceiveFrameResult {
+                status: raw,
+                ..Default::default()
+            }
+            .status,
+            raw
+        );
+        assert_eq!(
+            VesperSourceNormalizerOpenPacketSessionResult {
+                status: raw,
+                ..Default::default()
+            }
+            .status,
+            raw
+        );
+        assert_eq!(
+            VesperSourceNormalizerOpenResourceSessionResult {
+                status: raw,
+                ..Default::default()
+            }
+            .status,
+            raw
+        );
+        assert_eq!(
+            VesperSourceNormalizerReadPacketResult {
+                status: raw,
+                ..Default::default()
+            }
+            .status,
+            raw
+        );
+        assert!(VesperPluginResultStatus::from_raw(raw).is_none());
     }
 }
 
@@ -135,14 +326,14 @@ impl Default for VesperPluginProgressCallbacks {
 /// document. When `status` is `Failure`, it must encode a `ProcessorError`
 /// JSON document.
 pub struct VesperPluginProcessResult {
-    pub status: VesperPluginResultStatus,
+    pub status: u32,
     pub payload: VesperPluginBytes,
 }
 
 impl Default for VesperPluginProcessResult {
     fn default() -> Self {
         Self {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             payload: VesperPluginBytes::null(),
         }
     }
@@ -258,7 +449,7 @@ unsafe impl Sync for VesperBenchmarkSinkApi {}
 /// `status` is `Failure`, `session` must be null and `payload` must encode a
 /// `DecoderError` JSON document.
 pub struct VesperDecoderOpenSessionResult {
-    pub status: VesperPluginResultStatus,
+    pub status: u32,
     pub session: *mut c_void,
     pub payload: VesperPluginBytes,
 }
@@ -266,7 +457,7 @@ pub struct VesperDecoderOpenSessionResult {
 impl Default for VesperDecoderOpenSessionResult {
     fn default() -> Self {
         Self {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             session: std::ptr::null_mut(),
             payload: VesperPluginBytes::null(),
         }
@@ -283,7 +474,7 @@ impl Default for VesperDecoderOpenSessionResult {
 /// `release_native_frame`. On failure, `metadata` must encode a `DecoderError`
 /// JSON document and `handle` must be zero.
 pub struct VesperDecoderReceiveNativeFrameResult {
-    pub status: VesperPluginResultStatus,
+    pub status: u32,
     pub metadata: VesperPluginBytes,
     pub handle: usize,
 }
@@ -291,7 +482,7 @@ pub struct VesperDecoderReceiveNativeFrameResult {
 impl Default for VesperDecoderReceiveNativeFrameResult {
     fn default() -> Self {
         Self {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             metadata: VesperPluginBytes::null(),
             handle: 0,
         }
@@ -307,7 +498,7 @@ impl Default for VesperDecoderReceiveNativeFrameResult {
 /// PCM bytes and must be reclaimed with `free_bytes`. On failure, `metadata`
 /// must encode a `DecoderError` JSON document and `data` must be null.
 pub struct VesperDecoderReceivePcmFrameResult {
-    pub status: VesperPluginResultStatus,
+    pub status: u32,
     pub metadata: VesperPluginBytes,
     pub data: VesperPluginBytes,
 }
@@ -315,7 +506,7 @@ pub struct VesperDecoderReceivePcmFrameResult {
 impl Default for VesperDecoderReceivePcmFrameResult {
     fn default() -> Self {
         Self {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             metadata: VesperPluginBytes::null(),
             data: VesperPluginBytes::null(),
         }
@@ -329,6 +520,10 @@ impl Default for VesperDecoderReceivePcmFrameResult {
 /// The v2 decoder ABI keeps the v1 packet/session lifecycle but returns a
 /// platform native frame handle from `receive_native_frame`. The host must call
 /// `release_native_frame` exactly once for every successful frame handle.
+/// All result `status` fields must contain a `VesperPluginResultStatus` raw
+/// value. On any other value the host reclaims independent byte payloads and
+/// closes the session. `close_session` must accept every non-null session
+/// returned by `open_session_json` and reclaim all handles not yet released.
 pub struct VesperDecoderPluginApiV2 {
     pub context: *mut c_void,
     pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
@@ -557,7 +752,7 @@ unsafe impl Sync for VesperDecoderPluginApiV5 {}
 /// When `status` is `Failure`, `session` must be null and `payload` must encode
 /// a `FrameProcessorError` JSON document.
 pub struct VesperFrameProcessorOpenSessionResult {
-    pub status: VesperPluginResultStatus,
+    pub status: u32,
     pub session: *mut c_void,
     pub payload: VesperPluginBytes,
 }
@@ -565,7 +760,7 @@ pub struct VesperFrameProcessorOpenSessionResult {
 impl Default for VesperFrameProcessorOpenSessionResult {
     fn default() -> Self {
         Self {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             session: std::ptr::null_mut(),
             payload: VesperPluginBytes::null(),
         }
@@ -582,7 +777,7 @@ impl Default for VesperFrameProcessorOpenSessionResult {
 /// `release_frame`. On failure, `metadata` must encode a `FrameProcessorError`
 /// JSON document and `handle` must be zero.
 pub struct VesperFrameProcessorReceiveFrameResult {
-    pub status: VesperPluginResultStatus,
+    pub status: u32,
     pub metadata: VesperPluginBytes,
     pub handle: usize,
 }
@@ -590,7 +785,7 @@ pub struct VesperFrameProcessorReceiveFrameResult {
 impl Default for VesperFrameProcessorReceiveFrameResult {
     fn default() -> Self {
         Self {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             metadata: VesperPluginBytes::null(),
             handle: 0,
         }
@@ -605,6 +800,10 @@ impl Default for VesperFrameProcessorReceiveFrameResult {
 /// frames only. `submit_frame_json` borrows the input handle for the duration of
 /// a synchronous submit call; processor-owned output handles are returned by
 /// `receive_frame` and must be released exactly once through `release_frame`.
+/// All result `status` fields must contain a `VesperPluginResultStatus` raw
+/// value. On any other value the host reclaims independent byte payloads and
+/// closes the session. `close_session` must accept every non-null session
+/// returned by `open_session_json` and reclaim all handles not yet released.
 pub struct VesperFrameProcessorPluginApiV1 {
     pub context: *mut c_void,
     pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
@@ -672,7 +871,7 @@ unsafe impl Sync for VesperFrameProcessorPluginApiV1 {}
 /// document. When `status` is `Failure`, `session` must be null and `payload`
 /// must encode a `SourceNormalizerError` JSON document.
 pub struct VesperSourceNormalizerOpenPacketSessionResult {
-    pub status: VesperPluginResultStatus,
+    pub status: u32,
     pub session: *mut c_void,
     pub payload: VesperPluginBytes,
 }
@@ -680,7 +879,7 @@ pub struct VesperSourceNormalizerOpenPacketSessionResult {
 impl Default for VesperSourceNormalizerOpenPacketSessionResult {
     fn default() -> Self {
         Self {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             session: std::ptr::null_mut(),
             payload: VesperPluginBytes::null(),
         }
@@ -696,7 +895,7 @@ impl Default for VesperSourceNormalizerOpenPacketSessionResult {
 /// JSON document. When `status` is `Failure`, `session` must be null and
 /// `payload` must encode a `SourceNormalizerError` JSON document.
 pub struct VesperSourceNormalizerOpenResourceSessionResult {
-    pub status: VesperPluginResultStatus,
+    pub status: u32,
     pub session: *mut c_void,
     pub payload: VesperPluginBytes,
 }
@@ -704,7 +903,7 @@ pub struct VesperSourceNormalizerOpenResourceSessionResult {
 impl Default for VesperSourceNormalizerOpenResourceSessionResult {
     fn default() -> Self {
         Self {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             session: std::ptr::null_mut(),
             payload: VesperPluginBytes::null(),
         }
@@ -720,7 +919,7 @@ impl Default for VesperSourceNormalizerOpenResourceSessionResult {
 /// packet bytes until the host calls `release_packet` with `packet_handle`.
 /// On failure, `metadata` must encode `SourceNormalizerError`.
 pub struct VesperSourceNormalizerReadPacketResult {
-    pub status: VesperPluginResultStatus,
+    pub status: u32,
     pub metadata: VesperPluginBytes,
     pub data: *const u8,
     pub data_len: usize,
@@ -730,7 +929,7 @@ pub struct VesperSourceNormalizerReadPacketResult {
 impl Default for VesperSourceNormalizerReadPacketResult {
     fn default() -> Self {
         Self {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             metadata: VesperPluginBytes::null(),
             data: std::ptr::null(),
             data_len: 0,
@@ -746,6 +945,10 @@ impl Default for VesperSourceNormalizerReadPacketResult {
 /// The v2 source normalizer ABI produces borrowed compressed packets. Packet
 /// bytes remain plugin-owned and valid until the host calls `release_packet`
 /// with the returned packet handle.
+/// All result `status` fields must contain a `VesperPluginResultStatus` raw
+/// value. On any other value the host releases a non-zero packet handle when
+/// possible and closes the session. Close callbacks must reclaim remaining
+/// packet or resource handles owned by that session.
 pub struct VesperSourceNormalizerPluginApiV2 {
     pub context: *mut c_void,
     pub destroy: Option<unsafe extern "C" fn(context: *mut c_void)>,
@@ -1001,7 +1204,7 @@ unsafe impl Sync for VesperSourceNormalizerPluginApiV4 {}
 /// point to the ABI table matching `plugin_kind`.
 pub struct VesperPluginDescriptor {
     pub abi_version: u32,
-    pub plugin_kind: VesperPluginKind,
+    pub plugin_kind: u32,
     pub plugin_name: *const c_char,
     pub api: *const c_void,
 }

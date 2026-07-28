@@ -4,11 +4,14 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use cpal::Stream;
 use cpal::traits::{HostTrait, StreamTrait};
-use rtrb::RingBuffer;
+use crossbeam_queue::ArrayQueue;
 
-use crate::ring::{AudioRingSample, audio_ring_capacity_samples};
+use crate::ring::{AudioRingBlock, audio_ring_capacity_blocks, audio_ring_capacity_samples};
 use crate::stream::build_output_stream;
-use crate::timeline::{AudioBufferWindowWaitResult, SharedPlaybackState, sanitize_playback_rate};
+use crate::timeline::{
+    AudioBufferWindowWaitResult, MAX_ACCOUNTED_AUDIO_SAMPLES, SharedPlaybackState,
+    sanitize_playback_rate,
+};
 use crate::types::AudioOutputConfig;
 
 pub struct AudioSink {
@@ -42,15 +45,25 @@ impl AudioSink {
         }
 
         let ring_capacity = audio_ring_capacity_samples(output_config.sample_rate, channels);
-        let (producer, consumer) = RingBuffer::<AudioRingSample>::new(ring_capacity);
+        if ring_capacity > MAX_ACCOUNTED_AUDIO_SAMPLES {
+            anyhow::bail!("audio output ring capacity exceeds the supported sample count");
+        }
+        let Some(ring_block_capacity) = audio_ring_capacity_blocks(ring_capacity, channels) else {
+            anyhow::bail!(
+                "audio output channel count {} exceeds the supported block width",
+                channels
+            );
+        };
         let state = Arc::new(SharedPlaybackState::new(
-            producer,
+            Arc::new(ArrayQueue::<AudioRingBlock>::new(ring_block_capacity)),
+            ring_capacity,
+            output_config.channels,
             media_start,
             sanitize_playback_rate(playback_rate),
             start_paused,
         ));
 
-        let stream = build_output_stream(&device, &output_config, consumer, state.clone())?;
+        let stream = build_output_stream(&device, &output_config, state.clone())?;
         if !start_paused {
             stream
                 .play()
@@ -104,6 +117,10 @@ impl AudioSink {
 
     pub fn channels(&self) -> u16 {
         self.channels
+    }
+
+    pub fn take_stream_error(&self) -> bool {
+        self.state.take_stream_error()
     }
 }
 

@@ -1,16 +1,17 @@
 use super::{
-    FfiPlayerInitializer, PlayerFfiAbrMode, PlayerFfiBufferingPolicy, PlayerFfiCachePolicy,
-    PlayerFfiCallStatus, PlayerFfiCommandKind, PlayerFfiError, PlayerFfiErrorCategory,
-    PlayerFfiErrorCode, PlayerFfiEvent, PlayerFfiEventKind, PlayerFfiEventList,
-    PlayerFfiFrameProcessorPolicyAction, PlayerFfiFrameProcessorWarningKind, PlayerFfiHandle,
-    PlayerFfiInitializerHandle, PlayerFfiMediaInfo, PlayerFfiPlaybackState,
+    FfiPlayerInitializer, PlayerFfiAbrMode, PlayerFfiAbrPolicy, PlayerFfiBufferingPolicy,
+    PlayerFfiCachePolicy, PlayerFfiCallStatus, PlayerFfiCommandKind, PlayerFfiError,
+    PlayerFfiErrorCategory, PlayerFfiErrorCode, PlayerFfiEvent, PlayerFfiEventKind,
+    PlayerFfiEventList, PlayerFfiFrameProcessorPolicyAction, PlayerFfiFrameProcessorWarningKind,
+    PlayerFfiHandle, PlayerFfiInitializerHandle, PlayerFfiMediaInfo, PlayerFfiPlaybackState,
     PlayerFfiPluginCapabilityKind, PlayerFfiPluginDiagnosticStatus, PlayerFfiPluginParticipation,
     PlayerFfiResolvedResiliencePolicy, PlayerFfiRetryPolicy, PlayerFfiRuntimeWarningDomain,
-    PlayerFfiSnapshot, PlayerFfiStartup, PlayerFfiTrackKind, PlayerFfiVideoFrame,
-    into_initializer_handle, player_ffi_event_list_free, player_ffi_initializer_destroy,
-    player_ffi_initializer_initialize, player_ffi_initializer_media_info,
-    player_ffi_initializer_probe_uri, player_ffi_initializer_startup, player_ffi_media_info_free,
-    player_ffi_player_destroy, player_ffi_player_dispatch, player_ffi_player_drain_events,
+    PlayerFfiSnapshot, PlayerFfiStartup, PlayerFfiTrackKind, PlayerFfiTrackSelection,
+    PlayerFfiVideoFrame, into_initializer_handle, player_ffi_event_list_free,
+    player_ffi_initializer_destroy, player_ffi_initializer_initialize,
+    player_ffi_initializer_media_info, player_ffi_initializer_probe_uri,
+    player_ffi_initializer_startup, player_ffi_media_info_free, player_ffi_player_destroy,
+    player_ffi_player_dispatch, player_ffi_player_drain_events,
     player_ffi_player_set_playback_rate, player_ffi_resolve_resilience_policy,
     player_ffi_snapshot_free, player_ffi_startup_free, player_ffi_video_frame_free,
 };
@@ -76,6 +77,55 @@ fn resolve_resilience_policy_rejects_invalid_raw_source_kind() {
 }
 
 #[test]
+fn inbound_wire_ordinals_are_validated_before_conversion() {
+    let mut error = super::to_bridge_command(7, 0).expect_err("unknown command must fail");
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    unsafe { super::player_ffi_error_free(&mut error) };
+
+    let buffering = PlayerFfiBufferingPolicy {
+        preset: 99,
+        ..PlayerFfiBufferingPolicy::default()
+    };
+    let mut error = super::read_buffering_policy(&buffering).expect_err("unknown preset must fail");
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    unsafe { super::player_ffi_error_free(&mut error) };
+
+    let retry = PlayerFfiRetryPolicy {
+        has_backoff: true,
+        backoff: 99,
+        ..PlayerFfiRetryPolicy::default()
+    };
+    let mut error = super::read_retry_policy(&retry).expect_err("unknown backoff must fail");
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    unsafe { super::player_ffi_error_free(&mut error) };
+
+    let cache = PlayerFfiCachePolicy {
+        preset: 99,
+        ..PlayerFfiCachePolicy::default()
+    };
+    let mut error = super::read_cache_policy(&cache).expect_err("unknown cache preset must fail");
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    unsafe { super::player_ffi_error_free(&mut error) };
+
+    let selection = PlayerFfiTrackSelection {
+        mode: 99,
+        ..PlayerFfiTrackSelection::default()
+    };
+    let mut error =
+        super::read_track_selection(&selection).expect_err("unknown selection mode must fail");
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    unsafe { super::player_ffi_error_free(&mut error) };
+
+    let policy = PlayerFfiAbrPolicy {
+        mode: 99,
+        ..PlayerFfiAbrPolicy::default()
+    };
+    let mut error = super::read_abr_policy(&policy).expect_err("unknown ABR mode must fail");
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    unsafe { super::player_ffi_error_free(&mut error) };
+}
+
+#[test]
 fn initializer_probe_uri_rejects_null_output_without_error_pointer() {
     unsafe {
         let uri = CString::new("https://example.com/master.m3u8").expect("valid uri");
@@ -123,7 +173,7 @@ fn initializer_initialize_and_dispatch_accept_optional_frame_output() {
         let mut snapshot = PlayerFfiSnapshot::default();
         let dispatch_status = player_ffi_player_dispatch(
             player_handle,
-            PlayerFfiCommandKind::Play,
+            PlayerFfiCommandKind::Play as u32,
             0,
             &mut applied,
             ptr::null_mut(),
@@ -145,7 +195,7 @@ fn initializer_initialize_and_dispatch_accept_optional_frame_output() {
         );
         assert_eq!(
             snapshot.media_info.track_selection.abr_policy.mode,
-            PlayerFfiAbrMode::FixedTrack
+            PlayerFfiAbrMode::FixedTrack as u32
         );
         player_ffi_snapshot_free(&mut snapshot);
 
@@ -389,7 +439,7 @@ fn player_drain_events_preserves_order_and_is_one_shot() {
         let mut snapshot = PlayerFfiSnapshot::default();
         let play_status = player_ffi_player_dispatch(
             player_handle,
-            PlayerFfiCommandKind::Play,
+            PlayerFfiCommandKind::Play as u32,
             0,
             &mut applied,
             ptr::null_mut(),
@@ -462,7 +512,7 @@ fn player_drain_events_preserves_runtime_warning_payload() {
         let mut snapshot = PlayerFfiSnapshot::default();
         let dispatch_status = player_ffi_player_dispatch(
             player_handle,
-            PlayerFfiCommandKind::SeekTo,
+            PlayerFfiCommandKind::SeekTo as u32,
             42,
             &mut applied,
             ptr::null_mut(),

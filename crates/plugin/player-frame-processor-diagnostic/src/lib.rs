@@ -121,7 +121,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
         },
         descriptor: VesperPluginDescriptor {
             abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-            plugin_kind: VesperPluginKind::FrameProcessor,
+            plugin_kind: VesperPluginKind::FrameProcessor as u32,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
         },
@@ -178,7 +178,7 @@ unsafe extern "C" fn processor_open_session_json(
             max_in_flight_frames: Some(1),
         };
         VesperFrameProcessorOpenSessionResult {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             session: session.cast::<c_void>(),
             payload: serialize_payload(&info),
         }
@@ -455,7 +455,7 @@ fn decode_json<T: serde::de::DeserializeOwned>(
 
 fn open_error(error: FrameProcessorError) -> VesperFrameProcessorOpenSessionResult {
     VesperFrameProcessorOpenSessionResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         session: std::ptr::null_mut(),
         payload: serialize_payload(&error),
     }
@@ -463,14 +463,14 @@ fn open_error(error: FrameProcessorError) -> VesperFrameProcessorOpenSessionResu
 
 fn process_success<T: serde::Serialize>(value: &T) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: serialize_payload(value),
     }
 }
 
 fn process_error(error: FrameProcessorError) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         payload: serialize_payload(&error),
     }
 }
@@ -480,7 +480,7 @@ fn receive_success(
     handle: usize,
 ) -> VesperFrameProcessorReceiveFrameResult {
     VesperFrameProcessorReceiveFrameResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         metadata: serialize_payload(metadata),
         handle,
     }
@@ -488,7 +488,7 @@ fn receive_success(
 
 fn receive_error(error: FrameProcessorError) -> VesperFrameProcessorReceiveFrameResult {
     VesperFrameProcessorReceiveFrameResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         metadata: serialize_payload(&error),
         handle: 0,
     }

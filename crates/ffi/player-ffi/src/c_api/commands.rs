@@ -1,13 +1,26 @@
 use super::*;
 
-pub(crate) fn to_bridge_command(command: PlayerFfiCommandKind, position_ms: u64) -> FfiCommand {
+pub(crate) fn to_bridge_command(
+    command: u32,
+    position_ms: u64,
+) -> Result<FfiCommand, PlayerFfiError> {
     match command {
-        PlayerFfiCommandKind::Play => FfiCommand::Play,
-        PlayerFfiCommandKind::Pause => FfiCommand::Pause,
-        PlayerFfiCommandKind::TogglePause => FfiCommand::TogglePause,
-        PlayerFfiCommandKind::SeekTo => FfiCommand::SeekTo { position_ms },
-        PlayerFfiCommandKind::Stop => FfiCommand::Stop,
+        value if value == PlayerFfiCommandKind::Play as u32 => Ok(FfiCommand::Play),
+        value if value == PlayerFfiCommandKind::Pause as u32 => Ok(FfiCommand::Pause),
+        value if value == PlayerFfiCommandKind::TogglePause as u32 => Ok(FfiCommand::TogglePause),
+        value if value == PlayerFfiCommandKind::SeekTo as u32 => {
+            Ok(FfiCommand::SeekTo { position_ms })
+        }
+        value if value == PlayerFfiCommandKind::Stop as u32 => Ok(FfiCommand::Stop),
+        value => Err(invalid_ordinal("command", value)),
     }
+}
+
+fn invalid_ordinal(field: &str, value: u32) -> PlayerFfiError {
+    owned_api_error(
+        PlayerFfiErrorCode::InvalidArgument,
+        &format!("{field} had invalid value {value}"),
+    )
 }
 
 pub(crate) fn read_optional_c_string(
@@ -42,9 +55,16 @@ pub(crate) fn read_track_selection(
 
     Ok(BridgeTrackSelection {
         mode: match selection.mode {
-            PlayerFfiTrackSelectionMode::Auto => BridgeTrackSelectionMode::Auto,
-            PlayerFfiTrackSelectionMode::Disabled => BridgeTrackSelectionMode::Disabled,
-            PlayerFfiTrackSelectionMode::Track => BridgeTrackSelectionMode::Track,
+            value if value == PlayerFfiTrackSelectionMode::Auto as u32 => {
+                BridgeTrackSelectionMode::Auto
+            }
+            value if value == PlayerFfiTrackSelectionMode::Disabled as u32 => {
+                BridgeTrackSelectionMode::Disabled
+            }
+            value if value == PlayerFfiTrackSelectionMode::Track as u32 => {
+                BridgeTrackSelectionMode::Track
+            }
+            value => return Err(invalid_ordinal("selection.mode", value)),
         },
         track_id: read_optional_c_string(selection.track_id, "selection.track_id")?,
     })
@@ -63,9 +83,10 @@ pub(crate) fn read_abr_policy(
 
     Ok(BridgeAbrPolicy {
         mode: match policy.mode {
-            PlayerFfiAbrMode::Auto => BridgeAbrMode::Auto,
-            PlayerFfiAbrMode::Constrained => BridgeAbrMode::Constrained,
-            PlayerFfiAbrMode::FixedTrack => BridgeAbrMode::FixedTrack,
+            value if value == PlayerFfiAbrMode::Auto as u32 => BridgeAbrMode::Auto,
+            value if value == PlayerFfiAbrMode::Constrained as u32 => BridgeAbrMode::Constrained,
+            value if value == PlayerFfiAbrMode::FixedTrack as u32 => BridgeAbrMode::FixedTrack,
+            value => return Err(invalid_ordinal("policy.mode", value)),
         },
         track_id: read_optional_c_string(policy.track_id, "policy.track_id")?,
         max_bit_rate: policy.has_max_bit_rate.then_some(policy.max_bit_rate),
@@ -139,7 +160,24 @@ pub(crate) fn read_buffering_policy(
     };
 
     Ok(BridgeBufferingPolicy {
-        preset: policy.preset.into(),
+        preset: match policy.preset {
+            value if value == PlayerFfiBufferingPreset::Default as u32 => {
+                BridgeBufferingPreset::Default
+            }
+            value if value == PlayerFfiBufferingPreset::Balanced as u32 => {
+                BridgeBufferingPreset::Balanced
+            }
+            value if value == PlayerFfiBufferingPreset::Streaming as u32 => {
+                BridgeBufferingPreset::Streaming
+            }
+            value if value == PlayerFfiBufferingPreset::Resilient as u32 => {
+                BridgeBufferingPreset::Resilient
+            }
+            value if value == PlayerFfiBufferingPreset::LowLatency as u32 => {
+                BridgeBufferingPreset::LowLatency
+            }
+            value => return Err(invalid_ordinal("buffering.preset", value)),
+        },
         min_buffer_ms: policy.has_min_buffer_ms.then_some(policy.min_buffer_ms),
         max_buffer_ms: policy.has_max_buffer_ms.then_some(policy.max_buffer_ms),
         buffer_for_playback_ms: policy
@@ -181,7 +219,16 @@ pub(crate) fn read_retry_policy(
             5_000
         },
         backoff: if policy.has_backoff {
-            policy.backoff.into()
+            match policy.backoff {
+                value if value == PlayerFfiRetryBackoff::Fixed as u32 => BridgeRetryBackoff::Fixed,
+                value if value == PlayerFfiRetryBackoff::Linear as u32 => {
+                    BridgeRetryBackoff::Linear
+                }
+                value if value == PlayerFfiRetryBackoff::Exponential as u32 => {
+                    BridgeRetryBackoff::Exponential
+                }
+                value => return Err(invalid_ordinal("retry.backoff", value)),
+            }
         } else {
             BridgeRetryBackoff::Linear
         },
@@ -200,7 +247,17 @@ pub(crate) fn read_cache_policy(
     };
 
     Ok(BridgeCachePolicy {
-        preset: policy.preset.into(),
+        preset: match policy.preset {
+            value if value == PlayerFfiCachePreset::Default as u32 => BridgeCachePreset::Default,
+            value if value == PlayerFfiCachePreset::Disabled as u32 => BridgeCachePreset::Disabled,
+            value if value == PlayerFfiCachePreset::Streaming as u32 => {
+                BridgeCachePreset::Streaming
+            }
+            value if value == PlayerFfiCachePreset::Resilient as u32 => {
+                BridgeCachePreset::Resilient
+            }
+            value => return Err(invalid_ordinal("cache.preset", value)),
+        },
         max_memory_bytes: policy
             .has_max_memory_bytes
             .then_some(policy.max_memory_bytes),

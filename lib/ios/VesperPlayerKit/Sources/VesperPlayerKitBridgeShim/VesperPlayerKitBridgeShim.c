@@ -59,7 +59,7 @@ typedef enum PlayerFfiAbrMode {
 } PlayerFfiAbrMode;
 
 typedef struct PlayerFfiBufferingPolicy {
-  PlayerFfiBufferingPreset preset;
+  uint32_t preset;
   bool has_min_buffer_ms;
   uint64_t min_buffer_ms;
   bool has_max_buffer_ms;
@@ -79,11 +79,11 @@ typedef struct PlayerFfiRetryPolicy {
   bool has_max_delay_ms;
   uint64_t max_delay_ms;
   bool has_backoff;
-  PlayerFfiRetryBackoff backoff;
+  uint32_t backoff;
 } PlayerFfiRetryPolicy;
 
 typedef struct PlayerFfiCachePolicy {
-  PlayerFfiCachePreset preset;
+  uint32_t preset;
   bool has_max_memory_bytes;
   uint64_t max_memory_bytes;
   bool has_max_disk_bytes;
@@ -115,12 +115,12 @@ typedef struct PlayerFfiResolvedPreloadBudgetPolicy {
 } PlayerFfiResolvedPreloadBudgetPolicy;
 
 typedef struct PlayerFfiTrackSelection {
-  PlayerFfiTrackSelectionMode mode;
+  uint32_t mode;
   char *track_id;
 } PlayerFfiTrackSelection;
 
 typedef struct PlayerFfiAbrPolicy {
-  PlayerFfiAbrMode mode;
+  uint32_t mode;
   char *track_id;
   bool has_max_bit_rate;
   uint64_t max_bit_rate;
@@ -164,11 +164,11 @@ extern PlayerFfiCallStatus player_ffi_resolve_preload_budget(
 
 typedef struct PlayerFfiPreloadCandidate {
   const char *source_uri;
-  int scope_kind;
+  uint32_t scope_kind;
   const char *scope_id;
-  int candidate_kind;
-  int selection_hint;
-  int priority;
+  uint32_t candidate_kind;
+  uint32_t selection_hint;
+  uint32_t priority;
   uint64_t expected_memory_bytes;
   uint64_t expected_disk_bytes;
   bool has_ttl_ms;
@@ -234,8 +234,8 @@ typedef struct PlayerFfiPlaylistConfig {
   uint32_t preload_near_visible;
   uint32_t preload_prefetch_only;
   bool auto_advance;
-  PlayerFfiPlaylistRepeatMode repeat_mode;
-  PlayerFfiPlaylistFailureStrategy failure_strategy;
+  uint32_t repeat_mode;
+  uint32_t failure_strategy;
 } PlayerFfiPlaylistConfig;
 
 typedef struct PlayerFfiPlaylistQueueItem {
@@ -251,7 +251,7 @@ typedef struct PlayerFfiPlaylistQueueItem {
 
 typedef struct PlayerFfiPlaylistViewportHint {
   const char *item_id;
-  PlayerFfiPlaylistViewportHintKind kind;
+  uint32_t kind;
   uint32_t order;
 } PlayerFfiPlaylistViewportHint;
 
@@ -292,7 +292,7 @@ typedef enum PlayerFfiDownloadStreamKind {
 
 typedef struct PlayerFfiDownloadSource {
   char *source_uri;
-  PlayerFfiDownloadContentFormat content_format;
+  uint32_t content_format;
   char *manifest_uri;
   char **header_names;
   char **header_values;
@@ -306,7 +306,7 @@ typedef struct PlayerFfiDownloadProfile {
   char **selected_track_ids;
   uintptr_t selected_track_ids_len;
   bool has_target_output_format;
-  PlayerFfiDownloadOutputFormat target_output_format;
+  uint32_t target_output_format;
   char *target_directory;
   bool allow_metered_network;
 } PlayerFfiDownloadProfile;
@@ -344,7 +344,7 @@ typedef struct PlayerFfiDownloadSegmentRecord {
 
 typedef struct PlayerFfiDownloadAssetStream {
   char *stream_id;
-  PlayerFfiDownloadStreamKind kind;
+  uint32_t kind;
   char *language;
   char *codec;
   char *label;
@@ -360,7 +360,7 @@ typedef struct PlayerFfiDownloadAssetStream {
 } PlayerFfiDownloadAssetStream;
 
 typedef struct PlayerFfiDownloadAssetIndex {
-  PlayerFfiDownloadContentFormat content_format;
+  uint32_t content_format;
   char *version;
   char *etag;
   char *checksum;
@@ -399,12 +399,12 @@ typedef struct PlayerFfiDownloadTask {
   char *asset_id;
   PlayerFfiDownloadSource source;
   PlayerFfiDownloadProfile profile;
-  PlayerFfiDownloadTaskStatus status;
+  uint32_t status;
   PlayerFfiDownloadProgressSnapshot progress;
   PlayerFfiDownloadAssetIndex asset_index;
   bool has_error;
-  PlayerFfiErrorCode error_code;
-  PlayerFfiErrorCategory error_category;
+  uint32_t error_code;
+  uint32_t error_category;
   bool error_retriable;
   char *error_message;
 } PlayerFfiDownloadTask;
@@ -897,7 +897,7 @@ static PlayerFfiDownloadSource ffi_download_source_from_runtime(
     const VesperRuntimeDownloadSource *source) {
   PlayerFfiDownloadSource ffi_source = {
       .source_uri = source->source_uri,
-      .content_format = (PlayerFfiDownloadContentFormat)source->content_format,
+      .content_format = (uint32_t)source->content_format,
       .manifest_uri = source->manifest_uri,
       .header_names = source->header_names,
       .header_values = source->header_values,
@@ -915,7 +915,7 @@ static PlayerFfiDownloadProfile ffi_download_profile_from_runtime(
       .selected_track_ids = profile->selected_track_ids,
       .selected_track_ids_len = profile->selected_track_ids_len,
       .has_target_output_format = profile->has_target_output_format,
-      .target_output_format = (PlayerFfiDownloadOutputFormat)profile->target_output_format,
+      .target_output_format = (uint32_t)profile->target_output_format,
       .target_directory = profile->target_directory,
       .allow_metered_network = profile->allow_metered_network,
   };
@@ -960,7 +960,7 @@ static PlayerFfiDownloadAssetStream ffi_download_stream_from_runtime(
     const VesperRuntimeDownloadAssetStream *stream) {
   PlayerFfiDownloadAssetStream ffi_stream = {
       .stream_id = stream->stream_id,
-      .kind = (PlayerFfiDownloadStreamKind)stream->kind,
+      .kind = (uint32_t)stream->kind,
       .language = stream->language,
       .codec = stream->codec,
       .label = stream->label,
@@ -1076,7 +1076,7 @@ static bool ffi_download_asset_index_from_runtime(
   }
   memset(out_asset_index, 0, sizeof(*out_asset_index));
 
-  out_asset_index->content_format = (PlayerFfiDownloadContentFormat)asset_index->content_format;
+  out_asset_index->content_format = (uint32_t)asset_index->content_format;
   out_asset_index->version = asset_index->version;
   out_asset_index->etag = asset_index->etag;
   out_asset_index->checksum = asset_index->checksum;
@@ -1138,11 +1138,11 @@ static bool ffi_download_task_from_runtime(
   out_task->asset_id = task->asset_id;
   out_task->source = ffi_download_source_from_runtime(&task->source);
   out_task->profile = ffi_download_profile_from_runtime(&task->profile);
-  out_task->status = (PlayerFfiDownloadTaskStatus)task->status;
+  out_task->status = (uint32_t)task->status;
   out_task->progress = ffi_download_progress_from_runtime(task->progress);
   out_task->has_error = task->has_error;
-  out_task->error_code = task->error_code;
-  out_task->error_category = task->error_category;
+  out_task->error_code = (uint32_t)task->error_code;
+  out_task->error_category = (uint32_t)task->error_category;
   out_task->error_retriable = task->error_retriable;
   out_task->error_message = task->error_message;
   if (!ffi_download_asset_index_from_runtime(&task->asset_index, &out_task->asset_index)) {
@@ -1694,7 +1694,7 @@ bool vesper_runtime_resolve_resilience_policy(
   }
 
   PlayerFfiBufferingPolicy ffi_buffering_policy = {
-      .preset = (PlayerFfiBufferingPreset)buffering_policy->preset_ordinal,
+      .preset = (uint32_t)buffering_policy->preset_ordinal,
       .has_min_buffer_ms = buffering_policy->has_min_buffer_ms,
       .min_buffer_ms = non_negative_u64(buffering_policy->min_buffer_ms),
       .has_max_buffer_ms = buffering_policy->has_max_buffer_ms,
@@ -1714,10 +1714,10 @@ bool vesper_runtime_resolve_resilience_policy(
       .has_max_delay_ms = retry_policy->has_max_delay_ms,
       .max_delay_ms = retry_policy->max_delay_ms,
       .has_backoff = retry_policy->has_backoff,
-      .backoff = (PlayerFfiRetryBackoff)retry_policy->backoff_ordinal,
+      .backoff = (uint32_t)retry_policy->backoff_ordinal,
   };
   PlayerFfiCachePolicy ffi_cache_policy = {
-      .preset = (PlayerFfiCachePreset)cache_policy->preset_ordinal,
+      .preset = (uint32_t)cache_policy->preset_ordinal,
       .has_max_memory_bytes = cache_policy->has_max_memory_bytes,
       .max_memory_bytes = non_negative_u64(cache_policy->max_memory_bytes),
       .has_max_disk_bytes = cache_policy->has_max_disk_bytes,
@@ -1829,19 +1829,17 @@ bool vesper_runtime_resolve_track_preferences(
           track_preferences->select_undetermined_subtitle_language,
       .audio_selection =
           {
-              .mode =
-                  (PlayerFfiTrackSelectionMode)track_preferences->audio_selection.mode_ordinal,
+              .mode = (uint32_t)track_preferences->audio_selection.mode_ordinal,
               .track_id = (char *)track_preferences->audio_selection.track_id,
           },
       .subtitle_selection =
           {
-              .mode =
-                  (PlayerFfiTrackSelectionMode)track_preferences->subtitle_selection.mode_ordinal,
+              .mode = (uint32_t)track_preferences->subtitle_selection.mode_ordinal,
               .track_id = (char *)track_preferences->subtitle_selection.track_id,
           },
       .abr_policy =
           {
-              .mode = (PlayerFfiAbrMode)track_preferences->abr_policy.mode_ordinal,
+              .mode = (uint32_t)track_preferences->abr_policy.mode_ordinal,
               .track_id = (char *)track_preferences->abr_policy.track_id,
               .has_max_bit_rate = track_preferences->abr_policy.has_max_bit_rate,
               .max_bit_rate = non_negative_u64(track_preferences->abr_policy.max_bit_rate),
@@ -1956,11 +1954,11 @@ bool vesper_runtime_preload_session_plan(
     }
     for (uintptr_t index = 0; index < candidates_len; index += 1) {
       ffi_candidates[index].source_uri = candidates[index].source_uri;
-      ffi_candidates[index].scope_kind = (int)candidates[index].scope_kind;
+      ffi_candidates[index].scope_kind = (uint32_t)candidates[index].scope_kind;
       ffi_candidates[index].scope_id = candidates[index].scope_id;
-      ffi_candidates[index].candidate_kind = (int)candidates[index].candidate_kind;
-      ffi_candidates[index].selection_hint = (int)candidates[index].selection_hint;
-      ffi_candidates[index].priority = (int)candidates[index].priority;
+      ffi_candidates[index].candidate_kind = (uint32_t)candidates[index].candidate_kind;
+      ffi_candidates[index].selection_hint = (uint32_t)candidates[index].selection_hint;
+      ffi_candidates[index].priority = (uint32_t)candidates[index].priority;
       ffi_candidates[index].expected_memory_bytes = candidates[index].expected_memory_bytes;
       ffi_candidates[index].expected_disk_bytes = candidates[index].expected_disk_bytes;
       ffi_candidates[index].has_ttl_ms = candidates[index].has_ttl_ms;
@@ -2126,9 +2124,8 @@ bool vesper_runtime_playlist_session_create(
       .preload_near_visible = config->preload_near_visible,
       .preload_prefetch_only = config->preload_prefetch_only,
       .auto_advance = config->auto_advance,
-      .repeat_mode = (PlayerFfiPlaylistRepeatMode)config->repeat_mode,
-      .failure_strategy =
-          (PlayerFfiPlaylistFailureStrategy)config->failure_strategy,
+      .repeat_mode = (uint32_t)config->repeat_mode,
+      .failure_strategy = (uint32_t)config->failure_strategy,
   };
   PlayerFfiResolvedPreloadBudgetPolicy ffi_budget = {
       .max_concurrent_tasks = preload_budget->max_concurrent_tasks,
@@ -2210,7 +2207,7 @@ bool vesper_runtime_playlist_session_update_viewport_hints(
     }
     for (uintptr_t index = 0; index < hints_len; index += 1) {
       ffi_hints[index].item_id = hints[index].item_id;
-      ffi_hints[index].kind = (PlayerFfiPlaylistViewportHintKind)hints[index].kind;
+      ffi_hints[index].kind = (uint32_t)hints[index].kind;
       ffi_hints[index].order = hints[index].order;
     }
   }

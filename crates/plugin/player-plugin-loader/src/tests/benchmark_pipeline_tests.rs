@@ -9,7 +9,7 @@ fn dynamic_pipeline_event_hook_adapter_round_trips_json() {
     let api = fixture_hook_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
-        plugin_kind: VesperPluginKind::PipelineEventHook,
+        plugin_kind: VesperPluginKind::PipelineEventHook as u32,
         plugin_name: HOOK_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperPipelineEventHookApi).cast(),
     };
@@ -44,7 +44,7 @@ fn dynamic_benchmark_sink_adapter_round_trips_json() {
     let api = fixture_benchmark_sink_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
-        plugin_kind: VesperPluginKind::BenchmarkSink,
+        plugin_kind: VesperPluginKind::BenchmarkSink as u32,
         plugin_name: SINK_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperBenchmarkSinkApi).cast(),
     };

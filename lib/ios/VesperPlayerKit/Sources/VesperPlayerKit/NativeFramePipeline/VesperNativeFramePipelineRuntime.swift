@@ -120,7 +120,8 @@ actor VesperNativeFramePipelineRuntime {
             }
             await waitForPresentationTime(frame.presentationTimeUs)
             guard frameLeaseIsCurrent(frame) else {
-                release(frame: frame, presented: false)
+                // A seek, flush, or close already releases every Rust pending-frame
+                // handle. Dropping this value releases the retained CVPixelBuffer.
                 continue
             }
             guard isPlaying else {
@@ -129,7 +130,8 @@ actor VesperNativeFramePipelineRuntime {
             }
             let presented = await owner?.runtimePresent(frame: frame) ?? false
             guard frameLeaseIsCurrent(frame) else {
-                release(frame: frame, presented: false)
+                // The backend reset owns native-handle cleanup while Swift still
+                // keeps the pixel buffer alive through this local frame value.
                 continue
             }
             release(frame: frame, presented: presented)

@@ -14,6 +14,9 @@ use crate::upload::{
     UploadedVideoFrame, create_rgba_texture_and_bind_group, create_yuv420p_textures_and_bind_group,
     extent_from_size, write_plane_texture,
 };
+use crate::validation::{
+    TextureInputLimits, validate_rgba_upload, validate_texture_dimensions, validate_yuv420p_upload,
+};
 use crate::viewport::compute_display_rect;
 use crate::window::{preferred_backend_label, preferred_backends, preferred_surface_format};
 
@@ -22,6 +25,7 @@ pub struct VideoRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    texture_input_limits: TextureInputLimits,
     rgba_texture_bind_group_layout: wgpu::BindGroupLayout,
     yuv420p_texture_bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -75,12 +79,21 @@ impl VideoRenderer {
             .context("failed to request a wgpu device")?;
 
         let initial_size = window.inner_size();
+        let initial_width = initial_size.width.max(1);
+        let initial_height = initial_size.height.max(1);
+        let device_limits = device.limits();
+        let texture_input_limits = TextureInputLimits::for_device(
+            device_limits.max_texture_dimension_2d,
+            device_limits.max_buffer_size,
+        );
+        validate_texture_dimensions(
+            "initial render surface",
+            initial_width,
+            initial_height,
+            texture_input_limits.max_dimension_2d,
+        )?;
         let mut config = surface
-            .get_default_config(
-                &adapter,
-                initial_size.width.max(1),
-                initial_size.height.max(1),
-            )
+            .get_default_config(&adapter, initial_width, initial_height)
             .context("surface does not support default configuration")?;
         let capabilities = surface.get_capabilities(&adapter);
         config.format = preferred_surface_format(&capabilities.formats).unwrap_or(config.format);
@@ -220,7 +233,13 @@ impl VideoRenderer {
             ..Default::default()
         });
 
-        let video_texture_size = extent_from_size(frame_size.0.max(1), frame_size.1.max(1));
+        validate_texture_dimensions(
+            "initial video frame",
+            frame_size.0,
+            frame_size.1,
+            texture_input_limits.max_dimension_2d,
+        )?;
+        let video_texture_size = extent_from_size(1, 1);
         let (video_texture, video_bind_group) = create_rgba_texture_and_bind_group(
             &device,
             &rgba_texture_bind_group_layout,
@@ -235,6 +254,7 @@ impl VideoRenderer {
             device,
             queue,
             config,
+            texture_input_limits,
             rgba_texture_bind_group_layout,
             yuv420p_texture_bind_group_layout,
             sampler,
@@ -249,7 +269,7 @@ impl VideoRenderer {
             overlay_bind_group: None,
             overlay_texture: None,
             overlay_texture_size: None,
-            video_frame_size: (frame_size.0.max(1), frame_size.1.max(1)),
+            video_frame_size: frame_size,
             render_mode: RenderMode::Fit,
             video_viewport: None,
         })
@@ -267,14 +287,21 @@ impl VideoRenderer {
         self.render_mode
     }
 
-    pub fn resize(&mut self, size: PhysicalSize<u32>) {
+    pub fn resize(&mut self, size: PhysicalSize<u32>) -> Result<()> {
         if size.width == 0 || size.height == 0 {
-            return;
+            return Ok(());
         }
+        validate_texture_dimensions(
+            "render surface",
+            size.width,
+            size.height,
+            self.texture_input_limits.max_dimension_2d,
+        )?;
 
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
+        Ok(())
     }
 
     pub fn video_display_rect(&self) -> DisplayRect {
@@ -296,15 +323,22 @@ impl VideoRenderer {
         rect
     }
 
-    pub fn upload_frame(&mut self, frame: &VideoFrameTexture) {
+    pub fn upload_frame(&mut self, frame: &VideoFrameTexture) -> Result<()> {
         match frame {
             VideoFrameTexture::Rgba(frame) => self.upload_rgba_video_frame(frame),
             VideoFrameTexture::Yuv420p(frame) => self.upload_yuv420p_video_frame(frame),
         }
     }
 
-    fn upload_rgba_video_frame(&mut self, frame: &RgbaVideoFrame) {
-        let size = extent_from_size(frame.width.max(1), frame.height.max(1));
+    fn upload_rgba_video_frame(&mut self, frame: &RgbaVideoFrame) -> Result<()> {
+        let layout = validate_rgba_upload(
+            "RGBA video frame",
+            frame.width,
+            frame.height,
+            frame.bytes.len(),
+            self.texture_input_limits,
+        )?;
+        let size = extent_from_size(layout.width, layout.height);
         let needs_recreate = !matches!(
             &self.video_binding,
             UploadedVideoFrame::Rgba { texture_size, .. } if *texture_size == size
@@ -325,9 +359,8 @@ impl VideoRenderer {
             };
         }
 
-        self.video_frame_size = (frame.width.max(1), frame.height.max(1));
         let UploadedVideoFrame::Rgba { texture, .. } = &self.video_binding else {
-            return;
+            anyhow::bail!("renderer RGBA binding was not installed before upload");
         };
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -339,25 +372,25 @@ impl VideoRenderer {
             &frame.bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(frame.width * 4),
-                rows_per_image: Some(frame.height),
+                bytes_per_row: Some(layout.bytes_per_row),
+                rows_per_image: Some(layout.height),
             },
             size,
         );
+        self.video_frame_size = (layout.width, layout.height);
+        Ok(())
     }
 
-    fn upload_yuv420p_video_frame(&mut self, frame: &Yuv420pVideoFrame) {
-        let width = frame.width.max(1);
-        let height = frame.height.max(1);
-        let y_size = extent_from_size(width, height);
-        let uv_width = width.div_ceil(2);
-        let uv_height = height.div_ceil(2);
-        let uv_size = extent_from_size(uv_width, uv_height);
-        let expected_len =
-            width as usize * height as usize + uv_width as usize * uv_height as usize * 2;
-        if frame.bytes.len() < expected_len {
-            return;
-        }
+    fn upload_yuv420p_video_frame(&mut self, frame: &Yuv420pVideoFrame) -> Result<()> {
+        let layout = validate_yuv420p_upload(
+            "YUV420p video frame",
+            frame.width,
+            frame.height,
+            frame.bytes.len(),
+            self.texture_input_limits,
+        )?;
+        let y_size = extent_from_size(layout.width, layout.height);
+        let uv_size = extent_from_size(layout.uv_width, layout.uv_height);
 
         let needs_recreate = !matches!(
             &self.video_binding,
@@ -388,7 +421,6 @@ impl VideoRenderer {
             };
         }
 
-        self.video_frame_size = (width, height);
         let UploadedVideoFrame::Yuv420p {
             y_texture,
             u_texture,
@@ -396,22 +428,41 @@ impl VideoRenderer {
             ..
         } = &self.video_binding
         else {
-            return;
+            anyhow::bail!("renderer YUV420p binding was not installed before upload");
         };
 
-        let y_plane_len = width as usize * height as usize;
-        let uv_plane_len = uv_width as usize * uv_height as usize;
-        let y_plane = &frame.bytes[..y_plane_len];
-        let u_plane = &frame.bytes[y_plane_len..y_plane_len + uv_plane_len];
-        let v_plane = &frame.bytes[y_plane_len + uv_plane_len..y_plane_len + uv_plane_len * 2];
+        let y_plane = &frame.bytes[..layout.y_plane_len];
+        let u_plane = &frame.bytes[layout.y_plane_len..layout.y_plane_len + layout.uv_plane_len];
+        let v_plane = &frame.bytes[layout.y_plane_len + layout.uv_plane_len..layout.expected_len];
 
-        write_plane_texture(&self.queue, y_texture, y_plane, width, height);
-        write_plane_texture(&self.queue, u_texture, u_plane, uv_width, uv_height);
-        write_plane_texture(&self.queue, v_texture, v_plane, uv_width, uv_height);
+        write_plane_texture(&self.queue, y_texture, y_plane, layout.width, layout.height);
+        write_plane_texture(
+            &self.queue,
+            u_texture,
+            u_plane,
+            layout.uv_width,
+            layout.uv_height,
+        );
+        write_plane_texture(
+            &self.queue,
+            v_texture,
+            v_plane,
+            layout.uv_width,
+            layout.uv_height,
+        );
+        self.video_frame_size = (layout.width, layout.height);
+        Ok(())
     }
 
-    pub fn upload_overlay(&mut self, overlay: &RgbaOverlayFrame) {
-        let size = extent_from_size(overlay.width.max(1), overlay.height.max(1));
+    pub fn upload_overlay(&mut self, overlay: &RgbaOverlayFrame) -> Result<()> {
+        let layout = validate_rgba_upload(
+            "RGBA overlay",
+            overlay.width,
+            overlay.height,
+            overlay.bytes.len(),
+            self.texture_input_limits,
+        )?;
+        let size = extent_from_size(layout.width, layout.height);
         if self.overlay_texture_size != Some(size) {
             let (texture, bind_group) = create_rgba_texture_and_bind_group(
                 &self.device,
@@ -437,11 +488,14 @@ impl VideoRenderer {
                 &overlay.bytes,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(overlay.width * 4),
-                    rows_per_image: Some(overlay.height),
+                    bytes_per_row: Some(layout.bytes_per_row),
+                    rows_per_image: Some(layout.height),
                 },
                 size,
             );
+            Ok(())
+        } else {
+            anyhow::bail!("renderer overlay binding was not installed before upload");
         }
     }
 

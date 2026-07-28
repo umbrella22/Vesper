@@ -6,14 +6,14 @@ use std::sync::Arc;
 
 use player_plugin::{
     AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream, DownloadMetadata,
-    OutputFormat, PipelineEvent, PostDownloadProcessor, ProcessorError, ProcessorOutput,
-    ProcessorProgress, StreamKind,
+    OutputFormat, PipelineEvent, PipelineEventHook, PostDownloadProcessor, ProcessorError,
+    ProcessorOutput, ProcessorProgress, StreamKind,
 };
 
 use crate::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
 
 use super::executor::DownloadExecutor;
-use super::manager::DownloadManager;
+use super::manager::{DownloadExportPlan, DownloadManager};
 use super::store::DownloadStore;
 use super::types::{
     DownloadAssetIndex, DownloadAssetStream, DownloadContentFormat, DownloadStreamKind,
@@ -43,185 +43,243 @@ where
         }
 
         let progress = NoopProcessorProgress;
-        let run =
-            self.run_post_processor_chain(snapshot, ProcessorOutputPathPolicy::Derived, &progress)?;
+        let run = run_post_processor_chain(
+            snapshot,
+            &self.config.post_processors,
+            &self.config.event_hooks,
+            ProcessorOutputPathPolicy::Derived,
+            &progress,
+        )?;
         Ok(run.completed_path)
     }
+}
 
-    pub(super) fn export_processed_output(
-        &self,
-        snapshot: &DownloadTaskSnapshot,
-        output_path: Option<&Path>,
-        progress: &dyn ProcessorProgress,
-    ) -> PlayerResult<PathBuf> {
-        let run = self.run_post_processor_chain(
-            snapshot,
-            ProcessorOutputPathPolicy::Export { output_path },
-            progress,
-        )?;
-        if run.ran_processor
-            && let Some(path) = run.completed_path
-        {
-            return Ok(path);
-        }
-
-        Err(PlayerError::with_category(
-            PlayerErrorCode::Unsupported,
-            PlayerErrorCategory::Capability,
-            format!(
-                "download task {} has no post-download processor available for export",
-                snapshot.task_id.get()
+impl DownloadExportPlan {
+    pub fn execute(&self, progress: &dyn ProcessorProgress) -> PlayerResult<PathBuf> {
+        match self.snapshot.source.content_format {
+            DownloadContentFormat::SingleFile
+                if should_run_post_processors_on_completion(&self.snapshot) =>
+            {
+                export_processed_output(
+                    &self.snapshot,
+                    self.output_path.as_deref(),
+                    &self.post_processors,
+                    &self.event_hooks,
+                    progress,
+                )
+            }
+            DownloadContentFormat::SingleFile => {
+                export_single_file_output(&self.snapshot, self.output_path.as_deref(), progress)
+            }
+            DownloadContentFormat::HlsSegments
+            | DownloadContentFormat::DashSegments
+            | DownloadContentFormat::FlvSegments => export_processed_output(
+                &self.snapshot,
+                self.output_path.as_deref(),
+                &self.post_processors,
+                &self.event_hooks,
+                progress,
             ),
-        ))
+            DownloadContentFormat::Unknown => Err(PlayerError::with_category(
+                PlayerErrorCode::Unsupported,
+                PlayerErrorCategory::Capability,
+                format!(
+                    "download task {} has unknown content format for export",
+                    self.snapshot.task_id.get()
+                ),
+            )),
+        }
+    }
+}
+
+fn export_processed_output(
+    snapshot: &DownloadTaskSnapshot,
+    output_path: Option<&Path>,
+    post_processors: &[Arc<dyn PostDownloadProcessor>],
+    event_hooks: &[Arc<dyn PipelineEventHook>],
+    progress: &dyn ProcessorProgress,
+) -> PlayerResult<PathBuf> {
+    let run = run_post_processor_chain(
+        snapshot,
+        post_processors,
+        event_hooks,
+        ProcessorOutputPathPolicy::Export { output_path },
+        progress,
+    )?;
+    if run.ran_processor
+        && let Some(path) = run.completed_path
+    {
+        return Ok(path);
     }
 
-    fn run_post_processor_chain(
-        &self,
-        snapshot: &DownloadTaskSnapshot,
-        output_path_policy: ProcessorOutputPathPolicy<'_>,
-        progress: &dyn ProcessorProgress,
-    ) -> PlayerResult<PostProcessorRun> {
-        let mut current_input = self.completed_download_info(snapshot)?;
-        let mut current_completed_path = snapshot.asset_index.completed_path.clone();
-        let mut ran_processor = false;
+    Err(PlayerError::with_category(
+        PlayerErrorCode::Unsupported,
+        PlayerErrorCategory::Capability,
+        format!(
+            "download task {} has no post-download processor available for export",
+            snapshot.task_id.get()
+        ),
+    ))
+}
 
-        for processor in &self.config.post_processors {
-            let input_kind = current_input.content_format.kind();
-            let can_process = if completed_info_requires_assembly(&current_input) {
-                processor_can_assemble(processor, &current_input)
-            } else {
-                processor.supported_input_formats().contains(&input_kind)
-            };
-            if !can_process {
-                continue;
-            }
+fn run_post_processor_chain(
+    snapshot: &DownloadTaskSnapshot,
+    post_processors: &[Arc<dyn PostDownloadProcessor>],
+    event_hooks: &[Arc<dyn PipelineEventHook>],
+    output_path_policy: ProcessorOutputPathPolicy<'_>,
+    progress: &dyn ProcessorProgress,
+) -> PlayerResult<PostProcessorRun> {
+    let mut current_input = completed_download_info(snapshot)?;
+    let mut current_completed_path = snapshot.asset_index.completed_path.clone();
+    let mut ran_processor = false;
 
-            let resolved_output_path = output_path_policy.resolve(
-                snapshot,
-                current_completed_path.as_deref(),
-                processor,
-                ran_processor,
-            )?;
+    for processor in post_processors {
+        let input_kind = current_input.content_format.kind();
+        let can_process = if completed_info_requires_assembly(&current_input) {
+            processor_can_assemble(processor, &current_input)
+        } else {
+            processor.supported_input_formats().contains(&input_kind)
+        };
+        if !can_process {
+            continue;
+        }
 
-            ran_processor = true;
-            self.dispatch_pipeline_event(PipelineEvent::PostProcessStarted {
+        let resolved_output_path = output_path_policy.resolve(
+            snapshot,
+            current_completed_path.as_deref(),
+            processor,
+            ran_processor,
+        )?;
+
+        ran_processor = true;
+        dispatch_pipeline_event(
+            event_hooks,
+            PipelineEvent::PostProcessStarted {
                 task_id: snapshot.task_id.get().to_string(),
                 processor: processor.name().to_owned(),
-            });
+            },
+        );
 
-            let result = if completed_info_requires_assembly(&current_input) {
-                processor.assemble(&current_input, &resolved_output_path, progress)
-            } else {
-                processor.process(&current_input, &resolved_output_path, progress)
-            };
+        let result = if completed_info_requires_assembly(&current_input) {
+            processor.assemble(&current_input, &resolved_output_path, progress)
+        } else {
+            processor.process(&current_input, &resolved_output_path, progress)
+        };
 
-            match result {
-                Ok(ProcessorOutput::MuxedFile { path, .. }) => {
-                    self.dispatch_pipeline_event(PipelineEvent::PostProcessCompleted {
+        match result {
+            Ok(ProcessorOutput::MuxedFile { path, .. }) => {
+                dispatch_pipeline_event(
+                    event_hooks,
+                    PipelineEvent::PostProcessCompleted {
                         task_id: snapshot.task_id.get().to_string(),
                         output_path: path.display().to_string(),
-                    });
-                    current_completed_path = Some(path.clone());
-                    current_input = completed_info_for_processed_output(
-                        snapshot,
-                        path,
-                        current_input.metadata.clone(),
-                    );
-                }
-                Ok(ProcessorOutput::Skipped) => {}
-                Err(error) => {
-                    self.dispatch_pipeline_event(PipelineEvent::PostProcessFailed {
+                    },
+                );
+                current_completed_path = Some(path.clone());
+                current_input = completed_info_for_processed_output(
+                    snapshot,
+                    path,
+                    current_input.metadata.clone(),
+                );
+            }
+            Ok(ProcessorOutput::Skipped) => {}
+            Err(error) => {
+                dispatch_pipeline_event(
+                    event_hooks,
+                    PipelineEvent::PostProcessFailed {
                         task_id: snapshot.task_id.get().to_string(),
                         error: error.to_string(),
-                    });
-                    return Err(map_processor_error(processor.name(), error));
-                }
+                    },
+                );
+                return Err(map_processor_error(processor.name(), error));
             }
         }
+    }
 
-        if completed_info_requires_assembly(&current_input) {
-            return Err(assembly_required_error(
-                snapshot,
-                &current_input,
-                ran_processor,
+    if completed_info_requires_assembly(&current_input) {
+        return Err(assembly_required_error(
+            snapshot,
+            &current_input,
+            ran_processor,
+        ));
+    }
+
+    Ok(PostProcessorRun {
+        completed_path: current_completed_path,
+        ran_processor,
+    })
+}
+
+fn export_single_file_output(
+    snapshot: &DownloadTaskSnapshot,
+    output_path: Option<&Path>,
+    progress: &dyn ProcessorProgress,
+) -> PlayerResult<PathBuf> {
+    let source_path = resolve_single_file_path(snapshot)?;
+    let Some(output_path) = output_path else {
+        return Ok(source_path);
+    };
+    if paths_refer_to_same_file(&source_path, output_path) {
+        return Ok(source_path);
+    }
+
+    copy_single_file_export(&source_path, output_path, progress)?;
+    Ok(output_path.to_path_buf())
+}
+
+fn completed_download_info(snapshot: &DownloadTaskSnapshot) -> PlayerResult<CompletedDownloadInfo> {
+    let metadata = DownloadMetadata {
+        source_uri: Some(snapshot.source.source.uri().to_owned()),
+        manifest_uri: snapshot.source.manifest_uri.clone(),
+        total_bytes: snapshot.progress.total_bytes,
+        version: snapshot.asset_index.version.clone(),
+        etag: snapshot.asset_index.etag.clone(),
+        checksum: snapshot.asset_index.checksum.clone(),
+        mime_type: None,
+        custom: Default::default(),
+    };
+
+    let content_format = match snapshot.source.content_format {
+        DownloadContentFormat::HlsSegments => CompletedContentFormat::HlsSegments {
+            manifest_path: resolve_manifest_path(snapshot)?,
+            segment_paths: resolve_segment_paths(snapshot),
+        },
+        DownloadContentFormat::DashSegments => CompletedContentFormat::DashSegments {
+            manifest_path: resolve_manifest_path(snapshot)?,
+            segment_paths: resolve_segment_paths(snapshot),
+        },
+        DownloadContentFormat::FlvSegments => CompletedContentFormat::FlvSegments {
+            manifest_path: resolve_manifest_path(snapshot)?,
+            segment_paths: resolve_segment_paths(snapshot),
+        },
+        DownloadContentFormat::SingleFile => CompletedContentFormat::SingleFile {
+            path: resolve_single_file_path(snapshot)?,
+        },
+        DownloadContentFormat::Unknown => {
+            return Err(PlayerError::with_category(
+                PlayerErrorCode::Unsupported,
+                PlayerErrorCategory::Capability,
+                format!(
+                    "download task {} has unknown content format for post-processing",
+                    snapshot.task_id.get()
+                ),
             ));
         }
+    };
 
-        Ok(PostProcessorRun {
-            completed_path: current_completed_path,
-            ran_processor,
-        })
-    }
+    Ok(CompletedDownloadInfo {
+        asset_id: snapshot.asset_id.as_str().to_owned(),
+        task_id: Some(snapshot.task_id.get().to_string()),
+        content_format,
+        metadata,
+        streams: completed_streams_for_snapshot(snapshot)?,
+        assembly_mode: infer_assembly_mode_from_download_streams(&snapshot.asset_index.streams),
+    })
+}
 
-    pub(super) fn export_single_file_output(
-        &self,
-        snapshot: &DownloadTaskSnapshot,
-        output_path: Option<&Path>,
-        progress: &dyn ProcessorProgress,
-    ) -> PlayerResult<PathBuf> {
-        let source_path = resolve_single_file_path(snapshot)?;
-        let Some(output_path) = output_path else {
-            return Ok(source_path);
-        };
-        if paths_refer_to_same_file(&source_path, output_path) {
-            return Ok(source_path);
-        }
-
-        copy_single_file_export(&source_path, output_path, progress)?;
-        Ok(output_path.to_path_buf())
-    }
-
-    fn completed_download_info(
-        &self,
-        snapshot: &DownloadTaskSnapshot,
-    ) -> PlayerResult<CompletedDownloadInfo> {
-        let metadata = DownloadMetadata {
-            source_uri: Some(snapshot.source.source.uri().to_owned()),
-            manifest_uri: snapshot.source.manifest_uri.clone(),
-            total_bytes: snapshot.progress.total_bytes,
-            version: snapshot.asset_index.version.clone(),
-            etag: snapshot.asset_index.etag.clone(),
-            checksum: snapshot.asset_index.checksum.clone(),
-            mime_type: None,
-            custom: Default::default(),
-        };
-
-        let content_format = match snapshot.source.content_format {
-            DownloadContentFormat::HlsSegments => CompletedContentFormat::HlsSegments {
-                manifest_path: resolve_manifest_path(snapshot)?,
-                segment_paths: resolve_segment_paths(snapshot),
-            },
-            DownloadContentFormat::DashSegments => CompletedContentFormat::DashSegments {
-                manifest_path: resolve_manifest_path(snapshot)?,
-                segment_paths: resolve_segment_paths(snapshot),
-            },
-            DownloadContentFormat::FlvSegments => CompletedContentFormat::FlvSegments {
-                manifest_path: resolve_manifest_path(snapshot)?,
-                segment_paths: resolve_segment_paths(snapshot),
-            },
-            DownloadContentFormat::SingleFile => CompletedContentFormat::SingleFile {
-                path: resolve_single_file_path(snapshot)?,
-            },
-            DownloadContentFormat::Unknown => {
-                return Err(PlayerError::with_category(
-                    PlayerErrorCode::Unsupported,
-                    PlayerErrorCategory::Capability,
-                    format!(
-                        "download task {} has unknown content format for post-processing",
-                        snapshot.task_id.get()
-                    ),
-                ));
-            }
-        };
-
-        Ok(CompletedDownloadInfo {
-            asset_id: snapshot.asset_id.as_str().to_owned(),
-            task_id: Some(snapshot.task_id.get().to_string()),
-            content_format,
-            metadata,
-            streams: completed_streams_for_snapshot(snapshot)?,
-            assembly_mode: infer_assembly_mode_from_download_streams(&snapshot.asset_index.streams),
-        })
+fn dispatch_pipeline_event(event_hooks: &[Arc<dyn PipelineEventHook>], event: PipelineEvent) {
+    for hook in event_hooks {
+        hook.on_event(&event);
     }
 }
 
@@ -885,6 +943,13 @@ fn map_processor_error(processor_name: &str, error: ProcessorError) -> PlayerErr
             PlayerErrorCode::Unsupported,
             PlayerErrorCategory::Capability,
             format!("post-processor `{processor_name}` does not support this download format"),
+        ),
+        ProcessorError::UnsupportedDynamicStream { stream_index } => PlayerError::with_category(
+            PlayerErrorCode::Unsupported,
+            PlayerErrorCategory::Capability,
+            format!(
+                "post-processor `{processor_name}` does not support dynamic stream {stream_index} after the output header"
+            ),
         ),
         ProcessorError::PayloadCodec(message) => PlayerError::with_category(
             PlayerErrorCode::BackendFailure,

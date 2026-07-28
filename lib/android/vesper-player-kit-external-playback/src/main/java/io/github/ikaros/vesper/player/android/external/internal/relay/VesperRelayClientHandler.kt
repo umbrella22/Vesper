@@ -1,5 +1,6 @@
 package io.github.ikaros.vesper.player.android.external.internal.relay
 
+import io.github.ikaros.vesper.player.android.external.internal.relay.ffmpeg.VesperRelayIOException
 import java.io.OutputStream
 import java.net.Socket
 import java.util.Locale
@@ -199,6 +200,10 @@ internal class VesperRelaySourceRelay(
     private val emitDiagnostic: (VesperRelayDiagnostic) -> Unit,
     private val allowPrivateRemoteSources: Boolean,
 ) {
+    private val remoteTransport = VesperRelayHttpTransport(
+        allowPrivateAddresses = allowPrivateRemoteSources,
+    )
+
     fun relay(
         token: String,
         entry: RelayEntry,
@@ -248,6 +253,13 @@ internal class VesperRelaySourceRelay(
                     )
                     adapted.contentLength?.let { responseHeaders["Content-Length"] = it.toString() }
                     responseHeaders.putAll(adapted.headers)
+                    val usesChunkedFraming = !headOnly && adapted.contentLength == null
+                    if (usesChunkedFraming) {
+                        responseHeaders.keys.removeAll { name -> name.equals("Content-Length", ignoreCase = true) }
+                        responseHeaders["Transfer-Encoding"] = "chunked"
+                    } else {
+                        responseHeaders.keys.removeAll { name -> name.equals("Transfer-Encoding", ignoreCase = true) }
+                    }
                     responseHeaders.addDlnaPlaybackHeaders()
                     output.writeStatusAndHeaders(
                         adapted.status,
@@ -255,14 +267,21 @@ internal class VesperRelaySourceRelay(
                         responseHeaders,
                     )
                     if (!headOnly) {
-                        adapted.input.copyTo(output)
+                        if (usesChunkedFraming) {
+                            val chunked = VesperRelayChunkedOutputStream(output)
+                            adapted.input.copyTo(chunked)
+                            chunked.finish()
+                        } else {
+                            adapted.input.copyTo(output)
+                        }
                     }
                     output.flush()
                 } catch (error: java.io.IOException) {
+                    val relayError = error as? VesperRelayIOException
                     emitDiagnostic(
                         VesperRelayDiagnostic(
-                            code = "client_cancelled",
-                            severity = "info",
+                            code = relayError?.code ?: "client_cancelled",
+                            severity = if (relayError == null) "info" else "error",
                             message = error.message ?: "Relay client disconnected while receiving adapted media.",
                             details = mapOf("sessionId" to token),
                         ),
@@ -298,96 +317,24 @@ internal class VesperRelaySourceRelay(
         range: ByteRangeRequest?,
         output: OutputStream,
     ) {
-        var redirectsRemaining = MAX_RELAY_REDIRECTS
-        var currentUri = source.uri
-        while (true) {
-            if (!allowPrivateRemoteSources) {
-                // Validate target host before every connection to prevent SSRF.
-                validateRelayRemoteHost(currentUri)
+        remoteTransport.open(
+            uri = source.uri,
+            method = if (headOnly) "HEAD" else "GET",
+            headers = source.headers,
+            rangeHeader = range?.toHeaderValue(),
+        ).use { exchange ->
+            val status = exchange.responseCode
+            val responseHeaders = linkedMapOf<String, String>()
+            exchange.header("Content-Type")?.let { responseHeaders["Content-Type"] = it }
+            exchange.header("Content-Length")?.let { responseHeaders["Content-Length"] = it }
+            exchange.header("Content-Range")?.let { responseHeaders["Content-Range"] = it }
+            responseHeaders["Accept-Ranges"] = exchange.header("Accept-Ranges") ?: "bytes"
+            responseHeaders.addDlnaPlaybackHeaders()
+            output.writeStatusAndHeaders(status, exchange.responseMessage.ifBlank { status.reasonPhrase() }, responseHeaders)
+            if (!headOnly) {
+                exchange.bodyStream().use { input -> input.copyTo(output) }
             }
-            val connection = (java.net.URL(currentUri).openConnection() as java.net.HttpURLConnection)
-            try {
-                connection.instanceFollowRedirects = false
-                connection.connectTimeout = 10_000
-                connection.readTimeout = 20_000
-                connection.requestMethod = if (headOnly) "HEAD" else "GET"
-                source.headers.forEach { (name, value) ->
-                    if (name.isNotBlank() && value.isNotBlank() && !name.isHopByHopHeader()) {
-                        connection.setRequestProperty(name, value)
-                    }
-                }
-                range?.toHeaderValue()?.let { connection.setRequestProperty("Range", it) }
-
-                val status = connection.responseCode
-                if (status in 301..308 && redirectsRemaining > 0) {
-                    val location = connection.getHeaderField("Location")
-                    if (location.isNullOrBlank()) {
-                        output.writeSimpleResponse(502, "Bad Gateway: redirect without Location")
-                        return
-                    }
-                    redirectsRemaining--
-                    currentUri = location
-                    continue
-                }
-
-                val responseHeaders = linkedMapOf<String, String>()
-                connection.contentType?.let { responseHeaders["Content-Type"] = it }
-                connection.getHeaderField("Content-Length")?.let { responseHeaders["Content-Length"] = it }
-                connection.getHeaderField("Content-Range")?.let { responseHeaders["Content-Range"] = it }
-                responseHeaders["Accept-Ranges"] = connection.getHeaderField("Accept-Ranges") ?: "bytes"
-                responseHeaders.addDlnaPlaybackHeaders()
-                output.writeStatusAndHeaders(status, connection.responseMessage ?: status.reasonPhrase(), responseHeaders)
-                if (!headOnly) {
-                    val stream = runCatching { connection.inputStream }.getOrElse { connection.errorStream }
-                    stream?.use { it.copyTo(output) }
-                }
-                output.flush()
-                return
-            } finally {
-                connection.disconnect()
-            }
-        }
-    }
-
-    private companion object {
-        private const val MAX_RELAY_REDIRECTS = 5
-
-        private fun validateRelayRemoteHost(uri: String) {
-            val parsed =
-                try {
-                    java.net.URI(uri)
-                } catch (_: Exception) {
-                    return // Malformed URI will fail naturally on connection attempt.
-                }
-            val scheme = parsed.scheme?.lowercase(Locale.US)
-            if (scheme != "http" && scheme != "https") {
-                return
-            }
-            val host = parsed.host?.takeIf { it.isNotBlank() } ?: return
-            val addresses =
-                try {
-                    java.net.InetAddress.getAllByName(host)
-                } catch (_: Exception) {
-                    return // Unresolvable host: let the connection attempt handle it.
-                }
-            if (addresses.isEmpty() || addresses.any { it.isRelayBlockedAddress() }) {
-                // Reject connections to private, loopback, link-local, or multicast addresses
-                // to prevent SSRF through the relay server.
-                throw java.io.IOException("Relay blocked: $host resolves to a private or local address")
-            }
-        }
-
-        private fun java.net.InetAddress.isRelayBlockedAddress(): Boolean =
-            isAnyLocalAddress ||
-                isLoopbackAddress ||
-                isLinkLocalAddress ||
-                isSiteLocalAddress ||
-                isMulticastAddress ||
-                (this is java.net.Inet6Address && isUniqueLocalIpv6())
-
-        private fun java.net.Inet6Address.isUniqueLocalIpv6(): Boolean {
-            val first = address.firstOrNull()?.toInt()?.and(0xff) ?: return false
-            return first and 0xfe == 0xfc
+            output.flush()
         }
     }
 

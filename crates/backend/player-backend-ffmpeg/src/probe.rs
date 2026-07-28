@@ -23,6 +23,7 @@ pub(crate) fn video_packet_stream_info(
         extradata: codec_parameters_extradata(&parameters),
         width: Some(decoder.width()).filter(|width| *width > 0),
         height: Some(decoder.height()).filter(|height| *height > 0),
+        reorder_depth: codec_parameters_reorder_depth(&parameters),
         frame_rate: rational_to_f64(stream.avg_frame_rate())
             .or_else(|| rational_to_f64(stream.rate())),
     })
@@ -101,6 +102,20 @@ fn codec_parameters_extradata(parameters: &ffmpeg::codec::Parameters) -> Vec<u8>
         }
         let len = usize::try_from((*parameters).extradata_size).unwrap_or_default();
         std::slice::from_raw_parts((*parameters).extradata, len).to_vec()
+    }
+}
+
+fn codec_parameters_reorder_depth(parameters: &ffmpeg::codec::Parameters) -> Option<u32> {
+    // SAFETY: `parameters` is owned by FFmpeg and remains valid for this
+    // synchronous scalar field read.
+    unsafe {
+        let parameters = parameters.as_ptr();
+        if parameters.is_null() {
+            return None;
+        }
+        u32::try_from((*parameters).video_delay)
+            .ok()
+            .filter(|depth| *depth > 0)
     }
 }
 

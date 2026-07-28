@@ -106,7 +106,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var currentHdrFailureEvidence: VesperNativeHdrFailureEvidence?
     var fixedTrackConvergenceState: FixedTrackConvergenceState?
     var fixedTrackIssueActive = false
-    var audioSessionActive = false
+    let audioSessionLease = VesperSharedAudioSessionLease()
 
     var uiState: PlayerHostUiState {
         publishedUiState

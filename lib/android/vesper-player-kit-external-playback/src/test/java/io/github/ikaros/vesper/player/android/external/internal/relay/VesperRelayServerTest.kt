@@ -2,10 +2,13 @@ package io.github.ikaros.vesper.player.android.external.internal.relay
 
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
+import io.github.ikaros.vesper.player.android.external.internal.relay.ffmpeg.VesperRelayIOException
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.File
+import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -836,6 +839,53 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun adaptedFailureAfterPartialBytesUsesDetectableTruncatedFraming() {
+        val diagnostics = Collections.synchronizedList(mutableListOf<VesperRelayDiagnostic>())
+        val failingRelay = VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = { loopback },
+            diagnosticListener = diagnostics::add,
+            formatAdapter = object : VesperRelayFormatAdapter {
+                override fun open(
+                    request: VesperRelayFormatAdaptationRequest,
+                ): VesperRelayFormatAdaptationResult =
+                    VesperRelayFormatAdaptationResult.Stream(
+                        VesperRelayAdaptedStream(
+                            input = FailingAfterPayloadInputStream("partial".toByteArray()),
+                            contentType = "video/mp2t",
+                            contentLength = null,
+                            closeable = null,
+                        ),
+                    )
+            },
+        )
+        try {
+            val handle = failingRelay.register(
+                VesperPlayerSource.dash(uri = "https://example.com/video.mpd", label = "Episode"),
+                VesperRelayFormatAdaptationRegistration(
+                    fallbackFormat = VesperRelayFallbackFormat.MpegTs,
+                    config = VesperRelayFormatAdaptationConfig(enabled = true),
+                ),
+            )
+            val connection = URL(handle.url).openConnection() as HttpURLConnection
+
+            assertEquals(200, connection.responseCode)
+            assertEquals("chunked", connection.getHeaderField("Transfer-Encoding"))
+            try {
+                connection.inputStream.readBytes()
+                fail("expected truncated chunked body to fail")
+            } catch (_: IOException) {
+                // Missing the terminal chunk is the client-visible failure signal.
+            } finally {
+                connection.disconnect()
+            }
+            assertTrue(diagnostics.any { diagnostic -> diagnostic.code == "native_stream_failed" })
+        } finally {
+            failingRelay.stop()
+        }
+    }
+
+    @Test
     fun localReadableRejectsInvalidRangeWhenLengthIsKnown() {
         val output = ByteArrayOutputStream()
 
@@ -910,6 +960,31 @@ class VesperRelayServerTest {
             bindAddressProvider = { loopback },
             formatAdapter = adapter,
         ).also { additionalRelays += it }
+}
+
+private class FailingAfterPayloadInputStream(
+    private val payload: ByteArray,
+) : InputStream() {
+    private var delivered = false
+
+    override fun read(): Int {
+        val single = ByteArray(1)
+        val read = read(single, 0, 1)
+        return if (read < 0) -1 else single[0].toInt() and 0xff
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        if (delivered) {
+            throw VesperRelayIOException(
+                code = "native_stream_failed",
+                message = "synthetic relay failure",
+            )
+        }
+        delivered = true
+        val count = minOf(length, payload.size)
+        payload.copyInto(buffer, destinationOffset = offset, endIndex = count)
+        return count
+    }
 }
 
 private class RecordingFormatAdapter : VesperRelayFormatAdapter {

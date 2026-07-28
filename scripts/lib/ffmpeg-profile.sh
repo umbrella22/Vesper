@@ -7,6 +7,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 VESPER_FFMPEG_PROFILE_CONFIG_PATH="${VESPER_FFMPEG_PROFILE_CONFIG_PATH:-$VESPER_REPO_ROOT/scripts/ffmpeg-profiles.toml}"
 VESPER_FFMPEG_PROFILE_SECTIONS=""
+VESPER_FFMPEG_PROFILE_VALUE_VARS=""
 
 vesper_ffmpeg_profile_trim() {
   printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
@@ -36,24 +37,6 @@ vesper_ffmpeg_profile_note_section() {
   fi
 }
 
-vesper_ffmpeg_profile_parse_value() {
-  local value="$1"
-  value="$(vesper_ffmpeg_profile_trim "$value")"
-  case "$value" in
-    \[*\])
-      value="${value#\[}"
-      value="${value%\]}"
-      value="${value//\"/}"
-      value="$(printf '%s' "$value" | tr -d '[:space:]')"
-      ;;
-    \"*\")
-      value="${value#\"}"
-      value="${value%\"}"
-      ;;
-  esac
-  printf '%s' "$value"
-}
-
 vesper_ffmpeg_profile_set() {
   local section="$1"
   local key="$2"
@@ -61,6 +44,19 @@ vesper_ffmpeg_profile_set() {
   local var_name
   var_name="$(vesper_ffmpeg_profile_var_name "$section" "$key")"
   printf -v "$var_name" '%s' "$value"
+}
+
+vesper_ffmpeg_profile_append_value() {
+  local section="$1"
+  local key="$2"
+  local value="$3"
+  local var_name
+  var_name="$(vesper_ffmpeg_profile_var_name "$section" "$key")__VALUES"
+  if [[ " $VESPER_FFMPEG_PROFILE_VALUE_VARS " != *" $var_name "* ]]; then
+    VESPER_FFMPEG_PROFILE_VALUE_VARS="$VESPER_FFMPEG_PROFILE_VALUE_VARS $var_name"
+    eval "$var_name=()"
+  fi
+  eval "$var_name+=(\"\$value\")"
 }
 
 vesper_ffmpeg_profile_get() {
@@ -71,9 +67,25 @@ vesper_ffmpeg_profile_get() {
   printf '%s' "${!var_name:-}"
 }
 
+vesper_ffmpeg_profile_get_values() {
+  local section="$1"
+  local key="$2"
+  local target="$3"
+  local var_name
+  local scalar
+  var_name="$(vesper_ffmpeg_profile_var_name "$section" "$key")__VALUES"
+  eval "$target=()"
+  if [[ " $VESPER_FFMPEG_PROFILE_VALUE_VARS " == *" $var_name "* ]]; then
+    eval "$target=(\"\${${var_name}[@]}\")"
+    return 0
+  fi
+  scalar="$(vesper_ffmpeg_profile_get "$section" "$key")"
+  [[ -z "$scalar" ]] || eval "$target=(\"\$scalar\")"
+}
+
 vesper_ffmpeg_profile_load() {
   local path="${1:-$VESPER_FFMPEG_PROFILE_CONFIG_PATH}"
-  local raw line section key value
+  local section key kind value var_name parsed_path
 
   if [[ "${VESPER_FFMPEG_PROFILE_LOADED_PATH:-}" == "$path" ]]; then
     return 0
@@ -83,30 +95,59 @@ vesper_ffmpeg_profile_load() {
     exit 1
   fi
 
+  for var_name in $VESPER_FFMPEG_PROFILE_VALUE_VARS; do
+    unset "$var_name"
+  done
   VESPER_FFMPEG_PROFILE_SECTIONS=""
-  section=""
-  while IFS= read -r raw || [[ -n "$raw" ]]; do
-    line="${raw%%#*}"
-    line="$(vesper_ffmpeg_profile_trim "$line")"
-    [[ -n "$line" ]] || continue
+  VESPER_FFMPEG_PROFILE_VALUE_VARS=""
+  vesper_require_command python3 "Python 3.11 or newer is required to parse FFmpeg profiles."
+  parsed_path="$(mktemp "${TMPDIR:-/tmp}/vesper-ffmpeg-profile.XXXXXX")"
+  if ! python3 - "$path" >"$parsed_path" <<'PY'
+import sys
+import tomllib
 
-    if [[ "$line" == \[*\] ]]; then
-      section="${line#\[}"
-      section="${section%\]}"
-      section="$(vesper_ffmpeg_profile_trim "$section")"
-      vesper_ffmpeg_profile_note_section "$section"
-      continue
+
+def emit(section: str, key: str, kind: str, value: object) -> None:
+    if isinstance(value, bool):
+        rendered = "true" if value else "false"
+    else:
+        rendered = str(value)
+    for field in (section, key, kind, rendered):
+        sys.stdout.buffer.write(field.encode("utf-8"))
+        sys.stdout.buffer.write(b"\0")
+
+
+def walk(section: str, table: dict[str, object]) -> None:
+    for key, value in table.items():
+        if isinstance(value, dict):
+            nested = f"{section}.{key}" if section else key
+            walk(nested, value)
+        elif isinstance(value, list):
+            for item in value:
+                emit(section, key, "array", item)
+        else:
+            emit(section, key, "scalar", value)
+
+
+with open(sys.argv[1], "rb") as profile_file:
+    walk("", tomllib.load(profile_file))
+PY
+  then
+    rm -f "$parsed_path"
+    return 1
+  fi
+  while IFS= read -r -d '' section \
+    && IFS= read -r -d '' key \
+    && IFS= read -r -d '' kind \
+    && IFS= read -r -d '' value; do
+    vesper_ffmpeg_profile_note_section "$section"
+    if [[ "$kind" == "array" ]]; then
+      vesper_ffmpeg_profile_append_value "$section" "$key" "$value"
+    else
+      vesper_ffmpeg_profile_set "$section" "$key" "$value"
     fi
-
-    if [[ "$line" != *=* || -z "$section" ]]; then
-      echo "Unsupported TOML line in $path: $raw" >&2
-      exit 1
-    fi
-
-    key="$(vesper_ffmpeg_profile_trim "${line%%=*}")"
-    value="$(vesper_ffmpeg_profile_parse_value "${line#*=}")"
-    vesper_ffmpeg_profile_set "$section" "$key" "$value"
-  done <"$path"
+  done <"$parsed_path"
+  rm -f "$parsed_path"
 
   VESPER_FFMPEG_PROFILE_LOADED_PATH="$path"
 }
@@ -189,23 +230,24 @@ vesper_ffmpeg_profile_reset_resolved() {
 vesper_ffmpeg_profile_apply_table() {
   local section="$1"
   local value
+  local values=()
 
-  value="$(vesper_ffmpeg_profile_get "$section" libraries)"
-  [[ -z "$value" ]] || vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_LIBRARIES "$value"
-  value="$(vesper_ffmpeg_profile_get "$section" demuxers)"
-  [[ -z "$value" ]] || vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_DEMUXERS "$value"
-  value="$(vesper_ffmpeg_profile_get "$section" muxers)"
-  [[ -z "$value" ]] || vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_MUXERS "$value"
-  value="$(vesper_ffmpeg_profile_get "$section" protocols)"
-  [[ -z "$value" ]] || vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_PROTOCOLS "$value"
-  value="$(vesper_ffmpeg_profile_get "$section" decoders)"
-  [[ -z "$value" ]] || vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_DECODERS "$value"
-  value="$(vesper_ffmpeg_profile_get "$section" parsers)"
-  [[ -z "$value" ]] || vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_PARSERS "$value"
-  value="$(vesper_ffmpeg_profile_get "$section" bsfs)"
-  [[ -z "$value" ]] || vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_BSFS "$value"
-  value="$(vesper_ffmpeg_profile_get "$section" extra_configure_args)"
-  [[ -z "$value" ]] || vesper_ffmpeg_profile_append_csv VESPER_PROFILE_RESOLVED_EXTRA_CONFIGURE_ARGS "$value"
+  vesper_ffmpeg_profile_get_values "$section" libraries values
+  for value in ${values[@]+"${values[@]}"}; do vesper_ffmpeg_profile_append_unique VESPER_PROFILE_RESOLVED_LIBRARIES "$value"; done
+  vesper_ffmpeg_profile_get_values "$section" demuxers values
+  for value in ${values[@]+"${values[@]}"}; do vesper_ffmpeg_profile_append_unique VESPER_PROFILE_RESOLVED_DEMUXERS "$value"; done
+  vesper_ffmpeg_profile_get_values "$section" muxers values
+  for value in ${values[@]+"${values[@]}"}; do vesper_ffmpeg_profile_append_unique VESPER_PROFILE_RESOLVED_MUXERS "$value"; done
+  vesper_ffmpeg_profile_get_values "$section" protocols values
+  for value in ${values[@]+"${values[@]}"}; do vesper_ffmpeg_profile_append_unique VESPER_PROFILE_RESOLVED_PROTOCOLS "$value"; done
+  vesper_ffmpeg_profile_get_values "$section" decoders values
+  for value in ${values[@]+"${values[@]}"}; do vesper_ffmpeg_profile_append_unique VESPER_PROFILE_RESOLVED_DECODERS "$value"; done
+  vesper_ffmpeg_profile_get_values "$section" parsers values
+  for value in ${values[@]+"${values[@]}"}; do vesper_ffmpeg_profile_append_unique VESPER_PROFILE_RESOLVED_PARSERS "$value"; done
+  vesper_ffmpeg_profile_get_values "$section" bsfs values
+  for value in ${values[@]+"${values[@]}"}; do vesper_ffmpeg_profile_append_unique VESPER_PROFILE_RESOLVED_BSFS "$value"; done
+  vesper_ffmpeg_profile_get_values "$section" extra_configure_args values
+  for value in ${values[@]+"${values[@]}"}; do vesper_ffmpeg_profile_append_unique VESPER_PROFILE_RESOLVED_EXTRA_CONFIGURE_ARGS "$value"; done
   value="$(vesper_ffmpeg_profile_get "$section" tls)"
   [[ -z "$value" ]] || VESPER_PROFILE_RESOLVED_TLS_BACKEND="$value"
 }
@@ -224,7 +266,8 @@ vesper_ffmpeg_profile_resolve_one() {
   local profile="$1"
   local platform="$2"
   local section="profile.$profile"
-  local extends parent
+  local extends=()
+  local parent
 
   if ! vesper_ffmpeg_profile_section_seen "$section"; then
     echo "Unknown FFmpeg profile: $profile" >&2
@@ -239,9 +282,8 @@ vesper_ffmpeg_profile_resolve_one() {
   fi
   VESPER_PROFILE_RESOLVE_STACK="$VESPER_PROFILE_RESOLVE_STACK $profile"
 
-  extends="$(vesper_ffmpeg_profile_get "$section" extends)"
-  extends="${extends//,/ }"
-  for parent in $extends; do
+  vesper_ffmpeg_profile_get_values "$section" extends extends
+  for parent in ${extends[@]+"${extends[@]}"}; do
     [[ -n "$parent" ]] || continue
     vesper_ffmpeg_profile_resolve_one "$parent" "$platform"
   done
@@ -258,7 +300,7 @@ vesper_ffmpeg_profile_resolve() {
   local platform="$2"
   local path="${3:-$VESPER_FFMPEG_PROFILE_CONFIG_PATH}"
 
-  vesper_ffmpeg_profile_load "$path"
+  vesper_ffmpeg_profile_load "$path" || return 1
   vesper_ffmpeg_profile_reset_resolved
   vesper_ffmpeg_profile_resolve_one "$profile" "$platform"
   if [[ -z "$VESPER_PROFILE_RESOLVED_TLS_BACKEND" ]]; then

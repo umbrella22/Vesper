@@ -213,7 +213,7 @@ internal fun VesperNativeJniBindings.drainAndApplyNativeCommands(
                     NATIVE_JNI_BINDINGS_TAG,
                     "apply native command: SetVideoTrackSelection mode=${command.selection.modeOrdinal} trackId=${command.selection.trackId}",
                 )
-                if (nativeFramePipelineOwnsSurface) {
+                if (nativeFramePipelineOwnsSurface.get()) {
                     return@forEach
                 }
                 applyTrackSelectionCommand(
@@ -269,7 +269,7 @@ internal fun VesperNativeJniBindings.drainAndApplyNativeCommands(
                     NATIVE_JNI_BINDINGS_TAG,
                     "apply native command: SetAbrPolicy mode=${command.policy.modeOrdinal} trackId=${command.policy.trackId}",
                 )
-                if (nativeFramePipelineOwnsSurface) {
+                if (nativeFramePipelineOwnsSurface.get()) {
                     return@forEach
                 }
                 applyAbrPolicyCommand(exoPlayer, command.policy)
@@ -339,7 +339,7 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
             hasObservedTrackCatalog = true
             player?.let { exoPlayer ->
                 pendingTrackOverrides
-                    ?.takeIf { !nativeFramePipelineOwnsSurface }
+                    ?.takeIf { !nativeFramePipelineOwnsSurface.get() }
                     ?.let { defaults ->
                         applyTrackPreferenceTrackOverrides(
                             exoPlayer,
@@ -1185,26 +1185,25 @@ private fun VesperNativeJniBindings.dispatchWarmup(
 }
 
 internal fun VesperNativeJniBindings.runWarmup(task: NativePreloadTask, currentSource: VesperPlayerSource) {
-    val source =
-        currentSource.takeIf { it.uri == task.sourceUri }
-            ?: currentSourceOrFallback(task.sourceUri)
-    val resolvedResiliencePolicy = resolveResiliencePolicy(source, VesperPlaybackResiliencePolicy())
-    val dataSourceFactory = buildDataSourceFactory(
-        appContext,
-        resolvedResiliencePolicy.cache,
-        source.headers,
-    )
-    val dataSource = dataSourceFactory.createDataSource()
-
-    val readLength =
-        task.expectedMemoryBytes.coerceAtLeast(1L).coerceAtMost(DEFAULT_PRELOAD_WARMUP_READ_BYTES.toLong())
-    val dataSpec =
-        DataSpec.Builder()
+    var dataSource: androidx.media3.datasource.DataSource? = null
+    runCatching {
+        val source =
+            currentSource.takeIf { it.uri == task.sourceUri }
+                ?: currentSourceOrFallback(task.sourceUri)
+        val resolvedResiliencePolicy = resolveResiliencePolicy(source, VesperPlaybackResiliencePolicy())
+        dataSource = buildDataSourceFactory(
+            appContext,
+            resolvedResiliencePolicy.cache,
+            source.headers,
+        ).createDataSource()
+        val readLength = task.expectedMemoryBytes
+            .coerceAtLeast(1L)
+            .coerceAtMost(DEFAULT_PRELOAD_WARMUP_READ_BYTES.toLong())
+        val dataSpec = DataSpec.Builder()
             .setUri(task.sourceUri)
             .setLength(readLength)
             .build()
 
-    runCatching {
         dataSource.open(dataSpec)
         val buffer = ByteArray(DEFAULT_PRELOAD_WARMUP_READ_BYTES)
         dataSource.read(buffer, 0, buffer.size)
@@ -1222,7 +1221,7 @@ internal fun VesperNativeJniBindings.runWarmup(task: NativePreloadTask, currentS
         )
     }
 
-    runCatching { dataSource.close() }
+    runCatching { dataSource?.close() }
 }
 
 internal fun VesperNativeJniBindings.currentSourceOrFallback(uri: String): VesperPlayerSource {

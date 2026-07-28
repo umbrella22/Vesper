@@ -25,12 +25,12 @@ pub use adapter::{
 pub use clock::{MediaClock, PlaybackClock};
 pub use player_download::{
     DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
-    DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadExecutor, DownloadManager,
-    DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot,
-    DownloadResourceRecord, DownloadSegmentRecord, DownloadSnapshot, DownloadSource, DownloadStore,
-    DownloadStreamKind, DownloadTaskId, DownloadTaskProgressPatch, DownloadTaskSnapshot,
-    DownloadTaskState, DownloadTaskStatePatch, DownloadTaskStatus, InMemoryDownloadExecutor,
-    InMemoryDownloadStore,
+    DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadExecutor,
+    DownloadExportPlan, DownloadManager, DownloadManagerConfig, DownloadPrepareResult,
+    DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord,
+    DownloadSnapshot, DownloadSource, DownloadStore, DownloadStreamKind, DownloadTaskId,
+    DownloadTaskProgressPatch, DownloadTaskSnapshot, DownloadTaskState, DownloadTaskStatePatch,
+    DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
 };
 pub use player_model::{
     DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
@@ -61,10 +61,11 @@ pub mod download {
     pub use player_download::{
         DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
         DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadExecutor,
-        DownloadManager, DownloadManagerConfig, DownloadPrepareResult, DownloadProfile,
-        DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSnapshot,
-        DownloadSource, DownloadStore, DownloadStreamKind, DownloadTaskId, DownloadTaskSnapshot,
-        DownloadTaskState, DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
+        DownloadExportPlan, DownloadManager, DownloadManagerConfig, DownloadPrepareResult,
+        DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord,
+        DownloadSnapshot, DownloadSource, DownloadStore, DownloadStreamKind, DownloadTaskId,
+        DownloadTaskSnapshot, DownloadTaskState, DownloadTaskStatus, InMemoryDownloadExecutor,
+        InMemoryDownloadStore,
     };
 }
 
@@ -1994,6 +1995,9 @@ impl PlayerTimelineSnapshot {
         let inferred_duration = progress.duration().or(media_info.duration);
 
         match (media_info.source_kind, media_info.source_protocol) {
+            // RTMP and RTSP are live transports unless a platform/backend
+            // explicitly supplies a different timeline.
+            (_, MediaSourceProtocol::Rtmp | MediaSourceProtocol::Rtsp) => Self::live(progress),
             // Without an explicit live window from the platform/backend, treat remote HLS/DASH
             // with a known duration as VOD and duration-less streams as baseline LIVE.
             (MediaSourceKind::Remote, MediaSourceProtocol::Hls | MediaSourceProtocol::Dash) => {
@@ -2488,6 +2492,27 @@ mod tests {
         assert!(!timeline.is_seekable);
         assert!(timeline.seekable_range.is_none());
         assert!(timeline.duration.is_none());
+    }
+
+    #[test]
+    fn timeline_from_media_info_defaults_rtmp_and_rtsp_to_live() {
+        for protocol in [MediaSourceProtocol::Rtmp, MediaSourceProtocol::Rtsp] {
+            let media_info = test_media_info(
+                MediaSourceKind::Remote,
+                protocol,
+                Some(Duration::from_secs(600)),
+            );
+            let timeline = PlayerTimelineSnapshot::from_media_info(
+                PlaybackProgress::new(Duration::from_secs(30), Some(Duration::from_secs(600))),
+                true,
+                &media_info,
+            );
+
+            assert_eq!(timeline.kind, PlayerTimelineKind::Live, "{protocol:?}");
+            assert!(!timeline.is_seekable, "{protocol:?}");
+            assert_eq!(timeline.duration, None, "{protocol:?}");
+            assert_eq!(timeline.seekable_range, None, "{protocol:?}");
+        }
     }
 
     #[test]

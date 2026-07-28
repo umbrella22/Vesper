@@ -341,6 +341,19 @@ void main() {
     expect(result.hdrMetadata?.dolbyVisionBaseLayer, 'none');
     expect(result.hdrMetadata?.dolbyVisionFallbackTarget,
         'dolbyVisionSystemPlayer');
+
+    await platform.probePlaybackCapability(
+      request,
+      playerId: 'ios-player',
+    );
+    expect(calls, hasLength(2));
+    expect(
+      Map<Object?, Object?>.from(calls[1].arguments as Map),
+      <Object?, Object?>{
+        ...request.toMap(),
+        'playerId': 'ios-player',
+      },
+    );
   });
 
   test('createPlayer accepts explicit render surface kind', () async {

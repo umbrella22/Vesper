@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use url::{Host, Url};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaSourceKind {
     Local,
@@ -297,13 +299,18 @@ fn classify_media_source_protocol(uri: &str) -> MediaSourceProtocol {
 }
 
 fn is_loopback_http_uri(uri: &str) -> bool {
-    // This intentionally recognizes the narrow loopback HTTP shape emitted by
-    // diagnostic/dev tooling; general URL parsing stays out of the model layer.
-    let lower = uri.to_ascii_lowercase();
-    lower.starts_with("http://127.0.0.1:")
-        || lower.starts_with("http://localhost:")
-        || lower.starts_with("https://127.0.0.1:")
-        || lower.starts_with("https://localhost:")
+    let Ok(parsed) = Url::parse(uri) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return false;
+    }
+    match parsed.host() {
+        Some(Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    }
 }
 
 fn is_likely_local_file_path(uri: &str) -> bool {
@@ -379,6 +386,34 @@ mod tests {
 
         let progressive = MediaSource::new("https://example.com/video.mp4");
         assert_eq!(progressive.protocol(), MediaSourceProtocol::Progressive);
+    }
+
+    #[test]
+    fn loopback_http_classification_uses_the_parsed_host() {
+        for uri in [
+            "http://localhost/video.mp4",
+            "https://user@localhost:49152/video.mp4",
+            "http://127.0.0.2/video.mp4",
+            "http://[::1]:49152/video.mp4",
+        ] {
+            assert_eq!(
+                MediaSource::new(uri).kind(),
+                MediaSourceKind::Local,
+                "{uri}"
+            );
+        }
+
+        for uri in [
+            "http://localhost:80@evil.example/video.mp4",
+            "http://localhost.example/video.mp4",
+            "ftp://localhost/video.mp4",
+        ] {
+            assert_eq!(
+                MediaSource::new(uri).kind(),
+                MediaSourceKind::Remote,
+                "{uri}"
+            );
+        }
     }
 
     #[test]

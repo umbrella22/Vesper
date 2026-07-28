@@ -187,11 +187,11 @@ vesper_path_cache_key() {
 }
 
 vesper_test_fixture_path_pattern() {
-  printf '%s\n' '(^|/)(subtitle_contract|test[-_]?fixtures?|test[-_]?assets?|testdata)(/|$)|(^|/)fixtures/(contracts|media)(/|$)|(^|/)(tiny-aac\.m4a|tiny-h264-aac\.m4v)$'
+  printf '%s\n' '(^|/)(subtitle_contract|test[-_]?fixtures?|test[-_]?assets?|testdata)(/|$)|(^|/)fixtures/(contracts|media)(/|$)|(^|/)(tiny-aac\.m4a|tiny-h264-aac(-mediacodec)?\.m4v)$'
 }
 
 vesper_test_fixture_binary_marker_pattern() {
-  printf '%s\n' 'assets/subtitle_contract|fixtures/(contracts|media)|tiny-aac\.m4a|tiny-h264-aac\.m4v'
+  printf '%s\n' 'assets/subtitle_contract|fixtures/(contracts|media)|tiny-aac\.m4a|tiny-h264-aac(-mediacodec)?\.m4v'
 }
 
 vesper_verify_archive_excludes_test_fixtures() {

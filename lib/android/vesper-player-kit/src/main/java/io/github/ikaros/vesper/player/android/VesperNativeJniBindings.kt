@@ -83,7 +83,8 @@ internal class VesperNativeJniBindings(
     internal var analyticsListener: AnalyticsListener? = null
     @Volatile
     internal var attachedSurface: Surface? = null
-    internal var nativeFramePipelineOwnsSurface = false
+    internal val nativeFramePipelineOwnsSurface = AtomicBoolean(false)
+    private val nativeFrameLeaseRegistry = VesperNativeFrameLeaseRegistry()
     internal var updateListener: (() -> Unit)? = null
     internal var subtitleCuesListener: ((List<Cue>) -> Unit)? = null
     /**
@@ -321,7 +322,9 @@ internal class VesperNativeJniBindings(
             )
             attachedSurface?.takeIf { systemPlaybackVideoEnabled }?.let { surface ->
                 Log.i(NATIVE_JNI_BINDINGS_TAG, "reusing attached surface for source=${source.uri}")
-                exoPlayer.setVideoSurface(surface)
+                runPlayerSurfaceOperation(exoPlayer, "initial surface attach") {
+                    it.setVideoSurface(surface)
+                }
             }
             exoPlayer.prepare()
             val firstFrameWatchdogRoute =
@@ -367,6 +370,8 @@ internal class VesperNativeJniBindings(
         VesperNativeLibrary.ensureLoaded()
         val packetSource = openNativeFramePacketSource(source)
         var keepPacketSource = false
+        var openedHandle: Long? = null
+        var claimedMedia3Surface = false
         try {
             val json =
                 VesperNativeJni.openNativeFramePipeline(
@@ -383,12 +388,18 @@ internal class VesperNativeJniBindings(
             val opened = parseNativeFramePipelineJson(json) ?: return null
             val handle = (opened["handle"] as? Number)?.toLong() ?: 0L
             check(handle != 0L) { "native-frame pipeline handle must not be zero" }
+            openedHandle = handle
+            player?.let { exoPlayer ->
+                runPlayerSurfaceOperation(exoPlayer, "native-frame surface claim") {
+                    it.clearVideoSurface()
+                }
+            }
+            claimedMedia3Surface = true
             nativeFramePipelineHandle = handle
             nativeFramePipelineStatus = opened
             currentNativeFramePacketSource = packetSource
             keepPacketSource = true
-            nativeFramePipelineOwnsSurface = true
-            player?.clearVideoSurface()
+            nativeFramePipelineOwnsSurface.set(true)
             Log.i(
                 NATIVE_JNI_BINDINGS_TAG,
                 "opened native-frame pipeline handle=$handle route=${opened["route"]}",
@@ -397,6 +408,39 @@ internal class VesperNativeJniBindings(
                 attachNativeFramePipelineSurface(surface, surfaceKind)
             }
             return opened
+        } catch (error: Throwable) {
+            openedHandle?.let { handle ->
+                if (nativeFramePipelineHandle == handle) {
+                    nativeFramePipelineHandle = null
+                    nativeFramePipelineStatus = null
+                    currentNativeFramePacketSource = null
+                    keepPacketSource = false
+                }
+                nativeFrameLeaseRegistry.drainPipeline(handle).forEach { frameHandle ->
+                    runCatching {
+                        VesperNativeJni.releaseNativeFramePipelineFrame(
+                            handle,
+                            frameHandle,
+                            false,
+                        )
+                    }
+                }
+                runCatching { VesperNativeJni.closeNativeFramePipeline(handle) }
+                    .onFailure { closeError ->
+                        Log.w(
+                            NATIVE_JNI_BINDINGS_TAG,
+                            "failed to roll back native-frame pipeline open",
+                            closeError,
+                        )
+                    }
+            }
+            if (
+                claimedMedia3Surface &&
+                    restoreMedia3SurfaceAfterNativeFramePipeline().isSuccess
+            ) {
+                nativeFramePipelineOwnsSurface.set(false)
+            }
+            throw error
         } finally {
             if (!keepPacketSource) {
                 packetSource.close()
@@ -407,14 +451,23 @@ internal class VesperNativeJniBindings(
     override fun advanceNativeFramePipeline(): Map<String, Any?>? {
         val handle = nativeFramePipelineHandle ?: return null
         val json = VesperNativeJni.advanceNativeFramePipeline(handle) ?: return null
-        return parseNativeFramePipelineJson(json)?.let(::rememberNativeFramePipelineStatus)
+        return parseNativeFramePipelineJson(json)?.let { status ->
+            if (status["status"] == "frame") {
+                status.nativeFramePipelineFrameHandle()?.let { frameHandle ->
+                    nativeFrameLeaseRegistry.register(handle, frameHandle)
+                }
+            }
+            rememberNativeFramePipelineStatus(status)
+        }
     }
 
     override fun releaseNativeFramePipelineFrame(
         frameHandle: Long,
         presented: Boolean,
     ): Map<String, Any?>? {
-        val handle = nativeFramePipelineHandle ?: return null
+        val handle =
+            nativeFrameLeaseRegistry.takePipelineHandle(frameHandle)
+                ?: return nativeFramePipelineStatus
         val json =
             VesperNativeJni.releaseNativeFramePipelineFrame(handle, frameHandle, presented)
                 ?: return null
@@ -495,26 +548,66 @@ internal class VesperNativeJniBindings(
             nativeFramePipelineHandle = null
         }
         nativeFramePipelineStatus = null
-        nativeFramePipelineOwnsSurface = false
         if (handle != null) {
-            runCatching { VesperNativeJni.closeNativeFramePipeline(handle) }
+            nativeFrameLeaseRegistry.drainPipeline(handle).forEach { frameHandle ->
+                runCatching {
+                    VesperNativeJni.releaseNativeFramePipelineFrame(
+                        handle,
+                        frameHandle,
+                        false,
+                    )
+                }.onFailure { error ->
+                    Log.w(
+                        NATIVE_JNI_BINDINGS_TAG,
+                        "failed to release native-frame lease before close",
+                        error,
+                    )
+                }
+            }
+            val closed = runCatching { VesperNativeJni.closeNativeFramePipeline(handle) }
                 .onFailure { error ->
                     Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to close native-frame pipeline session", error)
                 }
             closeCurrentNativeFramePacketSource()
-            attachedSurface?.let { surface ->
-                if (surface.isValid) {
-                    player?.setVideoSurface(surface)
-                } else {
-                    Log.i(NATIVE_JNI_BINDINGS_TAG, "native-frame close skipped restoring invalid Surface")
-                    player?.clearVideoSurface()
-                    attachedSurface = null
+            if (closed.isSuccess) {
+                val restored = restoreMedia3SurfaceAfterNativeFramePipeline()
+                if (restored.isSuccess) {
+                    nativeFramePipelineOwnsSurface.set(false)
                 }
             }
         } else {
             closeCurrentNativeFramePacketSource()
         }
     }
+
+    private fun restoreMedia3SurfaceAfterNativeFramePipeline(): Result<Unit> =
+        runCatching {
+            player?.let { exoPlayer ->
+                attachedSurface?.let { surface ->
+                    if (surface.isValid) {
+                        runPlayerSurfaceOperation(exoPlayer, "native-frame surface restore") {
+                            it.setVideoSurface(surface)
+                        }
+                    } else {
+                        Log.i(
+                            NATIVE_JNI_BINDINGS_TAG,
+                            "native-frame close skipped restoring invalid Surface",
+                        )
+                        runPlayerSurfaceOperation(exoPlayer, "invalid surface clear") {
+                            it.clearVideoSurface()
+                        }
+                        attachedSurface = null
+                    }
+                }
+            }
+            Unit
+        }.onFailure { error ->
+            Log.w(
+                NATIVE_JNI_BINDINGS_TAG,
+                "failed to restore Media3 surface after native-frame close",
+                error,
+            )
+        }
 
     override fun setOnSubtitleCuesListener(listener: ((List<Cue>) -> Unit)?) {
         subtitleCuesListener = listener
@@ -695,12 +788,16 @@ internal class VesperNativeJniBindings(
         }
         Log.i(NATIVE_JNI_BINDINGS_TAG, "attachSurface kind=$surfaceKind")
         recordBenchmark("surface_attach", mapOf("surfaceKind" to surfaceKind.name))
-        attachedSurface = surface
-        if (nativeFramePipelineOwnsSurface) {
-            player?.clearVideoSurface()
-        } else {
-            player?.setVideoSurface(surface)
+        player?.let { exoPlayer ->
+            runPlayerSurfaceOperation(exoPlayer, "surface attach") {
+                if (nativeFramePipelineOwnsSurface.get()) {
+                    it.clearVideoSurface()
+                } else {
+                    it.setVideoSurface(surface)
+                }
+            }
         }
+        attachedSurface = surface
         sessionHandle?.let { handle ->
             VesperNativeJni.attachSurface(handle, surface, surfaceKind.ordinal)
         }
@@ -715,7 +812,11 @@ internal class VesperNativeJniBindings(
         }
         Log.i(NATIVE_JNI_BINDINGS_TAG, "detachSurface")
         recordBenchmark("surface_detach")
-        player?.clearVideoSurface()
+        player?.let { exoPlayer ->
+            runPlayerSurfaceOperation(exoPlayer, "surface detach") {
+                it.clearVideoSurface()
+            }
+        }
         attachedSurface = null
         sessionHandle?.let(VesperNativeJni::detachSurface)
         detachNativeFramePipelineSurface()

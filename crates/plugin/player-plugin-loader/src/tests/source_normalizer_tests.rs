@@ -4,6 +4,155 @@ use player_plugin::{
 };
 
 #[test]
+fn dual_source_normalizer_context_outlives_each_factory_and_destroys_once() {
+    let _guard = source_normalizer_packet_test_guard();
+    let destroys = std::sync::atomic::AtomicUsize::new(0);
+    let api = VesperSourceNormalizerPluginApiV4 {
+        context: (&destroys as *const std::sync::atomic::AtomicUsize)
+            .cast_mut()
+            .cast::<c_void>(),
+        destroy: Some(count_source_normalizer_destroy),
+        ..fixture_source_normalizer_dual_api()
+    };
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
+        plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
+    };
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load dual source normalizer");
+    let packet_factory = plugin
+        .source_normalizer_packet_plugin_factory()
+        .expect("packet factory");
+    let resource_factory = plugin
+        .source_normalizer_resource_plugin_factory()
+        .expect("resource factory");
+    let mut resource_session = resource_factory
+        .open_resource_session(&player_plugin::SourceNormalizerResourceSessionConfig {
+            runtime_profile: "fixture-resource".to_owned(),
+            input: "file:///tmp/input.mp4".to_owned(),
+            headers: Vec::new(),
+            output_root: "/tmp/vesper-source-normalizer-fixture".to_owned(),
+            cache_policy: SourceNormalizerResourceCachePolicy::default(),
+            preferred_route: Some(SourceNormalizerOutputRoute::Fmp4LocalStream),
+            startup_timeout_ms: Some(10),
+            read_idle_timeout_ms: Some(10),
+        })
+        .expect("open resource session");
+
+    drop(plugin);
+    drop(packet_factory);
+    drop(resource_factory);
+    assert_eq!(destroys.load(std::sync::atomic::Ordering::SeqCst), 0);
+    resource_session
+        .wait_for_update(std::time::Duration::from_millis(1))
+        .expect("resource session remains valid after packet factory drops");
+    resource_session.close().expect("close resource session");
+    assert_eq!(destroys.load(std::sync::atomic::Ordering::SeqCst), 0);
+    drop(resource_session);
+    assert_eq!(destroys.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn dual_source_normalizer_context_outlives_both_session_families_in_reverse_drop_order() {
+    let _guard = source_normalizer_packet_test_guard();
+    let destroys = std::sync::atomic::AtomicUsize::new(0);
+    let api = VesperSourceNormalizerPluginApiV4 {
+        context: (&destroys as *const std::sync::atomic::AtomicUsize)
+            .cast_mut()
+            .cast::<c_void>(),
+        destroy: Some(count_source_normalizer_destroy),
+        ..fixture_source_normalizer_dual_api()
+    };
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
+        plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
+    };
+    let plugin = LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect("load dual source normalizer");
+    let packet_factory = plugin
+        .source_normalizer_packet_plugin_factory()
+        .expect("packet factory");
+    let resource_factory = plugin
+        .source_normalizer_resource_plugin_factory()
+        .expect("resource factory");
+    let mut packet_session = packet_factory
+        .open_packet_session(&SourceNormalizerPacketSessionConfig {
+            runtime_profile: "fixture-packet".to_owned(),
+            input: "file:///tmp/input.mp4".to_owned(),
+            headers: Vec::new(),
+            startup_timeout_ms: None,
+            session_timeout_ms: None,
+            preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
+        })
+        .expect("open packet session");
+    let mut resource_session = resource_factory
+        .open_resource_session(&player_plugin::SourceNormalizerResourceSessionConfig {
+            runtime_profile: "fixture-resource".to_owned(),
+            input: "file:///tmp/input.mp4".to_owned(),
+            headers: Vec::new(),
+            output_root: "/tmp/vesper-source-normalizer-fixture".to_owned(),
+            cache_policy: SourceNormalizerResourceCachePolicy::default(),
+            preferred_route: Some(SourceNormalizerOutputRoute::Fmp4LocalStream),
+            startup_timeout_ms: Some(10),
+            read_idle_timeout_ms: Some(10),
+        })
+        .expect("open resource session");
+
+    drop(plugin);
+    drop(resource_factory);
+    drop(packet_factory);
+    assert_eq!(destroys.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    resource_session.close().expect("close resource session");
+    drop(resource_session);
+    assert_eq!(destroys.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+    packet_session.close().expect("close packet session");
+    drop(packet_session);
+    assert_eq!(destroys.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn source_normalizer_constructor_failure_destroys_context_once() {
+    let destroys = std::sync::atomic::AtomicUsize::new(0);
+    let api = VesperSourceNormalizerPluginApiV4 {
+        context: (&destroys as *const std::sync::atomic::AtomicUsize)
+            .cast_mut()
+            .cast::<c_void>(),
+        destroy: Some(count_source_normalizer_destroy),
+        packet_capabilities_json: Some(malformed_source_normalizer_capabilities),
+        ..fixture_source_normalizer_packet_api()
+    };
+    let descriptor = VesperPluginDescriptor {
+        abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
+        plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
+        api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
+    };
+
+    LoadedDynamicPlugin::from_descriptor(None, &descriptor)
+        .expect_err("malformed capabilities should reject the plugin");
+    assert_eq!(destroys.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+unsafe extern "C" fn count_source_normalizer_destroy(context: *mut c_void) {
+    // SAFETY: these tests pass a live AtomicUsize as the plugin context.
+    if let Some(counter) = unsafe { context.cast::<std::sync::atomic::AtomicUsize>().as_ref() } {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+unsafe extern "C" fn malformed_source_normalizer_capabilities(
+    _context: *mut c_void,
+) -> VesperPluginBytes {
+    VesperPluginBytes::from_vec(b"{".to_vec())
+}
+
+#[test]
 fn dynamic_source_normalizer_packet_plugin_round_trips_packet_lifecycle() {
     let _guard = source_normalizer_packet_test_guard();
     reset_source_normalizer_packet_releases();
@@ -130,7 +279,7 @@ fn dynamic_source_normalizer_packet_release_failure_keeps_outstanding_handle_for
     };
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
@@ -201,7 +350,7 @@ fn dynamic_source_normalizer_packet_read_releases_handle_when_metadata_is_malfor
     };
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
@@ -241,7 +390,7 @@ fn dynamic_source_normalizer_packet_open_closes_session_when_success_payload_is_
     };
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
@@ -279,7 +428,7 @@ fn dynamic_source_normalizer_resource_open_closes_session_when_success_payload_i
     };
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
@@ -316,7 +465,7 @@ fn dynamic_source_normalizer_packet_plugin_rejects_missing_release_callback() {
     };
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
@@ -339,7 +488,7 @@ fn dynamic_source_normalizer_resource_plugin_rejects_missing_wait_callback() {
     };
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
@@ -354,10 +503,11 @@ fn dynamic_source_normalizer_resource_plugin_rejects_missing_wait_callback() {
 
 #[test]
 fn dynamic_source_normalizer_resource_session_wait_for_update_decodes_status() {
+    let _guard = source_normalizer_packet_test_guard();
     let api = fixture_source_normalizer_dual_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
@@ -391,7 +541,7 @@ fn plugin_registry_reports_source_normalizer_packet_current_support() {
     let api = fixture_source_normalizer_packet_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };
@@ -454,7 +604,7 @@ fn dynamic_source_normalizer_plugin_rejects_legacy_v2_signature() {
     };
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2,
-        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperSourceNormalizerPluginApiV2).cast(),
     };
@@ -476,7 +626,7 @@ fn plugin_registry_reports_current_source_normalizer_packet_and_resource_support
     let api = fixture_source_normalizer_dual_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-        plugin_kind: VesperPluginKind::SourceNormalizer,
+        plugin_kind: VesperPluginKind::SourceNormalizer as u32,
         plugin_name: SOURCE_NORMALIZER_PACKET_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperSourceNormalizerPluginApiV4).cast(),
     };

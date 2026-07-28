@@ -78,7 +78,7 @@ targets:
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: FMWK
         CFBundleShortVersionString: "0.4.0"
-        CFBundleVersion: "4"
+        CFBundleVersion: "400"
     scheme:
       testTargets:
         - VesperPlayerKitTests

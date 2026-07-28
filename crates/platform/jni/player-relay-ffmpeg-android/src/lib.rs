@@ -31,6 +31,11 @@ const STALE_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_SESSION_CACHES: usize = 64;
 const MAX_NATIVE_STREAMS: usize = 256;
 const HLS_PLAYLIST_CONTENT_TYPE: &str = "application/x-mpegURL";
+const JNI_READ_COMPLETE: jint = -1;
+const JNI_READ_INVALID_HANDLE: jint = -2;
+const JNI_READ_FAILED: jint = -3;
+const JNI_READ_STALLED: jint = -4;
+const JNI_READ_CANCELLED: jint = -5;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,6 +144,7 @@ struct GrowingCacheState {
     available_len: u64,
     complete: bool,
     error: Option<RelayError>,
+    cancelled: bool,
     last_progress: Instant,
 }
 
@@ -150,6 +156,7 @@ impl GrowingCache {
                 available_len: 0,
                 complete: false,
                 error: None,
+                cancelled: false,
                 last_progress: Instant::now(),
             }),
             ready: Condvar::new(),
@@ -172,6 +179,10 @@ impl GrowingCache {
     fn mark_complete(&self) {
         self.refresh_available_len();
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.cancelled {
+            self.ready.notify_all();
+            return;
+        }
         state.complete = true;
         state.last_progress = Instant::now();
         self.ready.notify_all();
@@ -179,9 +190,32 @@ impl GrowingCache {
 
     fn mark_error(&self, error: RelayError) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.cancelled {
+            self.ready.notify_all();
+            return;
+        }
         state.error = Some(error);
         state.last_progress = Instant::now();
         self.ready.notify_all();
+    }
+
+    fn mark_cancelled(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.cancelled = true;
+        self.ready.notify_all();
+    }
+}
+
+impl SessionCache {
+    fn cancel(&self) {
+        let caches = {
+            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            [state.mpeg_ts_cache.clone(), state.hls_cache.clone()]
+        };
+        caches
+            .into_iter()
+            .flatten()
+            .for_each(|cache| cache.mark_cancelled());
     }
 }
 
@@ -200,6 +234,15 @@ enum NativeStream {
     },
 }
 
+#[derive(Debug)]
+enum NativeReadOutcome {
+    Bytes(usize),
+    Complete,
+    Failed(RelayError),
+    Stalled,
+    Cancelled,
+}
+
 struct NativeStreamEntry {
     stream: NativeStream,
     last_access: Instant,
@@ -210,6 +253,60 @@ impl NativeStreamEntry {
         Self {
             stream,
             last_access: Instant::now(),
+        }
+    }
+
+    fn read_outcome(&mut self, buffer: &mut [u8]) -> NativeReadOutcome {
+        self.read_outcome_with_timeout(buffer, DEFAULT_REMUX_TIMEOUT)
+    }
+
+    fn read_outcome_with_timeout(
+        &mut self,
+        buffer: &mut [u8],
+        stall_timeout: Duration,
+    ) -> NativeReadOutcome {
+        self.last_access = Instant::now();
+        if buffer.is_empty() {
+            return NativeReadOutcome::Bytes(0);
+        }
+        match &mut self.stream {
+            NativeStream::Bytes(cursor) => read_static_stream(cursor, buffer),
+            NativeStream::File(file) => read_static_stream(file, buffer),
+            NativeStream::LimitedFile { file, remaining } => {
+                if *remaining == 0 {
+                    return NativeReadOutcome::Complete;
+                }
+                let max_read = buffer.len().min(*remaining as usize);
+                match file.read(&mut buffer[..max_read]) {
+                    Ok(0) => native_read_failure(
+                        "relay_stream_truncated",
+                        "Relay stream ended before the promised byte range was complete.",
+                        None,
+                    ),
+                    Ok(read) => {
+                        *remaining = remaining.saturating_sub(read as u64);
+                        NativeReadOutcome::Bytes(read)
+                    }
+                    Err(error) => native_read_failure(
+                        "relay_stream_read_failed",
+                        "Failed to read the relay stream.",
+                        Some(error),
+                    ),
+                }
+            }
+            NativeStream::GrowingFile {
+                file,
+                cache,
+                position,
+                remaining,
+            } => read_growing_file_with_timeout(
+                file,
+                cache,
+                position,
+                remaining,
+                buffer,
+                stall_timeout,
+            ),
         }
     }
 }
@@ -386,40 +483,39 @@ fn run_jni_entry<T: Default>(
     }
 }
 
-impl Read for NativeStreamEntry {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        self.last_access = Instant::now();
-        match &mut self.stream {
-            NativeStream::Bytes(cursor) => cursor.read(buffer),
-            NativeStream::File(file) => file.read(buffer),
-            NativeStream::LimitedFile { file, remaining } => {
-                if *remaining == 0 {
-                    return Ok(0);
-                }
-                let max_read = buffer.len().min(*remaining as usize);
-                let read = file.read(&mut buffer[..max_read])?;
-                *remaining = remaining.saturating_sub(read as u64);
-                Ok(read)
-            }
-            NativeStream::GrowingFile {
-                file,
-                cache,
-                position,
-                remaining,
-            } => read_growing_file(file, cache, position, remaining, buffer),
-        }
+fn read_static_stream(stream: &mut impl Read, buffer: &mut [u8]) -> NativeReadOutcome {
+    match stream.read(buffer) {
+        Ok(0) => NativeReadOutcome::Complete,
+        Ok(read) => NativeReadOutcome::Bytes(read),
+        Err(error) => native_read_failure(
+            "relay_stream_read_failed",
+            "Failed to read the relay stream.",
+            Some(error),
+        ),
     }
 }
 
-fn read_growing_file(
+fn native_read_failure(
+    code: &'static str,
+    message: &'static str,
+    error: Option<std::io::Error>,
+) -> NativeReadOutcome {
+    let details = error
+        .map(|error| vec![("ioError".to_owned(), error.to_string())])
+        .unwrap_or_default();
+    NativeReadOutcome::Failed(relay_error(code, 502, message, details))
+}
+
+fn read_growing_file_with_timeout(
     file: &mut File,
     cache: &GrowingCache,
     position: &mut u64,
     remaining: &mut Option<u64>,
     buffer: &mut [u8],
-) -> std::io::Result<usize> {
+    stall_timeout: Duration,
+) -> NativeReadOutcome {
     if buffer.is_empty() || remaining.as_ref().is_some_and(|remaining| *remaining == 0) {
-        return Ok(0);
+        return NativeReadOutcome::Complete;
     }
 
     loop {
@@ -435,23 +531,49 @@ fn read_growing_file(
         if *position < readable_end {
             let max_read = (readable_end - *position) as usize;
             let max_read = max_read.min(buffer.len());
-            file.seek(SeekFrom::Start(*position))?;
-            drop(state);
-            let read = file.read(&mut buffer[..max_read])?;
-            if read > 0 {
-                *position += read as u64;
-                if let Some(remaining_bytes) = remaining.as_mut() {
-                    *remaining_bytes = remaining_bytes.saturating_sub(read as u64);
-                }
-                return Ok(read);
+            if let Err(error) = file.seek(SeekFrom::Start(*position)) {
+                return native_read_failure(
+                    "relay_stream_read_failed",
+                    "Failed to seek the relay stream cache.",
+                    Some(error),
+                );
             }
-            return Ok(0);
-        } else if state.complete || state.error.is_some() {
-            return Ok(0);
+            drop(state);
+            match file.read(&mut buffer[..max_read]) {
+                Ok(read) if read > 0 => {
+                    *position += read as u64;
+                    if let Some(remaining_bytes) = remaining.as_mut() {
+                        *remaining_bytes = remaining_bytes.saturating_sub(read as u64);
+                    }
+                    return NativeReadOutcome::Bytes(read);
+                }
+                Ok(_) => {
+                    return native_read_failure(
+                        "relay_stream_read_failed",
+                        "Relay stream cache became unreadable before advertised bytes were delivered.",
+                        None,
+                    );
+                }
+                Err(error) => {
+                    return native_read_failure(
+                        "relay_stream_read_failed",
+                        "Failed to read the relay stream cache.",
+                        Some(error),
+                    );
+                }
+            }
         }
-
-        if Instant::now().duration_since(state.last_progress) >= DEFAULT_REMUX_TIMEOUT {
-            return Ok(0);
+        if state.cancelled {
+            return NativeReadOutcome::Cancelled;
+        }
+        if let Some(error) = state.error.clone() {
+            return NativeReadOutcome::Failed(error);
+        }
+        if state.complete {
+            return NativeReadOutcome::Complete;
+        }
+        if Instant::now().duration_since(state.last_progress) >= stall_timeout {
+            return NativeReadOutcome::Stalled;
         }
         let (next_state, _) = cache
             .ready
@@ -629,7 +751,11 @@ pub unsafe extern "system" fn Java_io_github_ikaros_vesper_player_android_extern
 ) -> jint {
     let mut output = -1;
     let _ = unowned_env.with_env(|env| -> JniResult<()> {
-        if handle == 0 || length <= 0 || buffer.is_null() {
+        if handle == 0 {
+            output = JNI_READ_INVALID_HANDLE;
+            return Ok(());
+        }
+        if length <= 0 || buffer.is_null() {
             output = 0;
             return Ok(());
         }
@@ -664,23 +790,28 @@ pub unsafe extern "system" fn Java_io_github_ikaros_vesper_player_android_extern
         let stream = {
             let streams = lock_or_recover(streams());
             let Some(stream) = streams.get(&handle) else {
-                output = -2;
+                output = JNI_READ_INVALID_HANDLE;
                 return Ok(());
             };
             stream.clone()
         };
-        let read = lock_or_recover(&stream)
-            .read(&mut bytes)
-            .unwrap_or_default();
-
-        if read == 0 {
-            output = -1;
-            return Ok(());
+        match lock_or_recover(&stream).read_outcome(&mut bytes) {
+            NativeReadOutcome::Bytes(read) => {
+                let jbytes: Vec<i8> = bytes[..read].iter().map(|byte| *byte as i8).collect();
+                array.set_region(env, offset as jint, &jbytes)?;
+                output = read as jint;
+            }
+            NativeReadOutcome::Complete => output = JNI_READ_COMPLETE,
+            NativeReadOutcome::Failed(error) => {
+                output = if error.code == "remux_timeout" {
+                    JNI_READ_STALLED
+                } else {
+                    JNI_READ_FAILED
+                };
+            }
+            NativeReadOutcome::Stalled => output = JNI_READ_STALLED,
+            NativeReadOutcome::Cancelled => output = JNI_READ_CANCELLED,
         }
-
-        let jbytes: Vec<i8> = bytes[..read].iter().map(|byte| *byte as i8).collect();
-        array.set_region(env, offset as jint, &jbytes)?;
-        output = read as jint;
         Ok(())
     });
     output
@@ -708,6 +839,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
             .unwrap_or_else(|error| error.into_inner())
             .remove(&session_id)
         {
+            cache.cache.cancel();
             let _ = fs::remove_dir_all(&cache.cache.root_dir);
         }
         Ok(())
@@ -2324,7 +2456,6 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::io::Cursor;
-    use std::io::Read;
     use std::sync::Arc;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -2332,12 +2463,12 @@ mod tests {
 
     use super::{
         FallbackFormat, GrowingCache, HOST_PREPARED_DASH_INPUT_MODE, HandleRegistry,
-        MAX_NATIVE_STREAMS, MAX_SESSION_CACHES, NativeStream, OpenRequest, PreparedTrack,
-        RangeRequest, SessionCache, SessionCacheEntry, cleanup_stale_caches_in,
-        evict_oldest_native_streams, evict_oldest_session_caches, hls_playlist_snapshot,
-        insert_native_stream_entry, lock_or_recover, open_growing_cache_file,
-        open_growing_cache_range, packet_sort_timestamp_us, prewarm_stream, resolve_range,
-        safe_file_component, sessions, streams, validate_request,
+        MAX_NATIVE_STREAMS, MAX_SESSION_CACHES, NativeReadOutcome, NativeStream, OpenRequest,
+        PreparedTrack, RangeRequest, RelayError, SessionCache, SessionCacheEntry,
+        cleanup_stale_caches_in, evict_oldest_native_streams, evict_oldest_session_caches,
+        hls_playlist_snapshot, insert_native_stream_entry, lock_or_recover,
+        open_growing_cache_file, open_growing_cache_range, packet_sort_timestamp_us,
+        prewarm_stream, resolve_range, safe_file_component, sessions, streams, validate_request,
     };
 
     #[test]
@@ -2498,10 +2629,92 @@ mod tests {
             let streams = lock_or_recover(streams());
             streams.get(&opened.handle).expect("stream").clone()
         };
-        let read = lock_or_recover(&stream).read(&mut buffer).expect("read");
-        assert_eq!(read, 4);
+        let outcome = lock_or_recover(&stream)
+            .read_outcome_with_timeout(&mut buffer, Duration::from_millis(10));
+        assert!(matches!(outcome, NativeReadOutcome::Bytes(4)));
         assert_eq!(&buffer, b"abcd");
         lock_or_recover(streams()).remove(opened.handle);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn growing_cache_reports_failure_after_delivering_available_bytes() {
+        let root = unique_temp_dir("growing-failure");
+        let path = root.join("media.ts");
+        fs::write(&path, b"partial").expect("media");
+        let cache = Arc::new(GrowingCache::new(path));
+        cache.refresh_available_len();
+        cache.mark_error(RelayError {
+            code: "ffmpeg_read_failed",
+            status: 503,
+            message: "decoder failed".to_owned(),
+            details: Vec::new(),
+        });
+        let mut stream = super::NativeStreamEntry::new(NativeStream::GrowingFile {
+            file: std::fs::File::open(&cache.path).expect("open media"),
+            cache,
+            position: 0,
+            remaining: None,
+        });
+        let mut buffer = [0u8; 16];
+
+        assert!(matches!(
+            stream.read_outcome_with_timeout(&mut buffer, Duration::from_millis(10)),
+            NativeReadOutcome::Bytes(7)
+        ));
+        assert!(matches!(
+            stream.read_outcome_with_timeout(&mut buffer, Duration::from_millis(10)),
+            NativeReadOutcome::Failed(error) if error.code == "ffmpeg_read_failed"
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn growing_cache_distinguishes_stalled_cancelled_and_complete() {
+        let root = unique_temp_dir("growing-terminal-outcomes");
+        fs::create_dir_all(&root).expect("root");
+        let mut buffer = [0u8; 1];
+
+        let stalled_cache = Arc::new(GrowingCache::new(root.join("stalled.ts")));
+        fs::write(&stalled_cache.path, b"").expect("stalled media");
+        let mut stalled = super::NativeStreamEntry::new(NativeStream::GrowingFile {
+            file: std::fs::File::open(&stalled_cache.path).expect("open stalled"),
+            cache: stalled_cache,
+            position: 0,
+            remaining: None,
+        });
+        assert!(matches!(
+            stalled.read_outcome_with_timeout(&mut buffer, Duration::ZERO),
+            NativeReadOutcome::Stalled
+        ));
+
+        let cancelled_cache = Arc::new(GrowingCache::new(root.join("cancelled.ts")));
+        fs::write(&cancelled_cache.path, b"").expect("cancelled media");
+        cancelled_cache.mark_cancelled();
+        let mut cancelled = super::NativeStreamEntry::new(NativeStream::GrowingFile {
+            file: std::fs::File::open(&cancelled_cache.path).expect("open cancelled"),
+            cache: cancelled_cache,
+            position: 0,
+            remaining: None,
+        });
+        assert!(matches!(
+            cancelled.read_outcome_with_timeout(&mut buffer, Duration::from_millis(10)),
+            NativeReadOutcome::Cancelled
+        ));
+
+        let complete_cache = Arc::new(GrowingCache::new(root.join("complete.ts")));
+        fs::write(&complete_cache.path, b"").expect("complete media");
+        complete_cache.mark_complete();
+        let mut complete = super::NativeStreamEntry::new(NativeStream::GrowingFile {
+            file: std::fs::File::open(&complete_cache.path).expect("open complete"),
+            cache: complete_cache,
+            position: 0,
+            remaining: None,
+        });
+        assert!(matches!(
+            complete.read_outcome_with_timeout(&mut buffer, Duration::from_millis(10)),
+            NativeReadOutcome::Complete
+        ));
         let _ = fs::remove_dir_all(root);
     }
 

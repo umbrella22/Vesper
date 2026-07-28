@@ -58,7 +58,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
         },
         descriptor: VesperPluginDescriptor {
             abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-            plugin_kind: VesperPluginKind::Decoder,
+            plugin_kind: VesperPluginKind::Decoder as u32,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
         },
@@ -135,7 +135,7 @@ unsafe extern "C" fn native_decoder_open_session_json(
         };
 
         VesperDecoderOpenSessionResult {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             session: session.cast::<c_void>(),
             payload: serialize_payload(&info),
         }
@@ -405,7 +405,7 @@ fn serialize_payload<T: serde::Serialize>(value: &T) -> VesperPluginBytes {
 
 fn open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
     VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         session: std::ptr::null_mut(),
         payload: serialize_payload(&error),
     }
@@ -413,14 +413,14 @@ fn open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
 
 fn process_success<T: serde::Serialize>(value: &T) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         payload: serialize_payload(value),
     }
 }
 
 fn process_error(error: DecoderError) -> VesperPluginProcessResult {
     VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         payload: serialize_payload(&error),
     }
 }
@@ -430,7 +430,7 @@ fn native_frame_success(
     handle: usize,
 ) -> VesperDecoderReceiveNativeFrameResult {
     VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         metadata: serialize_payload(metadata),
         handle,
     }
@@ -438,7 +438,7 @@ fn native_frame_success(
 
 fn native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameResult {
     VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         metadata: serialize_payload(&error),
         handle: 0,
     }
@@ -449,7 +449,7 @@ fn pcm_frame_success(
     data: Option<Vec<u8>>,
 ) -> VesperDecoderReceivePcmFrameResult {
     VesperDecoderReceivePcmFrameResult {
-        status: VesperPluginResultStatus::Success,
+        status: VesperPluginResultStatus::Success as u32,
         metadata: serialize_payload(metadata),
         data: data
             .map(VesperPluginBytes::from_vec)
@@ -459,7 +459,7 @@ fn pcm_frame_success(
 
 fn pcm_frame_error(error: DecoderError) -> VesperDecoderReceivePcmFrameResult {
     VesperDecoderReceivePcmFrameResult {
-        status: VesperPluginResultStatus::Failure,
+        status: VesperPluginResultStatus::Failure as u32,
         metadata: serialize_payload(&error),
         data: VesperPluginBytes::null(),
     }
@@ -521,7 +521,7 @@ mod tests {
             descriptor.abi_version,
             VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT
         );
-        assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder);
+        assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder as u32);
         assert!(!descriptor.api.is_null());
         assert!(!descriptor.plugin_name.is_null());
     }
@@ -582,7 +582,7 @@ mod tests {
             )
         };
 
-        assert_eq!(result.status, VesperPluginResultStatus::Success);
+        assert_eq!(result.status, VesperPluginResultStatus::Success as u32);
         assert!(!result.session.is_null());
         // SAFETY: the payload was produced by this fixture and is consumed once.
         let payload = unsafe { result.payload.into_vec() };
@@ -611,7 +611,7 @@ mod tests {
             )
         };
 
-        assert_eq!(result.status, VesperPluginResultStatus::Failure);
+        assert_eq!(result.status, VesperPluginResultStatus::Failure as u32);
         // SAFETY: the fixture plugin produced this payload in the current
         // dynamic library and the test has not reclaimed it yet.
         let payload = unsafe { result.payload.into_vec() };
@@ -636,7 +636,7 @@ mod tests {
             )
         };
 
-        assert_eq!(result.status, VesperPluginResultStatus::Success);
+        assert_eq!(result.status, VesperPluginResultStatus::Success as u32);
         // SAFETY: fixture payload ownership is transferred to this test.
         let metadata_payload = unsafe { result.metadata.into_vec() };
         let metadata = serde_json::from_slice::<DecoderReceivePcmFrameMetadata>(&metadata_payload)
@@ -662,7 +662,7 @@ mod tests {
                 (&mut session as *mut FixtureDecoderSession).cast::<c_void>(),
             )
         };
-        assert_eq!(result.status, VesperPluginResultStatus::Success);
+        assert_eq!(result.status, VesperPluginResultStatus::Success as u32);
         // SAFETY: fixture payload ownership is transferred to this test.
         let metadata_payload = unsafe { result.metadata.into_vec() };
         let metadata = serde_json::from_slice::<DecoderReceivePcmFrameMetadata>(&metadata_payload)

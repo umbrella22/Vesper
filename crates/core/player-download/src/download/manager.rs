@@ -40,6 +40,25 @@ impl fmt::Debug for DownloadManagerConfig {
     }
 }
 
+#[derive(Clone)]
+pub struct DownloadExportPlan {
+    pub(super) snapshot: DownloadTaskSnapshot,
+    pub(super) output_path: Option<PathBuf>,
+    pub(super) post_processors: Vec<Arc<dyn PostDownloadProcessor>>,
+    pub(super) event_hooks: Vec<Arc<dyn PipelineEventHook>>,
+}
+
+impl fmt::Debug for DownloadExportPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DownloadExportPlan")
+            .field("task_id", &self.snapshot.task_id)
+            .field("output_path", &self.output_path)
+            .field("post_processors_len", &self.post_processors.len())
+            .field("event_hooks_len", &self.event_hooks.len())
+            .finish()
+    }
+}
+
 #[derive(Debug)]
 pub struct DownloadManager<S, E> {
     pub(super) config: DownloadManagerConfig,
@@ -418,6 +437,15 @@ where
         output_path: Option<&Path>,
         progress: &dyn ProcessorProgress,
     ) -> PlayerResult<PathBuf> {
+        self.prepare_export_task_output(task_id, output_path.map(Path::to_path_buf))?
+            .execute(progress)
+    }
+
+    pub fn prepare_export_task_output(
+        &self,
+        task_id: DownloadTaskId,
+        output_path: Option<PathBuf>,
+    ) -> PlayerResult<DownloadExportPlan> {
         let Some(snapshot) = self.store.task(task_id) else {
             return Err(PlayerError::with_category(
                 PlayerErrorCode::InvalidArgument,
@@ -437,29 +465,23 @@ where
             ));
         }
 
-        match snapshot.source.content_format {
-            DownloadContentFormat::SingleFile
-                if should_run_post_processors_on_completion(&snapshot) =>
-            {
-                self.export_processed_output(&snapshot, output_path, progress)
-            }
-            DownloadContentFormat::SingleFile => {
-                self.export_single_file_output(&snapshot, output_path, progress)
-            }
-            DownloadContentFormat::HlsSegments
-            | DownloadContentFormat::DashSegments
-            | DownloadContentFormat::FlvSegments => {
-                self.export_processed_output(&snapshot, output_path, progress)
-            }
-            DownloadContentFormat::Unknown => Err(PlayerError::with_category(
+        if snapshot.source.content_format == DownloadContentFormat::Unknown {
+            return Err(PlayerError::with_category(
                 PlayerErrorCode::Unsupported,
                 PlayerErrorCategory::Capability,
                 format!(
                     "download task {} has unknown content format for export",
                     snapshot.task_id.get()
                 ),
-            )),
+            ));
         }
+
+        Ok(DownloadExportPlan {
+            snapshot,
+            output_path,
+            post_processors: self.config.post_processors.clone(),
+            event_hooks: self.config.event_hooks.clone(),
+        })
     }
 
     pub fn fail_task(

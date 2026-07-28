@@ -114,18 +114,6 @@ typedef enum PlayerFfiTrackKind {
   PLAYER_FFI_TRACK_KIND_SUBTITLE = 2,
 } PlayerFfiTrackKind;
 
-typedef enum PlayerFfiTrackSelectionMode {
-  PLAYER_FFI_TRACK_SELECTION_MODE_AUTO = 0,
-  PLAYER_FFI_TRACK_SELECTION_MODE_DISABLED = 1,
-  PLAYER_FFI_TRACK_SELECTION_MODE_TRACK = 2,
-} PlayerFfiTrackSelectionMode;
-
-typedef enum PlayerFfiAbrMode {
-  PLAYER_FFI_ABR_MODE_AUTO = 0,
-  PLAYER_FFI_ABR_MODE_CONSTRAINED = 1,
-  PLAYER_FFI_ABR_MODE_FIXED_TRACK = 2,
-} PlayerFfiAbrMode;
-
 typedef enum PlayerFfiPlaybackState {
   PLAYER_FFI_PLAYBACK_STATE_READY = 0,
   PLAYER_FFI_PLAYBACK_STATE_PLAYING = 1,
@@ -168,19 +156,17 @@ typedef enum PlayerFfiPixelFormat {
   PLAYER_FFI_PIXEL_FORMAT_YUV420P = 1,
 } PlayerFfiPixelFormat;
 
-typedef enum PlayerFfiCommandKind {
-  PLAYER_FFI_COMMAND_KIND_PLAY = 0,
-  PLAYER_FFI_COMMAND_KIND_PAUSE = 1,
-  PLAYER_FFI_COMMAND_KIND_TOGGLE_PAUSE = 2,
-  PLAYER_FFI_COMMAND_KIND_SEEK_TO = 3,
-  PLAYER_FFI_COMMAND_KIND_STOP = 4,
-} PlayerFfiCommandKind;
-
 typedef enum PlayerFfiTimelineKind {
   PLAYER_FFI_TIMELINE_KIND_VOD = 0,
   PLAYER_FFI_TIMELINE_KIND_LIVE = 1,
   PLAYER_FFI_TIMELINE_KIND_LIVE_DVR = 2,
 } PlayerFfiTimelineKind;
+
+typedef enum PlayerFfiAbrMode {
+  PLAYER_FFI_ABR_MODE_AUTO = 0,
+  PLAYER_FFI_ABR_MODE_CONSTRAINED = 1,
+  PLAYER_FFI_ABR_MODE_FIXED_TRACK = 2,
+} PlayerFfiAbrMode;
 
 typedef enum PlayerFfiBufferingPreset {
   PLAYER_FFI_BUFFERING_PRESET_DEFAULT = 0,
@@ -190,18 +176,32 @@ typedef enum PlayerFfiBufferingPreset {
   PLAYER_FFI_BUFFERING_PRESET_LOW_LATENCY = 4,
 } PlayerFfiBufferingPreset;
 
-typedef enum PlayerFfiRetryBackoff {
-  PLAYER_FFI_RETRY_BACKOFF_FIXED = 0,
-  PLAYER_FFI_RETRY_BACKOFF_LINEAR = 1,
-  PLAYER_FFI_RETRY_BACKOFF_EXPONENTIAL = 2,
-} PlayerFfiRetryBackoff;
-
 typedef enum PlayerFfiCachePreset {
   PLAYER_FFI_CACHE_PRESET_DEFAULT = 0,
   PLAYER_FFI_CACHE_PRESET_DISABLED = 1,
   PLAYER_FFI_CACHE_PRESET_STREAMING = 2,
   PLAYER_FFI_CACHE_PRESET_RESILIENT = 3,
 } PlayerFfiCachePreset;
+
+typedef enum PlayerFfiCommandKind {
+  PLAYER_FFI_COMMAND_KIND_PLAY = 0,
+  PLAYER_FFI_COMMAND_KIND_PAUSE = 1,
+  PLAYER_FFI_COMMAND_KIND_TOGGLE_PAUSE = 2,
+  PLAYER_FFI_COMMAND_KIND_SEEK_TO = 3,
+  PLAYER_FFI_COMMAND_KIND_STOP = 4,
+} PlayerFfiCommandKind;
+
+typedef enum PlayerFfiRetryBackoff {
+  PLAYER_FFI_RETRY_BACKOFF_FIXED = 0,
+  PLAYER_FFI_RETRY_BACKOFF_LINEAR = 1,
+  PLAYER_FFI_RETRY_BACKOFF_EXPONENTIAL = 2,
+} PlayerFfiRetryBackoff;
+
+typedef enum PlayerFfiTrackSelectionMode {
+  PLAYER_FFI_TRACK_SELECTION_MODE_AUTO = 0,
+  PLAYER_FFI_TRACK_SELECTION_MODE_DISABLED = 1,
+  PLAYER_FFI_TRACK_SELECTION_MODE_TRACK = 2,
+} PlayerFfiTrackSelectionMode;
 
 /**
  * Error payload written by status-returning `player_ffi_*` calls.
@@ -403,12 +403,12 @@ typedef struct PlayerFfiTrackCatalog {
 } PlayerFfiTrackCatalog;
 
 typedef struct PlayerFfiTrackSelection {
-  enum PlayerFfiTrackSelectionMode mode;
+  uint32_t mode;
   char *track_id;
 } PlayerFfiTrackSelection;
 
 typedef struct PlayerFfiAbrPolicy {
-  enum PlayerFfiAbrMode mode;
+  uint32_t mode;
   char *track_id;
   bool has_max_bit_rate;
   uint64_t max_bit_rate;
@@ -609,7 +609,7 @@ typedef struct PlayerFfiResolvedPreloadBudgetPolicy {
 } PlayerFfiResolvedPreloadBudgetPolicy;
 
 typedef struct PlayerFfiBufferingPolicy {
-  enum PlayerFfiBufferingPreset preset;
+  uint32_t preset;
   bool has_min_buffer_ms;
   uint64_t min_buffer_ms;
   bool has_max_buffer_ms;
@@ -629,11 +629,11 @@ typedef struct PlayerFfiRetryPolicy {
   bool has_max_delay_ms;
   uint64_t max_delay_ms;
   bool has_backoff;
-  enum PlayerFfiRetryBackoff backoff;
+  uint32_t backoff;
 } PlayerFfiRetryPolicy;
 
 typedef struct PlayerFfiCachePolicy {
-  enum PlayerFfiCachePreset preset;
+  uint32_t preset;
   bool has_max_memory_bytes;
   uint64_t max_memory_bytes;
   bool has_max_disk_bytes;
@@ -803,7 +803,7 @@ enum PlayerFfiCallStatus player_ffi_player_destroy(struct PlayerFfiHandle handle
  * handle access according to the host binding contract.
  */
 enum PlayerFfiCallStatus player_ffi_player_dispatch(struct PlayerFfiHandle handle,
-                                                    enum PlayerFfiCommandKind command,
+                                                    uint32_t command,
                                                     uint64_t position_ms,
                                                     bool *out_applied,
                                                     struct PlayerFfiVideoFrame *out_frame,

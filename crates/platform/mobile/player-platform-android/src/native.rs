@@ -1080,6 +1080,7 @@ fn open_android_native_frame_decoder_session(
         height: video_track.height,
         coded_width: video_track.coded_width,
         coded_height: video_track.coded_height,
+        reorder_depth: video_track.reorder_depth,
         prefer_hardware: true,
         require_cpu_output: false,
         native_device_context,

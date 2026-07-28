@@ -280,9 +280,15 @@ private func withRuntimeBridgeTrackPreferencePolicy<Result>(
                                 has_max_bit_rate: policy.abrPolicy.maxBitRate != nil,
                                 max_bit_rate: policy.abrPolicy.maxBitRate ?? 0,
                                 has_max_width: policy.abrPolicy.maxWidth != nil,
-                                max_width: Int32(policy.abrPolicy.maxWidth ?? 0),
+                                max_width: encodeRuntimeInt32(
+                                    policy.abrPolicy.maxWidth,
+                                    field: "maxWidth"
+                                ),
                                 has_max_height: policy.abrPolicy.maxHeight != nil,
-                                max_height: Int32(policy.abrPolicy.maxHeight ?? 0)
+                                max_height: encodeRuntimeInt32(
+                                    policy.abrPolicy.maxHeight,
+                                    field: "maxHeight"
+                                )
                             )
                         )
                         return withUnsafePointer(to: &payload, body)

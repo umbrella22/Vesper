@@ -22,6 +22,8 @@ final class VesperNativeFramePipelineCoordinator {
     private var routeIssue: VesperNativeFramePipelineIssue?
     private var startupIssue: VesperNativeFramePipelineIssue?
     private let sessionFactory: SessionFactory
+    private var pendingCloseTask: Task<Void, Never>?
+    private var closeGeneration: UInt64 = 0
 
     init(sessionFactory: SessionFactory? = nil) {
         self.sessionFactory = sessionFactory ?? { source, configuration, sourceNormalizer, surfaceHost in
@@ -237,6 +239,22 @@ final class VesperNativeFramePipelineCoordinator {
                 VesperNativeFramePipelineStartupError(issue: issue)
             )
         }
+        let observedCloseGeneration = closeGeneration
+        let pendingCloseTask = pendingCloseTask
+        await pendingCloseTask?.value
+        if closeGeneration == observedCloseGeneration {
+            self.pendingCloseTask = nil
+        }
+        guard self.activeSession === activeSession, !activeSession.isClosed else {
+            let issue = VesperNativeFramePipelineIssue(
+                kind: .sessionClosed,
+                message: "iOS native-frame pipeline session was replaced while startup was waiting for teardown."
+            )
+            startupIssue = issue
+            return .failure(
+                VesperNativeFramePipelineStartupError(issue: issue)
+            )
+        }
         let result = await activeSession.start()
         switch result {
         case .success:
@@ -263,9 +281,22 @@ final class VesperNativeFramePipelineCoordinator {
             return
         }
         let isActiveSession = activeSession === session
-        session.close(detachPresenter: isActiveSession)
+        let shouldTrackClose = !session.isClosed
+        let closeCompletion = session.close(detachPresenter: isActiveSession)
+        if shouldTrackClose {
+            enqueueCloseCompletion(closeCompletion)
+        }
         if isActiveSession {
             activeSession = nil
+        }
+    }
+
+    private func enqueueCloseCompletion(_ closeCompletion: Task<Void, Never>) {
+        let previous = pendingCloseTask
+        closeGeneration &+= 1
+        pendingCloseTask = Task { [previous, closeCompletion] in
+            await previous?.value
+            await closeCompletion.value
         }
     }
 

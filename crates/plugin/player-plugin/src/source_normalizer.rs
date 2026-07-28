@@ -370,6 +370,8 @@ pub struct SourceNormalizerPacketTrackInfo {
     #[serde(default)]
     pub coded_height: Option<u32>,
     #[serde(default)]
+    pub reorder_depth: Option<u32>,
+    #[serde(default)]
     pub sample_rate: Option<u32>,
     #[serde(default)]
     pub channels: Option<u16>,
@@ -829,6 +831,7 @@ mod tests {
             height: Some(432),
             coded_width: Some(960),
             coded_height: Some(432),
+            reorder_depth: Some(4),
             sample_rate: None,
             channels: None,
             channel_layout: None,
@@ -881,6 +884,7 @@ mod tests {
             height: None,
             coded_width: None,
             coded_height: None,
+            reorder_depth: None,
             sample_rate: Some(48_000),
             channels: Some(2),
             channel_layout: Some("stereo".to_owned()),

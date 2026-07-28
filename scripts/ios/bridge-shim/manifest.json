@@ -2993,7 +2993,7 @@
       "name": "PlayerFfiBufferingPolicy",
       "fields": [
         {
-          "ty": "PlayerFfiBufferingPreset",
+          "ty": "uint32_t",
           "name": "preset"
         },
         {
@@ -3067,7 +3067,7 @@
           "name": "has_backoff"
         },
         {
-          "ty": "PlayerFfiRetryBackoff",
+          "ty": "uint32_t",
           "name": "backoff"
         }
       ]
@@ -3077,7 +3077,7 @@
       "name": "PlayerFfiCachePolicy",
       "fields": [
         {
-          "ty": "PlayerFfiCachePreset",
+          "ty": "uint32_t",
           "name": "preset"
         },
         {
@@ -3181,7 +3181,7 @@
       "name": "PlayerFfiTrackSelection",
       "fields": [
         {
-          "ty": "PlayerFfiTrackSelectionMode",
+          "ty": "uint32_t",
           "name": "mode"
         },
         {
@@ -3195,7 +3195,7 @@
       "name": "PlayerFfiAbrPolicy",
       "fields": [
         {
-          "ty": "PlayerFfiAbrMode",
+          "ty": "uint32_t",
           "name": "mode"
         },
         {
@@ -3353,7 +3353,7 @@
           "name": "source_uri"
         },
         {
-          "ty": "int",
+          "ty": "uint32_t",
           "name": "scope_kind"
         },
         {
@@ -3361,15 +3361,15 @@
           "name": "scope_id"
         },
         {
-          "ty": "int",
+          "ty": "uint32_t",
           "name": "candidate_kind"
         },
         {
-          "ty": "int",
+          "ty": "uint32_t",
           "name": "selection_hint"
         },
         {
-          "ty": "int",
+          "ty": "uint32_t",
           "name": "priority"
         },
         {
@@ -3591,11 +3591,11 @@
           "name": "auto_advance"
         },
         {
-          "ty": "PlayerFfiPlaylistRepeatMode",
+          "ty": "uint32_t",
           "name": "repeat_mode"
         },
         {
-          "ty": "PlayerFfiPlaylistFailureStrategy",
+          "ty": "uint32_t",
           "name": "failure_strategy"
         }
       ]
@@ -3647,7 +3647,7 @@
           "name": "item_id"
         },
         {
-          "ty": "PlayerFfiPlaylistViewportHintKind",
+          "ty": "uint32_t",
           "name": "kind"
         },
         {
@@ -3775,7 +3775,7 @@
           "name": "source_uri"
         },
         {
-          "ty": "PlayerFfiDownloadContentFormat",
+          "ty": "uint32_t",
           "name": "content_format"
         },
         {
@@ -3825,7 +3825,7 @@
           "name": "has_target_output_format"
         },
         {
-          "ty": "PlayerFfiDownloadOutputFormat",
+          "ty": "uint32_t",
           "name": "target_output_format"
         },
         {
@@ -3953,7 +3953,7 @@
           "name": "stream_id"
         },
         {
-          "ty": "PlayerFfiDownloadStreamKind",
+          "ty": "uint32_t",
           "name": "kind"
         },
         {
@@ -4011,7 +4011,7 @@
       "name": "PlayerFfiDownloadAssetIndex",
       "fields": [
         {
-          "ty": "PlayerFfiDownloadContentFormat",
+          "ty": "uint32_t",
           "name": "content_format"
         },
         {
@@ -4149,7 +4149,7 @@
           "name": "profile"
         },
         {
-          "ty": "PlayerFfiDownloadTaskStatus",
+          "ty": "uint32_t",
           "name": "status"
         },
         {
@@ -4165,11 +4165,11 @@
           "name": "has_error"
         },
         {
-          "ty": "PlayerFfiErrorCode",
+          "ty": "uint32_t",
           "name": "error_code"
         },
         {
-          "ty": "PlayerFfiErrorCategory",
+          "ty": "uint32_t",
           "name": "error_category"
         },
         {

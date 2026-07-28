@@ -369,14 +369,14 @@ pub struct PlayerFfiTrackCatalog {
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PlayerFfiTrackSelection {
-    pub mode: PlayerFfiTrackSelectionMode,
+    pub mode: u32,
     pub track_id: *mut c_char,
 }
 
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PlayerFfiAbrPolicy {
-    pub mode: PlayerFfiAbrMode,
+    pub mode: u32,
     pub track_id: *mut c_char,
     pub has_max_bit_rate: bool,
     pub max_bit_rate: u64,
@@ -418,7 +418,7 @@ pub struct PlayerFfiMediaInfo {
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PlayerFfiBufferingPolicy {
-    pub preset: PlayerFfiBufferingPreset,
+    pub preset: u32,
     pub has_min_buffer_ms: bool,
     pub min_buffer_ms: u64,
     pub has_max_buffer_ms: bool,
@@ -440,13 +440,13 @@ pub struct PlayerFfiRetryPolicy {
     pub has_max_delay_ms: bool,
     pub max_delay_ms: u64,
     pub has_backoff: bool,
-    pub backoff: PlayerFfiRetryBackoff,
+    pub backoff: u32,
 }
 
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PlayerFfiCachePolicy {
-    pub preset: PlayerFfiCachePreset,
+    pub preset: u32,
     pub has_max_memory_bytes: bool,
     pub max_memory_bytes: u64,
     pub has_max_disk_bytes: bool,

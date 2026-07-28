@@ -3078,6 +3078,113 @@ class VesperNativePlayerBridgeTest {
     }
 
     @Test
+    fun nativeFramePipelineEpochChangeDuringAdvanceReleasesReturnedFrameImmediately() {
+        val initialSource =
+            VesperPlayerSource.remote(
+                uri = "https://example.com/video.mp4",
+                label = "MP4",
+                protocol = VesperPlayerSourceProtocol.Progressive,
+            )
+        val scheduler = ManualNativeFramePipelinePumpScheduler()
+        val bindings =
+            FakeBindings(
+                nativeFramePipelineAdvanceStatuses =
+                    mutableListOf(
+                        mapOf("status" to "pending"),
+                        mapOf(
+                            "status" to "frame",
+                            "handle" to 303L,
+                            "presentationTimeUs" to 1_050_000L,
+                            "requiresHostRelease" to true,
+                        ),
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = initialSource,
+                sourceNormalizerConfiguration =
+                    VesperSourceNormalizerConfiguration(
+                        mode = VesperSourceNormalizerMode.PreflightOnly,
+                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                    ),
+                nativeFramePipelineConfiguration =
+                    VesperNativeFramePipelineConfiguration(
+                        mode = VesperNativeFramePipelineMode.PreferNativeFrame,
+                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                    ),
+                nativeFramePipelinePumpScheduler = scheduler,
+            )
+
+        runBlocking { bridge.initializeAsync() }
+        bindings.onAdvanceNativeFramePipeline = bridge::stopNativeFramePipelinePump
+        bridge.play()
+        scheduler.runNext()
+
+        assertEquals(listOf(303L to false), bindings.releasedNativeFramePipelineFrames)
+        assertNull(bridge.pendingTimedNativeFrame)
+        assertFalse(scheduler.hasPendingActions())
+    }
+
+    @Test
+    fun nativeFramePipelineTerminalErrorReleasesPendingFrame() {
+        val initialSource =
+            VesperPlayerSource.remote(
+                uri = "https://example.com/video.mp4",
+                label = "MP4",
+                protocol = VesperPlayerSourceProtocol.Progressive,
+            )
+        val scheduler = ManualNativeFramePipelinePumpScheduler()
+        val bindings =
+            FakeBindings(
+                nativeFramePipelineAdvanceStatuses =
+                    mutableListOf(
+                        mapOf("status" to "pending"),
+                        mapOf(
+                            "status" to "frame",
+                            "handle" to 304L,
+                            "presentationTimeUs" to 1_050_000L,
+                            "requiresHostRelease" to true,
+                        ),
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = initialSource,
+                sourceNormalizerConfiguration =
+                    VesperSourceNormalizerConfiguration(
+                        mode = VesperSourceNormalizerMode.PreflightOnly,
+                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                    ),
+                nativeFramePipelineConfiguration =
+                    VesperNativeFramePipelineConfiguration(
+                        mode = VesperNativeFramePipelineMode.PreferNativeFrame,
+                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                    ),
+                nativeFramePipelinePumpScheduler = scheduler,
+            )
+
+        runBlocking { bridge.initializeAsync() }
+        bridge.play()
+        scheduler.runNext()
+        assertNotNull(bridge.pendingTimedNativeFrame)
+        bindings.events +=
+            NativeBridgeEvent.Error(
+                message = "terminal playback failure",
+                codeOrdinal = VesperPlayerErrorCode.BackendFailure.jniOrdinal,
+                categoryOrdinal = VesperPlayerErrorCategory.Playback.jniOrdinal,
+                retriable = false,
+            )
+
+        bridge.refresh()
+
+        assertEquals(listOf(304L to false), bindings.releasedNativeFramePipelineFrames)
+        assertNull(bridge.pendingTimedNativeFrame)
+        assertFalse(scheduler.hasPendingActions())
+    }
+
+    @Test
     fun preferNativeFramePipelineHostTimedReleaseFailureFallsBackWithoutAdvancingAgain() {
         val initialSource =
             VesperPlayerSource.remote(
@@ -5162,6 +5269,7 @@ private class FakeBindings(
         get() = systemPlaybackActive
 
     var onInitialize: (() -> Unit)? = null
+    var onAdvanceNativeFramePipeline: (() -> Unit)? = null
     var onSeekTo: ((Long) -> Unit)? = null
     val events = mutableListOf<NativeBridgeEvent>()
     var disposeCount = 0
@@ -5284,6 +5392,7 @@ private class FakeBindings(
 
     override fun advanceNativeFramePipeline(): Map<String, Any?> {
         advanceNativeFramePipelineCount += 1
+        onAdvanceNativeFramePipeline?.invoke()
         val queuedStatus =
             if (nativeFramePipelineAdvanceStatuses.isNotEmpty()) {
                 nativeFramePipelineAdvanceStatuses.removeAt(0)

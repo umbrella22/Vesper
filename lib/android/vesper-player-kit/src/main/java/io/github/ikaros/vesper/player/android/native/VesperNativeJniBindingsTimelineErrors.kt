@@ -23,14 +23,11 @@ import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
-import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.DecoderReuseEvaluation
@@ -41,7 +38,6 @@ import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
-import java.io.File
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.absoluteValue
@@ -392,35 +388,21 @@ internal data class ResolvedCachePolicy(
 )
 
 internal object VesperMediaCacheStore {
-    private val caches = mutableMapOf<Long, SimpleCache>()
-    private val databaseProviders = mutableMapOf<Long, StandaloneDatabaseProvider>()
-    private val lock = Any()
+    private val owner = VesperSingleFlightOwner<Long, VesperSimpleCacheResource> { resource ->
+        resource.close()
+    }
 
     fun cache(
         appContext: Context,
         maxDiskBytes: Long,
-    ): SimpleCache {
-        synchronized(lock) {
-            caches[maxDiskBytes]?.let { return it }
-        }
-        // Perform file I/O and SQLite initialization outside the lock
-        // to avoid holding a monitor during blocking operations.
-        val cacheDir =
-            File(appContext.cacheDir, "vesper-media-cache/$maxDiskBytes").apply { mkdirs() }
-        val databaseProvider =
-            StandaloneDatabaseProvider(appContext)
-        val newCache =
-            SimpleCache(
-                cacheDir,
-                LeastRecentlyUsedCacheEvictor(maxDiskBytes),
-                databaseProvider,
+    ): androidx.media3.datasource.cache.SimpleCache =
+        owner.get(maxDiskBytes) {
+            VesperSimpleCacheResource.create(
+                appContext = appContext,
+                cacheDir = java.io.File(appContext.cacheDir, "vesper-media-cache/$maxDiskBytes"),
+                maxDiskBytes = maxDiskBytes,
             )
-        synchronized(lock) {
-            caches.getOrPut(maxDiskBytes) { newCache }
-            databaseProviders.getOrPut(maxDiskBytes) { databaseProvider }
-        }
-        return caches[maxDiskBytes]!!
-    }
+        }.cache
 }
 
 internal fun classifyPlaybackException(error: PlaybackException): NativePlaybackError {

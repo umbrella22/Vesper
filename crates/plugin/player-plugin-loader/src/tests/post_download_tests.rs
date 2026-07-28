@@ -5,7 +5,7 @@ fn dynamic_post_download_processor_adapter_round_trips_json() {
     let api = fixture_processor_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
-        plugin_kind: VesperPluginKind::PostDownloadProcessor,
+        plugin_kind: VesperPluginKind::PostDownloadProcessor as u32,
         plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperPostDownloadProcessorApi).cast(),
     };
@@ -57,7 +57,7 @@ fn dynamic_post_download_processor_assembly_adapter_round_trips_json() {
     let api = fixture_processor_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
-        plugin_kind: VesperPluginKind::PostDownloadProcessor,
+        plugin_kind: VesperPluginKind::PostDownloadProcessor as u32,
         plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperPostDownloadProcessorApi).cast(),
     };
@@ -99,7 +99,7 @@ fn dynamic_post_download_processor_rejects_v2_descriptor() {
     let api = fixture_processor_api();
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_PLUGIN_ABI_VERSION_V2,
-        plugin_kind: VesperPluginKind::PostDownloadProcessor,
+        plugin_kind: VesperPluginKind::PostDownloadProcessor as u32,
         plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperPostDownloadProcessorApi).cast(),
     };
@@ -124,7 +124,7 @@ fn dynamic_post_download_processor_rejects_missing_assembly_entry() {
     };
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
-        plugin_kind: VesperPluginKind::PostDownloadProcessor,
+        plugin_kind: VesperPluginKind::PostDownloadProcessor as u32,
         plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperPostDownloadProcessorApi).cast(),
     };
@@ -148,7 +148,7 @@ fn dynamic_post_download_processor_reports_payload_codec_errors() {
     };
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
-        plugin_kind: VesperPluginKind::PostDownloadProcessor,
+        plugin_kind: VesperPluginKind::PostDownloadProcessor as u32,
         plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperPostDownloadProcessorApi).cast(),
     };
@@ -186,7 +186,7 @@ fn dynamic_post_download_processor_reports_abi_violations() {
     };
     let descriptor = VesperPluginDescriptor {
         abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
-        plugin_kind: VesperPluginKind::PostDownloadProcessor,
+        plugin_kind: VesperPluginKind::PostDownloadProcessor as u32,
         plugin_name: PROCESSOR_NAME.as_ptr().cast::<c_char>(),
         api: (&api as *const VesperPostDownloadProcessorApi).cast(),
     };

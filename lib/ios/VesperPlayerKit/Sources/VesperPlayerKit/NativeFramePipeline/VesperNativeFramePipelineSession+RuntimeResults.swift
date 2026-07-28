@@ -20,13 +20,14 @@ extension VesperNativeFramePipelineSession {
 
     func applyRuntimeSeekResult(
         _ result: VesperNativeFramePipelineRuntime.CommandResult,
-        targetMs: Int64,
-        resumePlayback: Bool
+        targetMs: Int64
     ) -> Bool {
         guard !isClosed else { return false }
+        let resumePlayback = desiredPlaybackActive
         switch result {
         case .success(let object):
             mergeStatus(from: object)
+            hasReachedEnd = false
             audioOutput.seek(toMs: targetMs)
             onFramePresented?(
                 VesperNativeFramePipelineTimeline(
@@ -42,6 +43,8 @@ extension VesperNativeFramePipelineSession {
                         await runtime.play(rate: playbackRate)
                     }
                 }
+            } else {
+                isPlaying = false
             }
             return true
         case .failure(let error):
@@ -54,6 +57,8 @@ extension VesperNativeFramePipelineSession {
                         await runtime.play(rate: playbackRate)
                     }
                 }
+            } else {
+                isPlaying = false
             }
             return false
         case .ignored:
@@ -82,7 +87,9 @@ extension VesperNativeFramePipelineSession {
     /// drains. A seek clears the Rust-side EOF state and bumps the frame lease, so
     /// `isPlaying` resumes the loop and a later EOF reports again.
     func runtimeDidReachEndOfStream() {
+        desiredPlaybackActive = false
         isPlaying = false
+        hasReachedEnd = true
         audioOutput.pause()
         if let durationMs {
             onFramePresented?(
@@ -97,6 +104,7 @@ extension VesperNativeFramePipelineSession {
 
     func failPlaybackForAudioBridge(reason: String) {
         guard !isClosed else { return }
+        desiredPlaybackActive = false
         isPlaying = false
         audioOutput.pause()
         let runtime = runtime
@@ -113,6 +121,7 @@ extension VesperNativeFramePipelineSession {
 
     func runtimeDidFailPlayback(_ error: VesperNativeFramePipelineOperationError) {
         guard !isClosed else { return }
+        desiredPlaybackActive = false
         isPlaying = false
         audioOutput.pause()
         onPlaybackFailed?(

@@ -1,10 +1,10 @@
 package io.github.ikaros.vesper.player.android.external.internal.relay.ffmpeg
 
+import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayHttpExchange
+import io.github.ikaros.vesper.player.android.external.internal.relay.VesperRelayHttpTransport
 import java.io.IOException
 import java.io.OutputStream
 import java.net.HttpURLConnection
-import java.net.URI
-import java.net.URL
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -13,17 +13,18 @@ internal class VesperRelayRemoteDashResourceClient(
     private val allowPrivateAddresses: Boolean = false,
 ) {
     private val headers = headers.filterRemoteFetchHeaders()
-    private val activeConnections = Collections.synchronizedSet(mutableSetOf<HttpURLConnection>())
+    private val transport = VesperRelayHttpTransport(allowPrivateAddresses = allowPrivateAddresses)
+    private val activeExchanges = Collections.synchronizedSet(mutableSetOf<VesperRelayHttpExchange>())
 
     fun readUtf8(uri: String): String {
-        val connection = openValidatedConnection(uri, headers)
-        activeConnections += connection
+        val exchange = transport.open(uri = uri, method = "GET", headers = headers)
+        activeExchanges += exchange
         return try {
-            val status = connection.responseCode
+            val status = exchange.responseCode
             if (status >= 400) {
                 throw IOException("HTTP $status")
             }
-            val contentLength = connection.contentLengthLong
+            val contentLength = exchange.contentLength
             if (contentLength > MAX_HOST_PREPARED_DASH_MANIFEST_BYTES) {
                 throw DashResourceException(
                     code = "dash_manifest_too_large",
@@ -31,12 +32,12 @@ internal class VesperRelayRemoteDashResourceClient(
                     message = "DASH manifest exceeds the $MAX_HOST_PREPARED_DASH_MANIFEST_BYTES byte host-prepared planning limit.",
                 )
             }
-            connection.inputStream.use { input ->
+            exchange.bodyStream().use { input ->
                 input.readUtf8Limited()
             }
         } finally {
-            activeConnections -= connection
-            connection.disconnect()
+            activeExchanges -= exchange
+            exchange.close()
         }
     }
 
@@ -48,20 +49,20 @@ internal class VesperRelayRemoteDashResourceClient(
         if (cancellation.get()) {
             throw HostInputCancelledException()
         }
-        val connection = openValidatedConnection(uri, headers)
-        activeConnections += connection
+        val exchange = transport.open(uri = uri, method = "GET", headers = headers)
+        activeExchanges += exchange
         try {
-            val status = connection.responseCode
+            val status = exchange.responseCode
             if (status >= 400) {
                 throw IOException("HTTP $status")
             }
-            val input = connection.inputStream
+            val input = exchange.bodyStream()
             input.use { stream ->
                 stream.copyToCancellable(output, cancellation)
             }
         } finally {
-            activeConnections -= connection
-            connection.disconnect()
+            activeExchanges -= exchange
+            exchange.close()
         }
     }
 
@@ -74,12 +75,17 @@ internal class VesperRelayRemoteDashResourceClient(
         if (cancellation.get()) {
             throw HostInputCancelledException()
         }
-        val connection = openValidatedConnection(uri, headers + ("Range" to range.toHeaderValue()))
-        activeConnections += connection
+        val exchange = transport.open(
+            uri = uri,
+            method = "GET",
+            headers = headers,
+            rangeHeader = range.toHeaderValue(),
+        )
+        activeExchanges += exchange
         try {
-            val status = connection.responseCode
+            val status = exchange.responseCode
             if (status == HttpURLConnection.HTTP_PARTIAL) {
-                val contentRange = connection.getHeaderField("Content-Range")
+                val contentRange = exchange.header("Content-Range")
                 if (!contentRangeMatches(contentRange, range)) {
                     throw DashResourceException(
                         code = "host_fetch_failed",
@@ -87,13 +93,13 @@ internal class VesperRelayRemoteDashResourceClient(
                         message = "DASH HTTP resource returned invalid Content-Range for ${range.toHeaderValue()}.",
                     )
                 }
-                connection.inputStream.use { stream ->
+                exchange.bodyStream().use { stream ->
                     stream.copyLimitedToCancellable(output, range.length, cancellation)
                 }
                 return
             }
             if (status == HttpURLConnection.HTTP_OK && range.start == 0L) {
-                connection.inputStream.use { stream ->
+                exchange.bodyStream().use { stream ->
                     stream.copyLimitedToCancellable(output, range.length, cancellation)
                 }
                 return
@@ -107,79 +113,16 @@ internal class VesperRelayRemoteDashResourceClient(
                 message = "DASH HTTP resource did not honor byte range ${range.toHeaderValue()}: HTTP $status",
             )
         } finally {
-            activeConnections -= connection
-            connection.disconnect()
+            activeExchanges -= exchange
+            exchange.close()
         }
     }
 
     fun cancel() {
-        activeConnections.toList().forEach { connection ->
-            runCatching { connection.disconnect() }
+        val exchanges = synchronized(activeExchanges) { activeExchanges.toList() }
+        exchanges.forEach { exchange ->
+            runCatching { exchange.cancel() }
+            runCatching { exchange.close() }
         }
-    }
-
-    private fun openValidatedConnection(
-        uri: String,
-        headers: Map<String, String>,
-    ): HttpURLConnection {
-        var current = uri
-        repeat(MAX_REMOTE_DASH_REDIRECTS + 1) { redirectCount ->
-            val connection = openConnection(current, headers)
-            val status = connection.responseCode
-            if (status !in HTTP_REDIRECT_STATUSES) {
-                return connection
-            }
-            val location = connection.getHeaderField("Location")
-            activeConnections -= connection
-            connection.disconnect()
-            if (location.isNullOrBlank()) {
-                throw DashResourceException(
-                    code = "host_fetch_failed",
-                    status = 502,
-                    message = "DASH HTTP resource redirect did not include a Location header.",
-                )
-            }
-            if (redirectCount >= MAX_REMOTE_DASH_REDIRECTS) {
-                throw DashResourceException(
-                    code = "host_fetch_failed",
-                    status = 502,
-                    message = "DASH HTTP resource exceeded the redirect limit.",
-                )
-            }
-            current = URI(current).resolve(location).toString()
-        }
-        throw DashResourceException(
-            code = "host_fetch_failed",
-            status = 502,
-            message = "DASH HTTP resource exceeded the redirect limit.",
-        )
-    }
-
-    private fun openConnection(
-        uri: String,
-        headers: Map<String, String>,
-    ): HttpURLConnection {
-        validateRemoteDashUri(uri, allowPrivateAddresses)
-        val connection = URL(uri).openConnection() as HttpURLConnection
-        connection.instanceFollowRedirects = false
-        connection.connectTimeout = 10_000
-        connection.readTimeout = 20_000
-        connection.requestMethod = "GET"
-        headers.forEach { (name, value) ->
-            if (name.isNotBlank() && value.isNotBlank()) {
-                connection.setRequestProperty(name, value)
-            }
-        }
-        return connection
     }
 }
-
-private const val MAX_REMOTE_DASH_REDIRECTS = 5
-
-private val HTTP_REDIRECT_STATUSES = setOf(
-    HttpURLConnection.HTTP_MOVED_PERM,
-    HttpURLConnection.HTTP_MOVED_TEMP,
-    HttpURLConnection.HTTP_SEE_OTHER,
-    307,
-    308,
-)

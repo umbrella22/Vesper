@@ -1,11 +1,16 @@
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{
-    PlayerFfiBufferingPolicy, PlayerFfiCachePolicy, PlayerFfiCallStatus, PlayerFfiError,
-    PlayerFfiErrorCategory, PlayerFfiErrorCode, PlayerFfiResolvedResiliencePolicy,
-    PlayerFfiRetryPolicy, dash_bridge_error_to_ffi, map_player_error, player_error_to_ffi,
-    player_ffi_dash_bridge_parse_sidx, player_ffi_ios_native_frame_pipeline_advance,
+    PlayerFfiAbrPolicy, PlayerFfiBufferingPolicy, PlayerFfiCachePolicy, PlayerFfiCallStatus,
+    PlayerFfiDownloadAssetIndex, PlayerFfiDownloadContentFormat, PlayerFfiDownloadExportCallbacks,
+    PlayerFfiDownloadSource, PlayerFfiDownloadTask, PlayerFfiDownloadTaskStatus, PlayerFfiError,
+    PlayerFfiErrorCategory, PlayerFfiErrorCode, PlayerFfiPlaylistConfig,
+    PlayerFfiResolvedResiliencePolicy, PlayerFfiRetryPolicy, PlayerFfiTrackSelection,
+    dash_bridge_error_to_ffi, map_player_error, player_error_to_ffi,
+    player_ffi_dash_bridge_parse_sidx, player_ffi_download_session_dispose,
+    player_ffi_download_session_export_task, player_ffi_ios_native_frame_pipeline_advance,
     player_ffi_ios_native_frame_pipeline_close, player_ffi_ios_native_frame_pipeline_open,
     player_ffi_ios_native_frame_pipeline_release_frame, player_ffi_ios_native_frame_pipeline_seek,
     player_ffi_ios_plugin_abi_summary_json, player_ffi_preload_session_fail,
@@ -19,6 +24,127 @@ use player_plugin::{
 use player_runtime::{PlayerError, PlayerErrorCategory, PlayerErrorCode, SubtitleErrorDetails};
 
 #[test]
+fn inbound_policy_ordinals_reject_unknown_values() {
+    let cases = [
+        (
+            "buffering preset",
+            invalid_buffering_policy as fn() -> PlayerFfiError,
+        ),
+        ("retry backoff", invalid_retry_policy),
+        ("cache preset", invalid_cache_policy),
+    ];
+
+    for (label, run) in cases {
+        let mut error = run();
+        assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument, "{label}");
+        assert!(ffi_error_message(&error).contains("99"), "{label}");
+        unsafe { super::player_ffi_error_free(&mut error) };
+    }
+}
+
+#[test]
+fn inbound_track_and_playlist_ordinals_reject_unknown_values() {
+    let selection = PlayerFfiTrackSelection {
+        mode: 7,
+        ..PlayerFfiTrackSelection::default()
+    };
+    let mut selection_error = super::conversions::read_track_selection(&selection)
+        .expect_err("unknown selection mode should be rejected");
+    assert_eq!(selection_error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&selection_error).contains("selection.mode"));
+    unsafe { super::player_ffi_error_free(&mut selection_error) };
+
+    let abr = PlayerFfiAbrPolicy {
+        mode: 7,
+        ..PlayerFfiAbrPolicy::default()
+    };
+    let mut abr_error =
+        super::conversions::read_abr_policy(&abr).expect_err("unknown ABR mode should be rejected");
+    assert_eq!(abr_error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&abr_error).contains("policy.mode"));
+    unsafe { super::player_ffi_error_free(&mut abr_error) };
+
+    let config = PlayerFfiPlaylistConfig {
+        repeat_mode: 7,
+        failure_strategy: 1,
+        ..PlayerFfiPlaylistConfig::default()
+    };
+    let mut playlist_error = super::conversions::read_playlist_config(&config)
+        .expect_err("unknown playlist repeat mode should be rejected");
+    assert_eq!(playlist_error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&playlist_error).contains("config.repeat_mode"));
+    unsafe { super::player_ffi_error_free(&mut playlist_error) };
+}
+
+#[test]
+fn restored_download_task_rejects_unknown_status_and_error_ordinals() {
+    let asset_id = test_c_string("asset-1");
+    let source_uri = test_c_string("https://example.test/video.m3u8");
+    let make_task = || PlayerFfiDownloadTask {
+        asset_id: asset_id.as_ptr() as *mut c_char,
+        source: PlayerFfiDownloadSource {
+            source_uri: source_uri.as_ptr() as *mut c_char,
+            content_format: PlayerFfiDownloadContentFormat::HlsSegments as u32,
+            ..PlayerFfiDownloadSource::default()
+        },
+        asset_index: PlayerFfiDownloadAssetIndex {
+            content_format: PlayerFfiDownloadContentFormat::HlsSegments as u32,
+            ..PlayerFfiDownloadAssetIndex::default()
+        },
+        ..PlayerFfiDownloadTask::default()
+    };
+
+    let mut invalid_status = make_task();
+    invalid_status.status = 99;
+    let mut status_error =
+        super::conversions::read_download_task(&invalid_status, std::time::Instant::now())
+            .expect_err("unknown restored task status should be rejected");
+    assert_eq!(status_error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&status_error).contains("task.status"));
+    unsafe { super::player_ffi_error_free(&mut status_error) };
+
+    let mut invalid_error = make_task();
+    invalid_error.status = PlayerFfiDownloadTaskStatus::Failed as u32;
+    invalid_error.has_error = true;
+    invalid_error.error_code = 99;
+    invalid_error.error_category = PlayerFfiErrorCategory::Network as u32;
+    let mut code_error =
+        super::conversions::read_download_task(&invalid_error, std::time::Instant::now())
+            .expect_err("unknown restored task error code should be rejected");
+    assert_eq!(code_error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&code_error).contains("error code"));
+    unsafe { super::player_ffi_error_free(&mut code_error) };
+}
+
+fn invalid_buffering_policy() -> PlayerFfiError {
+    let policy = PlayerFfiBufferingPolicy {
+        preset: 99,
+        ..PlayerFfiBufferingPolicy::default()
+    };
+    super::conversions::read_buffering_policy(&policy)
+        .expect_err("unknown buffering preset should be rejected")
+}
+
+fn invalid_retry_policy() -> PlayerFfiError {
+    let policy = PlayerFfiRetryPolicy {
+        has_backoff: true,
+        backoff: 99,
+        ..PlayerFfiRetryPolicy::default()
+    };
+    super::conversions::read_retry_policy(&policy)
+        .expect_err("unknown retry backoff should be rejected")
+}
+
+fn invalid_cache_policy() -> PlayerFfiError {
+    let policy = PlayerFfiCachePolicy {
+        preset: 99,
+        ..PlayerFfiCachePolicy::default()
+    };
+    super::conversions::read_cache_policy(&policy)
+        .expect_err("unknown cache preset should be rejected")
+}
+
+#[test]
 fn ffi_handle_registry_reuses_slot_with_new_generation_and_rejects_stale_handle() {
     let mut registry = HandleRegistry::default();
     let first = registry.insert(7_u32);
@@ -30,6 +156,124 @@ fn ffi_handle_registry_reuses_slot_with_new_generation_and_rejects_stale_handle(
     assert_ne!(first, second);
     assert!(registry.get(first).is_none());
     assert_eq!(registry.get(second), Some(&9));
+}
+
+#[test]
+fn registry_lock_recovers_after_poisoning() {
+    let registry = std::sync::Mutex::new(Vec::<u32>::new());
+    let _ = std::panic::catch_unwind(|| {
+        let mut values = registry
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        values.push(1);
+        panic!("poison registry for regression coverage");
+    });
+
+    let mut values =
+        crate::handles::lock_registry(&registry).unwrap_or_else(|poisoned| poisoned.into_inner());
+    values.push(2);
+    assert_eq!(&*values, &[1, 2]);
+}
+
+struct DownloadExportLockProbe {
+    handle: u64,
+    session_lock_was_available: AtomicBool,
+}
+
+unsafe extern "C" fn probe_download_export_session_lock(context: *mut c_void, _ratio: f32) {
+    // SAFETY: the test keeps the probe alive for the full synchronous export call.
+    let probe = unsafe { &*(context.cast::<DownloadExportLockProbe>()) };
+    let session = {
+        let sessions = crate::handles::lock_registry(crate::handles::download_sessions())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        sessions.get(probe.handle).cloned()
+    };
+    let lock_was_available = session
+        .as_ref()
+        .is_some_and(|session| session.try_lock().is_ok());
+    probe
+        .session_lock_was_available
+        .fetch_or(lock_was_available, Ordering::SeqCst);
+}
+
+#[test]
+fn download_export_runs_host_progress_callback_without_holding_session_lock() {
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+    use player_model::MediaSource;
+    use player_platform_ios::IosDownloadBridgeSession;
+    use player_runtime::{
+        DownloadAssetIndex, DownloadContentFormat, DownloadProfile, DownloadSource,
+    };
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let temp_dir = std::env::temp_dir().join(format!("vesper-ios-export-lock-{unique}"));
+    std::fs::create_dir_all(&temp_dir).expect("create export test directory");
+    let source_path = temp_dir.join("input.mp4");
+    let output_path = temp_dir.join("output.mp4");
+    std::fs::write(&source_path, b"vesper export lock regression").expect("write export source");
+
+    let mut session = IosDownloadBridgeSession::new(false);
+    let task_id = session
+        .create_task(
+            "asset-export-lock",
+            DownloadSource::new(
+                MediaSource::new(format!("file://{}", source_path.display())),
+                DownloadContentFormat::SingleFile,
+            ),
+            DownloadProfile::default(),
+            DownloadAssetIndex::default(),
+            Instant::now(),
+        )
+        .expect("create download task");
+    session
+        .complete_task(task_id, Some(source_path), Instant::now())
+        .expect("complete download task");
+
+    let handle = {
+        let mut sessions = crate::handles::lock_registry(crate::handles::download_sessions())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        sessions.insert(Arc::new(Mutex::new(session)))
+    };
+    let probe = DownloadExportLockProbe {
+        handle,
+        session_lock_was_available: AtomicBool::new(false),
+    };
+    let output_path = CString::new(PathBuf::from(&output_path).to_string_lossy().as_bytes())
+        .expect("output path CString");
+    let callbacks = PlayerFfiDownloadExportCallbacks {
+        context: (&probe as *const DownloadExportLockProbe).cast_mut().cast(),
+        on_progress: Some(probe_download_export_session_lock),
+        is_cancelled: None,
+    };
+    let mut error = PlayerFfiError::default();
+
+    let status = unsafe {
+        player_ffi_download_session_export_task(
+            handle,
+            task_id.get(),
+            output_path.as_ptr(),
+            callbacks,
+            &mut error,
+        )
+    };
+
+    unsafe { player_ffi_download_session_dispose(handle) };
+    if status != PlayerFfiCallStatus::Ok {
+        unsafe { super::player_ffi_error_free(&mut error) };
+    }
+    std::fs::remove_dir_all(temp_dir).expect("remove export test directory");
+
+    assert_eq!(status, PlayerFfiCallStatus::Ok);
+    assert!(
+        probe.session_lock_was_available.load(Ordering::SeqCst),
+        "the export callback must be able to re-enter the same download session"
+    );
 }
 
 #[test]

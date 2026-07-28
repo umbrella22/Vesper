@@ -6,9 +6,9 @@ use player_platform_mobile::{
 };
 use player_plugin::ProcessorProgress;
 use player_runtime::{
-    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadManagerConfig, DownloadProfile,
-    DownloadSnapshot, DownloadSource, DownloadTaskId, DownloadTaskSnapshot, PlayerError,
-    PlayerResult,
+    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadExportPlan, DownloadManagerConfig,
+    DownloadProfile, DownloadSnapshot, DownloadSource, DownloadTaskId, DownloadTaskSnapshot,
+    PlayerError, PlayerResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,6 +178,14 @@ impl IosDownloadBridgeSession {
     ) -> PlayerResult<PathBuf> {
         self.inner
             .export_task_output(task_id, output_path, progress)
+    }
+
+    pub fn prepare_export_task_output(
+        &self,
+        task_id: DownloadTaskId,
+        output_path: Option<PathBuf>,
+    ) -> PlayerResult<DownloadExportPlan> {
+        self.inner.prepare_export_task_output(task_id, output_path)
     }
 
     pub fn drain_events(&mut self) -> Vec<DownloadEvent> {

@@ -21,6 +21,14 @@ after_includes = """
 
 [export]
 item_types = ["enums", "structs", "opaque", "functions"]
+include = [
+  "PlayerFfiAbrMode",
+  "PlayerFfiBufferingPreset",
+  "PlayerFfiCachePreset",
+  "PlayerFfiCommandKind",
+  "PlayerFfiRetryBackoff",
+  "PlayerFfiTrackSelectionMode",
+]
 
 [enum]
 rename_variants = "QualifiedScreamingSnakeCase"

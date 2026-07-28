@@ -35,6 +35,10 @@ final class VesperNativeFramePipelineSession {
     var onPlaybackEnded: (() -> Void)?
     var onPlaybackFailed: ((VesperNativeFramePipelineIssue) -> Void)?
     var isPlaying = false
+    var desiredPlaybackActive = false
+    var seekGeneration: UInt64 = 0
+    var pendingSeekGeneration: UInt64?
+    var hasReachedEnd = false
     var playbackRate: Float = 1.0
     let backend: VesperNativeFramePipelineBackend
     var runtime: VesperNativeFramePipelineRuntime?
@@ -43,6 +47,9 @@ final class VesperNativeFramePipelineSession {
     let usesSurfaceHostPresenter: Bool
     var audioBridgeState: VesperNativeFrameAudioBridgeState?
     let commandQueue = VesperNativeFramePipelineCommandQueue()
+    var nativeFrameStartupInProgress = false
+    var nativeFrameStartupWaiter: CheckedContinuation<Void, Never>?
+    var nativeFrameCloseCompletion: Task<Void, Never>?
 
     init(
         source: VesperPlayerSource,
@@ -101,6 +108,9 @@ final class VesperNativeFramePipelineSession {
             didStart = true
             return .success(self)
         }
+
+        nativeFrameStartupInProgress = true
+        defer { finishNativeFrameStartup() }
 
         let backend = backend
         let source = source
@@ -200,5 +210,22 @@ final class VesperNativeFramePipelineSession {
                 message: "iOS native-frame pipeline utility queue is saturated."
             )
         )
+    }
+
+    func waitForNativeFrameStartupCompletion() async {
+        guard nativeFrameStartupInProgress else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            guard nativeFrameStartupInProgress else {
+                continuation.resume()
+                return
+            }
+            nativeFrameStartupWaiter = continuation
+        }
+    }
+
+    func finishNativeFrameStartup() {
+        nativeFrameStartupInProgress = false
+        nativeFrameStartupWaiter?.resume()
+        nativeFrameStartupWaiter = nil
     }
 }

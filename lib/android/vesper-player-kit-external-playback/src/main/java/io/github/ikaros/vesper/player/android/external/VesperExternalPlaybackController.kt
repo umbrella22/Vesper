@@ -26,6 +26,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+internal class VesperExternalPreparationState {
+    @Volatile
+    var lastFailure: VesperExternalPlaybackResult =
+        VesperExternalPlaybackResult.Unsupported("No playable external playback source is available.")
+}
+
 class VesperExternalPlaybackController(context: Context) {
     internal val applicationContext = context.applicationContext
     internal val mainHandler = Handler(Looper.getMainLooper())
@@ -39,6 +45,7 @@ class VesperExternalPlaybackController(context: Context) {
     internal val dlnaDevices = ConcurrentHashMap<String, VesperDlnaDevice>()
     internal val recentlySeenDlnaDevices = ConcurrentHashMap<String, RecentDlnaDevice>()
     internal val activeRelayTokens = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    internal val preparationState = VesperExternalPreparationState()
     internal var discoveryGeneration = 0
     @Volatile
     internal var activeRouteId: String? = null

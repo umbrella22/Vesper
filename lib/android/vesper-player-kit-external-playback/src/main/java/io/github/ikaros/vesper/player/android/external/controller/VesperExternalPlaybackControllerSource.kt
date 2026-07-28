@@ -209,8 +209,11 @@ internal fun VesperExternalPlaybackController.handleDlnaLoadedResult(
     }
 }
 
-internal var lastPrepareFailure: VesperExternalPlaybackResult =
-    VesperExternalPlaybackResult.Unsupported("No playable external playback source is available.")
+internal var VesperExternalPlaybackController.lastPrepareFailure: VesperExternalPlaybackResult
+    get() = preparationState.lastFailure
+    set(value) {
+        preparationState.lastFailure = value
+    }
 
 internal fun VesperExternalPlaybackController.prepareSource(
     item: VesperExternalPlaybackMediaItem,

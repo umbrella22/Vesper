@@ -33,7 +33,10 @@ public final class VesperPlaylistCoordinator: ObservableObject {
         var runtimeConfig = configuration.toRuntimeBridgePayload()
         let resolvedBudget = preloadBudgetPolicy.resolvedForRuntime()
         var runtimeBudget = VesperRuntimeResolvedPreloadBudgetPolicy(
-            max_concurrent_tasks: UInt32(max(resolvedBudget.maxConcurrentTasks ?? 0, 0)),
+            max_concurrent_tasks: encodeRuntimeUInt32(
+                resolvedBudget.maxConcurrentTasks,
+                field: "maxConcurrentTasks"
+            ),
             max_memory_bytes: max(resolvedBudget.maxMemoryBytes ?? 0, 0),
             max_disk_bytes: max(resolvedBudget.maxDiskBytes ?? 0, 0),
             warmup_window_ms: UInt64(max(resolvedBudget.warmupWindowMs ?? 0, 0))

@@ -92,11 +92,14 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
 
   @override
   Future<VesperPlaybackCapabilityProbeResult> probePlaybackCapability(
-    VesperPlaybackCapabilityProbeRequest request,
-  ) async {
+      VesperPlaybackCapabilityProbeRequest request,
+      {String? playerId}) async {
     final result = await _invokeMethod<Object?>(
       'probePlaybackCapability',
-      request.toMap(),
+      <String, Object?>{
+        ...request.toMap(),
+        if (playerId != null) 'playerId': playerId,
+      },
     );
     final decoded = result is Map
         ? Map<Object?, Object?>.from(result)

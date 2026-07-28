@@ -37,17 +37,17 @@ while IFS= read -r abi; do
   selected_abis+=("$abi")
 done < <(vesper_android_resolve_selected_abis ${VESPER_FFMPEG_POSITIONAL_ARGS[@]+"${VESPER_FFMPEG_POSITIONAL_ARGS[@]}"})
 
-rm -rf "$JNI_LIBS_DIR" "$ASSETS_DIR"
-mkdir -p "$JNI_LIBS_DIR" "$ASSETS_DIR"
+rm -rf "$ASSETS_DIR"
+mkdir -p "$ASSETS_DIR"
+vesper_android_stage_ffmpeg_runtime_libraries \
+  "$JNI_LIBS_DIR" \
+  "$FFMPEG_OUTPUT_DIR" \
+  "$OPENSSL_ANDROID_DIR" \
+  "$LIBXML2_ANDROID_DIR" \
+  "$VESPER_FFMPEG_USE_OPENSSL" \
+  "$VESPER_FFMPEG_USE_LIBXML2" \
+  "${selected_abis[@]}"
 for abi in "${selected_abis[@]}"; do
-  mkdir -p "$JNI_LIBS_DIR/$abi"
-  find "$FFMPEG_OUTPUT_DIR/$abi/lib" -maxdepth 1 -type f -name 'lib*.so' -exec cp {} "$JNI_LIBS_DIR/$abi/" \;
-  if [[ "$VESPER_FFMPEG_USE_OPENSSL" == "1" && -d "$OPENSSL_ANDROID_DIR/$abi/lib" ]]; then
-    find "$OPENSSL_ANDROID_DIR/$abi/lib" -maxdepth 1 -type f \( -name 'libssl*.so' -o -name 'libcrypto*.so' \) -exec cp {} "$JNI_LIBS_DIR/$abi/" \;
-  fi
-  if [[ "$VESPER_FFMPEG_USE_LIBXML2" == "1" && -d "$LIBXML2_ANDROID_DIR/$abi/lib" ]]; then
-    find "$LIBXML2_ANDROID_DIR/$abi/lib" -maxdepth 1 -type f -name 'libxml2*.so' -exec cp {} "$JNI_LIBS_DIR/$abi/" \;
-  fi
   if [[ -f "$FFMPEG_OUTPUT_DIR/$abi/vesper-ffmpeg-build-metadata.txt" ]]; then
     cp "$FFMPEG_OUTPUT_DIR/$abi/vesper-ffmpeg-build-metadata.txt" "$ASSETS_DIR/$abi-metadata.txt"
     printf 'profile_hash=%s\n' "$PROFILE_HASH" >>"$ASSETS_DIR/$abi-metadata.txt"

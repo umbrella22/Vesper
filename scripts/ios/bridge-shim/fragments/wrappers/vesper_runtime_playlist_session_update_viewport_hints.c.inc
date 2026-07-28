@@ -13,7 +13,7 @@
     }
     for (uintptr_t index = 0; index < hints_len; index += 1) {
       ffi_hints[index].item_id = hints[index].item_id;
-      ffi_hints[index].kind = (PlayerFfiPlaylistViewportHintKind)hints[index].kind;
+      ffi_hints[index].kind = (uint32_t)hints[index].kind;
       ffi_hints[index].order = hints[index].order;
     }
   }

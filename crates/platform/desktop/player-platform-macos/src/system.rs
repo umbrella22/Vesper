@@ -45,7 +45,6 @@ pub struct MacosSystemAvFoundationBridgeBindings;
 
 struct MacosSystemNativeCommandSink {
     session_handle: *mut c_void,
-    callback_context: *mut MacosNativeCallbackContext,
 }
 
 struct MacosNativeCallbackContext {
@@ -60,13 +59,12 @@ unsafe impl Send for MacosSystemNativeCommandSink {}
 impl Drop for MacosSystemNativeCommandSink {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
-        // SAFETY: both raw pointers are created together by
-        // `player_macos_avfoundation_create_session`. Destroying the native
-        // session stops future callbacks before reclaiming the boxed context.
+        // SAFETY: the raw pointer was returned by
+        // `player_macos_avfoundation_create_session`. Native teardown drains
+        // callbacks and releases their Rust context before returning.
         // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
             player_macos_avfoundation_destroy_session(self.session_handle);
-            drop(Box::from_raw(self.callback_context));
         }
     }
 }
@@ -479,9 +477,9 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
                     "media source contains an interior NUL byte and cannot be passed to AVFoundation",
                 )
             })?;
-            // The native session owns only the raw pointer value; Rust retains
-            // ownership until session creation succeeds or the failure path below
-            // reconstructs the box.
+            let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(surface)?;
+            // Ownership transfers to the native callback owner for both success
+            // and failure paths. It calls `macos_release_context` exactly once.
             let callback_context =
                 Box::into_raw(Box::new(MacosNativeCallbackContext { controller }));
             let callbacks = MacosAvFoundationCallbacks {
@@ -490,9 +488,9 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
                 on_interruption_changed: Some(macos_on_interruption_changed),
                 on_seek_completed: Some(macos_on_seek_completed),
                 on_error: Some(macos_on_error),
+                release_context: Some(macos_release_context),
                 context: callback_context.cast(),
             };
-            let surface = MacosAvFoundationSurfaceTarget::from_runtime_surface(surface)?;
             let mut session_handle = std::ptr::null_mut();
             let mut error_message = [0 as c_char; 256];
             // SAFETY: all pointers are valid for the duration of the call. On
@@ -509,22 +507,13 @@ impl MacosAvFoundationBridgeBindings for MacosSystemAvFoundationBridgeBindings {
                 )
             };
             if !created {
-                // SAFETY: session creation failed, so the native side did not
-                // retain the callback context and Rust must reclaim the box.
-                // SAFETY: caller upholds the FFI contract for this pointer operation
-                unsafe {
-                    drop(Box::from_raw(callback_context));
-                }
                 return Err(PlayerError::new(
                     PlayerErrorCode::BackendFailure,
                     c_string_buffer_to_string(&error_message),
                 ));
             }
 
-            Ok(Box::new(MacosSystemNativeCommandSink {
-                session_handle,
-                callback_context,
-            }))
+            Ok(Box::new(MacosSystemNativeCommandSink { session_handle }))
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -729,7 +718,22 @@ struct MacosAvFoundationCallbacks {
     on_interruption_changed: Option<extern "C" fn(*mut c_void, c_uchar)>,
     on_seek_completed: Option<extern "C" fn(*mut c_void, u64)>,
     on_error: Option<extern "C" fn(*mut c_void, *const c_char)>,
+    release_context: Option<extern "C" fn(*mut c_void)>,
     context: *mut c_void,
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn macos_release_context(context: *mut c_void) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if context.is_null() {
+            return;
+        }
+        // SAFETY: native callback ownership is transferred exactly once during
+        // session creation and returned exactly once after callbacks are drained.
+        unsafe {
+            drop(Box::from_raw(context.cast::<MacosNativeCallbackContext>()));
+        }
+    }));
 }
 
 #[cfg(target_os = "macos")]
@@ -1053,9 +1057,23 @@ fn c_string_buffer_to_string(_buffer: &[c_char]) -> String {
 #[cfg(test)]
 mod tests {
     #[cfg(target_os = "macos")]
-    use std::os::raw::c_void;
+    use std::ffi::CString;
+    #[cfg(target_os = "macos")]
+    use std::os::raw::{c_char, c_void};
     use std::path::Path;
+    #[cfg(target_os = "macos")]
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    #[cfg(target_os = "macos")]
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
+    #[cfg(target_os = "macos")]
+    use std::time::Duration;
 
+    #[cfg(target_os = "macos")]
+    use super::{
+        MacosAvFoundationCallbacks, MacosAvFoundationSnapshotRepr, MacosAvFoundationSurfaceTarget,
+        player_macos_avfoundation_create_session, player_macos_avfoundation_destroy_session,
+        player_macos_avfoundation_session_set_playback_rate,
+    };
     use super::{
         MacosMetalLayerPresenter, MacosSystemAvFoundationBridgeBindings,
         probe_source_with_avfoundation,
@@ -1074,6 +1092,101 @@ mod tests {
     unsafe extern "C" {
         fn player_macos_test_create_player_layer() -> *mut c_void;
         fn player_macos_test_release_object(handle: *mut c_void);
+    }
+
+    #[cfg(target_os = "macos")]
+    struct CallbackLifecycleState {
+        should_block: AtomicBool,
+        started: (Mutex<bool>, Condvar),
+        allowed_to_finish: (Mutex<bool>, Condvar),
+        release_count: AtomicUsize,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl CallbackLifecycleState {
+        fn new() -> Self {
+            Self {
+                should_block: AtomicBool::new(false),
+                started: (Mutex::new(false), Condvar::new()),
+                allowed_to_finish: (Mutex::new(false), Condvar::new()),
+                release_count: AtomicUsize::new(0),
+            }
+        }
+
+        fn wait_until_started(&self) {
+            let (lock, changed) = &self.started;
+            let started = lock.lock().unwrap_or_else(|error| error.into_inner());
+            let (started, timeout) = changed
+                .wait_timeout_while(started, Duration::from_secs(2), |started| !*started)
+                .unwrap_or_else(|error| error.into_inner());
+            assert!(*started, "native callback should reach the test barrier");
+            assert!(!timeout.timed_out(), "native callback barrier timed out");
+        }
+
+        fn allow_callback_to_finish(&self) {
+            let (lock, changed) = &self.allowed_to_finish;
+            *lock.lock().unwrap_or_else(|error| error.into_inner()) = true;
+            changed.notify_all();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    struct CallbackLifecycleContext {
+        state: Arc<CallbackLifecycleState>,
+    }
+
+    #[cfg(target_os = "macos")]
+    extern "C" fn blocking_snapshot_callback(
+        context: *mut c_void,
+        _snapshot: MacosAvFoundationSnapshotRepr,
+    ) {
+        // SAFETY: the native callback owner retains this test context until it
+        // disables and drains all callbacks.
+        let Some(context) = (unsafe { context.cast::<CallbackLifecycleContext>().as_ref() }) else {
+            return;
+        };
+        if !context.state.should_block.load(Ordering::Acquire) {
+            return;
+        }
+
+        let (started_lock, started_changed) = &context.state.started;
+        *started_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = true;
+        started_changed.notify_all();
+
+        let (finish_lock, finish_changed) = &context.state.allowed_to_finish;
+        let finish = finish_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let _finish = finish_changed
+            .wait_while(finish, |finish| !*finish)
+            .unwrap_or_else(|error| error.into_inner());
+    }
+
+    #[cfg(target_os = "macos")]
+    extern "C" fn release_test_callback_context(context: *mut c_void) {
+        if context.is_null() {
+            return;
+        }
+        // SAFETY: each test transfers one Box to native ownership and the
+        // callback owner invokes this release function exactly once.
+        let context = unsafe { Box::from_raw(context.cast::<CallbackLifecycleContext>()) };
+        context.state.release_count.fetch_add(1, Ordering::AcqRel);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn lifecycle_callbacks(state: Arc<CallbackLifecycleState>) -> MacosAvFoundationCallbacks {
+        let context = Box::into_raw(Box::new(CallbackLifecycleContext { state }));
+        MacosAvFoundationCallbacks {
+            on_snapshot: Some(blocking_snapshot_callback),
+            on_first_frame_ready: None,
+            on_interruption_changed: None,
+            on_seek_completed: None,
+            on_error: None,
+            release_context: Some(release_test_callback_context),
+            context: context.cast(),
+        }
     }
 
     #[test]
@@ -1207,6 +1320,125 @@ mod tests {
         drop(sink);
 
         // SAFETY: caller upholds the FFI contract for this pointer operation
+        unsafe {
+            player_macos_test_release_object(layer_handle);
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn native_create_failure_releases_callback_context_once() {
+        let Some(test_video_path) = test_video_path() else {
+            eprintln!(
+                "skipping macOS callback lifecycle test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+            );
+            return;
+        };
+        let source = CString::new(test_video_path).expect("fixture path should not contain NUL");
+        let state = Arc::new(CallbackLifecycleState::new());
+        let callbacks = lifecycle_callbacks(state.clone());
+        let mut session_handle = std::ptr::null_mut();
+        let mut error_message = [0 as c_char; 256];
+
+        // UiView is structurally valid at the wire boundary but unsupported by
+        // the macOS session, forcing a native construction failure after the
+        // callback context ownership transfer.
+        // SAFETY: all pointers remain valid for the duration of the call.
+        let created = unsafe {
+            player_macos_avfoundation_create_session(
+                source.as_ptr(),
+                MacosAvFoundationSurfaceTarget { kind: 1, handle: 1 },
+                callbacks,
+                &mut session_handle,
+                error_message.as_mut_ptr(),
+                error_message.len(),
+            )
+        };
+
+        assert!(!created);
+        assert!(session_handle.is_null());
+        assert_eq!(state.release_count.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn native_destroy_drains_inflight_callback_before_releasing_context() {
+        let Some(test_video_path) = test_video_path() else {
+            eprintln!(
+                "skipping macOS callback lifecycle test: fixtures/media/tiny-h264-aac.m4v is unavailable"
+            );
+            return;
+        };
+        let source = CString::new(test_video_path).expect("fixture path should not contain NUL");
+        let state = Arc::new(CallbackLifecycleState::new());
+        let callbacks = lifecycle_callbacks(state.clone());
+        // SAFETY: the Objective-C test helper returns a retained AVPlayerLayer.
+        let layer_handle = unsafe { player_macos_test_create_player_layer() };
+        assert!(!layer_handle.is_null());
+        let mut session_handle = std::ptr::null_mut();
+        let mut error_message = [0 as c_char; 256];
+        // SAFETY: all pointers remain valid for the duration of the call.
+        let created = unsafe {
+            player_macos_avfoundation_create_session(
+                source.as_ptr(),
+                MacosAvFoundationSurfaceTarget {
+                    kind: 2,
+                    handle: layer_handle as usize,
+                },
+                callbacks,
+                &mut session_handle,
+                error_message.as_mut_ptr(),
+                error_message.len(),
+            )
+        };
+        assert!(created, "native session should be created");
+        assert!(!session_handle.is_null());
+
+        state.should_block.store(true, Ordering::Release);
+        let command_session = session_handle as usize;
+        let command = std::thread::spawn(move || {
+            let mut error_message = [0 as c_char; 256];
+            // SAFETY: destroy cannot complete while this callback is in flight.
+            unsafe {
+                player_macos_avfoundation_session_set_playback_rate(
+                    command_session as *mut c_void,
+                    1.25,
+                    error_message.as_mut_ptr(),
+                    error_message.len(),
+                )
+            }
+        });
+        state.wait_until_started();
+
+        let destroy_session = session_handle as usize;
+        let (destroyed_tx, destroyed_rx) = mpsc::channel();
+        let destroy = std::thread::spawn(move || {
+            // SAFETY: this thread owns the sole retained native session handle.
+            unsafe {
+                player_macos_avfoundation_destroy_session(destroy_session as *mut c_void);
+            }
+            let _ = destroyed_tx.send(());
+        });
+
+        assert!(
+            destroyed_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err()
+        );
+        assert_eq!(state.release_count.load(Ordering::Acquire), 0);
+
+        state.allow_callback_to_finish();
+        assert!(
+            command
+                .join()
+                .expect("native command thread should not panic")
+        );
+        destroy
+            .join()
+            .expect("native destroy thread should not panic");
+        assert_eq!(state.release_count.load(Ordering::Acquire), 1);
+
+        // SAFETY: the native session detached but did not own the test layer.
         unsafe {
             player_macos_test_release_object(layer_handle);
         }

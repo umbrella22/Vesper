@@ -46,11 +46,182 @@ pub(crate) fn read_optional_c_string(
     Ok(Some(text.to_owned()))
 }
 
+fn invalid_wire_ordinal(field_name: &str, value: u32) -> PlayerFfiError {
+    owned_api_error(
+        PlayerFfiErrorCode::InvalidArgument,
+        &format!("{field_name} had invalid value {value}"),
+    )
+}
+
+fn track_selection_mode_from_u32(value: u32) -> Result<MediaTrackSelectionMode, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiTrackSelectionMode::Auto as u32 => {
+            Ok(MediaTrackSelectionMode::Auto)
+        }
+        value if value == PlayerFfiTrackSelectionMode::Disabled as u32 => {
+            Ok(MediaTrackSelectionMode::Disabled)
+        }
+        value if value == PlayerFfiTrackSelectionMode::Track as u32 => {
+            Ok(MediaTrackSelectionMode::Track)
+        }
+        _ => Err(invalid_wire_ordinal("selection.mode", value)),
+    }
+}
+
+fn abr_mode_from_u32(value: u32) -> Result<MediaAbrMode, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiAbrMode::Auto as u32 => Ok(MediaAbrMode::Auto),
+        value if value == PlayerFfiAbrMode::Constrained as u32 => Ok(MediaAbrMode::Constrained),
+        value if value == PlayerFfiAbrMode::FixedTrack as u32 => Ok(MediaAbrMode::FixedTrack),
+        _ => Err(invalid_wire_ordinal("policy.mode", value)),
+    }
+}
+
+fn preload_candidate_kind_from_u32(value: u32) -> Result<PreloadCandidateKind, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiPreloadCandidateKind::Current as u32 => {
+            Ok(PreloadCandidateKind::Current)
+        }
+        value if value == PlayerFfiPreloadCandidateKind::Neighbor as u32 => {
+            Ok(PreloadCandidateKind::Neighbor)
+        }
+        value if value == PlayerFfiPreloadCandidateKind::Recommended as u32 => {
+            Ok(PreloadCandidateKind::Recommended)
+        }
+        value if value == PlayerFfiPreloadCandidateKind::Background as u32 => {
+            Ok(PreloadCandidateKind::Background)
+        }
+        _ => Err(invalid_wire_ordinal("candidate.candidate_kind", value)),
+    }
+}
+
+fn preload_selection_hint_from_u32(value: u32) -> Result<PreloadSelectionHint, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiPreloadSelectionHint::None as u32 => {
+            Ok(PreloadSelectionHint::None)
+        }
+        value if value == PlayerFfiPreloadSelectionHint::CurrentItem as u32 => {
+            Ok(PreloadSelectionHint::CurrentItem)
+        }
+        value if value == PlayerFfiPreloadSelectionHint::NeighborItem as u32 => {
+            Ok(PreloadSelectionHint::NeighborItem)
+        }
+        value if value == PlayerFfiPreloadSelectionHint::RecommendedItem as u32 => {
+            Ok(PreloadSelectionHint::RecommendedItem)
+        }
+        value if value == PlayerFfiPreloadSelectionHint::BackgroundFill as u32 => {
+            Ok(PreloadSelectionHint::BackgroundFill)
+        }
+        _ => Err(invalid_wire_ordinal("candidate.selection_hint", value)),
+    }
+}
+
+fn preload_priority_from_u32(value: u32) -> Result<PreloadPriority, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiPreloadPriority::Critical as u32 => {
+            Ok(PreloadPriority::Critical)
+        }
+        value if value == PlayerFfiPreloadPriority::High as u32 => Ok(PreloadPriority::High),
+        value if value == PlayerFfiPreloadPriority::Normal as u32 => Ok(PreloadPriority::Normal),
+        value if value == PlayerFfiPreloadPriority::Low as u32 => Ok(PreloadPriority::Low),
+        value if value == PlayerFfiPreloadPriority::Background as u32 => {
+            Ok(PreloadPriority::Background)
+        }
+        _ => Err(invalid_wire_ordinal("candidate.priority", value)),
+    }
+}
+
+fn download_content_format_from_u32(
+    value: u32,
+    field_name: &str,
+) -> Result<DownloadContentFormat, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiDownloadContentFormat::HlsSegments as u32 => {
+            Ok(DownloadContentFormat::HlsSegments)
+        }
+        value if value == PlayerFfiDownloadContentFormat::DashSegments as u32 => {
+            Ok(DownloadContentFormat::DashSegments)
+        }
+        value if value == PlayerFfiDownloadContentFormat::FlvSegments as u32 => {
+            Ok(DownloadContentFormat::FlvSegments)
+        }
+        value if value == PlayerFfiDownloadContentFormat::SingleFile as u32 => {
+            Ok(DownloadContentFormat::SingleFile)
+        }
+        value if value == PlayerFfiDownloadContentFormat::Unknown as u32 => {
+            Ok(DownloadContentFormat::Unknown)
+        }
+        _ => Err(invalid_wire_ordinal(field_name, value)),
+    }
+}
+
+fn download_output_format_from_u32(value: u32) -> Result<OutputFormat, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiDownloadOutputFormat::Mp4 as u32 => Ok(OutputFormat::Mp4),
+        value if value == PlayerFfiDownloadOutputFormat::Mkv as u32 => Ok(OutputFormat::Mkv),
+        value if value == PlayerFfiDownloadOutputFormat::Original as u32 => {
+            Ok(OutputFormat::Original)
+        }
+        _ => Err(invalid_wire_ordinal("profile.target_output_format", value)),
+    }
+}
+
+fn download_stream_kind_from_u32(value: u32) -> Result<DownloadStreamKind, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiDownloadStreamKind::Combined as u32 => {
+            Ok(DownloadStreamKind::Combined)
+        }
+        value if value == PlayerFfiDownloadStreamKind::Video as u32 => {
+            Ok(DownloadStreamKind::Video)
+        }
+        value if value == PlayerFfiDownloadStreamKind::Audio as u32 => {
+            Ok(DownloadStreamKind::Audio)
+        }
+        value if value == PlayerFfiDownloadStreamKind::SecondaryAudio as u32 => {
+            Ok(DownloadStreamKind::SecondaryAudio)
+        }
+        value if value == PlayerFfiDownloadStreamKind::Subtitle as u32 => {
+            Ok(DownloadStreamKind::Subtitle)
+        }
+        value if value == PlayerFfiDownloadStreamKind::Auxiliary as u32 => {
+            Ok(DownloadStreamKind::Auxiliary)
+        }
+        _ => Err(invalid_wire_ordinal("stream.kind", value)),
+    }
+}
+
+fn download_task_status_from_u32(value: u32) -> Result<DownloadTaskStatus, PlayerFfiError> {
+    match value {
+        value if value == PlayerFfiDownloadTaskStatus::Queued as u32 => {
+            Ok(DownloadTaskStatus::Queued)
+        }
+        value if value == PlayerFfiDownloadTaskStatus::Preparing as u32 => {
+            Ok(DownloadTaskStatus::Preparing)
+        }
+        value if value == PlayerFfiDownloadTaskStatus::Downloading as u32 => {
+            Ok(DownloadTaskStatus::Downloading)
+        }
+        value if value == PlayerFfiDownloadTaskStatus::Paused as u32 => {
+            Ok(DownloadTaskStatus::Paused)
+        }
+        value if value == PlayerFfiDownloadTaskStatus::Completed as u32 => {
+            Ok(DownloadTaskStatus::Completed)
+        }
+        value if value == PlayerFfiDownloadTaskStatus::Failed as u32 => {
+            Ok(DownloadTaskStatus::Failed)
+        }
+        value if value == PlayerFfiDownloadTaskStatus::Removed as u32 => {
+            Ok(DownloadTaskStatus::Removed)
+        }
+        _ => Err(invalid_wire_ordinal("task.status", value)),
+    }
+}
+
 pub(crate) fn read_track_selection(
     selection: &PlayerFfiTrackSelection,
 ) -> Result<MediaTrackSelection, PlayerFfiError> {
     Ok(MediaTrackSelection {
-        mode: selection.mode.into(),
+        mode: track_selection_mode_from_u32(selection.mode)?,
         track_id: read_optional_c_string(selection.track_id, "selection.track_id")?,
     })
 }
@@ -59,7 +230,7 @@ pub(crate) fn read_abr_policy(
     policy: &PlayerFfiAbrPolicy,
 ) -> Result<MediaAbrPolicy, PlayerFfiError> {
     Ok(MediaAbrPolicy {
-        mode: policy.mode.into(),
+        mode: abr_mode_from_u32(policy.mode)?,
         track_id: read_optional_c_string(policy.track_id, "policy.track_id")?,
         max_bit_rate: policy.has_max_bit_rate.then_some(policy.max_bit_rate),
         max_width: policy.has_max_width.then_some(policy.max_width),
@@ -104,22 +275,23 @@ pub(crate) fn read_preload_candidate(
         })?;
     let scope_id = read_optional_c_string(candidate.scope_id, "candidate.scope_id")?;
     let scope = match candidate.scope_kind {
-        PlayerFfiPreloadScopeKind::App => PreloadBudgetScope::App,
-        PlayerFfiPreloadScopeKind::Session => {
+        value if value == PlayerFfiPreloadScopeKind::App as u32 => PreloadBudgetScope::App,
+        value if value == PlayerFfiPreloadScopeKind::Session as u32 => {
             PreloadBudgetScope::Session(scope_id.unwrap_or_default())
         }
-        PlayerFfiPreloadScopeKind::Playlist => {
+        value if value == PlayerFfiPreloadScopeKind::Playlist as u32 => {
             PreloadBudgetScope::Playlist(scope_id.unwrap_or_default())
         }
+        value => return Err(invalid_wire_ordinal("candidate.scope_kind", value)),
     };
 
     Ok(PreloadCandidate {
         source: MediaSource::new(source_uri),
         scope,
-        kind: candidate.candidate_kind.into(),
-        selection_hint: candidate.selection_hint.into(),
+        kind: preload_candidate_kind_from_u32(candidate.candidate_kind)?,
+        selection_hint: preload_selection_hint_from_u32(candidate.selection_hint)?,
         config: PreloadConfig {
-            priority: candidate.priority.into(),
+            priority: preload_priority_from_u32(candidate.priority)?,
             ttl: candidate
                 .has_ttl_ms
                 .then_some(Duration::from_millis(candidate.ttl_ms)),
@@ -184,9 +356,11 @@ pub(crate) fn read_download_source(
         source.headers_len,
         "source.header_values",
     )?;
-    let mut download_source =
-        DownloadSource::new(MediaSource::new(source_uri), source.content_format.into())
-            .with_request_headers(header_names.into_iter().zip(header_values));
+    let mut download_source = DownloadSource::new(
+        MediaSource::new(source_uri),
+        download_content_format_from_u32(source.content_format, "source.content_format")?,
+    )
+    .with_request_headers(header_names.into_iter().zip(header_values));
     if let Some(manifest_uri) = read_optional_c_string(source.manifest_uri, "source.manifest_uri")?
         && !manifest_uri.is_empty()
     {
@@ -259,9 +433,13 @@ pub(crate) fn read_download_profile(
             profile.selected_track_ids_len,
             "profile.selected_track_ids",
         )?,
-        target_output_format: profile
-            .has_target_output_format
-            .then(|| OutputFormat::from(profile.target_output_format)),
+        target_output_format: if profile.has_target_output_format {
+            Some(download_output_format_from_u32(
+                profile.target_output_format,
+            )?)
+        } else {
+            None
+        },
         target_directory: read_optional_c_string(
             profile.target_directory,
             "profile.target_directory",
@@ -359,7 +537,7 @@ pub(crate) fn read_download_asset_stream(
         stream_id: read_optional_c_string(stream.stream_id, "stream.stream_id")?.ok_or_else(
             || owned_api_error(PlayerFfiErrorCode::NullPointer, "stream.stream_id was null"),
         )?,
-        kind: stream.kind.into(),
+        kind: download_stream_kind_from_u32(stream.kind)?,
         language: read_optional_c_string(stream.language, "stream.language")?,
         codec: read_optional_c_string(stream.codec, "stream.codec")?,
         label: read_optional_c_string(stream.label, "stream.label")?,
@@ -430,7 +608,10 @@ pub(crate) fn read_download_asset_index(
     };
 
     Ok(DownloadAssetIndex {
-        content_format: asset_index.content_format.into(),
+        content_format: download_content_format_from_u32(
+            asset_index.content_format,
+            "asset_index.content_format",
+        )?,
         version: read_optional_c_string(asset_index.version, "asset_index.version")?,
         etag: read_optional_c_string(asset_index.etag, "asset_index.etag")?,
         checksum: read_optional_c_string(asset_index.checksum, "asset_index.checksum")?,
@@ -470,8 +651,8 @@ pub(crate) fn read_download_task(
     })?;
     let error_summary = if task.has_error {
         Some(DownloadErrorSummary {
-            code: task.error_code.into(),
-            category: task.error_category.into(),
+            code: error_code_from_u32(task.error_code)?,
+            category: error_category_from_u32(task.error_category)?,
             retriable: task.error_retriable,
             message: read_optional_c_string(task.error_message, "task.error_message")?
                 .unwrap_or_else(|| "download failed".to_owned()),
@@ -485,7 +666,7 @@ pub(crate) fn read_download_task(
         asset_id: DownloadAssetId::new(asset_id),
         source: read_download_source(&task.source)?,
         profile: read_download_profile(&task.profile)?,
-        status: DownloadTaskStatus::from(task.status),
+        status: download_task_status_from_u32(task.status)?,
         progress: read_download_progress(&task.progress),
         asset_index: Arc::new(read_download_asset_index(&task.asset_index)?),
         created_at: now,
@@ -523,14 +704,26 @@ pub(crate) fn read_playlist_config(
             switch_policy: PlaylistSwitchPolicy {
                 auto_advance: config.auto_advance,
                 repeat_mode: match config.repeat_mode {
-                    PlayerFfiPlaylistRepeatMode::Off => PlaylistRepeatMode::Off,
-                    PlayerFfiPlaylistRepeatMode::One => PlaylistRepeatMode::One,
-                    PlayerFfiPlaylistRepeatMode::All => PlaylistRepeatMode::All,
+                    value if value == PlayerFfiPlaylistRepeatMode::Off as u32 => {
+                        PlaylistRepeatMode::Off
+                    }
+                    value if value == PlayerFfiPlaylistRepeatMode::One as u32 => {
+                        PlaylistRepeatMode::One
+                    }
+                    value if value == PlayerFfiPlaylistRepeatMode::All as u32 => {
+                        PlaylistRepeatMode::All
+                    }
+                    value => return Err(invalid_wire_ordinal("config.repeat_mode", value)),
                 },
                 failure_strategy: match config.failure_strategy {
-                    PlayerFfiPlaylistFailureStrategy::Pause => PlaylistFailureStrategy::Pause,
-                    PlayerFfiPlaylistFailureStrategy::SkipToNext => {
+                    value if value == PlayerFfiPlaylistFailureStrategy::Pause as u32 => {
+                        PlaylistFailureStrategy::Pause
+                    }
+                    value if value == PlayerFfiPlaylistFailureStrategy::SkipToNext as u32 => {
                         PlaylistFailureStrategy::SkipToNext
+                    }
+                    value => {
+                        return Err(invalid_wire_ordinal("config.failure_strategy", value));
                     }
                 },
             },
@@ -570,10 +763,19 @@ pub(crate) fn read_playlist_viewport_hint(
     let item_id = read_optional_c_string(hint.item_id, "hint.item_id")?
         .ok_or_else(|| owned_api_error(PlayerFfiErrorCode::NullPointer, "hint.item_id was null"))?;
     let kind = match hint.kind {
-        PlayerFfiPlaylistViewportHintKind::Visible => PlaylistViewportHintKind::Visible,
-        PlayerFfiPlaylistViewportHintKind::NearVisible => PlaylistViewportHintKind::NearVisible,
-        PlayerFfiPlaylistViewportHintKind::PrefetchOnly => PlaylistViewportHintKind::PrefetchOnly,
-        PlayerFfiPlaylistViewportHintKind::Hidden => PlaylistViewportHintKind::Hidden,
+        value if value == PlayerFfiPlaylistViewportHintKind::Visible as u32 => {
+            PlaylistViewportHintKind::Visible
+        }
+        value if value == PlayerFfiPlaylistViewportHintKind::NearVisible as u32 => {
+            PlaylistViewportHintKind::NearVisible
+        }
+        value if value == PlayerFfiPlaylistViewportHintKind::PrefetchOnly as u32 => {
+            PlaylistViewportHintKind::PrefetchOnly
+        }
+        value if value == PlayerFfiPlaylistViewportHintKind::Hidden as u32 => {
+            PlaylistViewportHintKind::Hidden
+        }
+        value => return Err(invalid_wire_ordinal("hint.kind", value)),
     };
 
     Ok(PlaylistViewportHint::new(item_id, kind).with_order(hint.order))
@@ -817,7 +1019,7 @@ pub(crate) fn download_source_to_ffi(source: DownloadSource) -> PlayerFfiDownloa
     debug_assert_eq!(headers_len, header_values_len);
     PlayerFfiDownloadSource {
         source_uri: into_c_string_ptr(source.source.uri().to_owned()),
-        content_format: source.content_format.into(),
+        content_format: PlayerFfiDownloadContentFormat::from(source.content_format) as u32,
         manifest_uri: source
             .manifest_uri
             .map(into_c_string_ptr)
@@ -849,8 +1051,8 @@ pub(crate) fn download_profile_to_ffi(profile: DownloadProfile) -> PlayerFfiDown
         has_target_output_format: profile.target_output_format.is_some(),
         target_output_format: profile
             .target_output_format
-            .map(PlayerFfiDownloadOutputFormat::from)
-            .unwrap_or_default(),
+            .map(|value| PlayerFfiDownloadOutputFormat::from(value) as u32)
+            .unwrap_or(PlayerFfiDownloadOutputFormat::Original as u32),
         target_directory: profile
             .target_directory
             .map(|path| into_c_string_ptr(path.to_string_lossy().into_owned()))
@@ -926,7 +1128,7 @@ pub(crate) fn download_asset_stream_to_ffi(
 
     PlayerFfiDownloadAssetStream {
         stream_id: into_c_string_ptr(stream.stream_id),
-        kind: stream.kind.into(),
+        kind: PlayerFfiDownloadStreamKind::from(stream.kind) as u32,
         language: stream
             .language
             .map(into_c_string_ptr)
@@ -994,7 +1196,7 @@ pub(crate) fn download_asset_index_to_ffi(
     };
 
     PlayerFfiDownloadAssetIndex {
-        content_format: asset_index.content_format.into(),
+        content_format: PlayerFfiDownloadContentFormat::from(asset_index.content_format) as u32,
         version: asset_index
             .version
             .as_ref()
@@ -1053,12 +1255,12 @@ pub(crate) fn download_task_to_ffi(task: DownloadTaskSnapshot) -> PlayerFfiDownl
         asset_id: into_c_string_ptr(task.asset_id.as_str().to_owned()),
         source: download_source_to_ffi(task.source),
         profile: download_profile_to_ffi(task.profile),
-        status: task.status.into(),
+        status: PlayerFfiDownloadTaskStatus::from(task.status) as u32,
         progress: download_progress_to_ffi(task.progress),
         asset_index: download_asset_index_to_ffi(&task.asset_index),
         has_error,
-        error_code,
-        error_category,
+        error_code: error_code as u32,
+        error_category: error_category as u32,
         error_retriable,
         error_message,
     }
@@ -1285,7 +1487,24 @@ pub(crate) fn read_buffering_policy(
     };
 
     Ok(PlayerBufferingPolicy {
-        preset: policy.preset.into(),
+        preset: match policy.preset {
+            value if value == PlayerFfiBufferingPreset::Default as u32 => {
+                PlayerBufferingPreset::Default
+            }
+            value if value == PlayerFfiBufferingPreset::Balanced as u32 => {
+                PlayerBufferingPreset::Balanced
+            }
+            value if value == PlayerFfiBufferingPreset::Streaming as u32 => {
+                PlayerBufferingPreset::Streaming
+            }
+            value if value == PlayerFfiBufferingPreset::Resilient as u32 => {
+                PlayerBufferingPreset::Resilient
+            }
+            value if value == PlayerFfiBufferingPreset::LowLatency as u32 => {
+                PlayerBufferingPreset::LowLatency
+            }
+            value => return Err(invalid_wire_ordinal("policy.preset", value)),
+        },
         min_buffer: policy
             .has_min_buffer_ms
             .then_some(Duration::from_millis(policy.min_buffer_ms)),
@@ -1331,7 +1550,16 @@ pub(crate) fn read_retry_policy(
             Duration::from_millis(5_000)
         },
         backoff: if policy.has_backoff {
-            policy.backoff.into()
+            match policy.backoff {
+                value if value == PlayerFfiRetryBackoff::Fixed as u32 => PlayerRetryBackoff::Fixed,
+                value if value == PlayerFfiRetryBackoff::Linear as u32 => {
+                    PlayerRetryBackoff::Linear
+                }
+                value if value == PlayerFfiRetryBackoff::Exponential as u32 => {
+                    PlayerRetryBackoff::Exponential
+                }
+                value => return Err(invalid_wire_ordinal("policy.backoff", value)),
+            }
         } else {
             PlayerRetryBackoff::Linear
         },
@@ -1350,7 +1578,17 @@ pub(crate) fn read_cache_policy(
     };
 
     Ok(PlayerCachePolicy {
-        preset: policy.preset.into(),
+        preset: match policy.preset {
+            value if value == PlayerFfiCachePreset::Default as u32 => PlayerCachePreset::Default,
+            value if value == PlayerFfiCachePreset::Disabled as u32 => PlayerCachePreset::Disabled,
+            value if value == PlayerFfiCachePreset::Streaming as u32 => {
+                PlayerCachePreset::Streaming
+            }
+            value if value == PlayerFfiCachePreset::Resilient as u32 => {
+                PlayerCachePreset::Resilient
+            }
+            value => return Err(invalid_wire_ordinal("policy.preset", value)),
+        },
         max_memory_bytes: policy
             .has_max_memory_bytes
             .then_some(policy.max_memory_bytes),
@@ -1969,7 +2207,7 @@ impl From<player_runtime::PlayerResolvedResiliencePolicy> for PlayerFfiResolvedR
     fn from(value: player_runtime::PlayerResolvedResiliencePolicy) -> Self {
         Self {
             buffering: PlayerFfiBufferingPolicy {
-                preset: value.buffering_policy.preset.into(),
+                preset: PlayerFfiBufferingPreset::from(value.buffering_policy.preset) as u32,
                 has_min_buffer_ms: value.buffering_policy.min_buffer.is_some(),
                 min_buffer_ms: value
                     .buffering_policy
@@ -2004,10 +2242,10 @@ impl From<player_runtime::PlayerResolvedResiliencePolicy> for PlayerFfiResolvedR
                 has_max_delay_ms: true,
                 max_delay_ms: duration_to_millis_u64(value.retry_policy.max_delay),
                 has_backoff: true,
-                backoff: value.retry_policy.backoff.into(),
+                backoff: PlayerFfiRetryBackoff::from(value.retry_policy.backoff) as u32,
             },
             cache: PlayerFfiCachePolicy {
-                preset: value.cache_policy.preset.into(),
+                preset: PlayerFfiCachePreset::from(value.cache_policy.preset) as u32,
                 has_max_memory_bytes: value.cache_policy.max_memory_bytes.is_some(),
                 max_memory_bytes: value.cache_policy.max_memory_bytes.unwrap_or_default(),
                 has_max_disk_bytes: value.cache_policy.max_disk_bytes.is_some(),
@@ -2053,7 +2291,7 @@ impl From<PlayerTrackPreferencePolicy> for PlayerFfiTrackPreferences {
 impl From<MediaTrackSelection> for PlayerFfiTrackSelection {
     fn from(value: MediaTrackSelection) -> Self {
         Self {
-            mode: value.mode.into(),
+            mode: PlayerFfiTrackSelectionMode::from(value.mode) as u32,
             track_id: value
                 .track_id
                 .map(into_c_string_ptr)
@@ -2065,7 +2303,7 @@ impl From<MediaTrackSelection> for PlayerFfiTrackSelection {
 impl From<MediaAbrPolicy> for PlayerFfiAbrPolicy {
     fn from(value: MediaAbrPolicy) -> Self {
         Self {
-            mode: value.mode.into(),
+            mode: PlayerFfiAbrMode::from(value.mode) as u32,
             track_id: value
                 .track_id
                 .map(into_c_string_ptr)

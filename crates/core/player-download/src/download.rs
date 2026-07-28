@@ -7,7 +7,7 @@ mod tests;
 mod types;
 
 pub use executor::{DownloadExecutor, DownloadPrepareResult, InMemoryDownloadExecutor};
-pub use manager::{DownloadManager, DownloadManagerConfig};
+pub use manager::{DownloadExportPlan, DownloadManager, DownloadManagerConfig};
 pub use store::{DownloadStore, InMemoryDownloadStore};
 pub use types::{
     DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,

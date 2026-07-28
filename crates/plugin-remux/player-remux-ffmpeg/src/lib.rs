@@ -43,7 +43,7 @@ fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
         },
         descriptor: VesperPluginDescriptor {
             abi_version: VESPER_POST_DOWNLOAD_PLUGIN_ABI_VERSION_V3,
-            plugin_kind: VesperPluginKind::PostDownloadProcessor,
+            plugin_kind: VesperPluginKind::PostDownloadProcessor as u32,
             plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
             api: std::ptr::null(),
         },
@@ -159,11 +159,11 @@ fn encode_processor_result(
 ) -> VesperPluginProcessResult {
     match result {
         Ok(output) => VesperPluginProcessResult {
-            status: VesperPluginResultStatus::Success,
+            status: VesperPluginResultStatus::Success as u32,
             payload: serialize_payload(&output),
         },
         Err(error) => VesperPluginProcessResult {
-            status: VesperPluginResultStatus::Failure,
+            status: VesperPluginResultStatus::Failure as u32,
             payload: serialize_payload(&error),
         },
     }
@@ -242,7 +242,7 @@ mod tests {
         );
         assert_eq!(
             descriptor.plugin_kind,
-            VesperPluginKind::PostDownloadProcessor
+            VesperPluginKind::PostDownloadProcessor as u32
         );
         assert!(!descriptor.api.is_null());
         assert!(!descriptor.plugin_name.is_null());

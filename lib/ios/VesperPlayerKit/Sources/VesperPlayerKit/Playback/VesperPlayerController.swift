@@ -179,7 +179,21 @@ public final class VesperPlayerController: ObservableObject {
     private let screenSleepToken = VesperScreenSleepToken()
     private var keepScreenOnDuringPlayback: Bool
     private var pendingTimelineOnlyUpdate = false
-    private lazy var systemPlaybackCoordinator = VesperSystemPlaybackCoordinator(controller: self)
+    private var systemPlaybackCoordinatorStorage: VesperSystemPlaybackCoordinator?
+    private var isDisposed = false
+
+    private var systemPlaybackCoordinator: VesperSystemPlaybackCoordinator {
+        if let coordinator = systemPlaybackCoordinatorStorage {
+            return coordinator
+        }
+        let coordinator = VesperSystemPlaybackCoordinator(controller: self)
+        systemPlaybackCoordinatorStorage = coordinator
+        return coordinator
+    }
+
+    var systemPlaybackCoordinatorForTesting: VesperSystemPlaybackCoordinator? {
+        systemPlaybackCoordinatorStorage
+    }
 
     init<Bridge: ObservablePlayerBridge>(
         _ bridge: Bridge,
@@ -280,10 +294,12 @@ public final class VesperPlayerController: ObservableObject {
 
     deinit {
         bridgeObservation?.cancel()
+        let systemPlaybackCoordinator = systemPlaybackCoordinatorStorage
         let token = screenSleepToken
-        let disposeFn = disposeImpl
+        let disposeFn = isDisposed ? nil : disposeImpl
         Task { @MainActor in
-            disposeFn()
+            systemPlaybackCoordinator?.clear()
+            disposeFn?()
             VesperScreenSleepCoordinator.release(token)
         }
     }
@@ -298,8 +314,12 @@ public final class VesperPlayerController: ObservableObject {
     }
 
     public func dispose() {
+        guard !isDisposed else { return }
+        isDisposed = true
+        bridgeObservation?.cancel()
+        bridgeObservation = nil
         VesperScreenSleepCoordinator.release(screenSleepToken)
-        systemPlaybackCoordinator.clear()
+        systemPlaybackCoordinatorStorage?.clear()
         disposeImpl()
     }
 

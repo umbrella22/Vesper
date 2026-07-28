@@ -106,6 +106,7 @@ pub struct VideoPacketStreamInfo {
     pub extradata: Vec<u8>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub reorder_depth: Option<u32>,
     pub frame_rate: Option<f64>,
 }
 
@@ -289,7 +290,8 @@ mod tests {
     use super::DecodedAudioTrack;
     use super::audio::playback_rate_filter_chain;
     use super::hls::{
-        parse_hls_master_manifest, resolve_hls_master_manifest_sources, resolve_uri_relative_to,
+        MAX_REMOTE_HLS_MANIFEST_BYTES, append_remote_hls_manifest_chunk, parse_hls_master_manifest,
+        resolve_hls_master_manifest_sources, resolve_uri_relative_to,
         select_hls_audio_rendition_uri, select_hls_video_variant_uri,
     };
     use super::input::{
@@ -372,6 +374,8 @@ mod tests {
             input_open_tuning_options(InputOpenProfile::RemoteHls, InputOpenPurpose::VideoDecode);
 
         assert!(audio_options.contains(&("allowed_media_types", "audio")));
+        assert!(audio_options.contains(&("protocol_whitelist", "http,https,tcp,tls,crypto")));
+        assert!(audio_options.contains(&("protocol_blacklist", "file,concat,subfile")));
         assert!(!video_options.contains(&("allowed_media_types", "audio")));
         assert!(video_options.contains(&("rw_timeout", "15000000")));
         assert!(
@@ -422,7 +426,8 @@ v1/prog_index.m3u8
 "#;
 
         let selected =
-            select_hls_audio_rendition_uri("https://example.com/live/master.m3u8", manifest);
+            select_hls_audio_rendition_uri("https://example.com/live/master.m3u8", manifest)
+                .expect("valid remote HLS audio rendition");
 
         assert_eq!(
             selected.as_deref(),
@@ -440,7 +445,8 @@ v1/prog_index.m3u8
 "#;
 
         let selected =
-            select_hls_video_variant_uri("https://example.com/live/master.m3u8", manifest);
+            select_hls_video_variant_uri("https://example.com/live/master.m3u8", manifest)
+                .expect("valid remote HLS video variant");
 
         assert_eq!(
             selected.as_deref(),
@@ -458,7 +464,8 @@ v1/prog_index.m3u8
 "#;
 
         let resolved =
-            resolve_hls_master_manifest_sources("https://example.com/live/master.m3u8", manifest);
+            resolve_hls_master_manifest_sources("https://example.com/live/master.m3u8", manifest)
+                .expect("valid remote HLS sources");
 
         assert_eq!(
             resolved.audio_rendition_uri.as_deref(),
@@ -481,5 +488,38 @@ v1/prog_index.m3u8
             resolved.as_deref(),
             Some("https://example.com/live/audio/a1/prog_index.m3u8")
         );
+    }
+
+    #[test]
+    fn remote_hls_uri_resolution_rejects_non_http_initial_and_derived_uris() {
+        assert_eq!(
+            resolve_uri_relative_to("ftp://example.com/live/master.m3u8", "video.m3u8"),
+            None
+        );
+        assert_eq!(
+            resolve_uri_relative_to("https://example.com/live/master.m3u8", "file:///etc/passwd"),
+            None
+        );
+        assert_eq!(
+            resolve_uri_relative_to(
+                "https://example.com/live/master.m3u8",
+                "tcp://127.0.0.1:9000"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn remote_hls_manifest_limit_is_checked_before_append() {
+        let mut bytes = vec![b'x'; MAX_REMOTE_HLS_MANIFEST_BYTES - 1];
+        append_remote_hls_manifest_chunk(&mut bytes, b"y")
+            .expect("manifest at the byte limit should be accepted");
+        assert_eq!(bytes.len(), MAX_REMOTE_HLS_MANIFEST_BYTES);
+
+        let error = append_remote_hls_manifest_chunk(&mut bytes, b"z")
+            .expect_err("manifest above the byte limit should be rejected");
+
+        assert_eq!(bytes.len(), MAX_REMOTE_HLS_MANIFEST_BYTES);
+        assert!(error.to_string().contains("524288-byte limit"));
     }
 }

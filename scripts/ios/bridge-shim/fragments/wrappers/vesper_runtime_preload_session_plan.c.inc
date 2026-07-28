@@ -13,11 +13,11 @@
     }
     for (uintptr_t index = 0; index < candidates_len; index += 1) {
       ffi_candidates[index].source_uri = candidates[index].source_uri;
-      ffi_candidates[index].scope_kind = (int)candidates[index].scope_kind;
+      ffi_candidates[index].scope_kind = (uint32_t)candidates[index].scope_kind;
       ffi_candidates[index].scope_id = candidates[index].scope_id;
-      ffi_candidates[index].candidate_kind = (int)candidates[index].candidate_kind;
-      ffi_candidates[index].selection_hint = (int)candidates[index].selection_hint;
-      ffi_candidates[index].priority = (int)candidates[index].priority;
+      ffi_candidates[index].candidate_kind = (uint32_t)candidates[index].candidate_kind;
+      ffi_candidates[index].selection_hint = (uint32_t)candidates[index].selection_hint;
+      ffi_candidates[index].priority = (uint32_t)candidates[index].priority;
       ffi_candidates[index].expected_memory_bytes = candidates[index].expected_memory_bytes;
       ffi_candidates[index].expected_disk_bytes = candidates[index].expected_disk_bytes;
       ffi_candidates[index].has_ttl_ms = candidates[index].has_ttl_ms;

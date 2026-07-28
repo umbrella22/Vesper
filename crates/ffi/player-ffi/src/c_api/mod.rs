@@ -517,7 +517,7 @@ pub unsafe extern "C" fn player_ffi_player_snapshot(
 /// handle access according to the host binding contract.
 pub unsafe extern "C" fn player_ffi_player_dispatch(
     handle: PlayerFfiHandle,
-    command: PlayerFfiCommandKind,
+    command: u32,
     position_ms: u64,
     out_applied: *mut bool,
     out_frame: *mut PlayerFfiVideoFrame,
@@ -536,9 +536,15 @@ pub unsafe extern "C" fn player_ffi_player_dispatch(
             return PlayerFfiCallStatus::Error;
         }
 
-        let Some(result) = with_player_mut(handle, |player| {
-            player.dispatch(to_bridge_command(command, position_ms))
-        }) else {
+        let command = match to_bridge_command(command, position_ms) {
+            Ok(command) => command,
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+
+        let Some(result) = with_player_mut(handle, |player| player.dispatch(command)) else {
             write_error(out_error, invalid_player_handle_error());
             return PlayerFfiCallStatus::Error;
         };

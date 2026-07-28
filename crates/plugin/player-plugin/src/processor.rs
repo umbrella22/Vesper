@@ -126,6 +126,8 @@ pub enum ProcessorOutput {
 pub enum ProcessorError {
     #[error("unsupported input format: {0:?}")]
     UnsupportedFormat(ContentFormatKind),
+    #[error("dynamic input stream {stream_index} appeared after the output header")]
+    UnsupportedDynamicStream { stream_index: u32 },
     #[error("payload codec error: {0}")]
     PayloadCodec(String),
     #[error("plugin ABI violation: {0}")]

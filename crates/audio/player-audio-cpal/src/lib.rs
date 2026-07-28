@@ -1,7 +1,7 @@
 //! CPAL audio sink and playback clock adapter for desktop runtime paths.
 //!
 //! This crate owns desktop audio device discovery, output stream creation, the
-//! `rtrb` single-producer/single-consumer ring, and playback clock accounting.
+//! fixed-capacity lock-free sample queue, and playback clock accounting.
 //! It is an internal desktop adapter rather than a shared native-frame pipeline
 //! core; shared playback logic should depend on abstract clocks or observers,
 //! not on CPAL directly.

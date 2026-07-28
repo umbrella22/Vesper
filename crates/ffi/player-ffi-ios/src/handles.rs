@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, LockResult, Mutex, MutexGuard, OnceLock};
 
 use player_platform_ios::{
     IosDownloadBridgeSession, IosPlaylistBridgeSession, IosPreloadBridgeSession,
@@ -144,6 +144,13 @@ static SOURCE_NORMALIZER_RESOURCE_SESSIONS: OnceLock<
 static NATIVE_FRAME_PIPELINE_SESSIONS: OnceLock<
     Mutex<HandleRegistry<IosNativeFramePipelineSessionHandle>>,
 > = OnceLock::new();
+
+pub(crate) fn lock_registry<T>(registry: &Mutex<T>) -> LockResult<MutexGuard<'_, T>> {
+    match registry.lock() {
+        Ok(guard) => Ok(guard),
+        Err(poisoned) => Ok(poisoned.into_inner()),
+    }
+}
 
 pub(crate) fn preload_sessions() -> &'static Mutex<HandleRegistry<IosPreloadBridgeSession>> {
     PRELOAD_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))

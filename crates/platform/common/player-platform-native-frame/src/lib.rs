@@ -1986,7 +1986,7 @@ impl NativeFramePipelineCore {
     fn queue_next_video_packet(
         &mut self,
     ) -> Result<NativeFramePipelinePacketStatus, NativeFramePipelineError> {
-        loop {
+        for _ in 0..self.config.packet_budget {
             let selected_video_stream_index = self
                 .packet_source
                 .as_ref()
@@ -2032,6 +2032,7 @@ impl NativeFramePipelineCore {
                 }
             }
         }
+        Ok(NativeFramePipelinePacketStatus::NeedMoreData)
     }
 
     fn decoder_receive_result(
@@ -3421,6 +3422,33 @@ mod tests {
         assert_eq!(
             state.lock().expect("pipeline state").released_frames,
             vec![(40, true)]
+        );
+    }
+
+    #[test]
+    fn pipeline_core_bounds_non_video_packet_skips_per_advance() {
+        let packet_budget = NativeFramePipelineCoreConfig::default().packet_budget;
+        let packet_count = packet_budget.saturating_mul(4);
+        let state = Arc::new(Mutex::new(PipelineTestState {
+            packet_reads: (0..packet_count)
+                .map(|_| source_packet(SourceNormalizerPacketMediaKind::Audio, 1))
+                .collect(),
+            presenter_accepts: true,
+            decoder_accepts_packets: true,
+            ..PipelineTestState::default()
+        }));
+        let mut core = pipeline_core(state.clone());
+
+        let output = core.advance().expect("packet skip budget is recoverable");
+        let remaining_packets = state.lock().expect("pipeline state").packet_reads.len();
+        let skipped_audio_packets = core.counters().skipped_audio_packets;
+        core.close().expect("close pipeline after bounded advance");
+
+        assert_eq!(output.status, NativeFramePipelineFrameStatus::Pending);
+        assert_eq!(remaining_packets, packet_count - packet_budget);
+        assert_eq!(
+            skipped_audio_packets,
+            u64::try_from(packet_budget).expect("packet budget fits u64")
         );
     }
 

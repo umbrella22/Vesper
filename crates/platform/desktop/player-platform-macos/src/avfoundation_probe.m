@@ -276,6 +276,7 @@ typedef void (*PlayerMacosFirstFrameReadyCallback)(void *context, uint64_t posit
 typedef void (*PlayerMacosInterruptionChangedCallback)(void *context, uint8_t interrupted);
 typedef void (*PlayerMacosSeekCompletedCallback)(void *context, uint64_t position_ms);
 typedef void (*PlayerMacosErrorCallback)(void *context, const char *message);
+typedef void (*PlayerMacosReleaseContextCallback)(void *context);
 
 typedef struct {
     PlayerMacosSnapshotCallback on_snapshot;
@@ -283,6 +284,7 @@ typedef struct {
     PlayerMacosInterruptionChangedCallback on_interruption_changed;
     PlayerMacosSeekCompletedCallback on_seek_completed;
     PlayerMacosErrorCallback on_error;
+    PlayerMacosReleaseContextCallback release_context;
     void *context;
 } PlayerMacosAvFoundationCallbacks;
 
@@ -354,6 +356,95 @@ static uint64_t player_time_to_millis(CMTime time) {
     return (uint64_t)llround(seconds * 1000.0);
 }
 
+static const void *PlayerMacosCallbackQueueKey = &PlayerMacosCallbackQueueKey;
+
+@interface PlayerMacosCallbackOwner : NSObject
+
+@property(nonatomic, assign) PlayerMacosAvFoundationCallbacks callbacks;
+@property(nonatomic, assign) BOOL callbacksEnabled;
+@property(nonatomic, strong) dispatch_queue_t callbackQueue;
+
+- (instancetype)initWithCallbacks:(PlayerMacosAvFoundationCallbacks)callbacks;
+- (void)performCallback:(void (^)(PlayerMacosAvFoundationCallbacks callbacks))callback;
+- (void)disableAndDrain;
+- (void)releaseContext;
+- (void)shutdown;
+
+@end
+
+@implementation PlayerMacosCallbackOwner
+
+- (instancetype)initWithCallbacks:(PlayerMacosAvFoundationCallbacks)callbacks {
+    self = [super init];
+    if (self == nil) {
+        return nil;
+    }
+
+    self.callbacks = callbacks;
+    self.callbacksEnabled = YES;
+    self.callbackQueue =
+        dispatch_queue_create("io.github.ikaros.vesper.player.macos.callbacks",
+                              DISPATCH_QUEUE_SERIAL);
+    dispatch_queue_set_specific(self.callbackQueue,
+                                PlayerMacosCallbackQueueKey,
+                                (__bridge void *)self,
+                                NULL);
+    return self;
+}
+
+- (void)runSyncOnCallbackQueue:(dispatch_block_t)block {
+    if (dispatch_get_specific(PlayerMacosCallbackQueueKey) == (__bridge void *)self) {
+        block();
+    } else {
+        dispatch_sync(self.callbackQueue, block);
+    }
+}
+
+- (void)performCallback:(void (^)(PlayerMacosAvFoundationCallbacks callbacks))callback {
+    if (callback == nil) {
+        return;
+    }
+    [self runSyncOnCallbackQueue:^{
+      if (!self.callbacksEnabled || self.callbacks.context == NULL) {
+          return;
+      }
+      callback(self.callbacks);
+    }];
+}
+
+- (void)disableAndDrain {
+    [self runSyncOnCallbackQueue:^{
+      self.callbacksEnabled = NO;
+    }];
+}
+
+- (void)releaseContext {
+    __block PlayerMacosAvFoundationCallbacks callbacks_to_release;
+    memset(&callbacks_to_release, 0, sizeof(callbacks_to_release));
+    [self runSyncOnCallbackQueue:^{
+      callbacks_to_release = self.callbacks;
+      PlayerMacosAvFoundationCallbacks cleared_callbacks;
+      memset(&cleared_callbacks, 0, sizeof(cleared_callbacks));
+      self.callbacks = cleared_callbacks;
+    }];
+
+    if (callbacks_to_release.context != NULL &&
+        callbacks_to_release.release_context != NULL) {
+        callbacks_to_release.release_context(callbacks_to_release.context);
+    }
+}
+
+- (void)shutdown {
+    [self disableAndDrain];
+    [self releaseContext];
+}
+
+- (void)dealloc {
+    [self shutdown];
+}
+
+@end
+
 @interface PlayerMacosAvFoundationSession : NSObject
 
 @property(nonatomic, strong) AVPlayer *player;
@@ -367,16 +458,17 @@ static uint64_t player_time_to_millis(CMTime time) {
 @property(nonatomic, strong) id endObserverToken;
 @property(nonatomic, strong) id workspaceSleepObserverToken;
 @property(nonatomic, strong) id workspaceWakeObserverToken;
-@property(nonatomic, assign) PlayerMacosAvFoundationCallbacks callbacks;
+@property(nonatomic, strong) PlayerMacosCallbackOwner *callbackOwner;
 @property(nonatomic, assign) float playbackRate;
 @property(nonatomic, assign) BOOL reachedEnd;
 @property(nonatomic, assign) BOOL firstFrameReadyReported;
 @property(nonatomic, assign) BOOL interrupted;
 @property(nonatomic, assign) BOOL resumeAfterInterruption;
+@property(nonatomic, assign) BOOL shuttingDown;
 
 - (instancetype)initWithURL:(NSURL *)url
                     surface:(PlayerMacosVideoSurfaceTarget)surface
-                  callbacks:(PlayerMacosAvFoundationCallbacks)callbacks
+              callbackOwner:(PlayerMacosCallbackOwner *)callback_owner
                       error:(NSString **)error;
 - (BOOL)replaceSurface:(PlayerMacosVideoSurfaceTarget)surface error:(NSString **)error;
 - (BOOL)playWithError:(NSString **)error;
@@ -386,6 +478,7 @@ static uint64_t player_time_to_millis(CMTime time) {
 - (BOOL)stopWithError:(NSString **)error;
 - (void)handleWorkspaceWillSleep;
 - (void)handleWorkspaceDidWake;
+- (void)shutdown;
 
 @end
 
@@ -393,7 +486,7 @@ static uint64_t player_time_to_millis(CMTime time) {
 
 - (instancetype)initWithURL:(NSURL *)url
                     surface:(PlayerMacosVideoSurfaceTarget)surface
-                  callbacks:(PlayerMacosAvFoundationCallbacks)callbacks
+              callbackOwner:(PlayerMacosCallbackOwner *)callback_owner
                       error:(NSString **)error {
     self = [super init];
     if (self == nil) {
@@ -408,12 +501,13 @@ static uint64_t player_time_to_millis(CMTime time) {
     self.playerItem = [AVPlayerItem playerItemWithAsset:asset];
     self.player = [AVPlayer playerWithPlayerItem:self.playerItem];
     self.player.actionAtItemEnd = AVPlayerActionAtItemEndPause;
-    self.callbacks = callbacks;
+    self.callbackOwner = callback_owner;
     self.playbackRate = 1.0f;
     self.reachedEnd = NO;
     self.firstFrameReadyReported = NO;
     self.interrupted = NO;
     self.resumeAfterInterruption = NO;
+    self.shuttingDown = NO;
 
     if (![self attachSurface:surface error:error]) {
         return nil;
@@ -425,18 +519,25 @@ static uint64_t player_time_to_millis(CMTime time) {
 }
 
 - (void)dealloc {
+    [self shutdown];
+}
+
+- (void)shutdown {
+    if (self.shuttingDown) {
+        return;
+    }
+    self.shuttingDown = YES;
+
+    PlayerMacosCallbackOwner *callback_owner = self.callbackOwner;
+    [callback_owner disableAndDrain];
+    [self.player pause];
+    [self.playerItem cancelPendingSeeks];
     [self uninstallObservers];
     [self detachCurrentSurface];
     self.player = nil;
     self.playerItem = nil;
-    PlayerMacosAvFoundationCallbacks callbacks = self.callbacks;
-    callbacks.context = NULL;
-    callbacks.on_snapshot = NULL;
-    callbacks.on_first_frame_ready = NULL;
-    callbacks.on_interruption_changed = NULL;
-    callbacks.on_seek_completed = NULL;
-    callbacks.on_error = NULL;
-    self.callbacks = callbacks;
+    [callback_owner releaseContext];
+    self.callbackOwner = nil;
 }
 
 - (void)detachCurrentSurface {
@@ -716,50 +817,56 @@ static uint64_t player_time_to_millis(CMTime time) {
 }
 
 - (void)emitSnapshotWithErrorMessage:(NSString *)error_message {
-    if (self.callbacks.context == NULL || self.callbacks.on_snapshot == NULL) {
-        return;
-    }
-
-    self.callbacks.on_snapshot(self.callbacks.context,
-                               [self currentSnapshotWithErrorMessage:error_message]);
+    PlayerMacosAvFoundationSnapshot snapshot =
+        [self currentSnapshotWithErrorMessage:error_message];
+    [self.callbackOwner performCallback:^(PlayerMacosAvFoundationCallbacks callbacks) {
+      if (callbacks.on_snapshot != NULL) {
+          callbacks.on_snapshot(callbacks.context, snapshot);
+      }
+    }];
 }
 
 - (void)emitInterruptionChanged:(BOOL)interrupted {
-    if (self.callbacks.context == NULL || self.callbacks.on_interruption_changed == NULL) {
-        return;
-    }
-
-    self.callbacks.on_interruption_changed(self.callbacks.context, interrupted ? 1 : 0);
+    [self.callbackOwner performCallback:^(PlayerMacosAvFoundationCallbacks callbacks) {
+      if (callbacks.on_interruption_changed != NULL) {
+          callbacks.on_interruption_changed(callbacks.context, interrupted ? 1 : 0);
+      }
+    }];
 }
 
 - (void)emitErrorMessage:(NSString *)error_message {
-    if (error_message == nil || self.callbacks.context == NULL ||
-        self.callbacks.on_error == NULL) {
+    if (error_message == nil) {
         return;
     }
 
-    self.callbacks.on_error(self.callbacks.context, error_message.UTF8String);
+    [self.callbackOwner performCallback:^(PlayerMacosAvFoundationCallbacks callbacks) {
+      if (callbacks.on_error != NULL) {
+          callbacks.on_error(callbacks.context, error_message.UTF8String);
+      }
+    }];
 }
 
 - (void)reportSeekCompletedAtPosition:(CMTime)position {
-    if (self.callbacks.context == NULL || self.callbacks.on_seek_completed == NULL) {
-        return;
-    }
-
-    self.callbacks.on_seek_completed(self.callbacks.context, player_time_to_millis(position));
+    uint64_t position_ms = player_time_to_millis(position);
+    [self.callbackOwner performCallback:^(PlayerMacosAvFoundationCallbacks callbacks) {
+      if (callbacks.on_seek_completed != NULL) {
+          callbacks.on_seek_completed(callbacks.context, position_ms);
+      }
+    }];
 }
 
 - (void)reportFirstFrameReadyIfNeeded {
     if (self.firstFrameReadyReported || self.playerLayer == nil || !self.playerLayer.readyForDisplay) {
         return;
     }
-    if (self.callbacks.context == NULL || self.callbacks.on_first_frame_ready == NULL) {
-        return;
-    }
 
     self.firstFrameReadyReported = YES;
-    self.callbacks.on_first_frame_ready(self.callbacks.context,
-                                        player_time_to_millis(self.player.currentTime));
+    uint64_t position_ms = player_time_to_millis(self.player.currentTime);
+    [self.callbackOwner performCallback:^(PlayerMacosAvFoundationCallbacks callbacks) {
+      if (callbacks.on_first_frame_ready != NULL) {
+          callbacks.on_first_frame_ready(callbacks.context, position_ms);
+      }
+    }];
 }
 
 - (void)handleWorkspaceWillSleep {
@@ -908,14 +1015,17 @@ bool player_macos_avfoundation_create_session(const char *source,
                                               void **out_session,
                                               char *error_message,
                                               size_t error_message_size) {
-    if (out_session == NULL) {
-        player_copy_utf8("output session pointer must not be null",
-                         error_message,
-                         error_message_size);
-        return false;
-    }
-
     @autoreleasepool {
+        PlayerMacosCallbackOwner *callback_owner =
+            [[PlayerMacosCallbackOwner alloc] initWithCallbacks:callbacks];
+        if (out_session == NULL) {
+            [callback_owner shutdown];
+            player_copy_utf8("output session pointer must not be null",
+                             error_message,
+                             error_message_size);
+            return false;
+        }
+
         __block PlayerMacosAvFoundationSession *session = nil;
         __block NSString *create_error = nil;
         void (^create_block)(void) = ^{
@@ -927,7 +1037,7 @@ bool player_macos_avfoundation_create_session(const char *source,
 
           session = [[PlayerMacosAvFoundationSession alloc] initWithURL:url
                                                                 surface:surface
-                                                              callbacks:callbacks
+                                                          callbackOwner:callback_owner
                                                                   error:&create_error];
         };
         if (surface.kind == PlayerMacosVideoSurfaceKindNsView ||
@@ -938,6 +1048,7 @@ bool player_macos_avfoundation_create_session(const char *source,
         }
 
         if (session == nil) {
+            [callback_owner shutdown];
             player_write_error_message(create_error, error_message, error_message_size);
             return false;
         }
@@ -958,7 +1069,7 @@ void player_macos_avfoundation_destroy_session(void *session_handle) {
     void (^destroy_block)(void) = ^{
       PlayerMacosAvFoundationSession *session =
           (__bridge_transfer PlayerMacosAvFoundationSession *)session_handle;
-      (void)session;
+      [session shutdown];
     };
     if (session.requiresMainThread) {
         player_run_sync_on_main(destroy_block);

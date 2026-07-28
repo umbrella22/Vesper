@@ -238,7 +238,7 @@ pub unsafe extern "C" fn player_ffi_preload_session_create(
         });
         let session = IosPreloadBridgeSession::new(budget_provider);
 
-        let Ok(mut sessions) = preload_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(preload_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -266,7 +266,7 @@ pub unsafe extern "C" fn player_ffi_preload_session_create(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_preload_session_dispose(handle: u64) {
     ffi_void(|| {
-        if let Ok(mut sessions) = preload_sessions().lock() {
+        if let Ok(mut sessions) = lock_registry(preload_sessions()) {
             sessions.remove(handle);
         }
     });
@@ -286,7 +286,7 @@ pub unsafe extern "C" fn player_ffi_preload_session_plan(
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
     ffi_call(out_error, || {
-        let Ok(mut sessions) = preload_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(preload_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -359,7 +359,7 @@ pub unsafe extern "C" fn player_ffi_preload_session_drain_commands(
             return PlayerFfiCallStatus::Error;
         }
 
-        let Ok(mut sessions) = preload_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(preload_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -415,7 +415,7 @@ pub unsafe extern "C" fn player_ffi_preload_session_complete(
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
     ffi_call(out_error, || {
-        let Ok(mut sessions) = preload_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(preload_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -483,7 +483,7 @@ pub unsafe extern "C" fn player_ffi_preload_session_fail(
             }
         };
 
-        let Ok(mut sessions) = preload_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(preload_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -580,7 +580,7 @@ pub unsafe extern "C" fn player_ffi_download_session_create(
             }
         };
 
-        let Ok(mut sessions) = download_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(download_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -614,7 +614,7 @@ pub unsafe extern "C" fn player_ffi_download_session_dispose(handle: u64) {
         // FFI) *after* releasing the registry lock. Dropping it under the lock
         // would serialize every download session process-wide.
         let session = {
-            if let Ok(mut sessions) = download_sessions().lock() {
+            if let Ok(mut sessions) = lock_registry(download_sessions()) {
                 sessions.remove(handle)
             } else {
                 None
@@ -715,7 +715,7 @@ pub unsafe extern "C" fn player_ffi_download_session_create_task(
         };
 
         let task_id = {
-            let sessions = match download_sessions().lock() {
+            let sessions = match lock_registry(download_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -808,7 +808,7 @@ pub unsafe extern "C" fn player_ffi_download_session_restore_tasks(
         };
 
         if let Err(error) = {
-            let sessions = match download_sessions().lock() {
+            let sessions = match lock_registry(download_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -855,7 +855,7 @@ fn with_download_session_task_mutation(
     ) -> player_runtime::PlayerResult<Option<DownloadTaskSnapshot>>,
 ) -> PlayerFfiCallStatus {
     let session = {
-        let sessions = match download_sessions().lock() {
+        let sessions = match lock_registry(download_sessions()) {
             Ok(sessions) => sessions,
             Err(_) => {
                 write_error(
@@ -969,7 +969,7 @@ pub unsafe extern "C" fn player_ffi_download_session_update_progress(
 ) -> PlayerFfiCallStatus {
     ffi_call(out_error, || {
         let session = {
-            let sessions = match download_sessions().lock() {
+            let sessions = match lock_registry(download_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -1040,7 +1040,7 @@ pub unsafe extern "C" fn player_ffi_download_session_complete_task(
         // `process_json` FFI (FFmpeg remux/encode); holding the global registry
         // mutex across that work would serialize every download session.
         let session = {
-            let sessions = match download_sessions().lock() {
+            let sessions = match lock_registry(download_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -1105,7 +1105,7 @@ pub unsafe extern "C" fn player_ffi_download_session_complete_preparation(
         };
 
         let session = {
-            let sessions = match download_sessions().lock() {
+            let sessions = match lock_registry(download_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -1186,7 +1186,7 @@ pub unsafe extern "C" fn player_ffi_download_session_replace_task_plan(
         };
 
         let session = {
-            let sessions = match download_sessions().lock() {
+            let sessions = match lock_registry(download_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -1267,7 +1267,7 @@ pub unsafe extern "C" fn player_ffi_download_session_export_task(
         // global registry mutex across that work would serialize every download
         // session.
         let session = {
-            let sessions = match download_sessions().lock() {
+            let sessions = match lock_registry(download_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -1292,16 +1292,24 @@ pub unsafe extern "C" fn player_ffi_download_session_export_task(
             };
             session
         };
-        let session = match session.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
+        let export_plan = {
+            let session = match session.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            match session.prepare_export_task_output(
+                player_runtime::DownloadTaskId::from_raw(task_id),
+                Some(PathBuf::from(output_path)),
+            ) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    write_error(out_error, player_error_to_ffi(error));
+                    return PlayerFfiCallStatus::Error;
+                }
+            }
         };
 
-        if let Err(error) = session.export_task_output(
-            player_runtime::DownloadTaskId::from_raw(task_id),
-            Some(PathBuf::from(output_path)),
-            &progress,
-        ) {
+        if let Err(error) = export_plan.execute(&progress) {
             write_error(out_error, player_error_to_ffi(error));
             return PlayerFfiCallStatus::Error;
         }
@@ -1351,7 +1359,7 @@ pub unsafe extern "C" fn player_ffi_download_session_fail_task(
         };
 
         let session = {
-            let sessions = match download_sessions().lock() {
+            let sessions = match lock_registry(download_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -1435,7 +1443,7 @@ pub unsafe extern "C" fn player_ffi_download_session_snapshot(
         }
 
         let session = {
-            let sessions = match download_sessions().lock() {
+            let sessions = match lock_registry(download_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -1507,7 +1515,7 @@ pub unsafe extern "C" fn player_ffi_download_session_drain_commands(
         }
 
         let session = {
-            let sessions = match download_sessions().lock() {
+            let sessions = match lock_registry(download_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -1581,7 +1589,7 @@ pub unsafe extern "C" fn player_ffi_download_session_drain_events(
         }
 
         let session = {
-            let sessions = match download_sessions().lock() {
+            let sessions = match lock_registry(download_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -1758,7 +1766,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_create(
             },
         );
 
-        let Ok(mut sessions) = playlist_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(playlist_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -1786,7 +1794,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_create(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_playlist_session_dispose(handle: u64) {
     ffi_void(|| {
-        if let Ok(mut sessions) = playlist_sessions().lock() {
+        if let Ok(mut sessions) = lock_registry(playlist_sessions()) {
             sessions.remove(handle);
         }
     });
@@ -1806,7 +1814,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_replace_queue(
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
     ffi_call(out_error, || {
-        let Ok(mut sessions) = playlist_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(playlist_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -1872,7 +1880,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_update_viewport_hints(
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
     ffi_call(out_error, || {
-        let Ok(mut sessions) = playlist_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(playlist_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -1936,7 +1944,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_clear_viewport_hints(
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
     ffi_call(out_error, || {
-        let Ok(mut sessions) = playlist_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(playlist_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -1967,7 +1975,7 @@ fn with_playlist_session_advance(
     out_error: *mut PlayerFfiError,
     advance: impl FnOnce(&mut IosPlaylistBridgeSession, std::time::Instant),
 ) -> PlayerFfiCallStatus {
-    let Ok(mut sessions) = playlist_sessions().lock() else {
+    let Ok(mut sessions) = lock_registry(playlist_sessions()) else {
         write_error(
             out_error,
             owned_api_error(
@@ -2085,7 +2093,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_current_active_item(
             return PlayerFfiCallStatus::Error;
         }
 
-        let Ok(sessions) = playlist_sessions().lock() else {
+        let Ok(sessions) = lock_registry(playlist_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -2159,7 +2167,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_drain_preload_commands(
             return PlayerFfiCallStatus::Error;
         }
 
-        let Ok(mut sessions) = playlist_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(playlist_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -2215,7 +2223,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_complete_preload_task(
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
     ffi_call(out_error, || {
-        let Ok(mut sessions) = playlist_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(playlist_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -2286,7 +2294,7 @@ pub unsafe extern "C" fn player_ffi_playlist_session_fail_preload_task(
             }
         };
 
-        let Ok(mut sessions) = playlist_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(playlist_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -2401,7 +2409,7 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_create(
             }
         };
 
-        let Ok(mut sessions) = benchmark_sessions().lock() else {
+        let Ok(mut sessions) = lock_registry(benchmark_sessions()) else {
             write_error(
                 out_error,
                 owned_api_error(
@@ -2435,7 +2443,7 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_dispose(handle: u64) {
         // lock. Dropping it under the lock would serialize every benchmark
         // session process-wide and block create/dispose for the plugin call.
         let session = {
-            if let Ok(mut sessions) = benchmark_sessions().lock() {
+            if let Ok(mut sessions) = lock_registry(benchmark_sessions()) {
                 sessions.remove(handle)
             } else {
                 None
@@ -2495,7 +2503,7 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_on_event_batch_json(
         // mutex across that call would serialize every benchmark session
         // process-wide and block create/dispose operations.
         let session = {
-            let Ok(sessions) = benchmark_sessions().lock() else {
+            let Ok(sessions) = lock_registry(benchmark_sessions()) else {
                 write_error(
                     out_error,
                     owned_api_error(
@@ -2567,7 +2575,7 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_flush_json(
         // dlopen-loaded plugin; holding the global registry mutex across that
         // call would serialize every benchmark session process-wide.
         let session = {
-            let Ok(sessions) = benchmark_sessions().lock() else {
+            let Ok(sessions) = lock_registry(benchmark_sessions()) else {
                 write_error(
                     out_error,
                     owned_api_error(
@@ -2876,7 +2884,7 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
                 return PlayerFfiCallStatus::Ok;
             }
         };
-        let mut sessions = match source_normalizer_resource_sessions().lock() {
+        let mut sessions = match lock_registry(source_normalizer_resource_sessions()) {
             Ok(sessions) => sessions,
             Err(_) => {
                 write_error(
@@ -2915,7 +2923,7 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
             Ok(value) => value,
             Err(error) => {
                 drop(opened_guard);
-                if let Ok(mut sessions) = source_normalizer_resource_sessions().lock() {
+                if let Ok(mut sessions) = lock_registry(source_normalizer_resource_sessions()) {
                     let _ = sessions.remove(handle);
                 }
                 write_error(
@@ -2956,7 +2964,7 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_poll(
             ptr::write(out_json, ptr::null_mut());
         }
         let session = {
-            let sessions = match source_normalizer_resource_sessions().lock() {
+            let sessions = match lock_registry(source_normalizer_resource_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -3028,7 +3036,7 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_dispose(handle: u
         // (whose inner `MobileSourceNormalizerResourceOpen::Drop` calls plugin
         // FFI `close_resource_session`) *after* releasing the registry lock.
         let session = {
-            if let Ok(mut sessions) = source_normalizer_resource_sessions().lock() {
+            if let Ok(mut sessions) = lock_registry(source_normalizer_resource_sessions()) {
                 sessions.remove(handle)
             } else {
                 None
@@ -3151,7 +3159,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_open(
                 return PlayerFfiCallStatus::Error;
             }
         };
-        let mut sessions = match native_frame_pipeline_sessions().lock() {
+        let mut sessions = match lock_registry(native_frame_pipeline_sessions()) {
             Ok(sessions) => sessions,
             Err(_) => {
                 write_error(
@@ -3192,7 +3200,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_open(
             Ok(value) => value,
             Err(error) => {
                 drop(opened);
-                if let Ok(mut sessions) = native_frame_pipeline_sessions().lock() {
+                if let Ok(mut sessions) = lock_registry(native_frame_pipeline_sessions()) {
                     let _ = sessions.remove(handle);
                 }
                 write_error(
@@ -3238,7 +3246,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_advance(
         // holding the global registry mutex across that work would serialize
         // every native-frame pipeline session process-wide and block open/close.
         let session = {
-            let sessions = match native_frame_pipeline_sessions().lock() {
+            let sessions = match lock_registry(native_frame_pipeline_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -3371,7 +3379,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_release_frame(
         // Clone the Arc under the registry lock, then drop the registry lock
         // before `release_pending_frame` (which may invoke plugin FFI release).
         let session = {
-            let sessions = match native_frame_pipeline_sessions().lock() {
+            let sessions = match lock_registry(native_frame_pipeline_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -3449,7 +3457,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_flush(
         // Clone the Arc under the registry lock, then drop the registry lock
         // before `flush()` (which flushes decoder/packet/processor plugin FFI).
         let session = {
-            let sessions = match native_frame_pipeline_sessions().lock() {
+            let sessions = match lock_registry(native_frame_pipeline_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -3529,7 +3537,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_seek(
         // Clone the Arc under the registry lock, then drop the registry lock
         // before `seek_to()` (which flushes and re-primes decoder/packet plugin FFI).
         let session = {
-            let sessions = match native_frame_pipeline_sessions().lock() {
+            let sessions = match lock_registry(native_frame_pipeline_sessions()) {
                 Ok(sessions) => sessions,
                 Err(_) => {
                     write_error(
@@ -3599,7 +3607,7 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_close(handle: u64)
         // lock. Dropping it under the lock would serialize every native-frame
         // pipeline session process-wide and block open/close for the teardown.
         let session = {
-            if let Ok(mut sessions) = native_frame_pipeline_sessions().lock() {
+            if let Ok(mut sessions) = lock_registry(native_frame_pipeline_sessions()) {
                 sessions.remove(handle)
             } else {
                 None

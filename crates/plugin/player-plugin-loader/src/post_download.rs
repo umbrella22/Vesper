@@ -104,20 +104,34 @@ impl DynamicPostDownloadProcessor {
             )
         };
 
-        match result.status {
-            VesperPluginResultStatus::Success => decode_plugin_bytes::<ProcessorOutput>(
+        match VesperPluginResultStatus::from_raw(result.status) {
+            Some(VesperPluginResultStatus::Success) => decode_plugin_bytes::<ProcessorOutput>(
                 result.payload,
                 self.inner.api.free_bytes,
                 self.inner.api.context,
             )
             .map_err(|error| map_plugin_payload_error(&self.inner.name, "success", error)),
-            VesperPluginResultStatus::Failure => decode_plugin_bytes::<ProcessorError>(
+            Some(VesperPluginResultStatus::Failure) => decode_plugin_bytes::<ProcessorError>(
                 result.payload,
                 self.inner.api.free_bytes,
                 self.inner.api.context,
             )
             .map_err(|error| map_plugin_payload_error(&self.inner.name, "error", error))
             .and_then(Err),
+            None => {
+                reclaim_plugin_payload(
+                    result.payload,
+                    self.inner.api.free_bytes,
+                    self.inner.api.context,
+                );
+                Err(ProcessorError::AbiViolation(
+                    unknown_plugin_result_status_message(
+                        &self.inner.name,
+                        "process_json",
+                        result.status,
+                    ),
+                ))
+            }
         }
     }
 }
