@@ -323,9 +323,8 @@ extension _PlayerHostLayout on _PlayerHostPageState {
           ExamplePluginDiagnosticsSection(
             palette: palette,
             sourceNormalizerSetting: _sourceNormalizerSetting,
-            sourceNormalizerPluginLibraryPaths:
-                _sourceNormalizerPluginLibraryPaths,
-            frameProcessorPluginLibraryPaths: _frameProcessorPluginLibraryPaths,
+            sourceNormalizerPluginReferences: _sourceNormalizerPluginReferences,
+            frameProcessorPluginReferences: _frameProcessorPluginReferences,
             pluginDiagnostics: controller.pluginDiagnostics,
             isCapturingHdrEvidence: _isCapturingHdrEvidence,
             hdrEvidenceActiveSourceAvailable:

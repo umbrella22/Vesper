@@ -1,7 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use player_download::{PlayerError, PlayerResult};
+use player_download::{
+    PipelineEventDispatcher, PipelineEventHookRegistration, PipelineEventHookReportBatch,
+    PlayerError, PlayerResult,
+};
 use player_model::MediaSource;
 use player_preload::{
     PreloadBudgetProvider, PreloadBudgetScope, PreloadCandidate, PreloadCandidateKind,
@@ -334,6 +337,9 @@ pub enum PlaylistEvent {
     Preload(PreloadEvent),
 }
 
+/// Maximum number of playlist events retained for host draining.
+pub const MAX_PENDING_PLAYLIST_EVENTS: usize = 1_024;
+
 /// Coordinates playlist state and the preload tasks implied by that state.
 #[derive(Debug)]
 pub struct PlaylistCoordinator<P, E> {
@@ -343,7 +349,8 @@ pub struct PlaylistCoordinator<P, E> {
     active_item_id: Option<PlaylistQueueItemId>,
     viewport_hints: HashMap<PlaylistQueueItemId, PlaylistViewportHint>,
     preload_planner: PreloadPlanner<P, E>,
-    events: Vec<PlaylistEvent>,
+    events: VecDeque<PlaylistEvent>,
+    dropped_events: u64,
 }
 
 impl<P, E> PlaylistCoordinator<P, E>
@@ -358,15 +365,59 @@ where
         budget_provider: P,
         executor: E,
     ) -> Self {
+        Self::with_pipeline_event_dispatcher(
+            playlist_id,
+            config,
+            budget_provider,
+            executor,
+            PipelineEventDispatcher::new(Vec::new()),
+            "unknown",
+        )
+    }
+
+    /// Creates a coordinator using a shared pipeline event dispatcher.
+    pub fn with_pipeline_event_dispatcher(
+        playlist_id: impl Into<String>,
+        config: PlaylistCoordinatorConfig,
+        budget_provider: P,
+        executor: E,
+        pipeline_event_dispatcher: PipelineEventDispatcher,
+        pipeline_event_platform: impl Into<String>,
+    ) -> Self {
         Self {
             playlist_id: PlaylistId::new(playlist_id),
             config,
             queue: Vec::new(),
             active_item_id: None,
             viewport_hints: HashMap::new(),
-            preload_planner: PreloadPlanner::new(budget_provider, executor),
-            events: Vec::new(),
+            preload_planner: PreloadPlanner::with_pipeline_event_dispatcher(
+                budget_provider,
+                executor,
+                pipeline_event_dispatcher,
+                pipeline_event_platform,
+            ),
+            events: VecDeque::new(),
+            dropped_events: 0,
         }
+    }
+
+    /// Creates a coordinator from event-hook registrations and a platform label.
+    pub fn with_pipeline_event_hooks(
+        playlist_id: impl Into<String>,
+        config: PlaylistCoordinatorConfig,
+        budget_provider: P,
+        executor: E,
+        registrations: Vec<PipelineEventHookRegistration>,
+        pipeline_event_platform: impl Into<String>,
+    ) -> Self {
+        Self::with_pipeline_event_dispatcher(
+            playlist_id,
+            config,
+            budget_provider,
+            executor,
+            PipelineEventDispatcher::new(registrations),
+            pipeline_event_platform,
+        )
     }
 
     /// Returns the underlying preload executor.
@@ -415,7 +466,27 @@ where
 
     /// Drains pending playlist and forwarded preload events.
     pub fn drain_events(&mut self) -> Vec<PlaylistEvent> {
-        std::mem::take(&mut self.events)
+        self.events.drain(..).collect()
+    }
+
+    /// Returns and clears the number of playlist events dropped at capacity.
+    pub fn take_dropped_event_count(&mut self) -> u64 {
+        std::mem::take(&mut self.dropped_events)
+    }
+
+    /// Flushes accepted pipeline events within the supplied deadline.
+    pub fn flush_pipeline_event_hooks(&self, timeout: Duration) -> bool {
+        self.preload_planner.flush_pipeline_event_hooks(timeout)
+    }
+
+    /// Closes the shared pipeline event dispatcher and joins its worker.
+    pub fn close_pipeline_event_hooks(&self) -> bool {
+        self.preload_planner.close_pipeline_event_hooks()
+    }
+
+    /// Drains reports produced by the shared pipeline event dispatcher.
+    pub fn drain_pipeline_event_hook_reports(&self) -> PipelineEventHookReportBatch {
+        self.preload_planner.drain_pipeline_event_hook_reports()
     }
 
     /// Replaces the queue and reconciles active item and preloads.
@@ -450,8 +521,7 @@ where
         };
         self.active_item_id = desired_active;
         self.sync(reason, now);
-        self.events
-            .push(PlaylistEvent::QueueChanged(self.snapshot()));
+        self.record_event(PlaylistEvent::QueueChanged(self.snapshot()));
     }
 
     /// Replaces viewport hints and reconciles active item and preloads.
@@ -483,8 +553,7 @@ where
 
         let mut viewport_hints = self.viewport_hints.values().cloned().collect::<Vec<_>>();
         viewport_hints.sort_by_key(|hint| hint.order);
-        self.events
-            .push(PlaylistEvent::ViewportHintsChanged(viewport_hints));
+        self.record_event(PlaylistEvent::ViewportHintsChanged(viewport_hints));
     }
 
     /// Clears all viewport hints and reconciles preload state.
@@ -495,8 +564,7 @@ where
 
         self.viewport_hints.clear();
         self.sync(PlaylistActivationReason::Viewport, now);
-        self.events
-            .push(PlaylistEvent::ViewportHintsChanged(Vec::new()));
+        self.record_event(PlaylistEvent::ViewportHintsChanged(Vec::new()));
     }
 
     /// Resolves manual next navigation.
@@ -575,8 +643,7 @@ where
             outcome: decision.outcome,
             wrapped: decision.wrapped,
         };
-        self.events
-            .push(PlaylistEvent::AdvanceResolved(decision.clone()));
+        self.record_event(PlaylistEvent::AdvanceResolved(decision.clone()));
         decision
     }
 
@@ -754,13 +821,12 @@ where
             return;
         };
 
-        self.events
-            .push(PlaylistEvent::ActiveItemChanged(PlaylistActiveItem {
-                item_id: item.item_id.clone(),
-                index,
-                source: item.source.clone(),
-                reason,
-            }));
+        self.record_event(PlaylistEvent::ActiveItemChanged(PlaylistActiveItem {
+            item_id: item.item_id.clone(),
+            index,
+            source: item.source.clone(),
+            reason,
+        }));
     }
 
     fn sync_preloads(&mut self, now: Instant) {
@@ -925,12 +991,17 @@ where
     }
 
     fn collect_preload_events(&mut self) {
-        self.events.extend(
-            self.preload_planner
-                .drain_events()
-                .into_iter()
-                .map(PlaylistEvent::Preload),
-        );
+        for event in self.preload_planner.drain_events() {
+            self.record_event(PlaylistEvent::Preload(event));
+        }
+    }
+
+    fn record_event(&mut self, event: PlaylistEvent) {
+        if self.events.len() >= MAX_PENDING_PLAYLIST_EVENTS {
+            self.dropped_events = self.dropped_events.saturating_add(1);
+        } else {
+            self.events.push_back(event);
+        }
     }
 }
 
@@ -967,10 +1038,10 @@ mod tests {
     use player_model::MediaSource;
 
     use super::{
-        PlaylistActivationReason, PlaylistAdvanceOutcome, PlaylistCoordinator,
-        PlaylistCoordinatorConfig, PlaylistFailureStrategy, PlaylistItemPreloadProfile,
-        PlaylistPreloadWindow, PlaylistQueueItem, PlaylistRepeatMode, PlaylistSwitchPolicy,
-        PlaylistViewportHint, PlaylistViewportHintKind,
+        MAX_PENDING_PLAYLIST_EVENTS, PlaylistActivationReason, PlaylistAdvanceOutcome,
+        PlaylistCoordinator, PlaylistCoordinatorConfig, PlaylistFailureStrategy,
+        PlaylistItemPreloadProfile, PlaylistPreloadWindow, PlaylistQueueItem, PlaylistRepeatMode,
+        PlaylistSwitchPolicy, PlaylistViewportHint, PlaylistViewportHintKind,
     };
     use player_preload::{
         InMemoryPreloadBudgetProvider, InMemoryPreloadExecutor, PreloadBudget, PreloadTaskStatus,
@@ -1048,6 +1119,22 @@ mod tests {
                 "https://example.com/2.m3u8".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn playlist_host_event_queue_is_bounded_and_preserves_drop_count() {
+        let mut coordinator = coordinator();
+        let queue = [item("item-1", "https://example.com/1.m3u8")];
+        let now = Instant::now();
+        for _ in 0..(MAX_PENDING_PLAYLIST_EVENTS + 8) {
+            coordinator.replace_queue(queue.clone(), now);
+        }
+
+        assert_eq!(
+            coordinator.drain_events().len(),
+            MAX_PENDING_PLAYLIST_EVENTS
+        );
+        assert!(coordinator.take_dropped_event_count() > 0);
     }
 
     #[test]

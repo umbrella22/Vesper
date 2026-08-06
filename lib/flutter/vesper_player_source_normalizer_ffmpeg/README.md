@@ -5,9 +5,10 @@ plugin.
 
 Android apps that depend on this package receive the native Maven dependency
 needed by `VesperSourceNormalizerConfiguration.preferBundled()` and
-`VesperSourceNormalizerConfiguration.requireBundled()`. The iOS SPM package
-depends on the canonical `VesperPlayerSourceNormalizerFfmpegPlugin` product.
-The package does not add Flutter MethodChannels or Dart runtime behavior.
+`VesperSourceNormalizerConfiguration.requireBundled()`. On iOS, the Flutter
+package does not add optional XCFramework products automatically; the App target
+embeds the required direct products. The package does not add Flutter
+MethodChannels or Dart runtime behavior.
 
 ## iOS Packaging
 
@@ -20,12 +21,16 @@ Stage the canonical local package before SwiftPM resolution:
   ios-arm64 ios-simulator-arm64
 ```
 
-The Flutter App target embeds and signs the aggregate
-`VesperPlayerOptionalPlugins` product. Xcode then places the SourceNormalizer
-framework, the three FFmpeg component frameworks, and the other optional plugin
-frameworks as top-level siblings under `Runner.app/Frameworks`.
-`VesperPlayerKit` discovers the SourceNormalizer framework executable
-automatically when a bundled configuration preset is enabled.
+The Flutter App target embeds and signs
+`VesperPlayerSourceNormalizerFfmpegPlugin`, `VesperFFmpegAVCodec`,
+`VesperFFmpegAVFormat`, and `VesperFFmpegAVUtil` as direct products from
+`VesperPlayerOptionalPlugins`. Xcode places those frameworks as top-level
+siblings under `Runner.app/Frameworks`. Hosts that enable Decoder or
+FrameProcessor capabilities add their direct plugin products separately.
+The bundled configuration presets select
+`VesperBundledPluginReferences.sourceNormalizerFfmpeg`; the internal iOS
+artifact resolver maps that identity to the embedded SourceNormalizer framework
+executable.
 
 This package is not part of the default `vesper_player` dependency graph or the
 default pub publishing script. Publish or depend on it only for apps that
@@ -39,6 +44,7 @@ preserve the included FFmpeg license, notices, configure metadata, source
 availability, and LGPL relinking rights separately from Vesper's Apache-2.0
 license; see [THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md).
 
-This Flutter package selects the SourceNormalizer product only. Repository host
-apps that need the complete optional matrix select the aggregate product from
-the App target.
+This Flutter package enables the SourceNormalizer dependency declaration; the
+iOS App target remains responsible for embedding the direct SourceNormalizer
+and FFmpeg products. Repository hosts that need the complete optional matrix
+embed all seven direct products.

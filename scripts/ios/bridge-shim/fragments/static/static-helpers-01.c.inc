@@ -17,6 +17,11 @@ static bool can_allocate_items(uintptr_t len, size_t item_size) {
   return item_size > 0 && len <= (uintptr_t)(SIZE_MAX / item_size);
 }
 
+static uint64_t saturating_add_uintptr_to_u64(uint64_t lhs, uintptr_t rhs) {
+  uint64_t rhs_u64 = (uint64_t)rhs;
+  return lhs > UINT64_MAX - rhs_u64 ? UINT64_MAX : lhs + rhs_u64;
+}
+
 static bool duplicate_runtime_string(const char *value, char **out_value) {
   if (out_value == NULL) {
     return false;
@@ -93,8 +98,11 @@ static PlayerFfiDownloadConfig ffi_download_config_from_runtime(
   PlayerFfiDownloadConfig ffi_config = {
       .auto_start = config->auto_start,
       .run_post_processors_on_completion = config->run_post_processors_on_completion,
-      .plugin_library_paths = config->plugin_library_paths,
-      .plugin_library_paths_len = config->plugin_library_paths_len,
+      .plugin_registry_handle = config->plugin_registry_handle,
+      .post_download_plugin_references_json =
+          config->post_download_plugin_references_json,
+      .event_hook_plugin_references_json =
+          config->event_hook_plugin_references_json,
   };
   return ffi_config;
 }

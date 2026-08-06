@@ -1,26 +1,28 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use player_model::MediaSource;
 use player_platform_mobile::{
-    HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED, MobileSourceNormalizerConfiguration,
-    hdr_programmable_processing_not_supported_reason,
+    HDR_PROGRAMMABLE_PROCESSING_NOT_SUPPORTED, MobileNativePluginArtifact,
+    MobileSourceNormalizerConfiguration, hdr_programmable_processing_not_supported_reason,
+    open_mobile_source_normalizer_packet_session,
 };
 use player_plugin::{
     DecoderBitstreamFormat, DecoderFrameFormat, DecoderMediaKind, DecoderNativeFrame,
     DecoderNativeHandleKind, DecoderPacket, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
-    FrameProcessorError, FrameProcessorFrameTimings, FrameProcessorReceiveOutput,
-    FrameProcessorSession, FrameProcessorSessionConfig, FrameProcessorSessionRequirements,
-    FrameProcessorSubmitFrame, FrameProcessorSubmitStatus, NativeDecoderSession, NativeFrame,
-    NativeFrameHdrMetadata, NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind,
+    FrameProcessorError, FrameProcessorFrameTimings, FrameProcessorInputFrame,
+    FrameProcessorReceiveOutput, FrameProcessorSession, FrameProcessorSessionConfig,
+    FrameProcessorSessionRequirements, FrameProcessorSubmitFrame, FrameProcessorSubmitStatus,
+    NativeDecoderPluginFactory, NativeDecoderSession, NativeFrame, NativeFrameHdrMetadata,
+    NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind,
     SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
-    SourceNormalizerPacketSessionConfig, SourceNormalizerPacketSessionRequirements,
     SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketStatus,
 };
 use player_plugin_loader::{
-    DecoderPluginMatchRequest, LoadedDynamicPlugin, PluginDiagnosticRecord, PluginRegistry,
+    DecoderPluginMatchRequest, NativePluginArtifact, PluginDiagnosticRecord, PluginRegistry,
 };
 use player_runtime::{
     FrameProcessorMode, FrameProcessorPolicy, NativeFramePipelineMode, PlayerPlaybackRoute,
@@ -29,8 +31,6 @@ use player_runtime::{
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
 
-const SOURCE_NORMALIZER_STARTUP_TIMEOUT_MS: u64 = 10_000;
-const SOURCE_NORMALIZER_PACKET_SESSION_TIMEOUT_MS: u64 = 30_000;
 const DECODER_DRAIN_RETRY_INTERVAL: Duration = Duration::from_millis(2);
 const MAX_PACKET_READ_ATTEMPTS_PER_ADVANCE: usize = 8;
 const MAX_DECODE_RECEIVE_ATTEMPTS_PER_ADVANCE: usize = 24;
@@ -58,11 +58,15 @@ impl IosNativeFramePipelineOpenError {
 pub struct IosNativeFramePipelineOpenConfig {
     pub source_uri: String,
     pub source_normalizer_mode: SourceNormalizerMode,
+    pub source_normalizer_plugin_artifacts: Vec<MobileNativePluginArtifact>,
     pub source_normalizer_plugin_library_paths: Vec<PathBuf>,
     pub runtime_profile: Option<String>,
     pub native_frame_pipeline_mode: NativeFramePipelineMode,
+    pub decoder_plugin_artifacts: Vec<MobileNativePluginArtifact>,
     pub decoder_plugin_library_paths: Vec<PathBuf>,
+    pub frame_processor_plugin_artifacts: Vec<MobileNativePluginArtifact>,
     pub frame_processor_plugin_library_paths: Vec<PathBuf>,
+    pub native_plugin_loading_policy: player_runtime::NativePluginLoadingPolicy,
     pub max_in_flight_frames: Option<u32>,
 }
 
@@ -316,6 +320,46 @@ struct ProcessorOwnedNativeFrame {
     frame: NativeFrame,
 }
 
+fn validate_ios_native_plugin_bindings(
+    config: &IosNativeFramePipelineOpenConfig,
+) -> Result<(), IosNativeFramePipelineOpenError> {
+    for (artifacts, paths, capability) in [
+        (
+            config.source_normalizer_plugin_artifacts.as_slice(),
+            config.source_normalizer_plugin_library_paths.as_slice(),
+            "iOS SourceNormalizer",
+        ),
+        (
+            config.decoder_plugin_artifacts.as_slice(),
+            config.decoder_plugin_library_paths.as_slice(),
+            "iOS NativeDecoder",
+        ),
+        (
+            config.frame_processor_plugin_artifacts.as_slice(),
+            config.frame_processor_plugin_library_paths.as_slice(),
+            "iOS FrameProcessor",
+        ),
+    ] {
+        if !artifacts.is_empty() && !paths.is_empty() {
+            return Err(IosNativeFramePipelineOpenError::new(
+                "startupFailure",
+                format!(
+                    "{capability} configuration cannot mix referenced artifacts with unbound library paths"
+                ),
+            ));
+        }
+        if !paths.is_empty() {
+            config
+                .native_plugin_loading_policy
+                .validate_development_raw_paths(capability)
+                .map_err(|error| {
+                    IosNativeFramePipelineOpenError::new("startupFailure", error.to_string())
+                })?;
+        }
+    }
+    Ok(())
+}
+
 impl IosNativeFramePipelineSession {
     pub fn open(
         config: IosNativeFramePipelineOpenConfig,
@@ -330,13 +374,18 @@ impl IosNativeFramePipelineSession {
                 "iOS native-frame pipeline must be explicitly preferred or required",
             ));
         }
-        if config.source_normalizer_plugin_library_paths.is_empty() {
+        validate_ios_native_plugin_bindings(&config)?;
+        if config.source_normalizer_plugin_artifacts.is_empty()
+            && config.source_normalizer_plugin_library_paths.is_empty()
+        {
             return Err(IosNativeFramePipelineOpenError::new(
                 "missingSourceNormalizerPacketPlugin",
                 "iOS native-frame pipeline requires a SourceNormalizer packet-stream plugin path",
             ));
         }
-        if config.decoder_plugin_library_paths.is_empty() {
+        if config.decoder_plugin_artifacts.is_empty()
+            && config.decoder_plugin_library_paths.is_empty()
+        {
             return Err(IosNativeFramePipelineOpenError::new(
                 "missingVideoToolboxDecoderPlugin",
                 "iOS native-frame pipeline requires a VideoToolbox decoder plugin path",
@@ -346,10 +395,12 @@ impl IosNativeFramePipelineSession {
         let source = MediaSource::new(config.source_uri.clone());
         let source_normalizer_configuration = MobileSourceNormalizerConfiguration {
             mode: config.source_normalizer_mode,
+            plugin_artifacts: config.source_normalizer_plugin_artifacts.clone(),
             plugin_library_paths: config.source_normalizer_plugin_library_paths.clone(),
+            native_plugin_loading_policy: config.native_plugin_loading_policy,
             runtime_profile: config.runtime_profile.clone(),
         };
-        let (source_record, mut packet_session) = open_packet_source_normalizer(
+        let (source_normalizer_plugin_name, mut packet_session) = open_packet_source_normalizer(
             &source,
             &source_normalizer_configuration,
         )
@@ -390,47 +441,77 @@ impl IosNativeFramePipelineSession {
             ));
         }
 
-        let decoder_registry = PluginRegistry::inspect_decoder_support(
-            &config.decoder_plugin_library_paths,
-            DecoderPluginMatchRequest::video(track.codec.clone()),
-        );
-        let audio_decoder_plugin_name = audio_track.as_ref().and_then(|track| {
-            let audio_registry = PluginRegistry::inspect_decoder_support(
-                &config.decoder_plugin_library_paths,
-                DecoderPluginMatchRequest::audio(track.codec.clone()),
-            );
-            audio_pcm_decoder_plugin_name(&audio_registry, &track.codec)
-        });
+        let video_request = DecoderPluginMatchRequest::video(track.codec.clone());
+        let (decoder_factory, audio_decoder_plugin_name) =
+            if config.decoder_plugin_artifacts.is_empty() {
+                let decoder_registry = PluginRegistry::inspect_decoder_support_development(
+                    &config.decoder_plugin_library_paths,
+                    video_request.clone(),
+                );
+                let audio_decoder_plugin_name = audio_track.as_ref().and_then(|track| {
+                    let audio_registry = PluginRegistry::inspect_decoder_support_development(
+                        &config.decoder_plugin_library_paths,
+                        DecoderPluginMatchRequest::audio(track.codec.clone()),
+                    );
+                    audio_pcm_decoder_plugin_name(&audio_registry, &track.codec)
+                });
+                let decoder_record = decoder_registry
+                    .best_native_decoder_for(&video_request)
+                    .ok_or_else(|| {
+                        IosNativeFramePipelineOpenError::new(
+                            "missingVideoToolboxDecoderPlugin",
+                            format!(
+                                "no native-frame decoder plugin supports {} video: {}",
+                                track.codec,
+                                registry_notes(&decoder_registry)
+                            ),
+                        )
+                    })?;
+                let decoder_reference = decoder_registry
+                    .reference_for_record(decoder_record)
+                    .ok_or_else(|| {
+                        IosNativeFramePipelineOpenError::new(
+                            "missingVideoToolboxDecoderPlugin",
+                            "selected decoder has no plugin capability reference",
+                        )
+                    })?;
+                let decoder_factory = decoder_registry
+                    .resolve_native_decoder(decoder_reference)
+                    .map_err(|error| {
+                        IosNativeFramePipelineOpenError::new(
+                            "missingVideoToolboxDecoderPlugin",
+                            format!("failed to resolve decoder plugin: {error}"),
+                        )
+                    })?
+                    .capability();
+                (decoder_factory, audio_decoder_plugin_name)
+            } else {
+                let decoder_factory = resolve_selected_ios_decoder(
+                    &config.decoder_plugin_artifacts,
+                    &video_request,
+                    false,
+                )?
+                .ok_or_else(|| {
+                    IosNativeFramePipelineOpenError::new(
+                        "missingVideoToolboxDecoderPlugin",
+                        format!(
+                            "no explicitly selected native-frame decoder supports {} video",
+                            track.codec
+                        ),
+                    )
+                })?;
+                let audio_decoder_plugin_name = match audio_track.as_ref() {
+                    Some(track) => resolve_selected_ios_decoder(
+                        &config.decoder_plugin_artifacts,
+                        &DecoderPluginMatchRequest::audio(track.codec.clone()),
+                        true,
+                    )?
+                    .map(|factory| factory.name().to_owned()),
+                    None => None,
+                };
+                (decoder_factory, audio_decoder_plugin_name)
+            };
         let audio_decoder_plugin_ready = audio_decoder_plugin_name.is_some();
-        let decoder_record = decoder_registry
-            .best_native_decoder_for(&DecoderPluginMatchRequest::video(track.codec.clone()))
-            .ok_or_else(|| {
-                IosNativeFramePipelineOpenError::new(
-                    "missingVideoToolboxDecoderPlugin",
-                    format!(
-                        "no native-frame decoder plugin supports {} video: {}",
-                        track.codec,
-                        registry_notes(&decoder_registry)
-                    ),
-                )
-            })?;
-        let decoder_plugin = LoadedDynamicPlugin::load(&decoder_record.path).map_err(|error| {
-            IosNativeFramePipelineOpenError::new(
-                "missingVideoToolboxDecoderPlugin",
-                format!("failed to load decoder plugin: {error}"),
-            )
-        })?;
-        let decoder_factory = decoder_plugin
-            .native_decoder_plugin_factory()
-            .ok_or_else(|| {
-                IosNativeFramePipelineOpenError::new(
-                    "missingVideoToolboxDecoderPlugin",
-                    format!(
-                        "{} is not a native-frame decoder plugin",
-                        decoder_plugin.plugin_name()
-                    ),
-                )
-            })?;
         let decoder_plugin_name = decoder_factory.name().to_owned();
         let decoder_session = decoder_factory
             .open_native_session(&video_decoder_session_config(&track))
@@ -441,13 +522,16 @@ impl IosNativeFramePipelineSession {
                 )
             })?;
 
-        let frame_processor_mode = if config.frame_processor_plugin_library_paths.is_empty() {
+        let frame_processor_mode = if config.frame_processor_plugin_artifacts.is_empty()
+            && config.frame_processor_plugin_library_paths.is_empty()
+        {
             FrameProcessorMode::Disabled
         } else {
             FrameProcessorMode::PreferProcessed
         };
         let frame_processor_chain = open_frame_processor_chain(
             &track,
+            &config.frame_processor_plugin_artifacts,
             &config.frame_processor_plugin_library_paths,
             frame_processor_mode,
             FrameProcessorPolicy {
@@ -482,9 +566,7 @@ impl IosNativeFramePipelineSession {
             video_bit_depth,
             hdr_kind,
             dolby_vision_mode,
-            source_normalizer_plugin_name: source_record
-                .plugin_name
-                .clone()
+            source_normalizer_plugin_name: source_normalizer_plugin_name
                 .or_else(|| stream_info.normalizer_name.clone()),
             decoder_plugin_name,
             processor_plugin_names,
@@ -995,16 +1077,16 @@ impl IosNativeFramePipelineSession {
                     self.audio_decoder_plugin_name.as_deref(),
                 ) {
                     (Some(codec), Some(plugin)) => format!(
-                        "audio PCM decoder plugin `{plugin}` is available for {codec}; iOS v1 keeps swiftNativeAudioBridge active"
+                        "audio PCM decoder plugin `{plugin}` is available for {codec}; the current iOS native-frame route keeps swiftNativeAudioBridge active"
                     ),
                     (Some(codec), None) => format!(
-                        "no PCM audio decoder plugin is available for {codec}; iOS v1 uses swiftNativeAudioBridge"
+                        "no PCM audio decoder plugin is available for {codec}; the current iOS native-frame route uses swiftNativeAudioBridge"
                     ),
                     (None, Some(plugin)) => format!(
-                        "audio PCM decoder plugin `{plugin}` is available; iOS v1 keeps swiftNativeAudioBridge active"
+                        "audio PCM decoder plugin `{plugin}` is available; the current iOS native-frame route keeps swiftNativeAudioBridge active"
                     ),
                     (None, None) => {
-                        "no PCM audio decoder plugin is available; iOS v1 uses swiftNativeAudioBridge"
+                        "no PCM audio decoder plugin is available; the current iOS native-frame route uses swiftNativeAudioBridge"
                             .to_owned()
                     }
                 }),
@@ -1213,13 +1295,7 @@ pub fn native_frame_pipeline_frame_json(
 fn open_packet_source_normalizer(
     source: &MediaSource,
     configuration: &MobileSourceNormalizerConfiguration,
-) -> Result<
-    (
-        PluginDiagnosticRecord,
-        Box<dyn SourceNormalizerPacketSession>,
-    ),
-    String,
-> {
+) -> Result<(Option<String>, Box<dyn SourceNormalizerPacketSession>), String> {
     if !matches!(
         configuration.mode,
         SourceNormalizerMode::PreflightOnly
@@ -1231,72 +1307,18 @@ fn open_packet_source_normalizer(
                 .to_owned(),
         );
     }
-    let registry =
-        PluginRegistry::inspect_source_normalizer_support(&configuration.plugin_library_paths);
-    let record = match configured_runtime_profile(configuration) {
-        Some(profile) => registry
-            .best_source_normalizer_packet_for_profile(profile)
-            .ok_or_else(|| {
-                format!(
-                    "no SourceNormalizer packet plugin supports runtime profile '{profile}': {}",
-                    registry_notes(&registry)
-                )
-            })?,
-        None => registry.best_source_normalizer_packet().ok_or_else(|| {
-            format!(
-                "no SourceNormalizer packet plugin is available: {}",
-                registry_notes(&registry)
-            )
-        })?,
-    };
-    let plugin = LoadedDynamicPlugin::load(&record.path)
-        .map_err(|error| format!("failed to load SourceNormalizer plugin: {error}"))?;
-    let factory = plugin
-        .source_normalizer_packet_plugin_factory()
-        .ok_or_else(|| {
-            format!(
-                "{} is not a packet-stream SourceNormalizer plugin",
-                plugin.plugin_name()
-            )
-        })?;
-    let runtime_profile = canonical_runtime_profile(configuration).unwrap_or_default();
-    let requirements = SourceNormalizerPacketSessionRequirements {
-        runtime_profile: runtime_profile.clone(),
-        media_kind: Some(SourceNormalizerPacketMediaKind::Video),
-        codec: None,
-        bitstream_format: None,
-        require_seek: false,
-        require_flush: true,
-        require_lease_cleanup: true,
-    };
-    let missing_capabilities = requirements.missing_capabilities(&factory.packet_capabilities());
-    if !missing_capabilities.is_empty() {
-        return Err(format!(
-            "SourceNormalizer packet plugin `{}` does not satisfy session requirements: missing {}",
-            factory.name(),
-            missing_capabilities.join(", ")
-        ));
-    }
-    let session = factory
-        .open_packet_session(&SourceNormalizerPacketSessionConfig {
-            runtime_profile,
-            input: source.uri().to_owned(),
-            headers: Vec::new(),
-            startup_timeout_ms: Some(SOURCE_NORMALIZER_STARTUP_TIMEOUT_MS),
-            session_timeout_ms: Some(SOURCE_NORMALIZER_PACKET_SESSION_TIMEOUT_MS),
-            preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
-        })
-        .map_err(|error| format!("open SourceNormalizer packet session failed: {error}"))?;
-    Ok((record.clone(), session))
+    let opened = open_mobile_source_normalizer_packet_session(source, configuration)?;
+    Ok((opened.plugin_name, opened.session))
 }
 
 fn open_frame_processor_chain(
     track: &player_plugin::SourceNormalizerPacketTrackInfo,
+    artifacts: &[MobileNativePluginArtifact],
     paths: &[PathBuf],
     mode: FrameProcessorMode,
     policy: FrameProcessorPolicy,
 ) -> Result<Option<IosFrameProcessorChain>, String> {
-    if mode == FrameProcessorMode::Disabled || paths.is_empty() {
+    if mode == FrameProcessorMode::Disabled || (artifacts.is_empty() && paths.is_empty()) {
         return Ok(None);
     }
     let input_metadata = NativeFrameMetadata {
@@ -1325,19 +1347,68 @@ fn open_frame_processor_chain(
         release_tracking: None,
     };
     let mut processors = Vec::new();
-    for (processor_index, path) in paths.iter().enumerate().take(policy.max_chain_depth) {
-        let plugin = LoadedDynamicPlugin::load(path).map_err(|error| {
+    if !artifacts.is_empty() && !paths.is_empty() {
+        return Err(
+            "iOS FrameProcessor configuration cannot mix referenced artifacts with unbound paths"
+                .to_owned(),
+        );
+    }
+    let bindings = if artifacts.is_empty() {
+        paths.iter().map(|path| (path, None)).collect::<Vec<_>>()
+    } else {
+        artifacts
+            .iter()
+            .map(|artifact| (&artifact.library_path, Some(&artifact.reference)))
+            .collect::<Vec<_>>()
+    };
+    for (processor_index, (path, requested_reference)) in bindings
+        .into_iter()
+        .enumerate()
+        .take(policy.max_chain_depth)
+    {
+        let registry = match requested_reference {
+            Some(reference) => {
+                let artifact = NativePluginArtifact::new(reference.plugin_id(), path)
+                    .map_err(|error| error.to_string())?;
+                PluginRegistry::load_native_artifacts([artifact])
+            }
+            None => PluginRegistry::load_native_development([path]),
+        }
+        .map_err(|error| {
             format!(
                 "failed to load frame processor plugin {}: {error}",
                 path.display()
             )
         })?;
-        let factory = plugin.frame_processor_plugin_factory().ok_or_else(|| {
-            format!(
-                "plugin `{}` does not export a frame processor API",
-                plugin.plugin_name()
-            )
-        })?;
+        let implicit_references;
+        let reference = match requested_reference {
+            Some(reference) => reference,
+            None => {
+                implicit_references = registry
+                    .frame_processor_references()
+                    .map_err(|error| format!("failed to enumerate frame processors: {error}"))?;
+                match implicit_references.as_slice() {
+                    [reference] => reference,
+                    [] => {
+                        return Err(format!(
+                            "plugin {} does not export a FrameProcessor interface",
+                            path.display()
+                        ));
+                    }
+                    _ => {
+                        return Err(format!(
+                            "plugin {} exposes {} FrameProcessor instances; an explicit PluginReference is required",
+                            path.display(),
+                            implicit_references.len()
+                        ));
+                    }
+                }
+            }
+        };
+        let factory = registry
+            .resolve_frame_processor(reference)
+            .map_err(|error| format!("failed to resolve frame processor: {error}"))?
+            .capability();
         let capabilities = factory.capabilities();
         let requirements = FrameProcessorSessionRequirements::native_video(input_metadata.clone());
         let missing_capabilities = requirements.missing_capabilities(&capabilities);
@@ -1415,7 +1486,7 @@ impl IosFrameProcessorChain {
             let submit_result = {
                 let node = &mut self.processors[node_index];
                 node.session
-                    .submit_frame(&current_frame, &submit)
+                    .submit_frame(FrameProcessorInputFrame::new(&current_frame), &submit)
                     .map_err(|error| frame_processor_error(self.mode, node, error))
             };
             let submit_result = match submit_result {
@@ -1693,6 +1764,55 @@ fn dolby_vision_mode(hdr: &NativeFrameHdrMetadata) -> Option<String> {
     }
 }
 
+fn resolve_selected_ios_decoder(
+    artifacts: &[MobileNativePluginArtifact],
+    request: &DecoderPluginMatchRequest,
+    require_pcm_frames: bool,
+) -> Result<Option<Arc<dyn NativeDecoderPluginFactory>>, IosNativeFramePipelineOpenError> {
+    for artifact in artifacts {
+        let native_artifact =
+            NativePluginArtifact::new(artifact.reference.plugin_id(), &artifact.library_path)
+                .map_err(|error| {
+                    IosNativeFramePipelineOpenError::new(
+                        "missingVideoToolboxDecoderPlugin",
+                        format!("decoder reference is invalid: {error}"),
+                    )
+                })?;
+        let registry =
+            PluginRegistry::load_native_artifacts([native_artifact]).map_err(|error| {
+                IosNativeFramePipelineOpenError::new(
+                    "missingVideoToolboxDecoderPlugin",
+                    format!(
+                        "decoder artifact {} failed to load: {error}",
+                        artifact.library_path.display()
+                    ),
+                )
+            })?;
+        let resolved = registry
+            .resolve_native_decoder(&artifact.reference)
+            .map_err(|error| {
+                IosNativeFramePipelineOpenError::new(
+                    "missingVideoToolboxDecoderPlugin",
+                    format!(
+                        "decoder reference {} at {} could not be resolved: {error}",
+                        artifact.reference.plugin_id(),
+                        artifact.library_path.display()
+                    ),
+                )
+            })?;
+        let factory = resolved.capability();
+        let capabilities = factory.capabilities();
+        if !capabilities.supports_codec(&request.codec, request.media_kind) {
+            continue;
+        }
+        if require_pcm_frames && !capabilities.supports_pcm_frames {
+            continue;
+        }
+        return Ok(Some(factory));
+    }
+    Ok(None)
+}
+
 fn audio_pcm_decoder_plugin_name(registry: &PluginRegistry, codec: &str) -> Option<String> {
     registry
         .best_pcm_audio_decoder_for(&DecoderPluginMatchRequest::audio(codec))
@@ -1757,20 +1877,6 @@ fn apple_native_frame_video_codec_supported(codec: &str) -> bool {
         || codec.starts_with("hev1")
         || codec.starts_with("dvh1")
         || codec.starts_with("dvhe")
-}
-
-fn configured_runtime_profile(configuration: &MobileSourceNormalizerConfiguration) -> Option<&str> {
-    configuration
-        .runtime_profile
-        .as_deref()
-        .map(str::trim)
-        .filter(|profile| !profile.is_empty())
-}
-
-fn canonical_runtime_profile(
-    configuration: &MobileSourceNormalizerConfiguration,
-) -> Option<String> {
-    configured_runtime_profile(configuration).map(str::to_owned)
 }
 
 fn registry_notes(registry: &PluginRegistry) -> String {
@@ -1859,7 +1965,7 @@ mod tests {
         FrameProcessorError, FrameProcessorOutputFrame, FrameProcessorSubmitResult,
         SourceNormalizerOperationStatus, SourceNormalizerPacket, SourceNormalizerPacketLease,
         SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
-        SourceNormalizerReadPacketMetadata, VesperPluginKind,
+        SourceNormalizerReadPacketMetadata,
     };
     use player_plugin_loader::{
         DecoderPluginCapabilitySummary, PluginCapabilitySummary, PluginDiagnosticStatus,
@@ -1877,6 +1983,37 @@ mod tests {
         Decoder,
         Packet,
         Seek(u64),
+    }
+
+    #[test]
+    fn ios_native_frame_pipeline_rejects_raw_paths_without_development_policy() {
+        let config = IosNativeFramePipelineOpenConfig {
+            source_uri: "file:///tmp/video.mp4".to_owned(),
+            source_normalizer_mode: SourceNormalizerMode::PreflightOnly,
+            source_normalizer_plugin_artifacts: Vec::new(),
+            source_normalizer_plugin_library_paths: vec![PathBuf::from(
+                "/tmp/must-not-open-source-normalizer.dylib",
+            )],
+            runtime_profile: Some("default".to_owned()),
+            native_frame_pipeline_mode: NativeFramePipelineMode::PreferNativeFrame,
+            decoder_plugin_artifacts: Vec::new(),
+            decoder_plugin_library_paths: vec![PathBuf::from("/tmp/must-not-open-decoder.dylib")],
+            frame_processor_plugin_artifacts: Vec::new(),
+            frame_processor_plugin_library_paths: Vec::new(),
+            native_plugin_loading_policy: player_runtime::NativePluginLoadingPolicy::DenyRawPaths,
+            max_in_flight_frames: Some(2),
+        };
+
+        let error = validate_ios_native_plugin_bindings(&config)
+            .expect_err("raw paths must be rejected before any plugin opens");
+
+        assert!(
+            error
+                .message
+                .contains("require explicit development loading policy")
+        );
+        assert!(!error.message.contains("failed to open plugin library"));
+        assert!(!error.message.contains("dlopen"));
     }
 
     #[test]
@@ -2541,7 +2678,7 @@ mod tests {
     }
 
     #[test]
-    fn open_wire_reports_available_audio_pcm_decoder_without_switching_v1_audio_bridge() {
+    fn open_wire_reports_available_audio_pcm_decoder_without_switching_audio_bridge() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let mut session = test_session(events);
         session.audio_decoder_plugin_name = Some("test-audio-decoder".to_owned());
@@ -2840,7 +2977,7 @@ mod tests {
             path: PathBuf::from(plugin_name),
             status: PluginDiagnosticStatus::DecoderSupported,
             plugin_name: Some(plugin_name.to_owned()),
-            plugin_kind: Some(VesperPluginKind::Decoder),
+            plugin_kind: Some(player_plugin_loader::PluginCapabilityKind::Decoder),
             capability_summary: Some(PluginCapabilitySummary::Decoder(
                 DecoderPluginCapabilitySummary::from(&capabilities),
             )),
@@ -2898,6 +3035,7 @@ mod tests {
                 }),
             },
             handle,
+            lease_token: None,
         }
     }
 
@@ -2929,6 +3067,7 @@ mod tests {
                 }),
             },
             handle,
+            lease_token: None,
         }
     }
 
@@ -3146,13 +3285,13 @@ mod tests {
 
         fn submit_frame(
             &mut self,
-            frame: &NativeFrame,
+            frame: FrameProcessorInputFrame<'_>,
             _submit: &FrameProcessorSubmitFrame,
         ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
             self.events
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
-                .push(FlushEvent::SubmitProcessor(frame.handle));
+                .push(FlushEvent::SubmitProcessor(frame.native_handle()));
             Ok(FrameProcessorSubmitResult::default())
         }
 
@@ -3188,7 +3327,7 @@ mod tests {
 
         fn submit_frame(
             &mut self,
-            _frame: &NativeFrame,
+            _frame: FrameProcessorInputFrame<'_>,
             _submit: &FrameProcessorSubmitFrame,
         ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
             Ok(FrameProcessorSubmitResult::default())
@@ -3230,7 +3369,7 @@ mod tests {
 
         fn submit_frame(
             &mut self,
-            _frame: &NativeFrame,
+            _frame: FrameProcessorInputFrame<'_>,
             _submit: &FrameProcessorSubmitFrame,
         ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
             Ok(FrameProcessorSubmitResult {
@@ -3248,6 +3387,7 @@ mod tests {
                     ),
                     timings: FrameProcessorFrameTimings::default(),
                     source_frame_id: Some(self.output_handle as u64),
+                    message: None,
                 },
             ))
         }
@@ -3276,7 +3416,7 @@ mod tests {
 
         fn submit_frame(
             &mut self,
-            _frame: &NativeFrame,
+            _frame: FrameProcessorInputFrame<'_>,
             _submit: &FrameProcessorSubmitFrame,
         ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
             Ok(FrameProcessorSubmitResult {
@@ -3294,6 +3434,7 @@ mod tests {
                     ),
                     timings: FrameProcessorFrameTimings::default(),
                     source_frame_id: Some(self.output_handle as u64),
+                    message: None,
                 },
             ))
         }
@@ -3330,7 +3471,7 @@ mod tests {
 
         fn submit_frame(
             &mut self,
-            _frame: &NativeFrame,
+            _frame: FrameProcessorInputFrame<'_>,
             _submit: &FrameProcessorSubmitFrame,
         ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
             Err(FrameProcessorError::internal("submit failed"))
@@ -3360,7 +3501,7 @@ mod tests {
 
         fn submit_frame(
             &mut self,
-            _frame: &NativeFrame,
+            _frame: FrameProcessorInputFrame<'_>,
             _submit: &FrameProcessorSubmitFrame,
         ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
             Ok(FrameProcessorSubmitResult {

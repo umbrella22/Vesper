@@ -159,7 +159,22 @@ class VesperPlayerController internal constructor(
 
     fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> = bridge.drainBenchmarkEvents()
 
+    /** Returns and clears structured reports emitted by playback EventHooks. */
+    fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch =
+        bridge.drainPipelineEventHookReports()
+
     fun benchmarkSummary(): VesperBenchmarkSummary = bridge.benchmarkSummary()
+
+    /**
+     * Waits for the benchmark sink's final flush after [dispose].
+     *
+     * The bounded wait runs off the caller thread so UI hosts can emit their
+     * disposal state immediately and collect the final report afterward.
+     */
+    suspend fun awaitBenchmarkSinkShutdown(timeoutMs: Long): Boolean =
+        withContext(Dispatchers.IO) {
+            bridge.awaitBenchmarkSinkShutdown(timeoutMs)
+        }
 
     companion object {
         val supportedPlaybackRates: List<Float> = listOf(0.5f, 1.0f, 1.5f, 2.0f, 3.0f)
@@ -170,18 +185,19 @@ object VesperPlayerControllerFactory {
     fun probePlaybackCapability(
         context: Context,
         request: VesperPlaybackCapabilityProbeRequest,
-    ): VesperPlaybackCapabilityProbeResult =
-        VesperPlaybackCapabilityProbe.probe(
-            request.copy(
-                sourceNormalizerConfiguration =
-                    VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
-                        context = context.applicationContext,
-                        configuration = request.sourceNormalizerConfiguration,
-                    ),
-            ),
+    ): VesperPlaybackCapabilityProbeResult {
+        VesperBundledPluginResolver.resolve(
+            context = context.applicationContext,
+            sourceNormalizerConfiguration = request.sourceNormalizerConfiguration,
+            frameProcessorConfiguration = request.frameProcessorConfiguration,
+            nativeFramePipelineConfiguration = request.nativeFramePipelineConfiguration,
+        )
+        return VesperPlaybackCapabilityProbe.probe(
+            request,
             sessionProbeProvider =
                 VesperAndroidDisplaySessionProbeProvider.fromContext(context.applicationContext),
         )
+    }
 
     fun createDefault(
         context: Context,
@@ -199,6 +215,8 @@ object VesperPlayerControllerFactory {
             VesperFrameProcessorConfiguration(),
         nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
             VesperNativeFramePipelineConfiguration(),
+        pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration =
+            VesperPipelineEventHookConfiguration(),
     ): VesperPlayerController =
         VesperPlayerController(
             PlayerBridgeFactory.createDefault(
@@ -214,6 +232,7 @@ object VesperPlayerControllerFactory {
                 sourceNormalizerConfiguration = sourceNormalizerConfiguration,
                 frameProcessorConfiguration = frameProcessorConfiguration,
                 nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
+                pipelineEventHookConfiguration = pipelineEventHookConfiguration,
             )
         )
 
@@ -221,12 +240,16 @@ object VesperPlayerControllerFactory {
         initialSource: VesperPlayerSource? = null,
         keepScreenOnDuringPlayback: Boolean = true,
         benchmarkConfiguration: VesperBenchmarkConfiguration = VesperBenchmarkConfiguration.Disabled,
-    ): VesperPlayerController =
-        VesperPlayerController(
+    ): VesperPlayerController {
+        require(benchmarkConfiguration.pluginReferences.isEmpty()) {
+            "Preview players do not have an Android Context for benchmark plugin references"
+        }
+        return VesperPlayerController(
             FakePlayerBridge(
                 initialSource = initialSource,
                 keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
                 benchmarkConfiguration = benchmarkConfiguration,
             )
         )
+    }
 }

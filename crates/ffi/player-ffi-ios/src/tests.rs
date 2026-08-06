@@ -4,23 +4,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{
     PlayerFfiAbrPolicy, PlayerFfiBufferingPolicy, PlayerFfiCachePolicy, PlayerFfiCallStatus,
-    PlayerFfiDownloadAssetIndex, PlayerFfiDownloadContentFormat, PlayerFfiDownloadExportCallbacks,
-    PlayerFfiDownloadSource, PlayerFfiDownloadTask, PlayerFfiDownloadTaskStatus, PlayerFfiError,
-    PlayerFfiErrorCategory, PlayerFfiErrorCode, PlayerFfiPlaylistConfig,
-    PlayerFfiResolvedResiliencePolicy, PlayerFfiRetryPolicy, PlayerFfiTrackSelection,
-    dash_bridge_error_to_ffi, map_player_error, player_error_to_ffi,
-    player_ffi_dash_bridge_parse_sidx, player_ffi_download_session_dispose,
-    player_ffi_download_session_export_task, player_ffi_ios_native_frame_pipeline_advance,
-    player_ffi_ios_native_frame_pipeline_close, player_ffi_ios_native_frame_pipeline_open,
-    player_ffi_ios_native_frame_pipeline_release_frame, player_ffi_ios_native_frame_pipeline_seek,
-    player_ffi_ios_plugin_abi_summary_json, player_ffi_preload_session_fail,
-    player_ffi_resolve_resilience_policy, player_ffi_source_normalizer_resource_open,
+    PlayerFfiDownloadAssetIndex, PlayerFfiDownloadConfig, PlayerFfiDownloadContentFormat,
+    PlayerFfiDownloadExportCallbacks, PlayerFfiDownloadSource, PlayerFfiDownloadTask,
+    PlayerFfiDownloadTaskStatus, PlayerFfiError, PlayerFfiErrorCategory, PlayerFfiErrorCode,
+    PlayerFfiPlaylistConfig, PlayerFfiResolvedResiliencePolicy, PlayerFfiRetryPolicy,
+    PlayerFfiTrackSelection, dash_bridge_error_to_ffi, map_player_error, player_error_to_ffi,
+    player_ffi_dash_bridge_parse_sidx, player_ffi_download_session_create,
+    player_ffi_download_session_dispose, player_ffi_download_session_export_task,
+    player_ffi_ios_native_frame_pipeline_advance, player_ffi_ios_native_frame_pipeline_close,
+    player_ffi_ios_native_frame_pipeline_open, player_ffi_ios_native_frame_pipeline_release_frame,
+    player_ffi_ios_native_frame_pipeline_seek, player_ffi_ios_playback_event_hook_session_close,
+    player_ffi_ios_playback_event_hook_session_drain_json,
+    player_ffi_ios_playback_event_hook_session_flush,
+    player_ffi_ios_playback_event_hook_session_submit_json, player_ffi_ios_plugin_abi_summary_json,
+    player_ffi_preload_session_fail, player_ffi_resolve_resilience_policy,
+    player_ffi_source_normalizer_resource_open,
 };
 use crate::handles::HandleRegistry;
-use player_plugin::{
-    VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+use player_plugin::PluginTransport;
+use player_plugin_abi::{
+    VESPER_INTERFACE_MAJOR, VESPER_INTERFACE_MINOR, VESPER_PLUGIN_ABI_MAJOR,
+    VESPER_PLUGIN_ABI_MINOR,
 };
+use player_plugin_loader::PluginRegistry;
 use player_runtime::{PlayerError, PlayerErrorCategory, PlayerErrorCode, SubtitleErrorDetails};
 
 #[test]
@@ -74,6 +80,132 @@ fn inbound_track_and_playlist_ordinals_reject_unknown_values() {
     assert_eq!(playlist_error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&playlist_error).contains("config.repeat_mode"));
     unsafe { super::player_ffi_error_free(&mut playlist_error) };
+}
+
+#[test]
+fn download_config_decodes_capability_specific_plugin_references() {
+    let post_download = CString::new(
+        r#"[{"pluginId":"io.github.ikaros.vesper.remux-ffmpeg","capabilityInstanceId":"io.github.ikaros.vesper.remux-ffmpeg.default","transport":"native"}]"#,
+    )
+    .expect("post-download references CString");
+    let event_hooks =
+        CString::new(r#"[{"pluginId":"dev.vesper.event-hook","transport":"native"}]"#)
+            .expect("event-hook references CString");
+    let config = PlayerFfiDownloadConfig {
+        post_download_plugin_references_json: post_download.as_ptr(),
+        event_hook_plugin_references_json: event_hooks.as_ptr(),
+        ..PlayerFfiDownloadConfig::default()
+    };
+
+    let resolved = super::conversions::read_download_config(&config)
+        .expect("download plugin references should decode");
+
+    assert_eq!(resolved.post_download_plugin_references.len(), 1);
+    assert_eq!(
+        resolved.post_download_plugin_references[0].plugin_id(),
+        "io.github.ikaros.vesper.remux-ffmpeg"
+    );
+    assert_eq!(
+        resolved.post_download_plugin_references[0].capability_instance_id(),
+        Some("io.github.ikaros.vesper.remux-ffmpeg.default")
+    );
+    assert_eq!(
+        resolved.post_download_plugin_references[0].transport(),
+        PluginTransport::Native
+    );
+    assert_eq!(resolved.event_hook_plugin_references.len(), 1);
+    assert_eq!(
+        resolved.event_hook_plugin_references[0].plugin_id(),
+        "dev.vesper.event-hook"
+    );
+}
+
+#[test]
+fn download_config_rejects_missing_or_invalid_plugin_reference_json() {
+    let empty_references = CString::new("[]").expect("empty references CString");
+    let missing = PlayerFfiDownloadConfig {
+        event_hook_plugin_references_json: empty_references.as_ptr(),
+        ..PlayerFfiDownloadConfig::default()
+    };
+    let mut missing_error = super::conversions::read_download_config(&missing)
+        .expect_err("missing post-download reference JSON should fail");
+    assert_eq!(missing_error.code, PlayerFfiErrorCode::NullPointer);
+    assert!(ffi_error_message(&missing_error).contains("post_download_plugin_references_json"));
+    unsafe { super::player_ffi_error_free(&mut missing_error) };
+
+    let invalid_references =
+        CString::new(r#"[{"pluginId":"not-reverse-dns","transport":"native"}]"#)
+            .expect("invalid references CString");
+    let invalid = PlayerFfiDownloadConfig {
+        post_download_plugin_references_json: invalid_references.as_ptr(),
+        event_hook_plugin_references_json: empty_references.as_ptr(),
+        ..PlayerFfiDownloadConfig::default()
+    };
+    let mut invalid_error = super::conversions::read_download_config(&invalid)
+        .expect_err("invalid plugin identity should fail");
+    assert_eq!(invalid_error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&invalid_error).contains("reverse-DNS"));
+    unsafe { super::player_ffi_error_free(&mut invalid_error) };
+}
+
+#[test]
+fn download_session_create_preserves_plugin_selection_error_and_zeroes_handle() {
+    let post_download = CString::new(
+        r#"[{"pluginId":"dev.vesper.missing-remux","capabilityInstanceId":"dev.vesper.missing-remux.post-download","transport":"native"}]"#,
+    )
+    .expect("post-download references CString");
+    let empty_references = CString::new("[]").expect("empty references CString");
+    let plugin_registry_handle =
+        super::plugin_registry::register_test_plugin_registry(PluginRegistry::default())
+            .expect("empty plugin registry should register");
+    let config = PlayerFfiDownloadConfig {
+        plugin_registry_handle,
+        post_download_plugin_references_json: post_download.as_ptr(),
+        event_hook_plugin_references_json: empty_references.as_ptr(),
+        ..PlayerFfiDownloadConfig::default()
+    };
+    let mut out_handle = u64::MAX;
+    let mut error = PlayerFfiError::default();
+
+    let status =
+        unsafe { player_ffi_download_session_create(&config, &mut out_handle, &mut error) };
+    unsafe { super::player_ffi_ios_plugin_registry_dispose(plugin_registry_handle) };
+
+    assert_eq!(status, PlayerFfiCallStatus::Error);
+    assert_eq!(out_handle, 0);
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert_eq!(error.category, PlayerFfiErrorCategory::Input);
+    let message = ffi_error_message(&error);
+    assert!(
+        message.contains("failed to resolve ios post-download plugin"),
+        "{message}"
+    );
+    assert!(
+        message.contains("plugin `dev.vesper.missing-remux` is not loaded for transport Native"),
+        "{message}"
+    );
+    unsafe { super::player_ffi_error_free(&mut error) };
+}
+
+#[test]
+fn benchmark_session_create_zeroes_handle_before_input_validation() {
+    let mut out_handle = u64::MAX;
+    let mut error = PlayerFfiError::default();
+
+    let status = unsafe {
+        super::player_ffi_benchmark_session_create_with_references_json(
+            0,
+            ptr::null(),
+            &mut out_handle,
+            &mut error,
+        )
+    };
+
+    assert_eq!(status, PlayerFfiCallStatus::Error);
+    assert_eq!(out_handle, 0);
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&error).contains("references_json was null"));
+    unsafe { super::player_ffi_error_free(&mut error) };
 }
 
 #[test]
@@ -274,6 +406,45 @@ fn download_export_runs_host_progress_callback_without_holding_session_lock() {
         probe.session_lock_was_available.load(Ordering::SeqCst),
         "the export callback must be able to re-enter the same download session"
     );
+}
+
+#[test]
+fn task_carrying_download_commands_repeat_the_nested_task_id_at_the_ffi_boundary() {
+    use std::time::Instant;
+
+    use player_model::MediaSource;
+    use player_platform_ios::{IosDownloadBridgeSession, IosDownloadCommand};
+    use player_runtime::{
+        DownloadAssetIndex, DownloadContentFormat, DownloadProfile, DownloadSource,
+    };
+
+    let mut session = IosDownloadBridgeSession::new(false);
+    let task_id = session
+        .create_task(
+            "asset-command-id",
+            DownloadSource::new(
+                MediaSource::new("https://example.com/video.mp4"),
+                DownloadContentFormat::SingleFile,
+            ),
+            DownloadProfile::default(),
+            DownloadAssetIndex::default(),
+            Instant::now(),
+        )
+        .expect("create download task");
+    let task = session.task(task_id).expect("download task snapshot");
+
+    for command in [
+        IosDownloadCommand::Prepare { task: task.clone() },
+        IosDownloadCommand::Start { task: task.clone() },
+        IosDownloadCommand::Resume { task: task.clone() },
+        IosDownloadCommand::Remove { task },
+    ] {
+        let ffi = super::PlayerFfiDownloadCommand::from(command);
+        assert_eq!(ffi.task_id, task_id.get());
+        assert_eq!(ffi.task.task_id, task_id.get());
+        let mut ffi = ffi;
+        super::conversions::download_command_free(&mut ffi);
+    }
 }
 
 #[test]
@@ -584,7 +755,7 @@ fn dash_bridge_parse_sidx_ffi_preserves_structured_error_details() {
 }
 
 #[test]
-fn plugin_abi_summary_reports_current_signature_versions() {
+fn plugin_abi_summary_reports_root_and_typed_interface_versions() {
     let mut out_json: *mut c_char = ptr::null_mut();
     let mut error = PlayerFfiError::default();
 
@@ -601,27 +772,48 @@ fn plugin_abi_summary_reports_current_signature_versions() {
     unsafe { super::player_ffi_mobile_plugin_diagnostics_string_free(out_json) };
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse ABI summary JSON");
     assert_eq!(
-        value["decoderAbiVersion"].as_u64(),
-        Some(VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT as u64)
+        value["rootAbi"]["major"].as_u64(),
+        Some(VESPER_PLUGIN_ABI_MAJOR as u64)
     );
     assert_eq!(
-        value["frameProcessorAbiVersion"].as_u64(),
-        Some(VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT as u64)
+        value["rootAbi"]["minor"].as_u64(),
+        Some(VESPER_PLUGIN_ABI_MINOR as u64)
     );
+    for interface in [
+        "postDownloadProcessor",
+        "pipelineEventHook",
+        "benchmarkSink",
+        "nativeDecoder",
+        "frameProcessor",
+        "sourceNormalizerPacket",
+        "sourceNormalizerResource",
+    ] {
+        assert_eq!(
+            value["typedInterfaces"][interface]["major"].as_u64(),
+            Some(VESPER_INTERFACE_MAJOR as u64)
+        );
+        assert_eq!(
+            value["typedInterfaces"][interface]["minor"].as_u64(),
+            Some(VESPER_INTERFACE_MINOR as u64)
+        );
+    }
+    assert!(value.get("decoderAbiVersion").is_none());
+    assert!(value.get("frameProcessorAbiVersion").is_none());
+    assert!(value.get("sourceNormalizerAbiVersion").is_none());
     assert_eq!(
-        value["sourceNormalizerAbiVersion"].as_u64(),
-        Some(VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT as u64)
+        value["abiSemantics"].as_str(),
+        Some("stable-root-typed-interfaces")
     );
-    assert_eq!(value["abiSemantics"].as_str(), Some("signature-only"));
     assert_eq!(
         value["capabilityMatching"].as_str(),
-        Some("requirements-first")
+        Some("explicit-plugin-reference")
     );
 }
 
 #[test]
 fn source_normalizer_resource_open_can_return_bypass_diagnostics_without_handle() {
     let source = test_c_string("file:///tmp/video.flv");
+    let artifacts = test_c_string("[]");
     let output_root = test_c_string("/tmp/vesper-source-normalizer");
     let mut out_handle = 99_u64;
     let mut out_json: *mut c_char = ptr::null_mut();
@@ -631,8 +823,7 @@ fn source_normalizer_resource_open_can_return_bypass_diagnostics_without_handle(
         player_ffi_source_normalizer_resource_open(
             source.as_ptr(),
             3,
-            ptr::null_mut(),
-            0,
+            artifacts.as_ptr(),
             ptr::null(),
             output_root.as_ptr(),
             false,
@@ -667,10 +858,13 @@ fn source_normalizer_resource_open_can_return_bypass_diagnostics_without_handle(
 }
 
 #[test]
-fn ios_native_frame_pipeline_open_requires_source_normalizer_packet_plugin_path() {
+fn ios_native_frame_pipeline_open_requires_source_normalizer_packet_plugin_reference() {
     let source = test_c_string("file:///tmp/video.mp4");
-    let decoder_path = test_c_string("/tmp/libdecoder.dylib");
-    let mut decoder_paths = [decoder_path.as_ptr() as *mut c_char];
+    let source_artifacts = test_c_string("[]");
+    let decoder_artifacts = test_c_string(
+        r#"[{"reference":{"pluginId":"io.github.ikaros.vesper.decoder-videotoolbox","capabilityInstanceId":"io.github.ikaros.vesper.decoder-videotoolbox.video","transport":"native"},"libraryPath":"/tmp/libdecoder.dylib"}]"#,
+    );
+    let frame_artifacts = test_c_string("[]");
     let mut out_handle = 99_u64;
     let mut out_json: *mut c_char = ptr::null_mut();
     let mut error = PlayerFfiError::default();
@@ -679,14 +873,11 @@ fn ios_native_frame_pipeline_open_requires_source_normalizer_packet_plugin_path(
         player_ffi_ios_native_frame_pipeline_open(
             source.as_ptr(),
             2,
-            ptr::null_mut(),
-            0,
+            source_artifacts.as_ptr(),
             ptr::null(),
             3,
-            decoder_paths.as_mut_ptr(),
-            decoder_paths.len(),
-            ptr::null_mut(),
-            0,
+            decoder_artifacts.as_ptr(),
+            frame_artifacts.as_ptr(),
             0,
             &mut out_handle,
             &mut out_json,
@@ -705,10 +896,13 @@ fn ios_native_frame_pipeline_open_requires_source_normalizer_packet_plugin_path(
 }
 
 #[test]
-fn ios_native_frame_pipeline_open_requires_videotoolbox_decoder_plugin_path() {
+fn ios_native_frame_pipeline_open_requires_videotoolbox_decoder_plugin_reference() {
     let source = test_c_string("file:///tmp/video.mp4");
-    let source_path = test_c_string("/tmp/libsource_normalizer.dylib");
-    let mut source_paths = [source_path.as_ptr() as *mut c_char];
+    let source_artifacts = test_c_string(
+        r#"[{"reference":{"pluginId":"io.github.ikaros.vesper.source-normalizer-ffmpeg","capabilityInstanceId":"io.github.ikaros.vesper.source-normalizer-ffmpeg.packet","transport":"native"},"libraryPath":"/tmp/libsource_normalizer.dylib"}]"#,
+    );
+    let decoder_artifacts = test_c_string("[]");
+    let frame_artifacts = test_c_string("[]");
     let mut out_handle = 99_u64;
     let mut out_json: *mut c_char = ptr::null_mut();
     let mut error = PlayerFfiError::default();
@@ -717,14 +911,11 @@ fn ios_native_frame_pipeline_open_requires_videotoolbox_decoder_plugin_path() {
         player_ffi_ios_native_frame_pipeline_open(
             source.as_ptr(),
             2,
-            source_paths.as_mut_ptr(),
-            source_paths.len(),
+            source_artifacts.as_ptr(),
             ptr::null(),
             3,
-            ptr::null_mut(),
-            0,
-            ptr::null_mut(),
-            0,
+            decoder_artifacts.as_ptr(),
+            frame_artifacts.as_ptr(),
             0,
             &mut out_handle,
             &mut out_json,
@@ -795,6 +986,111 @@ fn ios_native_frame_pipeline_seek_requires_json_output_pointer() {
     assert_eq!(error.code, PlayerFfiErrorCode::NullPointer);
     assert!(ffi_error_message(&error).contains("out_json was null"));
     unsafe { super::player_ffi_error_free(&mut error) };
+}
+
+#[test]
+fn ios_playback_event_hook_invalid_handles_are_rejected() {
+    let mut error = PlayerFfiError::default();
+    let event = test_c_string(
+        r#"{"runId":"run-1","sessionId":"session-1","platform":"ios","protocol":null,"eventName":"play","timestampNs":1,"thread":"main","resourceIdentity":"playback-session:1","attributes":{},"diagnostic":null}"#,
+    );
+    let status = unsafe {
+        player_ffi_ios_playback_event_hook_session_submit_json(
+            0xDEAD_BEEF,
+            event.as_ptr(),
+            &mut error,
+        )
+    };
+    assert_eq!(status, PlayerFfiCallStatus::Error);
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(ffi_error_message(&error).contains("invalid playback event-hook session handle"));
+    unsafe { super::player_ffi_error_free(&mut error) };
+
+    let flush_status =
+        unsafe { player_ffi_ios_playback_event_hook_session_flush(0xDEAD_BEEF, 100, &mut error) };
+    assert_eq!(flush_status, PlayerFfiCallStatus::Error);
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    unsafe { super::player_ffi_error_free(&mut error) };
+
+    let mut report_json = ptr::null_mut();
+    let drain_status = unsafe {
+        player_ffi_ios_playback_event_hook_session_drain_json(
+            0xDEAD_BEEF,
+            &mut report_json,
+            &mut error,
+        )
+    };
+    assert_eq!(drain_status, PlayerFfiCallStatus::Error);
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    assert!(report_json.is_null());
+    unsafe { super::player_ffi_error_free(&mut error) };
+
+    unsafe {
+        player_ffi_ios_playback_event_hook_session_close(0xDEAD_BEEF, &mut error);
+    }
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    unsafe { super::player_ffi_error_free(&mut error) };
+}
+
+#[test]
+fn ios_playback_event_hook_empty_session_has_idempotent_lifecycle() {
+    let references = test_c_string("[]");
+    let plugin_registry_handle =
+        super::plugin_registry::register_test_plugin_registry(PluginRegistry::default())
+            .expect("empty plugin registry should register");
+    let mut handle = 0;
+    let mut error = PlayerFfiError::default();
+    let created = unsafe {
+        super::player_ffi_ios_playback_event_hook_session_create(
+            plugin_registry_handle,
+            references.as_ptr(),
+            &mut handle,
+            &mut error,
+        )
+    };
+    unsafe { super::player_ffi_ios_plugin_registry_dispose(plugin_registry_handle) };
+    assert_eq!(created, PlayerFfiCallStatus::Ok);
+    assert_ne!(handle, 0);
+
+    let event = test_c_string(
+        r#"{"runId":"run-1","sessionId":"session-1","platform":"ios","protocol":null,"eventName":"play","timestampNs":1,"thread":"main","resourceIdentity":"playback-session:1","attributes":{},"diagnostic":null}"#,
+    );
+    let submitted = unsafe {
+        player_ffi_ios_playback_event_hook_session_submit_json(handle, event.as_ptr(), &mut error)
+    };
+    assert_eq!(submitted, PlayerFfiCallStatus::Ok);
+    assert_eq!(
+        unsafe { player_ffi_ios_playback_event_hook_session_flush(handle, 100, &mut error) },
+        PlayerFfiCallStatus::Ok
+    );
+
+    let mut report_json = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            player_ffi_ios_playback_event_hook_session_drain_json(
+                handle,
+                &mut report_json,
+                &mut error,
+            )
+        },
+        PlayerFfiCallStatus::Ok
+    );
+    assert!(!report_json.is_null());
+    let report_text = unsafe { CStr::from_ptr(report_json) }
+        .to_string_lossy()
+        .into_owned();
+    assert!(report_text.contains("\"reports\":[]"));
+    unsafe { super::player_ffi_ios_playback_event_hook_report_string_free(report_json) };
+
+    assert_eq!(
+        unsafe { player_ffi_ios_playback_event_hook_session_close(handle, &mut error) },
+        PlayerFfiCallStatus::Ok
+    );
+    assert_eq!(
+        unsafe { player_ffi_ios_playback_event_hook_session_close(handle, &mut error) },
+        PlayerFfiCallStatus::Ok
+    );
+    unsafe { super::player_ffi_ios_playback_event_hook_session_dispose(handle) };
 }
 
 fn ffi_error_message(error: &PlayerFfiError) -> String {

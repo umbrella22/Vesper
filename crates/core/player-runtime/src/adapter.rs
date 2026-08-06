@@ -81,6 +81,10 @@ pub trait PlayerRuntimeAdapter: Send {
     /// [`advance`](Self::advance). Implementations may mutate internal event
     /// queues and do not need to be reentrant.
     fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent>;
+    /// Returns and clears events dropped by the adapter's bounded event queue.
+    fn take_dropped_event_count(&mut self) -> u64 {
+        0
+    }
     /// Applies a runtime command.
     ///
     /// Calls must be serialized with [`advance`](Self::advance) and

@@ -530,6 +530,20 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(
             if (!firstFrameMark.isFirstForEpoch) {
                 return
             }
+            sessionHandle?.let { handle ->
+                val layout = currentVideoLayoutState
+                VesperNativeJni.reportFirstFrame(
+                    sessionHandle = handle,
+                    presentationTimeMs = (player?.currentPosition ?: 0L).coerceAtLeast(0L),
+                    width = layout?.width ?: 0,
+                    height = layout?.height ?: 0,
+                )
+                // The rendered-frame callback is the terminal signal for a
+                // first-frame epoch. Pump the Rust session immediately so the
+                // event reaches host hooks even when ExoPlayer emits no later
+                // state callback.
+                notifyNativeUpdate()
+            }
             recordBenchmark(
                 "first_frame_rendered",
                 mapOf(
@@ -1313,7 +1327,9 @@ internal fun VesperNativeJniBindings.prepareSourceNormalizerResourceForPlayback(
             VesperNativeJni.openSourceNormalizerResource(
                 source.uri,
                 sourceNormalizerConfiguration.modeOrdinal,
-                sourceNormalizerConfiguration.pluginLibraryPaths.toTypedArray(),
+                encodeVesperResolvedMobilePluginArtifacts(
+                    resolvedPluginArtifacts.sourceNormalizerArtifacts,
+                ),
                 sourceNormalizerConfiguration.runtimeProfile,
                 outputRoot,
                 sourceNormalizerConfiguration.mode == VesperSourceNormalizerMode.RequireNormalized,

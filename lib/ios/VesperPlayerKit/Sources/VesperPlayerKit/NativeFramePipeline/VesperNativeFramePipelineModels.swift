@@ -130,6 +130,22 @@ struct VesperNativeFramePipelineIssue: Equatable {
             return parsed
         }
         let normalized = message.lowercased()
+        if normalized.contains("source-normalizer-ffmpeg") ||
+            normalized.contains("source normalizer") && normalized.contains("artifact")
+        {
+            return VesperNativeFramePipelineIssue(
+                kind: .missingSourceNormalizerPacketPlugin,
+                message: "SourceNormalizer packet plugin path could not be loaded: \(message)"
+            )
+        }
+        if normalized.contains("decoder-videotoolbox") ||
+            normalized.contains("videotoolbox") && normalized.contains("artifact")
+        {
+            return VesperNativeFramePipelineIssue(
+                kind: .missingVideoToolboxDecoderPlugin,
+                message: "VideoToolbox decoder plugin path could not be loaded: \(message)"
+            )
+        }
         if normalized.contains("playersurfaceview") || normalized.contains("surface view") {
             return VesperNativeFramePipelineIssue(kind: .missingSurface, message: message)
         }

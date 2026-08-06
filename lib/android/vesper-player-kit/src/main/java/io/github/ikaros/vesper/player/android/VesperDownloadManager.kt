@@ -20,16 +20,22 @@ class VesperDownloadManager internal constructor(
     private val configuration: VesperDownloadConfiguration,
     private val executor: VesperDownloadExecutor,
     private val bindings: DownloadBindings,
+    private val appContext: Context? = null,
+    private val pluginRegistryFactory: VesperPluginRegistryFactory =
+        DefaultVesperPluginRegistryFactory,
     private val stateStore: VesperDownloadStatePersistence? = null,
     private val defaultBaseDirectory: File? = configuration.baseDirectory,
     private val runtimeDispatcher: CoroutineDispatcher =
         Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "VesperDownloadManagerRuntime").apply { isDaemon = true }
         }.asCoroutineDispatcher(),
+    private val runtimeOperationTimeoutMs: Long = RUNTIME_OP_TIMEOUT_MS,
 ) {
     private val runtimeScope = CoroutineScope(SupervisorJob() + runtimeDispatcher)
     private val eventBufferLock = Any()
     private val eventBuffer = mutableListOf<VesperDownloadEvent>()
+    private var droppedBufferedEvents = 0L
+    private var pendingSnapshotResync = false
 
     companion object {
         private const val MAX_EVENT_BUFFER_SIZE = 500
@@ -39,7 +45,10 @@ class VesperDownloadManager internal constructor(
     private val lastProgressPersistence = mutableMapOf<VesperDownloadTaskId, ProgressPersistenceCheckpoint>()
     private val _snapshot = MutableStateFlow(VesperDownloadSnapshot(emptyList()))
     @Volatile
-    private var sessionHandle: Long = bindings.createDownloadSession(configuration.toNativePayload())
+    private var needsAuthoritativeSnapshotResync = false
+    private val pluginRegistry: VesperPluginRegistryHandleOwner? = createPluginRegistry()
+    @Volatile
+    private var sessionHandle: Long = createNativeSession()
     private val isDisposed = java.util.concurrent.atomic.AtomicBoolean(false)
 
     val snapshot: StateFlow<VesperDownloadSnapshot> = _snapshot.asStateFlow()
@@ -65,6 +74,7 @@ class VesperDownloadManager internal constructor(
                     staleResourcePlanRecoverer ?: staleResourceRecoverer?.asPlanRecoverer(),
             ),
         bindings = NativeDownloadBindings,
+        appContext = context.applicationContext,
         stateStore =
             configuration
                 .takeIf { it.restoreTasksOnStartup }
@@ -88,31 +98,59 @@ class VesperDownloadManager internal constructor(
         }
         val handle = sessionHandle
         sessionHandle = 0L
-        snapshot.value.tasks
-            .filter {
-                it.state == VesperDownloadState.Preparing ||
-                    it.state == VesperDownloadState.Downloading
+        try {
+            snapshot.value.tasks
+                .filter {
+                    it.state == VesperDownloadState.Preparing ||
+                        it.state == VesperDownloadState.Downloading
+                }
+                .forEach { task -> runCatching { executor.pause(task.taskId) } }
+            runCatching { persistSnapshot(snapshot.value) }
+            runCatching { executor.dispose() }
+            runCatching { disposeNativeResources(handle) }
+        } finally {
+            runtimeScope.cancel()
+            (runtimeDispatcher as? AutoCloseable)?.close()
+            taskStore.replaceAll(VesperDownloadSnapshot(emptyList()))
+            lastProgressPersistence.clear()
+            synchronized(eventBufferLock) {
+                eventBuffer.clear()
+                droppedBufferedEvents = 0L
+                pendingSnapshotResync = false
             }
-            .forEach { pauseTask(it.taskId) }
-        persistSnapshot(snapshot.value)
-        executor.dispose()
-        runCatching {
-            if (handle != 0L) {
-                // Bypass onRuntimeThread because its isDisposed guard would
-                // skip the dispose call; we must dispose regardless.
-                runBlocking {
-                    withTimeout(RUNTIME_OP_TIMEOUT_MS) {
-                        withContext(runtimeDispatcher) {
-                            bindings.disposeDownloadSession(handle)
+            needsAuthoritativeSnapshotResync = false
+        }
+    }
+
+    private fun disposeNativeResources(handle: Long) {
+        val sessionDisposeClaimed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val registryCloseClaimed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val disposeSessionOnce = {
+            if (handle != 0L && sessionDisposeClaimed.compareAndSet(false, true)) {
+                bindings.disposeDownloadSession(handle)
+            }
+        }
+        val closeRegistryOnce = {
+            if (registryCloseClaimed.compareAndSet(false, true)) {
+                pluginRegistry?.close()
+            }
+        }
+        try {
+            runBlocking {
+                withTimeout(runtimeOperationTimeoutMs) {
+                    withContext(runtimeDispatcher) {
+                        try {
+                            disposeSessionOnce()
+                        } finally {
+                            closeRegistryOnce()
                         }
                     }
                 }
             }
+        } finally {
+            runCatching { disposeSessionOnce() }
+            runCatching { closeRegistryOnce() }
         }
-        runtimeScope.cancel()
-        (runtimeDispatcher as? AutoCloseable)?.close()
-        taskStore.replaceAll(VesperDownloadSnapshot(emptyList()))
-        lastProgressPersistence.clear()
     }
 
     fun refresh() {
@@ -123,9 +161,28 @@ class VesperDownloadManager internal constructor(
         forceFullSync(processCommands = true)
     }
 
-    fun drainEvents(): List<VesperDownloadEvent> =
+    fun drainEvents(): VesperDownloadEventBatch =
         synchronized(eventBufferLock) {
-            eventBuffer.toList().also { eventBuffer.clear() }
+            val requiresSnapshotResync = pendingSnapshotResync
+            val snapshotIsAuthoritative = !needsAuthoritativeSnapshotResync
+            val batch =
+                VesperDownloadEventBatch(
+                    events = if (requiresSnapshotResync) emptyList() else eventBuffer.toList(),
+                    droppedEvents =
+                        if (requiresSnapshotResync) {
+                            saturatingAdd(droppedBufferedEvents, eventBuffer.size.toLong())
+                        } else {
+                            droppedBufferedEvents
+                        },
+                    requiresSnapshotResync = requiresSnapshotResync,
+                    snapshotIsAuthoritative = snapshotIsAuthoritative,
+                )
+            if (snapshotIsAuthoritative) {
+                eventBuffer.clear()
+                droppedBufferedEvents = 0L
+                pendingSnapshotResync = false
+            }
+            batch
         }
 
     fun task(taskId: VesperDownloadTaskId): VesperDownloadTaskSnapshot? =
@@ -363,21 +420,37 @@ class VesperDownloadManager internal constructor(
             lastProgressPersistence.clear()
             synchronized(eventBufferLock) {
                 eventBuffer.clear()
+                droppedBufferedEvents = 0L
+                pendingSnapshotResync = false
             }
+            needsAuthoritativeSnapshotResync = false
             return
         }
 
-        val events = onRuntimeThread { bindings.drainDownloadEvents(handle).toList() }
-            .map(NativeDownloadEvent::toPublic)
-        if (events.isNotEmpty()) {
-            synchronized(eventBufferLock) {
-                eventBuffer += events
-                // Drop oldest events when buffer exceeds capacity to prevent unbounded growth.
-                if (eventBuffer.size > MAX_EVENT_BUFFER_SIZE) {
-                    val excess = eventBuffer.size - MAX_EVENT_BUFFER_SIZE
-                    eventBuffer.subList(0, excess).clear()
+        val batch =
+            try {
+                onRuntimeThread { bindings.drainDownloadEvents(handle) }
+            } catch (error: Throwable) {
+                needsAuthoritativeSnapshotResync = true
+                markSnapshotResyncRequired()
+                throw error
+            }
+        if (batch.droppedEvents != 0L) {
+            needsAuthoritativeSnapshotResync = true
+        }
+        val events =
+            if (needsAuthoritativeSnapshotResync) {
+                recordDroppedEvents(batch.droppedEvents, batch.events.size)
+                emptyList()
+            } else {
+                batch.decodePublicEvents() ?: run {
+                    needsAuthoritativeSnapshotResync = true
+                    recordDroppedEvents(0L, batch.events.size)
+                    emptyList()
                 }
             }
+        if (events.isNotEmpty()) {
+            appendEventsCapped(events)
             val immediateEvents = events.filterNot { it.isRemovedStatePatch }
             if (immediateEvents.isNotEmpty()) {
                 val updatedSnapshot = taskStore.apply(immediateEvents)
@@ -388,6 +461,10 @@ class VesperDownloadManager internal constructor(
         if (processCommands) {
             val commands = onRuntimeThread { bindings.drainDownloadCommands(handle).toList() }
             commands.forEach(::applyCommand)
+        }
+
+        if (needsAuthoritativeSnapshotResync && replaceTaskStoreWithRuntimeSnapshot(handle)) {
+            needsAuthoritativeSnapshotResync = false
         }
 
         if (events.isNotEmpty()) {
@@ -410,19 +487,67 @@ class VesperDownloadManager internal constructor(
             lastProgressPersistence.clear()
             synchronized(eventBufferLock) {
                 eventBuffer.clear()
+                droppedBufferedEvents = 0L
+                pendingSnapshotResync = false
             }
+            needsAuthoritativeSnapshotResync = false
             return
         }
 
-        val fullSnapshot =
-            onRuntimeThread { bindings.pollDownloadSnapshot(handle) }?.toPublic()
-                ?: VesperDownloadSnapshot(emptyList())
+        needsAuthoritativeSnapshotResync = !replaceTaskStoreWithRuntimeSnapshot(handle)
+        if (needsAuthoritativeSnapshotResync) {
+            markSnapshotResyncRequired()
+        }
+        syncRuntimeState(processCommands = processCommands)
+    }
+
+    private fun replaceTaskStoreWithRuntimeSnapshot(handle: Long): Boolean {
+        val fullSnapshot = onRuntimeThread { bindings.pollDownloadSnapshot(handle) }?.toPublic()
+            ?: return false
         taskStore.replaceAll(fullSnapshot)
         val activeSnapshot = taskStore.snapshot()
         _snapshot.value = activeSnapshot
         persistSnapshot(activeSnapshot)
-        syncRuntimeState(processCommands = processCommands)
+        return true
     }
+
+    private fun appendEventsCapped(events: List<VesperDownloadEvent>) {
+        synchronized(eventBufferLock) {
+            eventBuffer += events
+            if (eventBuffer.size > MAX_EVENT_BUFFER_SIZE) {
+                val excess = eventBuffer.size - MAX_EVENT_BUFFER_SIZE
+                eventBuffer.subList(0, excess).clear()
+                droppedBufferedEvents = saturatingAdd(droppedBufferedEvents, excess.toLong())
+                pendingSnapshotResync = true
+            }
+        }
+    }
+
+    private fun recordDroppedEvents(nativeDroppedEvents: Long, discardedEvents: Int) {
+        val normalizedNativeCount =
+            if (nativeDroppedEvents >= 0L) nativeDroppedEvents else Long.MAX_VALUE
+        synchronized(eventBufferLock) {
+            pendingSnapshotResync = true
+            droppedBufferedEvents =
+                saturatingAdd(
+                    saturatingAdd(droppedBufferedEvents, normalizedNativeCount),
+                    discardedEvents.toLong(),
+                )
+        }
+    }
+
+    private fun markSnapshotResyncRequired() {
+        synchronized(eventBufferLock) {
+            pendingSnapshotResync = true
+        }
+    }
+
+    private fun saturatingAdd(current: Long, increment: Long): Long =
+        when {
+            increment <= 0L -> current
+            current >= Long.MAX_VALUE - increment -> Long.MAX_VALUE
+            else -> current + increment
+        }
 
     private fun shouldPersistSnapshot(events: List<VesperDownloadEvent>): Boolean {
         var shouldPersist = false
@@ -482,7 +607,7 @@ class VesperDownloadManager internal constructor(
                 runtimeReporter,
             )
             is NativeDownloadCommand.Pause -> executor.pause(command.taskId)
-            is NativeDownloadCommand.Remove -> executor.remove(task(command.taskId))
+            is NativeDownloadCommand.Remove -> executor.remove(command.task.toPublic())
         }
     }
 
@@ -496,10 +621,61 @@ class VesperDownloadManager internal constructor(
      */
     private fun <T> onRuntimeThread(block: () -> T): T =
         runBlocking {
-            withTimeout(RUNTIME_OP_TIMEOUT_MS) {
+            withTimeout(runtimeOperationTimeoutMs) {
                 withContext(runtimeDispatcher) { block() }
             }
         }
+
+    private fun createPluginRegistry(): VesperPluginRegistryHandleOwner? {
+        val references =
+            (configuration.postDownloadPluginReferences + configuration.eventHookPluginReferences)
+                .distinct()
+        if (references.isEmpty()) {
+            return null
+        }
+        return try {
+            onRuntimeThread {
+                pluginRegistryFactory.create(appContext, references)
+            }
+        } catch (error: Throwable) {
+            runCatching { executor.dispose() }
+            closeRuntimeAfterFailedConstruction()
+            throw error
+        }
+    }
+
+    private fun createNativeSession(): Long =
+        try {
+            val handle =
+                onRuntimeThread {
+                    bindings.createDownloadSession(
+                        configuration.toNativePayload(pluginRegistry?.handle ?: 0L),
+                    )
+                }
+            check(handle != 0L) { "native download session handle must not be zero" }
+            handle
+        } catch (error: Throwable) {
+            closePluginRegistryAfterFailedConstruction()
+            runCatching { executor.dispose() }
+            closeRuntimeAfterFailedConstruction()
+            throw error
+        }
+
+    private fun closePluginRegistryAfterFailedConstruction() {
+        val closeClaimed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val closeOnce = {
+            if (closeClaimed.compareAndSet(false, true)) {
+                pluginRegistry?.close()
+            }
+        }
+        runCatching { onRuntimeThread { closeOnce() } }
+        runCatching { closeOnce() }
+    }
+
+    private fun closeRuntimeAfterFailedConstruction() {
+        runtimeScope.cancel()
+        runCatching { (runtimeDispatcher as? AutoCloseable)?.close() }
+    }
 
     private fun restorePersistedTasks() {
         val storedTasks = stateStore?.load()?.tasks.orEmpty()
@@ -719,17 +895,16 @@ class VesperDownloadManager internal constructor(
 
     init {
         try {
-            check(sessionHandle != 0L) { "native download session handle must not be zero" }
             restorePersistedTasks()
             forceFullSync()
         } catch (error: Throwable) {
             // Clean up the native session if constructor initialization fails,
             // preventing a permanent resource leak (AGENTS.md rule).
             val handle = sessionHandle
-            if (handle != 0L) {
-                runCatching { bindings.disposeDownloadSession(handle) }
-                sessionHandle = 0L
-            }
+            runCatching { disposeNativeResources(handle) }
+            sessionHandle = 0L
+            runCatching { executor.dispose() }
+            closeRuntimeAfterFailedConstruction()
             throw error
         }
     }

@@ -1,34 +1,46 @@
 use super::*;
+use std::collections::BTreeMap;
+
+use player_plugin::{MAX_PLUGIN_DIAGNOSTICS, MAX_PLUGIN_MEASUREMENTS, PluginReference};
 
 pub struct BenchmarkSinkPluginSession {
     sinks: Vec<Arc<dyn BenchmarkSink>>,
+    references: Vec<PluginReference>,
 }
 
 impl std::fmt::Debug for BenchmarkSinkPluginSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BenchmarkSinkPluginSession")
             .field("sink_count", &self.sinks.len())
+            .field("references", &self.references)
             .finish()
     }
 }
 
 impl BenchmarkSinkPluginSession {
-    pub fn load_paths(
-        paths: impl IntoIterator<Item = impl AsRef<Path>>,
-    ) -> Result<Self, PluginLoadError> {
+    pub fn from_registry(
+        registry: &PluginRegistry,
+        references: impl IntoIterator<Item = PluginReference>,
+    ) -> Result<Self, PluginSelectionError> {
         let mut sinks = Vec::new();
-        for path in paths {
-            let plugin = LoadedDynamicPlugin::load(path.as_ref())?;
-            if let Some(sink) = plugin.benchmark_sink() {
-                sinks.push(sink);
-            }
+        let mut resolved_references = Vec::new();
+        for reference in references {
+            let resolved = registry.resolve_benchmark_sink(&reference)?;
+            resolved_references.push(resolved.reference().clone());
+            sinks.push(resolved.capability());
         }
-
-        Ok(Self { sinks })
+        Ok(Self {
+            sinks,
+            references: resolved_references,
+        })
     }
 
     pub fn is_empty(&self) -> bool {
         self.sinks.is_empty()
+    }
+
+    pub fn references(&self) -> &[PluginReference] {
+        &self.references
     }
 
     pub fn on_event_batch_json(
@@ -56,6 +68,13 @@ impl BenchmarkSinkPluginSession {
 
     pub fn on_event_batch(&self, batch: &BenchmarkEventBatch) -> BenchmarkSinkReport {
         let mut report = BenchmarkSinkReport::default();
+        if let Err(error) = batch.validate() {
+            report.dropped_events = batch.events.len() as u64;
+            report
+                .diagnostics
+                .push(sink_error_diagnostic("host", &error));
+            return report;
+        }
         for sink in &self.sinks {
             match sink.on_event_batch(batch) {
                 Ok(status) => {
@@ -63,9 +82,7 @@ impl BenchmarkSinkPluginSession {
                 }
                 Err(error) => {
                     report.dropped_events += batch.events.len() as u64;
-                    report
-                        .plugin_errors
-                        .push(format!("{}: {error}", sink.name()));
+                    push_diagnostic(&mut report, sink_error_diagnostic(sink.name(), &error));
                 }
             }
         }
@@ -77,14 +94,10 @@ impl BenchmarkSinkPluginSession {
         for sink in &self.sinks {
             match sink.flush() {
                 Ok(sink_report) => {
-                    report.accepted_events += sink_report.accepted_events;
-                    report.dropped_events += sink_report.dropped_events;
-                    report.plugin_errors.extend(sink_report.plugin_errors);
+                    merge_report(&mut report, sink_report);
                 }
                 Err(error) => {
-                    report
-                        .plugin_errors
-                        .push(format!("{}: {error}", sink.name()));
+                    push_diagnostic(&mut report, sink_error_diagnostic(sink.name(), &error));
                 }
             }
         }
@@ -100,139 +113,50 @@ impl BenchmarkSinkPluginSession {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct DynamicBenchmarkSinkInner {
-    #[allow(dead_code)]
-    library: Option<Arc<LibraryHolder>>,
-    name: String,
-    api: CheckedBenchmarkSinkApi,
-}
-
-impl Drop for DynamicBenchmarkSinkInner {
-    fn drop(&mut self) {
-        if let Some(destroy) = self.api.destroy {
-            // SAFETY: `destroy` and `context` come from the validated plugin ABI
-            // table and are only invoked once when this wrapper is dropped.
-            unsafe { destroy(self.api.context) };
-        }
+fn merge_report(report: &mut BenchmarkSinkReport, incoming: BenchmarkSinkReport) {
+    report.accepted_events = report
+        .accepted_events
+        .saturating_add(incoming.accepted_events);
+    report.dropped_events = report
+        .dropped_events
+        .saturating_add(incoming.dropped_events);
+    extend_bounded(
+        &mut report.measurements,
+        incoming.measurements,
+        MAX_PLUGIN_MEASUREMENTS,
+    );
+    extend_bounded(
+        &mut report.threshold_violations,
+        incoming.threshold_violations,
+        MAX_PLUGIN_MEASUREMENTS,
+    );
+    for diagnostic in incoming.diagnostics {
+        push_diagnostic(report, diagnostic);
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct DynamicBenchmarkSink {
-    inner: Arc<DynamicBenchmarkSinkInner>,
+fn extend_bounded<T>(target: &mut Vec<T>, incoming: Vec<T>, limit: usize) {
+    let remaining = limit.saturating_sub(target.len());
+    target.extend(incoming.into_iter().take(remaining));
 }
 
-impl DynamicBenchmarkSink {
-    pub(crate) fn new(
-        library: Option<Arc<LibraryHolder>>,
-        fallback_name: String,
-        api: CheckedBenchmarkSinkApi,
-    ) -> Result<Self, PluginLoadError> {
-        let name = if let Some(name_fn) = api.name {
-            // SAFETY: the plugin ABI declares `name_fn` with `api.context`, and
-            // the returned pointer is interpreted immediately as an optional
-            // NUL-terminated UTF-8 string.
-            let name_ptr = unsafe { name_fn(api.context) };
-            if name_ptr.is_null() {
-                fallback_name
-            } else {
-                c_string_field(name_ptr, "benchmark_sink_name")?
-            }
-        } else {
-            fallback_name
-        };
-
-        Ok(Self {
-            inner: Arc::new(DynamicBenchmarkSinkInner { library, name, api }),
-        })
-    }
-
-    fn decode_result<T: DeserializeOwned>(
-        &self,
-        result: VesperPluginProcessResult,
-        operation: &'static str,
-    ) -> Result<T, BenchmarkSinkError> {
-        match VesperPluginResultStatus::from_raw(result.status) {
-            Some(VesperPluginResultStatus::Success) => decode_plugin_bytes::<T>(
-                result.payload,
-                self.inner.api.free_bytes,
-                self.inner.api.context,
-            )
-            .map_err(|error| {
-                BenchmarkSinkError::PayloadCodec(format!(
-                    "decode benchmark sink `{}` {operation} payload failed: {error}",
-                    self.inner.name
-                ))
-            }),
-            Some(VesperPluginResultStatus::Failure) => {
-                let decoded = decode_plugin_bytes::<BenchmarkSinkError>(
-                    result.payload,
-                    self.inner.api.free_bytes,
-                    self.inner.api.context,
-                )
-                .unwrap_or_else(|error| {
-                    BenchmarkSinkError::PayloadCodec(format!(
-                        "decode benchmark sink `{}` {operation} error payload failed: {error}",
-                        self.inner.name
-                    ))
-                });
-                Err(decoded)
-            }
-            None => {
-                reclaim_plugin_payload(
-                    result.payload,
-                    self.inner.api.free_bytes,
-                    self.inner.api.context,
-                );
-                Err(BenchmarkSinkError::AbiViolation(
-                    unknown_plugin_result_status_message(
-                        &self.inner.name,
-                        operation,
-                        result.status,
-                    ),
-                ))
-            }
-        }
+fn push_diagnostic(report: &mut BenchmarkSinkReport, diagnostic: PluginDiagnostic) {
+    if report.diagnostics.len() < MAX_PLUGIN_DIAGNOSTICS {
+        report.diagnostics.push(diagnostic);
     }
 }
 
-impl BenchmarkSink for DynamicBenchmarkSink {
-    fn name(&self) -> &str {
-        &self.inner.name
-    }
-
-    fn on_event_batch(
-        &self,
-        batch: &BenchmarkEventBatch,
-    ) -> Result<BenchmarkSinkStatus, BenchmarkSinkError> {
-        let batch_json = serde_json::to_vec(batch).map_err(|error| {
-            BenchmarkSinkError::PayloadCodec(format!(
-                "serialize benchmark batch for `{}` failed: {error}",
-                self.inner.name
-            ))
-        })?;
-
-        // SAFETY: the validated sink API guarantees `on_event_batch_json` is
-        // present, and `batch_json` remains alive for the duration of this
-        // synchronous callback.
-        let result = unsafe {
-            (self.inner.api.on_event_batch_json)(
-                self.inner.api.context,
-                batch_json.as_ptr(),
-                batch_json.len(),
-            )
-        };
-        self.decode_result(result, "batch")
-    }
-
-    fn flush(&self) -> Result<BenchmarkSinkReport, BenchmarkSinkError> {
-        let Some(flush_json) = self.inner.api.flush_json else {
-            return Ok(BenchmarkSinkReport::default());
-        };
-        // SAFETY: the validated sink API declares `flush_json` with this
-        // context. The callback is synchronous and returns plugin-owned bytes.
-        let result = unsafe { flush_json(self.inner.api.context) };
-        self.decode_result(result, "flush")
+fn sink_error_diagnostic(name: &str, error: &BenchmarkSinkError) -> PluginDiagnostic {
+    let code = match error {
+        BenchmarkSinkError::PayloadCodec(_) => "benchmark.payload_codec",
+        BenchmarkSinkError::AbiViolation(_) => "benchmark.abi_violation",
+        BenchmarkSinkError::SinkFailed(_) => "benchmark.sink_failed",
+        BenchmarkSinkError::ProtocolViolation(_) => "benchmark.protocol_violation",
+    };
+    PluginDiagnostic {
+        code: code.to_owned(),
+        severity: PluginDiagnosticSeverity::Error,
+        message: "benchmark sink operation failed".to_owned(),
+        attributes: BTreeMap::from([("sink".to_owned(), name.to_owned())]),
     }
 }

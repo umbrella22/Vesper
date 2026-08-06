@@ -357,9 +357,10 @@ The mobile SourceNormalizer configuration is opt-in through
 reports capabilities. `PreflightOnly` may open and close a packet session for
 the selected source and reports the result through `pluginDiagnostics`, but
 ExoPlayer still plays the original `VesperPlayerSource`. Preflight failure is
-non-fatal. `pluginLibraryPaths` must contain plugin `.so` paths only; the
-shared FFmpeg runtime AAR is resolved by Android packaging, not passed as a
-plugin path. `PreferNormalized` and `RequireNormalized` may replace the
+non-fatal. Callers select plugins with `VesperPluginReference`; the embedded
+registry maps each selected identity to its packaged `.so` inside the host kit.
+The shared FFmpeg runtime AAR is a dynamic dependency and is not a plugin
+registry entry. `PreferNormalized` and `RequireNormalized` may replace the
 platform source with a disk-backed fMP4 or short-window HLS resource served by
 the internal loopback server. `PreferNormalized` falls back to the original
 source when normalization fails; `RequireNormalized` reports a source error.
@@ -372,8 +373,8 @@ The mobile FrameProcessor path is opt-in through
 native-frame route decision for SourceNormalizer packet input, MediaCodec,
 SurfaceView presentation, fallback reason, and frame counters. When
 `preferNativeFrame` or `requireNativeFrame` is selected and the
-SourceNormalizer, MediaCodec decoder, and optional FrameProcessor plugin paths
-are available, the explicit SDK-managed SDR native-frame route reads packets,
+SourceNormalizer, MediaCodec decoder, and optional FrameProcessor references
+resolve from the embedded registry, the explicit SDK-managed SDR native-frame route reads packets,
 decodes through MediaCodec, and presents through a `SurfaceView`. HDR and
 Dolby Vision are routed to ExoPlayer / system playback; the
 SDK-managed native-frame route is SDR-only today and is not an HDR-ready path.

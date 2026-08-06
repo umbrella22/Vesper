@@ -7,39 +7,41 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
   }) async {
     VesperPlayerController? nextController;
     try {
-      final frameProcessorPluginPaths =
-          await ExampleLocalMediaPicker.bundledFrameProcessorPluginLibraryPaths();
       final selectedSource = initialSource ?? flutterHlsDemoSource();
       final directNativePlaybackRequired =
           exampleDolbyAcceptanceSourceRequiresDirectNativePlayback(
             selectedSource,
           );
-      final effectiveFrameProcessorPluginPaths = directNativePlaybackRequired
-          ? const <String>[]
-          : frameProcessorPluginPaths;
+      final sourceNormalizerConfiguration = _sourceNormalizerConfiguration(
+        directNativePlaybackRequired: directNativePlaybackRequired,
+      );
+      final frameProcessorPluginReferences = directNativePlaybackRequired
+          ? const <VesperPluginReference>[]
+          : <VesperPluginReference>[
+              VesperBundledPluginReferences.frameProcessorDiagnostic,
+            ];
       if (mounted) {
         _updateState(() {
-          _sourceNormalizerPluginLibraryPaths = const <String>[];
-          _frameProcessorPluginLibraryPaths =
-              effectiveFrameProcessorPluginPaths;
+          _sourceNormalizerPluginReferences =
+              sourceNormalizerConfiguration.pluginReferences;
+          _frameProcessorPluginReferences = frameProcessorPluginReferences;
         });
       } else {
-        _sourceNormalizerPluginLibraryPaths = const <String>[];
-        _frameProcessorPluginLibraryPaths = effectiveFrameProcessorPluginPaths;
+        _sourceNormalizerPluginReferences =
+            sourceNormalizerConfiguration.pluginReferences;
+        _frameProcessorPluginReferences = frameProcessorPluginReferences;
       }
 
       nextController = await VesperPlayerController.create(
         initialSource: selectedSource,
         renderSurfaceKind: VesperPlayerRenderSurfaceKind.surfaceView,
         resiliencePolicy: _selectedResilienceProfile.policy,
-        sourceNormalizerConfiguration: _sourceNormalizerConfiguration(
-          directNativePlaybackRequired: directNativePlaybackRequired,
-        ),
+        sourceNormalizerConfiguration: sourceNormalizerConfiguration,
         frameProcessorConfiguration: VesperFrameProcessorConfiguration(
-          mode: effectiveFrameProcessorPluginPaths.isEmpty
+          mode: frameProcessorPluginReferences.isEmpty
               ? VesperFrameProcessorMode.disabled
               : VesperFrameProcessorMode.diagnosticsOnly,
-          pluginLibraryPaths: effectiveFrameProcessorPluginPaths,
+          pluginReferences: frameProcessorPluginReferences,
         ),
       );
       await nextController.initialize();
@@ -77,14 +79,21 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
     }
     switch (_sourceNormalizerSetting.mode) {
       case VesperSourceNormalizerMode.preferNormalized:
-        return const VesperSourceNormalizerConfiguration.preferBundled();
+        return VesperSourceNormalizerConfiguration.preferBundled();
       case VesperSourceNormalizerMode.requireNormalized:
-        return const VesperSourceNormalizerConfiguration.requireBundled();
+        return VesperSourceNormalizerConfiguration.requireBundled();
       case VesperSourceNormalizerMode.disabled:
       case VesperSourceNormalizerMode.diagnosticsOnly:
       case VesperSourceNormalizerMode.preflightOnly:
         return VesperSourceNormalizerConfiguration(
           mode: _sourceNormalizerSetting.mode,
+          pluginReferences:
+              _sourceNormalizerSetting.mode ==
+                  VesperSourceNormalizerMode.disabled
+              ? const <VesperPluginReference>[]
+              : <VesperPluginReference>[
+                  VesperBundledPluginReferences.sourceNormalizerFfmpeg,
+                ],
         );
     }
   }
@@ -154,15 +163,25 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
   }
 
   Future<VesperDownloadManager> _createDownloadManager() async {
-    final pluginLibraryPaths =
-        await ExampleLocalMediaPicker.bundledDownloadPluginLibraryPaths();
-    _isDownloadExportPluginInstalled = pluginLibraryPaths.isNotEmpty;
-    final manager = await VesperDownloadManager.create(
-      configuration: VesperDownloadConfiguration(
-        runPostProcessorsOnCompletion: false,
-        pluginLibraryPaths: pluginLibraryPaths,
-      ),
-    );
+    late final VesperDownloadManager manager;
+    try {
+      manager = await VesperDownloadManager.create(
+        configuration: VesperDownloadConfiguration(
+          runPostProcessorsOnCompletion: false,
+          postDownloadPluginReferences: <VesperPluginReference>[
+            VesperBundledPluginReferences.remuxFfmpeg,
+          ],
+        ),
+      );
+      _isDownloadExportPluginInstalled = true;
+    } catch (_) {
+      manager = await VesperDownloadManager.create(
+        configuration: const VesperDownloadConfiguration(
+          runPostProcessorsOnCompletion: false,
+        ),
+      );
+      _isDownloadExportPluginInstalled = false;
+    }
     await (_downloadEventsSubscription?.cancel() ?? Future<void>.value());
     _downloadEventsSubscription = manager.events.listen(_handleDownloadEvent);
     final previous = _downloadManager;
@@ -185,6 +204,7 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
               .toDouble();
         });
       case VesperDownloadInitialSnapshotEvent():
+      case VesperDownloadResyncEvent():
       case VesperDownloadTaskCreatedEvent():
       case VesperDownloadTaskUpdatedEvent():
       case VesperDownloadTaskRemovedEvent():
@@ -249,9 +269,9 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
     if (directNativePlaybackRequired) {
       final wasPluginRoute =
           _sourceNormalizerSetting != ExampleSourceNormalizerSetting.disabled ||
-          _frameProcessorPluginLibraryPaths.isNotEmpty;
+          _frameProcessorPluginReferences.isNotEmpty;
       if (wasPluginRoute && mounted) {
-        _showMessage('Dolby Vision 验收已切回 direct native playback，插件路径已关闭。');
+        _showMessage('Dolby Vision 验收已切回 direct native playback，插件选择已关闭。');
       }
       _updateState(() {
         _sourceNormalizerSetting = ExampleSourceNormalizerSetting.disabled;

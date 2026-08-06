@@ -42,11 +42,50 @@ protocol VesperNativeFramePipelineBackend: AnyObject, Sendable {
 }
 
 final class VesperFfiNativeFramePipelineBackend: VesperNativeFramePipelineBackend, @unchecked Sendable {
+    typealias ArtifactResolver = ([VesperPluginReference]) throws -> VesperResolvedPluginArtifacts
+
+    private let artifactResolver: ArtifactResolver
+
+    init(
+        artifactResolver: @escaping ArtifactResolver = { references in
+            try VesperBundledPluginResolver.resolvePluginArtifacts(references)
+        }
+    ) {
+        self.artifactResolver = artifactResolver
+    }
+
     func open(
         source: VesperPlayerSource,
         configuration: VesperNativeFramePipelineConfiguration,
         sourceNormalizer: VesperSourceNormalizerConfiguration
     ) -> Result<VesperNativeFramePipelineOpenResult, VesperNativeFramePipelineStartupError> {
+        let sourceArtifactsJSON: String
+        let decoderArtifactsJSON: String
+        let frameProcessorArtifactsJSON: String
+        do {
+            let sourceArtifacts = try artifactResolver(
+                sourceNormalizer.pluginReferences
+            )
+            let decoderArtifacts = try artifactResolver(
+                configuration.decoderPluginReferences
+            )
+            let frameProcessorArtifacts = try artifactResolver(
+                configuration.frameProcessorPluginReferences
+            )
+            sourceArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(sourceArtifacts)
+            decoderArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(decoderArtifacts)
+            frameProcessorArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(
+                frameProcessorArtifacts
+            )
+        } catch {
+            return .failure(
+                VesperNativeFramePipelineStartupError(
+                    issue: VesperNativeFramePipelineIssue.classifyStartupFailure(
+                        error.localizedDescription
+                    )
+                )
+            )
+        }
         var openedHandle: UInt64 = 0
         var outputPointer: UnsafeMutablePointer<CChar>?
         var errorPointer: UnsafeMutablePointer<CChar>?
@@ -62,26 +101,17 @@ final class VesperFfiNativeFramePipelineBackend: VesperNativeFramePipelineBacken
         } ?? 0
         let ok = source.uri.withCString { sourceUriPointer in
             withOptionalCString(sourceNormalizer.runtimeProfile) { runtimeProfilePointer in
-                withCStringArray(sourceNormalizer.pluginLibraryPaths) {
-                    sourcePathPointers,
-                    sourcePathCount in
-                    withCStringArray(configuration.decoderPluginLibraryPaths) {
-                        decoderPathPointers,
-                        decoderPathCount in
-                        withCStringArray(configuration.frameProcessorPluginLibraryPaths) {
-                            framePathPointers,
-                            framePathCount in
+                sourceArtifactsJSON.withCString { sourceArtifactsPointer in
+                    decoderArtifactsJSON.withCString { decoderArtifactsPointer in
+                        frameProcessorArtifactsJSON.withCString { frameProcessorArtifactsPointer in
                             vesper_ios_native_frame_pipeline_open(
                                 sourceUriPointer,
                                 sourceNormalizer.ffiMode,
-                                sourcePathPointers,
-                                UInt(sourcePathCount),
+                                sourceArtifactsPointer,
                                 runtimeProfilePointer,
                                 configuration.ffiMode,
-                                decoderPathPointers,
-                                UInt(decoderPathCount),
-                                framePathPointers,
-                                UInt(framePathCount),
+                                decoderArtifactsPointer,
+                                frameProcessorArtifactsPointer,
                                 maxInFlightFrames,
                                 &openedHandle,
                                 &outputPointer,

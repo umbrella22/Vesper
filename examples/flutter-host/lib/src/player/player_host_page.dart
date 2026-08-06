@@ -90,8 +90,10 @@ class _PlayerHostPageState extends State<PlayerHostPage>
   String? _externalPlaybackMessage;
   bool _externalPlaybackMessageIsDiagnostic = false;
   bool _isDownloadExportPluginInstalled = false;
-  List<String> _sourceNormalizerPluginLibraryPaths = const <String>[];
-  List<String> _frameProcessorPluginLibraryPaths = const <String>[];
+  List<VesperPluginReference> _sourceNormalizerPluginReferences =
+      const <VesperPluginReference>[];
+  List<VesperPluginReference> _frameProcessorPluginReferences =
+      const <VesperPluginReference>[];
   bool _externalPlaybackPausedLocalPlayback = false;
   VesperSystemPlaybackPermissionStatus _systemPlaybackPermissionStatus =
       VesperSystemPlaybackPermissionStatus.notRequired;

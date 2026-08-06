@@ -413,9 +413,13 @@ enum VesperSharedAudioSession {
     }
 
     static func waitForPendingOperationsForTesting() async {
-        await withCheckedContinuation { continuation in
-            operationQueue.async {
-                continuation.resume()
+        // Lease deinitializers hop to MainActor before enqueueing their audio-session cleanup.
+        for _ in 0..<2 {
+            await Task.yield()
+            await withCheckedContinuation { continuation in
+                operationQueue.async {
+                    continuation.resume()
+                }
             }
         }
     }

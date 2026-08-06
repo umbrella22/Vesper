@@ -22,9 +22,9 @@ private func makeExampleController(
     let pluginConfiguration = makeExamplePlaybackPluginConfiguration(
         sourceNormalizerSetting: sourceNormalizerSetting,
         nativeFramePipelineSetting: nativeFramePipelineSetting,
-        sourceNormalizerPluginLibraryPaths: bundledSourceNormalizerPluginLibraryPaths(),
-        decoderPluginLibraryPaths: bundledDecoderPluginLibraryPaths(),
-        frameProcessorPluginLibraryPaths: bundledFrameProcessorPluginLibraryPaths(),
+        sourceNormalizerPluginReferences: bundledSourceNormalizerPluginReferences(),
+        decoderPluginReferences: bundledDecoderPluginReferences(),
+        frameProcessorPluginReferences: bundledFrameProcessorPluginReferences(),
         directNativePlaybackRequired: directNativePlaybackRequired
     )
     return VesperPlayerControllerFactory.makeDefault(
@@ -151,6 +151,7 @@ struct PlayerHostView: View {
     @StateObject private var controllerStore: ExamplePlayerControllerStore
     @StateObject private var playlistCoordinator: VesperPlaylistCoordinator
     @StateObject private var downloadManager: VesperDownloadManager
+    private let isDownloadExportPluginInstalled: Bool
     @StateObject private var deviceControls = ExampleIOSDeviceControls()
     @State private var pendingSeekRatio: Double?
     @State private var isVideoPickerPresented = false
@@ -192,7 +193,10 @@ struct PlayerHostView: View {
     @State private var savingTaskIds: Set<VesperDownloadTaskId> = []
     @State private var exportProgressByTaskId: [VesperDownloadTaskId: Float] = [:]
 
-    init() {
+    init(
+        downloadManager: VesperDownloadManager,
+        isDownloadExportPluginInstalled: Bool
+    ) {
         let playlistPreloadBudgetPolicy = VesperPreloadBudgetPolicy(
             maxConcurrentTasks: 2,
             maxMemoryBytes: 64 * 1024 * 1024,
@@ -221,14 +225,8 @@ struct PlayerHostView: View {
                 resiliencePolicy: ExampleResilienceProfile.balanced.policy
             )
         )
-        _downloadManager = StateObject(
-            wrappedValue: VesperDownloadManager(
-                configuration: VesperDownloadConfiguration(
-                    runPostProcessorsOnCompletion: false,
-                    pluginLibraryPaths: bundledDownloadPluginLibraryPaths()
-                )
-            )
-        )
+        _downloadManager = StateObject(wrappedValue: downloadManager)
+        self.isDownloadExportPluginInstalled = isDownloadExportPluginInstalled
     }
 
     private var themeMode: ExampleThemeMode {
@@ -255,20 +253,16 @@ struct PlayerHostView: View {
         horizontalSizeClass != .regular
     }
 
-    private var isDownloadExportPluginInstalled: Bool {
-        !bundledDownloadPluginLibraryPaths().isEmpty
+    private var sourceNormalizerPluginReferences: [VesperPluginReference] {
+        bundledSourceNormalizerPluginReferences()
     }
 
-    private var sourceNormalizerPluginLibraryPaths: [String] {
-        bundledSourceNormalizerPluginLibraryPaths()
+    private var decoderPluginReferences: [VesperPluginReference] {
+        bundledDecoderPluginReferences()
     }
 
-    private var decoderPluginLibraryPaths: [String] {
-        bundledDecoderPluginLibraryPaths()
-    }
-
-    private var frameProcessorPluginLibraryPaths: [String] {
-        bundledFrameProcessorPluginLibraryPaths()
+    private var frameProcessorPluginReferences: [VesperPluginReference] {
+        bundledFrameProcessorPluginReferences()
     }
 
     var body: some View {
@@ -612,9 +606,9 @@ struct PlayerHostView: View {
                     palette: palette,
                     sourceNormalizerSetting: sourceNormalizerSetting,
                     nativeFramePipelineSetting: nativeFramePipelineSetting,
-                    sourceNormalizerPluginLibraryPaths: sourceNormalizerPluginLibraryPaths,
-                    decoderPluginLibraryPaths: decoderPluginLibraryPaths,
-                    frameProcessorPluginLibraryPaths: frameProcessorPluginLibraryPaths,
+                    sourceNormalizerPluginReferences: sourceNormalizerPluginReferences,
+                    decoderPluginReferences: decoderPluginReferences,
+                    frameProcessorPluginReferences: frameProcessorPluginReferences,
                     pluginDiagnostics: controller.pluginDiagnostics,
                     hdrEvidencePresets: exampleHdrEvidenceP0Presets + exampleDolbyAcceptanceHdrEvidencePresets(),
                     selectedHdrEvidencePreset: selectedHdrEvidencePreset,
@@ -945,9 +939,9 @@ struct PlayerHostView: View {
                         controller: controller,
                         sourceNormalizerSetting: sourceNormalizerSetting,
                         nativeFramePipelineSetting: nativeFramePipelineSetting,
-                        sourceNormalizerPluginLibraryPaths: sourceNormalizerPluginLibraryPaths,
-                        decoderPluginLibraryPaths: decoderPluginLibraryPaths,
-                        frameProcessorPluginLibraryPaths: frameProcessorPluginLibraryPaths
+                        sourceNormalizerPluginReferences: sourceNormalizerPluginReferences,
+                        decoderPluginReferences: decoderPluginReferences,
+                        frameProcessorPluginReferences: frameProcessorPluginReferences
                     )
                 )
                 hostMessage = ExampleI18n.hdrEvidenceWritten(directory.path)

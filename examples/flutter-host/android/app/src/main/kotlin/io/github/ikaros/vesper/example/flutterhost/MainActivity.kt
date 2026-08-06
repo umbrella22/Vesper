@@ -16,7 +16,6 @@ import android.view.Display
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
-import dalvik.system.BaseDexClassLoader
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -42,10 +41,6 @@ class MainActivity : FlutterFragmentActivity() {
     ).setMethodCallHandler { call, result ->
       when (call.method) {
         "pickVideo" -> launchVideoPicker(result)
-        "bundledDownloadPluginLibraryPaths" ->
-          result.success(bundledPluginLibraryPaths("vesper_remux_ffmpeg"))
-        "bundledFrameProcessorPluginLibraryPaths" ->
-          result.success(bundledPluginLibraryPaths("vesper_frame_processor_diagnostic"))
         "saveVideoToGallery" -> saveVideoToGallery(call, result)
         "hdrEvidenceOutputRoot" -> result.success(hdrEvidenceOutputRoot().absolutePath)
         "hdrEvidenceDevice" -> result.success(hdrEvidenceDevice())
@@ -161,22 +156,6 @@ class MainActivity : FlutterFragmentActivity() {
       }
     }
     return fallback ?: "本地视频"
-  }
-
-  private fun bundledPluginLibraryPaths(libraryName: String): List<String> {
-    val resolvedPath =
-      (classLoader as? BaseDexClassLoader)?.findLibrary(libraryName)?.takeIf { path ->
-        path.isNotBlank() && File(path).isFile
-      }
-        ?: run {
-          val nativeLibraryDir = applicationInfo.nativeLibraryDir
-          val pluginLibrary =
-            nativeLibraryDir?.let { directory ->
-              File(directory, System.mapLibraryName(libraryName))
-            }
-          pluginLibrary?.takeIf(File::isFile)?.absolutePath
-        }
-    return resolvedPath?.let(::listOf) ?: emptyList()
   }
 
   private fun saveVideoToGallery(call: io.flutter.plugin.common.MethodCall, result: MethodChannel.Result) {

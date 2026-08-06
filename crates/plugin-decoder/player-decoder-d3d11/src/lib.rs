@@ -2,40 +2,54 @@
 
 //! D3D11 native-frame decoder plugin.
 //!
-//! Windows builds expose the plugin ABI and route sessions into the platform
-//! D3D11 implementation. Non-Windows builds keep the same ABI surface for
-//! loader and registry tests, but report unsupported decoder operations.
-
-use std::ffi::{c_char, c_void};
-use std::panic::{AssertUnwindSafe, catch_unwind};
+//! Windows builds route Safe SDK sessions into the platform D3D11
+//! implementation. Non-Windows builds retain the plugin root for contract tests
+//! but do not advertise decoder capabilities.
 
 use player_plugin::{
     DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
-    DecoderFrameFormat, DecoderMediaKind, DecoderNativeDeviceContextKind,
+    DecoderFrameFormat, DecoderMediaKind, DecoderNativeDeviceContextKind, DecoderNativeFrame,
     DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
-    DecoderNativeRequirements, DecoderOperationStatus, DecoderPacket, DecoderPacketResult,
-    DecoderReceiveNativeFrameMetadata, DecoderSessionConfig, DecoderSessionInfo,
-    NativeFramePipelineProfile, VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV5,
-    VesperDecoderReceiveNativeFrameResult, VesperPluginBytes, VesperPluginDescriptor,
-    VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
+    DecoderNativeRequirements, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameOutput,
+    DecoderSessionConfig, DecoderSessionInfo, NativeDecoderPluginFactory, NativeDecoderSession,
+    NativeFramePipelineProfile, Plugin, PluginBuildError,
 };
 
-static PLUGIN_NAME: &[u8] = b"player-decoder-d3d11\0";
-const HANDLE_KIND_D3D11_TEXTURE_2D: u32 = 6;
+const PLUGIN_ID: &str = "io.github.ikaros.vesper.decoder-d3d11";
+const INSTANCE_ID: &str = "io.github.ikaros.vesper.decoder-d3d11.native";
+const PLUGIN_NAME: &str = "player-decoder-d3d11";
 #[cfg(target_os = "windows")]
 const DEFAULT_WIDTH: u32 = 16;
 #[cfg(target_os = "windows")]
 const DEFAULT_HEIGHT: u32 = 16;
 
-struct PluginBundle {
-    api: VesperDecoderPluginApiV5,
-    descriptor: VesperPluginDescriptor,
+#[derive(Debug, Default)]
+struct D3D11DecoderFactory;
+
+impl NativeDecoderPluginFactory for D3D11DecoderFactory {
+    fn name(&self) -> &str {
+        PLUGIN_NAME
+    }
+
+    fn capabilities(&self) -> DecoderCapabilities {
+        decoder_capabilities()
+    }
+
+    fn native_requirements(&self) -> DecoderNativeRequirements {
+        decoder_native_requirements()
+    }
+
+    fn open_native_session(
+        &self,
+        config: &DecoderSessionConfig,
+    ) -> Result<Box<dyn NativeDecoderSession>, DecoderError> {
+        Ok(Box::new(D3D11DecoderSession::open(config.clone())?))
+    }
 }
 
 struct D3D11DecoderSession {
     codec: String,
-    inner: platform::SessionInner,
+    inner: Option<platform::SessionInner>,
     eof_received: bool,
     eof_sent: bool,
 }
@@ -48,42 +62,48 @@ impl D3D11DecoderSession {
             });
         }
         if config.require_cpu_output {
-            return Err(DecoderError::NotConfigured);
+            return Err(DecoderError::UnsupportedCapability {
+                capability: "cpu-video-frame-output".to_owned(),
+            });
         }
 
         let inner = platform::SessionInner::open(&config)?;
 
         Ok(Self {
             codec: config.codec,
-            inner,
+            inner: Some(inner),
             eof_received: false,
             eof_sent: false,
         })
     }
 
-    fn send_packet(
+    fn inner_mut(&mut self) -> Result<&mut platform::SessionInner, DecoderError> {
+        self.inner.as_mut().ok_or(DecoderError::NotConfigured)
+    }
+
+    fn send_packet_impl(
         &mut self,
-        packet: DecoderPacket,
+        packet: &DecoderPacket,
         data: &[u8],
     ) -> Result<DecoderPacketResult, DecoderError> {
         if packet.discontinuity {
-            self.inner.flush()?;
+            self.inner_mut()?.reset_decode_state()?;
             self.eof_received = false;
             self.eof_sent = false;
         }
 
         if packet.end_of_stream {
             self.eof_received = true;
-            return self.inner.send_end_of_stream();
+            return self.inner_mut()?.send_end_of_stream();
         }
 
-        self.inner.send_packet(&packet, data)
+        self.inner_mut()?.send_packet(packet, data)
     }
 
-    fn receive_native_frame(
+    fn receive_native_frame_impl(
         &mut self,
-    ) -> Result<(DecoderReceiveNativeFrameMetadata, usize), DecoderError> {
-        match self.inner.receive_native_frame()? {
+    ) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
+        match self.inner_mut()?.receive_native_frame()? {
             platform::ReceiveNativeFrame::Frame(frame) => {
                 let metadata = DecoderNativeFrameMetadata {
                     media_kind: DecoderMediaKind::Video,
@@ -110,252 +130,128 @@ impl D3D11DecoderSession {
                         requires_release: true,
                     }),
                 };
-                Ok((
-                    DecoderReceiveNativeFrameMetadata::frame(metadata),
-                    frame.handle,
-                ))
+                Ok(DecoderReceiveNativeFrameOutput::Frame(DecoderNativeFrame {
+                    metadata,
+                    handle: frame.handle,
+                    lease_token: None,
+                }))
             }
             platform::ReceiveNativeFrame::NeedMoreInput => {
                 if self.eof_received && !self.eof_sent {
                     self.eof_sent = true;
-                    return Ok((DecoderReceiveNativeFrameMetadata::eof(), 0));
+                    return Ok(DecoderReceiveNativeFrameOutput::Eof);
                 }
-                Ok((DecoderReceiveNativeFrameMetadata::need_more_input(), 0))
+                Ok(DecoderReceiveNativeFrameOutput::NeedMoreInput)
             }
             platform::ReceiveNativeFrame::Eof => {
                 self.eof_sent = true;
-                Ok((DecoderReceiveNativeFrameMetadata::eof(), 0))
+                Ok(DecoderReceiveNativeFrameOutput::Eof)
             }
         }
     }
 
-    fn release_native_frame(
-        &mut self,
-        handle_kind: u32,
-        handle: usize,
-    ) -> Result<(), DecoderError> {
-        if handle_kind != HANDLE_KIND_D3D11_TEXTURE_2D || handle == 0 {
+    fn release_native_frame_impl(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError> {
+        if frame.metadata.handle_kind != DecoderNativeHandleKind::D3D11Texture2D
+            || frame.handle == 0
+        {
             return Err(DecoderError::abi_violation(
                 "D3D11 decoder release received an invalid texture handle",
             ));
         }
-        self.inner.release_frame_texture(handle)
+        let frame_id = frame.metadata.frame_id.ok_or_else(|| {
+            DecoderError::abi_violation("D3D11 decoder release is missing its frame id")
+        })?;
+        self.inner_mut()?
+            .release_frame_texture(frame_id, frame.handle)
     }
 
-    fn flush(&mut self) {
-        let _ = self.inner.flush();
+    fn flush_impl(&mut self) -> Result<(), DecoderError> {
+        self.inner_mut()?.flush()?;
         self.eof_received = false;
         self.eof_sent = false;
+        Ok(())
+    }
+
+    fn close_impl(&mut self) -> Result<(), DecoderError> {
+        self.eof_received = false;
+        self.eof_sent = false;
+        let Some(inner) = self.inner.take() else {
+            return Ok(());
+        };
+        inner.close()
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
-    catch_unwind(AssertUnwindSafe(vesper_plugin_entry_impl)).unwrap_or(std::ptr::null())
-}
-
-fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
-    let mut bundle = Box::new(PluginBundle {
-        api: VesperDecoderPluginApiV5 {
-            context: std::ptr::null_mut(),
-            destroy: None,
-            name: Some(decoder_name),
-            capabilities_json: Some(decoder_capabilities_json),
-            native_requirements_json: Some(decoder_native_requirements_json),
-            free_bytes: Some(free_plugin_bytes),
-            open_session_json: Some(decoder_open_session_json),
-            send_packet: Some(decoder_send_packet),
-            receive_native_frame: Some(decoder_receive_native_frame),
-            release_native_frame: Some(decoder_release_native_frame),
-            flush_session: Some(decoder_flush_session),
-            close_session: Some(decoder_close_session),
-            receive_pcm_frame: None,
-            release_native_frame2: None,
-        },
-        descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-            plugin_kind: VesperPluginKind::Decoder as u32,
-            plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
-            api: std::ptr::null(),
-        },
-    });
-    bundle.descriptor.api = (&bundle.api as *const VesperDecoderPluginApiV5).cast::<c_void>();
-    let bundle = Box::leak(bundle);
-    &bundle.descriptor
-}
-
-unsafe extern "C" fn decoder_name(_context: *mut c_void) -> *const c_char {
-    catch_unwind(AssertUnwindSafe(|| PLUGIN_NAME.as_ptr().cast::<c_char>()))
-        .unwrap_or(std::ptr::null())
-}
-
-unsafe extern "C" fn decoder_capabilities_json(_context: *mut c_void) -> VesperPluginBytes {
-    catch_decoder_bytes(|| serialize_payload(&decoder_capabilities()))
-}
-
-unsafe extern "C" fn decoder_native_requirements_json(_context: *mut c_void) -> VesperPluginBytes {
-    catch_decoder_bytes(|| serialize_payload(&decoder_native_requirements()))
-}
-
-unsafe extern "C" fn decoder_open_session_json(
-    _context: *mut c_void,
-    config_json: *const u8,
-    config_json_len: usize,
-) -> VesperDecoderOpenSessionResult {
-    catch_decoder_open(|| {
-        let config = match decode_json::<DecoderSessionConfig>(config_json, config_json_len) {
-            Ok(config) => config,
-            Err(error) => return open_error(error),
-        };
-
-        match D3D11DecoderSession::open(config) {
-            Ok(session) => {
-                let info = DecoderSessionInfo {
-                    decoder_name: Some("player-decoder-d3d11".to_owned()),
-                    selected_hardware_backend: Some("D3D11".to_owned()),
-                    output_format: Some(DecoderFrameFormat::Bgra8888),
-                };
-                open_success(Box::into_raw(Box::new(session)).cast::<c_void>(), &info)
-            }
-            Err(error) => open_error(error),
+impl NativeDecoderSession for D3D11DecoderSession {
+    fn session_info(&self) -> DecoderSessionInfo {
+        DecoderSessionInfo {
+            decoder_name: Some(PLUGIN_NAME.to_owned()),
+            selected_hardware_backend: Some("D3D11".to_owned()),
+            output_format: Some(DecoderFrameFormat::Nv12),
         }
-    })
+    }
+
+    fn send_packet(
+        &mut self,
+        packet: &DecoderPacket,
+        data: &[u8],
+    ) -> Result<DecoderPacketResult, DecoderError> {
+        self.send_packet_impl(packet, data)
+    }
+
+    fn receive_native_frame(&mut self) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
+        self.receive_native_frame_impl()
+    }
+
+    fn release_native_frame(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError> {
+        self.release_native_frame_impl(frame)
+    }
+
+    fn flush(&mut self) -> Result<(), DecoderError> {
+        self.flush_impl()
+    }
+
+    fn close(&mut self) -> Result<(), DecoderError> {
+        self.close_impl()
+    }
 }
 
-unsafe extern "C" fn decoder_send_packet(
-    _context: *mut c_void,
-    session: *mut c_void,
-    packet_json: *const u8,
-    packet_json_len: usize,
-    packet_data: *const u8,
-    packet_data_len: usize,
-) -> VesperPluginProcessResult {
-    catch_decoder_process(|| {
-        // SAFETY: `session` is the opaque pointer returned by this plugin's
-        // open callback and remains owned by the host until close.
-        let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
-            return process_error(DecoderError::NotConfigured);
-        };
-        let packet = match decode_json::<DecoderPacket>(packet_json, packet_json_len) {
-            Ok(packet) => packet,
-            Err(error) => return process_error(error),
-        };
-        if packet_data.is_null() && packet_data_len > 0 {
-            return process_error(DecoderError::abi_violation(
-                "packet data pointer was null with non-zero len",
-            ));
-        }
-
-        let packet_data = if packet_data.is_null() || packet_data_len == 0 {
-            &[]
-        } else {
-            // SAFETY: the ABI caller provides a valid packet byte range for
-            // the duration of this synchronous callback.
-            unsafe { std::slice::from_raw_parts(packet_data, packet_data_len) }
-        };
-
-        match session.send_packet(packet, packet_data) {
-            Ok(result) => process_success(&result),
-            Err(error) => process_error(error),
-        }
-    })
+impl Drop for D3D11DecoderSession {
+    fn drop(&mut self) {
+        let _ = self.close_impl();
+    }
 }
 
-unsafe extern "C" fn decoder_receive_native_frame(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperDecoderReceiveNativeFrameResult {
-    catch_decoder_native_frame(|| {
-        // SAFETY: `session` is the opaque pointer returned by this plugin's
-        // open callback and remains owned by the host until close.
-        let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
-            return native_frame_error(DecoderError::NotConfigured);
-        };
-
-        match session.receive_native_frame() {
-            Ok((metadata, handle)) => native_frame_success(&metadata, handle),
-            Err(error) => native_frame_error(error),
-        }
-    })
-}
-
-unsafe extern "C" fn decoder_release_native_frame(
-    _context: *mut c_void,
-    session: *mut c_void,
-    handle_kind: u32,
-    handle: usize,
-) -> VesperPluginProcessResult {
-    catch_decoder_process(|| {
-        // SAFETY: `session` is the opaque pointer returned by this plugin's
-        // open callback and remains owned by the host until close.
-        let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
-            return process_error(DecoderError::NotConfigured);
-        };
-
-        match session.release_native_frame(handle_kind, handle) {
-            Ok(()) => process_success(&DecoderOperationStatus { completed: true }),
-            Err(error) => process_error(error),
-        }
-    })
-}
-
-unsafe extern "C" fn decoder_flush_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_decoder_process(|| {
-        // SAFETY: `session` is the opaque pointer returned by this plugin's
-        // open callback and remains owned by the host until close.
-        let Some(session) = (unsafe { session.cast::<D3D11DecoderSession>().as_mut() }) else {
-            return process_error(DecoderError::NotConfigured);
-        };
-        session.flush();
-        process_success(&DecoderOperationStatus { completed: true })
-    })
-}
-
-unsafe extern "C" fn decoder_close_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_decoder_process(|| {
-        if session.is_null() {
-            return process_error(DecoderError::NotConfigured);
-        }
-        // SAFETY: `session` was allocated by `decoder_open_session_json` and is
-        // consumed exactly once by this close callback.
-        let _ = unsafe { Box::from_raw(session.cast::<D3D11DecoderSession>()) };
-        process_success(&DecoderOperationStatus { completed: true })
-    })
-}
-
-unsafe extern "C" fn free_plugin_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: payloads returned by this plugin are allocated from Vec<u8>
-        // inside this dynamic library and have not been reclaimed yet.
-        let _ = unsafe { payload.into_vec() };
-    }));
+#[player_plugin::export]
+fn d3d11_decoder_plugin() -> Result<Plugin, PluginBuildError> {
+    Plugin::builder(PLUGIN_ID, PLUGIN_NAME)?
+        .with_native_decoder(INSTANCE_ID, D3D11DecoderFactory)?
+        .build()
 }
 
 fn decoder_capabilities() -> DecoderCapabilities {
     DecoderCapabilities {
-        codecs: [
-            ("H264", "baseline/main/high"),
-            ("AVC", "baseline/main/high"),
-            ("AVC1", "baseline/main/high"),
-            ("HEVC", "main/main10"),
-            ("H265", "main/main10"),
-            ("HVC1", "main/main10"),
-            ("HEV1", "main/main10"),
-        ]
-        .into_iter()
-        .map(|(codec, profile)| DecoderCodecCapability {
-            codec: codec.to_owned(),
-            media_kind: DecoderMediaKind::Video,
-            profiles: vec![profile.to_owned()],
-            output_formats: vec![DecoderFrameFormat::Bgra8888],
-        })
-        .collect(),
+        codecs: if cfg!(target_os = "windows") {
+            [
+                ("H264", "baseline/main/high"),
+                ("AVC", "baseline/main/high"),
+                ("AVC1", "baseline/main/high"),
+                ("HEVC", "main/main10"),
+                ("H265", "main/main10"),
+                ("HVC1", "main/main10"),
+                ("HEV1", "main/main10"),
+            ]
+            .into_iter()
+            .map(|(codec, profile)| DecoderCodecCapability {
+                codec: codec.to_owned(),
+                media_kind: DecoderMediaKind::Video,
+                profiles: vec![profile.to_owned()],
+                output_formats: vec![DecoderFrameFormat::Nv12],
+            })
+            .collect()
+        } else {
+            Vec::new()
+        },
         supports_hardware_decode: cfg!(target_os = "windows"),
         supports_cpu_video_frames: false,
         supports_audio_frames: false,
@@ -382,120 +278,25 @@ fn decoder_native_requirements() -> DecoderNativeRequirements {
     }
 }
 
-fn decode_json<T: serde::de::DeserializeOwned>(
-    data: *const u8,
-    len: usize,
-) -> Result<T, DecoderError> {
-    if data.is_null() && len > 0 {
-        return Err(DecoderError::abi_violation(
-            "decoder JSON pointer was null with non-zero len",
-        ));
-    }
-    let payload = if data.is_null() || len == 0 {
-        &[]
-    } else {
-        // SAFETY: the ABI caller provides a valid JSON byte range for the
-        // duration of this synchronous callback.
-        unsafe { std::slice::from_raw_parts(data, len) }
-    };
-    serde_json::from_slice(payload).map_err(|error| DecoderError::payload_codec(error.to_string()))
-}
-
-fn serialize_payload<T: serde::Serialize>(value: &T) -> VesperPluginBytes {
-    match serde_json::to_vec(value) {
-        Ok(payload) => VesperPluginBytes::from_vec(payload),
-        Err(error) => VesperPluginBytes::from_vec(error.to_string().into_bytes()),
-    }
-}
-
-fn open_success(session: *mut c_void, info: &DecoderSessionInfo) -> VesperDecoderOpenSessionResult {
-    VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Success as u32,
-        session,
-        payload: serialize_payload(info),
-    }
-}
-
-fn open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
-    VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        session: std::ptr::null_mut(),
-        payload: serialize_payload(&error),
-    }
-}
-
-fn process_success<T: serde::Serialize>(value: &T) -> VesperPluginProcessResult {
-    VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success as u32,
-        payload: serialize_payload(value),
-    }
-}
-
-fn process_error(error: DecoderError) -> VesperPluginProcessResult {
-    VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        payload: serialize_payload(&error),
-    }
-}
-
-fn native_frame_success(
-    metadata: &DecoderReceiveNativeFrameMetadata,
-    handle: usize,
-) -> VesperDecoderReceiveNativeFrameResult {
-    VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Success as u32,
-        metadata: serialize_payload(metadata),
-        handle,
-    }
-}
-
-fn native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameResult {
-    VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        metadata: serialize_payload(&error),
-        handle: 0,
-    }
-}
-
-fn catch_decoder_bytes(f: impl FnOnce() -> VesperPluginBytes) -> VesperPluginBytes {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| serialize_payload(&plugin_panic_error()))
-}
-
-fn catch_decoder_open(
-    f: impl FnOnce() -> VesperDecoderOpenSessionResult,
-) -> VesperDecoderOpenSessionResult {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| open_error(plugin_panic_error()))
-}
-
-fn catch_decoder_process(
-    f: impl FnOnce() -> VesperPluginProcessResult,
-) -> VesperPluginProcessResult {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| process_error(plugin_panic_error()))
-}
-
-fn catch_decoder_native_frame(
-    f: impl FnOnce() -> VesperDecoderReceiveNativeFrameResult,
-) -> VesperDecoderReceiveNativeFrameResult {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| native_frame_error(plugin_panic_error()))
-}
-
-fn plugin_panic_error() -> DecoderError {
-    DecoderError::internal("decoder plugin callback panicked")
-}
-
 #[cfg(target_os = "windows")]
 mod platform {
     use std::collections::HashMap;
     use std::ffi::c_void;
+    use std::marker::PhantomData;
     use std::mem::ManuallyDrop;
     use std::ptr;
+    use std::rc::Rc;
     use std::sync::OnceLock;
 
     use player_plugin::{
-        DecoderBitstreamFormat, DecoderError, DecoderFrameFormat, DecoderNativeDeviceContextKind,
-        DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult, DecoderSessionConfig,
+        DecoderBitstreamFormat, DecoderError, DecoderFrameFormat, DecoderNativeHandleKind,
+        DecoderPacket, DecoderPacketResult, DecoderSessionConfig,
+        normalize_decoder_codec_identifier,
     };
-    use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
+    use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+    use windows::Win32::Graphics::Direct3D11::{
+        D3D11_CREATE_DEVICE_SINGLETHREADED, ID3D11Device, ID3D11Texture2D,
+    };
     use windows::Win32::Media::MediaFoundation::{
         IMFActivate, IMFDXGIBuffer, IMFMediaType, IMFSample, IMFTransform, MF_E_NOTACCEPTING,
         MF_E_TRANSFORM_NEED_MORE_INPUT, MF_E_TRANSFORM_STREAM_CHANGE,
@@ -510,8 +311,10 @@ mod platform {
         MFVideoFormat_H264, MFVideoFormat_H264_ES, MFVideoFormat_HEVC, MFVideoFormat_NV12,
         MFVideoInterlace_Progressive,
     };
-    use windows::Win32::System::Com::CoTaskMemFree;
-    use windows::core::{IUnknown, Interface};
+    use windows::Win32::System::Com::{
+        COINIT_MULTITHREADED, CoInitializeEx, CoTaskMemFree, CoUninitialize,
+    };
+    use windows::core::{AgileReference, IUnknown, Interface};
 
     const HNS_PER_MICROSECOND: i64 = 10;
 
@@ -535,18 +338,60 @@ mod platform {
     }
 
     pub struct SessionInner {
-        decoder: IMFTransform,
+        decoder: AgileReference<IMFTransform>,
         width: u32,
         height: u32,
-        outstanding_textures: HashMap<usize, ID3D11Texture2D>,
+        outstanding_textures: HashMap<u64, OutstandingTexture>,
         stream_started: bool,
         draining: bool,
         eof_sent: bool,
         next_frame_id: u64,
     }
 
+    struct OutstandingTexture {
+        handle: usize,
+        _texture: ID3D11Texture2D,
+    }
+
+    struct ComApartmentScope {
+        uninitialize_on_drop: bool,
+        _thread_bound: PhantomData<Rc<()>>,
+    }
+
+    impl ComApartmentScope {
+        fn enter() -> Result<Self, DecoderError> {
+            // SAFETY: the reserved pointer is null. Each successful call is
+            // balanced by this thread-bound scope's `Drop` implementation.
+            let status = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+            if status == RPC_E_CHANGED_MODE {
+                return Ok(Self {
+                    uninitialize_on_drop: false,
+                    _thread_bound: PhantomData,
+                });
+            }
+            status
+                .ok()
+                .map_err(|error| mf_error("CoInitializeEx(COINIT_MULTITHREADED)", error))?;
+            Ok(Self {
+                uninitialize_on_drop: true,
+                _thread_bound: PhantomData,
+            })
+        }
+    }
+
+    impl Drop for ComApartmentScope {
+        fn drop(&mut self) {
+            if self.uninitialize_on_drop {
+                // SAFETY: the scope is not `Send` and balances a successful
+                // `CoInitializeEx` call made on this same thread.
+                unsafe { CoUninitialize() };
+            }
+        }
+    }
+
     impl SessionInner {
         pub fn open(config: &DecoderSessionConfig) -> Result<Self, DecoderError> {
+            let _apartment = ComApartmentScope::enter()?;
             ensure_media_foundation_started()?;
             let Some(context) = config.native_device_context.as_ref() else {
                 return Err(DecoderError::NotConfigured);
@@ -567,6 +412,12 @@ mod platform {
                         )
                     })?
             };
+            let creation_flags = unsafe { device.GetCreationFlags() };
+            if creation_flags & D3D11_CREATE_DEVICE_SINGLETHREADED.0 != 0 {
+                return Err(DecoderError::UnsupportedCapability {
+                    capability: "multithreaded-d3d11-device".to_owned(),
+                });
+            }
             let width = config.width.unwrap_or(super::DEFAULT_WIDTH).max(1);
             let height = config.height.unwrap_or(super::DEFAULT_HEIGHT).max(1);
             let coded_width = config.coded_width.unwrap_or(width).max(1);
@@ -581,6 +432,8 @@ mod platform {
                 coded_width,
                 coded_height,
             )?;
+            let decoder = AgileReference::new(&decoder)
+                .map_err(|error| mf_error("AgileReference<IMFTransform>::new", error))?;
             Ok(Self {
                 decoder,
                 width,
@@ -598,12 +451,14 @@ mod platform {
             packet: &DecoderPacket,
             data: &[u8],
         ) -> Result<DecoderPacketResult, DecoderError> {
+            let apartment = ComApartmentScope::enter()?;
             if data.is_empty() {
                 return Ok(DecoderPacketResult { accepted: true });
             }
-            self.start_stream_if_needed()?;
+            self.start_stream_if_needed_in_apartment(&apartment)?;
             let sample = create_input_sample(packet, data)?;
-            match unsafe { self.decoder.ProcessInput(0, &sample, 0) } {
+            let decoder = self.resolve_decoder(&apartment)?;
+            match unsafe { decoder.ProcessInput(0, &sample, 0) } {
                 Ok(()) => Ok(DecoderPacketResult { accepted: true }),
                 Err(error) if error.code() == MF_E_NOTACCEPTING => {
                     Ok(DecoderPacketResult { accepted: false })
@@ -613,15 +468,17 @@ mod platform {
         }
 
         pub fn send_end_of_stream(&mut self) -> Result<DecoderPacketResult, DecoderError> {
+            let apartment = ComApartmentScope::enter()?;
             if self.draining {
                 return Ok(DecoderPacketResult { accepted: true });
             }
-            self.start_stream_if_needed()?;
+            self.start_stream_if_needed_in_apartment(&apartment)?;
+            let decoder = self.resolve_decoder(&apartment)?;
             unsafe {
-                self.decoder
+                decoder
                     .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)
                     .map_err(|error| mf_error("MFT_MESSAGE_NOTIFY_END_OF_STREAM", error))?;
-                self.decoder
+                decoder
                     .ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)
                     .map_err(|error| mf_error("MFT_MESSAGE_COMMAND_DRAIN", error))?;
             }
@@ -631,15 +488,16 @@ mod platform {
         }
 
         pub fn receive_native_frame(&mut self) -> Result<ReceiveNativeFrame, DecoderError> {
+            let apartment = ComApartmentScope::enter()?;
             if self.eof_sent {
                 return Ok(ReceiveNativeFrame::Eof);
             }
 
             let mut output = MFT_OUTPUT_DATA_BUFFER::default();
             let mut status = 0u32;
+            let decoder = self.resolve_decoder(&apartment)?;
             match unsafe {
-                self.decoder
-                    .ProcessOutput(0, std::slice::from_mut(&mut output), &mut status)
+                decoder.ProcessOutput(0, std::slice::from_mut(&mut output), &mut status)
             } {
                 Ok(()) => {
                     let _events = unsafe { ManuallyDrop::take(&mut output.pEvents) };
@@ -661,45 +519,88 @@ mod platform {
                     }
                 }
                 Err(error) if error.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
-                    self.set_output_type()?;
+                    self.set_output_type_in_apartment(&apartment)?;
                     Ok(ReceiveNativeFrame::NeedMoreInput)
                 }
                 Err(error) => Err(mf_error("IMFTransform::ProcessOutput", error)),
             }
         }
 
-        pub fn release_frame_texture(&mut self, handle: usize) -> Result<(), DecoderError> {
-            self.outstanding_textures
-                .remove(&handle)
-                .map(|_| ())
-                .ok_or_else(|| {
-                    DecoderError::abi_violation(
-                        "D3D11 decoder release received an unknown texture handle",
-                    )
-                })
+        pub fn release_frame_texture(
+            &mut self,
+            frame_id: u64,
+            handle: usize,
+        ) -> Result<(), DecoderError> {
+            let _apartment = ComApartmentScope::enter()?;
+            let Some(texture) = self.outstanding_textures.get(&frame_id) else {
+                return Err(DecoderError::abi_violation(
+                    "D3D11 decoder release received an unknown frame id",
+                ));
+            };
+            if texture.handle != handle {
+                return Err(DecoderError::abi_violation(
+                    "D3D11 decoder release handle does not match its frame id",
+                ));
+            }
+            self.outstanding_textures.remove(&frame_id);
+            Ok(())
         }
 
-        pub fn flush(&mut self) -> Result<(), DecoderError> {
+        pub fn reset_decode_state(&mut self) -> Result<(), DecoderError> {
+            let apartment = ComApartmentScope::enter()?;
+            self.reset_decode_state_in_apartment(&apartment)
+        }
+
+        fn reset_decode_state_in_apartment(
+            &mut self,
+            apartment: &ComApartmentScope,
+        ) -> Result<(), DecoderError> {
+            let decoder = self.resolve_decoder(apartment)?;
             unsafe {
-                self.decoder
+                decoder
                     .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)
                     .map_err(|error| mf_error("MFT_MESSAGE_COMMAND_FLUSH", error))?;
             }
-            self.outstanding_textures.clear();
             self.draining = false;
             self.eof_sent = false;
             Ok(())
         }
 
-        fn start_stream_if_needed(&mut self) -> Result<(), DecoderError> {
+        pub fn flush(&mut self) -> Result<(), DecoderError> {
+            let apartment = ComApartmentScope::enter()?;
+            self.reset_decode_state_in_apartment(&apartment)?;
+            self.outstanding_textures.clear();
+            Ok(())
+        }
+
+        pub fn close(mut self) -> Result<(), DecoderError> {
+            let apartment = ComApartmentScope::enter()?;
+            let flush_result = self.reset_decode_state_in_apartment(&apartment);
+            self.outstanding_textures.clear();
+            let Self {
+                decoder,
+                outstanding_textures,
+                ..
+            } = self;
+            drop(outstanding_textures);
+            drop(decoder);
+            drop(apartment);
+            flush_result
+        }
+
+        fn start_stream_if_needed_in_apartment(
+            &mut self,
+            apartment: &ComApartmentScope,
+        ) -> Result<(), DecoderError> {
             if self.stream_started {
                 return Ok(());
             }
+            let decoder = self.resolve_decoder(apartment)?;
             unsafe {
-                self.decoder
+                decoder
                     .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
                     .map_err(|error| mf_error("MFT_MESSAGE_NOTIFY_BEGIN_STREAMING", error))?;
-                self.decoder
+                decoder
                     .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
                     .map_err(|error| mf_error("MFT_MESSAGE_NOTIFY_START_OF_STREAM", error))?;
             }
@@ -707,14 +608,27 @@ mod platform {
             Ok(())
         }
 
-        fn set_output_type(&self) -> Result<(), DecoderError> {
+        fn set_output_type_in_apartment(
+            &self,
+            apartment: &ComApartmentScope,
+        ) -> Result<(), DecoderError> {
             let output_type =
                 create_video_media_type(MFVideoFormat_NV12, self.width, self.height, None, true)?;
+            let decoder = self.resolve_decoder(apartment)?;
             unsafe {
-                self.decoder
+                decoder
                     .SetOutputType(0, &output_type, 0)
                     .map_err(|error| mf_error("IMFTransform::SetOutputType", error))
             }
+        }
+
+        fn resolve_decoder(
+            &self,
+            _apartment: &ComApartmentScope,
+        ) -> Result<IMFTransform, DecoderError> {
+            self.decoder
+                .resolve()
+                .map_err(|error| mf_error("AgileReference<IMFTransform>::resolve", error))
         }
 
         fn native_frame_from_sample(
@@ -743,9 +657,17 @@ mod platform {
             }
             let texture = unsafe { ID3D11Texture2D::from_raw(resource) };
             let handle = texture.as_raw() as usize;
-            self.outstanding_textures.insert(handle, texture);
             let frame_id = self.next_frame_id;
-            self.next_frame_id = self.next_frame_id.saturating_add(1);
+            self.next_frame_id = self.next_frame_id.checked_add(1).ok_or_else(|| {
+                DecoderError::internal("D3D11 decoder frame id space is exhausted")
+            })?;
+            self.outstanding_textures.insert(
+                frame_id,
+                OutstandingTexture {
+                    handle,
+                    _texture: texture,
+                },
+            );
             Ok(NativeFrame {
                 pts_us,
                 duration_us,
@@ -963,14 +885,14 @@ mod platform {
     fn codec_input_subtype(
         config: &DecoderSessionConfig,
     ) -> Result<windows::core::GUID, DecoderError> {
-        let codec = config.codec.to_ascii_uppercase();
+        let codec = normalize_decoder_codec_identifier(&config.codec);
         let bitstream = config.bitstream_format.as_ref();
         match codec.as_str() {
-            "H264" | "AVC1" | "AVC3" => match bitstream {
+            "h264" | "avc" | "avc1" | "avc3" => match bitstream {
                 Some(DecoderBitstreamFormat::AnnexB) => Ok(MFVideoFormat_H264_ES),
                 _ => Ok(MFVideoFormat_H264),
             },
-            "HEVC" | "H265" | "HVC1" | "HEV1" => Ok(MFVideoFormat_HEVC),
+            "hevc" | "h265" | "hvc1" | "hev1" => Ok(MFVideoFormat_HEVC),
             _ => Err(DecoderError::UnsupportedCodec {
                 codec: config.codec.clone(),
             }),
@@ -1032,43 +954,41 @@ mod platform {
             Err(DecoderError::NotConfigured)
         }
 
-        pub fn release_frame_texture(&mut self, _handle: usize) -> Result<(), DecoderError> {
+        pub fn release_frame_texture(
+            &mut self,
+            _frame_id: u64,
+            _handle: usize,
+        ) -> Result<(), DecoderError> {
+            Err(DecoderError::NotConfigured)
+        }
+
+        pub fn reset_decode_state(&mut self) -> Result<(), DecoderError> {
             Err(DecoderError::NotConfigured)
         }
 
         pub fn flush(&mut self) -> Result<(), DecoderError> {
             Err(DecoderError::NotConfigured)
         }
+
+        pub fn close(self) -> Result<(), DecoderError> {
+            Ok(())
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        HANDLE_KIND_D3D11_TEXTURE_2D, decode_json, decoder_capabilities,
-        decoder_native_requirements, vesper_plugin_entry,
-    };
+    use super::*;
     use player_plugin::{
-        DecoderBitstreamFormat, DecoderError, DecoderMediaKind, DecoderNativeDeviceContext,
-        DecoderNativeDeviceContextKind, DecoderNativeHandleKind, DecoderNativeRequirements,
-        DecoderReceiveFrameStatus, DecoderReceiveNativeFrameMetadata, DecoderSessionConfig,
-        NativeFramePipelineProfile, VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-        VesperDecoderPluginApiV5, VesperPluginKind, VesperPluginResultStatus,
+        DecoderBitstreamFormat, DecoderMediaKind, DecoderNativeDeviceContext,
+        DecoderNativeDeviceContextKind, DecoderNativeHandleKind, NativeFramePipelineProfile,
     };
 
     #[test]
-    fn exported_descriptor_matches_native_decoder_plugin_metadata() {
-        // SAFETY: the D3D11 entry point returns a process-lifetime descriptor
-        // pointer or null; this test immediately borrows it.
-        let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
-
-        assert_eq!(
-            descriptor.abi_version,
-            VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT
-        );
-        assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder as u32);
-        assert!(!descriptor.api.is_null());
-        assert!(!descriptor.plugin_name.is_null());
+    fn exports_plugin_entry() {
+        let entry: extern "C" fn() -> *const player_plugin::__private::VesperPluginRoot =
+            vesper_plugin_entry;
+        assert!(!entry().is_null());
     }
 
     #[test]
@@ -1084,8 +1004,20 @@ mod tests {
             cfg!(target_os = "windows")
         );
         assert!(!capabilities.supports_cpu_video_frames);
-        assert!(capabilities.supports_codec("H264", DecoderMediaKind::Video));
-        assert!(capabilities.supports_codec("hvc1", DecoderMediaKind::Video));
+        assert_eq!(
+            capabilities.supports_codec("H264", DecoderMediaKind::Video),
+            cfg!(target_os = "windows")
+        );
+        assert_eq!(
+            capabilities.supports_codec("hvc1", DecoderMediaKind::Video),
+            cfg!(target_os = "windows")
+        );
+        assert!(
+            capabilities
+                .codecs
+                .iter()
+                .all(|codec| { codec.output_formats == vec![DecoderFrameFormat::Nv12] })
+        );
     }
 
     #[test]
@@ -1117,76 +1049,59 @@ mod tests {
         );
     }
 
-    #[test]
-    fn exported_descriptor_exposes_native_requirements_callback() {
-        // SAFETY: the D3D11 entry point returns a process-lifetime descriptor
-        // pointer or null; this test immediately borrows it.
-        let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
-        // SAFETY: the descriptor is expected to expose the current decoder ABI
-        // table for this plugin kind.
-        let api = unsafe { descriptor.api.cast::<VesperDecoderPluginApiV5>().as_ref() }
-            .expect("native decoder api");
-        let callback = api
-            .native_requirements_json
-            .expect("native requirements callback");
-        // SAFETY: the callback pointer comes from the plugin ABI table and is
-        // called synchronously with its paired context.
-        let payload = unsafe { callback(api.context) };
-        let requirements = decode_json::<DecoderNativeRequirements>(payload.data, payload.len)
-            .expect("requirements payload");
-
-        assert!(requirements.requires_native_device_context);
-        assert_eq!(
-            requirements.output_handle_kinds,
-            vec![DecoderNativeHandleKind::D3D11Texture2D]
-        );
-        assert_eq!(
-            requirements.output_pipeline_profiles,
-            vec![NativeFramePipelineProfile::D3D11Texture2D]
-        );
-        // SAFETY: `payload` was allocated by this plugin and has not been freed.
-        unsafe { super::free_plugin_bytes(api.context, payload) };
-    }
-
+    #[cfg(target_os = "windows")]
     #[test]
     fn open_session_rejects_missing_device_context() {
-        let config = DecoderSessionConfig {
+        let factory = D3D11DecoderFactory;
+        let error = match factory.open_native_session(&DecoderSessionConfig {
             codec: "H264".to_owned(),
             media_kind: DecoderMediaKind::Video,
             prefer_hardware: true,
             ..DecoderSessionConfig::default()
-        };
-        let payload = serde_json::to_vec(&config).expect("config json");
-
-        // SAFETY: all pointers passed to the callback are valid for this
-        // synchronous test call.
-        let result = unsafe {
-            super::decoder_open_session_json(std::ptr::null_mut(), payload.as_ptr(), payload.len())
+        }) {
+            Ok(_) => panic!("missing D3D11 device context must be rejected"),
+            Err(error) => error,
         };
 
-        assert_eq!(result.status, VesperPluginResultStatus::Failure as u32);
-        assert!(result.session.is_null());
-        let error = decode_json::<DecoderError>(result.payload.data, result.payload.len)
-            .expect("error payload");
         assert_eq!(error, DecoderError::NotConfigured);
-        // SAFETY: `result.payload` was allocated by this plugin and has not
-        // been freed.
-        unsafe { super::free_plugin_bytes(std::ptr::null_mut(), result.payload) };
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
-    fn native_frame_metadata_round_trips_eof_status() {
-        let metadata = DecoderReceiveNativeFrameMetadata {
-            status: DecoderReceiveFrameStatus::Eof,
-            frame: None,
+    fn open_session_rejects_cpu_output_before_platform_setup() {
+        let factory = D3D11DecoderFactory;
+        let error = match factory.open_native_session(&DecoderSessionConfig {
+            codec: "H264".to_owned(),
+            media_kind: DecoderMediaKind::Video,
+            require_cpu_output: true,
+            ..DecoderSessionConfig::default()
+        }) {
+            Ok(_) => panic!("CPU output must be rejected"),
+            Err(error) => error,
         };
-        let payload = super::serialize_payload(&metadata);
-        let decoded = decode_json::<DecoderReceiveNativeFrameMetadata>(payload.data, payload.len)
-            .expect("metadata payload");
 
-        assert_eq!(decoded.status, DecoderReceiveFrameStatus::Eof);
-        // SAFETY: `payload` was allocated by this plugin and has not been freed.
-        unsafe { super::free_plugin_bytes(std::ptr::null_mut(), payload) };
+        assert!(matches!(
+            error,
+            DecoderError::UnsupportedCapability { capability }
+                if capability == "cpu-video-frame-output"
+        ));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn non_windows_factory_does_not_advertise_or_open_codecs() {
+        let factory = D3D11DecoderFactory;
+        assert!(factory.capabilities().codecs.is_empty());
+
+        let error = match factory.open_native_session(&DecoderSessionConfig {
+            codec: "H264".to_owned(),
+            media_kind: DecoderMediaKind::Video,
+            ..DecoderSessionConfig::default()
+        }) {
+            Ok(_) => panic!("non-Windows D3D11 session must be rejected"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, DecoderError::UnsupportedCodec { .. }));
     }
 
     #[test]
@@ -1195,6 +1110,5 @@ mod tests {
 
         assert_eq!(context.kind(), DecoderNativeDeviceContextKind::D3D11Device);
         assert_eq!(context.d3d11_device_ptr(), Some(42));
-        assert_eq!(HANDLE_KIND_D3D11_TEXTURE_2D, 6);
     }
 }

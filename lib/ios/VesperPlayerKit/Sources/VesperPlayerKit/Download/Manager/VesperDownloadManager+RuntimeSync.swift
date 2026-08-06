@@ -7,16 +7,51 @@ extension VesperDownloadManager {
             taskStore.replaceAll(VesperDownloadSnapshot(tasks: []))
             snapshot = VesperDownloadSnapshot(tasks: [])
             eventBuffer.removeAll(keepingCapacity: false)
+            droppedBufferedEvents = 0
+            pendingSnapshotResync = false
             lastProgressPersistence.removeAll(keepingCapacity: false)
+            needsAuthoritativeSnapshotResync = false
+            isProcessingRuntimeCommands = false
+            pendingRuntimeCommandAcknowledgementCount = 0
+            runtimeCommandDiagnostic = nil
             return
         }
 
-        var runtimeEvents = VesperRuntimeDownloadEventList(events: nil, len: 0)
+        var runtimeEvents = VesperRuntimeDownloadEventList(
+            events: nil,
+            len: 0,
+            dropped_events: 0
+        )
         var events: [VesperDownloadEvent] = []
         if bindings.drainDownloadEvents(sessionHandle: sessionHandle, outEvents: &runtimeEvents) {
-            events = runtimeEvents.toPublic()
-            appendEventsCapped(events)
+            let drainedEventCount = Int(runtimeEvents.len)
+            if runtimeEvents.dropped_events > 0 {
+                needsAuthoritativeSnapshotResync = true
+                recordDroppedEvents(
+                    nativeDroppedEvents: runtimeEvents.dropped_events,
+                    discardedEvents: drainedEventCount
+                )
+            } else if let decodedEvents = runtimeEvents.decodePublicEvents() {
+                if !needsAuthoritativeSnapshotResync {
+                    events = decodedEvents
+                    appendEventsCapped(events)
+                } else {
+                    recordDroppedEvents(
+                        nativeDroppedEvents: 0,
+                        discardedEvents: drainedEventCount
+                    )
+                }
+            } else {
+                needsAuthoritativeSnapshotResync = true
+                recordDroppedEvents(
+                    nativeDroppedEvents: 0,
+                    discardedEvents: drainedEventCount
+                )
+            }
             bindings.freeDownloadEventList(&runtimeEvents)
+        } else {
+            needsAuthoritativeSnapshotResync = true
+            markSnapshotResyncRequired()
         }
 
         let immediateEvents = events.filter { !$0.isRemovedStatePatch }
@@ -28,12 +63,13 @@ extension VesperDownloadManager {
         }
 
         if processCommands {
-            var runtimeCommands = VesperRuntimeDownloadCommandList(commands: nil, len: 0)
-            if bindings.drainDownloadCommands(sessionHandle: sessionHandle, outCommands: &runtimeCommands) {
-                let commands = runtimeCommands.toPublic()
-                bindings.freeDownloadCommandList(&runtimeCommands)
-                commands.forEach(applyCommand(_:))
-            }
+            processRuntimeCommandsIfNeeded()
+        }
+
+        if needsAuthoritativeSnapshotResync,
+           replaceTaskStoreWithRuntimeSnapshot()
+        {
+            needsAuthoritativeSnapshotResync = false
         }
 
         if !events.isEmpty {
@@ -55,24 +91,104 @@ extension VesperDownloadManager {
             taskStore.replaceAll(VesperDownloadSnapshot(tasks: []))
             snapshot = VesperDownloadSnapshot(tasks: [])
             eventBuffer.removeAll(keepingCapacity: false)
+            droppedBufferedEvents = 0
+            pendingSnapshotResync = false
             lastProgressPersistence.removeAll(keepingCapacity: false)
+            needsAuthoritativeSnapshotResync = false
+            isProcessingRuntimeCommands = false
+            pendingRuntimeCommandAcknowledgementCount = 0
+            runtimeCommandDiagnostic = nil
             return
         }
 
-        var runtimeSnapshot = VesperRuntimeDownloadSnapshot(tasks: nil, len: 0)
-        if bindings.downloadSessionSnapshot(sessionHandle: sessionHandle, outSnapshot: &runtimeSnapshot) {
-            let fullSnapshot = runtimeSnapshot.toPublic()
-            taskStore.replaceAll(fullSnapshot)
-            let activeSnapshot = taskStore.snapshot()
-            snapshot = activeSnapshot
-            persistSnapshot(activeSnapshot)
-            bindings.freeDownloadSnapshot(&runtimeSnapshot)
-        } else {
-            taskStore.replaceAll(VesperDownloadSnapshot(tasks: []))
-            snapshot = VesperDownloadSnapshot(tasks: [])
+        needsAuthoritativeSnapshotResync = !replaceTaskStoreWithRuntimeSnapshot()
+        if needsAuthoritativeSnapshotResync {
+            markSnapshotResyncRequired()
         }
 
         syncRuntimeState(processCommands: processCommands)
+    }
+
+    func processRuntimeCommandsIfNeeded() {
+        guard !isProcessingRuntimeCommands else {
+            return
+        }
+        if runtimeCommandDiagnostic != nil {
+            _ = acknowledgePendingRuntimeCommandsIfNeeded()
+            return
+        }
+        isProcessingRuntimeCommands = true
+        defer { isProcessingRuntimeCommands = false }
+
+        for _ in 0..<maxRuntimeCommandBatchesPerSync {
+            guard acknowledgePendingRuntimeCommandsIfNeeded() else {
+                return
+            }
+
+            var runtimeCommands = VesperRuntimeDownloadCommandList(commands: nil, len: 0)
+            guard bindings.peekDownloadCommands(
+                sessionHandle: sessionHandle,
+                outCommands: &runtimeCommands
+            ) else {
+                return
+            }
+            let commandCount = runtimeCommands.len
+            let commands = runtimeCommands.decodePublicCommands()
+            bindings.freeDownloadCommandList(&runtimeCommands)
+            guard let commands else {
+                let diagnostic =
+                    "Native download command validation failed; command processing is quarantined."
+                runtimeCommandDiagnostic = diagnostic
+                iosHostLog(diagnostic)
+                pendingRuntimeCommandAcknowledgementCount = commandCount
+                _ = acknowledgePendingRuntimeCommandsIfNeeded()
+                return
+            }
+
+            guard commandCount > 0 else {
+                return
+            }
+            commands.forEach(applyCommand(_:))
+            pendingRuntimeCommandAcknowledgementCount = commandCount
+            guard acknowledgePendingRuntimeCommandsIfNeeded() else {
+                return
+            }
+        }
+    }
+
+    func acknowledgePendingRuntimeCommandsIfNeeded() -> Bool {
+        guard pendingRuntimeCommandAcknowledgementCount > 0 else {
+            return true
+        }
+        guard bindings.acknowledgeDownloadCommands(
+            sessionHandle: sessionHandle,
+            commandCount: pendingRuntimeCommandAcknowledgementCount
+        ) else {
+            return false
+        }
+        pendingRuntimeCommandAcknowledgementCount = 0
+        return true
+    }
+
+    @discardableResult
+    private func replaceTaskStoreWithRuntimeSnapshot() -> Bool {
+        var runtimeSnapshot = VesperRuntimeDownloadSnapshot(tasks: nil, len: 0)
+        guard bindings.downloadSessionSnapshot(
+            sessionHandle: sessionHandle,
+            outSnapshot: &runtimeSnapshot
+        ) else {
+            return false
+        }
+        let fullSnapshot = runtimeSnapshot.decodePublic()
+        bindings.freeDownloadSnapshot(&runtimeSnapshot)
+        guard let fullSnapshot else {
+            return false
+        }
+        taskStore.replaceAll(fullSnapshot)
+        let activeSnapshot = taskStore.snapshot()
+        snapshot = activeSnapshot
+        persistSnapshot(activeSnapshot)
+        return true
     }
 
     func shouldPersistSnapshot(after events: [VesperDownloadEvent]) -> Bool {
@@ -132,7 +248,7 @@ extension VesperDownloadManager {
         case .pause:
             executor.pause(taskId: command.taskId)
         case .remove:
-            executor.remove(task: task(command.taskId))
+            executor.remove(task: command.task)
         }
     }
 
@@ -154,13 +270,36 @@ extension VesperDownloadManager {
         if events.count >= capacity {
             // The batch alone fills the buffer; drop its older tail and replace
             // the buffer outright so we never shift a large existing array.
+            let discardedCount = eventBuffer.count + events.count - capacity
             eventBuffer = Array(events.suffix(capacity))
+            recordDroppedEvents(nativeDroppedEvents: 0, discardedEvents: discardedCount)
             return
         }
         eventBuffer.append(contentsOf: events)
         let excess = eventBuffer.count - capacity
         if excess > 0 {
             eventBuffer.removeFirst(excess)
+            recordDroppedEvents(nativeDroppedEvents: 0, discardedEvents: excess)
         }
+    }
+
+    func recordDroppedEvents(nativeDroppedEvents: UInt64, discardedEvents: Int) {
+        pendingSnapshotResync = true
+        droppedBufferedEvents = saturatingAdd(droppedBufferedEvents, nativeDroppedEvents)
+        if discardedEvents > 0 {
+            droppedBufferedEvents = saturatingAdd(
+                droppedBufferedEvents,
+                UInt64(discardedEvents)
+            )
+        }
+    }
+
+    func markSnapshotResyncRequired() {
+        pendingSnapshotResync = true
+    }
+
+    func saturatingAdd(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        let result = lhs.addingReportingOverflow(rhs)
+        return result.overflow ? UInt64.max : result.partialValue
     }
 }

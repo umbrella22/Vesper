@@ -115,18 +115,19 @@ source is loaded.
 4. Open `VesperPlayerHostDemo.xcodeproj` in Xcode and run on an arm64
    Simulator or device.
 
-The generated App target directly depends on the aggregate
-`VesperPlayerOptionalPlugins` SwiftPM product. Xcode embeds and signs seven
-top-level sibling frameworks: `VesperFFmpegAVCodec`, `VesperFFmpegAVFormat`,
+The generated App target directly embeds and signs seven top-level sibling
+frameworks: `VesperFFmpegAVCodec`, `VesperFFmpegAVFormat`,
 `VesperFFmpegAVUtil`, and the Remux, SourceNormalizer, VideoToolbox Decoder,
-and diagnostic FrameProcessor plugin frameworks. The project has no custom
+and diagnostic FrameProcessor plugin frameworks. The optional Swift package
+exposes one same-named product for each framework. The project has no custom
 flat-dylib embedding phase and does not use the legacy umbrella runtime.
 
 ## Optional Plugin Diagnostics
 
-The iOS example passes only plugin framework executable paths to
-`VesperPlayerController`. The three FFmpeg component frameworks are embedded
-and signed by the App target, but are not passed as plugin paths.
+The iOS example passes canonical `VesperPluginReference` values to the host kit.
+The bundled resolver maps each identity to its signed plugin framework
+executable internally. The three FFmpeg component frameworks are embedded and
+signed as sibling dynamic dependencies, not plugin registry entries.
 
 SourceNormalizer diagnostics and preflight modes do not change playback. In
 `preferNormalized` and `requireNormalized`, the host may open a disk-backed
@@ -169,6 +170,12 @@ xcodebuild \
   -destination 'generic/platform=iOS' \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 ```
+
+The release-owner physical-device gate uses a retained verified optional-plugin
+snapshot rather than the mutable workspace `Artifacts/` directory. Run
+`./scripts/vesper ios verify-optional-plugins-device` as documented in
+[`scripts/README.md`](../../scripts/README.md); it is separate from the static
+`ios verify-release --scope complete` archive gate.
 
 ## Test
 

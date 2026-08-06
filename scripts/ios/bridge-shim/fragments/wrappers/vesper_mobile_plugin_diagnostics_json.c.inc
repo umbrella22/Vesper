@@ -1,5 +1,6 @@
 {
-  if (source_uri == NULL || out_json == NULL) {
+  if (source_uri == NULL || source_plugin_artifacts_json == NULL ||
+      frame_plugin_artifacts_json == NULL || out_json == NULL) {
     return false;
   }
   if (out_error_message != NULL) {
@@ -13,12 +14,10 @@
   PlayerFfiCallStatus status = player_ffi_mobile_plugin_diagnostics_json(
       source_uri,
       source_mode,
-      source_plugin_library_paths,
-      source_plugin_library_paths_len,
+      source_plugin_artifacts_json,
       runtime_profile,
       frame_mode,
-      frame_plugin_library_paths,
-      frame_plugin_library_paths_len,
+      frame_plugin_artifacts_json,
       out_json,
       &ffi_error);
   if (status != PlayerFfiCallStatusOk) {

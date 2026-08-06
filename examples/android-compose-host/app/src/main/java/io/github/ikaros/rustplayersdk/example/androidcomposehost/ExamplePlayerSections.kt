@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.mediarouter.app.MediaRouteButton
 import io.github.ikaros.vesper.player.android.VesperPlaylistQueueItemState
+import io.github.ikaros.vesper.player.android.VesperPluginReference
 import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackRoute
 import io.github.ikaros.vesper.player.android.external.VesperExternalRouteButton
 import java.text.SimpleDateFormat
@@ -1132,9 +1133,9 @@ internal fun ExamplePluginDiagnosticsSection(
     sourceNormalizerSetting: ExampleSourceNormalizerSetting,
     nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
     videoSurfaceSetting: ExampleVideoSurfaceSetting,
-    sourceNormalizerPluginLibraryPaths: List<String>,
-    decoderMediaCodecPluginLibraryPaths: List<String>,
-    frameProcessorPluginLibraryPaths: List<String>,
+    sourceNormalizerPluginReferences: List<VesperPluginReference>,
+    decoderMediaCodecPluginReferences: List<VesperPluginReference>,
+    frameProcessorPluginReferences: List<VesperPluginReference>,
     pluginDiagnostics: List<Map<String, Any?>>,
     hdrEvidencePresets: List<ExampleHdrEvidenceSamplePreset>,
     selectedHdrEvidencePreset: ExampleHdrEvidenceSamplePreset,
@@ -1272,21 +1273,21 @@ internal fun ExamplePluginDiagnosticsSection(
 
             ExampleFactRow(
                 label = stringResource(R.string.example_plugins_source_normalizer_path),
-                value = sourceNormalizerPluginLibraryPaths.joinToString().ifBlank {
+                value = sourceNormalizerPluginReferences.joinToString { it.pluginId }.ifBlank {
                     stringResource(R.string.example_plugins_missing)
                 },
                 palette = palette,
             )
             ExampleFactRow(
                 label = stringResource(R.string.example_plugins_decoder_mediacodec_path),
-                value = decoderMediaCodecPluginLibraryPaths.joinToString().ifBlank {
+                value = decoderMediaCodecPluginReferences.joinToString { it.pluginId }.ifBlank {
                     stringResource(R.string.example_plugins_missing)
                 },
                 palette = palette,
             )
             ExampleFactRow(
                 label = stringResource(R.string.example_plugins_frame_processor_path),
-                value = frameProcessorPluginLibraryPaths.joinToString().ifBlank {
+                value = frameProcessorPluginReferences.joinToString { it.pluginId }.ifBlank {
                     stringResource(R.string.example_plugins_missing)
                 },
                 palette = palette,

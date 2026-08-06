@@ -90,6 +90,91 @@ void main() {
     expect(snapshots.last.tasks, isEmpty);
   });
 
+  test('download resync replaces the local task map authoritatively', () async {
+    platform.initialSnapshot = VesperDownloadSnapshot(
+      tasks: <VesperDownloadTaskSnapshot>[
+        _downloadTask(
+          taskId: 7,
+          state: VesperDownloadState.downloading,
+          receivedBytes: 256,
+        ),
+        _downloadTask(
+          taskId: 8,
+          state: VesperDownloadState.paused,
+          receivedBytes: 128,
+        ),
+      ],
+    );
+    final manager = await VesperDownloadManager.create();
+    addTearDown(manager.dispose);
+    final forwardedEvents = <VesperDownloadManagerEvent>[];
+    final subscription = manager.events.listen(forwardedEvents.add);
+    addTearDown(subscription.cancel);
+
+    final completedTask = _downloadTask(
+      taskId: 7,
+      state: VesperDownloadState.completed,
+      receivedBytes: 1024,
+    );
+    final recoveredTask = _downloadTask(
+      taskId: 9,
+      state: VesperDownloadState.queued,
+      receivedBytes: 0,
+    );
+    platform.emit(
+      VesperDownloadResyncEvent(
+        downloadId: _FakeVesperPlatform.downloadId,
+        snapshot: VesperDownloadSnapshot(
+          tasks: <VesperDownloadTaskSnapshot>[
+            completedTask,
+            recoveredTask,
+          ],
+        ),
+        droppedEvents: 3,
+      ),
+    );
+    await _flushEvents();
+
+    expect(manager.task(7)?.state, VesperDownloadState.completed);
+    expect(manager.task(8), isNull);
+    expect(manager.task(9)?.state, VesperDownloadState.queued);
+    expect(manager.snapshot.tasks.map((task) => task.taskId), <int>[7, 9]);
+    expect(forwardedEvents.single, isA<VesperDownloadResyncEvent>());
+    expect(
+      (forwardedEvents.single as VesperDownloadResyncEvent).droppedEvents,
+      3,
+    );
+  });
+
+  test('download stream errors preserve the current snapshot', () async {
+    final initialTask = _downloadTask(
+      taskId: 7,
+      state: VesperDownloadState.downloading,
+      receivedBytes: 256,
+    );
+    platform.initialSnapshot = VesperDownloadSnapshot(
+      tasks: <VesperDownloadTaskSnapshot>[initialTask],
+    );
+    final manager = await VesperDownloadManager.create();
+    addTearDown(manager.dispose);
+    final forwardedEvents = <VesperDownloadManagerEvent>[];
+    final subscription = manager.events.listen(forwardedEvents.add);
+    addTearDown(subscription.cancel);
+
+    platform.emitDownloadError(
+      const FormatException('Malformed downloadResync payload.'),
+    );
+    await _flushEvents();
+
+    expect(manager.task(7), initialTask);
+    expect(manager.snapshot.tasks, <VesperDownloadTaskSnapshot>[initialTask]);
+    expect(forwardedEvents.single, isA<VesperDownloadErrorEvent>());
+    expect(
+      (forwardedEvents.single as VesperDownloadErrorEvent).snapshot.tasks,
+      <VesperDownloadTaskSnapshot>[initialTask],
+    );
+  });
+
   test('forwards share and save requests through the platform API', () async {
     final manager = await VesperDownloadManager.create();
     addTearDown(manager.dispose);
@@ -430,6 +515,10 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
     _downloadEvents.add(event);
   }
 
+  void emitDownloadError(Object error) {
+    _downloadEvents.addError(error, StackTrace.current);
+  }
+
   void emitPlayer(VesperPlayerEvent event) {
     _playerEvents.add(event);
   }
@@ -539,6 +628,8 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
+    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
+        const VesperPipelineEventHookConfiguration(),
   }) async {
     return VesperPlatformCreateResult(
       playerId: 'test-player',

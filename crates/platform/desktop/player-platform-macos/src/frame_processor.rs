@@ -38,14 +38,22 @@ pub(crate) fn open_macos_frame_processor_chain(
     };
     let mut processors = Vec::new();
     for (processor_index, path) in paths.iter().enumerate().take(policy.max_chain_depth) {
-        let plugin = LoadedDynamicPlugin::load(path)
+        let registry = PluginRegistry::load_native_development([path])
             .with_context(|| format!("failed to load frame processor plugin {}", path.display()))?;
-        let factory = plugin.frame_processor_plugin_factory().ok_or_else(|| {
-            anyhow::anyhow!(
-                "plugin `{}` does not export a frame processor API",
-                plugin.plugin_name()
-            )
-        })?;
+        let references = registry.frame_processor_references()?;
+        let reference = match references.as_slice() {
+            [reference] => reference,
+            [] => anyhow::bail!(
+                "plugin {} does not expose a FrameProcessor interface",
+                path.display()
+            ),
+            _ => anyhow::bail!(
+                "plugin {} exposes {} FrameProcessor instances; an explicit PluginReference is required",
+                path.display(),
+                references.len()
+            ),
+        };
+        let factory = registry.resolve_frame_processor(reference)?.capability();
         let capabilities = factory.capabilities();
         let requirements =
             player_plugin::FrameProcessorSessionRequirements::native_video(input_metadata.clone());

@@ -81,10 +81,21 @@ For distribution, build the core FFmpeg-free framework:
 To reproduce the complete tagged-release set locally, enable optional staging:
 
 ```sh
-VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1 \
-  ./scripts/vesper ios stage-release /tmp/vesper-ios-release
+./scripts/vesper ios stage-release /tmp/vesper-ios-release \
+  --include-optional-plugins
 ./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope complete
 ```
+
+For physical-device acceptance of those verified optional artifacts, run the
+separate `ios verify-optional-plugins-device` gate documented in
+[`scripts/README.md`](../../../scripts/README.md). It retains the Release input
+hashes, sanitized tested hashes, and XCResult rather than treating archive
+verification as device evidence.
+
+The Rust CLI stages the complete release file set and the optional Swift package
+`Artifacts/` directory before committing either destination. Use
+`--package-artifacts-directory <PATH>` only when a release workflow needs an
+explicit package-artifact destination outside the default package directory.
 
 The build script:
 
@@ -354,16 +365,17 @@ hosts stage the canonical optional package before SwiftPM resolution:
 ```
 
 The App target depends on the local `VesperPlayerOptionalPlugins` Swift package
-and embeds its aggregate `VesperPlayerOptionalPlugins` product with Embed &
-Sign. SwiftPM then places the three FFmpeg component frameworks and four plugin
-frameworks as top-level siblings under `App.app/Frameworks`. Do not create flat
-dylibs, nested frameworks, or the legacy `VesperPlayerFfmpegRuntime.framework`
-umbrella.
+and embeds its seven same-named binary products with Embed & Sign. SwiftPM then
+places the three FFmpeg component frameworks and four plugin frameworks as
+top-level siblings under `App.app/Frameworks`. Do not create flat dylibs,
+nested frameworks, or the legacy `VesperPlayerFfmpegRuntime.framework` umbrella.
 
-At runtime, pass only plugin framework executable paths through APIs such as
-`VesperDownloadConfiguration.pluginLibraryPaths`. The three FFmpeg component
-frameworks are dynamic dependencies, not plugin entries. All FFmpeg-backed
-siblings must carry the same `profile-hash.txt` value.
+At runtime, select the remux plugin with a native `VesperPluginReference` in
+`VesperDownloadConfiguration.postDownloadPluginReferences`. The host kit maps
+that reference to the embedded signed plugin framework; executable paths stay
+internal artifact locators. The three FFmpeg component frameworks are dynamic
+dependencies, not plugin entries. All FFmpeg-backed siblings must carry the
+same `profile-hash.txt` value.
 
 Bundling these components makes the host responsible for FFmpeg notices,
 corresponding source, configure flags, and LGPL relinking rights. See
@@ -376,12 +388,12 @@ redistribution boundary.
 ## Optional Mobile Plugin Routes
 
 `VesperSourceNormalizerConfiguration` and `VesperFrameProcessorConfiguration`
-are disabled by default. When enabled, their `pluginLibraryPaths` must point to
-plugin framework executables. Do not pass FFmpeg component framework paths as
-plugin paths; the App target embeds and signs them as sibling dependencies.
-Bundled SourceNormalizer discovery resolves
-`VesperPlayerSourceNormalizerFfmpegPlugin.framework/`
-`VesperPlayerSourceNormalizerFfmpegPlugin` from the app `Frameworks` directory.
+are disabled by default. When enabled, their `pluginReferences` select explicit
+native plugin identities. `VesperBundledPluginReferences` provides canonical
+references for the distributed plugins, and the host kit maps those references
+to signed framework executables internally. The App target embeds the FFmpeg
+component frameworks as sibling dynamic dependencies; they are not plugin
+registry entries. An empty reference list selects no plugin.
 
 SourceNormalizer mobile supports `diagnosticsOnly`, `preflightOnly`,
 `preferNormalized`, and `requireNormalized`. Diagnostics mode loads the optional

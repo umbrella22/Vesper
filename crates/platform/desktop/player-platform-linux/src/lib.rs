@@ -129,9 +129,11 @@ pub fn open_linux_host_runtime_source_with_options_and_interrupt(
     )?;
     bootstrap.startup =
         linux_startup_with_unsupported_plugin_diagnostics(bootstrap.startup, &options);
-    Ok(PlayerRuntime::from_adapter_bootstrap(
+    Ok(PlayerRuntime::from_adapter_bootstrap_with_pipeline(
         LINUX_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
         bootstrap,
+        options.pipeline_event_dispatcher.clone(),
+        options.pipeline_event_platform.clone(),
     ))
 }
 

@@ -1,9 +1,13 @@
 use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-use player_download::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
+use player_download::{
+    PipelineEventDispatcher, PipelineEventHookRegistration, PipelineEventHookReportBatch,
+    PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult,
+};
 use player_model::MediaSource;
+use player_plugin::{PipelineEvent, PluginDiagnostic, PluginDiagnosticSeverity};
 
 /// Default number of preload tasks that may run concurrently.
 pub const DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS: u32 = 2;
@@ -15,6 +19,8 @@ pub const DEFAULT_PRELOAD_MAX_DISK_BYTES: u64 = 256 * 1024 * 1024;
 pub const DEFAULT_PRELOAD_WARMUP_WINDOW: Duration = Duration::from_secs(30);
 
 const MAX_RETAINED_TERMINAL_TASKS: usize = 256;
+/// Maximum number of planner lifecycle events retained for host draining.
+pub const MAX_PENDING_PRELOAD_EVENTS: usize = 1_024;
 
 /// User-provided preload budget overrides.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -459,6 +465,7 @@ impl PreloadExecutor for InMemoryPreloadExecutor {
 #[derive(Debug, Clone)]
 struct PreloadTaskRecord {
     task_id: PreloadTaskId,
+    created_at: Instant,
     source: MediaSource,
     source_identity: PreloadSourceIdentity,
     cache_key: PreloadCacheKey,
@@ -518,7 +525,10 @@ pub struct PreloadPlanner<P, E> {
     next_task_id: u64,
     tasks: HashMap<PreloadTaskId, PreloadTaskRecord>,
     terminal_order: VecDeque<PreloadTaskId>,
-    events: Vec<PreloadEvent>,
+    events: VecDeque<PreloadEvent>,
+    dropped_events: u64,
+    pipeline_event_dispatcher: PipelineEventDispatcher,
+    pipeline_event_platform: String,
 }
 
 impl<P, E> PreloadPlanner<P, E>
@@ -528,14 +538,52 @@ where
 {
     /// Creates a planner from a budget provider and executor.
     pub fn new(budget_provider: P, executor: E) -> Self {
+        Self::with_pipeline_event_dispatcher(
+            budget_provider,
+            executor,
+            PipelineEventDispatcher::new(Vec::new()),
+            "unknown",
+        )
+    }
+
+    /// Creates a planner using a shared pipeline event dispatcher.
+    pub fn with_pipeline_event_dispatcher(
+        budget_provider: P,
+        executor: E,
+        pipeline_event_dispatcher: PipelineEventDispatcher,
+        pipeline_event_platform: impl Into<String>,
+    ) -> Self {
+        let pipeline_event_platform = pipeline_event_platform.into();
         Self {
             budget_provider,
             executor,
             next_task_id: 1,
             tasks: HashMap::new(),
             terminal_order: VecDeque::new(),
-            events: Vec::new(),
+            events: VecDeque::new(),
+            dropped_events: 0,
+            pipeline_event_dispatcher,
+            pipeline_event_platform: if pipeline_event_platform.is_empty() {
+                "unknown".to_owned()
+            } else {
+                pipeline_event_platform
+            },
         }
+    }
+
+    /// Creates a planner from event-hook registrations and a platform label.
+    pub fn with_pipeline_event_hooks(
+        budget_provider: P,
+        executor: E,
+        registrations: Vec<PipelineEventHookRegistration>,
+        pipeline_event_platform: impl Into<String>,
+    ) -> Self {
+        Self::with_pipeline_event_dispatcher(
+            budget_provider,
+            executor,
+            PipelineEventDispatcher::new(registrations),
+            pipeline_event_platform,
+        )
     }
 
     /// Returns the underlying executor.
@@ -561,7 +609,27 @@ where
 
     /// Drains pending planner events.
     pub fn drain_events(&mut self) -> Vec<PreloadEvent> {
-        std::mem::take(&mut self.events)
+        self.events.drain(..).collect()
+    }
+
+    /// Returns and clears the number of lifecycle events dropped from the host queue.
+    pub fn take_dropped_event_count(&mut self) -> u64 {
+        std::mem::take(&mut self.dropped_events)
+    }
+
+    /// Flushes accepted pipeline events within the supplied deadline.
+    pub fn flush_pipeline_event_hooks(&self, timeout: Duration) -> bool {
+        self.pipeline_event_dispatcher.flush(timeout)
+    }
+
+    /// Closes the shared pipeline event dispatcher and joins its worker.
+    pub fn close_pipeline_event_hooks(&self) -> bool {
+        self.pipeline_event_dispatcher.close()
+    }
+
+    /// Drains reports produced by the shared pipeline event dispatcher.
+    pub fn drain_pipeline_event_hook_reports(&self) -> PipelineEventHookReportBatch {
+        self.pipeline_event_dispatcher.drain_reports()
     }
 
     /// Returns a snapshot for one task id.
@@ -603,6 +671,7 @@ where
                 Err(error) => {
                     let failed_record = PreloadTaskRecord {
                         task_id,
+                        created_at: now,
                         source_identity: PreloadSourceIdentity::from_media_source(
                             &candidate.source,
                         ),
@@ -622,7 +691,7 @@ where
                     };
                     let failed_snapshot = failed_record.snapshot();
                     self.tasks.insert(task_id, failed_record);
-                    self.events.push(PreloadEvent::Failed(failed_snapshot));
+                    self.record_event(PreloadEvent::Failed(failed_snapshot));
                     self.remember_terminal_task(task_id);
                     continue;
                 }
@@ -631,6 +700,7 @@ where
 
             let record = PreloadTaskRecord {
                 task_id,
+                created_at: now,
                 source_identity: PreloadSourceIdentity::from_media_source(&candidate.source),
                 cache_key,
                 source: candidate.source,
@@ -648,15 +718,14 @@ where
             };
 
             let planned_snapshot = record.snapshot();
-            self.events
-                .push(PreloadEvent::Planned(planned_snapshot.clone()));
+            self.record_event(PreloadEvent::Planned(planned_snapshot.clone()));
 
             match self.executor.warmup(&planned_snapshot) {
                 Ok(()) => {
                     let mut started_record = record;
                     started_record.status = PreloadTaskStatus::Active;
                     let started_snapshot = started_record.snapshot();
-                    self.events.push(PreloadEvent::Started(started_snapshot));
+                    self.record_event(PreloadEvent::Started(started_snapshot));
                     self.tasks.insert(task_id, started_record);
                     planned.push(task_id);
                 }
@@ -665,7 +734,7 @@ where
                     failed_record.status = PreloadTaskStatus::Failed;
                     failed_record.error_summary = Some(error.into());
                     let failed_snapshot = failed_record.snapshot();
-                    self.events.push(PreloadEvent::Failed(failed_snapshot));
+                    self.record_event(PreloadEvent::Failed(failed_snapshot));
                     self.tasks.insert(task_id, failed_record);
                     self.remember_terminal_task(task_id);
                 }
@@ -691,7 +760,7 @@ where
         self.executor.cancel(task_id)?;
         record.status = PreloadTaskStatus::Cancelled;
         let snapshot = record.snapshot();
-        self.events.push(PreloadEvent::Cancelled(snapshot.clone()));
+        self.record_event(PreloadEvent::Cancelled(snapshot.clone()));
         self.remember_terminal_task(task_id);
         Ok(Some(snapshot))
     }
@@ -715,7 +784,7 @@ where
         record.status = PreloadTaskStatus::Completed;
         record.error_summary = None;
         let snapshot = record.snapshot();
-        self.events.push(PreloadEvent::Completed(snapshot.clone()));
+        self.record_event(PreloadEvent::Completed(snapshot.clone()));
         self.remember_terminal_task(task_id);
         Ok(Some(snapshot))
     }
@@ -740,7 +809,7 @@ where
         record.status = PreloadTaskStatus::Failed;
         record.error_summary = Some(error.into());
         let snapshot = record.snapshot();
-        self.events.push(PreloadEvent::Failed(snapshot.clone()));
+        self.record_event(PreloadEvent::Failed(snapshot.clone()));
         self.remember_terminal_task(task_id);
         Ok(Some(snapshot))
     }
@@ -771,7 +840,7 @@ where
         {
             record.status = PreloadTaskStatus::Expired;
             let snapshot = record.snapshot();
-            self.events.push(PreloadEvent::Expired(snapshot.clone()));
+            self.record_event(PreloadEvent::Expired(snapshot.clone()));
             self.remember_terminal_task(task_id);
             return Ok(Some(snapshot));
         }
@@ -787,8 +856,7 @@ where
         if let Some(record) = self.tasks.get_mut(&task_id) {
             record.status = PreloadTaskStatus::Active;
             let started_snapshot = record.snapshot();
-            self.events
-                .push(PreloadEvent::Started(started_snapshot.clone()));
+            self.record_event(PreloadEvent::Started(started_snapshot.clone()));
             self.forget_terminal_task(task_id);
             return Ok(Some(started_snapshot));
         }
@@ -822,9 +890,37 @@ where
             if let Some(record) = self.tasks.get_mut(&task_id) {
                 record.status = PreloadTaskStatus::Expired;
                 let snapshot = record.snapshot();
-                self.events.push(PreloadEvent::Expired(snapshot));
+                self.record_event(PreloadEvent::Expired(snapshot));
                 self.remember_terminal_task(task_id);
             }
+        }
+    }
+
+    fn record_event(&mut self, event: PreloadEvent) {
+        let snapshot = preload_event_snapshot(&event);
+        let timestamp_ns = self
+            .tasks
+            .get(&snapshot.task_id)
+            .map(|record| {
+                Instant::now()
+                    .saturating_duration_since(record.created_at)
+                    .as_nanos()
+                    .min(u128::from(u64::MAX)) as u64
+            })
+            .unwrap_or(0);
+        self.pipeline_event_dispatcher
+            .enqueue(preload_pipeline_event(
+                snapshot,
+                &self.pipeline_event_platform,
+                preload_event_name(&event),
+                timestamp_ns,
+                preload_event_diagnostic(&event),
+            ));
+
+        if self.events.len() >= MAX_PENDING_PRELOAD_EVENTS {
+            self.dropped_events = self.dropped_events.saturating_add(1);
+        } else {
+            self.events.push_back(event);
         }
     }
 
@@ -925,6 +1021,181 @@ impl PreloadBudgetUsage {
     }
 }
 
+fn preload_event_snapshot(event: &PreloadEvent) -> &PreloadTaskSnapshot {
+    match event {
+        PreloadEvent::Planned(snapshot)
+        | PreloadEvent::Started(snapshot)
+        | PreloadEvent::Cancelled(snapshot)
+        | PreloadEvent::Completed(snapshot)
+        | PreloadEvent::Expired(snapshot)
+        | PreloadEvent::Failed(snapshot) => snapshot,
+    }
+}
+
+fn preload_event_name(event: &PreloadEvent) -> &'static str {
+    match event {
+        PreloadEvent::Planned(_) => "preload.task.planned",
+        PreloadEvent::Started(_) => "preload.task.started",
+        PreloadEvent::Cancelled(_) => "preload.task.cancelled",
+        PreloadEvent::Completed(_) => "preload.task.completed",
+        PreloadEvent::Expired(_) => "preload.task.expired",
+        PreloadEvent::Failed(_) => "preload.task.failed",
+    }
+}
+
+fn preload_pipeline_event(
+    snapshot: &PreloadTaskSnapshot,
+    platform: &str,
+    event_name: &str,
+    timestamp_ns: u64,
+    diagnostic: Option<PluginDiagnostic>,
+) -> PipelineEvent {
+    let resource_identity = format!("preload-task:{}", snapshot.task_id.get());
+    PipelineEvent {
+        run_id: resource_identity.clone(),
+        session_id: snapshot.task_id.get().to_string(),
+        platform: platform.to_owned(),
+        protocol: preload_protocol(snapshot.source.protocol()).map(str::to_owned),
+        event_name: event_name.to_owned(),
+        timestamp_ns,
+        thread: None,
+        resource_identity: Some(resource_identity),
+        attributes: BTreeMap::from([
+            (
+                "status".to_owned(),
+                preload_status_name(&snapshot.status).to_owned(),
+            ),
+            (
+                "kind".to_owned(),
+                preload_kind_name(snapshot.kind).to_owned(),
+            ),
+            (
+                "selectionHint".to_owned(),
+                preload_selection_hint_name(&snapshot.selection_hint).to_owned(),
+            ),
+            (
+                "priority".to_owned(),
+                preload_priority_name(snapshot.priority).to_owned(),
+            ),
+        ]),
+        diagnostic,
+    }
+}
+
+fn preload_event_diagnostic(event: &PreloadEvent) -> Option<PluginDiagnostic> {
+    let PreloadEvent::Failed(snapshot) = event else {
+        return None;
+    };
+    let Some(summary) = snapshot.error_summary.as_ref() else {
+        return Some(PluginDiagnostic {
+            code: "preload.failed".to_owned(),
+            severity: PluginDiagnosticSeverity::Error,
+            message: "preload task failed".to_owned(),
+            attributes: BTreeMap::new(),
+        });
+    };
+    Some(PluginDiagnostic {
+        code: "preload.failed".to_owned(),
+        severity: PluginDiagnosticSeverity::Error,
+        message: "preload task failed".to_owned(),
+        attributes: BTreeMap::from([
+            (
+                "errorCode".to_owned(),
+                preload_error_code_name(summary.code).to_owned(),
+            ),
+            (
+                "category".to_owned(),
+                preload_error_category_name(summary.category).to_owned(),
+            ),
+            ("retriable".to_owned(), summary.retriable.to_string()),
+        ]),
+    })
+}
+
+fn preload_protocol(protocol: player_model::MediaSourceProtocol) -> Option<&'static str> {
+    match protocol {
+        player_model::MediaSourceProtocol::Unknown => None,
+        player_model::MediaSourceProtocol::File => Some("file"),
+        player_model::MediaSourceProtocol::Content => Some("content"),
+        player_model::MediaSourceProtocol::Progressive => Some("progressive"),
+        player_model::MediaSourceProtocol::Hls => Some("hls"),
+        player_model::MediaSourceProtocol::Dash => Some("dash"),
+        player_model::MediaSourceProtocol::Rtmp => Some("rtmp"),
+        player_model::MediaSourceProtocol::Rtsp => Some("rtsp"),
+        player_model::MediaSourceProtocol::Flv => Some("flv"),
+    }
+}
+
+fn preload_status_name(status: &PreloadTaskStatus) -> &'static str {
+    match status {
+        PreloadTaskStatus::Planned => "planned",
+        PreloadTaskStatus::Active => "active",
+        PreloadTaskStatus::Cancelled => "cancelled",
+        PreloadTaskStatus::Completed => "completed",
+        PreloadTaskStatus::Expired => "expired",
+        PreloadTaskStatus::Failed => "failed",
+    }
+}
+
+fn preload_kind_name(kind: PreloadCandidateKind) -> &'static str {
+    match kind {
+        PreloadCandidateKind::Current => "current",
+        PreloadCandidateKind::Neighbor => "neighbor",
+        PreloadCandidateKind::Recommended => "recommended",
+        PreloadCandidateKind::Background => "background",
+    }
+}
+
+fn preload_selection_hint_name(hint: &PreloadSelectionHint) -> &'static str {
+    match hint {
+        PreloadSelectionHint::None => "none",
+        PreloadSelectionHint::CurrentItem => "current-item",
+        PreloadSelectionHint::NeighborItem => "neighbor-item",
+        PreloadSelectionHint::RecommendedItem => "recommended-item",
+        PreloadSelectionHint::BackgroundFill => "background-fill",
+    }
+}
+
+fn preload_priority_name(priority: PreloadPriority) -> &'static str {
+    match priority {
+        PreloadPriority::Critical => "critical",
+        PreloadPriority::High => "high",
+        PreloadPriority::Normal => "normal",
+        PreloadPriority::Low => "low",
+        PreloadPriority::Background => "background",
+    }
+}
+
+fn preload_error_code_name(code: PlayerErrorCode) -> &'static str {
+    match code {
+        PlayerErrorCode::InvalidArgument => "invalid_argument",
+        PlayerErrorCode::InvalidState => "invalid_state",
+        PlayerErrorCode::InvalidSource => "invalid_source",
+        PlayerErrorCode::BackendFailure => "backend_failure",
+        PlayerErrorCode::AudioOutputUnavailable => "audio_output_unavailable",
+        PlayerErrorCode::DecodeFailure => "decode_failure",
+        PlayerErrorCode::SeekFailure => "seek_failure",
+        PlayerErrorCode::Unsupported => "unsupported",
+        PlayerErrorCode::CommandChannelClosed => "command_channel_closed",
+        PlayerErrorCode::EventChannelClosed => "event_channel_closed",
+        PlayerErrorCode::Cancelled => "cancelled",
+        PlayerErrorCode::Timeout => "timeout",
+    }
+}
+
+fn preload_error_category_name(category: PlayerErrorCategory) -> &'static str {
+    match category {
+        PlayerErrorCategory::Input => "input",
+        PlayerErrorCategory::Source => "source",
+        PlayerErrorCategory::Network => "network",
+        PlayerErrorCategory::Decode => "decode",
+        PlayerErrorCategory::AudioOutput => "audio_output",
+        PlayerErrorCategory::Playback => "playback",
+        PlayerErrorCategory::Capability => "capability",
+        PlayerErrorCategory::Platform => "platform",
+    }
+}
+
 fn compare_candidates(left: &PreloadCandidate, right: &PreloadCandidate) -> Ordering {
     rank_candidate_kind(left.kind)
         .cmp(&rank_candidate_kind(right.kind))
@@ -973,8 +1244,13 @@ mod tests {
         PreloadPriority, PreloadSelectionHint, PreloadTaskStatus, rank_candidate_kind,
         rank_priority,
     };
-    use player_download::{PlayerError, PlayerErrorCode};
+    use player_download::{PlayerError, PlayerErrorCategory, PlayerErrorCode};
     use player_model::MediaSource;
+    use player_plugin::{
+        PipelineEvent, PipelineEventHook, PipelineEventHookOutcome, PluginReference,
+        PluginTransport,
+    };
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     fn budget(
@@ -1015,6 +1291,39 @@ mod tests {
                 warmup_window: None,
             },
         }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingHook {
+        events: Arc<Mutex<Vec<PipelineEvent>>>,
+    }
+
+    impl PipelineEventHook for RecordingHook {
+        fn on_event(
+            &self,
+            event: &PipelineEvent,
+        ) -> Result<PipelineEventHookOutcome, player_plugin::PipelineEventHookError> {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(event.clone());
+            Ok(PipelineEventHookOutcome::accepted())
+        }
+    }
+
+    fn hook_registration(
+        hook: Arc<RecordingHook>,
+    ) -> player_download::PipelineEventHookRegistration {
+        player_download::PipelineEventHookRegistration::new(
+            PluginReference::new(
+                "dev.vesper.preload-test",
+                Some("dev.vesper.preload-test.primary".to_owned()),
+                PluginTransport::Native,
+            )
+            .expect("valid hook reference"),
+            hook,
+        )
+        .expect("valid hook registration")
     }
 
     #[test]
@@ -1077,6 +1386,144 @@ mod tests {
         assert!(rank_priority(PreloadPriority::High) < rank_priority(PreloadPriority::Normal));
         assert!(rank_priority(PreloadPriority::Normal) < rank_priority(PreloadPriority::Low));
         assert!(rank_priority(PreloadPriority::Low) < rank_priority(PreloadPriority::Background));
+    }
+
+    #[test]
+    fn planner_dispatches_bounded_sanitized_pipeline_events() {
+        let hook = Arc::new(RecordingHook::default());
+        let provider = InMemoryPreloadBudgetProvider::new(budget(4, 4_096, 4_096));
+        let mut planner = PreloadPlanner::with_pipeline_event_hooks(
+            provider,
+            InMemoryPreloadExecutor::default(),
+            vec![hook_registration(hook.clone())],
+            "test",
+        );
+        let now = Instant::now();
+        let mut expiring = candidate(
+            "https://user:secret@example.com/video.m3u8?token=private",
+            PreloadBudgetScope::App,
+            PreloadCandidateKind::Current,
+            PreloadPriority::Critical,
+            1,
+        );
+        expiring.config.ttl = Some(Duration::from_secs(1));
+        let mut failing = candidate(
+            "https://example.com/failing.m3u8",
+            PreloadBudgetScope::App,
+            PreloadCandidateKind::Neighbor,
+            PreloadPriority::High,
+            1,
+        );
+        failing.config.ttl = None;
+        let completed = candidate(
+            "https://example.com/completed.m3u8",
+            PreloadBudgetScope::App,
+            PreloadCandidateKind::Recommended,
+            PreloadPriority::Normal,
+            1,
+        );
+        let ids = planner.plan([expiring, failing, completed], now);
+        assert_eq!(ids.len(), 3);
+
+        planner.cancel(ids[2]).expect("cancel should succeed");
+        planner
+            .resume(ids[2], now + Duration::from_millis(1))
+            .expect("resume should succeed");
+        planner.complete(ids[2]).expect("complete should succeed");
+        planner
+            .fail(
+                ids[1],
+                PlayerError::with_category(
+                    PlayerErrorCode::BackendFailure,
+                    PlayerErrorCategory::Network,
+                    "secret source and authorization header",
+                ),
+            )
+            .expect("fail should succeed");
+        planner.expire_due_tasks(now + Duration::from_secs(2));
+
+        assert!(planner.flush_pipeline_event_hooks(Duration::from_secs(1)));
+        let events = hook
+            .events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert!(events.len() >= 9);
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_name == "preload.task.planned")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_name == "preload.task.started")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_name == "preload.task.cancelled")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_name == "preload.task.completed")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_name == "preload.task.failed")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_name == "preload.task.expired")
+        );
+        for event in &events {
+            assert!(
+                event
+                    .resource_identity
+                    .as_deref()
+                    .is_some_and(|identity| identity.starts_with("preload-task:"))
+            );
+            assert!(
+                !event
+                    .resource_identity
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("secret")
+            );
+            if let Some(diagnostic) = &event.diagnostic {
+                assert_eq!(diagnostic.message, "preload task failed");
+                assert!(!diagnostic.message.contains("authorization"));
+            }
+        }
+    }
+
+    #[test]
+    fn planner_has_no_hook_drop_count_and_bounds_host_event_queue() {
+        let provider = InMemoryPreloadBudgetProvider::new(budget(2_000, 4_096, 4_096));
+        let mut planner = PreloadPlanner::new(provider, InMemoryPreloadExecutor::default());
+        let now = Instant::now();
+        let candidates = (0..600)
+            .map(|index| {
+                candidate(
+                    &format!("https://example.com/{index}.m3u8"),
+                    PreloadBudgetScope::App,
+                    PreloadCandidateKind::Background,
+                    PreloadPriority::Background,
+                    1,
+                )
+            })
+            .collect::<Vec<_>>();
+        planner.plan(candidates, now);
+        let events = planner.drain_events();
+        assert_eq!(events.len(), super::MAX_PENDING_PRELOAD_EVENTS);
+        assert!(planner.take_dropped_event_count() > 0);
+        assert_eq!(
+            planner.drain_pipeline_event_hook_reports().dropped_events,
+            0
+        );
     }
 
     #[test]

@@ -93,8 +93,8 @@ final class VesperNativeFramePipelineCoordinator {
         if let pendingIssue {
             message += " Pending reason: \(pendingIssue.message)"
         }
-        let paths = configuration.decoderPluginLibraryPaths +
-            configuration.frameProcessorPluginLibraryPaths
+        let decoderPluginIds = configuration.decoderPluginReferences.map(\.pluginId)
+        let frameProcessorPluginIds = configuration.frameProcessorPluginReferences.map(\.pluginId)
         let maxInFlight = configuration.maxInFlightFrames.map(String.init) ?? "default"
         let sessionCounters = activeSession?.counters ?? counters
         let sessionClockSource = activeSession?.clockSource ?? "pending"
@@ -115,13 +115,14 @@ final class VesperNativeFramePipelineCoordinator {
         let audioStreamIndex = activeSession?.audioStreamIndex
         let audioMediaKind = activeSession?.audioMediaKind ?? "pending"
         var diagnostic: [String: Any] = [
-            "path": paths.joined(separator: ":"),
             "pluginName": "vesper-ios-native-frame-pipeline",
             "pluginKind": "native_frame_pipeline",
+            "decoderPluginIds": decoderPluginIds,
+            "frameProcessorPluginIds": frameProcessorPluginIds,
             "status": status,
             "message":
-                "\(message) decoderPlugins=\(configuration.decoderPluginLibraryPaths.count); " +
-                "frameProcessors=\(configuration.frameProcessorPluginLibraryPaths.count); " +
+                "\(message) decoderPlugins=\(configuration.decoderPluginReferences.count); " +
+                "frameProcessors=\(configuration.frameProcessorPluginReferences.count); " +
                 "maxInFlightFrames=\(maxInFlight)",
             "participation": participation,
             "route": route,
@@ -308,10 +309,17 @@ final class VesperNativeFramePipelineCoordinator {
         if let issue = Self.unsupportedSourceIssue(for: source) {
             return issue
         }
-        guard !configuration.decoderPluginLibraryPaths.isEmpty else {
+        let hasVideoToolboxDecoder = configuration.decoderPluginReferences.contains { reference in
+            VesperBundledPluginResolver.isRegisteredNativeReference(
+                reference,
+                pluginId: VesperBundledPluginReferences.decoderVideoToolbox.pluginId
+            )
+        }
+        guard hasVideoToolboxDecoder else {
             return VesperNativeFramePipelineIssue(
                 kind: .missingVideoToolboxDecoderPlugin,
-                message: "iOS native-frame pipeline requires a VideoToolbox decoder plugin path."
+                message:
+                    "iOS native-frame pipeline requires a VideoToolbox decoder plugin path selected by reference."
             )
         }
         guard sourceNormalizer.supportsPacketInput else {
@@ -323,10 +331,17 @@ final class VesperNativeFramePipelineCoordinator {
                     "modes remain on system playback."
             )
         }
-        guard !sourceNormalizer.pluginLibraryPaths.isEmpty else {
+        let hasSourceNormalizerPacketPlugin = sourceNormalizer.pluginReferences.contains { reference in
+            VesperBundledPluginResolver.isRegisteredNativeReference(
+                reference,
+                pluginId: VesperBundledPluginReferences.sourceNormalizerFfmpeg.pluginId
+            )
+        }
+        guard hasSourceNormalizerPacketPlugin else {
             return VesperNativeFramePipelineIssue(
                 kind: .missingSourceNormalizerPacketPlugin,
-                message: "iOS native-frame pipeline requires a SourceNormalizer packet-stream plugin path."
+                message:
+                    "iOS native-frame pipeline requires a SourceNormalizer packet-stream plugin path selected by reference."
             )
         }
         return nil

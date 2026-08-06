@@ -45,14 +45,20 @@ targets:
     preBuildScripts:
       - name: Build Rust iOS Resolver
         script: |
+          if [[ "${VESPER_IOS_FFI_PREBUILT:-0}" == "1" ]]; then
+            exit 0
+          fi
+          export PATH="${HOME}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
           export VESPER_BUILD_IOS_PLAYER_FFI_MODE=platform
-          "${SRCROOT}/../../../scripts/ios/build-player-ffi-xcframework.sh"
+          export VESPER_BUILD_APPLE_CATALYST=0
+          "${SRCROOT}/../../../scripts/vesper" ios ffi release
         outputFiles:
           - $(SRCROOT)/Artifacts/rust-player-ffi/$(PLATFORM_NAME)/libvesper_player_ffi_ios.a
     sources:
       - Sources/VesperPlayerKit
     settings:
       base:
+        CURRENT_PROJECT_VERSION: "400"
         PRODUCT_BUNDLE_IDENTIFIER: io.github.ikaros.vesper.lib.ioshost
         DEFINES_MODULE: true
         SKIP_INSTALL: false

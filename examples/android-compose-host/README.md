@@ -53,11 +53,13 @@ regression.
 
 ## Optional Plugin Diagnostics
 
-The Android example packages the SourceNormalizer FFmpeg plugin and the
-FrameProcessor diagnostic plugin into generated `jniLibs` during Gradle builds.
-The app passes only plugin binary paths to `VesperPlayerController`; FFmpeg
-runtime libraries come from the shared `vesper-player-kit-ffmpeg-runtime` AAR
-and are not included in `pluginLibraryPaths`.
+The Android example packages the remux, SourceNormalizer FFmpeg, MediaCodec
+decoder, and FrameProcessor diagnostic plugins into generated `jniLibs` during
+Gradle builds. Gradle also generates embedded registry fragments from each
+plugin manifest and final stripped binary. The app passes canonical
+`VesperPluginReference` values; the host kit resolves binary locators from the
+registry. FFmpeg runtime libraries come from the shared
+`vesper-player-kit-ffmpeg-runtime` AAR and are not registry entries.
 
 SourceNormalizer diagnostics and preflight modes do not change playback. In
 `preferNormalized` and `requireNormalized`, the host may open a disk-backed
@@ -171,7 +173,7 @@ cache:
 
 The wrapper is the user-facing CLI entry point. Repository automation and
 offline agent work resolve an already cached distribution that matches
-`gradle-wrapper.properties` through `scripts/lib/android.sh`.
+`gradle-wrapper.properties` through the Rust CLI's shared Gradle resolver.
 
 References:
 

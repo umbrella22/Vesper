@@ -1,13 +1,16 @@
 [package]
 name = "player-plugin"
+description = "Safe Rust author SDK for Vesper native plugins."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+player-plugin-abi = { version = "0.4.0", path = "../player-plugin-abi" }
+player-plugin-macros = { version = "0.4.0", path = "../player-plugin-macros" }
 serde.workspace = true
-thiserror.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true

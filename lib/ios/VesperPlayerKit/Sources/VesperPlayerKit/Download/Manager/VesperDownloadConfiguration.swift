@@ -35,7 +35,8 @@ public struct VesperDownloadConfiguration: Equatable {
     public let resumePartialDownloads: Bool
     public let restoreTasksOnStartup: Bool
     public let baseDirectory: URL?
-    public let pluginLibraryPaths: [String]
+    public let postDownloadPluginReferences: [VesperPluginReference]
+    public let eventHookPluginReferences: [VesperPluginReference]
     public let rangeChunkBytes: UInt64?
     public let minProgressBytes: UInt64
     public let minProgressIntervalMs: UInt64
@@ -47,7 +48,8 @@ public struct VesperDownloadConfiguration: Equatable {
         resumePartialDownloads: Bool = true,
         restoreTasksOnStartup: Bool = true,
         baseDirectory: URL? = nil,
-        pluginLibraryPaths: [String] = [],
+        postDownloadPluginReferences: [VesperPluginReference] = [],
+        eventHookPluginReferences: [VesperPluginReference] = [],
         rangeChunkBytes: UInt64? = nil,
         minProgressBytes: UInt64 = vesperDownloadDefaultMinProgressBytes,
         minProgressIntervalMs: UInt64 = vesperDownloadDefaultMinProgressIntervalMs,
@@ -58,7 +60,8 @@ public struct VesperDownloadConfiguration: Equatable {
         self.resumePartialDownloads = resumePartialDownloads
         self.restoreTasksOnStartup = restoreTasksOnStartup
         self.baseDirectory = baseDirectory
-        self.pluginLibraryPaths = pluginLibraryPaths
+        self.postDownloadPluginReferences = postDownloadPluginReferences
+        self.eventHookPluginReferences = eventHookPluginReferences
         self.rangeChunkBytes = rangeChunkBytes.flatMap { $0 > 0 ? $0 : nil }
         self.minProgressBytes = max(minProgressBytes, 1)
         self.minProgressIntervalMs = minProgressIntervalMs

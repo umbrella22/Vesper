@@ -57,7 +57,9 @@ protocol PlayerBridge: AnyObject {
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy)
     func setAudioSessionInterrupted(_ interrupted: Bool)
     func drainBenchmarkEvents() -> [VesperBenchmarkEvent]
+    func drainPipelineEventHookReports() -> VesperPipelineEventHookReportBatch
     func benchmarkSummary() -> VesperBenchmarkSummary
+    func awaitBenchmarkSinkShutdown(timeout: TimeInterval) async -> Bool
 }
 
 @MainActor
@@ -77,6 +79,14 @@ protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
 }
 
 extension PlayerBridge {
+    func drainPipelineEventHookReports() -> VesperPipelineEventHookReportBatch {
+        VesperPipelineEventHookReportBatch()
+    }
+
+    func awaitBenchmarkSinkShutdown(timeout: TimeInterval) async -> Bool {
+        true
+    }
+
     func sampleTimeline() -> TimelineUiState? {
         nil
     }

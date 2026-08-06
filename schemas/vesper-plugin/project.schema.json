@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vesper-player.dev/schemas/plugin/project.schema.json",
+  "title": "Vesper Plugin Project Manifest",
+  "description": "JSON-equivalent schema for the author-owned vesper-plugin.toml source manifest. Artifact hashes are generated during packaging and are not author inputs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "plugin", "compatibility", "capabilities"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "plugin": { "$ref": "#/$defs/plugin" },
+    "compatibility": { "$ref": "#/$defs/compatibility" },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "redistribution": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/redistribution" },
+      "default": []
+    },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/artifactSource" },
+      "default": []
+    },
+    "package_files": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "$ref": "#/$defs/packageFile" },
+      "default": []
+    }
+  },
+  "$defs": {
+    "reverseDns": {
+      "type": "string",
+      "pattern": "^[a-z](?:[a-z0-9-]*[a-z0-9])?\\.[a-z](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z](?:[a-z0-9-]*[a-z0-9])?)*$",
+      "maxLength": 255
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "archivePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*//)(?!.*[\\\\:\\u0000-\\u001F\\u007F])(?!.*(?:^|/)(?:\\.|\\.\\.)(?:/|$))(?!.*\\/$).+$"
+    },
+    "plugin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version", "description", "license", "publisher"],
+      "properties": {
+        "id": { "$ref": "#/$defs/reverseDns" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+        },
+        "description": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "license": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "publisher": { "$ref": "#/$defs/reverseDns" }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host_sdk", "abi_major", "abi_minor_min", "abi_minor_max"],
+      "properties": {
+        "host_sdk": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "abi_major": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "abi_minor_min": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "abi_minor_max": { "type": "integer", "minimum": 0, "maximum": 65535 }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interface_id", "instance_id", "interface_major", "interface_minor", "stability"],
+      "properties": {
+        "interface_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "instance_id": { "$ref": "#/$defs/reverseDns" },
+        "interface_major": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "interface_minor": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "stability": { "enum": ["stable", "experimental"] }
+      }
+    },
+    "runtimeDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "linkage", "compatibility_key"],
+      "properties": {
+        "id": { "$ref": "#/$defs/reverseDns" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "linkage": { "enum": ["dynamic", "static", "system"] },
+        "compatibility_key": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "artifactSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transport", "target", "format", "source", "path", "architecture", "capabilities"],
+      "properties": {
+        "transport": { "enum": ["native", "wasm"] },
+        "target": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "format": { "enum": ["dylib", "aar", "xcframework", "wasm-component"] },
+        "source": { "type": "string", "minLength": 1 },
+        "path": { "$ref": "#/$defs/archivePath" },
+        "architecture": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/artifactCapability" }
+        },
+        "minimum_os": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "runtime_dependencies": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/runtimeDependency" },
+          "default": []
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "transport": { "const": "native" } } },
+          "then": { "properties": { "format": { "enum": ["dylib", "aar", "xcframework"] } } }
+        },
+        {
+          "if": { "properties": { "transport": { "const": "wasm" } } },
+          "then": { "properties": { "format": { "const": "wasm-component" } } }
+        }
+      ]
+    },
+    "artifactCapability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interface_id", "instance_id"],
+      "properties": {
+        "interface_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "instance_id": { "$ref": "#/$defs/reverseDns" }
+      }
+    },
+    "packageFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "path", "kind"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1 },
+        "path": { "$ref": "#/$defs/archivePath" },
+        "kind": { "enum": ["license", "notice", "runtime-metadata", "redistribution"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "license" } } },
+          "then": { "properties": { "path": { "pattern": "^licenses/.+" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "notice" } } },
+          "then": { "properties": { "path": { "pattern": "^notices/.+" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "runtime-metadata" } } },
+          "then": { "properties": { "path": { "pattern": "^runtime/.+" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "redistribution" } } },
+          "then": { "properties": { "path": { "pattern": "^redistribution/.+" } } }
+        }
+      ]
+    },
+    "redistribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component", "license", "notice", "source", "build_configuration"],
+      "properties": {
+        "component": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "license": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "notice": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "source": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "build_configuration": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "relinking_materials": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "profile_hash": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use url::Url;
 
 use crate::{DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata};
 
@@ -581,7 +582,11 @@ pub struct SourceNormalizerPacketSeek {
     pub exact: bool,
 }
 
-/// Empty success payload used by seek and close operations.
+/// Success payload used by source-normalizer session operations.
+///
+/// Resource cancellation may report `completed = false` after accepting the
+/// request while background work is still terminating. Callers observe the
+/// terminal state through `poll` or `wait_for_update`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SourceNormalizerOperationStatus {
     pub completed: bool,
@@ -608,6 +613,8 @@ pub enum SourceNormalizerError {
     UnsupportedOperation { operation: String },
     #[error("source normalizer timeout: {message}")]
     Timeout { message: String },
+    #[error("source normalizer resource exhausted: {message}")]
+    ResourceExhausted { message: String },
     #[error("source normalizer internal error: {message}")]
     Internal { message: String },
 }
@@ -648,6 +655,51 @@ impl SourceNormalizerError {
             message: message.into(),
         }
     }
+
+    pub fn resource_exhausted(message: impl Into<String>) -> Self {
+        Self::ResourceExhausted {
+            message: message.into(),
+        }
+    }
+}
+
+/// Validates the intentionally restricted locator surface exposed to plugins.
+///
+/// This shared host/adapter boundary rejects sensitive data instead of
+/// rewriting the locator, because query and fragment removal would change its
+/// identity. Local paths retain literal `?` and `#` characters.
+#[doc(hidden)]
+pub fn validate_source_normalizer_plugin_input(
+    input: &str,
+    headers: &[(String, String)],
+) -> Result<(), SourceNormalizerError> {
+    if !headers.is_empty() {
+        return Err(SourceNormalizerError::invalid_input(
+            "Plugin sessions do not receive HTTP headers",
+        ));
+    }
+    if is_windows_drive_absolute_path(input) {
+        return Ok(());
+    }
+    if let Ok(url) = Url::parse(input)
+        && (!url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some())
+    {
+        return Err(SourceNormalizerError::invalid_input(
+            "Plugin sessions do not receive URL credentials, query strings, or fragments",
+        ));
+    }
+    Ok(())
+}
+
+fn is_windows_drive_absolute_path(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
 }
 
 /// Creates packet-stream source normalizer sessions for one plugin.
@@ -736,18 +788,7 @@ mod tests {
         SourceNormalizerResourceSessionRequirements, SourceNormalizerSessionCapabilities,
         SourceNormalizerSessionRequirements,
     };
-    use crate::{
-        DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata,
-        VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-        VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, VesperPluginKind,
-    };
-
-    #[test]
-    fn source_normalizer_abi_constants_are_stable() {
-        assert_eq!(VesperPluginKind::SourceNormalizer as u32, 6);
-        assert_eq!(VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_V2, 2);
-        assert_eq!(VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT, 4);
-    }
+    use crate::{DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata};
 
     #[test]
     fn source_normalizer_resource_wait_status_round_trips_through_json() {

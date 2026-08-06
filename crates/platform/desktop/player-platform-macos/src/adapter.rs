@@ -385,6 +385,7 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
                 interrupt_flag.clone(),
                 Arc::new(MacosSourceNormalizerPacketVideoSourceFactory {
                     decoder_plugin_path: selection.plugin_path,
+                    decoder_plugin_reference: selection.plugin_reference,
                     decoder_plugin_name: selection.plugin_name,
                     video_surface: selection.video_surface,
                     frame_processor_paths: selection.frame_processor_paths,
@@ -403,6 +404,7 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
                 interrupt_flag.clone(),
                 Arc::new(MacosNativeFrameVideoSourceFactory {
                     plugin_path: selection.plugin_path,
+                    plugin_reference: selection.plugin_reference,
                     video_surface: selection.video_surface,
                     frame_processor_paths: selection.frame_processor_paths,
                     frame_processor_mode: selection.frame_processor_mode,
@@ -548,7 +550,7 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
             ),
         });
 
-    Ok(PlayerRuntime::from_adapter_bootstrap(
+    Ok(PlayerRuntime::from_adapter_bootstrap_with_pipeline(
         MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
         PlayerRuntimeAdapterBootstrap {
             runtime: Box::new(MacosRuntimeAdapter {
@@ -566,6 +568,8 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
                 &normalization,
             ),
         },
+        options.pipeline_event_dispatcher.clone(),
+        options.pipeline_event_platform.clone(),
     ))
 }
 
@@ -722,6 +726,7 @@ impl PlayerRuntimeAdapterFactory for MacosSoftwarePlayerRuntimeAdapterFactory {
                 options.clone(),
                 Arc::new(MacosNativeFrameVideoSourceFactory {
                     plugin_path: selection.plugin_path.clone(),
+                    plugin_reference: selection.plugin_reference.clone(),
                     video_surface: selection.video_surface,
                     frame_processor_paths: selection.frame_processor_paths.clone(),
                     frame_processor_mode: selection.frame_processor_mode,
@@ -980,6 +985,10 @@ impl PlayerRuntimeAdapter for MacosRuntimeAdapter {
             events.insert(0, event);
         }
         events
+    }
+
+    fn take_dropped_event_count(&mut self) -> u64 {
+        self.inner.take_dropped_event_count()
     }
 
     fn dispatch(

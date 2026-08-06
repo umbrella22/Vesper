@@ -38,7 +38,7 @@ final class VesperBenchmarkConfiguration {
     this.maxBufferedEvents = 2048,
     this.includeRawEvents = true,
     this.consoleLogging = false,
-    this.pluginLibraryPaths = const <String>[],
+    this.pluginReferences = const <VesperPluginReference>[],
   });
 
   const VesperBenchmarkConfiguration.disabled()
@@ -46,7 +46,7 @@ final class VesperBenchmarkConfiguration {
         maxBufferedEvents = 2048,
         includeRawEvents = true,
         consoleLogging = false,
-        pluginLibraryPaths = const <String>[];
+        pluginReferences = const <VesperPluginReference>[];
 
   factory VesperBenchmarkConfiguration.fromMap(Map<Object?, Object?> map) {
     final normalized = vesperDecodeMap(map);
@@ -55,7 +55,7 @@ final class VesperBenchmarkConfiguration {
       maxBufferedEvents: normalized['maxBufferedEvents'] as int? ?? 2048,
       includeRawEvents: normalized['includeRawEvents'] as bool? ?? true,
       consoleLogging: normalized['consoleLogging'] as bool? ?? false,
-      pluginLibraryPaths: _decodeStringList(normalized['pluginLibraryPaths']),
+      pluginReferences: _decodePluginReferences(normalized['pluginReferences']),
     );
   }
 
@@ -63,14 +63,14 @@ final class VesperBenchmarkConfiguration {
   final int maxBufferedEvents;
   final bool includeRawEvents;
   final bool consoleLogging;
-  final List<String> pluginLibraryPaths;
+  final List<VesperPluginReference> pluginReferences;
 
   bool get hasOverrides =>
       enabled ||
       maxBufferedEvents != 2048 ||
       !includeRawEvents ||
       consoleLogging ||
-      pluginLibraryPaths.isNotEmpty;
+      pluginReferences.isNotEmpty;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
@@ -78,9 +78,30 @@ final class VesperBenchmarkConfiguration {
       'maxBufferedEvents': maxBufferedEvents,
       'includeRawEvents': includeRawEvents,
       'consoleLogging': consoleLogging,
-      'pluginLibraryPaths': pluginLibraryPaths,
+      'pluginReferences': pluginReferences
+          .map((reference) => reference.toMap())
+          .toList(growable: false),
     };
   }
+}
+
+List<VesperPluginReference> _decodePluginReferences(Object? value) {
+  if (value == null) {
+    return const <VesperPluginReference>[];
+  }
+  if (value is! List) {
+    throw const FormatException('pluginReferences must be a list');
+  }
+  return List<VesperPluginReference>.unmodifiable(
+    value.map((entry) {
+      if (entry is! Map) {
+        throw const FormatException('invalid plugin reference');
+      }
+      return VesperPluginReference.fromMap(
+        Map<Object?, Object?>.from(entry),
+      );
+    }),
+  );
 }
 
 final class VesperBufferingPolicy {

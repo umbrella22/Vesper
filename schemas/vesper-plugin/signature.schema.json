@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vesper-player.dev/schemas/plugin/signature.schema.json",
+  "title": "Vesper Plugin Package Signature",
+  "description": "Canonical signature.json envelope for an Ed25519 signature over the domain-separated exact SHA256SUMS bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "algorithm", "publisher", "key_id", "signature"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "algorithm": { "const": "ed25519" },
+    "publisher": { "$ref": "#/$defs/reverseDns" },
+    "key_id": { "$ref": "#/$defs/hex32" },
+    "signature": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{128}$"
+    }
+  },
+  "$defs": {
+    "reverseDns": {
+      "type": "string",
+      "pattern": "^[a-z](?:[a-z0-9-]*[a-z0-9])?\\.[a-z](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z](?:[a-z0-9-]*[a-z0-9])?)*$",
+      "maxLength": 255
+    },
+    "hex32": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

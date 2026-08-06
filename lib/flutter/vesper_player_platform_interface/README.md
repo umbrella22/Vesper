@@ -167,10 +167,11 @@ Mobile plugin configurations are intentionally conservative. SourceNormalizer
 the platform source. `preferNormalized` and `requireNormalized` are explicit
 normalized-resource modes owned by the Android and iOS host kits; Flutter only
 passes configuration and decodes diagnostics. `preferBundled()` and
-`requireBundled()` keep `pluginLibraryPaths` empty so published native
-dependencies can be discovered by the host kit. FrameProcessor `diagnosticsOnly`
-must report availability without opening frame sessions or marking the plugin as
-participated.
+`requireBundled()` emit the canonical SourceNormalizer
+`VesperPluginReference`. The Android embedded registry and iOS host resolver map
+that identity to the packaged native artifact. FrameProcessor `diagnosticsOnly`
+must report availability without opening frame sessions or marking the plugin
+as participated.
 
 Coarse capability fields such as `supportsTrackSelection` or
 `supportsAbrPolicy` should not be treated as implicit support for every

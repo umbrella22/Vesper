@@ -1,29 +1,49 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use player_plugin::{PipelineEvent, PipelineEventHook, PostDownloadProcessor, ProcessorProgress};
+use player_plugin::{PluginDiagnostic, PluginDiagnosticSeverity, ProcessorProgress};
 
 use crate::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
 
 use super::executor::{DownloadExecutor, DownloadPrepareResult};
+use super::pipeline_event::{
+    PipelineEventDispatcher, PipelineEventHookRegistration, PipelineEventHookReportBatch,
+    download_pipeline_event,
+};
+use super::post_processing::PostDownloadProcessorRegistration;
 use super::post_processing::should_run_post_processors_on_completion;
 use super::store::DownloadStore;
 use super::types::{
     DownloadAssetId, DownloadAssetIndex, DownloadContentFormat, DownloadErrorSummary,
-    DownloadEvent, DownloadProfile, DownloadProgressSnapshot, DownloadSnapshot, DownloadSource,
-    DownloadTaskId, DownloadTaskSnapshot, DownloadTaskStatus, next_non_zero_task_id,
+    DownloadEvent, DownloadEventBatch, DownloadProfile, DownloadProgressSnapshot, DownloadSnapshot,
+    DownloadSource, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskStatus,
+    next_non_zero_task_id,
 };
 
-#[derive(Default)]
+pub const MAX_PENDING_DOWNLOAD_EVENTS: usize = 1_024;
+
 // Keep platform default constructors aligned when adding required fields.
 pub struct DownloadManagerConfig {
     pub auto_start: bool,
     pub run_post_processors_on_completion: bool,
-    pub post_processors: Vec<Arc<dyn PostDownloadProcessor>>,
-    pub event_hooks: Vec<Arc<dyn PipelineEventHook>>,
+    pub post_processors: Vec<PostDownloadProcessorRegistration>,
+    pub event_hooks: Vec<PipelineEventHookRegistration>,
+    pub pipeline_event_platform: String,
+}
+
+impl Default for DownloadManagerConfig {
+    fn default() -> Self {
+        Self {
+            auto_start: false,
+            run_post_processors_on_completion: false,
+            post_processors: Vec::new(),
+            event_hooks: Vec::new(),
+            pipeline_event_platform: "unknown".to_owned(),
+        }
+    }
 }
 
 impl fmt::Debug for DownloadManagerConfig {
@@ -36,6 +56,7 @@ impl fmt::Debug for DownloadManagerConfig {
             )
             .field("post_processors_len", &self.post_processors.len())
             .field("event_hooks_len", &self.event_hooks.len())
+            .field("pipeline_event_platform", &self.pipeline_event_platform)
             .finish()
     }
 }
@@ -44,8 +65,9 @@ impl fmt::Debug for DownloadManagerConfig {
 pub struct DownloadExportPlan {
     pub(super) snapshot: DownloadTaskSnapshot,
     pub(super) output_path: Option<PathBuf>,
-    pub(super) post_processors: Vec<Arc<dyn PostDownloadProcessor>>,
-    pub(super) event_hooks: Vec<Arc<dyn PipelineEventHook>>,
+    pub(super) post_processors: Vec<PostDownloadProcessorRegistration>,
+    pub(super) pipeline_event_platform: String,
+    pub(super) pipeline_event_dispatcher: PipelineEventDispatcher,
 }
 
 impl fmt::Debug for DownloadExportPlan {
@@ -54,7 +76,7 @@ impl fmt::Debug for DownloadExportPlan {
             .field("task_id", &self.snapshot.task_id)
             .field("output_path", &self.output_path)
             .field("post_processors_len", &self.post_processors.len())
-            .field("event_hooks_len", &self.event_hooks.len())
+            .field("pipeline_event_platform", &self.pipeline_event_platform)
             .finish()
     }
 }
@@ -65,7 +87,9 @@ pub struct DownloadManager<S, E> {
     store: S,
     executor: E,
     pub(super) next_task_id: u64,
-    events: Vec<DownloadEvent>,
+    events: VecDeque<DownloadEvent>,
+    dropped_download_events: u64,
+    pub(super) pipeline_event_dispatcher: PipelineEventDispatcher,
     pending_preparation_tasks: HashSet<DownloadTaskId>,
 }
 
@@ -75,12 +99,15 @@ where
     E: DownloadExecutor,
 {
     pub fn new(config: DownloadManagerConfig, store: S, executor: E) -> Self {
+        let pipeline_event_dispatcher = PipelineEventDispatcher::new(config.event_hooks.clone());
         Self {
             config,
             store,
             executor,
             next_task_id: 1,
-            events: Vec::new(),
+            events: VecDeque::new(),
+            dropped_download_events: 0,
+            pipeline_event_dispatcher,
             pending_preparation_tasks: HashSet::new(),
         }
     }
@@ -112,7 +139,26 @@ where
     }
 
     pub fn drain_events(&mut self) -> Vec<DownloadEvent> {
-        std::mem::take(&mut self.events)
+        self.events.drain(..).collect()
+    }
+
+    pub fn drain_event_batch(&mut self) -> DownloadEventBatch {
+        DownloadEventBatch {
+            events: self.events.drain(..).collect(),
+            dropped_events: std::mem::take(&mut self.dropped_download_events),
+        }
+    }
+
+    pub fn take_dropped_download_event_count(&mut self) -> u64 {
+        std::mem::take(&mut self.dropped_download_events)
+    }
+
+    pub fn flush_pipeline_event_hooks(&self, timeout: Duration) -> bool {
+        self.pipeline_event_dispatcher.flush(timeout)
+    }
+
+    pub fn drain_pipeline_event_hook_reports(&self) -> PipelineEventHookReportBatch {
+        self.pipeline_event_dispatcher.drain_reports()
     }
 
     pub fn task(&self, task_id: DownloadTaskId) -> Option<DownloadTaskSnapshot> {
@@ -480,7 +526,8 @@ where
             snapshot,
             output_path,
             post_processors: self.config.post_processors.clone(),
-            event_hooks: self.config.event_hooks.clone(),
+            pipeline_event_platform: self.config.pipeline_event_platform.clone(),
+            pipeline_event_dispatcher: self.pipeline_event_dispatcher.clone(),
         })
     }
 
@@ -524,11 +571,15 @@ where
             return Ok(Some(snapshot));
         }
 
-        self.executor.remove(task_id)?;
+        let mut removed = snapshot;
+        removed.status = DownloadTaskStatus::Removed;
+        removed.updated_at = now;
+
+        self.executor.remove(&removed)?;
         self.pending_preparation_tasks.remove(&task_id);
-        self.update_task(task_id, now, |task| {
-            task.status = DownloadTaskStatus::Removed;
-        })
+        self.store.save_task(removed.clone())?;
+        self.emit_event(DownloadEvent::StateChanged(removed.state_patch()));
+        Ok(Some(removed))
     }
 
     fn update_task(
@@ -610,48 +661,150 @@ where
 
     fn emit_event(&mut self, event: DownloadEvent) {
         self.dispatch_pipeline_events(&event);
-        self.events.push(event);
+        self.push_download_event(event);
     }
 
     fn dispatch_pipeline_events(&self, event: &DownloadEvent) {
         match event {
             DownloadEvent::Created(snapshot) => {
-                self.dispatch_pipeline_event(PipelineEvent::DownloadTaskCreated {
-                    task_id: snapshot.task_id.get().to_string(),
-                    asset_id: snapshot.asset_id.as_str().to_owned(),
-                });
+                self.dispatch_pipeline_event(download_pipeline_event(
+                    snapshot,
+                    &self.config.pipeline_event_platform,
+                    "download.task.created",
+                    BTreeMap::from([(
+                        "contentFormat".to_owned(),
+                        download_content_format_name(snapshot.source.content_format).to_owned(),
+                    )]),
+                    None,
+                ));
             }
             DownloadEvent::StateChanged(patch) => {
-                self.dispatch_pipeline_event(PipelineEvent::DownloadTaskStateChanged {
-                    task_id: patch.task_id.get().to_string(),
-                    new_state: patch.status.as_str().to_owned(),
-                });
+                let Some(snapshot) = self.store.task(patch.task_id) else {
+                    return;
+                };
+                let attributes =
+                    BTreeMap::from([("state".to_owned(), patch.status.as_str().to_owned())]);
+                self.dispatch_pipeline_event(download_pipeline_event(
+                    &snapshot,
+                    &self.config.pipeline_event_platform,
+                    "download.task.state_changed",
+                    attributes.clone(),
+                    None,
+                ));
 
                 if patch.status == DownloadTaskStatus::Completed {
-                    self.dispatch_pipeline_event(PipelineEvent::DownloadTaskCompleted {
-                        task_id: patch.task_id.get().to_string(),
-                    });
+                    self.dispatch_pipeline_event(download_pipeline_event(
+                        &snapshot,
+                        &self.config.pipeline_event_platform,
+                        "download.task.completed",
+                        attributes.clone(),
+                        None,
+                    ));
                 }
 
                 if patch.status == DownloadTaskStatus::Failed {
-                    self.dispatch_pipeline_event(PipelineEvent::DownloadTaskFailed {
-                        task_id: patch.task_id.get().to_string(),
-                        error: patch
-                            .error_summary
-                            .as_ref()
-                            .map(|summary| summary.message.clone())
-                            .unwrap_or_else(|| "download failed".to_owned()),
-                    });
+                    self.dispatch_pipeline_event(download_pipeline_event(
+                        &snapshot,
+                        &self.config.pipeline_event_platform,
+                        "download.task.failed",
+                        attributes,
+                        Some(download_failure_diagnostic(patch.error_summary.as_ref())),
+                    ));
                 }
             }
             DownloadEvent::AssetIndexUpdated(_) | DownloadEvent::ProgressUpdated(_) => {}
         }
     }
 
-    pub(super) fn dispatch_pipeline_event(&self, event: PipelineEvent) {
-        for hook in &self.config.event_hooks {
-            hook.on_event(&event);
+    fn push_download_event(&mut self, event: DownloadEvent) {
+        if let DownloadEvent::ProgressUpdated(incoming) = &event
+            && let Some(index) = self.events.iter().position(|queued| {
+                matches!(queued, DownloadEvent::ProgressUpdated(existing) if existing.task_id == incoming.task_id)
+            })
+        {
+            self.events[index] = event;
+            return;
         }
+
+        if self.events.len() >= MAX_PENDING_DOWNLOAD_EVENTS {
+            let progress_index = self
+                .events
+                .iter()
+                .position(|queued| matches!(queued, DownloadEvent::ProgressUpdated(_)));
+            if let Some(index) = progress_index {
+                let _ = self.events.remove(index);
+            } else {
+                let _ = self.events.pop_front();
+            }
+            self.dropped_download_events = self.dropped_download_events.saturating_add(1);
+        }
+        self.events.push_back(event);
+    }
+
+    pub(super) fn dispatch_pipeline_event(&self, event: player_plugin::PipelineEvent) {
+        self.pipeline_event_dispatcher.enqueue(event);
+    }
+}
+
+fn download_content_format_name(format: DownloadContentFormat) -> &'static str {
+    match format {
+        DownloadContentFormat::HlsSegments => "hls-segments",
+        DownloadContentFormat::DashSegments => "dash-segments",
+        DownloadContentFormat::FlvSegments => "flv-segments",
+        DownloadContentFormat::SingleFile => "single-file",
+        DownloadContentFormat::Unknown => "unknown",
+    }
+}
+
+fn download_failure_diagnostic(summary: Option<&DownloadErrorSummary>) -> PluginDiagnostic {
+    let attributes = summary.map_or_else(BTreeMap::new, |summary| {
+        BTreeMap::from([
+            (
+                "errorCode".to_owned(),
+                player_error_code_name(summary.code).to_owned(),
+            ),
+            (
+                "category".to_owned(),
+                player_error_category_name(summary.category).to_owned(),
+            ),
+            ("retriable".to_owned(), summary.retriable.to_string()),
+        ])
+    });
+    PluginDiagnostic {
+        code: "download.failed".to_owned(),
+        severity: PluginDiagnosticSeverity::Error,
+        message: "download task failed".to_owned(),
+        attributes,
+    }
+}
+
+fn player_error_code_name(code: PlayerErrorCode) -> &'static str {
+    match code {
+        PlayerErrorCode::InvalidArgument => "invalid_argument",
+        PlayerErrorCode::InvalidState => "invalid_state",
+        PlayerErrorCode::InvalidSource => "invalid_source",
+        PlayerErrorCode::BackendFailure => "backend_failure",
+        PlayerErrorCode::AudioOutputUnavailable => "audio_output_unavailable",
+        PlayerErrorCode::DecodeFailure => "decode_failure",
+        PlayerErrorCode::SeekFailure => "seek_failure",
+        PlayerErrorCode::Unsupported => "unsupported",
+        PlayerErrorCode::CommandChannelClosed => "command_channel_closed",
+        PlayerErrorCode::EventChannelClosed => "event_channel_closed",
+        PlayerErrorCode::Cancelled => "cancelled",
+        PlayerErrorCode::Timeout => "timeout",
+    }
+}
+
+fn player_error_category_name(category: PlayerErrorCategory) -> &'static str {
+    match category {
+        PlayerErrorCategory::Input => "input",
+        PlayerErrorCategory::Source => "source",
+        PlayerErrorCategory::Network => "network",
+        PlayerErrorCategory::Decode => "decode",
+        PlayerErrorCategory::AudioOutput => "audio_output",
+        PlayerErrorCategory::Playback => "playback",
+        PlayerErrorCategory::Capability => "capability",
+        PlayerErrorCategory::Platform => "platform",
     }
 }
 

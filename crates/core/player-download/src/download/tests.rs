@@ -2,8 +2,10 @@ use super::post_processing::NoopProcessorProgress;
 use super::{
     DownloadAssetId, DownloadAssetIndex, DownloadContentFormat, DownloadEvent, DownloadManager,
     DownloadManagerConfig, DownloadPrepareResult, DownloadProfile, DownloadResourceRecord,
-    DownloadSegmentRecord, DownloadSource, DownloadTaskId, DownloadTaskStatus,
-    InMemoryDownloadExecutor, InMemoryDownloadStore,
+    DownloadSegmentRecord, DownloadSource, DownloadTaskId, DownloadTaskSnapshot,
+    DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
+    MAX_PENDING_DOWNLOAD_EVENTS, MAX_PENDING_PIPELINE_EVENT_REPORTS, PipelineEventHookRegistration,
+    PostDownloadProcessorRegistration,
 };
 use crate::{
     DownloadAssetStream, DownloadStreamKind, PlayerError, PlayerErrorCategory, PlayerErrorCode,
@@ -11,15 +13,16 @@ use crate::{
 };
 use player_model::MediaSource;
 use player_plugin::{
-    AssemblyMode, CompletedDownloadInfo, ContentFormatKind, OutputFormat, PipelineEvent,
-    PipelineEventHook, PostDownloadProcessor, ProcessorCapabilities, ProcessorError,
-    ProcessorOutput, ProcessorProgress,
+    AssemblyMode, CompletedDownloadInfo, ContentFormatKind, MAX_PLUGIN_ERROR_MESSAGE_BYTES,
+    OutputFormat, PipelineEvent, PipelineEventHook, PipelineEventHookError,
+    PipelineEventHookOutcome, PluginReference, PluginTransport, PostDownloadProcessor,
+    ProcessorCapabilities, ProcessorError, ProcessorOutput, ProcessorProgress,
 };
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Default)]
 struct RecordingHook {
@@ -210,8 +213,8 @@ impl super::DownloadExecutor for PendingPrepareExecutor {
         Ok(())
     }
 
-    fn remove(&mut self, task_id: DownloadTaskId) -> PlayerResult<()> {
-        self.removed.push(task_id);
+    fn remove(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<()> {
+        self.removed.push(task.task_id);
         Ok(())
     }
 }
@@ -226,12 +229,54 @@ impl RecordingHook {
 }
 
 impl PipelineEventHook for RecordingHook {
-    fn on_event(&self, event: &PipelineEvent) {
+    fn on_event(
+        &self,
+        event: &PipelineEvent,
+    ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
         match self.events.lock() {
             Ok(mut events) => events.push(event.clone()),
             Err(poisoned) => poisoned.into_inner().push(event.clone()),
         }
+        Ok(PipelineEventHookOutcome::accepted())
     }
+}
+
+fn hook_registration<H>(hook: Arc<H>) -> PipelineEventHookRegistration
+where
+    H: PipelineEventHook + 'static,
+{
+    hook_registration_with_identity(
+        "dev.vesper.test.download-hook",
+        "dev.vesper.test.download-hook.instance",
+        hook,
+    )
+}
+
+fn hook_registration_with_identity<H>(
+    plugin_id: &str,
+    instance_id: &str,
+    hook: Arc<H>,
+) -> PipelineEventHookRegistration
+where
+    H: PipelineEventHook + 'static,
+{
+    PipelineEventHookRegistration::new(
+        PluginReference::new(
+            plugin_id,
+            Some(instance_id.to_owned()),
+            PluginTransport::Native,
+        )
+        .expect("test hook reference"),
+        hook,
+    )
+    .expect("resolved hook registration")
+}
+
+fn built_in_processor<P>(processor: Arc<P>) -> PostDownloadProcessorRegistration
+where
+    P: PostDownloadProcessor + 'static,
+{
+    PostDownloadProcessorRegistration::built_in(processor)
 }
 
 impl ProcessorProgress for RecordingProgress {
@@ -376,11 +421,19 @@ fn manager_creates_and_auto_starts_tasks() {
     let executor = InMemoryDownloadExecutor::default();
     let mut manager = DownloadManager::new(config, store, executor);
 
+    let sensitive_uri = "https://example.com/a.m3u8?token=secret-url-token";
+    let sensitive_source = source(sensitive_uri).with_request_headers([(
+        "Authorization".to_owned(),
+        "Bearer secret-header-token".to_owned(),
+    )]);
     let task_id = manager
         .create_task(
-            "asset-a",
-            source("https://example.com/a.m3u8"),
-            DownloadProfile::default(),
+            "secret-asset-identity",
+            sensitive_source,
+            DownloadProfile {
+                target_directory: Some(PathBuf::from("/private/secret-output-path")),
+                ..DownloadProfile::default()
+            },
             asset_index(1024),
             Instant::now(),
         )
@@ -942,7 +995,8 @@ fn manager_dispatches_pipeline_hook_events_for_state_changes() {
     let config = DownloadManagerConfig {
         auto_start: true,
         run_post_processors_on_completion: true,
-        event_hooks: vec![hook.clone()],
+        event_hooks: vec![hook_registration(hook.clone())],
+        pipeline_event_platform: "test".to_owned(),
         ..DownloadManagerConfig::default()
     };
     let store = InMemoryDownloadStore::default();
@@ -968,20 +1022,327 @@ fn manager_dispatches_pipeline_hook_events_for_state_changes() {
         )
         .expect("fail should succeed");
 
+    assert!(manager.flush_pipeline_event_hooks(Duration::from_secs(1)));
     let events = hook.events();
-    assert!(events.iter().any(|event| matches!(
-        event,
-        PipelineEvent::DownloadTaskCreated { asset_id, .. } if asset_id == "asset-a"
-    )));
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_name == "download.task.created")
+    );
     assert!(
         !events
             .iter()
-            .any(|event| matches!(event, PipelineEvent::DownloadTaskCompleted { .. }))
+            .any(|event| event.event_name == "download.task.completed")
     );
-    assert!(events.iter().any(|event| matches!(
-        event,
-        PipelineEvent::DownloadTaskFailed { error, .. } if error == "network failed"
-    )));
+    assert!(events.iter().any(|event| {
+        event.event_name == "download.task.failed"
+            && event
+                .diagnostic
+                .as_ref()
+                .is_some_and(|diagnostic| diagnostic.code == "download.failed")
+    }));
+    let encoded = serde_json::to_string(&events).expect("serialize recorded events");
+    assert!(!encoded.contains("secret-asset-identity"));
+    assert!(!encoded.contains("secret-url-token"));
+    assert!(!encoded.contains("secret-header-token"));
+    assert!(!encoded.contains("secret-output-path"));
+
+    let reports = manager.drain_pipeline_event_hook_reports();
+    assert_eq!(reports.dropped_events, 0);
+    assert_eq!(reports.dropped_reports, 0);
+    assert!(reports.reports.iter().all(|report| report.result.is_ok()));
+}
+
+#[test]
+fn pipeline_event_worker_isolates_failures_and_panics_from_download_state() {
+    struct FailingHook;
+    struct PanickingHook;
+
+    impl PipelineEventHook for FailingHook {
+        fn on_event(
+            &self,
+            _event: &PipelineEvent,
+        ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+            Err(PipelineEventHookError::Failed(
+                "intentional hook failure".to_owned(),
+            ))
+        }
+    }
+
+    impl PipelineEventHook for PanickingHook {
+        fn on_event(
+            &self,
+            _event: &PipelineEvent,
+        ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+            panic!("intentional hook panic")
+        }
+    }
+
+    let recording = Arc::new(RecordingHook::default());
+    let config = DownloadManagerConfig {
+        event_hooks: vec![
+            hook_registration_with_identity(
+                "dev.vesper.test.panicking-hook",
+                "dev.vesper.test.panicking-hook.instance",
+                Arc::new(PanickingHook),
+            ),
+            hook_registration_with_identity(
+                "dev.vesper.test.failing-hook",
+                "dev.vesper.test.failing-hook.instance",
+                Arc::new(FailingHook),
+            ),
+            hook_registration_with_identity(
+                "dev.vesper.test.recording-hook",
+                "dev.vesper.test.recording-hook.instance",
+                recording.clone(),
+            ),
+        ],
+        pipeline_event_platform: "test".to_owned(),
+        ..DownloadManagerConfig::default()
+    };
+    let mut manager = DownloadManager::new(
+        config,
+        InMemoryDownloadStore::default(),
+        InMemoryDownloadExecutor::default(),
+    );
+
+    let task_id = manager
+        .create_task(
+            "asset-a",
+            source("https://example.com/a.m3u8"),
+            DownloadProfile::default(),
+            asset_index(512),
+            Instant::now(),
+        )
+        .expect("hook failures must not fail task creation");
+    assert!(manager.task(task_id).is_some());
+    assert!(manager.flush_pipeline_event_hooks(Duration::from_secs(1)));
+    assert!(!recording.events().is_empty());
+
+    let reports = manager.drain_pipeline_event_hook_reports();
+    assert!(reports.reports.iter().any(|report| {
+        report.reference.plugin_id() == "dev.vesper.test.panicking-hook"
+            && matches!(
+                &report.result,
+                Err(PipelineEventHookError::Failed(message)) if message == "event hook panicked"
+            )
+    }));
+    assert!(reports.reports.iter().any(|report| {
+        report.reference.plugin_id() == "dev.vesper.test.failing-hook"
+            && matches!(
+                &report.result,
+                Err(PipelineEventHookError::Failed(message))
+                    if message == "intentional hook failure"
+            )
+    }));
+    assert!(reports.reports.iter().any(|report| {
+        report.reference.plugin_id() == "dev.vesper.test.recording-hook" && report.result.is_ok()
+    }));
+}
+
+#[test]
+fn pipeline_event_worker_rejects_host_owned_and_oversized_author_errors() {
+    struct HostOwnedErrorHook;
+    struct OversizedErrorHook;
+
+    impl PipelineEventHook for HostOwnedErrorHook {
+        fn on_event(
+            &self,
+            _event: &PipelineEvent,
+        ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+            Err(PipelineEventHookError::AbiViolation(
+                "host-owned-sentinel".to_owned(),
+            ))
+        }
+    }
+
+    impl PipelineEventHook for OversizedErrorHook {
+        fn on_event(
+            &self,
+            _event: &PipelineEvent,
+        ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+            Err(PipelineEventHookError::Failed(
+                "author-sentinel".repeat(MAX_PLUGIN_ERROR_MESSAGE_BYTES + 1),
+            ))
+        }
+    }
+
+    let config = DownloadManagerConfig {
+        event_hooks: vec![
+            hook_registration_with_identity(
+                "dev.vesper.test.host-owned-error",
+                "dev.vesper.test.host-owned-error.instance",
+                Arc::new(HostOwnedErrorHook),
+            ),
+            hook_registration_with_identity(
+                "dev.vesper.test.oversized-error",
+                "dev.vesper.test.oversized-error.instance",
+                Arc::new(OversizedErrorHook),
+            ),
+        ],
+        pipeline_event_platform: "test".to_owned(),
+        ..DownloadManagerConfig::default()
+    };
+    let mut manager = DownloadManager::new(
+        config,
+        InMemoryDownloadStore::default(),
+        InMemoryDownloadExecutor::default(),
+    );
+
+    manager
+        .create_task(
+            "asset-a",
+            source("https://example.com/a.m3u8"),
+            DownloadProfile::default(),
+            asset_index(512),
+            Instant::now(),
+        )
+        .expect("task creation");
+    assert!(manager.flush_pipeline_event_hooks(Duration::from_secs(1)));
+
+    let reports = manager.drain_pipeline_event_hook_reports();
+    assert!(!reports.reports.is_empty());
+    for report in reports.reports {
+        let Err(PipelineEventHookError::ProtocolViolation(message)) = report.result else {
+            panic!("invalid author error must become a protocol violation");
+        };
+        assert!(message.len() <= MAX_PLUGIN_ERROR_MESSAGE_BYTES);
+        assert!(!message.contains("host-owned-sentinel"));
+        assert!(!message.contains("author-sentinel"));
+    }
+}
+
+#[test]
+fn plugin_registrations_require_resolved_instances_and_supported_transport() {
+    let unresolved_hook =
+        PluginReference::new("dev.vesper.test.hook", None, PluginTransport::Native)
+            .expect("unresolved hook reference");
+    let hook_error =
+        PipelineEventHookRegistration::new(unresolved_hook, Arc::new(RecordingHook::default()))
+            .expect_err("hook registration must be resolved");
+    assert_eq!(hook_error.code(), PlayerErrorCode::InvalidArgument);
+
+    let wasm_processor = PluginReference::new(
+        "dev.vesper.test.processor",
+        Some("dev.vesper.test.processor.primary".to_owned()),
+        PluginTransport::Wasm,
+    )
+    .expect("WASM processor reference");
+    let processor_error = PostDownloadProcessorRegistration::plugin(
+        wasm_processor,
+        Arc::new(RecordingProcessor::default()),
+    )
+    .expect_err("PostDownloadProcessor is native-only");
+    assert_eq!(processor_error.code(), PlayerErrorCode::InvalidArgument);
+}
+
+#[test]
+fn bounded_pipeline_and_download_queues_surface_overflow_counts() {
+    #[derive(Default)]
+    struct GateState {
+        started: bool,
+        released: bool,
+    }
+
+    struct BlockingHook {
+        gate: Arc<(Mutex<GateState>, Condvar)>,
+    }
+
+    impl PipelineEventHook for BlockingHook {
+        fn on_event(
+            &self,
+            _event: &PipelineEvent,
+        ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+            let (lock, changed) = &*self.gate;
+            let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.started = true;
+            changed.notify_all();
+            while !state.released {
+                state = changed
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
+            Ok(PipelineEventHookOutcome::accepted())
+        }
+    }
+
+    let gate = Arc::new((Mutex::new(GateState::default()), Condvar::new()));
+    let config = DownloadManagerConfig {
+        event_hooks: vec![hook_registration_with_identity(
+            "dev.vesper.test.blocking-hook",
+            "dev.vesper.test.blocking-hook.instance",
+            Arc::new(BlockingHook { gate: gate.clone() }),
+        )],
+        pipeline_event_platform: "test".to_owned(),
+        ..DownloadManagerConfig::default()
+    };
+    let mut manager = DownloadManager::new(
+        config,
+        InMemoryDownloadStore::default(),
+        InMemoryDownloadExecutor::default(),
+    );
+    let now = Instant::now();
+    manager
+        .create_task(
+            "asset-0",
+            source("https://example.com/0.m3u8"),
+            DownloadProfile::default(),
+            asset_index(1),
+            now,
+        )
+        .expect("first task");
+
+    {
+        let (lock, changed) = &*gate;
+        let state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (state, timeout) = changed
+            .wait_timeout_while(state, Duration::from_secs(1), |state| !state.started)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(state.started && !timeout.timed_out());
+    }
+
+    for index in 1..600 {
+        manager
+            .create_task(
+                format!("asset-{index}"),
+                source("https://example.com/media.m3u8"),
+                DownloadProfile::default(),
+                asset_index(1),
+                now,
+            )
+            .expect("queued task");
+    }
+
+    let saturated = manager.drain_pipeline_event_hook_reports();
+    assert!(saturated.dropped_events > 0);
+    let download_batch = manager.drain_event_batch();
+    assert_eq!(download_batch.events.len(), MAX_PENDING_DOWNLOAD_EVENTS);
+    assert!(download_batch.dropped_events > 0);
+    assert_eq!(manager.take_dropped_download_event_count(), 0);
+
+    {
+        let (lock, changed) = &*gate;
+        let mut state = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.released = true;
+        changed.notify_all();
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut flushed = false;
+    while Instant::now() < deadline {
+        if manager.flush_pipeline_event_hooks(Duration::from_millis(100)) {
+            flushed = true;
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(
+        flushed,
+        "event-hook worker did not drain before the deadline"
+    );
+    let drained = manager.drain_pipeline_event_hook_reports();
+    assert_eq!(drained.reports.len(), MAX_PENDING_PIPELINE_EVENT_REPORTS);
+    assert!(drained.dropped_reports > 0);
 }
 
 #[test]
@@ -991,8 +1352,20 @@ fn manager_runs_post_processor_and_updates_completed_path() {
     let config = DownloadManagerConfig {
         auto_start: false,
         run_post_processors_on_completion: true,
-        post_processors: vec![processor.clone()],
-        event_hooks: vec![hook.clone()],
+        post_processors: vec![
+            PostDownloadProcessorRegistration::plugin(
+                PluginReference::new(
+                    "dev.vesper.test.recording-processor",
+                    Some("dev.vesper.test.recording-processor.primary".to_owned()),
+                    PluginTransport::Native,
+                )
+                .expect("processor reference"),
+                processor.clone(),
+            )
+            .expect("resolved processor registration"),
+        ],
+        event_hooks: vec![hook_registration(hook.clone())],
+        pipeline_event_platform: "test".to_owned(),
     };
     let store = InMemoryDownloadStore::default();
     let executor = InMemoryDownloadExecutor::default();
@@ -1042,21 +1415,29 @@ fn manager_runs_post_processor_and_updates_completed_path() {
     ));
     assert_eq!(invocations[0].1, PathBuf::from("/tmp/offline/playlist.mp4"));
 
+    assert!(manager.flush_pipeline_event_hooks(Duration::from_secs(1)));
     let events = hook.events();
-    assert!(events.iter().any(|event| matches!(
-        event,
-        PipelineEvent::PostProcessStarted { processor, .. } if processor == "recording-processor"
-    )));
-    assert!(events.iter().any(|event| matches!(
-        event,
-        PipelineEvent::PostProcessCompleted { output_path, .. }
-            if output_path == "/tmp/offline/playlist.mp4"
-    )));
-    assert!(events.iter().any(|event| matches!(
-        event,
-        PipelineEvent::DownloadTaskCompleted { task_id: completed_task_id }
-            if completed_task_id == "1"
-    )));
+    assert!(events.iter().any(|event| {
+        event.event_name == "post_process.started"
+            && event.attributes.get("processor").map(String::as_str) == Some("recording-processor")
+            && event.attributes.get("pluginId").map(String::as_str)
+                == Some("dev.vesper.test.recording-processor")
+            && event
+                .attributes
+                .get("capabilityInstanceId")
+                .map(String::as_str)
+                == Some("dev.vesper.test.recording-processor.primary")
+            && event.attributes.get("transport").map(String::as_str) == Some("native")
+    }));
+    assert!(events.iter().any(|event| {
+        event.event_name == "post_process.completed"
+            && event.resource_identity.as_deref() == Some("download-task:1")
+    }));
+    assert!(
+        events.iter().any(|event| {
+            event.event_name == "download.task.completed" && event.session_id == "1"
+        })
+    );
 }
 
 #[test]
@@ -1066,8 +1447,9 @@ fn manager_marks_task_failed_when_post_processor_fails() {
     let config = DownloadManagerConfig {
         auto_start: false,
         run_post_processors_on_completion: true,
-        post_processors: vec![processor],
-        event_hooks: vec![hook.clone()],
+        post_processors: vec![built_in_processor(processor)],
+        event_hooks: vec![hook_registration(hook.clone())],
+        pipeline_event_platform: "test".to_owned(),
     };
     let store = InMemoryDownloadStore::default();
     let executor = InMemoryDownloadExecutor::default();
@@ -1104,17 +1486,22 @@ fn manager_marks_task_failed_when_post_processor_fails() {
             .is_some_and(|summary| summary.message.contains("failing-processor"))
     );
 
+    assert!(manager.flush_pipeline_event_hooks(Duration::from_secs(1)));
     let events = hook.events();
-    assert!(events.iter().any(|event| matches!(
-        event,
-        PipelineEvent::PostProcessFailed { error, .. }
-            if error == "mux failed: ffmpeg remux failed"
-    )));
-    assert!(events.iter().any(|event| matches!(
-        event,
-        PipelineEvent::DownloadTaskFailed { error, .. }
-            if error.contains("failing-processor")
-    )));
+    assert!(events.iter().any(|event| {
+        event.event_name == "post_process.failed"
+            && event
+                .diagnostic
+                .as_ref()
+                .is_some_and(|diagnostic| diagnostic.code == "post_process.mux_failed")
+    }));
+    assert!(events.iter().any(|event| {
+        event.event_name == "download.task.failed"
+            && event
+                .diagnostic
+                .as_ref()
+                .is_some_and(|diagnostic| diagnostic.code == "download.failed")
+    }));
 }
 
 #[test]
@@ -1123,7 +1510,7 @@ fn manager_assembles_multi_stream_downloads_with_capable_processor() {
     let config = DownloadManagerConfig {
         auto_start: false,
         run_post_processors_on_completion: true,
-        post_processors: vec![processor.clone()],
+        post_processors: vec![built_in_processor(processor.clone())],
         ..DownloadManagerConfig::default()
     };
     let store = InMemoryDownloadStore::default();
@@ -1214,10 +1601,13 @@ fn manager_fails_multi_stream_completion_without_assembly_processor() {
 
 #[test]
 fn manager_fails_multi_stream_completion_when_assembly_processor_skips() {
+    let hook = Arc::new(RecordingHook::default());
     let config = DownloadManagerConfig {
         auto_start: false,
         run_post_processors_on_completion: true,
-        post_processors: vec![Arc::new(SkippingAssemblyProcessor)],
+        post_processors: vec![built_in_processor(Arc::new(SkippingAssemblyProcessor))],
+        event_hooks: vec![hook_registration(hook.clone())],
+        pipeline_event_platform: "test".to_owned(),
         ..DownloadManagerConfig::default()
     };
     let store = InMemoryDownloadStore::default();
@@ -1255,6 +1645,12 @@ fn manager_fails_multi_stream_completion_when_assembly_processor_skips() {
         .unwrap_or_default();
     assert!(message.contains("requires post-download assembly"));
     assert!(message.contains("no processor produced an assembled output"));
+    assert!(manager.flush_pipeline_event_hooks(Duration::from_secs(1)));
+    assert!(
+        hook.events()
+            .iter()
+            .any(|event| event.event_name == "post_process.skipped")
+    );
 }
 
 #[test]
@@ -1264,8 +1660,9 @@ fn manager_exports_completed_segment_download_with_progress() {
     let config = DownloadManagerConfig {
         auto_start: false,
         run_post_processors_on_completion: false,
-        post_processors: vec![processor.clone()],
-        event_hooks: vec![hook.clone()],
+        post_processors: vec![built_in_processor(processor.clone())],
+        event_hooks: vec![hook_registration(hook.clone())],
+        pipeline_event_platform: "test".to_owned(),
     };
     let store = InMemoryDownloadStore::default();
     let executor = InMemoryDownloadExecutor::default();
@@ -1314,12 +1711,12 @@ fn manager_exports_completed_segment_download_with_progress() {
     ));
     assert_eq!(invocations[0].1, PathBuf::from("/tmp/gallery/exported.mp4"));
 
+    assert!(manager.flush_pipeline_event_hooks(Duration::from_secs(1)));
     let events = hook.events();
-    assert!(events.iter().any(|event| matches!(
-        event,
-        PipelineEvent::PostProcessCompleted { output_path, .. }
-            if output_path == "/tmp/gallery/exported.mp4"
-    )));
+    assert!(events.iter().any(|event| {
+        event.event_name == "post_process.completed"
+            && event.resource_identity.as_deref() == Some("download-task:1")
+    }));
 }
 
 #[test]

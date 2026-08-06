@@ -2,7 +2,7 @@ import Foundation
 internal import VesperPlayerKitBridgeShim
 
 protocol DownloadBindings: Sendable {
-    func createDownloadSession(configuration: VesperDownloadConfiguration) -> UInt64
+    func createDownloadSession(configuration: VesperDownloadConfiguration) throws -> UInt64
 
     func disposeDownloadSession(_ sessionHandle: UInt64)
 
@@ -75,10 +75,12 @@ protocol DownloadBindings: Sendable {
         outSnapshot: inout VesperRuntimeDownloadSnapshot
     ) -> Bool
 
-    func drainDownloadCommands(
+    func peekDownloadCommands(
         sessionHandle: UInt64,
         outCommands: inout VesperRuntimeDownloadCommandList
     ) -> Bool
+
+    func acknowledgeDownloadCommands(sessionHandle: UInt64, commandCount: UInt) -> Bool
 
     func drainDownloadEvents(
         sessionHandle: UInt64,
@@ -122,22 +124,57 @@ struct RuntimeDownloadCommand {
         Self(kind: .pause, task: nil, taskId: taskId)
     }
 
-    static func remove(_ taskId: UInt64) -> Self {
-        Self(kind: .remove, task: nil, taskId: taskId)
+    static func remove(_ task: VesperDownloadTaskSnapshot) -> Self {
+        Self(kind: .remove, task: task, taskId: task.taskId)
     }
 }
 
 struct NativeDownloadBindings: DownloadBindings {
-    func createDownloadSession(configuration: VesperDownloadConfiguration) -> UInt64 {
-        var runtimeConfig = configuration.toRuntimeBridgePayload()
+    func createDownloadSession(configuration: VesperDownloadConfiguration) throws -> UInt64 {
+        let pluginRegistry: VesperEmbeddedPluginRegistry
+        let payload: VesperRuntimeDownloadConfig
+        do {
+            pluginRegistry = try VesperEmbeddedPluginRegistry.create(
+                references: configuration.postDownloadPluginReferences
+                    + configuration.eventHookPluginReferences
+            )
+            payload = try configuration.toRuntimeBridgePayload(
+                pluginRegistryHandle: pluginRegistry.handle
+            )
+        } catch {
+            throw VesperDownloadManagerInitializationError.pluginConfiguration(
+                error.localizedDescription
+            )
+        }
+        var runtimeConfig = payload
+        defer { freeRuntimeDownloadConfig(&runtimeConfig) }
         var handle: UInt64 = 0
-        let created = withUnsafePointer(to: &runtimeConfig) { configPointer in
-            withUnsafeMutablePointer(to: &handle) { handlePointer in
-                vesper_runtime_download_session_create(configPointer, handlePointer)
+        var errorMessage: UnsafeMutablePointer<CChar>?
+        let created = withExtendedLifetime(pluginRegistry) {
+            withUnsafePointer(to: &runtimeConfig) { configPointer in
+                withUnsafeMutablePointer(to: &handle) { handlePointer in
+                    withUnsafeMutablePointer(to: &errorMessage) { errorPointer in
+                        vesper_runtime_download_session_create(
+                            configPointer,
+                            handlePointer,
+                            errorPointer
+                        )
+                    }
+                }
             }
         }
-        freeRuntimeDownloadConfig(&runtimeConfig)
-        return created ? handle : 0
+        defer {
+            if let errorMessage {
+                vesper_runtime_download_error_string_free(errorMessage)
+            }
+        }
+        guard created, handle != 0 else {
+            throw VesperDownloadManagerInitializationError.nativeSessionCreation(
+                errorMessage.map { String(cString: $0) }
+                    ?? "Native download session creation failed."
+            )
+        }
+        return handle
     }
 
     func disposeDownloadSession(_ sessionHandle: UInt64) {
@@ -310,11 +347,15 @@ struct NativeDownloadBindings: DownloadBindings {
         vesper_runtime_download_session_snapshot(sessionHandle, &outSnapshot)
     }
 
-    func drainDownloadCommands(
+    func peekDownloadCommands(
         sessionHandle: UInt64,
         outCommands: inout VesperRuntimeDownloadCommandList
     ) -> Bool {
-        vesper_runtime_download_session_drain_commands(sessionHandle, &outCommands)
+        vesper_runtime_download_session_peek_commands(sessionHandle, &outCommands)
+    }
+
+    func acknowledgeDownloadCommands(sessionHandle: UInt64, commandCount: UInt) -> Bool {
+        vesper_runtime_download_session_acknowledge_commands(sessionHandle, commandCount)
     }
 
     func drainDownloadEvents(

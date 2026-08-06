@@ -174,7 +174,9 @@ public final class VesperPlayerController: ObservableObject {
     private let setResiliencePolicyImpl: (VesperPlaybackResiliencePolicy) -> Void
     private let setAudioSessionInterruptedImpl: (Bool) -> Void
     private let drainBenchmarkEventsImpl: () -> [VesperBenchmarkEvent]
+    private let drainPipelineEventHookReportsImpl: () -> VesperPipelineEventHookReportBatch
     private let benchmarkSummaryImpl: () -> VesperBenchmarkSummary
+    private let awaitBenchmarkSinkShutdownImpl: (TimeInterval) async -> Bool
     private let routePickerPlayerImpl: () -> AVPlayer?
     private let screenSleepToken = VesperScreenSleepToken()
     private var keepScreenOnDuringPlayback: Bool
@@ -259,7 +261,9 @@ public final class VesperPlayerController: ObservableObject {
         setResiliencePolicyImpl = bridge.setResiliencePolicy
         setAudioSessionInterruptedImpl = bridge.setAudioSessionInterrupted
         drainBenchmarkEventsImpl = bridge.drainBenchmarkEvents
+        drainPipelineEventHookReportsImpl = bridge.drainPipelineEventHookReports
         benchmarkSummaryImpl = bridge.benchmarkSummary
+        awaitBenchmarkSinkShutdownImpl = bridge.awaitBenchmarkSinkShutdown
         routePickerPlayerImpl = { bridge.routePickerPlayer }
         bridgeObservation = bridge.objectWillChange.sink { [weak self] _ in
             guard let self else { return }
@@ -480,8 +484,18 @@ public final class VesperPlayerController: ObservableObject {
         drainBenchmarkEventsImpl()
     }
 
+    /// Drains structured reports produced by the configured playback EventHook plugins.
+    public func drainPipelineEventHookReports() -> VesperPipelineEventHookReportBatch {
+        drainPipelineEventHookReportsImpl()
+    }
+
     public func benchmarkSummary() -> VesperBenchmarkSummary {
         benchmarkSummaryImpl()
+    }
+
+    @_spi(VesperFlutter)
+    public func awaitBenchmarkSinkShutdown(timeout: TimeInterval) async -> Bool {
+        await awaitBenchmarkSinkShutdownImpl(timeout)
     }
 
     /// Playback rates exposed by the current iOS host surface.

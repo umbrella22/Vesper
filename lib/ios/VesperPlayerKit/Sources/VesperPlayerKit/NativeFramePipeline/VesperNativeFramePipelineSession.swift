@@ -117,9 +117,12 @@ final class VesperNativeFramePipelineSession {
         let configuration = configuration
         let sourceNormalizer = sourceNormalizer
         let openResult = await VesperBoundedUtilityQueue.shared.run(
-            fallback: { Result.failure(Self.utilityQueueSaturatedStartupError()) }
+            fallback: {
+                Result<VesperNativeFramePipelineOpenResult, VesperNativeFramePipelineStartupError>
+                    .failure(Self.utilityQueueSaturatedStartupError())
+            }
         ) {
-            backend.open(
+            return backend.open(
                 source: source,
                 configuration: configuration,
                 sourceNormalizer: sourceNormalizer

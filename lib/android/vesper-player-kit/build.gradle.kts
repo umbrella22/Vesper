@@ -12,11 +12,13 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
 }
 
 val repoRoot = projectDir.resolve("../../..").canonicalFile
-val rustAndroidBuildScript = repoRoot.resolve("scripts/android/build-vesper-player-kit-jni.sh")
-val androidTestNativeProvisionScript =
-    repoRoot.resolve("scripts/android/internal/provision-player-kit-android-test-jni.sh")
+val vesperCli = repoRoot.resolve("scripts/vesper")
 val androidTestJniLibsDir = layout.buildDirectory.dir("generated/androidTestJniLibs")
 val rustAndroidAbis = providers.gradleProperty("vesper.player.android.abis").orNull
+val hostJniLibraries =
+    providers
+        .environmentVariable("VESPER_ANDROID_HOST_JNI_LIBS")
+        .orElse("src/main/jniLibs")
 val extractsInstrumentationNativeLibraries =
     gradle.startParameter.taskNames.any { taskName ->
         taskName.contains("AndroidTest", ignoreCase = true) ||
@@ -24,18 +26,15 @@ val extractsInstrumentationNativeLibraries =
             taskName.endsWith("deviceCheck", ignoreCase = true)
     }
 
-require(rustAndroidBuildScript.isFile) {
-    "Rust Android build script not found: ${rustAndroidBuildScript.absolutePath}"
-}
-require(androidTestNativeProvisionScript.isFile) {
-    "Android instrumentation JNI provisioning script not found: ${androidTestNativeProvisionScript.absolutePath}"
+require(vesperCli.isFile) {
+    "Vesper CLI launcher not found: ${vesperCli.absolutePath}"
 }
 
 val buildRustAndroidHostDebug = tasks.register<Exec>("buildRustAndroidHostDebug") {
     group = "rust"
     description = "Builds debug Android JNI libraries for the Rust player host library."
     workingDir = repoRoot
-    commandLine(rustAndroidBuildScript.absolutePath, "debug")
+    commandLine(vesperCli.absolutePath, "android", "jni", "debug")
     if (!rustAndroidAbis.isNullOrBlank()) {
         environment("RUST_ANDROID_ABIS", rustAndroidAbis)
     }
@@ -45,7 +44,7 @@ val buildRustAndroidHostRelease = tasks.register<Exec>("buildRustAndroidHostRele
     group = "rust"
     description = "Builds release Android JNI libraries for the Rust player host library."
     workingDir = repoRoot
-    commandLine(rustAndroidBuildScript.absolutePath, "release")
+    commandLine(vesperCli.absolutePath, "android", "jni", "release")
     if (!rustAndroidAbis.isNullOrBlank()) {
         environment("RUST_ANDROID_ABIS", rustAndroidAbis)
     }
@@ -57,9 +56,13 @@ val provisionAndroidTestNativeLibraries = tasks.register<Exec>("provisionAndroid
     dependsOn(buildRustAndroidHostDebug)
     workingDir = repoRoot
     commandLine(
-        androidTestNativeProvisionScript.absolutePath,
+        vesperCli.absolutePath,
+        "android",
+        "provision-test-jni",
         androidTestJniLibsDir.get().asFile.absolutePath,
+        "--profile",
         "debug",
+        "--ffmpeg-profile",
         "default",
     )
     if (!rustAndroidAbis.isNullOrBlank()) {
@@ -101,6 +104,8 @@ android {
     packaging {
         jniLibs.useLegacyPackaging = extractsInstrumentationNativeLibraries
     }
+
+    sourceSets.getByName("main").jniLibs.setSrcDirs(listOf(hostJniLibraries.get()))
 
     sourceSets.getByName("androidTest").apply {
         assets.srcDir(repoRoot.resolve("fixtures/media"))
@@ -226,6 +231,10 @@ buildRustAndroidHostRelease.configure {
         task.name == "mergeDebugJniLibFolders" ||
             task.name == "mergeDebugAndroidTestJniLibFolders"
     })
+}
+
+tasks.matching { task -> task.name == "verifyVesperNativeBinaryNames" }.configureEach {
+    mustRunAfter(buildRustAndroidHostDebug, buildRustAndroidHostRelease)
 }
 
 tasks.matching {

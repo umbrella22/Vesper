@@ -10,9 +10,14 @@ import java.net.Socket
 import java.net.SocketException
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.CoroutineContext
 import kotlin.concurrent.thread
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -74,7 +79,120 @@ class VesperDownloadManagerTest {
         val task = manager.task(1L)
         assertNotNull(task)
         assertEquals(VesperDownloadState.Downloading, task?.state)
-        assertTrue(manager.drainEvents().any { it is VesperDownloadEvent.Created })
+        assertTrue(manager.drainEvents().events.any { it is VesperDownloadEvent.Created })
+        manager.dispose()
+    }
+
+    @Test
+    fun droppedRuntimeEventsRetryAuthoritativeSnapshotResync() {
+        val bindings = FakeDownloadBindings(autoStart = false)
+        val manager =
+            VesperDownloadManager(
+                configuration = VesperDownloadConfiguration(autoStart = false),
+                executor = RecordingDownloadExecutor(),
+                bindings = bindings,
+                runtimeDispatcher = Dispatchers.Unconfined,
+            )
+
+        val taskId =
+            requireNotNull(manager.createTask(
+                assetId = "asset-loss-recovery",
+                source =
+                    VesperDownloadSource(
+                        source =
+                            VesperPlayerSource.remote(
+                                uri = "https://example.com/video.mp4",
+                                label = "Video",
+                            ),
+                    ),
+                assetIndex = VesperDownloadAssetIndex(totalSizeBytes = 1024L),
+            ))
+        manager.drainEvents()
+        val snapshotCallsBeforeLoss = bindings.pollSnapshotCount
+        bindings.simulateDroppedCompletion(
+            taskId = taskId,
+            completedPath = "/tmp/downloads/loss-recovered.mp4",
+        )
+        bindings.returnNullFromNextSnapshot()
+
+        manager.refresh()
+
+        assertEquals(snapshotCallsBeforeLoss + 1, bindings.pollSnapshotCount)
+        assertEquals(VesperDownloadState.Queued, manager.task(taskId)?.state)
+        val lossBatch = manager.drainEvents()
+        assertTrue(lossBatch.events.isEmpty())
+        assertEquals(1L, lossBatch.droppedEvents)
+        assertTrue(lossBatch.requiresSnapshotResync)
+        assertFalse(lossBatch.snapshotIsAuthoritative)
+
+        val pendingLossBatch = manager.drainEvents()
+        assertTrue(pendingLossBatch.events.isEmpty())
+        assertEquals(1L, pendingLossBatch.droppedEvents)
+        assertTrue(pendingLossBatch.requiresSnapshotResync)
+        assertFalse(pendingLossBatch.snapshotIsAuthoritative)
+
+        manager.refresh()
+
+        assertEquals(snapshotCallsBeforeLoss + 2, bindings.pollSnapshotCount)
+        assertEquals(VesperDownloadState.Completed, manager.task(taskId)?.state)
+        assertEquals(
+            "/tmp/downloads/loss-recovered.mp4",
+            manager.task(taskId)?.assetIndex?.completedPath,
+        )
+        val recoveredBatch = manager.drainEvents()
+        assertTrue(recoveredBatch.events.isEmpty())
+        assertEquals(1L, recoveredBatch.droppedEvents)
+        assertTrue(recoveredBatch.requiresSnapshotResync)
+        assertTrue(recoveredBatch.snapshotIsAuthoritative)
+
+        val nextBatch = manager.drainEvents()
+        assertTrue(nextBatch.events.isEmpty())
+        assertEquals(0L, nextBatch.droppedEvents)
+        assertFalse(nextBatch.requiresSnapshotResync)
+        assertTrue(nextBatch.snapshotIsAuthoritative)
+        manager.dispose()
+    }
+
+    @Test
+    fun eventBufferOverflowRequiresSnapshotResyncAndCountsSupersededEvents() {
+        val bindings = FakeDownloadBindings(autoStart = false)
+        val manager =
+            VesperDownloadManager(
+                configuration = VesperDownloadConfiguration(autoStart = false),
+                executor = RecordingDownloadExecutor(),
+                bindings = bindings,
+                runtimeDispatcher = Dispatchers.Unconfined,
+            )
+
+        val taskId =
+            requireNotNull(manager.createTask(
+                assetId = "asset-event-overflow",
+                source =
+                    VesperDownloadSource(
+                        source =
+                            VesperPlayerSource.remote(
+                                uri = "https://example.com/video.mp4",
+                                label = "Video",
+                            ),
+                    ),
+                assetIndex = VesperDownloadAssetIndex(totalSizeBytes = 1024L),
+            ))
+        manager.drainEvents()
+        bindings.enqueueProgressEvents(taskId, count = 501)
+
+        manager.refresh()
+
+        val overflowBatch = manager.drainEvents()
+        assertTrue(overflowBatch.events.isEmpty())
+        assertEquals(501L, overflowBatch.droppedEvents)
+        assertTrue(overflowBatch.requiresSnapshotResync)
+        assertTrue(overflowBatch.snapshotIsAuthoritative)
+
+        val nextBatch = manager.drainEvents()
+        assertTrue(nextBatch.events.isEmpty())
+        assertEquals(0L, nextBatch.droppedEvents)
+        assertFalse(nextBatch.requiresSnapshotResync)
+        assertTrue(nextBatch.snapshotIsAuthoritative)
         manager.dispose()
     }
 
@@ -250,34 +368,261 @@ class VesperDownloadManagerTest {
     }
 
     @Test
-    fun pluginLibraryPathsAreForwardedToNativeSessionConfig() {
+    fun pluginReferencesAndRegistryHandleAreForwardedToNativeSessionConfig() {
         val bindings = FakeDownloadBindings(autoStart = false)
+        val postDownloadReference =
+            VesperPluginReference(
+                pluginId = "dev.vesper.remux-ffmpeg",
+                capabilityInstanceId = "dev.vesper.remux-ffmpeg.post-download",
+                transport = VesperPluginTransport.Native,
+            )
+        val eventHookReference =
+            VesperPluginReference(
+                pluginId = "dev.vesper.download-metrics",
+                capabilityInstanceId = "dev.vesper.download-metrics.event-hook",
+                transport = VesperPluginTransport.Native,
+            )
+        val registry = RecordingPluginRegistryHandleOwner(73L)
+        var loadedReferences = emptyList<VesperPluginReference>()
         val manager =
             VesperDownloadManager(
                 configuration =
                     VesperDownloadConfiguration(
                         autoStart = false,
                         runPostProcessorsOnCompletion = false,
-                        pluginLibraryPaths =
-                            listOf(
-                                "/data/local/tmp/libvesper_remux_ffmpeg.so",
-                                "/data/local/tmp/libvesper_metrics.so",
-                            ),
+                        postDownloadPluginReferences = listOf(postDownloadReference),
+                        eventHookPluginReferences = listOf(eventHookReference),
                     ),
                 executor = RecordingDownloadExecutor(),
                 bindings = bindings,
+                pluginRegistryFactory =
+                    VesperPluginRegistryFactory { _, references ->
+                        loadedReferences = references
+                        registry
+                    },
                 runtimeDispatcher = Dispatchers.Unconfined,
             )
 
+        assertEquals(listOf(postDownloadReference, eventHookReference), loadedReferences)
+        assertEquals(73L, bindings.createdConfig?.pluginRegistryHandle)
         assertEquals(
-            listOf(
-                "/data/local/tmp/libvesper_remux_ffmpeg.so",
-                "/data/local/tmp/libvesper_metrics.so",
-            ),
-            bindings.createdConfig?.pluginLibraryPaths?.toList(),
+            encodeVesperPluginReferences(listOf(postDownloadReference)),
+            bindings.createdConfig?.postDownloadPluginReferencesJson,
+        )
+        assertEquals(
+            encodeVesperPluginReferences(listOf(eventHookReference)),
+            bindings.createdConfig?.eventHookPluginReferencesJson,
         )
         assertEquals(false, bindings.createdConfig?.runPostProcessorsOnCompletion)
         manager.dispose()
+        manager.dispose()
+        assertEquals(1, registry.closeCount)
+    }
+
+    @Test
+    fun constructorDisposesExecutorWhenPluginRegistryCreationFails() {
+        val expected = IllegalStateException("registry creation failed")
+        val bindings = FakeDownloadBindings(autoStart = false)
+        val executor = RecordingDownloadExecutor()
+
+        val actual =
+            runCatching {
+                VesperDownloadManager(
+                    configuration = configurationWithPostDownloadPlugin(),
+                    executor = executor,
+                    bindings = bindings,
+                    pluginRegistryFactory = VesperPluginRegistryFactory { _, _ -> throw expected },
+                    runtimeDispatcher = Dispatchers.Unconfined,
+                )
+            }.exceptionOrNull()
+
+        assertTrue(actual is IllegalStateException)
+        assertEquals(expected.message, actual?.message)
+        assertEquals(1, executor.disposeCount)
+        assertEquals(0, bindings.createSessionCount)
+    }
+
+    @Test
+    fun constructorDisposesRegistryAndExecutorWhenNativeSessionCreationThrows() {
+        val expected = IllegalStateException("session creation failed")
+        val bindings = FakeDownloadBindings(autoStart = false, createSessionError = expected)
+        val executor = RecordingDownloadExecutor()
+        val registry = RecordingPluginRegistryHandleOwner(73L)
+
+        val actual =
+            runCatching {
+                VesperDownloadManager(
+                    configuration = configurationWithPostDownloadPlugin(),
+                    executor = executor,
+                    bindings = bindings,
+                    pluginRegistryFactory = VesperPluginRegistryFactory { _, _ -> registry },
+                    runtimeDispatcher = Dispatchers.Unconfined,
+                )
+            }.exceptionOrNull()
+
+        assertTrue(actual is IllegalStateException)
+        assertEquals(expected.message, actual?.message)
+        assertEquals(1, bindings.createSessionCount)
+        assertEquals(0, bindings.disposeSessionCount)
+        assertEquals(1, registry.closeCount)
+        assertEquals(1, executor.disposeCount)
+    }
+
+    @Test
+    fun constructorDisposesRegistryAndExecutorWhenNativeSessionHandleIsZero() {
+        val bindings = FakeDownloadBindings(autoStart = false, sessionHandle = 0L)
+        val executor = RecordingDownloadExecutor()
+        val registry = RecordingPluginRegistryHandleOwner(73L)
+
+        val actual =
+            runCatching {
+                VesperDownloadManager(
+                    configuration = configurationWithPostDownloadPlugin(),
+                    executor = executor,
+                    bindings = bindings,
+                    pluginRegistryFactory = VesperPluginRegistryFactory { _, _ -> registry },
+                    runtimeDispatcher = Dispatchers.Unconfined,
+                )
+            }.exceptionOrNull()
+
+        assertTrue(actual is IllegalStateException)
+        assertTrue(actual?.message?.contains("must not be zero") == true)
+        assertEquals(1, bindings.createSessionCount)
+        assertEquals(0, bindings.disposeSessionCount)
+        assertEquals(1, registry.closeCount)
+        assertEquals(1, executor.disposeCount)
+    }
+
+    @Test
+    fun constructorInitializationFailureDisposesNativeResourcesAndExecutor() {
+        val expected = IllegalStateException("initial snapshot failed")
+        val bindings = FakeDownloadBindings(autoStart = false, pollSnapshotError = expected)
+        val executor = RecordingDownloadExecutor()
+        val registry = RecordingPluginRegistryHandleOwner(73L)
+
+        val actual =
+            runCatching {
+                VesperDownloadManager(
+                    configuration = configurationWithPostDownloadPlugin(),
+                    executor = executor,
+                    bindings = bindings,
+                    pluginRegistryFactory = VesperPluginRegistryFactory { _, _ -> registry },
+                    runtimeDispatcher = Dispatchers.Unconfined,
+                )
+            }.exceptionOrNull()
+
+        assertTrue(actual is IllegalStateException)
+        assertEquals(expected.message, actual?.message)
+        assertEquals(1, bindings.disposeSessionCount)
+        assertEquals(1, registry.closeCount)
+        assertEquals(1, executor.disposeCount)
+    }
+
+    @Test
+    fun disposeClosesRegistryWhenNativeSessionDisposeThrows() {
+        val expected = IllegalStateException("session dispose failed")
+        val bindings = FakeDownloadBindings(autoStart = false, disposeSessionError = expected)
+        val executor = RecordingDownloadExecutor()
+        val registry = RecordingPluginRegistryHandleOwner(73L)
+        val manager =
+            VesperDownloadManager(
+                configuration = configurationWithPostDownloadPlugin(),
+                executor = executor,
+                bindings = bindings,
+                pluginRegistryFactory = VesperPluginRegistryFactory { _, _ -> registry },
+                runtimeDispatcher = Dispatchers.Unconfined,
+            )
+
+        manager.dispose()
+        manager.dispose()
+
+        assertEquals(1, bindings.disposeSessionCount)
+        assertEquals(1, registry.closeCount)
+        assertEquals(1, executor.disposeCount)
+    }
+
+    @Test
+    fun disposeClosesRegistryWhenRuntimeDispatcherRejectsCleanup() {
+        val dispatcher = RejectableCoroutineDispatcher()
+        val bindings = FakeDownloadBindings(autoStart = false)
+        val executor = RecordingDownloadExecutor()
+        val registry = RecordingPluginRegistryHandleOwner(73L)
+        val manager =
+            VesperDownloadManager(
+                configuration = configurationWithPostDownloadPlugin(),
+                executor = executor,
+                bindings = bindings,
+                pluginRegistryFactory = VesperPluginRegistryFactory { _, _ -> registry },
+                runtimeDispatcher = dispatcher,
+            )
+        dispatcher.reject = true
+
+        manager.dispose()
+        manager.dispose()
+
+        assertEquals(1, bindings.disposeSessionCount)
+        assertEquals(1, registry.closeCount)
+        assertEquals(1, executor.disposeCount)
+    }
+
+    @Test
+    fun disposeFallsBackWhenRuntimeCleanupTimesOutBeforeDispatch() {
+        val runtimeExecutor = Executors.newSingleThreadExecutor()
+        val runtimeDispatcher = runtimeExecutor.asCoroutineDispatcher()
+        val bindings = FakeDownloadBindings(autoStart = false)
+        val downloadExecutor = RecordingDownloadExecutor()
+        val registry = RecordingPluginRegistryHandleOwner(73L)
+        val manager =
+            VesperDownloadManager(
+                configuration = configurationWithPostDownloadPlugin(),
+                executor = downloadExecutor,
+                bindings = bindings,
+                pluginRegistryFactory = VesperPluginRegistryFactory { _, _ -> registry },
+                runtimeDispatcher = runtimeDispatcher,
+                runtimeOperationTimeoutMs = 25L,
+            )
+        val blockerStarted = CountDownLatch(1)
+        val releaseBlocker = CountDownLatch(1)
+        runtimeExecutor.execute {
+            blockerStarted.countDown()
+            releaseBlocker.await(2, TimeUnit.SECONDS)
+        }
+        assertTrue(blockerStarted.await(2, TimeUnit.SECONDS))
+
+        try {
+            manager.dispose()
+            assertEquals(1, bindings.disposeSessionCount)
+            assertEquals(1, registry.closeCount)
+            assertEquals(1, downloadExecutor.disposeCount)
+        } finally {
+            releaseBlocker.countDown()
+            runtimeExecutor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun constructorPreservesSessionErrorWhenFallbackRegistryCloseFails() {
+        val expected = IllegalStateException("session creation failed")
+        val bindings = FakeDownloadBindings(autoStart = false, createSessionError = expected)
+        val executor = RecordingDownloadExecutor()
+        val registry = ThrowingPluginRegistryHandleOwner(73L)
+        val dispatcher = RejectAfterDispatchCountCoroutineDispatcher(allowedDispatchCount = 2)
+
+        val actual =
+            runCatching {
+                VesperDownloadManager(
+                    configuration = configurationWithPostDownloadPlugin(),
+                    executor = executor,
+                    bindings = bindings,
+                    pluginRegistryFactory = VesperPluginRegistryFactory { _, _ -> registry },
+                    runtimeDispatcher = dispatcher,
+                )
+            }.exceptionOrNull()
+
+        assertTrue(actual is IllegalStateException)
+        assertEquals(expected.message, actual?.message)
+        assertEquals(1, registry.closeCount)
+        assertEquals(1, executor.disposeCount)
     }
 
     @Test
@@ -424,23 +769,58 @@ private class InMemoryDownloadStateStore(
     }
 }
 
+private class RecordingPluginRegistryHandleOwner(
+    override val handle: Long,
+) : VesperPluginRegistryHandleOwner {
+    var closeCount = 0
+
+    override fun close() {
+        closeCount += 1
+    }
+}
+
+private class ThrowingPluginRegistryHandleOwner(
+    override val handle: Long,
+) : VesperPluginRegistryHandleOwner {
+    var closeCount = 0
+
+    override fun close() {
+        closeCount += 1
+        throw IllegalStateException("registry close failed")
+    }
+}
+
 private class FakeDownloadBindings(
     private val autoStart: Boolean,
+    private val sessionHandle: Long = 17L,
+    private val createSessionError: Throwable? = null,
+    private val disposeSessionError: Throwable? = null,
+    private val pollSnapshotError: Throwable? = null,
 ) : DownloadBindings {
     private val tasks = linkedMapOf<Long, NativeDownloadTask>()
     private val commands = mutableListOf<NativeDownloadCommand>()
     private val events = mutableListOf<NativeDownloadEvent>()
+    private var droppedEvents = 0L
+    private var snapshotNullsRemaining = 0
     private var nextTaskId = 1L
     var createdConfig: NativeDownloadConfig? = null
+    var createSessionCount = 0
+    var disposeSessionCount = 0
+    var pollSnapshotCount = 0
     val forwardedProgress = mutableListOf<Float>()
     var exportWasCancelled: Boolean = false
 
     override fun createDownloadSession(config: NativeDownloadConfig): Long {
+        createSessionCount += 1
         createdConfig = config
-        return 17L
+        createSessionError?.let { throw it }
+        return sessionHandle
     }
 
-    override fun disposeDownloadSession(sessionHandle: Long) = Unit
+    override fun disposeDownloadSession(sessionHandle: Long) {
+        disposeSessionCount += 1
+        disposeSessionError?.let { throw it }
+    }
 
     override fun createDownloadTask(
         sessionHandle: Long,
@@ -660,19 +1040,61 @@ private class FakeDownloadBindings(
     override fun removeDownloadTask(sessionHandle: Long, taskId: Long, nowEpochMs: Long): Boolean =
         updateTask(taskId) { task ->
             task.withStatus(statusOrdinal = 6).also { updated ->
-                commands += NativeDownloadCommand.Remove(taskId)
+                commands += NativeDownloadCommand.Remove(updated)
                 events += updated.toStateChangedEvent()
             }
         }
 
-    override fun pollDownloadSnapshot(sessionHandle: Long): NativeDownloadSnapshot =
-        NativeDownloadSnapshot(tasks = tasks.values.toTypedArray())
+    override fun pollDownloadSnapshot(sessionHandle: Long): NativeDownloadSnapshot? {
+        pollSnapshotCount += 1
+        pollSnapshotError?.let { throw it }
+        if (snapshotNullsRemaining > 0) {
+            snapshotNullsRemaining -= 1
+            return null
+        }
+        return NativeDownloadSnapshot(tasks = tasks.values.toTypedArray())
+    }
 
     override fun drainDownloadCommands(sessionHandle: Long): Array<NativeDownloadCommand> =
         commands.toTypedArray().also { commands.clear() }
 
-    override fun drainDownloadEvents(sessionHandle: Long): Array<NativeDownloadEvent> =
-        events.toTypedArray().also { events.clear() }
+    override fun drainDownloadEvents(sessionHandle: Long): NativeDownloadEventBatch =
+        NativeDownloadEventBatch(
+            events = events.toTypedArray(),
+            droppedEvents = droppedEvents,
+        ).also {
+            events.clear()
+            droppedEvents = 0
+        }
+
+    fun simulateDroppedCompletion(taskId: Long, completedPath: String) {
+        updateTask(taskId) { task ->
+            val completedProgress =
+                task.progress.withValues(
+                    receivedBytes = if (task.progress.hasTotalBytes) task.progress.totalBytes else task.progress.receivedBytes,
+                    receivedSegments =
+                        if (task.progress.hasTotalSegments) task.progress.totalSegments else task.progress.receivedSegments,
+                )
+            task.withStatus(
+                statusOrdinal = 4,
+                progress = completedProgress,
+                assetIndex = task.assetIndex.withCompletedPath(completedPath),
+            )
+        }
+        events.clear()
+        droppedEvents += 1
+    }
+
+    fun enqueueProgressEvents(taskId: Long, count: Int) {
+        val task = tasks[taskId] ?: return
+        repeat(count) {
+            events += task.toProgressUpdatedEvent()
+        }
+    }
+
+    fun returnNullFromNextSnapshot() {
+        snapshotNullsRemaining += 1
+    }
 
     private fun updateTask(
         taskId: Long,
@@ -1029,6 +1451,7 @@ private class RecordingDownloadExecutor(
     val resumedTaskIds = mutableListOf<Long>()
     val pausedTaskIds = mutableListOf<Long>()
     val removedTaskIds = mutableListOf<Long>()
+    var disposeCount = 0
 
     override fun prepare(
         task: VesperDownloadTaskSnapshot,
@@ -1061,5 +1484,48 @@ private class RecordingDownloadExecutor(
 
     override fun remove(task: VesperDownloadTaskSnapshot?) {
         task?.let { removedTaskIds += it.taskId }
+    }
+
+    override fun dispose() {
+        disposeCount += 1
+    }
+}
+
+private fun configurationWithPostDownloadPlugin(): VesperDownloadConfiguration =
+    VesperDownloadConfiguration(
+        autoStart = false,
+        postDownloadPluginReferences =
+            listOf(
+                VesperPluginReference(
+                    pluginId = "dev.vesper.remux-ffmpeg",
+                    capabilityInstanceId = "dev.vesper.remux-ffmpeg.post-download",
+                    transport = VesperPluginTransport.Native,
+                ),
+            ),
+    )
+
+private class RejectableCoroutineDispatcher : CoroutineDispatcher() {
+    @Volatile
+    var reject = false
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        if (reject) {
+            throw RejectedExecutionException("runtime dispatcher rejected cleanup")
+        }
+        block.run()
+    }
+}
+
+private class RejectAfterDispatchCountCoroutineDispatcher(
+    private val allowedDispatchCount: Int,
+) : CoroutineDispatcher() {
+    private var dispatchCount = 0
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        if (dispatchCount >= allowedDispatchCount) {
+            throw RejectedExecutionException("runtime dispatcher rejected construction cleanup")
+        }
+        dispatchCount += 1
+        block.run()
     }
 }

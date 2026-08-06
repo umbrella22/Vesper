@@ -1,41 +1,112 @@
 import Foundation
 
-enum VesperBundledPluginResolver {
-    private static let sourceNormalizerFrameworkName = "VesperPlayerSourceNormalizerFfmpegPlugin"
+enum VesperBundledPluginResolutionError: LocalizedError, Equatable {
+    case unsupportedTransport(String)
+    case missingArtifact(String)
+    case tooManyReferences(Int)
 
-    static func resolveSourceNormalizerConfiguration(
-        _ configuration: VesperSourceNormalizerConfiguration
-    ) -> VesperSourceNormalizerConfiguration {
-        resolveSourceNormalizerConfiguration(
-            configuration,
-            frameworkSearchURLs: defaultFrameworkSearchURLs()
-        )
+    var errorDescription: String? {
+        switch self {
+        case let .unsupportedTransport(transport):
+            "iOS build-time plugins do not support transport `\(transport)`."
+        case let .missingArtifact(pluginId):
+            "No embedded iOS plugin artifact was found for `\(pluginId)`."
+        case let .tooManyReferences(count):
+            "iOS plugin reference count \(count) exceeds the limit of 256."
+        }
+    }
+}
+
+/// Internal artifact locators resolved from one explicit public selection.
+struct VesperResolvedPluginArtifacts: Equatable {
+    struct Artifact: Equatable {
+        let reference: VesperPluginReference
+        let libraryPath: String
     }
 
-    static func resolveSourceNormalizerConfiguration(
-        _ configuration: VesperSourceNormalizerConfiguration,
-        frameworkSearchURLs: [URL],
+    let artifacts: [Artifact]
+
+    init(artifacts: [Artifact]) {
+        self.artifacts = artifacts
+    }
+
+    var libraryPaths: [String] {
+        var seen = Set<String>()
+        return artifacts.compactMap { artifact in
+            seen.insert(artifact.libraryPath).inserted ? artifact.libraryPath : nil
+        }
+    }
+
+    func references(forLibraryPath path: String) -> [VesperPluginReference] {
+        artifacts.compactMap { artifact in
+            artifact.libraryPath == path ? artifact.reference : nil
+        }
+    }
+}
+
+enum VesperBundledPluginResolver {
+    private static let knownFrameworkNames: [String: String] = [
+        "io.github.ikaros.vesper.source-normalizer-ffmpeg":
+            "VesperPlayerSourceNormalizerFfmpegPlugin",
+        "io.github.ikaros.vesper.remux-ffmpeg": "VesperPlayerRemuxFfmpegPlugin",
+        "io.github.ikaros.vesper.decoder-videotoolbox":
+            "VesperPlayerDecoderVideoToolboxPlugin",
+        "dev.vesper.frame-processor-diagnostic":
+            "VesperPlayerFrameProcessorDiagnosticPlugin",
+    ]
+
+    static func resolvePluginArtifacts(
+        _ references: [VesperPluginReference],
+        frameworkSearchURLs: [URL] = defaultFrameworkSearchURLs(),
         fileManager: FileManager = .default
-    ) -> VesperSourceNormalizerConfiguration {
-        if configuration.mode == .disabled || !configuration.pluginLibraryPaths.isEmpty {
-            return configuration
+    ) throws -> VesperResolvedPluginArtifacts {
+        var uniqueReferences: [VesperPluginReference] = []
+        uniqueReferences.reserveCapacity(references.count)
+        for reference in references where !uniqueReferences.contains(reference) {
+            uniqueReferences.append(reference)
+        }
+        guard uniqueReferences.count <= 256 else {
+            throw VesperBundledPluginResolutionError.tooManyReferences(uniqueReferences.count)
         }
 
-        guard
-            let pluginPath = findPluginBinary(
-                frameworkName: sourceNormalizerFrameworkName,
-                searchURLs: frameworkSearchURLs,
-                fileManager: fileManager
+        var resolvedArtifacts: [VesperResolvedPluginArtifacts.Artifact] = []
+        for reference in uniqueReferences {
+            let resolvedPath: String
+            switch reference.transport {
+            case .native:
+                guard
+                    let frameworkName = knownFrameworkNames[reference.pluginId],
+                    let path = findPluginBinary(
+                        frameworkName: frameworkName,
+                        searchURLs: frameworkSearchURLs,
+                        fileManager: fileManager
+                    )
+                else {
+                    throw VesperBundledPluginResolutionError.missingArtifact(reference.pluginId)
+                }
+                resolvedPath = path
+            case .wasm:
+                throw VesperBundledPluginResolutionError.unsupportedTransport("wasm")
+            case let .unknown(rawValue):
+                throw VesperBundledPluginResolutionError.unsupportedTransport(rawValue)
+            }
+            resolvedArtifacts.append(
+                VesperResolvedPluginArtifacts.Artifact(
+                    reference: reference,
+                    libraryPath: resolvedPath
+                )
             )
-        else {
-            return configuration
         }
+        return VesperResolvedPluginArtifacts(artifacts: resolvedArtifacts)
+    }
 
-        return VesperSourceNormalizerConfiguration(
-            mode: configuration.mode,
-            pluginLibraryPaths: [pluginPath],
-            runtimeProfile: configuration.runtimeProfile
-        )
+    static func isRegisteredNativeReference(
+        _ reference: VesperPluginReference,
+        pluginId: String
+    ) -> Bool {
+        reference.transport == .native &&
+            reference.pluginId == pluginId &&
+            knownFrameworkNames[reference.pluginId] != nil
     }
 
     static func findPluginBinary(
@@ -82,7 +153,10 @@ enum VesperBundledPluginResolver {
             urls.append(builtInPlugInsURL)
         }
         urls.append(Bundle.main.bundleURL)
-        urls.append(contentsOf: Bundle.allFrameworks.map(\.bundleURL).map { $0.deletingLastPathComponent() })
+        // Optional plugin frameworks are build-time embedded under the host
+        // application's Frameworks directory. Avoid `Bundle.allFrameworks`
+        // here: it performs a process-wide bundle scan and can block when
+        // this resolver runs on the bounded utility queue during startup.
 
         var seen = Set<String>()
         return urls.compactMap { url in

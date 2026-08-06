@@ -1,5 +1,6 @@
 {
-  if (source_uri == NULL || output_root == NULL || out_handle == NULL || out_json == NULL) {
+  if (source_uri == NULL || source_plugin_artifacts_json == NULL || output_root == NULL ||
+      out_handle == NULL || out_json == NULL) {
     return false;
   }
   if (out_error_message != NULL) {
@@ -14,8 +15,7 @@
   PlayerFfiCallStatus status = player_ffi_source_normalizer_resource_open(
       source_uri,
       source_mode,
-      source_plugin_library_paths,
-      source_plugin_library_paths_len,
+      source_plugin_artifacts_json,
       runtime_profile,
       output_root,
       force_normalized,

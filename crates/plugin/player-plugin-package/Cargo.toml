@@ -1,0 +1,25 @@
+[package]
+name = "player-plugin-package"
+description = "Deterministic signed package and trust-store primitives for Vesper plugins."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ed25519-dalek.workspace = true
+player-plugin = { version = "0.4.0", path = "../player-plugin" }
+player-plugin-abi = { version = "0.4.0", path = "../player-plugin-abi" }
+rand_core.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+unicode-casefold.workspace = true
+unicode-normalization.workspace = true
+uuid.workspace = true
+zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }

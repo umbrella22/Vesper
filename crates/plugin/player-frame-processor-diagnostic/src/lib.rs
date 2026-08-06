@@ -1,30 +1,23 @@
-#![warn(clippy::undocumented_unsafe_blocks)]
+#![deny(unsafe_code)]
 
 use std::collections::VecDeque;
-use std::ffi::{c_char, c_void};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::thread;
 use std::time::Duration;
 
 use player_plugin::{
     DecoderFrameFormat, DecoderMediaKind, FrameProcessorCapabilities, FrameProcessorError,
-    FrameProcessorFrameTimings, FrameProcessorOperationStatus, FrameProcessorReceiveFrameMetadata,
+    FrameProcessorFrameTimings, FrameProcessorInputFrame, FrameProcessorOutputFrame,
+    FrameProcessorPluginFactory, FrameProcessorReceiveOutput, FrameProcessorSession,
     FrameProcessorSessionConfig, FrameProcessorSessionInfo, FrameProcessorSubmitFrame,
     FrameProcessorSubmitResult, FrameProcessorSubmitStatus, NativeFrame, NativeFrameMetadata,
-    NativeFramePipelineProfile, NativeFrameReleaseTracking, NativeHandleKind,
-    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT, VesperFrameProcessorOpenSessionResult,
-    VesperFrameProcessorPluginApiV1, VesperFrameProcessorReceiveFrameResult, VesperPluginBytes,
-    VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
+    NativeFramePipelineProfile, NativeHandleKind, Plugin, PluginBuildError,
 };
 
-static PLUGIN_NAME: &[u8] = b"player-frame-processor-diagnostic\0";
+const PLUGIN_ID: &str = "dev.vesper.frame-processor-diagnostic";
+const INSTANCE_ID: &str = "dev.vesper.frame-processor-diagnostic.frame";
+const PLUGIN_NAME: &str = "player-frame-processor-diagnostic";
 const MODE_ENV: &str = "VESPER_FRAME_PROCESSOR_DIAGNOSTIC_MODE";
 const SLOW_DELAY_MS_ENV: &str = "VESPER_FRAME_PROCESSOR_DIAGNOSTIC_SLOW_MS";
-
-struct PluginBundle {
-    api: VesperFrameProcessorPluginApiV1,
-    descriptor: VesperPluginDescriptor,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DiagnosticMode {
@@ -51,12 +44,193 @@ impl DiagnosticMode {
     }
 }
 
+#[derive(Debug, Default)]
+struct DiagnosticFrameProcessorFactory;
+
+impl FrameProcessorPluginFactory for DiagnosticFrameProcessorFactory {
+    fn name(&self) -> &str {
+        PLUGIN_NAME
+    }
+
+    fn capabilities(&self) -> FrameProcessorCapabilities {
+        diagnostic_capabilities(DiagnosticMode::from_env())
+    }
+
+    fn open_session(
+        &self,
+        config: &FrameProcessorSessionConfig,
+    ) -> Result<Box<dyn FrameProcessorSession>, FrameProcessorError> {
+        let mode = DiagnosticMode::from_env();
+        if !diagnostic_capabilities(mode).supports_input_metadata(&config.input_metadata) {
+            return Err(FrameProcessorError::unsupported_handle(format!(
+                "{:?}",
+                config.input_metadata.effective_pipeline_profile()
+            )));
+        }
+
+        Ok(Box::new(DiagnosticSession::new(
+            mode,
+            &config.input_metadata,
+        )))
+    }
+}
+
+#[derive(Debug)]
+struct PendingOutput {
+    frame: NativeFrame,
+    source_frame_id: Option<u64>,
+}
+
 #[derive(Debug)]
 struct DiagnosticSession {
     mode: DiagnosticMode,
-    pending_outputs: VecDeque<NativeFrame>,
-    source_frame_ids: VecDeque<Option<u64>>,
+    info: FrameProcessorSessionInfo,
+    pending_outputs: VecDeque<PendingOutput>,
     counters: DiagnosticCounters,
+}
+
+impl DiagnosticSession {
+    fn new(mode: DiagnosticMode, input_metadata: &NativeFrameMetadata) -> Self {
+        Self {
+            mode,
+            info: FrameProcessorSessionInfo {
+                processor_name: Some(PLUGIN_NAME.to_owned()),
+                selected_backend: Some(format!("{mode:?}")),
+                output_handle_kind: Some(input_metadata.handle_kind.clone()),
+                output_pipeline_profile: Some(input_metadata.effective_pipeline_profile()),
+                max_in_flight_frames: Some(1),
+            },
+            pending_outputs: VecDeque::new(),
+            counters: DiagnosticCounters::default(),
+        }
+    }
+
+    fn pending_count(&self) -> u32 {
+        if self.pending_outputs.is_empty() {
+            0
+        } else {
+            1
+        }
+    }
+}
+
+impl FrameProcessorSession for DiagnosticSession {
+    fn session_info(&self) -> FrameProcessorSessionInfo {
+        self.info.clone()
+    }
+
+    fn submit_frame(
+        &mut self,
+        frame: FrameProcessorInputFrame<'_>,
+        _submit: &FrameProcessorSubmitFrame,
+    ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
+        if frame.native_handle() == 0 {
+            return Err(FrameProcessorError::abi_violation(
+                "input frame handle must not be null",
+            ));
+        }
+        if !diagnostic_capabilities(self.mode).supports_input_metadata(frame.metadata()) {
+            self.counters.rejected = self.counters.rejected.saturating_add(1);
+            return Ok(FrameProcessorSubmitResult {
+                status: FrameProcessorSubmitStatus::Rejected,
+                queue_depth: Some(self.pending_count()),
+                in_flight_frames: Some(self.pending_count()),
+                message: Some("unsupported input handle kind".to_owned()),
+            });
+        }
+        if !self.pending_outputs.is_empty() {
+            self.counters.backpressure = self.counters.backpressure.saturating_add(1);
+            return Ok(FrameProcessorSubmitResult {
+                status: FrameProcessorSubmitStatus::Backpressure,
+                queue_depth: Some(self.pending_count()),
+                in_flight_frames: Some(self.pending_count()),
+                message: Some("diagnostic output is still pending".to_owned()),
+            });
+        }
+
+        if self.mode == DiagnosticMode::Slow {
+            thread::sleep(Duration::from_millis(slow_delay_ms()));
+        }
+
+        let source_frame_id = frame.metadata().frame_id;
+        let output = allocate_output_frame(&frame);
+        self.counters.submitted = self.counters.submitted.saturating_add(1);
+        self.pending_outputs.push_back(PendingOutput {
+            frame: output,
+            source_frame_id,
+        });
+
+        Ok(FrameProcessorSubmitResult {
+            status: FrameProcessorSubmitStatus::Accepted,
+            queue_depth: Some(self.pending_count()),
+            in_flight_frames: Some(self.pending_count()),
+            message: None,
+        })
+    }
+
+    fn receive_frame(&mut self) -> Result<FrameProcessorReceiveOutput, FrameProcessorError> {
+        let Some(output) = self.pending_outputs.pop_front() else {
+            return Ok(FrameProcessorReceiveOutput::Pending);
+        };
+        let process_time_us = match self.mode {
+            DiagnosticMode::Slow => slow_delay_ms().saturating_mul(1_000),
+            DiagnosticMode::LateOutput => 1_000_000,
+            DiagnosticMode::Noop | DiagnosticMode::UnsupportedHandle | DiagnosticMode::Marker => {
+                100
+            }
+        };
+        self.counters.record_process_time(process_time_us);
+        let message = if self.mode == DiagnosticMode::LateOutput {
+            "diagnostic output intentionally reports late timing".to_owned()
+        } else if self.mode == DiagnosticMode::Marker {
+            format!("debug marker metadata-only; {}", self.counters.summary())
+        } else {
+            self.counters.summary()
+        };
+
+        Ok(FrameProcessorReceiveOutput::Frame(
+            FrameProcessorOutputFrame {
+                frame: output.frame,
+                timings: FrameProcessorFrameTimings {
+                    queue_wait_us: Some(0),
+                    process_time_us: Some(process_time_us),
+                    submit_to_ready_us: Some(process_time_us),
+                },
+                source_frame_id: output.source_frame_id,
+                message: Some(message),
+            },
+        ))
+    }
+
+    fn release_frame(&mut self, frame: NativeFrame) -> Result<(), FrameProcessorError> {
+        if frame.handle == 0 {
+            return Err(FrameProcessorError::abi_violation(
+                "release_frame handle must not be null",
+            ));
+        }
+        if frame
+            .metadata
+            .release_tracking
+            .as_ref()
+            .is_some_and(|tracking| !tracking.requires_release)
+        {
+            return Err(FrameProcessorError::abi_violation(
+                "borrowed passthrough frame must not be released",
+            ));
+        }
+        self.counters.released = self.counters.released.saturating_add(1);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), FrameProcessorError> {
+        self.pending_outputs.clear();
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<(), FrameProcessorError> {
+        self.pending_outputs.clear();
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -97,255 +271,6 @@ impl DiagnosticCounters {
             self.max_process_time_us
         )
     }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
-    catch_unwind(AssertUnwindSafe(vesper_plugin_entry_impl)).unwrap_or(std::ptr::null())
-}
-
-fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
-    let mut bundle = Box::new(PluginBundle {
-        api: VesperFrameProcessorPluginApiV1 {
-            context: std::ptr::null_mut(),
-            destroy: None,
-            name: Some(processor_name),
-            capabilities_json: Some(processor_capabilities_json),
-            open_session_json: Some(processor_open_session_json),
-            submit_frame_json: Some(processor_submit_frame_json),
-            receive_frame: Some(processor_receive_frame),
-            release_frame: Some(processor_release_frame),
-            flush_session: Some(processor_flush_session),
-            close_session: Some(processor_close_session),
-            free_bytes: Some(free_plugin_bytes),
-        },
-        descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-            plugin_kind: VesperPluginKind::FrameProcessor as u32,
-            plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
-            api: std::ptr::null(),
-        },
-    });
-    bundle.descriptor.api =
-        (&bundle.api as *const VesperFrameProcessorPluginApiV1).cast::<c_void>();
-    let bundle = Box::leak(bundle);
-    &bundle.descriptor
-}
-
-unsafe extern "C" fn processor_name(_context: *mut c_void) -> *const c_char {
-    catch_unwind(AssertUnwindSafe(|| PLUGIN_NAME.as_ptr().cast::<c_char>()))
-        .unwrap_or(std::ptr::null())
-}
-
-unsafe extern "C" fn processor_capabilities_json(_context: *mut c_void) -> VesperPluginBytes {
-    catch_processor_bytes(|| {
-        let mode = DiagnosticMode::from_env();
-        serialize_payload(&diagnostic_capabilities(mode))
-    })
-}
-
-unsafe extern "C" fn processor_open_session_json(
-    _context: *mut c_void,
-    config_json: *const u8,
-    config_json_len: usize,
-) -> VesperFrameProcessorOpenSessionResult {
-    catch_processor_open(|| {
-        let config = match decode_json::<FrameProcessorSessionConfig>(config_json, config_json_len)
-        {
-            Ok(config) => config,
-            Err(error) => return open_error(error),
-        };
-        let mode = DiagnosticMode::from_env();
-        let capabilities = diagnostic_capabilities(mode);
-        if !capabilities.supports_input_metadata(&config.input_metadata) {
-            return open_error(FrameProcessorError::unsupported_handle(format!(
-                "{:?}",
-                config.input_metadata.effective_pipeline_profile()
-            )));
-        }
-
-        let session = Box::into_raw(Box::new(DiagnosticSession {
-            mode,
-            pending_outputs: VecDeque::new(),
-            source_frame_ids: VecDeque::new(),
-            counters: DiagnosticCounters::default(),
-        }));
-        let info = FrameProcessorSessionInfo {
-            processor_name: Some("player-frame-processor-diagnostic".to_owned()),
-            selected_backend: Some(format!("{mode:?}")),
-            output_handle_kind: Some(config.input_metadata.handle_kind.clone()),
-            output_pipeline_profile: Some(config.input_metadata.effective_pipeline_profile()),
-            max_in_flight_frames: Some(1),
-        };
-        VesperFrameProcessorOpenSessionResult {
-            status: VesperPluginResultStatus::Success as u32,
-            session: session.cast::<c_void>(),
-            payload: serialize_payload(&info),
-        }
-    })
-}
-
-unsafe extern "C" fn processor_submit_frame_json(
-    _context: *mut c_void,
-    session: *mut c_void,
-    submit_json: *const u8,
-    submit_json_len: usize,
-    handle: usize,
-) -> VesperPluginProcessResult {
-    catch_processor_process(|| {
-        // SAFETY: `session` is the opaque pointer returned by this plugin's
-        // open callback and remains owned by the host until close.
-        let Some(session) = (unsafe { session.cast::<DiagnosticSession>().as_mut() }) else {
-            return process_error(FrameProcessorError::NotConfigured);
-        };
-        let submit = match decode_json::<FrameProcessorSubmitFrame>(submit_json, submit_json_len) {
-            Ok(submit) => submit,
-            Err(error) => return process_error(error),
-        };
-        if handle == 0 {
-            return process_error(FrameProcessorError::abi_violation(
-                "input frame handle must not be null",
-            ));
-        }
-        if !diagnostic_capabilities(session.mode).supports_input_metadata(&submit.metadata) {
-            session.counters.rejected = session.counters.rejected.saturating_add(1);
-            return process_success(&FrameProcessorSubmitResult {
-                status: FrameProcessorSubmitStatus::Rejected,
-                queue_depth: Some(session.pending_outputs.len() as u32),
-                in_flight_frames: Some(session.pending_outputs.len() as u32),
-                message: Some("unsupported input handle kind".to_owned()),
-            });
-        }
-        if session.pending_outputs.len() >= 1 {
-            session.counters.backpressure = session.counters.backpressure.saturating_add(1);
-            return process_success(&FrameProcessorSubmitResult {
-                status: FrameProcessorSubmitStatus::Backpressure,
-                queue_depth: Some(session.pending_outputs.len() as u32),
-                in_flight_frames: Some(session.pending_outputs.len() as u32),
-                message: Some("diagnostic output is still pending".to_owned()),
-            });
-        }
-
-        match session.mode {
-            DiagnosticMode::Slow => thread::sleep(Duration::from_millis(slow_delay_ms())),
-            DiagnosticMode::Noop
-            | DiagnosticMode::UnsupportedHandle
-            | DiagnosticMode::LateOutput
-            | DiagnosticMode::Marker => {}
-        }
-
-        let output = allocate_output_frame(&submit.metadata, handle);
-        session.counters.submitted = session.counters.submitted.saturating_add(1);
-        session.source_frame_ids.push_back(submit.metadata.frame_id);
-        session.pending_outputs.push_back(output);
-
-        process_success(&FrameProcessorSubmitResult {
-            status: FrameProcessorSubmitStatus::Accepted,
-            queue_depth: Some(session.pending_outputs.len() as u32),
-            in_flight_frames: Some(session.pending_outputs.len() as u32),
-            message: None,
-        })
-    })
-}
-
-unsafe extern "C" fn processor_receive_frame(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperFrameProcessorReceiveFrameResult {
-    catch_processor_receive(|| {
-        // SAFETY: `session` is the opaque pointer returned by this plugin's
-        // open callback and remains owned by the host until close.
-        let Some(session) = (unsafe { session.cast::<DiagnosticSession>().as_mut() }) else {
-            return receive_error(FrameProcessorError::NotConfigured);
-        };
-        let Some(output) = session.pending_outputs.pop_front() else {
-            return receive_success(&FrameProcessorReceiveFrameMetadata::pending(), 0);
-        };
-        let source_frame_id = session.source_frame_ids.pop_front().flatten();
-        let process_time_us = match session.mode {
-            DiagnosticMode::Slow => slow_delay_ms().saturating_mul(1_000),
-            DiagnosticMode::LateOutput => 1_000_000,
-            DiagnosticMode::Noop | DiagnosticMode::UnsupportedHandle | DiagnosticMode::Marker => {
-                100
-            }
-        };
-        session.counters.record_process_time(process_time_us);
-        let mut metadata = FrameProcessorReceiveFrameMetadata::frame(output.metadata);
-        metadata.source_frame_id = source_frame_id;
-        metadata.timings = FrameProcessorFrameTimings {
-            queue_wait_us: Some(0),
-            process_time_us: Some(process_time_us),
-            submit_to_ready_us: Some(process_time_us),
-        };
-        if session.mode == DiagnosticMode::LateOutput {
-            metadata.message =
-                Some("diagnostic output intentionally reports late timing".to_owned());
-        } else if session.mode == DiagnosticMode::Marker {
-            metadata.message = Some(format!(
-                "debug marker metadata-only; {}",
-                session.counters.summary()
-            ));
-        } else {
-            metadata.message = Some(session.counters.summary());
-        }
-
-        receive_success(&metadata, output.handle)
-    })
-}
-
-unsafe extern "C" fn processor_release_frame(
-    _context: *mut c_void,
-    session: *mut c_void,
-    _handle_kind: u32,
-    handle: usize,
-) -> VesperPluginProcessResult {
-    catch_processor_process(|| {
-        if handle == 0 {
-            return process_error(FrameProcessorError::abi_violation(
-                "release_frame handle must not be null",
-            ));
-        }
-        // SAFETY: output handles are allocated with `Box::into_raw` by this
-        // diagnostic plugin and released exactly once through this callback.
-        let _ = unsafe { Box::from_raw(handle as *mut Vec<u8>) };
-        // SAFETY: `session` is the opaque pointer returned by this plugin's
-        // open callback and remains owned by the host until close.
-        if let Some(session) = unsafe { session.cast::<DiagnosticSession>().as_mut() } {
-            session.counters.released = session.counters.released.saturating_add(1);
-        }
-        process_success(&FrameProcessorOperationStatus { completed: true })
-    })
-}
-
-unsafe extern "C" fn processor_flush_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_processor_process(|| {
-        // SAFETY: `session` is the opaque pointer returned by this plugin's
-        // open callback and remains owned by the host until close.
-        let Some(session) = (unsafe { session.cast::<DiagnosticSession>().as_mut() }) else {
-            return process_error(FrameProcessorError::NotConfigured);
-        };
-        release_pending_outputs(session);
-        process_success(&FrameProcessorOperationStatus { completed: true })
-    })
-}
-
-unsafe extern "C" fn processor_close_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_processor_process(|| {
-        if session.is_null() {
-            return process_error(FrameProcessorError::NotConfigured);
-        }
-        // SAFETY: the session pointer was allocated with `Box::into_raw` by
-        // this plugin and close is called once by the host.
-        let mut session = unsafe { Box::from_raw(session.cast::<DiagnosticSession>()) };
-        release_pending_outputs(&mut session);
-        process_success(&FrameProcessorOperationStatus { completed: true })
-    })
 }
 
 fn diagnostic_capabilities(mode: DiagnosticMode) -> FrameProcessorCapabilities {
@@ -396,34 +321,16 @@ fn diagnostic_capabilities(mode: DiagnosticMode) -> FrameProcessorCapabilities {
     }
 }
 
-fn allocate_output_frame(metadata: &NativeFrameMetadata, input_handle: usize) -> NativeFrame {
-    let mut output_metadata = metadata.clone();
-    output_metadata.frame_id = metadata.frame_id.or(Some(input_handle as u64));
-    output_metadata.release_tracking = Some(NativeFrameReleaseTracking {
-        frame_id: output_metadata.frame_id,
-        requires_release: false,
-    });
-    NativeFrame {
-        metadata: output_metadata,
-        handle: input_handle,
+fn allocate_output_frame(frame: &FrameProcessorInputFrame<'_>) -> NativeFrame {
+    let mut output = frame.borrowed_passthrough();
+    output.metadata.frame_id = output
+        .metadata
+        .frame_id
+        .or_else(|| u64::try_from(output.handle).ok());
+    if let Some(tracking) = output.metadata.release_tracking.as_mut() {
+        tracking.frame_id = output.metadata.frame_id;
     }
-}
-
-fn release_pending_outputs(session: &mut DiagnosticSession) {
-    while let Some(output) = session.pending_outputs.pop_front() {
-        if output
-            .metadata
-            .release_tracking
-            .as_ref()
-            .is_some_and(|tracking| tracking.requires_release)
-        {
-            // SAFETY: this branch only releases processor-owned outputs. The
-            // current diagnostic modes return borrowed passthrough handles and
-            // mark them as not requiring release.
-            let _ = unsafe { Box::from_raw(output.handle as *mut Vec<u8>) };
-        }
-    }
-    session.source_frame_ids.clear();
+    output
 }
 
 fn slow_delay_ms() -> u64 {
@@ -431,111 +338,6 @@ fn slow_delay_ms() -> u64 {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(50)
-}
-
-fn decode_json<T: serde::de::DeserializeOwned>(
-    data: *const u8,
-    len: usize,
-) -> Result<T, FrameProcessorError> {
-    if data.is_null() && len > 0 {
-        return Err(FrameProcessorError::abi_violation(
-            "plugin JSON pointer was null with non-zero len",
-        ));
-    }
-    let payload = if data.is_null() || len == 0 {
-        &[]
-    } else {
-        // SAFETY: the ABI caller keeps the byte range alive for this synchronous
-        // callback.
-        unsafe { std::slice::from_raw_parts(data, len) }
-    };
-    serde_json::from_slice(payload)
-        .map_err(|error| FrameProcessorError::payload_codec(error.to_string()))
-}
-
-fn open_error(error: FrameProcessorError) -> VesperFrameProcessorOpenSessionResult {
-    VesperFrameProcessorOpenSessionResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        session: std::ptr::null_mut(),
-        payload: serialize_payload(&error),
-    }
-}
-
-fn process_success<T: serde::Serialize>(value: &T) -> VesperPluginProcessResult {
-    VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success as u32,
-        payload: serialize_payload(value),
-    }
-}
-
-fn process_error(error: FrameProcessorError) -> VesperPluginProcessResult {
-    VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        payload: serialize_payload(&error),
-    }
-}
-
-fn receive_success(
-    metadata: &FrameProcessorReceiveFrameMetadata,
-    handle: usize,
-) -> VesperFrameProcessorReceiveFrameResult {
-    VesperFrameProcessorReceiveFrameResult {
-        status: VesperPluginResultStatus::Success as u32,
-        metadata: serialize_payload(metadata),
-        handle,
-    }
-}
-
-fn receive_error(error: FrameProcessorError) -> VesperFrameProcessorReceiveFrameResult {
-    VesperFrameProcessorReceiveFrameResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        metadata: serialize_payload(&error),
-        handle: 0,
-    }
-}
-
-unsafe extern "C" fn free_plugin_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: the payload was produced by this dynamic library and has not
-        // been reclaimed yet.
-        let _ = unsafe { payload.into_vec() };
-    }));
-}
-
-fn serialize_payload<T: serde::Serialize>(value: &T) -> VesperPluginBytes {
-    match serde_json::to_vec(value) {
-        Ok(payload) => VesperPluginBytes::from_vec(payload),
-        Err(error) => VesperPluginBytes::from_vec(error.to_string().into_bytes()),
-    }
-}
-
-fn catch_processor_bytes(operation: impl FnOnce() -> VesperPluginBytes) -> VesperPluginBytes {
-    catch_unwind(AssertUnwindSafe(operation)).unwrap_or_else(|_| {
-        serialize_payload(&FrameProcessorError::abi_violation(
-            "frame processor callback panicked",
-        ))
-    })
-}
-
-fn catch_processor_open(
-    operation: impl FnOnce() -> VesperFrameProcessorOpenSessionResult,
-) -> VesperFrameProcessorOpenSessionResult {
-    catch_unwind(AssertUnwindSafe(operation))
-        .unwrap_or_else(|_| open_error(FrameProcessorError::internal("callback panicked")))
-}
-
-fn catch_processor_process(
-    operation: impl FnOnce() -> VesperPluginProcessResult,
-) -> VesperPluginProcessResult {
-    catch_unwind(AssertUnwindSafe(operation))
-        .unwrap_or_else(|_| process_error(FrameProcessorError::internal("callback panicked")))
-}
-
-fn catch_processor_receive(
-    operation: impl FnOnce() -> VesperFrameProcessorReceiveFrameResult,
-) -> VesperFrameProcessorReceiveFrameResult {
-    catch_unwind(AssertUnwindSafe(operation))
-        .unwrap_or_else(|_| receive_error(FrameProcessorError::internal("callback panicked")))
 }
 
 #[allow(dead_code)]
@@ -560,23 +362,33 @@ fn sample_metadata() -> NativeFrameMetadata {
         sync_info: None,
         transform: None,
         frame_id: Some(1),
-        release_tracking: Some(NativeFrameReleaseTracking {
-            frame_id: Some(1),
-            requires_release: true,
-        }),
+        release_tracking: None,
     }
+}
+
+#[player_plugin::export]
+fn diagnostic_frame_processor_plugin() -> Result<Plugin, PluginBuildError> {
+    Plugin::builder(PLUGIN_ID, PLUGIN_NAME)?
+        .with_frame_processor(INSTANCE_ID, DiagnosticFrameProcessorFactory)?
+        .build()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DiagnosticCounters, DiagnosticMode, DiagnosticSession, allocate_output_frame,
-        diagnostic_capabilities, release_pending_outputs, sample_metadata, slow_delay_ms,
-    };
-    use player_plugin::{
-        FrameProcessorReceiveFrameMetadata, FrameProcessorReceiveStatus, FrameProcessorSubmitFrame,
-        NativeFramePipelineProfile, NativeHandleKind,
-    };
+    use super::*;
+
+    fn sample_frame(handle: usize) -> NativeFrame {
+        NativeFrame {
+            metadata: sample_metadata(),
+            handle,
+            lease_token: None,
+        }
+    }
+
+    #[test]
+    fn exports_plugin_entry() {
+        assert!(!vesper_plugin_entry().is_null());
+    }
 
     #[test]
     fn default_mode_is_noop() {
@@ -615,33 +427,14 @@ mod tests {
     }
 
     #[test]
-    fn sample_submit_metadata_is_video() {
-        let submit = FrameProcessorSubmitFrame::new(sample_metadata());
+    fn diagnostic_output_preserves_shape_and_marks_borrowed_passthrough() {
+        let input = sample_frame(99);
+        let output = allocate_output_frame(&FrameProcessorInputFrame::new(&input));
 
-        assert_eq!(submit.metadata.codec, "diagnostic-video");
-    }
-
-    #[test]
-    fn diagnostic_session_starts_empty() {
-        let session = DiagnosticSession {
-            mode: DiagnosticMode::Noop,
-            pending_outputs: std::collections::VecDeque::new(),
-            source_frame_ids: std::collections::VecDeque::new(),
-            counters: DiagnosticCounters::default(),
-        };
-
-        assert!(session.pending_outputs.is_empty());
-    }
-
-    #[test]
-    fn diagnostic_output_preserves_shape_and_marks_passthrough_release_tracking() {
-        let metadata = sample_metadata();
-        let output = allocate_output_frame(&metadata, 99);
-
-        assert_eq!(output.metadata.width, metadata.width);
-        assert_eq!(output.metadata.height, metadata.height);
-        assert_eq!(output.metadata.handle_kind, metadata.handle_kind);
-        assert_eq!(output.metadata.frame_id, metadata.frame_id);
+        assert_eq!(output.metadata.width, input.metadata.width);
+        assert_eq!(output.metadata.height, input.metadata.height);
+        assert_eq!(output.metadata.handle_kind, input.metadata.handle_kind);
+        assert_eq!(output.metadata.frame_id, input.metadata.frame_id);
         assert_eq!(output.handle, 99);
         assert_eq!(
             output
@@ -654,44 +447,48 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_flush_drops_pending_outputs() {
-        let mut session = DiagnosticSession {
-            mode: DiagnosticMode::Noop,
-            pending_outputs: std::collections::VecDeque::new(),
-            source_frame_ids: std::collections::VecDeque::new(),
-            counters: DiagnosticCounters::default(),
+    fn marker_session_preserves_counter_message_and_timing() {
+        let input = sample_frame(99);
+        let mut session = DiagnosticSession::new(DiagnosticMode::Marker, &input.metadata);
+        let submit = FrameProcessorSubmitFrame::new(input.metadata.clone());
+        let result = session
+            .submit_frame(FrameProcessorInputFrame::new(&input), &submit)
+            .expect("submit marker frame");
+        assert_eq!(result.status, FrameProcessorSubmitStatus::Accepted);
+
+        let FrameProcessorReceiveOutput::Frame(output) =
+            session.receive_frame().expect("receive marker frame")
+        else {
+            panic!("expected marker output");
         };
+        assert_eq!(output.timings.submit_to_ready_us, Some(100));
+        assert_eq!(output.source_frame_id, Some(1));
+        assert!(
+            output
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("processed=1"))
+        );
+    }
+
+    #[test]
+    fn diagnostic_session_reports_backpressure_and_flushes_pending_output() {
+        let input = sample_frame(99);
+        let mut session = DiagnosticSession::new(DiagnosticMode::Noop, &input.metadata);
+        let submit = FrameProcessorSubmitFrame::new(input.metadata.clone());
         session
-            .pending_outputs
-            .push_back(allocate_output_frame(&sample_metadata(), 100));
-        session.source_frame_ids.push_back(Some(7));
+            .submit_frame(FrameProcessorInputFrame::new(&input), &submit)
+            .expect("submit first frame");
+        let result = session
+            .submit_frame(FrameProcessorInputFrame::new(&input), &submit)
+            .expect("submit backpressured frame");
+        assert_eq!(result.status, FrameProcessorSubmitStatus::Backpressure);
 
-        release_pending_outputs(&mut session);
-
-        assert!(session.pending_outputs.is_empty());
-        assert!(session.source_frame_ids.is_empty());
-    }
-
-    #[test]
-    fn diagnostic_receive_metadata_can_report_late_output() {
-        let mut metadata = FrameProcessorReceiveFrameMetadata::frame(sample_metadata());
-        metadata.timings.submit_to_ready_us = Some(1_000_000);
-        metadata.source_frame_id = Some(1);
-        metadata.message = Some("diagnostic output intentionally reports late timing".to_owned());
-
-        assert_eq!(metadata.status, FrameProcessorReceiveStatus::Frame);
-        assert_eq!(metadata.timings.submit_to_ready_us, Some(1_000_000));
-        assert_eq!(metadata.source_frame_id, Some(1));
-    }
-
-    #[test]
-    fn marker_mode_uses_metadata_only_debug_capability_profile() {
-        let capabilities = diagnostic_capabilities(DiagnosticMode::Marker);
-
-        assert!(capabilities.supports_input_pipeline_profile(
-            &NativeFramePipelineProfile::Unknown("io_surface".to_owned())
-        ));
-        assert!(capabilities.supports_input_metadata(&sample_metadata()));
+        session.flush().expect("flush pending output");
+        assert_eq!(
+            session.receive_frame().expect("receive after flush"),
+            FrameProcessorReceiveOutput::Pending
+        );
     }
 
     #[test]

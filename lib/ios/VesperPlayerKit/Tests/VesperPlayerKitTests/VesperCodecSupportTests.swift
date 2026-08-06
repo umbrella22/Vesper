@@ -40,7 +40,7 @@ final class VesperCodecSupportTests: XCTestCase {
                 codec: "hvc1.1.6.L93.B0",
                 requiresNativeFrame: true,
                 nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
-                    decoderPluginLibraryPaths: ["/tmp/libdecoder_videotoolbox.dylib"]
+                    decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
                 )
             )
         )
@@ -60,7 +60,7 @@ final class VesperCodecSupportTests: XCTestCase {
                 codec: "dvh1.05.06",
                 nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                     mode: .requireNativeFrame,
-                    decoderPluginLibraryPaths: ["/tmp/libdecoder_videotoolbox.dylib"]
+                    decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
                 )
             )
         )
@@ -86,11 +86,11 @@ final class VesperCodecSupportTests: XCTestCase {
                 codec: "dvh1.05.06",
                 sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                     mode: .preferNormalized,
-                    pluginLibraryPaths: ["/tmp/libnormalizer.dylib"]
+                    pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
                 ),
                 nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                     mode: .preferNativeFrame,
-                    decoderPluginLibraryPaths: ["/tmp/libdecoder_videotoolbox.dylib"]
+                    decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
                 )
             )
         )
@@ -118,7 +118,7 @@ final class VesperCodecSupportTests: XCTestCase {
                 codec: "dvhe.08.07",
                 nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                     mode: .preferNativeFrame,
-                    decoderPluginLibraryPaths: ["/tmp/libdecoder_videotoolbox.dylib"]
+                    decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
                 )
             )
         )
@@ -167,7 +167,7 @@ final class VesperCodecSupportTests: XCTestCase {
                 codec: "dvhe.08.07",
                 nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                     mode: .preferNativeFrame,
-                    decoderPluginLibraryPaths: ["/tmp/libdecoder_videotoolbox.dylib"]
+                    decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
                 )
             )
         )
@@ -329,7 +329,7 @@ final class VesperCodecSupportTests: XCTestCase {
                 codec: "dvh1.05.06",
                 nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                     mode: .preferNativeFrame,
-                    decoderPluginLibraryPaths: ["/tmp/libdecoder_videotoolbox.dylib"]
+                    decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
                 )
             ),
             sessionProbeProvider: { _ in
@@ -355,7 +355,7 @@ final class VesperCodecSupportTests: XCTestCase {
                 codec: "dvh1.05.06",
                 nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                     mode: .preferNativeFrame,
-                    decoderPluginLibraryPaths: ["/tmp/libdecoder_videotoolbox.dylib"]
+                    decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
                 )
             ),
             sessionProbeProvider: { _ in
@@ -384,7 +384,7 @@ final class VesperCodecSupportTests: XCTestCase {
                 frameRate: 60,
                 nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                     mode: .preferNativeFrame,
-                    decoderPluginLibraryPaths: ["/tmp/libdecoder_videotoolbox.dylib"]
+                    decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
                 )
             ),
             sessionProbeProvider: { request in
@@ -424,7 +424,7 @@ final class VesperCodecSupportTests: XCTestCase {
                 frameRate: 120,
                 nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                     mode: .preferNativeFrame,
-                    decoderPluginLibraryPaths: ["/tmp/libdecoder_videotoolbox.dylib"]
+                    decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
                 )
             ),
             sessionProbeProvider: { request in

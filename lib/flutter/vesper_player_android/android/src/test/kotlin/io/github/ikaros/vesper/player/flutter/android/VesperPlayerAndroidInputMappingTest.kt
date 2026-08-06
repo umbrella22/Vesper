@@ -2,11 +2,45 @@ package io.github.ikaros.vesper.player.flutter.android
 
 import io.github.ikaros.vesper.player.android.VesperVideoSurfaceKind
 import io.github.ikaros.vesper.player.android.VesperPlayerUnsupportedOperation
+import io.github.ikaros.vesper.player.android.VesperPluginTransport
 import org.junit.Assert.assertEquals
 import org.junit.Assert.fail
 import org.junit.Test
 
 class VesperPlayerAndroidInputMappingTest {
+    @Test
+    fun benchmarkPluginReferencePreservesUnknownTransport() {
+        val configuration =
+            mapOf<String, Any?>(
+                "enabled" to true,
+                "pluginReferences" to
+                    listOf(
+                        mapOf(
+                            "pluginId" to "dev.vesper.benchmark-sink",
+                            "capabilityInstanceId" to "dev.vesper.benchmark-sink.default",
+                            "transport" to "future-sandbox",
+                        ),
+                    ),
+            ).toBenchmarkConfiguration()
+
+        val reference = configuration.pluginReferences.single()
+        assertEquals("dev.vesper.benchmark-sink", reference.pluginId)
+        assertEquals("dev.vesper.benchmark-sink.default", reference.capabilityInstanceId)
+        assertEquals(VesperPluginTransport.Unknown, reference.transport)
+        assertEquals("future-sandbox", reference.transportRawValue)
+    }
+
+    @Test
+    fun benchmarkPluginReferenceRejectsLossyScalarEntries() {
+        try {
+            mapOf<String, Any?>(
+                "pluginReferences" to listOf("dev.vesper.benchmark-sink"),
+            ).toBenchmarkConfiguration()
+            fail("Expected scalar plugin reference to throw.")
+        } catch (_: IllegalArgumentException) {
+        }
+    }
+
     @Test
     fun autoSurfaceKindUsesSurfaceView() {
         assertEquals(VesperVideoSurfaceKind.SurfaceView, null.toVesperVideoSurfaceKind())

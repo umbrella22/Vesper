@@ -78,6 +78,21 @@ extension VesperNativePlayerBridge {
         tearDownActivePlayback()
         deactivateAudioSessionIfNeeded()
         benchmarkRecorder.dispose()
+        _ = pipelineEventHookSession?.flush()
+        let reportBatch = pipelineEventHookSession?.drainReports() ?? VesperPipelineEventHookReportBatch()
+        if !reportBatch.isEmpty {
+            finalizedPipelineEventHookReports = reportBatch
+        }
+        if !reportBatch.isEmpty {
+            let dispatcherError = reportBatch.dispatcherError ?? "none"
+            iosHostLog(
+                "playback EventHook reports drained count=\(reportBatch.reports.count) " +
+                    "droppedEvents=\(reportBatch.droppedEvents) " +
+                    "droppedReports=\(reportBatch.droppedReports) " +
+                    "error=\(dispatcherError)"
+            )
+        }
+        pipelineEventHookSession?.dispose()
     }
 
     func refresh() {
@@ -196,7 +211,7 @@ extension VesperNativePlayerBridge {
         let sourceNormalizer = sourceNormalizerConfiguration
         let frameProcessor = frameProcessorConfiguration
         return await VesperBoundedUtilityQueue.shared.run(fallback: { [] }) {
-            VesperMobilePluginDiagnosticsProbe.run(
+            return VesperMobilePluginDiagnosticsProbe.run(
                 source: source,
                 sourceNormalizer: sourceNormalizer,
                 frameProcessor: frameProcessor

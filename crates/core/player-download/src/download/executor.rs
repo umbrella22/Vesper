@@ -11,7 +11,7 @@ pub trait DownloadExecutor {
 
     fn resume(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<()>;
 
-    fn remove(&mut self, task_id: DownloadTaskId) -> PlayerResult<()>;
+    fn remove(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<()>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,8 +72,8 @@ impl DownloadExecutor for InMemoryDownloadExecutor {
         Ok(())
     }
 
-    fn remove(&mut self, task_id: DownloadTaskId) -> PlayerResult<()> {
-        self.removed.push(task_id);
+    fn remove(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<()> {
+        self.removed.push(task.task_id);
         Ok(())
     }
 }

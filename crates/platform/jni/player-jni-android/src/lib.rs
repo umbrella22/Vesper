@@ -6,10 +6,10 @@ mod native_frame_presenter;
 mod object_builders;
 mod parsers;
 mod playlist_jni;
+mod plugin_registry_jni;
 mod preload_jni;
 mod sessions;
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use jni::EnvUnowned;
@@ -30,11 +30,12 @@ use player_platform_mobile::{
     mobile_plugin_diagnostics_json, mobile_source_normalizer_resource_bypass_diagnostics_json,
     mobile_source_normalizer_resource_open_json, mobile_source_normalizer_resource_status_json,
     open_mobile_source_normalizer_resource_with_diagnostics,
+    parse_mobile_native_plugin_artifacts_json,
 };
 use player_runtime::NativeFramePipelineMode;
 use player_runtime::{
-    FrameProcessorMode, MediaTrackSelection, PlayerError, PlayerErrorCode, PlayerRuntimeCommand,
-    SourceNormalizerMode, SubtitleErrorDetails,
+    FrameProcessorMode, MediaTrackSelection, PipelineEventHookReportBatch, PlayerError,
+    PlayerErrorCode, PlayerRuntimeCommand, SourceNormalizerMode, SubtitleErrorDetails,
 };
 
 pub(crate) const PKG: &str = "io/github/ikaros/vesper/player/android";
@@ -50,17 +51,18 @@ use object_builders::{
 };
 pub(crate) use parsers::{error_category_from_jni_ordinal, error_code_from_jni_ordinal};
 use parsers::{
-    exo_state_from_ordinal, parse_native_abr_policy, parse_native_buffering_policy,
+    exo_state_from_ordinal, long_field, parse_native_abr_policy, parse_native_buffering_policy,
     parse_native_cache_policy, parse_native_retry_policy, parse_native_track_catalog,
     parse_native_track_preferences, parse_native_track_selection,
     parse_native_track_selection_snapshot, source_kind_from_ordinal, source_protocol_from_ordinal,
-    string_array_to_vec, string_from_java_object,
+    string_field, string_from_java_object,
 };
+use plugin_registry_jni::{clone_android_plugin_registry, parse_plugin_references};
 pub(crate) use sessions::resolve_preload_budget_with_runtime;
 use sessions::{
     dispose_benchmark_sink_session, dispose_native_frame_pipeline_session,
-    dispose_source_normalizer_resource_session, new_benchmark_sink_session,
-    new_native_frame_pipeline_session, new_session, new_source_normalizer_resource_session,
+    dispose_source_normalizer_resource_session, new_native_frame_pipeline_session,
+    new_session_with_plugin_registry, new_source_normalizer_resource_session,
     resolve_resilience_policy_with_runtime, resolve_track_preferences_with_runtime, sessions,
     with_benchmark_sink_session, with_native_frame_pipeline_session_mut, with_session_mut,
     with_session_mut_checked, with_source_normalizer_resource_session_mut,
@@ -89,37 +91,66 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     source_uri: JString<'_>,
+    pipeline_event_hook_configuration: JObject<'_>,
 ) -> jlong {
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
             .with_env(|env| -> JniResult<jlong> {
                 let source_uri = source_uri.try_to_string(env)?;
-                match new_session(source_uri) {
-                    Ok(handle) => Ok(handle),
+                let registry_handle = long_field(
+                    env,
+                    &pipeline_event_hook_configuration,
+                    "pluginRegistryHandle",
+                )?;
+                let references_json = string_field(
+                    env,
+                    &pipeline_event_hook_configuration,
+                    "pluginReferencesJson",
+                )?
+                .unwrap_or_else(|| "[]".to_owned());
+                let references = match parse_plugin_references(&references_json) {
+                    Ok(references) => references,
                     Err(message) => {
                         env.throw_new(
-                            jni_name("java/lang/IllegalStateException"),
+                            jni_name("java/lang/IllegalArgumentException"),
                             jni_name(message),
                         )?;
-                        Ok(0)
+                        return Ok(0);
                     }
-                }
-            })
-            .resolve::<ThrowRuntimeExAndDefault>()
-    })
-}
-
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_createBenchmarkSinkSession(
-    mut unowned_env: EnvUnowned<'_>,
-    _class: JClass<'_>,
-    plugin_library_paths: JObjectArray<'_>,
-) -> jlong {
-    run_jni_entry(&mut unowned_env, |unowned_env| {
-        unowned_env
-            .with_env(|env| -> JniResult<jlong> {
-                let paths = string_array_to_vec(env, plugin_library_paths)?;
-                match new_benchmark_sink_session(paths) {
+                };
+                let registry = if references.is_empty() {
+                    if registry_handle != 0 {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalArgumentException"),
+                            jni_name(
+                                "Android plugin registry handle must be zero when playback event-hook references are empty",
+                            ),
+                        )?;
+                        return Ok(0);
+                    }
+                    None
+                } else {
+                    if registry_handle == 0 {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalArgumentException"),
+                            jni_name(
+                                "Android plugin registry handle is required for playback event-hook references",
+                            ),
+                        )?;
+                        return Ok(0);
+                    }
+                    match clone_android_plugin_registry(registry_handle) {
+                        Ok(registry) => Some(registry),
+                        Err(message) => {
+                            env.throw_new(
+                                jni_name("java/lang/IllegalArgumentException"),
+                                jni_name(message),
+                            )?;
+                            return Ok(0);
+                        }
+                    }
+                };
+                match new_session_with_plugin_registry(source_uri, registry, references) {
                     Ok(handle) => Ok(handle),
                     Err(message) => {
                         env.throw_new(
@@ -140,36 +171,58 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     source_uri: JString<'_>,
     source_mode_ordinal: jint,
-    source_plugin_library_paths: JObjectArray<'_>,
+    source_plugin_artifacts_json: JString<'_>,
     runtime_profile: JObject<'_>,
     frame_mode_ordinal: jint,
-    frame_plugin_library_paths: JObjectArray<'_>,
+    frame_plugin_artifacts_json: JString<'_>,
 ) -> jstring {
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
             .with_env(|env| -> JniResult<jstring> {
                 let source_uri = source_uri.try_to_string(env)?;
-                let source_plugin_library_paths =
-                    string_array_to_vec(env, source_plugin_library_paths)?
-                        .into_iter()
-                        .map(PathBuf::from)
-                        .collect();
-                let frame_plugin_library_paths =
-                    string_array_to_vec(env, frame_plugin_library_paths)?
-                        .into_iter()
-                        .map(PathBuf::from)
-                        .collect();
+                let source_plugin_artifacts_json =
+                    source_plugin_artifacts_json.try_to_string(env)?;
+                let source_plugin_artifacts = match parse_mobile_native_plugin_artifacts_json(
+                    &source_plugin_artifacts_json,
+                ) {
+                    Ok(artifacts) => artifacts,
+                    Err(message) => {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalArgumentException"),
+                            jni_name(message),
+                        )?;
+                        return Ok(std::ptr::null_mut());
+                    }
+                };
+                let frame_plugin_artifacts_json = frame_plugin_artifacts_json.try_to_string(env)?;
+                let frame_plugin_artifacts =
+                    match parse_mobile_native_plugin_artifacts_json(&frame_plugin_artifacts_json) {
+                        Ok(artifacts) => artifacts,
+                        Err(message) => {
+                            env.throw_new(
+                                jni_name("java/lang/IllegalArgumentException"),
+                                jni_name(message),
+                            )?;
+                            return Ok(std::ptr::null_mut());
+                        }
+                    };
                 let runtime_profile = string_from_java_object(env, runtime_profile)?;
                 let diagnostics_json = mobile_plugin_diagnostics_json(
                     &player_model::MediaSource::new(source_uri),
                     &MobileSourceNormalizerConfiguration {
                         mode: source_normalizer_mode_from_ordinal(source_mode_ordinal),
-                        plugin_library_paths: source_plugin_library_paths,
+                        plugin_artifacts: source_plugin_artifacts,
+                        plugin_library_paths: Vec::new(),
+                        native_plugin_loading_policy:
+                            player_runtime::NativePluginLoadingPolicy::DenyRawPaths,
                         runtime_profile,
                     },
                     &MobileFrameProcessorConfiguration {
                         mode: frame_processor_mode_from_ordinal(frame_mode_ordinal),
-                        plugin_library_paths: frame_plugin_library_paths,
+                        plugin_artifacts: frame_plugin_artifacts,
+                        plugin_library_paths: Vec::new(),
+                        native_plugin_loading_policy:
+                            player_runtime::NativePluginLoadingPolicy::DenyRawPaths,
                     },
                 )
                 .unwrap_or_else(|_| "[]".to_owned());
@@ -185,7 +238,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     source_uri: JString<'_>,
     source_mode_ordinal: jint,
-    source_plugin_library_paths: JObjectArray<'_>,
+    source_plugin_artifacts_json: JString<'_>,
     runtime_profile: JObject<'_>,
     output_root: JString<'_>,
     force_normalized: jboolean,
@@ -194,10 +247,18 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
         unowned_env
             .with_env(|env| -> JniResult<jstring> {
                 let source_uri = source_uri.try_to_string(env)?;
-                let plugin_library_paths = string_array_to_vec(env, source_plugin_library_paths)?
-                    .into_iter()
-                    .map(PathBuf::from)
-                    .collect();
+                let plugin_artifacts_json = source_plugin_artifacts_json.try_to_string(env)?;
+                let plugin_artifacts =
+                    match parse_mobile_native_plugin_artifacts_json(&plugin_artifacts_json) {
+                        Ok(artifacts) => artifacts,
+                        Err(message) => {
+                            env.throw_new(
+                                jni_name("java/lang/IllegalArgumentException"),
+                                jni_name(message),
+                            )?;
+                            return Ok(std::ptr::null_mut());
+                        }
+                    };
                 let runtime_profile = string_from_java_object(env, runtime_profile)?;
                 let output_root = output_root.try_to_string(env)?;
                 let decision = if force_normalized {
@@ -209,7 +270,10 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                     &player_model::MediaSource::new(source_uri),
                     &MobileSourceNormalizerConfiguration {
                         mode: source_normalizer_mode_from_ordinal(source_mode_ordinal),
-                        plugin_library_paths,
+                        plugin_artifacts,
+                        plugin_library_paths: Vec::new(),
+                        native_plugin_loading_policy:
+                            player_runtime::NativePluginLoadingPolicy::DenyRawPaths,
                         runtime_profile,
                     },
                     output_root,
@@ -311,11 +375,13 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     source_uri: JString<'_>,
     source_mode_ordinal: jint,
-    source_plugin_library_paths: JObjectArray<'_>,
+    source_plugin_artifacts_json: JString<'_>,
     runtime_profile: JObject<'_>,
     native_frame_mode: JString<'_>,
-    decoder_plugin_library_paths: JObjectArray<'_>,
-    frame_processor_plugin_library_paths: JObjectArray<'_>,
+    decoder_plugin_artifacts_json: JString<'_>,
+    avc_decoder_implementation_name: JObject<'_>,
+    hevc_decoder_implementation_name: JObject<'_>,
+    frame_processor_plugin_artifacts_json: JString<'_>,
     max_in_flight_frames: jint,
     presenter_profile: JString<'_>,
 ) -> jstring {
@@ -323,11 +389,20 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
         unowned_env
             .with_env(|env| -> JniResult<jstring> {
                 let source_uri = source_uri.try_to_string(env)?;
-                let source_plugin_library_paths =
-                    string_array_to_vec(env, source_plugin_library_paths)?
-                        .into_iter()
-                        .map(PathBuf::from)
-                        .collect();
+                let source_plugin_artifacts_json =
+                    source_plugin_artifacts_json.try_to_string(env)?;
+                let source_plugin_artifacts = match parse_mobile_native_plugin_artifacts_json(
+                    &source_plugin_artifacts_json,
+                ) {
+                    Ok(artifacts) => artifacts,
+                    Err(message) => {
+                        env.throw_new(
+                            jni_name("java/lang/IllegalArgumentException"),
+                            jni_name(message),
+                        )?;
+                        return Ok(std::ptr::null_mut());
+                    }
+                };
                 let runtime_profile = string_from_java_object(env, runtime_profile)?;
                 let native_frame_mode = native_frame_mode.try_to_string(env)?;
                 let native_frame_mode =
@@ -353,31 +428,63 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
                             return Ok(std::ptr::null_mut());
                         }
                     };
-                let decoder_plugin_library_paths =
-                    string_array_to_vec(env, decoder_plugin_library_paths)?
-                        .into_iter()
-                        .map(PathBuf::from)
-                        .collect();
-                let frame_processor_plugin_library_paths =
-                    string_array_to_vec(env, frame_processor_plugin_library_paths)?
-                        .into_iter()
-                        .map(PathBuf::from)
-                        .collect();
+                let decoder_plugin_artifacts_json =
+                    decoder_plugin_artifacts_json.try_to_string(env)?;
+                let decoder_plugin_artifacts =
+                    match parse_mobile_native_plugin_artifacts_json(&decoder_plugin_artifacts_json)
+                    {
+                        Ok(artifacts) => artifacts,
+                        Err(message) => {
+                            env.throw_new(
+                                jni_name("java/lang/IllegalArgumentException"),
+                                jni_name(message),
+                            )?;
+                            return Ok(std::ptr::null_mut());
+                        }
+                    };
+                let avc_decoder_implementation_name =
+                    string_from_java_object(env, avc_decoder_implementation_name)?;
+                let hevc_decoder_implementation_name =
+                    string_from_java_object(env, hevc_decoder_implementation_name)?;
+                let frame_processor_plugin_artifacts_json =
+                    frame_processor_plugin_artifacts_json.try_to_string(env)?;
+                let frame_processor_plugin_artifacts =
+                    match parse_mobile_native_plugin_artifacts_json(
+                        &frame_processor_plugin_artifacts_json,
+                    ) {
+                        Ok(artifacts) => artifacts,
+                        Err(message) => {
+                            env.throw_new(
+                                jni_name("java/lang/IllegalArgumentException"),
+                                jni_name(message),
+                            )?;
+                            return Ok(std::ptr::null_mut());
+                        }
+                    };
                 let session = match AndroidNativeFramePipelineSession::open(
                     AndroidNativeFramePipelineOpenConfig {
                         source_uri,
                         source_normalizer: MobileSourceNormalizerConfiguration {
                             mode: source_normalizer_mode_from_ordinal(source_mode_ordinal),
-                            plugin_library_paths: source_plugin_library_paths,
+                            plugin_artifacts: source_plugin_artifacts,
+                            plugin_library_paths: Vec::new(),
+                            native_plugin_loading_policy:
+                                player_runtime::NativePluginLoadingPolicy::DenyRawPaths,
                             runtime_profile,
                         },
                         native_frame_pipeline: MobileNativeFramePipelineConfiguration {
                             mode: native_frame_mode,
-                            decoder_plugin_library_paths,
-                            frame_processor_plugin_library_paths,
+                            decoder_plugin_artifacts,
+                            decoder_plugin_library_paths: Vec::new(),
+                            frame_processor_plugin_artifacts,
+                            frame_processor_plugin_library_paths: Vec::new(),
+                            native_plugin_loading_policy:
+                                player_runtime::NativePluginLoadingPolicy::DenyRawPaths,
                             max_in_flight_frames: (max_in_flight_frames > 0)
                                 .then_some(max_in_flight_frames as u32),
                         },
+                        avc_decoder_implementation_name,
+                        hevc_decoder_implementation_name,
                         presenter_profile,
                     },
                 ) {
@@ -772,8 +879,14 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
             .with_env(|_env| -> JniResult<()> {
-                let mut guard = lock_or_recover(sessions());
-                guard.remove(session_handle);
+                // Remove the owner while holding the registry lock, then drop
+                // it after unlocking. Closing a pipeline event worker can
+                // join a thread and must not block unrelated JNI sessions.
+                let session = {
+                    let mut guard = lock_or_recover(sessions());
+                    guard.remove(session_handle)
+                };
+                drop(session);
                 Ok(())
             })
             .resolve::<ThrowRuntimeExAndDefault>()
@@ -1062,6 +1175,130 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
             })
             .resolve::<ThrowRuntimeExAndDefault>()
     });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_reportFirstFrame(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    presentation_time_ms: jlong,
+    width: jint,
+    height: jint,
+) {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<()> {
+                let _ = with_session_mut(env, session_handle, |session| {
+                    session.report_first_frame(
+                        Duration::from_millis(presentation_time_ms.max(0) as u64),
+                        width.max(0) as u32,
+                        height.max(0) as u32,
+                    );
+                });
+                Ok(())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_flushPipelineEventHooks(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+    timeout_ms: jlong,
+) -> jboolean {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let Some(flushed) = with_session_mut(env, session_handle, |session| {
+                    session
+                        .flush_pipeline_event_hooks(Duration::from_millis(timeout_ms.max(0) as u64))
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(flushed as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_closePipelineEventHooks(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+) -> jboolean {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jboolean> {
+                let Some(closed) = with_session_mut(env, session_handle, |session| {
+                    session.close_pipeline_event_hooks()
+                }) else {
+                    return Ok(false as jboolean);
+                };
+                Ok(closed as jboolean)
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
+}
+
+fn pipeline_event_hook_reports_json(batch: PipelineEventHookReportBatch) -> String {
+    let reports = batch
+        .reports
+        .into_iter()
+        .map(|report| {
+            let result = match report.result {
+                Ok(outcome) => serde_json::json!({
+                    "status": if outcome.accepted { "accepted" } else { "rejected" },
+                    "outcome": outcome,
+                }),
+                Err(error) => serde_json::json!({
+                    "status": "error",
+                    "error": error,
+                }),
+            };
+            serde_json::json!({
+                "pluginId": report.reference.plugin_id(),
+                "capabilityInstanceId": report.reference.capability_instance_id(),
+                "transport": report.reference.transport(),
+                "runId": report.run_id,
+                "sessionId": report.session_id,
+                "eventName": report.event_name,
+                "result": result,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "reports": reports,
+        "droppedEvents": batch.dropped_events,
+        "droppedReports": batch.dropped_reports,
+        "dispatcherError": batch.dispatcher_error,
+    })
+    .to_string()
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_drainPipelineEventHookReports(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_handle: jlong,
+) -> jstring {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        unowned_env
+            .with_env(|env| -> JniResult<jstring> {
+                let Some(batch) = with_session_mut(env, session_handle, |session| {
+                    session.drain_pipeline_event_hook_reports()
+                }) else {
+                    return Ok(std::ptr::null_mut());
+                };
+                Ok(env
+                    .new_string(pipeline_event_hook_reports_json(batch))?
+                    .into_raw())
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -1542,7 +1779,12 @@ mod tests {
 
     #[test]
     fn stale_session_lookup_is_checked_without_java_exception() {
-        let handle = super::sessions::new_session("stale-test".to_owned()).expect("session");
+        let handle = super::sessions::new_session_with_plugin_registry(
+            "stale-test".to_owned(),
+            None,
+            Vec::new(),
+        )
+        .expect("session");
         {
             let mut guard = super::lock_or_recover(super::sessions::sessions());
             assert!(guard.remove(handle).is_some());

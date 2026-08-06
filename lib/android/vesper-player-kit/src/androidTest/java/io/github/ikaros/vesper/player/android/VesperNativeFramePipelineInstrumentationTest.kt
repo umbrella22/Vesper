@@ -46,15 +46,35 @@ class VesperNativeFramePipelineInstrumentationTest {
         val sourceNormalizerConfiguration =
             VesperSourceNormalizerConfiguration(
                 mode = VesperSourceNormalizerMode.PreflightOnly,
-                pluginLibraryPaths = listOf(sourceNormalizerPath),
+                pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
             )
         val nativeFrameConfiguration =
             VesperNativeFramePipelineConfiguration(
                 mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                decoderPluginLibraryPaths = listOf(decoderPath),
+                decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                 maxInFlightFrames = 3,
             )
-        val bindings = VesperNativeJniBindings(context)
+        val bindings =
+            VesperNativeJniBindings(
+                context,
+                resolvedPluginArtifacts =
+                    VesperResolvedMobilePluginArtifacts(
+                        sourceNormalizerArtifacts =
+                            listOf(
+                                VesperResolvedMobilePluginArtifact(
+                                    VesperBundledPluginReferences.sourceNormalizerFfmpeg,
+                                    sourceNormalizerPath,
+                                ),
+                            ),
+                        decoderArtifacts =
+                            listOf(
+                                VesperResolvedMobilePluginArtifact(
+                                    VesperBundledPluginReferences.decoderMediaCodec,
+                                    decoderPath,
+                                ),
+                            ),
+                    ),
+            )
         val surfaceTexture = SurfaceTexture(0)
         surfaceTexture.setDefaultBufferSize(128, 96)
         val surface = Surface(surfaceTexture)

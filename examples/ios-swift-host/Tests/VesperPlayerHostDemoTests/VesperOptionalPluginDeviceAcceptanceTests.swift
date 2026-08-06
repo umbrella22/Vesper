@@ -17,37 +17,47 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
             source: source,
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .diagnosticsOnly,
-                pluginLibraryPaths: [paths.sourceNormalizer]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             frameProcessor: VesperFrameProcessorConfiguration(
                 mode: .diagnosticsOnly,
-                pluginLibraryPaths: [paths.frameProcessor]
+                pluginReferences: [VesperBundledPluginReferences.frameProcessorDiagnostic]
             )
         )
         XCTAssertTrue(
             diagnostics.contains { diagnostic in
-                diagnostic["path"] as? String == paths.sourceNormalizer &&
+                diagnostic["pluginId"] as? String ==
+                    VesperBundledPluginReferences.sourceNormalizerFfmpeg.pluginId &&
                     diagnostic["status"] as? String == "sourceNormalizerSupported"
             },
             "The bundled SourceNormalizer must pass the checked mobile plugin loader."
         )
         XCTAssertTrue(
             diagnostics.contains { diagnostic in
-                diagnostic["path"] as? String == paths.frameProcessor &&
+                diagnostic["pluginId"] as? String ==
+                    VesperBundledPluginReferences.frameProcessorDiagnostic.pluginId &&
                     diagnostic["status"] as? String == "frameProcessorSupported"
             },
             "The bundled FrameProcessor must pass the checked mobile plugin loader."
         )
+        XCTAssertTrue(diagnostics.allSatisfy { $0["path"] == nil })
 
         let baseDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("vesper-remux-device-\(UUID().uuidString)", isDirectory: true)
-        let manager = VesperDownloadManager(
+        let manager = try VesperDownloadManager(
             configuration: VesperDownloadConfiguration(
                 autoStart: false,
                 runPostProcessorsOnCompletion: false,
                 restoreTasksOnStartup: false,
                 baseDirectory: baseDirectory,
-                pluginLibraryPaths: [paths.remux]
+                postDownloadPluginReferences: [
+                    try VesperPluginReference(
+                        pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
+                        capabilityInstanceId:
+                            "io.github.ikaros.vesper.remux-ffmpeg.post-download",
+                        transport: .native
+                    )
+                ]
             )
         )
         defer {
@@ -90,13 +100,15 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .requireNativeFrame,
-                decoderPluginLibraryPaths: [paths.decoder],
-                frameProcessorPluginLibraryPaths: [paths.frameProcessor],
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox],
+                frameProcessorPluginReferences: [
+                    VesperBundledPluginReferences.frameProcessorDiagnostic
+                ],
                 maxInFlightFrames: 1
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: [paths.sourceNormalizer]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: surfaceView
         )
@@ -225,12 +237,12 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .requireNativeFrame,
-                decoderPluginLibraryPaths: [paths.decoder],
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox],
                 maxInFlightFrames: 1
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: [paths.sourceNormalizer]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: surfaceView
         )
@@ -300,10 +312,10 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
 
     private func bundledPluginPaths() throws -> BundledPluginPaths {
         try BundledPluginPaths(
-            remux: XCTUnwrap(bundledDownloadPluginLibraryPaths().first),
-            sourceNormalizer: XCTUnwrap(bundledSourceNormalizerPluginLibraryPaths().first),
-            decoder: XCTUnwrap(bundledDecoderPluginLibraryPaths().first),
-            frameProcessor: XCTUnwrap(bundledFrameProcessorPluginLibraryPaths().first)
+            remux: XCTUnwrap(bundledDownloadPluginArtifactPaths().first),
+            sourceNormalizer: XCTUnwrap(bundledSourceNormalizerPluginArtifactPaths().first),
+            decoder: XCTUnwrap(bundledDecoderPluginArtifactPaths().first),
+            frameProcessor: XCTUnwrap(bundledFrameProcessorPluginArtifactPaths().first)
         )
     }
 
@@ -354,15 +366,12 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
         defer { dlclose(handle) }
 
         dlerror()
-        guard let symbol = dlsym(handle, "vesper_plugin_entry") else {
+        guard dlsym(handle, "vesper_plugin_entry") != nil else {
             throw OptionalPluginAcceptanceError.missingEntry(
                 path: path,
                 message: dynamicLoaderMessage()
             )
         }
-        typealias PluginEntry = @convention(c) () -> UnsafeRawPointer?
-        let entry = unsafeBitCast(symbol, to: PluginEntry.self)
-        XCTAssertNotNil(entry(), "The plugin descriptor must not be null: \(path)")
     }
 
     private func dynamicLoaderMessage() -> String {

@@ -151,12 +151,18 @@ void main() {
 
   test('createPlayer forwards benchmark configuration when provided', () async {
     final platform = MethodChannelVesperPlayerIos();
-    const benchmarkConfiguration = VesperBenchmarkConfiguration(
+    final benchmarkConfiguration = VesperBenchmarkConfiguration(
       enabled: true,
       maxBufferedEvents: 1024,
       includeRawEvents: true,
       consoleLogging: true,
-      pluginLibraryPaths: <String>['/tmp/libvesper_sink.dylib'],
+      pluginReferences: <VesperPluginReference>[
+        VesperPluginReference(
+          pluginId: 'dev.vesper.benchmark-sink',
+          capabilityInstanceId: 'dev.vesper.benchmark-sink.default',
+          transport: VesperPluginTransport.native,
+        ),
+      ],
     );
 
     await platform.createPlayer(
@@ -176,38 +182,87 @@ void main() {
     );
   });
 
+  test('createDownloadManager forwards capability-specific plugin references',
+      () async {
+    final platform = MethodChannelVesperPlayerIos();
+    final configuration = VesperDownloadConfiguration(
+      postDownloadPluginReferences: <VesperPluginReference>[
+        VesperPluginReference(
+          pluginId: 'io.github.ikaros.vesper.remux-ffmpeg',
+          capabilityInstanceId:
+              'io.github.ikaros.vesper.remux-ffmpeg.post-download',
+          transport: VesperPluginTransport.native,
+        ),
+      ],
+      eventHookPluginReferences: <VesperPluginReference>[
+        VesperPluginReference(
+          pluginId: 'dev.vesper.event-hook',
+          transport: VesperPluginTransport.unknown,
+          transportRawValue: 'future-sandbox',
+        ),
+      ],
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return <String, Object?>{'downloadId': 'downloads'};
+    });
+
+    await platform.createDownloadManager(configuration: configuration);
+
+    expect(calls, hasLength(1));
+    expect(calls.single.method, 'createDownloadManager');
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      <Object?, Object?>{
+        'configuration': configuration.toMap(),
+        'hasStaleResourceRecovery': false,
+      },
+    );
+  });
+
   test('createPlayer forwards mobile plugin configurations when provided',
       () async {
     final platform = MethodChannelVesperPlayerIos();
-    const sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(
+    final sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(
       mode: VesperSourceNormalizerMode.preflightOnly,
-      pluginLibraryPaths: <String>[
-        '/Frameworks/SourceNormalizer.framework/SourceNormalizer'
+      pluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.sourceNormalizerFfmpeg,
       ],
       runtimeProfile: 'generic-fallback',
     );
-    const frameProcessorConfiguration = VesperFrameProcessorConfiguration(
+    final frameProcessorConfiguration = VesperFrameProcessorConfiguration(
       mode: VesperFrameProcessorMode.diagnosticsOnly,
-      pluginLibraryPaths: <String>[
-        '/Frameworks/FrameProcessor.framework/FrameProcessor'
+      pluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.frameProcessorDiagnostic,
       ],
     );
-    const nativeFramePipelineConfiguration =
+    final nativeFramePipelineConfiguration =
         VesperNativeFramePipelineConfiguration(
       mode: VesperNativeFramePipelineMode.requireNativeFrame,
-      decoderPluginLibraryPaths: <String>[
-        '/Frameworks/VideoToolboxDecoder.framework/VideoToolboxDecoder'
+      decoderPluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.decoderVideoToolbox,
       ],
-      frameProcessorPluginLibraryPaths: <String>[
-        '/Frameworks/FrameProcessor.framework/FrameProcessor'
+      frameProcessorPluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.frameProcessorDiagnostic,
       ],
       maxInFlightFrames: 2,
+    );
+    final pipelineEventHookConfiguration = VesperPipelineEventHookConfiguration(
+      pluginReferences: <VesperPluginReference>[
+        VesperPluginReference(
+          pluginId: 'dev.vesper.pipeline-hook',
+          capabilityInstanceId: 'dev.vesper.pipeline-hook.default',
+          transport: VesperPluginTransport.native,
+        ),
+      ],
     );
 
     await platform.createPlayer(
       sourceNormalizerConfiguration: sourceNormalizerConfiguration,
       frameProcessorConfiguration: frameProcessorConfiguration,
       nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
+      pipelineEventHookConfiguration: pipelineEventHookConfiguration,
     );
 
     expect(calls, hasLength(1));
@@ -226,6 +281,27 @@ void main() {
         nativeFramePipelineConfiguration.toMap(),
       ),
     );
+    expect(
+      Map<Object?, Object?>.from(calls.single.arguments as Map),
+      containsPair('pipelineEventHook', pipelineEventHookConfiguration.toMap()),
+    );
+    final arguments = Map<Object?, Object?>.from(calls.single.arguments as Map);
+    for (final configurationKey in <String>[
+      'pipelineEventHook',
+      'sourceNormalizer',
+      'frameProcessor',
+      'nativeFramePipeline',
+    ]) {
+      final configuration = Map<Object?, Object?>.from(
+        arguments[configurationKey] as Map,
+      );
+      expect(configuration, isNot(contains('pluginLibraryPaths')));
+      expect(configuration, isNot(contains('decoderPluginLibraryPaths')));
+      expect(
+        configuration,
+        isNot(contains('frameProcessorPluginLibraryPaths')),
+      );
+    }
   });
 
   test('probePlaybackCapability forwards request and decodes result', () async {
@@ -288,7 +364,7 @@ void main() {
       kind: VesperPlayerSourceKind.local,
       protocol: VesperPlayerSourceProtocol.file,
     );
-    const request = VesperPlaybackCapabilityProbeRequest(
+    final request = VesperPlaybackCapabilityProbeRequest(
       source: source,
       codec: 'dvh1.05.06',
       width: 3840,
@@ -296,8 +372,8 @@ void main() {
       frameRate: 59.94,
       nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
         mode: VesperNativeFramePipelineMode.preferNativeFrame,
-        decoderPluginLibraryPaths: <String>[
-          '/Frameworks/VideoToolboxDecoder.framework/VideoToolboxDecoder'
+        decoderPluginReferences: <VesperPluginReference>[
+          VesperBundledPluginReferences.decoderVideoToolbox,
         ],
       ),
     );

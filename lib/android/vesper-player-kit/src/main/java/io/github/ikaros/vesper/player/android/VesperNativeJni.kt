@@ -7,22 +7,36 @@ internal object VesperNativeJni {
         VesperNativeLibrary.ensureLoaded()
     }
 
-    external fun createSession(sourceUri: String): Long
+    external fun createSession(
+        sourceUri: String,
+        pipelineEventHookConfig: NativePipelineEventHookConfig,
+    ): Long
     external fun createPreloadSession(preloadBudget: NativeResolvedPreloadBudgetPolicy): Long
     external fun createDownloadSession(config: NativeDownloadConfig): Long
-    external fun createBenchmarkSinkSession(pluginLibraryPaths: Array<String>): Long
+    external fun createEmbeddedPluginRegistry(
+        registryFragments: Array<String>,
+        referencesJson: String,
+        nativeLibraryDir: String,
+        packagePaths: Array<String>,
+        runtimeApiLevel: Int,
+    ): Long
+    external fun disposeEmbeddedPluginRegistry(registryHandle: Long)
+    external fun createBenchmarkSinkSessionFromRegistry(
+        registryHandle: Long,
+        referencesJson: String,
+    ): Long
     external fun probeMobilePlugins(
         sourceUri: String,
         sourceModeOrdinal: Int,
-        sourcePluginLibraryPaths: Array<String>,
+        sourcePluginArtifactsJson: String,
         runtimeProfile: String?,
         frameModeOrdinal: Int,
-        framePluginLibraryPaths: Array<String>,
+        framePluginArtifactsJson: String,
     ): String
     external fun openSourceNormalizerResource(
         sourceUri: String,
         sourceModeOrdinal: Int,
-        sourcePluginLibraryPaths: Array<String>,
+        sourcePluginArtifactsJson: String,
         runtimeProfile: String?,
         outputRoot: String,
         forceNormalized: Boolean,
@@ -32,11 +46,13 @@ internal object VesperNativeJni {
     external fun openNativeFramePipeline(
         sourceUri: String,
         sourceModeOrdinal: Int,
-        sourcePluginLibraryPaths: Array<String>,
+        sourcePluginArtifactsJson: String,
         runtimeProfile: String?,
         nativeFrameMode: String,
-        decoderPluginLibraryPaths: Array<String>,
-        frameProcessorPluginLibraryPaths: Array<String>,
+        decoderPluginArtifactsJson: String,
+        avcDecoderImplementationName: String?,
+        hevcDecoderImplementationName: String?,
+        frameProcessorPluginArtifactsJson: String,
         maxInFlightFrames: Int,
         presenterProfile: String,
     ): String?
@@ -163,7 +179,7 @@ internal object VesperNativeJni {
     external fun removeDownloadTask(sessionHandle: Long, taskId: Long, nowEpochMs: Long): Boolean
     external fun pollDownloadSnapshot(sessionHandle: Long): NativeDownloadSnapshot?
     external fun drainDownloadCommands(sessionHandle: Long): Array<NativeDownloadCommand>
-    external fun drainDownloadEvents(sessionHandle: Long): Array<NativeDownloadEvent>
+    external fun drainDownloadEvents(sessionHandle: Long): NativeDownloadEventBatch
     external fun drainPlaylistPreloadCommands(sessionHandle: Long): Array<NativePreloadCommand>
     external fun completePreloadTask(sessionHandle: Long, taskId: Long): Boolean
     external fun completePlaylistPreloadTask(sessionHandle: Long, taskId: Long): Boolean
@@ -219,6 +235,15 @@ internal object VesperNativeJni {
     )
     external fun reportSeekCompleted(sessionHandle: Long, positionMs: Long)
     external fun reportRetryScheduled(sessionHandle: Long, attempt: Int, delayMs: Long)
+    external fun reportFirstFrame(
+        sessionHandle: Long,
+        presentationTimeMs: Long,
+        width: Int,
+        height: Int,
+    )
+    external fun flushPipelineEventHooks(sessionHandle: Long, timeoutMs: Long): Boolean
+    external fun closePipelineEventHooks(sessionHandle: Long): Boolean
+    external fun drainPipelineEventHookReports(sessionHandle: Long): String?
     external fun reportError(
         sessionHandle: Long,
         codeOrdinal: Int,

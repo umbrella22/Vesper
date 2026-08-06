@@ -5,9 +5,16 @@ on:
     paths:
       - ".github/workflows/flutter-ci.yml"
       - ".github/actions/select-xcode/**"
+      - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "crates/tools/player-cli/**"
       - "scripts/**"
+      - "plugins/**"
+      - "schemas/**"
+      - "templates/**"
+      - "wit/**"
+      - "fixtures/plugins/**"
       - "crates/model/**"
       - "crates/core/**"
       - "crates/ffi/**"
@@ -31,9 +38,16 @@ on:
     paths:
       - ".github/workflows/flutter-ci.yml"
       - ".github/actions/select-xcode/**"
+      - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "crates/tools/player-cli/**"
       - "scripts/**"
+      - "plugins/**"
+      - "schemas/**"
+      - "templates/**"
+      - "wit/**"
+      - "fixtures/plugins/**"
       - "crates/model/**"
       - "crates/core/**"
       - "crates/ffi/**"
@@ -69,6 +83,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -87,7 +104,8 @@ jobs:
           for pkg_dir in \
             lib/flutter/vesper_player_platform_interface \
             lib/flutter/vesper_player \
-            lib/flutter/vesper_player_ui
+            lib/flutter/vesper_player_ui \
+            lib/flutter/vesper_player_source_normalizer_ffmpeg
           do
             echo "::group::$pkg_dir"
             (
@@ -104,44 +122,10 @@ jobs:
           done
 
       - name: Flutter pub publish dry-run
-        run: ./scripts/vesper flutter pub-dry-run /tmp/vesper-flutter-pub-dry-run
-
-  flutter-macos-quality:
-    name: Flutter macOS Package Quality
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.44.0"
-          channel: stable
-          cache: true
-
-      - name: Show Flutter version
-        run: flutter --version
-
-      - name: Analyze and test Flutter macOS package
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          pkg_dir="lib/flutter/vesper_player_macos"
-          echo "::group::$pkg_dir"
-          (
-            cd "$pkg_dir"
-            flutter pub get
-            flutter analyze
-            if [[ -d test ]]; then
-              flutter test
-            else
-              echo "No test/ directory; skipping flutter test."
-            fi
-          )
-          echo "::endgroup::"
+        run: >-
+          ./scripts/vesper flutter pub-dry-run
+          /tmp/vesper-flutter-pub-dry-run
+          --include-optional-plugins
 
   flutter-android:
     name: Flutter Android Host ${{ matrix.abi }}
@@ -157,6 +141,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -284,11 +271,9 @@ jobs:
         run: flutter build apk --release --target-platform ${{ matrix.flutter_target }}
 
       - name: Verify Flutter Android host release excludes test fixtures
-        shell: bash
-        run: |
-          source scripts/lib/common.sh
-          vesper_verify_flutter_android_release_artifact \
-            examples/flutter-host/build/app/outputs/flutter-apk/app-release.apk
+        run: >-
+          ./scripts/vesper flutter verify-android-release
+          examples/flutter-host/build/app/outputs/flutter-apk/app-release.apk
 
       - name: Stage Flutter Android release APK
         if: github.event_name == 'workflow_dispatch'
@@ -312,6 +297,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -338,6 +326,9 @@ jobs:
 
       - name: Stage canonical optional iOS plugin XCFrameworks
         run: ./scripts/vesper ios stage-optional-plugins-release /tmp/vesper-flutter-ios-optional-plugins-release --profile source-normalizer ios-arm64 ios-simulator-arm64
+
+      - name: Build Rust iOS resolver bundle
+        run: ./scripts/vesper ios ffi release
 
       - name: Show Flutter version
         run: flutter --version
@@ -392,9 +383,6 @@ jobs:
       - name: Test Flutter iOS host
         working-directory: examples/flutter-host
         run: flutter test
-
-      - name: Build Rust iOS resolver bundle
-        run: ./scripts/vesper ios ffi release
 
       - name: Select Flutter iOS Simulator
         shell: bash

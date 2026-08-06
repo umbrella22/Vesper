@@ -18,6 +18,7 @@ use super::{
     AndroidNativePlayerRuntimeAdapterFactory, AndroidNativePlayerSession,
     AndroidNativePlayerSessionBootstrap, AndroidOpaqueHandle,
     android_native_frame_pipeline_frame_json, android_native_frame_pipeline_open_json,
+    required_android_decoder_implementation_name,
 };
 use player_model::MediaSource;
 use player_platform_mobile::MobileCommandQueue;
@@ -40,6 +41,9 @@ use player_plugin::{
     SourceNormalizerPacketSession, SourceNormalizerPacketStreamInfo,
     SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata,
 };
+use player_plugin::{
+    PipelineEvent, PipelineEventHook, PipelineEventHookOutcome, PluginReference, PluginTransport,
+};
 use player_runtime::{
     DecodedVideoFrame, FrameProcessorMode, MediaAbrMode, MediaAbrPolicy, MediaTrack,
     MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot,
@@ -50,6 +54,23 @@ use player_runtime::{
     PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerSnapshot,
     PlayerTimelineSnapshot, PresentationState, SourceNormalizerMode, SubtitleErrorDetails,
 };
+
+struct RecordingPipelineHook {
+    event_names: Arc<Mutex<Vec<String>>>,
+}
+
+impl PipelineEventHook for RecordingPipelineHook {
+    fn on_event(
+        &self,
+        event: &PipelineEvent,
+    ) -> Result<PipelineEventHookOutcome, player_plugin::PipelineEventHookError> {
+        self.event_names
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(event.event_name.clone());
+        Ok(PipelineEventHookOutcome::accepted())
+    }
+}
 #[test]
 fn android_factory_exposes_native_capabilities() {
     let factory = AndroidNativePlayerRuntimeAdapterFactory::default();
@@ -174,6 +195,56 @@ fn android_native_frame_pipeline_open_requires_explicit_native_frame_mode() {
             .message()
             .contains("must be explicitly preferred or required")
     );
+}
+
+#[test]
+fn android_native_frame_pipeline_rejects_raw_paths_without_development_policy() {
+    let mut config = test_native_frame_open_config(NativeFramePipelineMode::PreferNativeFrame);
+    config.source_normalizer.native_plugin_loading_policy =
+        player_runtime::NativePluginLoadingPolicy::DenyRawPaths;
+    config.native_frame_pipeline.native_plugin_loading_policy =
+        player_runtime::NativePluginLoadingPolicy::DenyRawPaths;
+
+    let error = AndroidNativeFramePipelineSession::open(config)
+        .expect_err("raw paths must be rejected before any plugin opens");
+
+    assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
+    assert!(
+        error
+            .message()
+            .contains("require explicit development loading policy")
+    );
+    assert!(!error.message().contains("failed to open plugin library"));
+    assert!(!error.message().contains("dlopen"));
+}
+
+#[test]
+fn android_native_frame_pipeline_selects_component_for_normalized_video_codec() {
+    let mut config = test_native_frame_open_config(NativeFramePipelineMode::PreferNativeFrame);
+    config.avc_decoder_implementation_name = Some(" c2.test.avc.decoder ".to_owned());
+
+    assert_eq!(
+        required_android_decoder_implementation_name(&config, "video/avc1.640028")
+            .expect("AVC component should be selected"),
+        " c2.test.avc.decoder "
+    );
+    assert_eq!(
+        required_android_decoder_implementation_name(&config, "hev1.1.6.L93.B0")
+            .expect("HEVC component should be selected"),
+        "c2.test.hevc.decoder"
+    );
+}
+
+#[test]
+fn android_native_frame_pipeline_rejects_missing_hardware_component_before_decoder_open() {
+    let mut config = test_native_frame_open_config(NativeFramePipelineMode::PreferNativeFrame);
+    config.hevc_decoder_implementation_name = None;
+
+    let error = required_android_decoder_implementation_name(&config, "hvc1")
+        .expect_err("missing HEVC component must reject the native-frame route");
+
+    assert_eq!(error.code(), PlayerErrorCode::Unsupported);
+    assert!(error.message().contains("host-selected hardware decoder"));
 }
 
 #[test]
@@ -442,6 +513,12 @@ fn android_native_frame_pipeline_waits_for_surface_before_android_native_window_
         .expect("factory state")
         .opened_configs;
     assert_eq!(opened_configs.len(), 1);
+    assert_eq!(
+        opened_configs[0]
+            .required_decoder_implementation_name
+            .as_deref(),
+        Some("c2.test.avc.decoder")
+    );
     assert_eq!(
         opened_configs[0]
             .native_device_context
@@ -2523,6 +2600,88 @@ fn android_host_bridge_session_reports_surface_and_seek_events() {
 }
 
 #[test]
+fn android_host_bridge_session_forwards_events_to_pipeline_hooks() {
+    let event_names = Arc::new(Mutex::new(Vec::new()));
+    let reference = PluginReference::new(
+        "dev.vesper.android-playback-hook",
+        Some("dev.vesper.android-playback-hook.primary".to_owned()),
+        PluginTransport::Native,
+    )
+    .expect("valid event hook reference");
+    let registration = player_runtime::PipelineEventHookRegistration::new(
+        reference,
+        Arc::new(RecordingPipelineHook {
+            event_names: event_names.clone(),
+        }),
+    )
+    .expect("valid event hook registration");
+    let mut session = AndroidHostBridgeSession::new_with_pipeline_event_hooks(
+        "https://example.com/master.m3u8",
+        vec![registration],
+    )
+    .expect("hook session should initialize");
+
+    session.report_seek_completed(Duration::from_millis(900));
+    let events = session.drain_events();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, AndroidHostEvent::SeekCompleted { position_ms: 900 }))
+    );
+    assert!(session.flush_pipeline_event_hooks(Duration::from_secs(1)));
+    let reports = session.drain_pipeline_event_hook_reports();
+    assert_eq!(reports.reports.len(), 1);
+    assert_eq!(reports.reports[0].event_name, "playback.seek_completed");
+    assert_eq!(
+        event_names
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_slice(),
+        ["playback.seek_completed"]
+    );
+    assert!(session.close_pipeline_event_hooks());
+    assert!(session.close_pipeline_event_hooks());
+}
+
+#[test]
+fn android_host_bridge_session_forwards_first_frame_to_pipeline_hooks() {
+    let event_names = Arc::new(Mutex::new(Vec::new()));
+    let reference = PluginReference::new(
+        "dev.vesper.android-first-frame-hook",
+        Some("dev.vesper.android-first-frame-hook.primary".to_owned()),
+        PluginTransport::Native,
+    )
+    .expect("valid event hook reference");
+    let registration = player_runtime::PipelineEventHookRegistration::new(
+        reference,
+        Arc::new(RecordingPipelineHook {
+            event_names: event_names.clone(),
+        }),
+    )
+    .expect("valid event hook registration");
+    let mut session = AndroidHostBridgeSession::new_with_pipeline_event_hooks(
+        "https://example.com/master.m3u8",
+        vec![registration],
+    )
+    .expect("hook session should initialize");
+
+    session.report_first_frame(Duration::from_millis(123), 1920, 1080);
+    let _ = session.drain_events();
+    assert!(session.flush_pipeline_event_hooks(Duration::from_secs(1)));
+    let reports = session.drain_pipeline_event_hook_reports();
+    assert_eq!(reports.reports.len(), 1);
+    assert_eq!(reports.reports[0].event_name, "playback.first_frame_ready");
+    assert_eq!(
+        event_names
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_slice(),
+        ["playback.first_frame_ready"]
+    );
+    assert!(session.close_pipeline_event_hooks());
+}
+
+#[test]
 fn android_host_bridge_session_uses_media_info_duration_for_hls_vod_snapshot() {
     let mut session = AndroidHostBridgeSession::new("https://example.com/master.m3u8");
     session.session.media_info.duration = Some(Duration::from_secs(24));
@@ -2686,15 +2845,24 @@ fn test_native_frame_open_config(
         source_uri: "file:///tmp/video.mp4".to_owned(),
         source_normalizer: MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreflightOnly,
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec!["/tmp/libsource_normalizer.so".into()],
+            native_plugin_loading_policy:
+                player_runtime::NativePluginLoadingPolicy::DevelopmentRawPaths,
             runtime_profile: Some("default".to_owned()),
         },
         native_frame_pipeline: MobileNativeFramePipelineConfiguration {
             mode,
+            decoder_plugin_artifacts: Vec::new(),
             decoder_plugin_library_paths: vec!["/tmp/libmediacodec_decoder.so".into()],
+            frame_processor_plugin_artifacts: Vec::new(),
             frame_processor_plugin_library_paths: vec!["/tmp/libframe_processor.so".into()],
+            native_plugin_loading_policy:
+                player_runtime::NativePluginLoadingPolicy::DevelopmentRawPaths,
             max_in_flight_frames: Some(2),
         },
+        avc_decoder_implementation_name: Some("c2.test.avc.decoder".to_owned()),
+        hevc_decoder_implementation_name: Some("c2.test.hevc.decoder".to_owned()),
         presenter_profile: AndroidNativeFramePresenterProfile::SurfaceView,
     }
 }
@@ -2818,6 +2986,7 @@ fn test_decoder_open_plan(
         }),
         video_track: test_video_track(),
         selected_profile: AndroidNativeFramePipelineProfile::HostTimedSurface,
+        required_decoder_implementation_name: "c2.test.avc.decoder".to_owned(),
         requires_android_native_window,
     }
 }
@@ -2895,6 +3064,7 @@ fn test_decoder_native_frame(handle: usize, pts_us: i64) -> DecoderNativeFrame {
             }),
         },
         handle,
+        lease_token: None,
     }
 }
 
@@ -2908,6 +3078,7 @@ fn test_processor_output_frame(input: &DecoderNativeFrame) -> NativeFrame {
     NativeFrame {
         metadata: metadata.into(),
         handle: input.handle + 10_000,
+        lease_token: None,
     }
 }
 

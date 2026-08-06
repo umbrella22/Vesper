@@ -46,9 +46,14 @@ public enum VesperPlaybackCapabilityProbe {
         if effectiveRequiresNativeFrame && sourceIsRemote {
             missing.append("hostManagedNetworkProbeNotImplemented")
         }
-        if effectiveRequiresNativeFrame
-            && request.nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty
-        {
+        let hasNativeFrameDecoder =
+            request.nativeFramePipelineConfiguration.decoderPluginReferences.contains { reference in
+                VesperBundledPluginResolver.isRegisteredNativeReference(
+                    reference,
+                    pluginId: VesperBundledPluginReferences.decoderVideoToolbox.pluginId
+                )
+            }
+        if effectiveRequiresNativeFrame && !hasNativeFrameDecoder {
             missing.append("nativeFrameDecoderPlugin")
         }
         if isHdrOrDolbyVision {
@@ -79,7 +84,7 @@ public enum VesperPlaybackCapabilityProbe {
         let nativeFrameSupported =
             effectiveRequiresNativeFrame
             ? hardwareDecodeSupported
-                && !request.nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty
+                && hasNativeFrameDecoder
                 && !sourceIsRemote
             : hardwareDecodeSupported
         let recommendedPlaybackPath: VesperRecommendedPlaybackPath

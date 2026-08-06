@@ -16,7 +16,7 @@ minor releases. Pin the version explicitly when consuming.
 Exported from `package:vesper_player_ui/vesper_player_ui.dart`:
 
 - `VesperPlayerStage` — opinionated player stage with controls overlay,
-  gestures (double-tap seek, drag scrub), fullscreen toggle, and sheet entry
+  gestures (double-tap play / pause, drag scrub), fullscreen toggle, and sheet entry
   points. Hosts can pass `topBarPrimaryAction` and `topBarSecondaryAction` for
   Cast, AirPlay, DLNA, or custom menu buttons that should follow the stage
   overlay
@@ -30,9 +30,11 @@ Exported from `package:vesper_player_ui/vesper_player_ui.dart`:
 
 ## Installation
 
-The Flutter packages are source-distributed from this repository and currently
-set `publish_to: none`. In a host app, use path or git dependencies until the
-package family is published:
+The Flutter package family is not published yet. Repository development first
+runs `./scripts/vesper flutter local-overrides`. External hosts must configure
+the root-level federated package overrides described in the
+[`vesper_player` installation guide](../vesper_player/README.md#installation)
+before using source-checkout dependencies:
 
 ```yaml
 dependencies:

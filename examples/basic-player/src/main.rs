@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -5,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 mod desktop_file_dialog;
 mod desktop_overlay_ui;
 mod desktop_presenter;
@@ -39,13 +40,19 @@ use player_platform_macos::{
     MacosVideoLayerFrame, MacosVideoLayerSurface,
     open_macos_host_runtime_uri_with_options_and_interrupt,
 };
+use player_plugin::{PluginReference, PluginTransport};
+use player_plugin_loader::{PluginRegistry, WasmPluginArtifact, WasmPluginInterfaceDeclaration};
+use player_plugin_package::{
+    InstalledPluginActivation, PluginHostTarget, PluginTrustStore, verify_installed_plugin_catalog,
+};
 use player_render_wgpu::{
     DisplayRect, RenderFrameOutcome, RenderMode, RenderSurfaceConfig, RgbaVideoFrame,
     VideoFrameTexture, VideoRenderer, Yuv420pVideoFrame, default_window_attributes,
 };
 use player_runtime::{
-    DecodedAudioSummary, DecodedVideoFrame, FrameProcessorMode, MediaTrackCatalog,
-    MediaTrackSelectionSnapshot, PlaybackProgress, PlayerDecoderPluginVideoMode, PlayerMediaInfo,
+    DecodedAudioSummary, DecodedVideoFrame, FrameProcessorMode, MAX_PIPELINE_EVENT_HOOKS,
+    MediaTrackCatalog, MediaTrackSelectionSnapshot, PipelineEventHookRegistration,
+    PipelineEventHookReportBatch, PlaybackProgress, PlayerDecoderPluginVideoMode, PlayerMediaInfo,
     PlayerPlaybackRoute, PlayerPluginCapabilitySummary, PlayerPluginDiagnostic,
     PlayerPluginDiagnosticStatus, PlayerPluginParticipation, PlayerResilienceMetrics,
     PlayerRuntime, PlayerRuntimeBootstrap, PlayerRuntimeCommand, PlayerRuntimeEvent,
@@ -53,6 +60,9 @@ use player_runtime::{
     PlayerVideoDecodeInfo, PlayerVideoDecodeMode, PresentationState, SourceNormalizerMode,
     VideoPixelFormat,
 };
+use semver::Version;
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 use winit::application::ApplicationHandler;
@@ -70,6 +80,7 @@ const CONTROL_FADE_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const PLAYBACK_OVERLAY_REFRESH_INTERVAL: Duration = Duration::from_millis(125);
 const PLAYBACK_UI_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const POST_LAUNCH_PLAY_PAINT_FALLBACK: Duration = Duration::from_millis(120);
+const PIPELINE_EVENT_HOOK_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 const HLS_DEMO_CLI_FLAG: &str = "--hls-demo";
 const DASH_DEMO_CLI_FLAG: &str = "--dash-demo";
 const DECODER_PLUGIN_PATHS_ENV: &str = "VESPER_DECODER_PLUGIN_PATHS";
@@ -78,6 +89,13 @@ const SOURCE_NORMALIZER_PLUGIN_PATHS_ENV: &str = "VESPER_SOURCE_NORMALIZER_PLUGI
 const SOURCE_NORMALIZER_MODE_ENV: &str = "VESPER_SOURCE_NORMALIZER_MODE";
 const FRAME_PROCESSOR_PLUGIN_PATHS_ENV: &str = "VESPER_FRAME_PROCESSOR_PLUGIN_PATHS";
 const FRAME_PROCESSOR_MODE_ENV: &str = "VESPER_FRAME_PROCESSOR_MODE";
+const PLUGIN_DEVELOPMENT_MODE_ENV: &str = "VESPER_PLUGIN_DEVELOPMENT_MODE";
+const PLUGIN_INSTALL_ROOT_ENV: &str = "VESPER_PLUGIN_INSTALL_ROOT";
+const PLUGIN_TRUST_STORE_ENV: &str = "VESPER_PLUGIN_TRUST_STORE";
+const PLUGIN_ACTIVATIONS_ENV: &str = "VESPER_PLUGIN_ACTIVATIONS";
+const PIPELINE_EVENT_HOOK_REFERENCES_ENV: &str = "VESPER_PIPELINE_EVENT_HOOK_REFERENCES";
+const WASM_EVENT_HOOK_COMPONENT_ENV: &str = "VESPER_WASM_EVENT_HOOK_COMPONENT";
+const WASM_EVENT_HOOK_REFERENCE_ENV: &str = "VESPER_WASM_EVENT_HOOK_REFERENCE";
 const PLAYBACK_DEBUG_ENV: &str = "VESPER_PLAYBACK_DEBUG";
 const PLAYBACK_DEBUG_TRACE_ENV: &str = "VESPER_PLAYBACK_DEBUG_TRACE";
 const PLAYBACK_DEBUG_WINDOW_ENV: &str = "VESPER_PLAYBACK_DEBUG_WINDOW";
@@ -155,11 +173,12 @@ fn main() -> Result<()> {
         .init();
 
     let source = resolve_initial_media_source_uri()?;
+    let pipeline_event_hooks = pipeline_event_hook_registrations_from_env()?;
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let mut app = DesktopPlayerApp::new(source);
+    let mut app = DesktopPlayerApp::new(source, pipeline_event_hooks);
     match event_loop.run_app(&mut app) {
         Ok(()) => Ok(()),
         Err(run_error) => {
@@ -172,6 +191,7 @@ fn main() -> Result<()> {
 struct DesktopPlayerApp {
     source: Option<String>,
     runtime: Option<PlayerRuntime>,
+    pipeline_event_hooks: Vec<PipelineEventHookRegistration>,
     last_frame: Option<DecodedVideoFrame>,
     render_config: RenderSurfaceConfig,
     uses_external_video_surface: bool,
@@ -455,7 +475,10 @@ impl BasicPlayerSmokeScript {
 }
 
 impl DesktopPlayerApp {
-    fn new(source: Option<String>) -> Self {
+    fn new(
+        source: Option<String>,
+        pipeline_event_hooks: Vec<PipelineEventHookRegistration>,
+    ) -> Self {
         let playlist_entries = source
             .as_ref()
             .map(|initial_source| DesktopPlaylistEntry {
@@ -470,6 +493,7 @@ impl DesktopPlayerApp {
         Self {
             source,
             runtime: None,
+            pipeline_event_hooks,
             last_frame: None,
             render_config: RenderSurfaceConfig::default(),
             uses_external_video_surface: false,
@@ -710,7 +734,7 @@ impl DesktopPlayerApp {
     }
 
     fn reset_active_playback_for_launch(&mut self) {
-        self.runtime = None;
+        self.close_active_runtime();
         self.last_frame = None;
         self.last_overlay_refresh_at = None;
         self.uses_external_video_surface = false;
@@ -727,6 +751,12 @@ impl DesktopPlayerApp {
         self.last_pointer_overlay_refresh_at = None;
         self.pending_post_launch_play_paint_deadline = None;
         self.smoke_script.reset();
+    }
+
+    fn close_active_runtime(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            finalize_runtime_pipeline_event_hooks(&runtime);
+        }
     }
 
     fn replace_active_launch_cancel_flag(&mut self) -> Arc<AtomicBool> {
@@ -871,12 +901,15 @@ impl DesktopPlayerApp {
         #[cfg(target_os = "macos")]
         let runtime_options = {
             let video_surface = self.ensure_native_video_surface(window.as_ref())?;
-            let options = basic_player_runtime_options().with_video_surface(video_surface);
+            let options = basic_player_runtime_options(&self.pipeline_event_hooks)?
+                .with_video_surface(video_surface);
             runtime_options_for_winit_window(window.as_ref(), options)?
         };
         #[cfg(not(target_os = "macos"))]
-        let runtime_options =
-            runtime_options_for_winit_window(window.as_ref(), basic_player_runtime_options())?;
+        let runtime_options = runtime_options_for_winit_window(
+            window.as_ref(),
+            basic_player_runtime_options(&self.pipeline_event_hooks)?,
+        )?;
 
         let launch_tx = self.launch_tx.clone();
         thread::spawn(move || {
@@ -2205,6 +2238,7 @@ impl DesktopPlayerApp {
             }
             log_runtime_event(event);
         }
+        log_pipeline_event_hook_reports(runtime.drain_pipeline_event_hook_reports());
     }
 
     fn sync_ui_presenter(&self) {
@@ -2369,22 +2403,309 @@ fn open_basic_player_runtime_for_source(
     )
 }
 
-fn basic_player_runtime_options() -> PlayerRuntimeOptions {
-    PlayerRuntimeOptions::default()
-        .with_decoder_plugin_library_paths(decoder_plugin_library_paths_from_env())
-        .with_decoder_plugin_video_mode(decoder_plugin_video_mode_from_env())
-        .with_source_normalizer_plugin_library_paths(
-            source_normalizer_plugin_library_paths_from_env(),
-        )
-        .with_source_normalizer_mode(source_normalizer_mode_from_env())
-        .with_frame_processor_library_paths(frame_processor_library_paths_from_env())
-        .with_frame_processor_mode(frame_processor_mode_from_env())
+fn pipeline_event_hook_registrations_from_env() -> Result<Vec<PipelineEventHookRegistration>> {
+    let mut registrations = installed_event_hook_registrations_from_env()?;
+    registrations.extend(development_wasm_event_hook_registrations_from_env()?);
+    if registrations.len() > MAX_PIPELINE_EVENT_HOOKS {
+        bail!(
+            "configured pipeline EventHooks exceed the {MAX_PIPELINE_EVENT_HOOKS}-hook runtime limit"
+        );
+    }
+    let mut references = HashSet::new();
+    for registration in &registrations {
+        if !references.insert(registration.reference().clone()) {
+            bail!(
+                "pipeline EventHook '{}' is configured more than once",
+                registration.reference().plugin_id()
+            );
+        }
+    }
+    Ok(registrations)
 }
 
-fn decoder_plugin_library_paths_from_env() -> Vec<PathBuf> {
-    std::env::var_os(DECODER_PLUGIN_PATHS_ENV)
-        .map(|value| std::env::split_paths(&value).collect())
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InstalledPluginActivationConfig {
+    plugin_id: String,
+    version: String,
+}
+
+fn installed_event_hook_registrations_from_env() -> Result<Vec<PipelineEventHookRegistration>> {
+    let install_root = configured_path(PLUGIN_INSTALL_ROOT_ENV);
+    let trust_store_path = configured_path(PLUGIN_TRUST_STORE_ENV);
+    let references =
+        parse_json_environment::<Vec<PluginReference>>(PIPELINE_EVENT_HOOK_REFERENCES_ENV)?;
+    let activation_configs =
+        parse_json_environment::<Vec<InstalledPluginActivationConfig>>(PLUGIN_ACTIVATIONS_ENV)?;
+    if install_root.is_none()
+        && trust_store_path.is_none()
+        && references.is_none()
+        && activation_configs.is_none()
+    {
+        return Ok(Vec::new());
+    }
+
+    let install_root = install_root.with_context(|| {
+        format!("{PLUGIN_INSTALL_ROOT_ENV} is required when installed plugins are configured")
+    })?;
+    let trust_store_path = trust_store_path.with_context(|| {
+        format!("{PLUGIN_TRUST_STORE_ENV} is required when installed plugins are configured")
+    })?;
+    let references = references.unwrap_or_default();
+    if references.len() > MAX_PIPELINE_EVENT_HOOKS {
+        bail!(
+            "{PIPELINE_EVENT_HOOK_REFERENCES_ENV} exceeds the {MAX_PIPELINE_EVENT_HOOKS}-hook runtime limit"
+        );
+    }
+    let activations = activation_configs
         .unwrap_or_default()
+        .into_iter()
+        .map(|activation| {
+            InstalledPluginActivation::new(&activation.plugin_id, &activation.version).with_context(
+                || {
+                    format!(
+                        "invalid activation for installed plugin '{}'",
+                        activation.plugin_id
+                    )
+                },
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let trust_store = PluginTrustStore::from_file(&trust_store_path).with_context(|| {
+        format!(
+            "failed to load plugin trust store '{}'",
+            trust_store_path.display()
+        )
+    })?;
+    let host = current_desktop_plugin_host_target()?;
+    let catalog = verify_installed_plugin_catalog(
+        &install_root,
+        &trust_store,
+        &host,
+        &references,
+        &activations,
+    )
+    .with_context(|| {
+        format!(
+            "failed to verify installed plugin catalog '{}'",
+            install_root.display()
+        )
+    })?;
+    let registry = PluginRegistry::load_verified_installed_catalog(&catalog)
+        .context("failed to load the verified installed plugin catalog")?;
+    references
+        .into_iter()
+        .map(|reference| {
+            let resolved = registry
+                .resolve_pipeline_event_hook(&reference)
+                .with_context(|| {
+                    format!(
+                        "failed to resolve installed pipeline EventHook '{}'",
+                        reference.plugin_id()
+                    )
+                })?;
+            info!(
+                plugin_id = resolved.reference().plugin_id(),
+                instance_id = resolved
+                    .reference()
+                    .capability_instance_id()
+                    .unwrap_or("unknown"),
+                transport = ?resolved.reference().transport(),
+                "loaded a verified installed pipeline EventHook"
+            );
+            PipelineEventHookRegistration::new(resolved.reference().clone(), resolved.capability())
+                .context("failed to register a verified installed pipeline EventHook")
+        })
+        .collect()
+}
+
+fn current_desktop_plugin_host_target() -> Result<PluginHostTarget> {
+    let target_env = if cfg!(target_env = "gnu") {
+        "gnu"
+    } else if cfg!(target_env = "msvc") {
+        "msvc"
+    } else {
+        ""
+    };
+    let (target, architecture) =
+        desktop_native_plugin_coordinates(std::env::consts::OS, std::env::consts::ARCH, target_env)
+            .with_context(|| {
+                format!(
+                    "installed Native plugins are not supported for host {}/{}/{}",
+                    std::env::consts::OS,
+                    std::env::consts::ARCH,
+                    target_env
+                )
+            })?;
+    let host_sdk = Version::parse(env!("CARGO_PKG_VERSION"))
+        .context("basic-player package version is not valid SemVer")?;
+    PluginHostTarget::new(host_sdk, target, architecture)
+        .context("failed to construct the desktop plugin host target")
+}
+
+fn desktop_native_plugin_coordinates(
+    os: &str,
+    architecture: &str,
+    target_env: &str,
+) -> Option<(&'static str, &'static str)> {
+    match (os, architecture, target_env) {
+        ("macos", "aarch64", _) => Some(("aarch64-apple-darwin", "arm64")),
+        ("macos", "x86_64", _) => Some(("x86_64-apple-darwin", "x86_64")),
+        ("linux", "aarch64", "gnu") => Some(("aarch64-unknown-linux-gnu", "arm64")),
+        ("linux", "x86_64", "gnu") => Some(("x86_64-unknown-linux-gnu", "x86_64")),
+        ("windows", "aarch64", "msvc") => Some(("aarch64-pc-windows-msvc", "arm64")),
+        ("windows", "x86_64", "msvc") => Some(("x86_64-pc-windows-msvc", "x86_64")),
+        _ => None,
+    }
+}
+
+fn configured_path(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn parse_json_environment<T>(name: &str) -> Result<Option<T>>
+where
+    T: DeserializeOwned,
+{
+    let Some(value) = std::env::var_os(name).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let Some(value) = value.to_str() else {
+        bail!("{name} must contain UTF-8 JSON");
+    };
+    parse_json_config(name, value).map(Some)
+}
+
+fn parse_json_config<T>(name: &str, value: &str) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_str(value).with_context(|| format!("failed to parse {name}"))
+}
+
+fn development_wasm_event_hook_registrations_from_env() -> Result<Vec<PipelineEventHookRegistration>>
+{
+    let component_path = std::env::var_os(WASM_EVENT_HOOK_COMPONENT_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let reference_json =
+        std::env::var_os(WASM_EVENT_HOOK_REFERENCE_ENV).filter(|value| !value.is_empty());
+    let (component_path, reference_json) = match (component_path, reference_json) {
+        (None, None) => return Ok(Vec::new()),
+        (Some(component_path), Some(reference_json)) => (component_path, reference_json),
+        _ => {
+            bail!(
+                "{WASM_EVENT_HOOK_COMPONENT_ENV} and {WASM_EVENT_HOOK_REFERENCE_ENV} must be configured together"
+            )
+        }
+    };
+    if !env_flag(PLUGIN_DEVELOPMENT_MODE_ENV) {
+        bail!(
+            "raw WASM components require explicit development policy through {PLUGIN_DEVELOPMENT_MODE_ENV}=1"
+        );
+    }
+    let Some(reference_json) = reference_json.to_str() else {
+        bail!("{WASM_EVENT_HOOK_REFERENCE_ENV} must contain UTF-8 JSON");
+    };
+    let reference: PluginReference = serde_json::from_str(reference_json)
+        .with_context(|| format!("failed to parse {WASM_EVENT_HOOK_REFERENCE_ENV}"))?;
+    if reference.transport() != PluginTransport::Wasm {
+        bail!("{WASM_EVENT_HOOK_REFERENCE_ENV} must select the WASM transport");
+    }
+    let instance_id = reference
+        .capability_instance_id()
+        .context("development WASM EventHook reference must select a capability instance")?
+        .to_owned();
+
+    warn!(
+        plugin_id = reference.plugin_id(),
+        instance_id,
+        component_path = %component_path.display(),
+        "loading an unsigned raw WASM component under explicit development policy"
+    );
+    let artifact = WasmPluginArtifact::new(
+        reference.plugin_id(),
+        component_path,
+        [WasmPluginInterfaceDeclaration::pipeline_event_hook(
+            instance_id,
+        )],
+    )
+    .context("invalid development WASM EventHook artifact")?;
+    let registry = PluginRegistry::load_wasm_artifacts([artifact])
+        .context("failed to load development WASM EventHook artifact")?;
+    let resolved = registry
+        .resolve_pipeline_event_hook(&reference)
+        .context("failed to resolve development WASM EventHook reference")?;
+    let registration =
+        PipelineEventHookRegistration::new(resolved.reference().clone(), resolved.capability())
+            .context("failed to register development WASM EventHook")?;
+    Ok(vec![registration])
+}
+
+fn basic_player_runtime_options(
+    pipeline_event_hooks: &[PipelineEventHookRegistration],
+) -> Result<PlayerRuntimeOptions> {
+    let decoder_paths = development_plugin_library_paths_from_env(DECODER_PLUGIN_PATHS_ENV)?;
+    let source_normalizer_paths =
+        development_plugin_library_paths_from_env(SOURCE_NORMALIZER_PLUGIN_PATHS_ENV)?;
+    let frame_processor_paths =
+        development_plugin_library_paths_from_env(FRAME_PROCESSOR_PLUGIN_PATHS_ENV)?;
+    let has_development_native_plugins = !decoder_paths.is_empty()
+        || !source_normalizer_paths.is_empty()
+        || !frame_processor_paths.is_empty();
+    let mut options = PlayerRuntimeOptions::default()
+        .with_decoder_plugin_library_paths(decoder_paths)
+        .with_decoder_plugin_video_mode(decoder_plugin_video_mode_from_env())
+        .with_source_normalizer_plugin_library_paths(source_normalizer_paths)
+        .with_source_normalizer_mode(source_normalizer_mode_from_env())
+        .with_frame_processor_library_paths(frame_processor_paths)
+        .with_frame_processor_mode(frame_processor_mode_from_env());
+    if has_development_native_plugins {
+        options = options.with_development_native_plugin_loading();
+    }
+    if pipeline_event_hooks.is_empty() {
+        Ok(options.with_pipeline_event_platform(std::env::consts::OS))
+    } else {
+        Ok(options.with_pipeline_event_hooks(pipeline_event_hooks.to_vec(), std::env::consts::OS))
+    }
+}
+
+fn development_plugin_library_paths_from_env(name: &str) -> Result<Vec<PathBuf>> {
+    let paths = match std::env::var_os(name).filter(|value| !value.is_empty()) {
+        Some(value) => std::env::split_paths(&value).collect::<Vec<_>>(),
+        None => Vec::new(),
+    };
+    let paths = require_development_policy_for_raw_plugin_paths(
+        paths,
+        env_flag(PLUGIN_DEVELOPMENT_MODE_ENV),
+        name,
+    )?;
+    if !paths.is_empty() {
+        warn!(
+            environment = name,
+            path_count = paths.len(),
+            "loading unsigned raw Native plugin libraries under explicit development policy"
+        );
+    }
+    Ok(paths)
+}
+
+fn require_development_policy_for_raw_plugin_paths(
+    paths: Vec<PathBuf>,
+    development_mode: bool,
+    environment_name: &str,
+) -> Result<Vec<PathBuf>> {
+    if paths.iter().any(|path| path.as_os_str().is_empty()) {
+        bail!("{environment_name} must not contain empty path entries");
+    }
+    if !paths.is_empty() && !development_mode {
+        bail!(
+            "raw Native plugin libraries from {environment_name} require explicit development policy through {PLUGIN_DEVELOPMENT_MODE_ENV}=1"
+        );
+    }
+    Ok(paths)
 }
 
 fn decoder_plugin_video_mode_from_env() -> PlayerDecoderPluginVideoMode {
@@ -2398,12 +2719,6 @@ fn decoder_plugin_video_mode_from_value(value: Option<String>) -> PlayerDecoderP
         }
         _ => PlayerDecoderPluginVideoMode::DiagnosticsOnly,
     }
-}
-
-fn source_normalizer_plugin_library_paths_from_env() -> Vec<PathBuf> {
-    std::env::var_os(SOURCE_NORMALIZER_PLUGIN_PATHS_ENV)
-        .map(|value| std::env::split_paths(&value).collect())
-        .unwrap_or_default()
 }
 
 fn source_normalizer_mode_from_env() -> SourceNormalizerMode {
@@ -2426,12 +2741,6 @@ fn source_normalizer_mode_from_value(value: Option<String>) -> SourceNormalizerM
         }
         _ => SourceNormalizerMode::Disabled,
     }
-}
-
-fn frame_processor_library_paths_from_env() -> Vec<PathBuf> {
-    std::env::var_os(FRAME_PROCESSOR_PLUGIN_PATHS_ENV)
-        .map(|value| std::env::split_paths(&value).collect())
-        .unwrap_or_default()
 }
 
 fn frame_processor_mode_from_env() -> FrameProcessorMode {
@@ -2515,6 +2824,12 @@ fn log_control_action(origin: &'static str, action: ControlAction) {
 
 fn log_keyboard_action(action: &'static str) {
     info!(origin = "keyboard", action, "desktop keyboard action");
+}
+
+impl Drop for DesktopPlayerApp {
+    fn drop(&mut self) {
+        self.close_active_runtime();
+    }
 }
 
 impl ApplicationHandler for DesktopPlayerApp {
@@ -3139,6 +3454,75 @@ fn decoder_plugin_selected_for_playback(video_decode: Option<&PlayerVideoDecodeI
         })
 }
 
+fn finalize_runtime_pipeline_event_hooks(runtime: &PlayerRuntime) {
+    if !runtime.flush_pipeline_event_hooks(PIPELINE_EVENT_HOOK_FLUSH_TIMEOUT) {
+        warn!("timed out while flushing desktop pipeline EventHook dispatch");
+    }
+    log_pipeline_event_hook_reports(runtime.drain_pipeline_event_hook_reports());
+    if !runtime.close_pipeline_event_hooks() {
+        warn!("failed to close desktop pipeline EventHook dispatcher cleanly");
+    }
+    log_pipeline_event_hook_reports(runtime.drain_pipeline_event_hook_reports());
+}
+
+fn log_pipeline_event_hook_reports(batch: PipelineEventHookReportBatch) {
+    if let Some(error) = batch.dispatcher_error {
+        warn!(%error, "desktop pipeline EventHook dispatcher reported an error");
+    }
+    if batch.dropped_events > 0 || batch.dropped_reports > 0 {
+        warn!(
+            dropped_events = batch.dropped_events,
+            dropped_reports = batch.dropped_reports,
+            "desktop pipeline EventHook queue dropped data"
+        );
+    }
+    for report in batch.reports {
+        let plugin_id = report.reference.plugin_id();
+        let instance_id = report
+            .reference
+            .capability_instance_id()
+            .unwrap_or("unresolved");
+        match report.result {
+            Ok(outcome) => {
+                info!(
+                    plugin_id,
+                    instance_id,
+                    transport = ?report.reference.transport(),
+                    run_id = report.run_id,
+                    session_id = report.session_id,
+                    event_name = report.event_name,
+                    accepted = outcome.accepted,
+                    measurements = outcome.measurements.len(),
+                    diagnostics = outcome.diagnostics.len(),
+                    "desktop pipeline EventHook completed"
+                );
+                for diagnostic in outcome.diagnostics {
+                    debug!(
+                        plugin_id,
+                        instance_id,
+                        code = diagnostic.code,
+                        severity = ?diagnostic.severity,
+                        message = diagnostic.message,
+                        "desktop pipeline EventHook diagnostic"
+                    );
+                }
+            }
+            Err(error) => {
+                warn!(
+                    plugin_id,
+                    instance_id,
+                    transport = ?report.reference.transport(),
+                    run_id = report.run_id,
+                    session_id = report.session_id,
+                    event_name = report.event_name,
+                    %error,
+                    "desktop pipeline EventHook failed"
+                );
+            }
+        }
+    }
+}
+
 fn log_runtime_event(event: PlayerRuntimeEvent) {
     match event {
         PlayerRuntimeEvent::Initialized(startup) => {
@@ -3215,11 +3599,13 @@ fn log_runtime_event(event: PlayerRuntimeEvent) {
 mod tests {
     use super::{
         ControlAction, DASH_DEMO_CLI_FLAG, DESKTOP_DASH_DEMO_URL, DESKTOP_HLS_DEMO_URL,
-        DesktopPlayerApp, HLS_DEMO_CLI_FLAG, SourceLaunchStatus,
-        decoder_plugin_video_mode_from_value, frame_processor_mode_from_value,
-        plugin_diagnostics_summary, resolve_media_source_argument,
+        DesktopPlayerApp, HLS_DEMO_CLI_FLAG, InstalledPluginActivationConfig, SourceLaunchStatus,
+        decoder_plugin_video_mode_from_value, desktop_native_plugin_coordinates,
+        frame_processor_mode_from_value, parse_json_config, plugin_diagnostics_summary,
+        require_development_policy_for_raw_plugin_paths, resolve_media_source_argument,
         source_normalizer_mode_from_value,
     };
+    use player_plugin::PluginReference;
     use player_render_wgpu::RenderFrameOutcome;
     use player_runtime::{
         FrameProcessorMode, PlayerDecoderPluginVideoMode, PlayerPluginCapabilitySummary,
@@ -3227,6 +3613,7 @@ mod tests {
         PlayerPluginDiagnosticStatus, PlayerPluginParticipation, PlayerVideoDecodeInfo,
         PlayerVideoDecodeMode, SourceNormalizerMode,
     };
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -3239,6 +3626,97 @@ mod tests {
             resolve_media_source_argument(DASH_DEMO_CLI_FLAG.to_owned()).expect("dash demo"),
             DESKTOP_DASH_DEMO_URL
         );
+    }
+
+    #[test]
+    fn desktop_plugin_target_mapping_is_explicit_about_supported_abis() {
+        assert_eq!(
+            desktop_native_plugin_coordinates("macos", "aarch64", ""),
+            Some(("aarch64-apple-darwin", "arm64"))
+        );
+        assert_eq!(
+            desktop_native_plugin_coordinates("linux", "x86_64", "gnu"),
+            Some(("x86_64-unknown-linux-gnu", "x86_64"))
+        );
+        assert_eq!(
+            desktop_native_plugin_coordinates("windows", "aarch64", "msvc"),
+            Some(("aarch64-pc-windows-msvc", "arm64"))
+        );
+        assert_eq!(
+            desktop_native_plugin_coordinates("linux", "aarch64", "musl"),
+            None
+        );
+        assert_eq!(
+            desktop_native_plugin_coordinates("windows", "x86_64", "gnu"),
+            None
+        );
+    }
+
+    #[test]
+    fn raw_native_plugin_paths_require_explicit_development_policy() {
+        let path = PathBuf::from("/tmp/plugin with spaces/\u{63d2}\u{4ef6}.dylib");
+        let error = require_development_policy_for_raw_plugin_paths(
+            vec![path.clone()],
+            false,
+            "VESPER_TEST_PLUGIN_PATHS",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("VESPER_PLUGIN_DEVELOPMENT_MODE=1")
+        );
+        assert_eq!(
+            require_development_policy_for_raw_plugin_paths(
+                vec![path.clone()],
+                true,
+                "VESPER_TEST_PLUGIN_PATHS",
+            )
+            .expect("development plugin path"),
+            vec![path]
+        );
+        assert!(
+            require_development_policy_for_raw_plugin_paths(
+                Vec::new(),
+                false,
+                "VESPER_TEST_PLUGIN_PATHS",
+            )
+            .expect("empty plugin path list")
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn raw_native_plugin_paths_reject_empty_locator_entries() {
+        let error = require_development_policy_for_raw_plugin_paths(
+            vec![PathBuf::new()],
+            true,
+            "VESPER_TEST_PLUGIN_PATHS",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("empty path entries"));
+    }
+
+    #[test]
+    fn installed_plugin_json_preserves_typed_reference_fields() {
+        let references = parse_json_config::<Vec<PluginReference>>(
+            "VESPER_TEST_PLUGIN_REFERENCES",
+            r#"[{"pluginId":"dev.vesper.event-hook-2","capabilityInstanceId":"dev.vesper.event-hook-2.primary","transport":"wasm"}]"#,
+        )
+        .expect("plugin references");
+        assert_eq!(references.len(), 1);
+        assert_eq!(references[0].plugin_id(), "dev.vesper.event-hook-2");
+        assert_eq!(
+            references[0].capability_instance_id(),
+            Some("dev.vesper.event-hook-2.primary")
+        );
+
+        let error = parse_json_config::<Vec<InstalledPluginActivationConfig>>(
+            "VESPER_TEST_PLUGIN_ACTIVATIONS",
+            r#"[{"pluginId":"dev.vesper.event-hook-2","version":"1.2.3","latest":true}]"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("VESPER_TEST_PLUGIN_ACTIVATIONS"));
     }
 
     #[test]
@@ -3405,7 +3883,7 @@ mod tests {
 
     #[test]
     fn playlist_row_reflects_loading_and_failed_launch_states() {
-        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()));
+        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()), Vec::new());
         app.register_playlist_source(DESKTOP_HLS_DEMO_URL, Some("HLS DEMO".to_owned()));
 
         app.active_launch_request_id = Some(7);
@@ -3423,7 +3901,7 @@ mod tests {
 
     #[test]
     fn host_overlay_only_exposes_runtime_free_actions_while_loading() {
-        let app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()));
+        let app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()), Vec::new());
 
         assert!(app.is_control_action_available(ControlAction::OpenLocalFile));
         assert!(app.is_control_action_available(ControlAction::OpenHlsDemo));
@@ -3435,7 +3913,7 @@ mod tests {
 
     #[test]
     fn empty_start_has_no_default_media_or_playlist_entry() {
-        let app = DesktopPlayerApp::new(None);
+        let app = DesktopPlayerApp::new(None, Vec::new());
 
         assert!(app.source.is_none());
         assert!(app.playlist_item_view_data().is_empty());
@@ -3448,7 +3926,7 @@ mod tests {
 
     #[test]
     fn replacing_launch_cancel_flag_interrupts_previous_prepare() {
-        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()));
+        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()), Vec::new());
 
         let first = app.replace_active_launch_cancel_flag();
         assert!(!first.load(std::sync::atomic::Ordering::SeqCst));
@@ -3460,7 +3938,7 @@ mod tests {
 
     #[test]
     fn deferred_post_launch_play_waits_for_present_or_short_timeout() {
-        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()));
+        let mut app = DesktopPlayerApp::new(Some("file:///tmp/local.mp4".to_owned()), Vec::new());
         app.pending_post_launch_play = true;
         app.pending_post_launch_play_needs_paint = true;
         app.pending_post_launch_play_paint_deadline = Some(Instant::now() + Duration::from_secs(1));

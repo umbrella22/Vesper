@@ -398,3 +398,10 @@ pub enum DownloadEvent {
     AssetIndexUpdated(DownloadTaskSnapshot),
     ProgressUpdated(DownloadTaskProgressPatch),
 }
+
+/// One atomic drain of the bounded host event queue.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DownloadEventBatch {
+    pub events: Vec<DownloadEvent>,
+    pub dropped_events: u64,
+}

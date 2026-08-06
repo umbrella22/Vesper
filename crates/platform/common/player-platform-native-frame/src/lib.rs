@@ -6,9 +6,10 @@ use std::time::Duration;
 use player_plugin::{
     DecoderNativeDeviceContext, DecoderNativeFrame, DecoderPacket, DecoderPacketResult,
     DecoderReceiveNativeFrameOutput, FrameProcessorError, FrameProcessorFrameTimings,
-    FrameProcessorOutputFrame, FrameProcessorReceiveOutput, FrameProcessorSession,
-    FrameProcessorSubmitFrame, FrameProcessorSubmitResult, FrameProcessorSubmitStatus, NativeFrame,
-    NativeFrameReleaseTracking, SourceNormalizerPacket, SourceNormalizerPacketMediaKind,
+    FrameProcessorInputFrame, FrameProcessorOutputFrame, FrameProcessorReceiveOutput,
+    FrameProcessorSession, FrameProcessorSubmitFrame, FrameProcessorSubmitResult,
+    FrameProcessorSubmitStatus, NativeFrame, NativeFrameReleaseTracking, SourceNormalizerPacket,
+    SourceNormalizerPacketMediaKind,
 };
 use player_runtime::{
     FrameProcessorMode, FrameProcessorPolicy, FrameProcessorPolicyAction, FrameProcessorWarning,
@@ -339,7 +340,7 @@ impl NativeFrameProcessorChainCore {
         self.metrics.submitted_frame_count = self.metrics.submitted_frame_count.saturating_add(1);
         let node = &mut self.processors[node_index];
         node.session
-            .submit_frame(current_frame, &submit)
+            .submit_frame(FrameProcessorInputFrame::new(current_frame), &submit)
             .map_err(|error| {
                 NativeFrameProcessorError::from_plugin(
                     self.mode,
@@ -1080,6 +1081,7 @@ pub fn decoder_frame_to_native_frame(frame: &DecoderNativeFrame) -> NativeFrame 
     NativeFrame {
         metadata: frame.metadata.clone().into(),
         handle: frame.handle,
+        lease_token: frame.lease_token,
     }
 }
 
@@ -1087,6 +1089,7 @@ pub fn native_frame_to_decoder_frame(frame: &NativeFrame) -> DecoderNativeFrame 
     DecoderNativeFrame {
         metadata: frame.metadata.clone().into(),
         handle: frame.handle,
+        lease_token: frame.lease_token,
     }
 }
 
@@ -2474,11 +2477,11 @@ mod tests {
     use player_plugin::{
         DecoderFrameFormat, DecoderMediaKind, DecoderNativeDeviceContext, DecoderNativeFrame,
         DecoderNativeFrameMetadata, DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult,
-        DecoderReceiveNativeFrameOutput, FrameProcessorFrameTimings, FrameProcessorOutputFrame,
-        FrameProcessorReceiveOutput, FrameProcessorSession, FrameProcessorSessionInfo,
-        FrameProcessorSubmitFrame, FrameProcessorSubmitResult, FrameProcessorSubmitStatus,
-        NativeFrameMetadata, NativeFramePipelineProfile, NativeFrameReleaseTracking,
-        SourceNormalizerPacket, SourceNormalizerPacketMediaKind,
+        DecoderReceiveNativeFrameOutput, FrameProcessorFrameTimings, FrameProcessorInputFrame,
+        FrameProcessorOutputFrame, FrameProcessorReceiveOutput, FrameProcessorSession,
+        FrameProcessorSessionInfo, FrameProcessorSubmitFrame, FrameProcessorSubmitResult,
+        FrameProcessorSubmitStatus, NativeFrameMetadata, NativeFramePipelineProfile,
+        NativeFrameReleaseTracking, SourceNormalizerPacket, SourceNormalizerPacketMediaKind,
     };
     use player_runtime::{
         FrameProcessorPolicy, FrameProcessorPolicyAction, FrameProcessorWarningKind,
@@ -2520,11 +2523,11 @@ mod tests {
 
         fn submit_frame(
             &mut self,
-            frame: &NativeFrame,
+            frame: FrameProcessorInputFrame<'_>,
             _submit: &FrameProcessorSubmitFrame,
         ) -> Result<FrameProcessorSubmitResult, player_plugin::FrameProcessorError> {
             let mut state = self.state.lock().expect("state");
-            state.submitted_handles.push(frame.handle);
+            state.submitted_handles.push(frame.native_handle());
             if let Some(message) = state.submit_error.clone() {
                 return Err(player_plugin::FrameProcessorError::internal(message));
             }
@@ -2716,6 +2719,7 @@ mod tests {
                 }),
             },
             handle,
+            lease_token: None,
         }
     }
 
@@ -2735,6 +2739,7 @@ mod tests {
             frame: NativeFrame {
                 metadata,
                 handle: input.handle + offset,
+                lease_token: None,
             },
             timings: FrameProcessorFrameTimings {
                 queue_wait_us: None,
@@ -2742,6 +2747,7 @@ mod tests {
                 submit_to_ready_us,
             },
             source_frame_id: input.metadata.frame_id,
+            message: None,
         })
     }
 

@@ -1,17 +1,19 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use player_model::MediaSource;
 use player_runtime::{
-    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FirstFrameReady, MAX_PLAYBACK_RATE,
-    MIN_PLAYBACK_RATE, NATURAL_PLAYBACK_RATE_MAX, PlaybackProgress, PlayerError, PlayerErrorCode,
-    PlayerMediaInfo, PlayerResilienceMetricsTracker, PlayerResult, PlayerRuntimeAdapter,
-    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FirstFrameReady, MAX_PENDING_RUNTIME_EVENTS,
+    MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, NATURAL_PLAYBACK_RATE_MAX, PlaybackProgress, PlayerError,
+    PlayerErrorCode, PlayerMediaInfo, PlayerResilienceMetricsTracker, PlayerResult,
+    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
     PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
     PlayerRuntimeStartup, PlayerSnapshot, PlayerTimelineSnapshot, PlayerVideoInfo,
     PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget, PresentationState,
+    extend_runtime_events_bounded, push_runtime_event_bounded,
 };
 
 pub const MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID: &str = "macos_native";
@@ -122,9 +124,19 @@ pub enum MacosNativeSessionUpdate {
     Error(PlayerError),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct MacosManagedNativeSessionController {
     updates: Arc<Mutex<VecDeque<MacosNativeSessionUpdate>>>,
+    dropped_updates: Arc<AtomicU64>,
+}
+
+impl Default for MacosManagedNativeSessionController {
+    fn default() -> Self {
+        Self {
+            updates: Arc::new(Mutex::new(VecDeque::new())),
+            dropped_updates: Arc::new(AtomicU64::new(0)),
+        }
+    }
 }
 
 pub struct MacosManagedNativeSession<C> {
@@ -143,6 +155,7 @@ pub struct MacosManagedNativeSession<C> {
     resilience_metrics: PlayerResilienceMetricsTracker,
     first_frame_emitted: bool,
     events: VecDeque<PlayerRuntimeEvent>,
+    dropped_events: u64,
 }
 
 pub trait MacosNativePlayerBridge: Send + Sync {
@@ -191,6 +204,9 @@ pub trait MacosNativePlayerSession: Send {
     fn playback_rate(&self) -> f32;
     fn progress(&self) -> PlaybackProgress;
     fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent>;
+    fn take_dropped_event_count(&mut self) -> u64 {
+        0
+    }
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
@@ -414,6 +430,10 @@ impl PlayerRuntimeAdapter for MacosNativePlayerRuntime {
         self.inner.drain_events()
     }
 
+    fn take_dropped_event_count(&mut self) -> u64 {
+        self.inner.take_dropped_event_count()
+    }
+
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
@@ -580,6 +600,10 @@ impl MacosManagedNativeSessionController {
 
     pub fn push_update(&self, update: MacosNativeSessionUpdate) {
         if let Ok(mut updates) = self.updates.lock() {
+            if updates.len() >= MAX_PENDING_RUNTIME_EVENTS {
+                self.dropped_updates.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
             updates.push_back(update);
         }
     }
@@ -589,6 +613,10 @@ impl MacosManagedNativeSessionController {
             .lock()
             .map(|mut updates| updates.drain(..).collect())
             .unwrap_or_default()
+    }
+
+    fn take_dropped_update_count(&self) -> u64 {
+        self.dropped_updates.swap(0, Ordering::Relaxed)
     }
 }
 
@@ -633,6 +661,7 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
             resilience_metrics: PlayerResilienceMetricsTracker::default(),
             first_frame_emitted: false,
             events: VecDeque::new(),
+            dropped_events: 0,
         }
     }
 
@@ -654,11 +683,18 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
                         self.tracker
                             .seed(self.presentation_state, self.playback_rate);
                     }
-                    self.events
-                        .push_back(PlayerRuntimeEvent::SeekCompleted { position });
+                    push_runtime_event_bounded(
+                        &mut self.events,
+                        &mut self.dropped_events,
+                        PlayerRuntimeEvent::SeekCompleted { position },
+                    );
                 }
                 MacosNativeSessionUpdate::Error(error) => {
-                    self.events.push_back(PlayerRuntimeEvent::Error(error));
+                    push_runtime_event_bounded(
+                        &mut self.events,
+                        &mut self.dropped_events,
+                        PlayerRuntimeEvent::Error(error),
+                    );
                 }
             }
         }
@@ -678,7 +714,11 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
         self.is_buffering = observation.is_buffering;
         self.playback_rate = observation.playback_rate;
         self.progress = observation.progress;
-        self.events.extend(observation.emitted_events);
+        extend_runtime_events_bounded(
+            &mut self.events,
+            &mut self.dropped_events,
+            observation.emitted_events,
+        );
     }
 
     fn emit_first_frame_ready(&mut self, position: Duration) {
@@ -691,12 +731,15 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
         };
 
         self.first_frame_emitted = true;
-        self.events
-            .push_back(PlayerRuntimeEvent::FirstFrameReady(FirstFrameReady {
+        push_runtime_event_bounded(
+            &mut self.events,
+            &mut self.dropped_events,
+            PlayerRuntimeEvent::FirstFrameReady(FirstFrameReady {
                 presentation_time: position,
                 width: video.width,
                 height: video.height,
-            }));
+            }),
+        );
     }
 
     fn snapshot(&self) -> PlayerSnapshot {
@@ -715,21 +758,34 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
     }
 
     fn emit_initial_runtime_events(&mut self, startup: PlayerRuntimeStartup) {
-        self.events
-            .push_back(PlayerRuntimeEvent::Initialized(startup));
-        self.events
-            .push_back(PlayerRuntimeEvent::MetadataReady(self.media_info.clone()));
-        self.events
-            .push_back(PlayerRuntimeEvent::PlaybackStateChanged(
-                self.presentation_state,
-            ));
+        push_runtime_event_bounded(
+            &mut self.events,
+            &mut self.dropped_events,
+            PlayerRuntimeEvent::Initialized(startup),
+        );
+        push_runtime_event_bounded(
+            &mut self.events,
+            &mut self.dropped_events,
+            PlayerRuntimeEvent::MetadataReady(self.media_info.clone()),
+        );
+        push_runtime_event_bounded(
+            &mut self.events,
+            &mut self.dropped_events,
+            PlayerRuntimeEvent::PlaybackStateChanged(self.presentation_state),
+        );
         if self.is_interrupted {
-            self.events
-                .push_back(PlayerRuntimeEvent::InterruptionChanged { interrupted: true });
+            push_runtime_event_bounded(
+                &mut self.events,
+                &mut self.dropped_events,
+                PlayerRuntimeEvent::InterruptionChanged { interrupted: true },
+            );
         }
         if self.is_buffering {
-            self.events
-                .push_back(PlayerRuntimeEvent::BufferingChanged { buffering: true });
+            push_runtime_event_bounded(
+                &mut self.events,
+                &mut self.dropped_events,
+                PlayerRuntimeEvent::BufferingChanged { buffering: true },
+            );
         }
         self.tracker
             .seed(self.presentation_state, self.playback_rate);
@@ -739,37 +795,48 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
         if self.presentation_state != previous_state {
             self.resilience_metrics
                 .observe_playback_state(self.presentation_state);
-            self.events
-                .push_back(PlayerRuntimeEvent::PlaybackStateChanged(
-                    self.presentation_state,
-                ));
+            push_runtime_event_bounded(
+                &mut self.events,
+                &mut self.dropped_events,
+                PlayerRuntimeEvent::PlaybackStateChanged(self.presentation_state),
+            );
         }
     }
 
     fn emit_playback_rate_change_if_needed(&mut self, previous_rate: f32) {
         if (self.playback_rate - previous_rate).abs() > f32::EPSILON {
-            self.events
-                .push_back(PlayerRuntimeEvent::PlaybackRateChanged {
+            push_runtime_event_bounded(
+                &mut self.events,
+                &mut self.dropped_events,
+                PlayerRuntimeEvent::PlaybackRateChanged {
                     rate: self.playback_rate,
-                });
+                },
+            );
         }
     }
 
     fn emit_buffering_change_if_needed(&mut self, previous_buffering: bool) {
         if self.is_buffering != previous_buffering {
             self.resilience_metrics.observe_buffering(self.is_buffering);
-            self.events.push_back(PlayerRuntimeEvent::BufferingChanged {
-                buffering: self.is_buffering,
-            });
+            push_runtime_event_bounded(
+                &mut self.events,
+                &mut self.dropped_events,
+                PlayerRuntimeEvent::BufferingChanged {
+                    buffering: self.is_buffering,
+                },
+            );
         }
     }
 
     fn emit_interruption_change_if_needed(&mut self, previous_interrupted: bool) {
         if self.is_interrupted != previous_interrupted {
-            self.events
-                .push_back(PlayerRuntimeEvent::InterruptionChanged {
+            push_runtime_event_bounded(
+                &mut self.events,
+                &mut self.dropped_events,
+                PlayerRuntimeEvent::InterruptionChanged {
                     interrupted: self.is_interrupted,
-                });
+                },
+            );
         }
     }
 
@@ -990,6 +1057,14 @@ impl<C: MacosNativeCommandSink> MacosNativePlayerSession for MacosManagedNativeS
     fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
         self.pump_pending_updates();
         self.events.drain(..).collect()
+    }
+
+    fn take_dropped_event_count(&mut self) -> u64 {
+        let dropped = self
+            .dropped_events
+            .saturating_add(self.controller.take_dropped_update_count());
+        self.dropped_events = 0;
+        dropped
     }
 
     fn dispatch(

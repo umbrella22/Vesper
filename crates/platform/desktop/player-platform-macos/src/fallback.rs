@@ -283,6 +283,9 @@ pub(crate) fn open_software_fallback_adapter_with_factory(
 pub(crate) fn strict_frame_processor_fallback_enabled(options: &PlayerRuntimeOptions) -> bool {
     options.frame_processor_mode == FrameProcessorMode::RequireProcessed
         && !options.frame_processor_library_paths.is_empty()
+        && options
+            .native_plugin_loading_policy
+            .allows_development_raw_paths()
 }
 
 pub(crate) fn without_source_normalizer_options(

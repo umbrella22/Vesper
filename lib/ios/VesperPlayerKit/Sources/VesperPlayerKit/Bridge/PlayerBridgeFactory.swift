@@ -20,7 +20,9 @@ enum PlayerBridgeFactory {
         frameProcessorConfiguration: VesperFrameProcessorConfiguration =
             VesperFrameProcessorConfiguration(),
         nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
-            VesperNativeFramePipelineConfiguration()
+            VesperNativeFramePipelineConfiguration(),
+        pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration =
+            VesperPipelineEventHookConfiguration()
     ) -> VesperPlayerController {
         switch defaultBackend {
         case .fakeDemo:
@@ -35,10 +37,6 @@ enum PlayerBridgeFactory {
                 keepScreenOnDuringPlayback: keepScreenOnDuringPlayback
             )
         case .rustNativeStub:
-            let resolvedSourceNormalizerConfiguration =
-                VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
-                    sourceNormalizerConfiguration
-                )
             return VesperPlayerController(
                 VesperNativePlayerBridge(
                     initialSource: initialSource,
@@ -46,9 +44,10 @@ enum PlayerBridgeFactory {
                     trackPreferencePolicy: trackPreferencePolicy,
                     preloadBudgetPolicy: preloadBudgetPolicy,
                     benchmarkConfiguration: benchmarkConfiguration,
-                    sourceNormalizerConfiguration: resolvedSourceNormalizerConfiguration,
+                    sourceNormalizerConfiguration: sourceNormalizerConfiguration,
                     frameProcessorConfiguration: frameProcessorConfiguration,
-                    nativeFramePipelineConfiguration: nativeFramePipelineConfiguration
+                    nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
+                    pipelineEventHookConfiguration: pipelineEventHookConfiguration
                 ),
                 keepScreenOnDuringPlayback: keepScreenOnDuringPlayback
             )
@@ -74,7 +73,9 @@ public enum VesperPlayerControllerFactory {
         frameProcessorConfiguration: VesperFrameProcessorConfiguration =
             VesperFrameProcessorConfiguration(),
         nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
-            VesperNativeFramePipelineConfiguration()
+            VesperNativeFramePipelineConfiguration(),
+        pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration =
+            VesperPipelineEventHookConfiguration()
     ) -> VesperPlayerController {
         PlayerBridgeFactory.makeDefaultBridge(
             initialSource: initialSource,
@@ -85,7 +86,8 @@ public enum VesperPlayerControllerFactory {
             benchmarkConfiguration: benchmarkConfiguration,
             sourceNormalizerConfiguration: sourceNormalizerConfiguration,
             frameProcessorConfiguration: frameProcessorConfiguration,
-            nativeFramePipelineConfiguration: nativeFramePipelineConfiguration
+            nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
+            pipelineEventHookConfiguration: pipelineEventHookConfiguration
         )
     }
 
@@ -100,10 +102,7 @@ public enum VesperPlayerControllerFactory {
                 height: request.height,
                 frameRate: request.frameRate,
                 requiresNativeFrame: request.requiresNativeFrame,
-                sourceNormalizerConfiguration:
-                    VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
-                        request.sourceNormalizerConfiguration
-                    ),
+                sourceNormalizerConfiguration: request.sourceNormalizerConfiguration,
                 frameProcessorConfiguration: request.frameProcessorConfiguration,
                 nativeFramePipelineConfiguration: request.nativeFramePipelineConfiguration
             ),

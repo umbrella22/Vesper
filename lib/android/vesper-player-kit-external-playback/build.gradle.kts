@@ -7,6 +7,7 @@ plugins {
 }
 
 val workspaceRootDir = layout.projectDirectory.dir("../../..")
+val vesperCli = workspaceRootDir.file("scripts/vesper")
 val configuredAndroidAbis =
     sequenceOf(
         "vesper.player.android.external.abis",
@@ -19,7 +20,14 @@ val configuredAndroidAbis =
         ?.map(String::trim)
         ?.filter(String::isNotEmpty)
         ?: listOf("arm64-v8a")
-val relayFfmpegJniLibsDir = layout.projectDirectory.dir("src/main/jniLibs")
+val relayFfmpegJniLibsDir =
+    providers
+        .environmentVariable("VESPER_ANDROID_EXTERNAL_RELAY_JNI_LIBS")
+        .orElse(layout.projectDirectory.dir("src/main/jniLibs").asFile.absolutePath)
+val relayFfmpegAssetsDir =
+    providers
+        .environmentVariable("VESPER_ANDROID_EXTERNAL_RELAY_ASSETS")
+        .orElse(layout.projectDirectory.dir("src/main/assets").asFile.absolutePath)
 val relayFfmpegBuildProfile =
     providers.gradleProperty("vesper.player.android.external.nativeBuildProfile")
         .orElse(
@@ -45,6 +53,10 @@ val relayFfmpegProfile =
     providers.gradleProperty("vesper.player.android.external.ffmpegProfile")
         .orElse(providers.gradleProperty("vesper.player.android.ffmpegProfile"))
         .orElse("default")
+val skipFfmpegRuntime =
+    providers.environmentVariable("VESPER_ANDROID_SKIP_FFMPEG_RUNTIME_BUILD")
+        .map { it == "1" || it.equals("true", ignoreCase = true) }
+        .orElse(false)
 
 if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
     apply(plugin = "org.jetbrains.kotlin.android")
@@ -58,6 +70,16 @@ android {
         minSdk = 26
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
+    }
+
+
+    sourceSets {
+        getByName("main").apply {
+            jniLibs.directories.clear()
+            jniLibs.directories.add(relayFfmpegJniLibsDir.get())
+            assets.directories.clear()
+            assets.directories.add(relayFfmpegAssetsDir.get())
+        }
     }
 
     buildTypes {
@@ -115,9 +137,8 @@ val buildRelayFfmpegAndroidJni = tasks.register<Exec>("buildRelayFfmpegAndroidJn
     description = "Builds the Android relay FFmpeg JNI library for external playback."
     group = "vesper"
 
-    val scriptFile = workspaceRootDir.file("scripts/android/internal/build-external-playback-relay-ffmpeg-jni.sh")
-
-    inputs.file(scriptFile)
+    inputs.file(vesperCli)
+    inputs.dir(workspaceRootDir.dir("crates/tools/player-cli"))
     inputs.file(workspaceRootDir.file("Cargo.toml"))
     inputs.file(workspaceRootDir.file("Cargo.lock"))
     inputs.dir(workspaceRootDir.dir("crates/platform/jni/player-relay-ffmpeg-android"))
@@ -126,16 +147,29 @@ val buildRelayFfmpegAndroidJni = tasks.register<Exec>("buildRelayFfmpegAndroidJn
     inputs.property("buildProfile", relayFfmpegBuildProfile)
     inputs.property("ffmpegProfile", relayFfmpegProfile)
     outputs.dir(relayFfmpegJniLibsDir)
+    outputs.dir(relayFfmpegAssetsDir)
 
     workingDir = workspaceRootDir.asFile
     environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
 
     doFirst {
-        commandLine(
-            scriptFile.asFile.absolutePath,
-            relayFfmpegBuildProfile.get(),
+        val arguments = mutableListOf<Any>(
+            vesperCli.asFile.absolutePath,
+            "android",
+            "external-playback-jni",
+            relayFfmpegJniLibsDir.get(),
+            "--assets-directory",
+            relayFfmpegAssetsDir.get(),
             "--profile",
+            relayFfmpegBuildProfile.get(),
+            "--ffmpeg-profile",
             relayFfmpegProfile.get(),
+        )
+        if (skipFfmpegRuntime.get()) {
+            arguments += "--skip-ffmpeg-runtime"
+        }
+        commandLine(
+            arguments,
         )
     }
 }
@@ -145,7 +179,9 @@ tasks.matching { task -> task.name == "verifyVesperNativeBinaryNames" }.configur
 }
 
 tasks.matching { task ->
-    (task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")) ||
+    (task.name.startsWith("merge") &&
+        (task.name.endsWith("JniLibFolders") || task.name.endsWith("Assets"))) ||
+        task.name.startsWith("lint", ignoreCase = true) ||
         (task.name.startsWith("generate") && task.name.contains("Lint") && task.name.endsWith("Model"))
 }.configureEach {
     dependsOn(buildRelayFfmpegAndroidJni)

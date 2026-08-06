@@ -62,12 +62,45 @@ final class VesperDownloadManagerTests: XCTestCase {
         )
     }
 
+    func testDownloadBridgeShimTransfersAndFreesRustErrorMessage() throws {
+        var config = VesperRuntimeDownloadConfig(
+            auto_start: false,
+            run_post_processors_on_completion: false,
+            plugin_registry_handle: 0,
+            post_download_plugin_references_json: nil,
+            event_hook_plugin_references_json: nil
+        )
+        var handle: UInt64 = 99
+        var errorMessage: UnsafeMutablePointer<CChar>?
+
+        let created = withUnsafePointer(to: &config) { configPointer in
+            withUnsafeMutablePointer(to: &handle) { handlePointer in
+                withUnsafeMutablePointer(to: &errorMessage) { errorPointer in
+                    vesper_runtime_download_session_create(
+                        configPointer,
+                        handlePointer,
+                        errorPointer
+                    )
+                }
+            }
+        }
+
+        XCTAssertFalse(created)
+        XCTAssertEqual(handle, 0)
+        let transferredMessage = try XCTUnwrap(errorMessage)
+        defer { vesper_runtime_download_error_string_free(transferredMessage) }
+        XCTAssertEqual(
+            String(cString: transferredMessage),
+            "config.post_download_plugin_references_json was null"
+        )
+    }
+
     /// Guards the main-thread back-pressure fix for `eventBuffer`: the capped
     /// append must keep the buffer at `maxEventBufferCapacity`, preserve FIFO
     /// order (drop oldest), and handle a single pathological drain that exceeds
     /// capacity without growing the buffer first.
     func testEventBufferAppendCapsToCapacityAndPreservesNewest() throws {
-        let manager = VesperDownloadManager(
+        let manager = try VesperDownloadManager(
             configuration: VesperDownloadConfiguration(),
             executor: RecordingDownloadExecutor(),
             bindings: FakeDownloadBindings(autoStart: false)
@@ -75,34 +108,57 @@ final class VesperDownloadManagerTests: XCTestCase {
         defer { manager.dispose() }
 
         let capacity = manager.maxEventBufferCapacity
-        let event = VesperDownloadEvent.progressUpdated(
-            VesperDownloadTaskProgressPatch(
-                taskId: 1,
-                progress: VesperDownloadProgressSnapshot()
+        let progressEvent: (UInt64) -> VesperDownloadEvent = { taskId in
+            .progressUpdated(
+                VesperDownloadTaskProgressPatch(
+                    taskId: taskId,
+                    progress: VesperDownloadProgressSnapshot()
+                )
             )
-        )
+        }
 
         // A single batch larger than capacity: only the newest `capacity`
         // events are retained, in order.
-        let oversizedBatch = Array(repeating: event, count: capacity + 500)
+        let oversizedBatch = (0..<(capacity + 500)).map { progressEvent(UInt64($0)) }
         manager.appendEventsCapped(oversizedBatch)
         XCTAssertEqual(manager.eventBuffer.count, capacity)
 
         // A normal-sized batch that overflows by a small amount drops the oldest
         // excess and keeps the newest.
-        manager.appendEventsCapped(Array(repeating: event, count: 10))
+        manager.appendEventsCapped(
+            ((capacity + 500)..<(capacity + 510)).map { progressEvent(UInt64($0)) }
+        )
         XCTAssertEqual(manager.eventBuffer.count, capacity)
 
         // A batch well under capacity appends without truncation.
-        let before = manager.eventBuffer.count
-        manager.appendEventsCapped(Array(repeating: event, count: 5))
-        XCTAssertEqual(manager.eventBuffer.count, min(before + 5, capacity))
+        manager.appendEventsCapped(
+            ((capacity + 510)..<(capacity + 515)).map { progressEvent(UInt64($0)) }
+        )
+        let retainedTaskIds = manager.eventBuffer.compactMap { event -> UInt64? in
+            guard case let .progressUpdated(patch) = event else { return nil }
+            return patch.taskId
+        }
+        XCTAssertEqual(retainedTaskIds.count, capacity)
+        XCTAssertEqual(retainedTaskIds.first, 515)
+        XCTAssertEqual(retainedTaskIds.last, UInt64(capacity + 514))
+
+        let batch = manager.drainEvents()
+        XCTAssertTrue(batch.events.isEmpty)
+        XCTAssertEqual(batch.droppedEvents, UInt64(capacity + 515))
+        XCTAssertTrue(batch.requiresSnapshotResync)
+        XCTAssertTrue(batch.snapshotIsAuthoritative)
+
+        let nextBatch = manager.drainEvents()
+        XCTAssertTrue(nextBatch.events.isEmpty)
+        XCTAssertEqual(nextBatch.droppedEvents, 0)
+        XCTAssertFalse(nextBatch.requiresSnapshotResync)
+        XCTAssertTrue(nextBatch.snapshotIsAuthoritative)
     }
 
     func testCreateTaskAutoStartRefreshesSnapshotAndStartsExecutor() throws {
         let bindings = FakeDownloadBindings(autoStart: true)
         let executor = RecordingDownloadExecutor()
-        let manager = VesperDownloadManager(
+        let manager = try VesperDownloadManager(
             configuration: VesperDownloadConfiguration(autoStart: true),
             executor: executor,
             bindings: bindings
@@ -121,7 +177,7 @@ final class VesperDownloadManagerTests: XCTestCase {
         XCTAssertEqual(executor.startedTaskIds, [1])
         XCTAssertEqual(manager.task(1)?.state, .downloading)
         XCTAssertTrue(
-            manager.drainEvents().contains { event in
+            manager.drainEvents().events.contains { event in
                 if case .created = event {
                     return true
                 }
@@ -130,10 +186,337 @@ final class VesperDownloadManagerTests: XCTestCase {
         )
     }
 
+    func testDroppedRuntimeEventsRetryAuthoritativeSnapshotResync() throws {
+        let bindings = FakeDownloadBindings(autoStart: false)
+        let manager = try VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: false),
+            executor: RecordingDownloadExecutor(),
+            bindings: bindings
+        )
+        defer { manager.dispose() }
+
+        let taskId = try XCTUnwrap(
+            try manager.createTask(
+                assetId: "asset-loss-recovery",
+                source: VesperDownloadSource(
+                    source: .remoteUrl(
+                        URL(string: "https://example.com/video.mp4")!,
+                        label: "Video"
+                    )
+                ),
+                assetIndex: VesperDownloadAssetIndex(totalSizeBytes: 1024)
+            )
+        )
+        _ = manager.drainEvents()
+        let snapshotCallsBeforeLoss = bindings.snapshotCallCount
+        bindings.simulateDroppedCompletion(
+            taskId: taskId,
+            completedPath: "/tmp/downloads/loss-recovered.mp4"
+        )
+        bindings.failNextSnapshot()
+
+        manager.refresh()
+
+        XCTAssertEqual(bindings.snapshotCallCount, snapshotCallsBeforeLoss + 1)
+        XCTAssertEqual(manager.task(taskId)?.state, .queued)
+        XCTAssertTrue(manager.needsAuthoritativeSnapshotResync)
+        let lossBatch = manager.drainEvents()
+        XCTAssertTrue(lossBatch.events.isEmpty)
+        XCTAssertEqual(lossBatch.droppedEvents, 1)
+        XCTAssertTrue(lossBatch.requiresSnapshotResync)
+        XCTAssertFalse(lossBatch.snapshotIsAuthoritative)
+
+        let pendingLossBatch = manager.drainEvents()
+        XCTAssertTrue(pendingLossBatch.events.isEmpty)
+        XCTAssertEqual(pendingLossBatch.droppedEvents, 1)
+        XCTAssertTrue(pendingLossBatch.requiresSnapshotResync)
+        XCTAssertFalse(pendingLossBatch.snapshotIsAuthoritative)
+
+        manager.refresh()
+
+        XCTAssertEqual(bindings.snapshotCallCount, snapshotCallsBeforeLoss + 2)
+        XCTAssertEqual(manager.task(taskId)?.state, .completed)
+        XCTAssertEqual(
+            manager.task(taskId)?.assetIndex.completedPath,
+            "/tmp/downloads/loss-recovered.mp4"
+        )
+        XCTAssertFalse(manager.needsAuthoritativeSnapshotResync)
+        let recoveredBatch = manager.drainEvents()
+        XCTAssertTrue(recoveredBatch.events.isEmpty)
+        XCTAssertEqual(recoveredBatch.droppedEvents, 1)
+        XCTAssertTrue(recoveredBatch.requiresSnapshotResync)
+        XCTAssertTrue(recoveredBatch.snapshotIsAuthoritative)
+
+        let nextBatch = manager.drainEvents()
+        XCTAssertTrue(nextBatch.events.isEmpty)
+        XCTAssertEqual(nextBatch.droppedEvents, 0)
+        XCTAssertFalse(nextBatch.requiresSnapshotResync)
+        XCTAssertTrue(nextBatch.snapshotIsAuthoritative)
+    }
+
+    func testMalformedRuntimeEventTriggersSnapshotResyncWithoutApplyingEvent() throws {
+        let bindings = FakeDownloadBindings(autoStart: false)
+        let manager = try VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: false),
+            executor: RecordingDownloadExecutor(),
+            bindings: bindings
+        )
+        defer { manager.dispose() }
+
+        let taskId = try XCTUnwrap(
+            try manager.createTask(
+                assetId: "asset-malformed-event",
+                source: VesperDownloadSource(
+                    source: .remoteUrl(URL(string: "https://example.com/video.mp4")!)
+                )
+            )
+        )
+        _ = manager.drainEvents()
+        bindings.enqueueCreatedEventWithMalformedStatus(taskId: taskId)
+
+        manager.refresh()
+
+        let batch = manager.drainEvents()
+        XCTAssertTrue(batch.events.isEmpty)
+        XCTAssertEqual(batch.droppedEvents, 1)
+        XCTAssertEqual(manager.task(taskId)?.state, .queued)
+        XCTAssertFalse(manager.needsAuthoritativeSnapshotResync)
+    }
+
+    func testMalformedAuthoritativeSnapshotIsRejectedAndRetried() throws {
+        let bindings = FakeDownloadBindings(autoStart: false)
+        let manager = try VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: false),
+            executor: RecordingDownloadExecutor(),
+            bindings: bindings
+        )
+        defer { manager.dispose() }
+
+        let taskId = try XCTUnwrap(
+            try manager.createTask(
+                assetId: "asset-malformed-snapshot",
+                source: VesperDownloadSource(
+                    source: .remoteUrl(URL(string: "https://example.com/video.mp4")!)
+                )
+            )
+        )
+        _ = manager.drainEvents()
+        bindings.simulateDroppedCompletion(
+            taskId: taskId,
+            completedPath: "/tmp/downloads/malformed-snapshot.mp4"
+        )
+        bindings.returnMalformedStatusFromNextSnapshot()
+
+        manager.refresh()
+
+        XCTAssertEqual(manager.task(taskId)?.state, .queued)
+        XCTAssertTrue(manager.needsAuthoritativeSnapshotResync)
+
+        manager.refresh()
+
+        XCTAssertEqual(manager.task(taskId)?.state, .completed)
+        XCTAssertFalse(manager.needsAuthoritativeSnapshotResync)
+    }
+
+    func testRuntimeDownloadDecodeRejectsNestedPointerCountMismatch() {
+        var task = makeStrictDecodingRuntimeTask()
+        task.asset_index.resources_len = 1
+        XCTAssertNil(task.decodePublic())
+        freeRuntimeDownloadTask(&task)
+
+        var profileTask = makeStrictDecodingRuntimeTask()
+        profileTask.profile.selected_track_ids_len = 1
+        XCTAssertNil(profileTask.decodePublic())
+        freeRuntimeDownloadTask(&profileTask)
+
+        let malformedSnapshot = VesperRuntimeDownloadSnapshot(tasks: nil, len: 1)
+        XCTAssertNil(malformedSnapshot.decodePublic())
+    }
+
+    func testRuntimeDownloadDecodeRejectsMalformedNestedRequiredValues() {
+        var resourceTask = makeStrictDecodingRuntimeTask(
+            assetIndex: VesperDownloadAssetIndex(
+                resources: [
+                    VesperDownloadResourceRecord(
+                        resourceId: "resource",
+                        uri: "https://example.com/resource"
+                    ),
+                ]
+            )
+        )
+        if let resources = resourceTask.asset_index.resources {
+            freeDownloadCString(resources[0].resource_id)
+            resources[0].resource_id = nil
+        }
+        XCTAssertNil(resourceTask.decodePublic())
+        freeRuntimeDownloadTask(&resourceTask)
+
+        var streamTask = makeStrictDecodingRuntimeTask(
+            assetIndex: VesperDownloadAssetIndex(
+                streams: [VesperDownloadAssetStream(streamId: "stream")]
+            )
+        )
+        if let streams = streamTask.asset_index.streams {
+            streams[0].kind = VesperRuntimeDownloadStreamKind(rawValue: 99)
+        }
+        XCTAssertNil(streamTask.decodePublic())
+        freeRuntimeDownloadTask(&streamTask)
+
+        var outputTask = makeStrictDecodingRuntimeTask(
+            profile: VesperDownloadProfile(targetOutputFormat: .mp4)
+        )
+        outputTask.profile.target_output_format = VesperRuntimeDownloadOutputFormat(rawValue: 99)
+        XCTAssertNil(outputTask.decodePublic())
+        freeRuntimeDownloadTask(&outputTask)
+    }
+
+    func testRuntimeDownloadDecodeRejectsNullNestedStringEntries() {
+        var streamTask = makeStrictDecodingRuntimeTask(
+            assetIndex: VesperDownloadAssetIndex(
+                streams: [
+                    VesperDownloadAssetStream(
+                        streamId: "stream",
+                        resourceIds: ["resource"]
+                    ),
+                ]
+            )
+        )
+        if let streams = streamTask.asset_index.streams,
+           let resourceIds = streams[0].resource_ids
+        {
+            freeDownloadCString(resourceIds[0])
+            resourceIds[0] = nil
+        }
+        XCTAssertNil(streamTask.decodePublic())
+        freeRuntimeDownloadTask(&streamTask)
+    }
+
+    func testMalformedCommandPoisonsProcessingAndRejectsLaterBatches() throws {
+        let bindings = FakeDownloadBindings(autoStart: false)
+        let executor = RecordingDownloadExecutor()
+        let manager = try VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: false),
+            executor: executor,
+            bindings: bindings
+        )
+        defer { manager.dispose() }
+
+        let taskId = try XCTUnwrap(
+            try manager.createTask(
+                assetId: "asset-malformed-command",
+                source: VesperDownloadSource(
+                    source: .remoteUrl(URL(string: "https://example.com/video.mp4")!)
+                )
+            )
+        )
+        bindings.enqueueMismatchedRemoveCommand(taskId: taskId)
+
+        manager.refresh()
+
+        XCTAssertTrue(executor.removedTaskIds.isEmpty)
+        XCTAssertEqual(bindings.acknowledgeCommandCallCount, 1)
+        XCTAssertNotNil(manager.runtimeCommandDiagnostic)
+
+        bindings.enqueueRemoveCommand(taskId: taskId)
+        manager.refresh()
+
+        XCTAssertTrue(executor.removedTaskIds.isEmpty)
+        XCTAssertEqual(bindings.acknowledgeCommandCallCount, 1)
+    }
+
+    func testSynchronousPrepareReporterDoesNotReenterThePendingCommandBatch() throws {
+        let bindings = FakeDownloadBindings(autoStart: false)
+        let executor = RecordingDownloadExecutor()
+        let manager = try VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: false),
+            executor: executor,
+            bindings: bindings
+        )
+        defer { manager.dispose() }
+
+        let taskId = try XCTUnwrap(try manager.createTask(
+            assetId: "asset-reentrant-prepare",
+            source: VesperDownloadSource(
+                source: .remoteUrl(URL(string: "https://example.com/video.mp4")!)
+            )
+        ))
+        bindings.enqueuePrepareCommand(taskId: taskId)
+        manager.refresh()
+
+        XCTAssertEqual(executor.preparedSourceHeaders.count, 1)
+        XCTAssertEqual(executor.startedTaskIds, [taskId])
+        XCTAssertEqual(bindings.acknowledgeCommandCallCount, 2)
+        XCTAssertFalse(manager.isProcessingRuntimeCommands)
+        XCTAssertEqual(manager.pendingRuntimeCommandAcknowledgementCount, 0)
+    }
+
+    func testAcknowledgementFailureRetriesAckWithoutRepeatingCommandSideEffects() throws {
+        let bindings = FakeDownloadBindings(autoStart: false)
+        let executor = RecordingDownloadExecutor()
+        let manager = try VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: false),
+            executor: executor,
+            bindings: bindings
+        )
+        defer { manager.dispose() }
+        let taskId = try XCTUnwrap(try manager.createTask(
+            assetId: "asset-ack-retry",
+            source: VesperDownloadSource(
+                source: .remoteUrl(URL(string: "https://example.com/video.mp4")!)
+            )
+        ))
+        bindings.enqueuePauseCommand(taskId: taskId)
+        bindings.failNextCommandAcknowledgement()
+        manager.refresh()
+
+        XCTAssertEqual(executor.pausedTaskIds, [taskId])
+        XCTAssertEqual(bindings.acknowledgeCommandCallCount, 1)
+        XCTAssertEqual(manager.pendingRuntimeCommandAcknowledgementCount, 1)
+
+        manager.refresh()
+
+        XCTAssertEqual(executor.pausedTaskIds, [taskId])
+        XCTAssertEqual(bindings.acknowledgeCommandCallCount, 2)
+        XCTAssertEqual(manager.pendingRuntimeCommandAcknowledgementCount, 0)
+    }
+
+    func testCommandBatchLimitAcknowledgesTheLastAppliedBatch() throws {
+        let bindings = FakeDownloadBindings(autoStart: false)
+        let executor = RecordingDownloadExecutor()
+        let manager = try VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: false),
+            executor: executor,
+            bindings: bindings
+        )
+        defer { manager.dispose() }
+        let taskId = try XCTUnwrap(try manager.createTask(
+            assetId: "asset-batch-limit",
+            source: VesperDownloadSource(
+                source: .remoteUrl(URL(string: "https://example.com/video.mp4")!)
+            )
+        ))
+        bindings.commandBatchSize = 1
+        for _ in 0..<manager.maxRuntimeCommandBatchesPerSync {
+            bindings.enqueuePauseCommand(taskId: taskId)
+        }
+
+        manager.refresh()
+
+        XCTAssertEqual(
+            executor.pausedTaskIds,
+            Array(repeating: taskId, count: manager.maxRuntimeCommandBatchesPerSync)
+        )
+        XCTAssertEqual(
+            bindings.acknowledgeCommandCallCount,
+            manager.maxRuntimeCommandBatchesPerSync
+        )
+        XCTAssertEqual(manager.pendingRuntimeCommandAcknowledgementCount, 0)
+    }
+
     func testSourceHeadersSurviveNativeDownloadCommandRoundTrip() throws {
         let bindings = FakeDownloadBindings(autoStart: true)
         let executor = RecordingDownloadExecutor()
-        let manager = VesperDownloadManager(
+        let manager = try VesperDownloadManager(
             configuration: VesperDownloadConfiguration(autoStart: true),
             executor: executor,
             bindings: bindings
@@ -164,8 +547,8 @@ final class VesperDownloadManagerTests: XCTestCase {
         XCTAssertEqual(manager.task(1)?.source.source.headers, expected)
     }
 
-    func testCreateTaskRejectsDrmSourceWithTypedUnsupportedError() {
-        let manager = VesperDownloadManager(
+    func testCreateTaskRejectsDrmSourceWithTypedUnsupportedError() throws {
+        let manager = try VesperDownloadManager(
             configuration: VesperDownloadConfiguration(autoStart: false),
             executor: RecordingDownloadExecutor(),
             bindings: FakeDownloadBindings(autoStart: false)
@@ -194,8 +577,8 @@ final class VesperDownloadManagerTests: XCTestCase {
         }
     }
 
-    func testRestoreTasksRejectsDrmSourceWithTypedUnsupportedError() {
-        let manager = VesperDownloadManager(
+    func testRestoreTasksRejectsDrmSourceWithTypedUnsupportedError() throws {
+        let manager = try VesperDownloadManager(
             configuration: VesperDownloadConfiguration(autoStart: false),
             executor: RecordingDownloadExecutor(),
             bindings: FakeDownloadBindings(autoStart: false)
@@ -232,7 +615,7 @@ final class VesperDownloadManagerTests: XCTestCase {
     func testPauseResumeAndRemoveDelegateToExecutorWithoutForkingStateMachine() throws {
         let bindings = FakeDownloadBindings(autoStart: true)
         let executor = RecordingDownloadExecutor()
-        let manager = VesperDownloadManager(
+        let manager = try VesperDownloadManager(
             configuration: VesperDownloadConfiguration(autoStart: true),
             executor: executor,
             bindings: bindings
@@ -262,7 +645,7 @@ final class VesperDownloadManagerTests: XCTestCase {
     func testExecutorReporterUpdatesSharedSnapshotProgressAndCompletion() throws {
         let bindings = FakeDownloadBindings(autoStart: true)
         let executor = RecordingDownloadExecutor(autoComplete: true)
-        let manager = VesperDownloadManager(
+        let manager = try VesperDownloadManager(
             configuration: VesperDownloadConfiguration(autoStart: true),
             executor: executor,
             bindings: bindings
@@ -284,16 +667,24 @@ final class VesperDownloadManagerTests: XCTestCase {
         XCTAssertEqual(task?.assetIndex.completedPath, "/tmp/downloads/1.bin")
     }
 
-    func testPluginLibraryPathsAreForwardedToBindingsConfiguration() {
+    func testCapabilitySpecificPluginReferencesAreForwardedToBindingsConfiguration() throws {
         let bindings = FakeDownloadBindings(autoStart: false)
-        let manager = VesperDownloadManager(
+        let postDownloadReference = try VesperPluginReference(
+            pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
+            capabilityInstanceId: "io.github.ikaros.vesper.remux-ffmpeg.post-download",
+            transport: .native
+        )
+        let eventHookReference = try VesperPluginReference(
+            pluginId: "dev.vesper.event-hook",
+            capabilityInstanceId: "dev.vesper.event-hook.download",
+            transport: .native
+        )
+        let manager = try VesperDownloadManager(
             configuration: VesperDownloadConfiguration(
                 autoStart: false,
                 runPostProcessorsOnCompletion: false,
-                pluginLibraryPaths: [
-                    "/Applications/VesperPlayerRemuxFfmpegPlugin.framework/VesperPlayerRemuxFfmpegPlugin",
-                    "/Applications/VesperPlayerKit.framework/libvesper_metrics.dylib",
-                ]
+                postDownloadPluginReferences: [postDownloadReference],
+                eventHookPluginReferences: [eventHookReference]
             ),
             executor: RecordingDownloadExecutor(),
             bindings: bindings
@@ -301,13 +692,56 @@ final class VesperDownloadManagerTests: XCTestCase {
         defer { manager.dispose() }
 
         XCTAssertEqual(
-            bindings.createdConfiguration?.pluginLibraryPaths,
-            [
-                "/Applications/VesperPlayerRemuxFfmpegPlugin.framework/VesperPlayerRemuxFfmpegPlugin",
-                "/Applications/VesperPlayerKit.framework/libvesper_metrics.dylib",
-            ]
+            bindings.createdConfiguration?.postDownloadPluginReferences,
+            [postDownloadReference]
+        )
+        XCTAssertEqual(
+            bindings.createdConfiguration?.eventHookPluginReferences,
+            [eventHookReference]
         )
         XCTAssertEqual(bindings.createdConfiguration?.runPostProcessorsOnCompletion, false)
+    }
+
+    func testInitializationPropagatesSessionCreationErrorAndDisposesExecutor() {
+        let bindings = FakeDownloadBindings(
+            autoStart: false,
+            sessionCreationError: .createFailed
+        )
+        let executor = RecordingDownloadExecutor()
+
+        XCTAssertThrowsError(try VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: false),
+            executor: executor,
+            bindings: bindings
+        )) { error in
+            XCTAssertEqual(error as? StubDownloadBindingsError, .createFailed)
+        }
+        XCTAssertEqual(executor.disposeCount, 1)
+        XCTAssertEqual(bindings.disposeSessionCount, 0)
+        XCTAssertEqual(bindings.snapshotCallCount, 0)
+        XCTAssertEqual(bindings.drainCommandCallCount, 0)
+        XCTAssertEqual(bindings.drainEventCallCount, 0)
+    }
+
+    func testInitializationRejectsZeroSessionHandleAndDisposesExecutor() {
+        let bindings = FakeDownloadBindings(autoStart: false, sessionHandle: 0)
+        let executor = RecordingDownloadExecutor()
+
+        XCTAssertThrowsError(try VesperDownloadManager(
+            configuration: VesperDownloadConfiguration(autoStart: false),
+            executor: executor,
+            bindings: bindings
+        )) { error in
+            XCTAssertEqual(
+                error as? VesperDownloadManagerInitializationError,
+                .invalidSessionHandle
+            )
+        }
+        XCTAssertEqual(executor.disposeCount, 1)
+        XCTAssertEqual(bindings.disposeSessionCount, 0)
+        XCTAssertEqual(bindings.snapshotCallCount, 0)
+        XCTAssertEqual(bindings.drainCommandCallCount, 0)
+        XCTAssertEqual(bindings.drainEventCallCount, 0)
     }
 
     func testPreparedDownloadOutputURLUsesUniqueTempPathForSameFileName() throws {
@@ -346,7 +780,7 @@ final class VesperDownloadManagerTests: XCTestCase {
             .appendingPathComponent("vesper-native-download-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: baseDirectory) }
 
-        let manager = VesperDownloadManager(
+        let manager = try VesperDownloadManager(
             configuration: VesperDownloadConfiguration(
                 autoStart: false,
                 restoreTasksOnStartup: false,
@@ -601,7 +1035,7 @@ final class VesperDownloadManagerTests: XCTestCase {
 
     func testExportTaskOutputForwardsProgressAndCancellationToBindings() async throws {
         let bindings = FakeDownloadBindings(autoStart: false)
-        let manager = VesperDownloadManager(
+        let manager = try VesperDownloadManager(
             configuration: VesperDownloadConfiguration(autoStart: false),
             executor: RecordingDownloadExecutor(),
             bindings: bindings
@@ -629,26 +1063,55 @@ final class VesperDownloadManagerTests: XCTestCase {
     }
 }
 
+private enum StubDownloadBindingsError: Error, Equatable {
+    case createFailed
+}
+
 private final class FakeDownloadBindings: @unchecked Sendable, DownloadBindings {
     private let autoStart: Bool
+    private let sessionHandle: UInt64
+    private let sessionCreationError: StubDownloadBindingsError?
     private var tasks: [UInt64: StoredDownloadTask] = [:]
     private var commands: [StoredRuntimeCommand] = []
+    private var pendingCommands: [StoredRuntimeCommand] = []
     private var events: [StoredRuntimeEvent] = []
+    private var droppedEvents: UInt64 = 0
+    private var snapshotFailuresRemaining = 0
+    private var malformedSnapshotStatusesRemaining = 0
+    private var malformedCreatedEventStatusesRemaining = 0
+    private var acknowledgementFailuresRemaining = 0
+    var commandBatchSize: Int?
     private var nextTaskId: UInt64 = 1
     private(set) var createdConfiguration: VesperDownloadConfiguration?
+    private(set) var disposeSessionCount = 0
+    private(set) var snapshotCallCount = 0
+    private(set) var drainCommandCallCount = 0
+    private(set) var acknowledgeCommandCallCount = 0
+    private(set) var drainEventCallCount = 0
     var forwardedProgress: [Float] = []
     var exportWasCancelled = false
 
-    init(autoStart: Bool) {
+    init(
+        autoStart: Bool,
+        sessionHandle: UInt64 = 17,
+        sessionCreationError: StubDownloadBindingsError? = nil
+    ) {
         self.autoStart = autoStart
+        self.sessionHandle = sessionHandle
+        self.sessionCreationError = sessionCreationError
     }
 
-    func createDownloadSession(configuration: VesperDownloadConfiguration) -> UInt64 {
+    func createDownloadSession(configuration: VesperDownloadConfiguration) throws -> UInt64 {
         createdConfiguration = configuration
-        return 17
+        if let sessionCreationError {
+            throw sessionCreationError
+        }
+        return sessionHandle
     }
 
-    func disposeDownloadSession(_ sessionHandle: UInt64) {}
+    func disposeDownloadSession(_ sessionHandle: UInt64) {
+        disposeSessionCount += 1
+    }
 
     func createDownloadTask(
         sessionHandle: UInt64,
@@ -668,7 +1131,7 @@ private final class FakeDownloadBindings: @unchecked Sendable, DownloadBindings 
             contentFormat: source.pointee.content_format,
             manifestUri: stringFromOptionalRuntimeCString(source.pointee.manifest_uri),
             sourceHeaders: runtimeDownloadSourceHeaders(source.pointee),
-            status: autoStart ? .downloading : .queued,
+            status: autoStart ? .preparing : .queued,
             totalBytes: assetIndex.pointee.has_total_size_bytes ? assetIndex.pointee.total_size_bytes : nil,
             receivedBytes: 0,
             totalSegments: assetIndex.pointee.segments_len > 0 ? UInt32(assetIndex.pointee.segments_len) : nil,
@@ -681,7 +1144,7 @@ private final class FakeDownloadBindings: @unchecked Sendable, DownloadBindings 
         events.append(.init(kind: .created, task: storedTask))
         events.append(.init(kind: .stateChanged, task: storedTask))
         if autoStart {
-            commands.append(.start(storedTask))
+            commands.append(.prepare(storedTask))
         }
         outTaskId.pointee = taskId
         return true
@@ -721,8 +1184,8 @@ private final class FakeDownloadBindings: @unchecked Sendable, DownloadBindings 
 
     func startDownloadTask(sessionHandle: UInt64, taskId: UInt64) -> Bool {
         updateTask(taskId) { task in
-            let updated = task.with(status: .downloading)
-            commands.append(.start(updated))
+            let updated = task.with(status: .preparing)
+            commands.append(.prepare(updated))
             events.append(.init(kind: .stateChanged, task: updated))
             return updated
         }
@@ -786,16 +1249,14 @@ private final class FakeDownloadBindings: @unchecked Sendable, DownloadBindings 
     ) -> Bool {
         updateTask(taskId) { task in
             let updated = task.with(
-                status: autoStart ? .downloading : task.status,
+                status: .downloading,
                 totalBytes: assetIndex.pointee.has_total_size_bytes ? assetIndex.pointee.total_size_bytes : nil,
                 totalSegments: assetIndex.pointee.segments_len > 0 ? UInt32(assetIndex.pointee.segments_len) : nil,
                 completedPath: stringFromOptionalRuntimeCString(assetIndex.pointee.completed_path)
             )
             events.append(.init(kind: .assetIndexUpdated, task: updated))
-            if autoStart {
-                commands.append(.start(updated))
-                events.append(.init(kind: .stateChanged, task: updated))
-            }
+            commands.append(.start(updated))
+            events.append(.init(kind: .stateChanged, task: updated))
             return updated
         }
     }
@@ -865,7 +1326,7 @@ private final class FakeDownloadBindings: @unchecked Sendable, DownloadBindings 
     func removeDownloadTask(sessionHandle: UInt64, taskId: UInt64) -> Bool {
         updateTask(taskId) { task in
             let updated = task.with(status: .removed)
-            commands.append(.remove(taskId))
+            commands.append(.remove(updated))
             events.append(.init(kind: .stateChanged, task: updated))
             return updated
         }
@@ -875,27 +1336,135 @@ private final class FakeDownloadBindings: @unchecked Sendable, DownloadBindings 
         sessionHandle: UInt64,
         outSnapshot: inout VesperRuntimeDownloadSnapshot
     ) -> Bool {
+        snapshotCallCount += 1
+        if snapshotFailuresRemaining > 0 {
+            snapshotFailuresRemaining -= 1
+            return false
+        }
         let orderedTasks = tasks.keys.sorted().compactMap { tasks[$0] }
         outSnapshot = makeRuntimeSnapshot(from: orderedTasks)
+        if malformedSnapshotStatusesRemaining > 0,
+           let runtimeTasks = outSnapshot.tasks,
+           outSnapshot.len > 0
+        {
+            malformedSnapshotStatusesRemaining -= 1
+            runtimeTasks[0].status = VesperRuntimeDownloadTaskStatus(rawValue: 99)
+        }
         return true
     }
 
-    func drainDownloadCommands(
+    func peekDownloadCommands(
         sessionHandle: UInt64,
         outCommands: inout VesperRuntimeDownloadCommandList
     ) -> Bool {
-        outCommands = makeRuntimeCommandList(from: commands)
-        commands.removeAll(keepingCapacity: true)
+        drainCommandCallCount += 1
+        if pendingCommands.isEmpty {
+            let requestedBatchSize = commandBatchSize ?? commands.count
+            let batchSize = min(max(0, requestedBatchSize), commands.count)
+            pendingCommands = Array(commands.prefix(batchSize))
+            commands.removeFirst(batchSize)
+        }
+        outCommands = makeRuntimeCommandList(from: pendingCommands)
         return true
+    }
+
+    func acknowledgeDownloadCommands(sessionHandle: UInt64, commandCount: UInt) -> Bool {
+        acknowledgeCommandCallCount += 1
+        if acknowledgementFailuresRemaining > 0 {
+            acknowledgementFailuresRemaining -= 1
+            return false
+        }
+        guard commandCount == UInt(pendingCommands.count) else {
+            return false
+        }
+        pendingCommands.removeAll(keepingCapacity: true)
+        return true
+    }
+
+    func failNextCommandAcknowledgement() {
+        acknowledgementFailuresRemaining += 1
+    }
+
+    func enqueuePrepareCommand(taskId: UInt64) {
+        guard let task = tasks[taskId] else {
+            return
+        }
+        commands.append(.prepare(task))
+    }
+
+    func enqueuePauseCommand(taskId: UInt64) {
+        guard tasks[taskId] != nil else {
+            return
+        }
+        commands.append(.pause(taskId))
     }
 
     func drainDownloadEvents(
         sessionHandle: UInt64,
         outEvents: inout VesperRuntimeDownloadEventList
     ) -> Bool {
-        outEvents = makeRuntimeEventList(from: events)
+        drainEventCallCount += 1
+        outEvents = makeRuntimeEventList(from: events, droppedEvents: droppedEvents)
+        if malformedCreatedEventStatusesRemaining > 0,
+           let runtimeEvents = outEvents.events,
+           outEvents.len > 0,
+           let task = runtimeEvents[0].task
+        {
+            malformedCreatedEventStatusesRemaining -= 1
+            task.pointee.status = VesperRuntimeDownloadTaskStatus(rawValue: 99)
+        }
         events.removeAll(keepingCapacity: true)
+        droppedEvents = 0
         return true
+    }
+
+    func simulateDroppedCompletion(taskId: UInt64, completedPath: String) {
+        guard let task = tasks[taskId] else {
+            return
+        }
+        tasks[taskId] = task.with(
+            status: .completed,
+            receivedBytes: task.totalBytes ?? task.receivedBytes,
+            completedPath: completedPath
+        )
+        events.removeAll(keepingCapacity: true)
+        droppedEvents += 1
+    }
+
+    func failNextSnapshot() {
+        snapshotFailuresRemaining += 1
+    }
+
+    func returnMalformedStatusFromNextSnapshot() {
+        malformedSnapshotStatusesRemaining += 1
+    }
+
+    func enqueueCreatedEventWithMalformedStatus(taskId: UInt64) {
+        guard let task = tasks[taskId] else {
+            return
+        }
+        events.append(.init(kind: .created, task: task))
+        malformedCreatedEventStatusesRemaining += 1
+    }
+
+    func enqueueMismatchedRemoveCommand(taskId: UInt64) {
+        guard let task = tasks[taskId] else {
+            return
+        }
+        commands.append(
+            StoredRuntimeCommand(
+                kind: .remove,
+                task: task,
+                taskId: taskId + 1
+            )
+        )
+    }
+
+    func enqueueRemoveCommand(taskId: UInt64) {
+        guard let task = tasks[taskId] else {
+            return
+        }
+        commands.append(.remove(task))
     }
 
     func freeDownloadSnapshot(_ snapshot: inout VesperRuntimeDownloadSnapshot) {
@@ -983,6 +1552,10 @@ private struct StoredRuntimeCommand {
     let task: StoredDownloadTask?
     let taskId: UInt64
 
+    static func prepare(_ task: StoredDownloadTask) -> Self {
+        Self(kind: .prepare, task: task, taskId: task.taskId)
+    }
+
     static func start(_ task: StoredDownloadTask) -> Self {
         Self(kind: .start, task: task, taskId: task.taskId)
     }
@@ -995,8 +1568,8 @@ private struct StoredRuntimeCommand {
         Self(kind: .pause, task: nil, taskId: taskId)
     }
 
-    static func remove(_ taskId: UInt64) -> Self {
-        Self(kind: .remove, task: nil, taskId: taskId)
+    static func remove(_ task: StoredDownloadTask) -> Self {
+        Self(kind: .remove, task: task, taskId: task.taskId)
     }
 }
 
@@ -1010,6 +1583,7 @@ private final class RecordingDownloadExecutor: VesperDownloadExecutor {
     private(set) var resumedTaskIds: [UInt64] = []
     private(set) var pausedTaskIds: [UInt64] = []
     private(set) var removedTaskIds: [UInt64] = []
+    private(set) var disposeCount = 0
 
     init(autoComplete: Bool = false) {
         self.autoComplete = autoComplete
@@ -1064,6 +1638,10 @@ private final class RecordingDownloadExecutor: VesperDownloadExecutor {
         }
         removedTaskIds.append(task.taskId)
     }
+
+    func dispose() {
+        disposeCount += 1
+    }
 }
 
 @MainActor
@@ -1111,6 +1689,23 @@ private func makeRuntimeSnapshot(from tasks: [StoredDownloadTask]) -> VesperRunt
     return VesperRuntimeDownloadSnapshot(tasks: pointer, len: UInt(tasks.count))
 }
 
+private func makeStrictDecodingRuntimeTask(
+    profile: VesperDownloadProfile = VesperDownloadProfile(),
+    assetIndex: VesperDownloadAssetIndex = VesperDownloadAssetIndex()
+) -> VesperRuntimeDownloadTask {
+    VesperDownloadTaskSnapshot(
+        taskId: 1,
+        assetId: "asset-strict-decode",
+        source: VesperDownloadSource(
+            source: .remoteUrl(URL(string: "https://example.com/video.mp4")!)
+        ),
+        profile: profile,
+        state: .queued,
+        progress: VesperDownloadProgressSnapshot(),
+        assetIndex: assetIndex
+    ).toRuntimeBridgePayload()
+}
+
 private func makeRuntimeCommandList(from commands: [StoredRuntimeCommand]) -> VesperRuntimeDownloadCommandList {
     guard !commands.isEmpty else {
         return VesperRuntimeDownloadCommandList(commands: nil, len: 0)
@@ -1126,15 +1721,26 @@ private func makeRuntimeCommandList(from commands: [StoredRuntimeCommand]) -> Ve
     return VesperRuntimeDownloadCommandList(commands: pointer, len: UInt(commands.count))
 }
 
-private func makeRuntimeEventList(from events: [StoredRuntimeEvent]) -> VesperRuntimeDownloadEventList {
+private func makeRuntimeEventList(
+    from events: [StoredRuntimeEvent],
+    droppedEvents: UInt64 = 0
+) -> VesperRuntimeDownloadEventList {
     guard !events.isEmpty else {
-        return VesperRuntimeDownloadEventList(events: nil, len: 0)
+        return VesperRuntimeDownloadEventList(
+            events: nil,
+            len: 0,
+            dropped_events: droppedEvents
+        )
     }
     let pointer = UnsafeMutablePointer<VesperRuntimeDownloadEvent>.allocate(capacity: events.count)
     for (index, event) in events.enumerated() {
         pointer[index] = makeRuntimeEvent(from: event)
     }
-    return VesperRuntimeDownloadEventList(events: pointer, len: UInt(events.count))
+    return VesperRuntimeDownloadEventList(
+        events: pointer,
+        len: UInt(events.count),
+        dropped_events: droppedEvents
+    )
 }
 
 private func makeRuntimeEvent(from event: StoredRuntimeEvent) -> VesperRuntimeDownloadEvent {
@@ -1321,10 +1927,11 @@ private func freeRuntimeCommandList(_ commands: inout VesperRuntimeDownloadComma
 
 private func freeRuntimeEventList(_ events: inout VesperRuntimeDownloadEventList) {
     guard let eventPointer = events.events else {
+        events = VesperRuntimeDownloadEventList(events: nil, len: 0, dropped_events: 0)
         return
     }
     for index in 0..<Int(events.len) {
-        var event = eventPointer[index]
+        let event = eventPointer[index]
         if let taskPointer = event.task {
             var task = taskPointer.pointee
             freeRuntimeTask(&task)
@@ -1336,7 +1943,7 @@ private func freeRuntimeEventList(_ events: inout VesperRuntimeDownloadEventList
     }
     eventPointer.deinitialize(count: Int(events.len))
     eventPointer.deallocate()
-    events = VesperRuntimeDownloadEventList(events: nil, len: 0)
+    events = VesperRuntimeDownloadEventList(events: nil, len: 0, dropped_events: 0)
 }
 
 private func freeRuntimeTask(_ task: inout VesperRuntimeDownloadTask) {

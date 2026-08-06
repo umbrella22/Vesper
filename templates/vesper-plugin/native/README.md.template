@@ -1,0 +1,13 @@
+# {{PLUGIN_NAME}}
+
+This is a Native Rust plugin for Vesper Player SDK.
+
+Build and inspect it with:
+
+```sh
+vesper plugin build vesper-plugin.toml --profile dev
+vesper plugin inspect vesper-plugin.toml --artifact {{ARTIFACT_SOURCE}} --transport native
+vesper plugin check vesper-plugin.toml --artifact {{ARTIFACT_SOURCE}} --transport native
+```
+
+The generated experimental capability implementations expose metadata-only stubs. Implement their session behavior before distributing the plugin.

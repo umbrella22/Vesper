@@ -91,9 +91,10 @@ generated `jniLibs`. The iOS Runner App target directly depends on the aggregate
 `VesperPlayerOptionalPlugins` SwiftPM product. Xcode embeds and signs three
 FFmpeg component frameworks plus the Remux, SourceNormalizer, VideoToolbox
 Decoder, and diagnostic FrameProcessor frameworks as top-level siblings under
-`Runner.app/Frameworks`. The host passes only the applicable plugin framework
-executables through MethodChannel; FFmpeg component frameworks are dependencies,
-not plugin paths.
+`Runner.app/Frameworks`. Dart sends canonical `VesperPluginReference` values
+through MethodChannel. Each native host kit resolves those identities to its
+packaged plugin artifacts; FFmpeg component frameworks remain sibling dynamic
+dependencies.
 
 `flutter pub get` initially generates its aggregate Swift package with Flutter's
 default deployment target. `flutter build ios` raises it from the Runner's
@@ -105,12 +106,13 @@ run `flutter build ios --config-only --no-codesign` once after the final
 
 The Flutter example depends on `vesper_player_source_normalizer_ffmpeg` and uses
 `VesperSourceNormalizerConfiguration.preferBundled()` /
-`VesperSourceNormalizerConfiguration.requireBundled()` so Android and iOS host
-kits can discover bundled SourceNormalizer binaries themselves. FrameProcessor
-remains explicit and still uses native host plugin paths. FFmpeg runtime
-libraries are provided by the Android runtime AAR or by the signed sibling
+`VesperSourceNormalizerConfiguration.requireBundled()` to emit the canonical
+SourceNormalizer reference. An empty reference list selects no plugin; Android
+and iOS host resolvers map explicit identities to bundled artifacts.
+FrameProcessor remains explicit and uses its canonical plugin reference. FFmpeg
+runtime libraries are provided by the Android runtime AAR or by the signed sibling
 `VesperFFmpegAVCodec`, `VesperFFmpegAVFormat`, and `VesperFFmpegAVUtil`
-frameworks on iOS; neither runtime form is passed as a plugin path.
+frameworks on iOS; neither runtime form is a plugin registry entry.
 
 SourceNormalizer diagnostics and preflight modes do not change playback. In
 `preferNormalized` and `requireNormalized`, the Android and iOS host kits may

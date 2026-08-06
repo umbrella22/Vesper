@@ -67,6 +67,7 @@ import io.github.ikaros.vesper.player.android.VesperPictureInPictureError
 import io.github.ikaros.vesper.player.android.VesperPictureInPictureErrorCode
 import io.github.ikaros.vesper.player.android.VesperMediaTrack
 import io.github.ikaros.vesper.player.android.VesperMediaTrackKind
+import io.github.ikaros.vesper.player.android.VesperPipelineEventHookReportBatch
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityConfidence
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityHdrKind
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeResult
@@ -115,6 +116,7 @@ import org.json.JSONObject
 
 private const val PLAYER_SURFACE_TAG_PREFIX =
     "io.github.ikaros.vesper.player.surface."
+private const val BENCHMARK_SHUTDOWN_TIMEOUT_MS = 2_000L
 
 class VesperPlayerAndroidPlugin :
     PlatformViewFactory(StandardMessageCodec.INSTANCE),
@@ -137,6 +139,10 @@ class VesperPlayerAndroidPlugin :
     private var pendingSystemPlaybackPermissionResult: MethodChannel.Result? = null
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // Final benchmark logging is bounded independently so engine detach cannot
+    // cancel it before the plugin worker publishes its final flush report.
+    private val benchmarkFinalizationScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val sessions = linkedMapOf<String, PlayerSession>()
     private val downloadSessions = linkedMapOf<String, DownloadSession>()
     private val surfaceHostLifecycle =
@@ -269,6 +275,9 @@ class VesperPlayerAndroidPlugin :
                 session.controller.refresh()
                 emitSnapshot(session)
                 null
+            }
+            "drainPipelineEventHookReports" -> handleSessionCommand(call, result) { session ->
+                session.controller.drainPipelineEventHookReports().toPipelineEventHookReportMap()
             }
             "sampleTimeline" -> handleTimelineSample(call, result)
             "refreshDownloadManager" -> handleDownloadSessionCommand(call, result) { session ->
@@ -820,6 +829,8 @@ class VesperPlayerAndroidPlugin :
                 (arguments["nativeFramePipeline"] as? Map<*, *>)
                     ?.stringMap()
                     .toNativeFramePipelineConfiguration()
+            val pipelineEventHookConfiguration =
+                arguments.toPipelineEventHookConfiguration()
             val benchmarkConfiguration =
                 (arguments["benchmarkConfiguration"] as? Map<*, *>)
                     ?.stringMap()
@@ -848,6 +859,7 @@ class VesperPlayerAndroidPlugin :
                     sourceNormalizerConfiguration = sourceNormalizerConfiguration,
                     frameProcessorConfiguration = frameProcessorConfiguration,
                     nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
+                    pipelineEventHookConfiguration = pipelineEventHookConfiguration,
                 ),
                 benchmarkConsoleLogging = benchmarkConfiguration.consoleLogging,
             )
@@ -1577,9 +1589,16 @@ class VesperPlayerAndroidPlugin :
                     } else {
                         session.controller.drainRuntimeWarnings()
                     }
-                buildSnapshotMap(session) to drained
-            }.collect { (snapshot, drained) ->
+                val hookReports =
+                    if (eventSink == null) {
+                        VesperPipelineEventHookReportBatch()
+                    } else {
+                        session.controller.drainPipelineEventHookReports()
+                    }
+                Triple(buildSnapshotMap(session), drained, hookReports)
+            }.collect { (snapshot, drained, hookReports) ->
                 emitRuntimeWarnings(session, drained)
+                emitPipelineEventHookReports(session, hookReports)
                 emitHostTerminalErrorIfNeeded(session, snapshot)
                 emitSnapshot(session, snapshot)
             }
@@ -1737,6 +1756,27 @@ class VesperPlayerAndroidPlugin :
         }
     }
 
+    private fun emitPipelineEventHookReports(
+        session: PlayerSession,
+        batch: VesperPipelineEventHookReportBatch,
+    ) {
+        if (
+            batch.reports.isEmpty() &&
+            batch.droppedEvents == 0L &&
+            batch.droppedReports == 0L &&
+            batch.dispatcherError == null
+        ) {
+            return
+        }
+        emitEvent(
+            mapOf(
+                "playerId" to session.id,
+                "type" to "pipelineEventHookReports",
+                "reports" to batch.toPipelineEventHookReportMap(),
+            ),
+        )
+    }
+
     private fun emitDownloadSnapshot(session: DownloadSession) {
         downloadEventSink?.success(
             mapOf(
@@ -1748,55 +1788,12 @@ class VesperPlayerAndroidPlugin :
     }
 
     private fun emitDownloadRuntimeEvents(session: DownloadSession) {
-        session.manager.drainEvents().forEach { event ->
-            when (event) {
-                is VesperDownloadEvent.Created -> {
-                    downloadEventSink?.success(
-                        mapOf(
-                            "downloadId" to session.id,
-                            "type" to "taskCreated",
-                            "task" to event.task.toMap(),
-                        ),
-                    )
-                }
-                is VesperDownloadEvent.AssetIndexUpdated -> {
-                    downloadEventSink?.success(
-                        mapOf(
-                            "downloadId" to session.id,
-                            "type" to "taskUpdated",
-                            "task" to event.task.toMap(),
-                        ),
-                    )
-                }
-                is VesperDownloadEvent.StateChanged -> {
-                    if (event.patch.state == VesperDownloadState.Removed) {
-                        downloadEventSink?.success(
-                            mapOf(
-                                "downloadId" to session.id,
-                                "type" to "taskRemoved",
-                                "taskId" to event.patch.taskId,
-                            ),
-                        )
-                    } else {
-                        downloadEventSink?.success(
-                            mapOf(
-                                "downloadId" to session.id,
-                                "type" to "taskUpdated",
-                                "patch" to event.patch.toMap(),
-                            ),
-                        )
-                    }
-                }
-                is VesperDownloadEvent.ProgressUpdated -> {
-                    downloadEventSink?.success(
-                        mapOf(
-                            "downloadId" to session.id,
-                            "type" to "taskUpdated",
-                            "progressPatch" to event.patch.toMap(),
-                        ),
-                    )
-                }
-            }
+        val batch = session.manager.drainEvents()
+        batch.toFlutterDownloadEventMaps(
+            downloadId = session.id,
+            snapshot = buildDownloadSnapshotMap(session),
+        ).forEach { payload ->
+            downloadEventSink?.success(payload)
         }
     }
 
@@ -1959,7 +1956,6 @@ class VesperPlayerAndroidPlugin :
         session.warningDrainJob?.cancel()
         surfaceHostLifecycle.detachSession(session)
         session.controller.dispose()
-        emitBenchmarkConsoleLog(session, force = true)
         sessions.remove(session.id)
         emitEvent(
             mapOf(
@@ -1967,6 +1963,14 @@ class VesperPlayerAndroidPlugin :
                 "type" to "disposed",
             ),
         )
+        if (session.benchmarkConsoleLogging) {
+            benchmarkFinalizationScope.launch {
+                session.controller.awaitBenchmarkSinkShutdown(
+                    BENCHMARK_SHUTDOWN_TIMEOUT_MS,
+                )
+                emitBenchmarkConsoleLog(session, force = true)
+            }
+        }
     }
 
     private fun disposeDownloadSession(session: DownloadSession) {

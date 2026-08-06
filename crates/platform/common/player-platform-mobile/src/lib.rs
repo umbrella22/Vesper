@@ -1,6 +1,6 @@
 #![deny(unsafe_code)]
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::Read;
 use std::path::PathBuf;
@@ -9,37 +9,40 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use player_model::MediaSource;
 use player_plugin::{
-    DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata, ProcessorProgress,
-    SourceNormalizerNormalizeLevel, SourceNormalizerOutputRoute, SourceNormalizerPacketMediaKind,
-    SourceNormalizerPacketSession, SourceNormalizerPacketSessionConfig,
-    SourceNormalizerPacketSessionRequirements, SourceNormalizerPacketStreamInfo,
-    SourceNormalizerPacketTrackInfo, SourceNormalizerResourceCachePolicy,
-    SourceNormalizerResourceSession, SourceNormalizerResourceSessionConfig,
-    SourceNormalizerResourceSessionInfo, SourceNormalizerResourceSessionRequirements,
-    SourceNormalizerResourceSessionState, SourceNormalizerResourceSessionStatus,
+    DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameHdrMetadata, PluginReference,
+    PluginTransport, ProcessorProgress, SourceNormalizerNormalizeLevel,
+    SourceNormalizerOutputRoute, SourceNormalizerPacketMediaKind, SourceNormalizerPacketSession,
+    SourceNormalizerPacketSessionConfig, SourceNormalizerPacketSessionRequirements,
+    SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
+    SourceNormalizerResourceCachePolicy, SourceNormalizerResourceSession,
+    SourceNormalizerResourceSessionConfig, SourceNormalizerResourceSessionInfo,
+    SourceNormalizerResourceSessionRequirements, SourceNormalizerResourceSessionState,
+    SourceNormalizerResourceSessionStatus,
 };
 use player_plugin_loader::{
-    FrameProcessorPluginCapabilitySummary, LoadedDynamicPlugin, PluginCapabilitySummary,
-    PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
+    FrameProcessorPluginCapabilitySummary, NativePluginArtifact, PluginCapabilityKind,
+    PluginCapabilitySummary, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
     SourceNormalizerPacketPluginCapabilitySummary, SourceNormalizerResourcePluginCapabilitySummary,
 };
 use player_runtime::{
-    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadExecutor, DownloadExportPlan,
-    DownloadManager, DownloadManagerConfig, DownloadPrepareResult, DownloadProfile,
-    DownloadSnapshot, DownloadSource, DownloadTaskId, DownloadTaskSnapshot, FrameProcessorMode,
-    InMemoryDownloadStore, InMemoryPreloadBudgetProvider, NativeFramePipelineMode, PlayerError,
-    PlayerErrorCategory, PlayerErrorCode, PlayerPlaybackRoute, PlayerPluginCapabilitySummary,
-    PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
+    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadEventBatch, DownloadExecutor,
+    DownloadExportPlan, DownloadManager, DownloadManagerConfig, DownloadPrepareResult,
+    DownloadProfile, DownloadSnapshot, DownloadSource, DownloadTaskId, DownloadTaskSnapshot,
+    FrameProcessorMode, InMemoryDownloadStore, InMemoryPreloadBudgetProvider,
+    MAX_PIPELINE_EVENT_HOOKS, NativeFramePipelineMode, NativePluginLoadingPolicy,
+    PipelineEventDispatcher, PipelineEventHookRegistration, PipelineEventHookReportBatch,
+    PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerPlaybackRoute,
+    PlayerPluginCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
     PlayerPluginFrameProcessorCapabilitySummary, PlayerPluginParticipation,
     PlayerPluginSourceNormalizerCapabilitySummary, PlayerResult, PlayerRuntimeEvent,
     PlayerRuntimeOptions, PlayerRuntimeStartup, PlaylistActiveItem, PlaylistAdvanceDecision,
     PlaylistCoordinator, PlaylistCoordinatorConfig, PlaylistEvent, PlaylistQueueItem,
-    PlaylistSnapshot, PlaylistViewportHint, PreloadBudget, PreloadCandidate, PreloadEvent,
-    PreloadExecutor, PreloadPlanner, PreloadSnapshot, PreloadTaskId, PreloadTaskSnapshot,
-    SourceNormalizerMode,
+    PlaylistSnapshot, PlaylistViewportHint, PostDownloadProcessorRegistration, PreloadBudget,
+    PreloadCandidate, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadSnapshot,
+    PreloadTaskId, PreloadTaskSnapshot, SourceNormalizerMode,
 };
-use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 const SOURCE_NORMALIZER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const SOURCE_NORMALIZER_SESSION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -49,6 +52,45 @@ const SOURCE_NORMALIZER_PREFLIGHT_CACHE_CAPACITY: usize = 64;
 const SOURCE_NORMALIZER_PREFLIGHT_SUCCESS_TTL: Duration = Duration::from_secs(5 * 60);
 const SOURCE_NORMALIZER_PREFLIGHT_FAILURE_TTL: Duration = Duration::from_secs(30);
 const FMP4_BOX_MARKER_SCAN_LIMIT_BYTES: u64 = 1024 * 1024;
+/// Protocol limit for one mobile host-to-Rust artifact binding set.
+pub const MAX_MOBILE_NATIVE_PLUGIN_ARTIFACTS: usize = 256;
+/// Protocol limit for an encoded mobile artifact binding set.
+pub const MAX_MOBILE_NATIVE_PLUGIN_ARTIFACTS_JSON_BYTES: usize = 256 * 1024;
+pub const MOBILE_COMMAND_QUEUE_CAPACITY: usize = 256;
+/// Maximum number of runtime events retained by one mobile playback session.
+pub const MOBILE_RUNTIME_EVENT_QUEUE_CAPACITY: usize = 1_024;
+/// Maximum number of host-generated events retained outside the runtime queue.
+pub const MOBILE_EXTRA_EVENT_QUEUE_CAPACITY: usize = 256;
+/// Maximum number of platform callback updates waiting for a session pump.
+pub const MOBILE_SESSION_UPDATE_QUEUE_CAPACITY: usize = 1_024;
+
+/// Appends one item to a bounded queue and reports whether it was retained.
+///
+/// Mobile callbacks are allowed to outpace the host drain loop. Dropping the
+/// newest item keeps already observed state transitions ordered and gives the
+/// caller a precise counter to expose in diagnostics.
+pub fn push_bounded<T>(queue: &mut VecDeque<T>, value: T, capacity: usize) -> bool {
+    if queue.len() >= capacity {
+        return false;
+    }
+    queue.push_back(value);
+    true
+}
+
+/// Extends a bounded queue, returning the number of values dropped.
+pub fn extend_bounded<T>(
+    queue: &mut VecDeque<T>,
+    values: impl IntoIterator<Item = T>,
+    capacity: usize,
+) -> usize {
+    let mut dropped = 0;
+    for value in values {
+        if !push_bounded(queue, value, capacity) {
+            dropped += 1;
+        }
+    }
+    dropped
+}
 
 static SOURCE_NORMALIZER_PREFLIGHT_CACHE: LazyLock<Mutex<PreflightDiagnosticCache>> =
     LazyLock::new(|| {
@@ -70,12 +112,13 @@ pub enum MobileDownloadCommand {
     Start { task: DownloadTaskSnapshot },
     Pause { task_id: DownloadTaskId },
     Resume { task: DownloadTaskSnapshot },
-    Remove { task_id: DownloadTaskId },
+    Remove { task: DownloadTaskSnapshot },
 }
 
 #[derive(Debug, Clone)]
 pub struct MobileCommandQueue<T> {
     label: &'static str,
+    capacity: usize,
     queue: Arc<Mutex<VecDeque<T>>>,
 }
 
@@ -83,13 +126,18 @@ impl<T> MobileCommandQueue<T> {
     pub fn new(label: &'static str) -> Self {
         Self {
             label,
+            capacity: MOBILE_COMMAND_QUEUE_CAPACITY,
             queue: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
     #[doc(hidden)]
     pub fn from_shared_for_tests(label: &'static str, queue: Arc<Mutex<VecDeque<T>>>) -> Self {
-        Self { label, queue }
+        Self {
+            label,
+            capacity: MOBILE_COMMAND_QUEUE_CAPACITY,
+            queue,
+        }
     }
 
     pub fn push(&self, command: T) -> PlayerResult<()> {
@@ -100,6 +148,16 @@ impl<T> MobileCommandQueue<T> {
                 format!("{} command queue lock poisoned", self.label),
             )
         })?;
+        if queue.len() >= self.capacity {
+            return Err(PlayerError::with_category(
+                PlayerErrorCode::InvalidState,
+                PlayerErrorCategory::Platform,
+                format!(
+                    "{} command queue reached its {}-command capacity",
+                    self.label, self.capacity
+                ),
+            ));
+        }
         queue.push_back(command);
         Ok(())
     }
@@ -131,6 +189,7 @@ pub fn drain_runtime_events<T>(
 
 pub fn push_video_surface_event(
     extra_events: &mut VecDeque<PlayerRuntimeEvent>,
+    dropped_events: &mut u64,
     previous: &mut bool,
     attached: bool,
 ) -> bool {
@@ -138,7 +197,11 @@ pub fn push_video_surface_event(
         return false;
     }
     *previous = attached;
-    extra_events.push_back(PlayerRuntimeEvent::VideoSurfaceChanged { attached });
+    player_runtime::push_runtime_event_bounded(
+        extra_events,
+        dropped_events,
+        PlayerRuntimeEvent::VideoSurfaceChanged { attached },
+    );
     true
 }
 
@@ -172,13 +235,46 @@ pub struct MobilePreloadBridgeSession {
 
 impl MobilePreloadBridgeSession {
     pub fn new(budget_provider: InMemoryPreloadBudgetProvider, label: &'static str) -> Self {
+        Self::new_with_pipeline_event_dispatcher(
+            budget_provider,
+            label,
+            PipelineEventDispatcher::new(Vec::new()),
+            "unknown",
+        )
+    }
+
+    pub fn new_with_pipeline_event_dispatcher(
+        budget_provider: InMemoryPreloadBudgetProvider,
+        label: &'static str,
+        pipeline_event_dispatcher: PipelineEventDispatcher,
+        pipeline_event_platform: impl Into<String>,
+    ) -> Self {
         let command_queue = MobileCommandQueue::new(label);
         let executor = MobilePreloadExecutor::new(command_queue.clone());
 
         Self {
-            planner: PreloadPlanner::new(budget_provider, executor),
+            planner: PreloadPlanner::with_pipeline_event_dispatcher(
+                budget_provider,
+                executor,
+                pipeline_event_dispatcher,
+                pipeline_event_platform,
+            ),
             command_queue,
         }
+    }
+
+    pub fn new_with_pipeline_event_hooks(
+        budget_provider: InMemoryPreloadBudgetProvider,
+        label: &'static str,
+        registrations: Vec<PipelineEventHookRegistration>,
+        pipeline_event_platform: impl Into<String>,
+    ) -> Self {
+        Self::new_with_pipeline_event_dispatcher(
+            budget_provider,
+            label,
+            PipelineEventDispatcher::new(registrations),
+            pipeline_event_platform,
+        )
     }
 
     pub fn plan(
@@ -220,6 +316,22 @@ impl MobilePreloadBridgeSession {
         self.planner.drain_events()
     }
 
+    pub fn take_dropped_event_count(&mut self) -> u64 {
+        self.planner.take_dropped_event_count()
+    }
+
+    pub fn flush_pipeline_event_hooks(&self, timeout: Duration) -> bool {
+        self.planner.flush_pipeline_event_hooks(timeout)
+    }
+
+    pub fn close_pipeline_event_hooks(&self) -> bool {
+        self.planner.close_pipeline_event_hooks()
+    }
+
+    pub fn drain_pipeline_event_hook_reports(&self) -> PipelineEventHookReportBatch {
+        self.planner.drain_pipeline_event_hook_reports()
+    }
+
     pub fn drain_commands(&mut self) -> Vec<MobilePreloadCommand> {
         self.command_queue.drain()
     }
@@ -257,8 +369,9 @@ impl DownloadExecutor for MobileDownloadExecutor {
             .push(MobileDownloadCommand::Resume { task: task.clone() })
     }
 
-    fn remove(&mut self, task_id: DownloadTaskId) -> PlayerResult<()> {
-        self.queue.push(MobileDownloadCommand::Remove { task_id })
+    fn remove(&mut self, task: &DownloadTaskSnapshot) -> PlayerResult<()> {
+        self.queue
+            .push(MobileDownloadCommand::Remove { task: task.clone() })
     }
 }
 
@@ -416,45 +529,132 @@ impl MobileDownloadBridgeSession {
         self.manager.drain_events()
     }
 
+    pub fn drain_event_batch(&mut self) -> DownloadEventBatch {
+        self.manager.drain_event_batch()
+    }
+
+    pub fn flush_pipeline_event_hooks(&self, timeout: Duration) -> bool {
+        self.manager.flush_pipeline_event_hooks(timeout)
+    }
+
+    pub fn drain_pipeline_event_hook_reports(&self) -> PipelineEventHookReportBatch {
+        self.manager.drain_pipeline_event_hook_reports()
+    }
+
     pub fn drain_commands(&mut self) -> Vec<MobileDownloadCommand> {
         self.command_queue.drain()
     }
 }
 
-pub fn mobile_download_manager_config(
+pub fn mobile_download_manager_config_from_registry(
     platform_label: &str,
     auto_start: bool,
     run_post_processors_on_completion: bool,
-    plugin_library_paths: impl IntoIterator<Item = PathBuf>,
+    registry: &PluginRegistry,
+    post_download_references: impl IntoIterator<Item = PluginReference>,
+    event_hook_references: impl IntoIterator<Item = PluginReference>,
 ) -> PlayerResult<DownloadManagerConfig> {
-    let mut post_processors = Vec::new();
-    let mut event_hooks = Vec::new();
+    let post_download_references = post_download_references.into_iter().collect::<Vec<_>>();
+    let event_hook_references = event_hook_references.into_iter().collect::<Vec<_>>();
+    ensure_unique_plugin_references(platform_label, "post-download", &post_download_references)?;
+    ensure_unique_plugin_references(platform_label, "event-hook", &event_hook_references)?;
+    ensure_event_hook_limit(platform_label, event_hook_references.len())?;
 
-    for path in plugin_library_paths {
-        let plugin = LoadedDynamicPlugin::load(&path).map_err(|error| {
+    let resolved_post_processors = post_download_references
+        .iter()
+        .map(|reference| registry.resolve_post_download(reference))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
             PlayerError::with_category(
                 PlayerErrorCode::InvalidArgument,
                 PlayerErrorCategory::Input,
-                format!(
-                    "failed to load {platform_label} download plugin `{}`: {error}",
-                    path.display()
-                ),
+                format!("failed to resolve {platform_label} post-download plugin: {error}"),
             )
         })?;
-        if let Some(processor) = plugin.post_download_processor() {
-            post_processors.push(processor);
-        }
-        if let Some(hook) = plugin.pipeline_event_hook() {
-            event_hooks.push(hook);
-        }
-    }
+    let canonical_post_download_references = resolved_post_processors
+        .iter()
+        .map(|value| value.reference().clone())
+        .collect::<Vec<_>>();
+    ensure_unique_plugin_references(
+        platform_label,
+        "resolved post-download",
+        &canonical_post_download_references,
+    )?;
+    let post_processors = resolved_post_processors
+        .into_iter()
+        .map(|value| {
+            PostDownloadProcessorRegistration::plugin(value.reference().clone(), value.capability())
+        })
+        .collect::<PlayerResult<Vec<_>>>()?;
+
+    let resolved_event_hooks = event_hook_references
+        .iter()
+        .map(|reference| registry.resolve_pipeline_event_hook(reference))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            PlayerError::with_category(
+                PlayerErrorCode::InvalidArgument,
+                PlayerErrorCategory::Input,
+                format!("failed to resolve {platform_label} event-hook plugin: {error}"),
+            )
+        })?;
+    let canonical_event_hook_references = resolved_event_hooks
+        .iter()
+        .map(|value| value.reference().clone())
+        .collect::<Vec<_>>();
+    ensure_unique_plugin_references(
+        platform_label,
+        "resolved event-hook",
+        &canonical_event_hook_references,
+    )?;
+    let event_hooks = resolved_event_hooks
+        .into_iter()
+        .map(|value| {
+            PipelineEventHookRegistration::new(value.reference().clone(), value.capability())
+        })
+        .collect::<PlayerResult<Vec<_>>>()?;
 
     Ok(DownloadManagerConfig {
         auto_start,
         run_post_processors_on_completion,
         post_processors,
         event_hooks,
+        pipeline_event_platform: platform_label.to_owned(),
     })
+}
+
+fn ensure_event_hook_limit(platform_label: &str, count: usize) -> PlayerResult<()> {
+    if count > MAX_PIPELINE_EVENT_HOOKS {
+        return Err(PlayerError::with_category(
+            PlayerErrorCode::InvalidArgument,
+            PlayerErrorCategory::Input,
+            format!(
+                "{platform_label} event-hook plugin references exceed the {MAX_PIPELINE_EVENT_HOOKS}-hook limit"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_unique_plugin_references(
+    platform_label: &str,
+    capability_label: &str,
+    references: &[PluginReference],
+) -> PlayerResult<()> {
+    let mut unique = HashSet::with_capacity(references.len());
+    for reference in references {
+        if !unique.insert(reference) {
+            return Err(PlayerError::with_category(
+                PlayerErrorCode::InvalidArgument,
+                PlayerErrorCategory::Input,
+                format!(
+                    "duplicate {platform_label} {capability_label} plugin reference: {}",
+                    reference.plugin_id()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -470,18 +670,56 @@ impl MobilePlaylistBridgeSession {
         preload_budget: PreloadBudget,
         label: &'static str,
     ) -> Self {
+        Self::new_with_pipeline_event_dispatcher(
+            playlist_id,
+            config,
+            preload_budget,
+            label,
+            PipelineEventDispatcher::new(Vec::new()),
+            "unknown",
+        )
+    }
+
+    pub fn new_with_pipeline_event_dispatcher(
+        playlist_id: impl Into<String>,
+        config: PlaylistCoordinatorConfig,
+        preload_budget: PreloadBudget,
+        label: &'static str,
+        pipeline_event_dispatcher: PipelineEventDispatcher,
+        pipeline_event_platform: impl Into<String>,
+    ) -> Self {
         let command_queue = MobileCommandQueue::new(label);
         let executor = MobilePreloadExecutor::new(command_queue.clone());
 
         Self {
-            coordinator: PlaylistCoordinator::new(
+            coordinator: PlaylistCoordinator::with_pipeline_event_dispatcher(
                 playlist_id,
                 config,
                 InMemoryPreloadBudgetProvider::new(preload_budget),
                 executor,
+                pipeline_event_dispatcher,
+                pipeline_event_platform,
             ),
             command_queue,
         }
+    }
+
+    pub fn new_with_pipeline_event_hooks(
+        playlist_id: impl Into<String>,
+        config: PlaylistCoordinatorConfig,
+        preload_budget: PreloadBudget,
+        label: &'static str,
+        registrations: Vec<PipelineEventHookRegistration>,
+        pipeline_event_platform: impl Into<String>,
+    ) -> Self {
+        Self::new_with_pipeline_event_dispatcher(
+            playlist_id,
+            config,
+            preload_budget,
+            label,
+            PipelineEventDispatcher::new(registrations),
+            pipeline_event_platform,
+        )
     }
 
     pub fn replace_queue(
@@ -547,6 +785,22 @@ impl MobilePlaylistBridgeSession {
         self.coordinator.drain_events()
     }
 
+    pub fn take_dropped_event_count(&mut self) -> u64 {
+        self.coordinator.take_dropped_event_count()
+    }
+
+    pub fn flush_pipeline_event_hooks(&self, timeout: Duration) -> bool {
+        self.coordinator.flush_pipeline_event_hooks(timeout)
+    }
+
+    pub fn close_pipeline_event_hooks(&self) -> bool {
+        self.coordinator.close_pipeline_event_hooks()
+    }
+
+    pub fn drain_pipeline_event_hook_reports(&self) -> PipelineEventHookReportBatch {
+        self.coordinator.drain_pipeline_event_hook_reports()
+    }
+
     pub fn drain_preload_events(&mut self) -> Vec<PreloadEvent> {
         self.coordinator
             .drain_events()
@@ -563,10 +817,92 @@ impl MobilePlaylistBridgeSession {
     }
 }
 
+/// Internal Rust bridge configuration for mobile experimental plugin routes.
+///
+/// Public Android, iOS, and Flutter APIs resolve embedded artifacts through
+/// `VesperPluginReference`; these filesystem paths are restricted to internal
+/// JNI, FFI, and platform bridge crates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MobileNativePluginArtifact {
+    pub reference: PluginReference,
+    pub library_path: PathBuf,
+}
+
+impl MobileNativePluginArtifact {
+    pub fn new(
+        reference: PluginReference,
+        library_path: impl Into<PathBuf>,
+    ) -> Result<Self, String> {
+        if reference.transport() != PluginTransport::Native {
+            return Err(format!(
+                "mobile plugin artifact `{}` must use native transport",
+                reference.plugin_id()
+            ));
+        }
+        let library_path = library_path.into();
+        if library_path.as_os_str().is_empty() {
+            return Err(format!(
+                "mobile plugin artifact `{}` has an empty library path",
+                reference.plugin_id()
+            ));
+        }
+        Ok(Self {
+            reference,
+            library_path,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MobileNativePluginArtifactWire {
+    reference: PluginReference,
+    library_path: PathBuf,
+}
+
+impl<'de> Deserialize<'de> for MobileNativePluginArtifact {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = MobileNativePluginArtifactWire::deserialize(deserializer)?;
+        Self::new(wire.reference, wire.library_path).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Parses one bounded set of host-resolved native plugin artifacts.
+///
+/// The reference is the capability selector. `library_path` is only its
+/// internal build-time locator and never substitutes for identity selection.
+pub fn parse_mobile_native_plugin_artifacts_json(
+    json: &str,
+) -> Result<Vec<MobileNativePluginArtifact>, String> {
+    if json.len() > MAX_MOBILE_NATIVE_PLUGIN_ARTIFACTS_JSON_BYTES {
+        return Err(format!(
+            "mobile plugin artifact JSON is {} bytes; maximum is {} bytes",
+            json.len(),
+            MAX_MOBILE_NATIVE_PLUGIN_ARTIFACTS_JSON_BYTES
+        ));
+    }
+    let artifacts = serde_json::from_str::<Vec<MobileNativePluginArtifact>>(json)
+        .map_err(|error| format!("invalid mobile plugin artifact JSON: {error}"))?;
+    if artifacts.len() > MAX_MOBILE_NATIVE_PLUGIN_ARTIFACTS {
+        return Err(format!(
+            "mobile plugin artifact count {} exceeds {}",
+            artifacts.len(),
+            MAX_MOBILE_NATIVE_PLUGIN_ARTIFACTS
+        ));
+    }
+    Ok(artifacts)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MobileSourceNormalizerConfiguration {
     pub mode: SourceNormalizerMode,
+    pub plugin_artifacts: Vec<MobileNativePluginArtifact>,
     pub plugin_library_paths: Vec<PathBuf>,
+    pub native_plugin_loading_policy: NativePluginLoadingPolicy,
     pub runtime_profile: Option<String>,
 }
 
@@ -574,9 +910,26 @@ impl Default for MobileSourceNormalizerConfiguration {
     fn default() -> Self {
         Self {
             mode: SourceNormalizerMode::Disabled,
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: Vec::new(),
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DenyRawPaths,
             runtime_profile: None,
         }
+    }
+}
+
+impl MobileSourceNormalizerConfiguration {
+    pub fn resolved_plugin_library_paths(&self) -> Result<Vec<PathBuf>, String> {
+        resolved_mobile_plugin_library_paths(
+            &self.plugin_artifacts,
+            &self.plugin_library_paths,
+            "SourceNormalizer",
+            self.native_plugin_loading_policy,
+        )
+    }
+
+    pub fn has_configured_plugins(&self) -> bool {
+        !self.plugin_artifacts.is_empty() || !self.plugin_library_paths.is_empty()
     }
 }
 
@@ -597,17 +950,26 @@ impl PreflightDiagnosticCacheKey {
             source_uri: source.uri().to_owned(),
             runtime_profile: canonical_runtime_profile_cache_key(configuration),
             mode: source_normalizer_mode_cache_label(configuration.mode),
-            plugin_paths: configuration
-                .plugin_library_paths
-                .iter()
-                .map(PreflightPluginPathFingerprint::from_path)
-                .collect(),
+            plugin_paths: if configuration.plugin_artifacts.is_empty() {
+                configuration
+                    .plugin_library_paths
+                    .iter()
+                    .map(PreflightPluginPathFingerprint::from_path)
+                    .collect()
+            } else {
+                configuration
+                    .plugin_artifacts
+                    .iter()
+                    .map(PreflightPluginPathFingerprint::from_artifact)
+                    .collect()
+            },
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct PreflightPluginPathFingerprint {
+    reference: Option<PluginReference>,
     path: String,
     len: Option<u64>,
     modified_ms: Option<u128>,
@@ -623,10 +985,17 @@ impl PreflightPluginPathFingerprint {
             .map(|duration| duration.as_millis());
 
         Self {
+            reference: None,
             path: path.display().to_string(),
             len,
             modified_ms,
         }
+    }
+
+    fn from_artifact(artifact: &MobileNativePluginArtifact) -> Self {
+        let mut fingerprint = Self::from_path(&artifact.library_path);
+        fingerprint.reference = Some(artifact.reference.clone());
+        fingerprint
     }
 }
 
@@ -823,26 +1192,52 @@ impl PreflightDiagnosticCache {
     }
 }
 
+/// Internal Rust bridge configuration for the experimental mobile frame path.
+/// Public host-kit callers use validated plugin references instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MobileFrameProcessorConfiguration {
     pub mode: FrameProcessorMode,
+    pub plugin_artifacts: Vec<MobileNativePluginArtifact>,
     pub plugin_library_paths: Vec<PathBuf>,
+    pub native_plugin_loading_policy: NativePluginLoadingPolicy,
 }
 
 impl Default for MobileFrameProcessorConfiguration {
     fn default() -> Self {
         Self {
             mode: FrameProcessorMode::Disabled,
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: Vec::new(),
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DenyRawPaths,
         }
     }
 }
 
+impl MobileFrameProcessorConfiguration {
+    pub fn resolved_plugin_library_paths(&self) -> Result<Vec<PathBuf>, String> {
+        resolved_mobile_plugin_library_paths(
+            &self.plugin_artifacts,
+            &self.plugin_library_paths,
+            "FrameProcessor",
+            self.native_plugin_loading_policy,
+        )
+    }
+
+    pub fn has_configured_plugins(&self) -> bool {
+        !self.plugin_artifacts.is_empty() || !self.plugin_library_paths.is_empty()
+    }
+}
+
+/// Internal Rust bridge configuration for decoder and frame-processor routes.
+/// Public host-kit callers use build-time registries and plugin references.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MobileNativeFramePipelineConfiguration {
     pub mode: NativeFramePipelineMode,
+    pub decoder_plugin_artifacts: Vec<MobileNativePluginArtifact>,
     pub decoder_plugin_library_paths: Vec<PathBuf>,
+    pub frame_processor_plugin_artifacts: Vec<MobileNativePluginArtifact>,
     pub frame_processor_plugin_library_paths: Vec<PathBuf>,
+    pub native_plugin_loading_policy: NativePluginLoadingPolicy,
     pub max_in_flight_frames: Option<u32>,
 }
 
@@ -850,11 +1245,76 @@ impl Default for MobileNativeFramePipelineConfiguration {
     fn default() -> Self {
         Self {
             mode: NativeFramePipelineMode::Disabled,
+            decoder_plugin_artifacts: Vec::new(),
             decoder_plugin_library_paths: Vec::new(),
+            frame_processor_plugin_artifacts: Vec::new(),
             frame_processor_plugin_library_paths: Vec::new(),
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DenyRawPaths,
             max_in_flight_frames: None,
         }
     }
+}
+
+impl MobileNativeFramePipelineConfiguration {
+    pub fn resolved_decoder_plugin_library_paths(&self) -> Result<Vec<PathBuf>, String> {
+        resolved_mobile_plugin_library_paths(
+            &self.decoder_plugin_artifacts,
+            &self.decoder_plugin_library_paths,
+            "NativeDecoder",
+            self.native_plugin_loading_policy,
+        )
+    }
+
+    pub fn resolved_frame_processor_plugin_library_paths(&self) -> Result<Vec<PathBuf>, String> {
+        resolved_mobile_plugin_library_paths(
+            &self.frame_processor_plugin_artifacts,
+            &self.frame_processor_plugin_library_paths,
+            "native-frame FrameProcessor",
+            self.native_plugin_loading_policy,
+        )
+    }
+
+    pub fn has_configured_decoder_plugins(&self) -> bool {
+        !self.decoder_plugin_artifacts.is_empty() || !self.decoder_plugin_library_paths.is_empty()
+    }
+
+    pub fn has_configured_frame_processors(&self) -> bool {
+        !self.frame_processor_plugin_artifacts.is_empty()
+            || !self.frame_processor_plugin_library_paths.is_empty()
+    }
+}
+
+fn resolved_mobile_plugin_library_paths(
+    artifacts: &[MobileNativePluginArtifact],
+    unbound_paths: &[PathBuf],
+    capability: &'static str,
+    policy: NativePluginLoadingPolicy,
+) -> Result<Vec<PathBuf>, String> {
+    if !artifacts.is_empty() && !unbound_paths.is_empty() {
+        return Err(format!(
+            "{capability} configuration cannot mix referenced artifacts with unbound library paths"
+        ));
+    }
+    if !unbound_paths.is_empty() {
+        policy
+            .validate_development_raw_paths(capability)
+            .map_err(|error| error.to_string())?;
+    }
+    let candidates = if artifacts.is_empty() {
+        unbound_paths.iter().cloned().collect::<Vec<_>>()
+    } else {
+        artifacts
+            .iter()
+            .map(|artifact| artifact.library_path.clone())
+            .collect::<Vec<_>>()
+    };
+    let mut paths = Vec::with_capacity(candidates.len());
+    for path in candidates {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -871,6 +1331,7 @@ pub enum MobileSourceNormalizerRouteDecision {
 }
 
 pub struct MobileSourceNormalizerResourceOpen {
+    pub reference: PluginReference,
     pub plugin_name: Option<String>,
     pub plugin_path: String,
     pub session: Box<dyn SourceNormalizerResourceSession>,
@@ -886,6 +1347,7 @@ pub struct MobileSourceNormalizerResourceOpenOutcome {
 }
 
 pub struct MobileSourceNormalizerPacketOpen {
+    pub reference: PluginReference,
     pub plugin_name: Option<String>,
     pub plugin_path: String,
     pub session: Box<dyn SourceNormalizerPacketSession>,
@@ -910,6 +1372,7 @@ pub enum MobileSourceNormalizerPlaybackAction {
 #[serde(rename_all = "camelCase")]
 pub struct MobileSourceNormalizerResourceWire {
     pub handle: u64,
+    pub plugin_reference: PluginReference,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_name: Option<String>,
     pub plugin_path: String,
@@ -965,12 +1428,16 @@ impl MobilePluginConfiguration {
         Self {
             source_normalizer: MobileSourceNormalizerConfiguration {
                 mode: options.source_normalizer_mode,
+                plugin_artifacts: Vec::new(),
                 plugin_library_paths: options.source_normalizer_plugin_library_paths.clone(),
+                native_plugin_loading_policy: options.native_plugin_loading_policy,
                 runtime_profile: None,
             },
             frame_processor: MobileFrameProcessorConfiguration {
                 mode: options.frame_processor_mode,
+                plugin_artifacts: Vec::new(),
                 plugin_library_paths: options.frame_processor_library_paths.clone(),
+                native_plugin_loading_policy: options.native_plugin_loading_policy,
             },
             native_frame_pipeline: MobileNativeFramePipelineConfiguration {
                 mode: match options.decoder_plugin_video_mode {
@@ -987,8 +1454,11 @@ impl MobilePluginConfiguration {
                         }
                     }
                 },
+                decoder_plugin_artifacts: Vec::new(),
                 decoder_plugin_library_paths: options.decoder_plugin_library_paths.clone(),
+                frame_processor_plugin_artifacts: Vec::new(),
                 frame_processor_plugin_library_paths: options.frame_processor_library_paths.clone(),
+                native_plugin_loading_policy: options.native_plugin_loading_policy,
                 max_in_flight_frames: Some(
                     options
                         .frame_processor_policy
@@ -998,7 +1468,32 @@ impl MobilePluginConfiguration {
         }
     }
 
-    pub fn apply_to_runtime_options(&self, options: &mut PlayerRuntimeOptions) {
+    pub fn apply_to_runtime_options(
+        &self,
+        options: &mut PlayerRuntimeOptions,
+    ) -> Result<(), String> {
+        if !self.source_normalizer.plugin_artifacts.is_empty()
+            || !self.frame_processor.plugin_artifacts.is_empty()
+            || !self
+                .native_frame_pipeline
+                .decoder_plugin_artifacts
+                .is_empty()
+            || !self
+                .native_frame_pipeline
+                .frame_processor_plugin_artifacts
+                .is_empty()
+        {
+            return Err(
+                "referenced mobile plugin artifacts cannot be represented by path-only PlayerRuntimeOptions"
+                    .to_owned(),
+            );
+        }
+        self.source_normalizer.resolved_plugin_library_paths()?;
+        self.frame_processor.resolved_plugin_library_paths()?;
+        self.native_frame_pipeline
+            .resolved_decoder_plugin_library_paths()?;
+        self.native_frame_pipeline
+            .resolved_frame_processor_plugin_library_paths()?;
         options.source_normalizer_mode = self.source_normalizer.mode;
         options.source_normalizer_plugin_library_paths =
             self.source_normalizer.plugin_library_paths.clone();
@@ -1038,6 +1533,20 @@ impl MobilePluginConfiguration {
                 .frame_processor_policy
                 .max_in_flight_frames_per_processor = max_in_flight_frames.max(1);
         }
+        if !self.source_normalizer.plugin_library_paths.is_empty()
+            || !self.frame_processor.plugin_library_paths.is_empty()
+            || !self
+                .native_frame_pipeline
+                .decoder_plugin_library_paths
+                .is_empty()
+            || !self
+                .native_frame_pipeline
+                .frame_processor_plugin_library_paths
+                .is_empty()
+        {
+            options.native_plugin_loading_policy = NativePluginLoadingPolicy::DevelopmentRawPaths;
+        }
+        Ok(())
     }
 }
 
@@ -1111,7 +1620,7 @@ pub fn open_mobile_source_normalizer_resource_with_diagnostics(
 
     let output_root = output_root.into();
     let mut diagnostics = Vec::new();
-    if configuration.plugin_library_paths.is_empty() {
+    if !configuration.has_configured_plugins() {
         let message = "source normalizer normalized-resource open skipped because no plugin paths were provided";
         diagnostics.push(runtime_source_normalizer_diagnostic(
             String::new(),
@@ -1129,15 +1638,21 @@ pub fn open_mobile_source_normalizer_resource_with_diagnostics(
         };
     }
 
-    let registry =
-        PluginRegistry::inspect_source_normalizer_support(&configuration.plugin_library_paths);
+    let registry = inspect_mobile_source_normalizer_registry(configuration)?;
     diagnostics.extend(
         registry
             .records()
             .iter()
-            .map(|record| diagnostic_from_record(record, source_normalizer_participation(record))),
+            .filter(|record| mobile_source_record_is_selected(&registry, record, configuration))
+            .map(|record| {
+                diagnostic_from_record(
+                    record,
+                    source_normalizer_participation(record),
+                    registry.reference_for_record(record),
+                )
+            }),
     );
-    let Some(record) = best_mobile_source_normalizer_resource(&registry, configuration) else {
+    let Some(record) = selected_mobile_source_normalizer_resource(&registry, configuration)? else {
         let message = source_normalizer_resource_selection_failure_message(
             "normalized-resource open",
             &registry,
@@ -1159,7 +1674,13 @@ pub fn open_mobile_source_normalizer_resource_with_diagnostics(
         };
     };
 
-    match open_source_normalizer_resource_session(source, configuration, output_root, record) {
+    match open_source_normalizer_resource_session(
+        source,
+        configuration,
+        output_root,
+        &registry,
+        record,
+    ) {
         Ok(mut opened) => {
             opened.diagnostics.splice(0..0, diagnostics);
             if let Some(reason) = hdr_resource_metadata_not_preserved_reason(&opened.info) {
@@ -1286,9 +1807,8 @@ pub fn open_mobile_source_normalizer_packet_session(
     source: &MediaSource,
     configuration: &MobileSourceNormalizerConfiguration,
 ) -> Result<MobileSourceNormalizerPacketOpen, String> {
-    let registry =
-        PluginRegistry::inspect_source_normalizer_support(&configuration.plugin_library_paths);
-    let Some(record) = best_mobile_source_normalizer_packet(&registry, configuration) else {
+    let registry = inspect_mobile_source_normalizer_registry(configuration)?;
+    let Some(record) = selected_mobile_source_normalizer_packet(&registry, configuration)? else {
         let profile = configured_runtime_profile(configuration)
             .map(|profile| format!(" for runtime profile `{profile}`"))
             .unwrap_or_default();
@@ -1297,7 +1817,7 @@ pub fn open_mobile_source_normalizer_packet_session(
             mobile_source_normalizer_registry_notes(&registry)
         ));
     };
-    open_source_normalizer_packet_session(source, configuration, record)
+    open_source_normalizer_packet_session(source, configuration, &registry, record)
 }
 
 pub fn mobile_source_normalizer_playback_decision(
@@ -1371,12 +1891,12 @@ pub fn source_normalizer_diagnostics(
     configuration: &MobileSourceNormalizerConfiguration,
 ) -> Vec<PlayerPluginDiagnostic> {
     if configuration.mode == SourceNormalizerMode::Disabled
-        && configuration.plugin_library_paths.is_empty()
+        && !configuration.has_configured_plugins()
     {
         return Vec::new();
     }
 
-    if configuration.plugin_library_paths.is_empty() {
+    if !configuration.has_configured_plugins() {
         return vec![runtime_source_normalizer_diagnostic(
             String::new(),
             None,
@@ -1390,12 +1910,29 @@ pub fn source_normalizer_diagnostics(
         return vec![cached_preflight_source_normalizer(source, configuration)];
     }
 
-    let registry =
-        PluginRegistry::inspect_source_normalizer_support(&configuration.plugin_library_paths);
+    let registry = match inspect_mobile_source_normalizer_registry(configuration) {
+        Ok(registry) => registry,
+        Err(error) => {
+            return vec![runtime_source_normalizer_diagnostic(
+                String::new(),
+                None,
+                PlayerPluginDiagnosticStatus::LoadFailed,
+                error,
+                PlayerPluginParticipation::Bypassed,
+            )];
+        }
+    };
     let mut diagnostics = registry
         .records()
         .iter()
-        .map(|record| diagnostic_from_record(record, source_normalizer_participation(record)))
+        .filter(|record| mobile_source_record_is_selected(&registry, record, configuration))
+        .map(|record| {
+            diagnostic_from_record(
+                record,
+                source_normalizer_participation(record),
+                registry.reference_for_record(record),
+            )
+        })
         .collect::<Vec<_>>();
 
     if configuration.mode == SourceNormalizerMode::PreferNormalized
@@ -1421,24 +1958,38 @@ pub fn source_normalizer_diagnostics(
             return diagnostics;
         }
 
-        let Some(record) = best_mobile_source_normalizer_resource(&registry, configuration) else {
-            diagnostics.push(runtime_source_normalizer_diagnostic(
-                String::new(),
-                None,
-                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
-                source_normalizer_resource_selection_failure_message(
-                    "resource probe",
-                    &registry,
-                    configuration,
-                ),
-                PlayerPluginParticipation::Bypassed,
-            ));
-            return diagnostics;
+        let record = match selected_mobile_source_normalizer_resource(&registry, configuration) {
+            Ok(Some(record)) => record,
+            Ok(None) => {
+                diagnostics.push(runtime_source_normalizer_diagnostic(
+                    String::new(),
+                    None,
+                    PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+                    source_normalizer_resource_selection_failure_message(
+                        "resource probe",
+                        &registry,
+                        configuration,
+                    ),
+                    PlayerPluginParticipation::Bypassed,
+                ));
+                return diagnostics;
+            }
+            Err(error) => {
+                diagnostics.push(runtime_source_normalizer_diagnostic(
+                    String::new(),
+                    None,
+                    PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+                    error,
+                    PlayerPluginParticipation::Bypassed,
+                ));
+                return diagnostics;
+            }
         };
 
         diagnostics.push(probe_source_normalizer_resource(
             source,
             configuration,
+            &registry,
             record,
         ));
         return diagnostics;
@@ -1450,13 +2001,12 @@ pub fn source_normalizer_diagnostics(
 pub fn frame_processor_diagnostics(
     configuration: &MobileFrameProcessorConfiguration,
 ) -> Vec<PlayerPluginDiagnostic> {
-    if configuration.mode == FrameProcessorMode::Disabled
-        && configuration.plugin_library_paths.is_empty()
+    if configuration.mode == FrameProcessorMode::Disabled && !configuration.has_configured_plugins()
     {
         return Vec::new();
     }
 
-    if configuration.plugin_library_paths.is_empty() {
+    if !configuration.has_configured_plugins() {
         return vec![runtime_frame_processor_diagnostic(
             String::new(),
             None,
@@ -1465,10 +2015,45 @@ pub fn frame_processor_diagnostics(
         )];
     }
 
-    PluginRegistry::inspect_frame_processor_support(&configuration.plugin_library_paths)
+    let paths = match configuration.resolved_plugin_library_paths() {
+        Ok(paths) => paths,
+        Err(error) => {
+            return vec![runtime_frame_processor_diagnostic(
+                String::new(),
+                None,
+                error,
+                PlayerPluginParticipation::Bypassed,
+            )];
+        }
+    };
+    let registry = if configuration.plugin_artifacts.is_empty() {
+        PluginRegistry::inspect_frame_processor_support_development(&paths)
+    } else {
+        let artifacts =
+            match host_verified_mobile_native_plugin_artifacts(&configuration.plugin_artifacts) {
+                Ok(artifacts) => artifacts,
+                Err(error) => {
+                    return vec![runtime_frame_processor_diagnostic(
+                        String::new(),
+                        None,
+                        error,
+                        PlayerPluginParticipation::Bypassed,
+                    )];
+                }
+            };
+        PluginRegistry::inspect_frame_processor_support_artifacts(artifacts)
+    };
+    registry
         .records()
         .iter()
-        .map(|record| diagnostic_from_record(record, frame_processor_participation(record)))
+        .filter(|record| mobile_frame_record_is_selected(&registry, record, configuration))
+        .map(|record| {
+            diagnostic_from_record(
+                record,
+                frame_processor_participation(record),
+                registry.reference_for_record(record),
+            )
+        })
         .collect()
 }
 
@@ -1476,10 +2061,8 @@ pub fn native_frame_pipeline_diagnostics(
     configuration: &MobileNativeFramePipelineConfiguration,
 ) -> Vec<PlayerPluginDiagnostic> {
     if configuration.mode == NativeFramePipelineMode::Disabled
-        && configuration.decoder_plugin_library_paths.is_empty()
-        && configuration
-            .frame_processor_plugin_library_paths
-            .is_empty()
+        && !configuration.has_configured_decoder_plugins()
+        && !configuration.has_configured_frame_processors()
     {
         return Vec::new();
     }
@@ -1514,10 +2097,18 @@ pub fn native_frame_pipeline_diagnostics(
         }
     };
 
-    let path = configuration
-        .decoder_plugin_library_paths
+    let decoder_paths = match configuration.resolved_decoder_plugin_library_paths() {
+        Ok(paths) => paths,
+        Err(error) => return native_frame_pipeline_configuration_error(error),
+    };
+    let frame_processor_paths = match configuration.resolved_frame_processor_plugin_library_paths()
+    {
+        Ok(paths) => paths,
+        Err(error) => return native_frame_pipeline_configuration_error(error),
+    };
+    let path = decoder_paths
         .iter()
-        .chain(configuration.frame_processor_plugin_library_paths.iter())
+        .chain(frame_processor_paths.iter())
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>()
         .join(std::path::MAIN_SEPARATOR_STR);
@@ -1528,8 +2119,14 @@ pub fn native_frame_pipeline_diagnostics(
         status: PlayerPluginDiagnosticStatus::Loaded,
         message: Some(format!(
             "{message}; route={route}; decoder_plugins={}; frame_processors={}; max_in_flight_frames={}",
-            configuration.decoder_plugin_library_paths.len(),
-            configuration.frame_processor_plugin_library_paths.len(),
+            configured_mobile_plugin_count(
+                &configuration.decoder_plugin_artifacts,
+                &configuration.decoder_plugin_library_paths,
+            ),
+            configured_mobile_plugin_count(
+                &configuration.frame_processor_plugin_artifacts,
+                &configuration.frame_processor_plugin_library_paths,
+            ),
             configuration
                 .max_in_flight_frames
                 .map(|value| value.to_string())
@@ -1541,14 +2138,19 @@ pub fn native_frame_pipeline_diagnostics(
             player_plugin_detail("route", route),
             player_plugin_detail(
                 "decoderPlugins",
-                configuration.decoder_plugin_library_paths.len().to_string(),
+                configured_mobile_plugin_count(
+                    &configuration.decoder_plugin_artifacts,
+                    &configuration.decoder_plugin_library_paths,
+                )
+                .to_string(),
             ),
             player_plugin_detail(
                 "frameProcessors",
-                configuration
-                    .frame_processor_plugin_library_paths
-                    .len()
-                    .to_string(),
+                configured_mobile_plugin_count(
+                    &configuration.frame_processor_plugin_artifacts,
+                    &configuration.frame_processor_plugin_library_paths,
+                )
+                .to_string(),
             ),
             player_plugin_detail(
                 "maxInFlightFrames",
@@ -1561,29 +2163,49 @@ pub fn native_frame_pipeline_diagnostics(
     }]
 }
 
+fn native_frame_pipeline_configuration_error(
+    error: impl Into<String>,
+) -> Vec<PlayerPluginDiagnostic> {
+    vec![PlayerPluginDiagnostic {
+        path: String::new(),
+        plugin_name: Some("vesper-mobile-native-frame-pipeline".to_owned()),
+        plugin_kind: Some("native_frame_pipeline".to_owned()),
+        status: PlayerPluginDiagnosticStatus::LoadFailed,
+        message: Some(format!(
+            "mobile native-frame pipeline configuration rejected: {}",
+            error.into()
+        )),
+        capability: None,
+        participation: PlayerPluginParticipation::Bypassed,
+        details: Vec::new(),
+    }]
+}
+
 fn preflight_source_normalizer(
     source: &MediaSource,
     configuration: &MobileSourceNormalizerConfiguration,
+    registry: &PluginRegistry,
     record: &PluginDiagnosticRecord,
 ) -> PlayerPluginDiagnostic {
     let started = Instant::now();
-    let mut opened = match open_source_normalizer_packet_session(source, configuration, record) {
-        Ok(opened) => opened,
-        Err(error) => {
-            let status = if error.contains("load failed") {
-                PlayerPluginDiagnosticStatus::LoadFailed
-            } else {
-                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
-            };
-            return runtime_source_normalizer_diagnostic(
-                record.path.display().to_string(),
-                record.plugin_name.clone(),
-                status,
-                format!("source normalizer preflight open failed: {error}"),
-                PlayerPluginParticipation::Bypassed,
-            );
-        }
-    };
+    let mut opened =
+        match open_source_normalizer_packet_session(source, configuration, registry, record) {
+            Ok(opened) => opened,
+            Err(error) => {
+                let status = if error.contains("load failed") {
+                    PlayerPluginDiagnosticStatus::LoadFailed
+                } else {
+                    PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported
+                };
+                return runtime_source_normalizer_diagnostic(
+                    record.path.display().to_string(),
+                    record.plugin_name.clone(),
+                    status,
+                    format!("source normalizer preflight open failed: {error}"),
+                    PlayerPluginParticipation::Bypassed,
+                );
+            }
+        };
     let stream_info = opened.info.clone();
     let close_message = match opened.session.close() {
         Ok(()) => None,
@@ -1738,23 +2360,45 @@ fn preflight_source_normalizer_with_registry(
     source: &MediaSource,
     configuration: &MobileSourceNormalizerConfiguration,
 ) -> PlayerPluginDiagnostic {
-    let registry =
-        PluginRegistry::inspect_source_normalizer_support(&configuration.plugin_library_paths);
-    let Some(record) = best_mobile_source_normalizer_packet(&registry, configuration) else {
-        return runtime_source_normalizer_diagnostic(
-            String::new(),
-            None,
-            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
-            source_normalizer_packet_selection_failure_message(
-                "preflight",
-                &registry,
-                configuration,
-            ),
-            PlayerPluginParticipation::Unknown,
-        );
+    let registry = match inspect_mobile_source_normalizer_registry(configuration) {
+        Ok(registry) => registry,
+        Err(error) => {
+            return runtime_source_normalizer_diagnostic(
+                String::new(),
+                None,
+                PlayerPluginDiagnosticStatus::LoadFailed,
+                error,
+                PlayerPluginParticipation::Bypassed,
+            );
+        }
+    };
+    let record = match selected_mobile_source_normalizer_packet(&registry, configuration) {
+        Ok(Some(record)) => record,
+        Ok(None) => {
+            return runtime_source_normalizer_diagnostic(
+                String::new(),
+                None,
+                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+                source_normalizer_packet_selection_failure_message(
+                    "preflight",
+                    &registry,
+                    configuration,
+                ),
+                PlayerPluginParticipation::Unknown,
+            );
+        }
+        Err(error) => {
+            return runtime_source_normalizer_diagnostic(
+                String::new(),
+                None,
+                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+                error,
+                PlayerPluginParticipation::Bypassed,
+            );
+        }
     };
 
-    preflight_source_normalizer(source, configuration, record)
+    preflight_source_normalizer(source, configuration, &registry, record)
 }
 
 #[cfg(test)]
@@ -1791,19 +2435,18 @@ fn cached_preflight_diagnostic_with_global(
 fn open_source_normalizer_packet_session(
     source: &MediaSource,
     configuration: &MobileSourceNormalizerConfiguration,
+    registry: &PluginRegistry,
     record: &PluginDiagnosticRecord,
 ) -> Result<MobileSourceNormalizerPacketOpen, String> {
     let path = record.path.display().to_string();
-    let plugin = LoadedDynamicPlugin::load(&record.path)
-        .map_err(|error| format!("source normalizer packet load failed: {error}"))?;
-    let factory = plugin
-        .source_normalizer_packet_plugin_factory()
-        .ok_or_else(|| {
-            format!(
-                "{} is not a packet-stream source normalizer plugin",
-                plugin.plugin_name()
-            )
-        })?;
+    let reference = registry.reference_for_record(record).ok_or_else(|| {
+        "source normalizer packet selection has no plugin capability reference".to_owned()
+    })?;
+    let resolved = registry
+        .resolve_source_packet(reference)
+        .map_err(|error| format!("source normalizer packet selection failed: {error}"))?;
+    let canonical_reference = resolved.reference().clone();
+    let factory = resolved.capability();
     let runtime_profile = canonical_runtime_profile(configuration).unwrap_or_default();
     let requirements = SourceNormalizerPacketSessionRequirements {
         runtime_profile: runtime_profile.clone(),
@@ -1856,6 +2499,7 @@ fn open_source_normalizer_packet_session(
         PlayerPluginParticipation::Selected,
     );
     Ok(MobileSourceNormalizerPacketOpen {
+        reference: canonical_reference,
         plugin_name: info
             .normalizer_name
             .clone()
@@ -1870,33 +2514,31 @@ fn open_source_normalizer_packet_session(
 fn probe_source_normalizer_resource(
     source: &MediaSource,
     configuration: &MobileSourceNormalizerConfiguration,
+    registry: &PluginRegistry,
     record: &PluginDiagnosticRecord,
 ) -> PlayerPluginDiagnostic {
     let started = Instant::now();
     let path = record.path.display().to_string();
-    let plugin = match LoadedDynamicPlugin::load(&record.path) {
-        Ok(plugin) => plugin,
+    let Some(reference) = registry.reference_for_record(record) else {
+        return runtime_source_normalizer_diagnostic(
+            path,
+            record.plugin_name.clone(),
+            PlayerPluginDiagnosticStatus::LoadFailed,
+            "source normalizer resource probe has no plugin capability reference",
+            PlayerPluginParticipation::Bypassed,
+        );
+    };
+    let factory = match registry.resolve_source_resource(reference) {
+        Ok(resolved) => resolved.capability(),
         Err(error) => {
             return runtime_source_normalizer_diagnostic(
                 path,
                 record.plugin_name.clone(),
-                PlayerPluginDiagnosticStatus::LoadFailed,
-                format!("source normalizer resource probe load failed: {error}"),
+                PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
+                format!("source normalizer resource probe selection failed: {error}"),
                 PlayerPluginParticipation::Bypassed,
             );
         }
-    };
-    let Some(factory) = plugin.source_normalizer_resource_plugin_factory() else {
-        return runtime_source_normalizer_diagnostic(
-            path,
-            Some(plugin.plugin_name().to_owned()),
-            PlayerPluginDiagnosticStatus::SourceNormalizerUnsupported,
-            format!(
-                "{} is not a resource-output source normalizer plugin",
-                plugin.plugin_name()
-            ),
-            PlayerPluginParticipation::Bypassed,
-        );
     };
 
     let runtime_profile = canonical_runtime_profile(configuration).unwrap_or_default();
@@ -2026,20 +2668,19 @@ fn open_source_normalizer_resource_session(
     source: &MediaSource,
     configuration: &MobileSourceNormalizerConfiguration,
     output_root: String,
+    registry: &PluginRegistry,
     record: &PluginDiagnosticRecord,
 ) -> Result<MobileSourceNormalizerResourceOpen, String> {
     let started = Instant::now();
     let path = record.path.display().to_string();
-    let plugin = LoadedDynamicPlugin::load(&record.path)
-        .map_err(|error| format!("source normalizer resource load failed: {error}"))?;
-    let factory = plugin
-        .source_normalizer_resource_plugin_factory()
-        .ok_or_else(|| {
-            format!(
-                "{} is not a resource-output source normalizer plugin",
-                plugin.plugin_name()
-            )
-        })?;
+    let reference = registry.reference_for_record(record).ok_or_else(|| {
+        "source normalizer resource selection has no plugin capability reference".to_owned()
+    })?;
+    let resolved = registry
+        .resolve_source_resource(reference)
+        .map_err(|error| format!("source normalizer resource selection failed: {error}"))?;
+    let canonical_reference = resolved.reference().clone();
+    let factory = resolved.capability();
     let runtime_profile = canonical_runtime_profile(configuration).unwrap_or_default();
     let preferred_route = preferred_resource_route_for_source(source);
     let requirements = SourceNormalizerResourceSessionRequirements {
@@ -2104,6 +2745,7 @@ fn open_source_normalizer_resource_session(
     );
     status.info = Some(info.clone());
     Ok(MobileSourceNormalizerResourceOpen {
+        reference: canonical_reference,
         plugin_name: info.normalizer_name.clone(),
         plugin_path: path,
         session,
@@ -2264,6 +2906,7 @@ fn resource_participation(route: SourceNormalizerOutputRoute) -> PlayerPluginPar
 fn diagnostic_from_record(
     record: &PluginDiagnosticRecord,
     participation: PlayerPluginParticipation,
+    reference: Option<&PluginReference>,
 ) -> PlayerPluginDiagnostic {
     PlayerPluginDiagnostic {
         path: record.path.display().to_string(),
@@ -2276,8 +2919,27 @@ fn diagnostic_from_record(
             .as_ref()
             .map(capability_summary_from_loader),
         participation,
-        details: Vec::new(),
+        details: reference.map_or_else(Vec::new, plugin_reference_diagnostic_details),
     }
+}
+
+fn plugin_reference_diagnostic_details(
+    reference: &PluginReference,
+) -> Vec<player_runtime::PlayerPluginDiagnosticDetail> {
+    let mut details = vec![
+        player_plugin_detail("pluginId", reference.plugin_id()),
+        player_plugin_detail(
+            "transport",
+            match reference.transport() {
+                PluginTransport::Native => "native",
+                PluginTransport::Wasm => "wasm",
+            },
+        ),
+    ];
+    if let Some(instance_id) = reference.capability_instance_id() {
+        details.push(player_plugin_detail("capabilityInstanceId", instance_id));
+    }
+    details
 }
 
 fn runtime_status_from_loader(status: PluginDiagnosticStatus) -> PlayerPluginDiagnosticStatus {
@@ -2531,15 +3193,8 @@ fn source_normalizer_mode_cache_label(mode: SourceNormalizerMode) -> &'static st
     }
 }
 
-fn plugin_kind_label(kind: player_plugin::VesperPluginKind) -> &'static str {
-    match kind {
-        player_plugin::VesperPluginKind::PostDownloadProcessor => "post_download_processor",
-        player_plugin::VesperPluginKind::PipelineEventHook => "pipeline_event_hook",
-        player_plugin::VesperPluginKind::Decoder => "decoder",
-        player_plugin::VesperPluginKind::BenchmarkSink => "benchmark_sink",
-        player_plugin::VesperPluginKind::FrameProcessor => "frame_processor",
-        player_plugin::VesperPluginKind::SourceNormalizer => "source_normalizer",
-    }
+fn plugin_kind_label(kind: PluginCapabilityKind) -> &'static str {
+    kind.wire_name()
 }
 
 fn normalize_level_label(level: SourceNormalizerNormalizeLevel) -> &'static str {
@@ -2636,6 +3291,224 @@ fn canonical_runtime_profile_cache_key(
     configuration: &MobileSourceNormalizerConfiguration,
 ) -> Option<String> {
     canonical_runtime_profile(configuration)
+}
+
+fn inspect_mobile_source_normalizer_registry(
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> Result<PluginRegistry, String> {
+    let paths = configuration.resolved_plugin_library_paths()?;
+    if configuration.plugin_artifacts.is_empty() {
+        Ok(PluginRegistry::inspect_source_normalizer_support_development(paths))
+    } else {
+        let artifacts =
+            host_verified_mobile_native_plugin_artifacts(&configuration.plugin_artifacts)?;
+        Ok(PluginRegistry::inspect_source_normalizer_support_artifacts(
+            artifacts,
+        ))
+    }
+}
+
+fn selected_mobile_source_normalizer_resource<'a>(
+    registry: &'a PluginRegistry,
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> Result<Option<&'a PluginDiagnosticRecord>, String> {
+    if configuration.plugin_artifacts.is_empty() {
+        return Ok(best_mobile_source_normalizer_resource(
+            registry,
+            configuration,
+        ));
+    }
+    for artifact in &configuration.plugin_artifacts {
+        let resolved = registry
+            .resolve_source_resource(&artifact.reference)
+            .map_err(|error| {
+                format!(
+                    "SourceNormalizerResource reference `{}` at `{}` could not be resolved: {error}",
+                    format_plugin_reference(&artifact.reference),
+                    artifact.library_path.display()
+                )
+            })?;
+        let capabilities = resolved.capability().resource_capabilities();
+        if !source_runtime_profile_is_supported(
+            &capabilities.supported_runtime_profiles,
+            configuration,
+        ) {
+            continue;
+        }
+        let record = registry.records().iter().find(|record| {
+            record.path == artifact.library_path
+                && registry.reference_for_record(record) == Some(resolved.reference())
+                && matches!(
+                    record.capability_summary,
+                    Some(PluginCapabilitySummary::SourceNormalizerResource(_))
+                )
+        });
+        return record.map(Some).ok_or_else(|| {
+            format!(
+                "SourceNormalizerResource reference `{}` resolved from a different artifact than `{}`",
+                format_plugin_reference(&artifact.reference),
+                artifact.library_path.display()
+            )
+        });
+    }
+    Ok(None)
+}
+
+fn selected_mobile_source_normalizer_packet<'a>(
+    registry: &'a PluginRegistry,
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> Result<Option<&'a PluginDiagnosticRecord>, String> {
+    if configuration.plugin_artifacts.is_empty() {
+        return Ok(best_mobile_source_normalizer_packet(
+            registry,
+            configuration,
+        ));
+    }
+    for artifact in &configuration.plugin_artifacts {
+        let resolved = registry
+            .resolve_source_packet(&artifact.reference)
+            .map_err(|error| {
+                format!(
+                    "SourceNormalizerPacket reference `{}` at `{}` could not be resolved: {error}",
+                    format_plugin_reference(&artifact.reference),
+                    artifact.library_path.display()
+                )
+            })?;
+        let capabilities = resolved.capability().packet_capabilities();
+        if !source_runtime_profile_is_supported(
+            &capabilities.supported_runtime_profiles,
+            configuration,
+        ) {
+            continue;
+        }
+        let record = registry.records().iter().find(|record| {
+            record.path == artifact.library_path
+                && registry.reference_for_record(record) == Some(resolved.reference())
+                && matches!(
+                    record.capability_summary,
+                    Some(PluginCapabilitySummary::SourceNormalizerPacket(_))
+                )
+        });
+        return record.map(Some).ok_or_else(|| {
+            format!(
+                "SourceNormalizerPacket reference `{}` resolved from a different artifact than `{}`",
+                format_plugin_reference(&artifact.reference),
+                artifact.library_path.display()
+            )
+        });
+    }
+    Ok(None)
+}
+
+fn source_runtime_profile_is_supported(
+    supported_profiles: &[String],
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> bool {
+    if supported_profiles.is_empty() {
+        return false;
+    }
+    configured_runtime_profile(configuration).is_none_or(|requested| {
+        supported_profiles
+            .iter()
+            .any(|profile| profile.eq_ignore_ascii_case(requested))
+    })
+}
+
+fn mobile_source_record_is_selected(
+    registry: &PluginRegistry,
+    record: &PluginDiagnosticRecord,
+    configuration: &MobileSourceNormalizerConfiguration,
+) -> bool {
+    if configuration.plugin_artifacts.is_empty() {
+        return true;
+    }
+    let Some(reference) = registry.reference_for_record(record) else {
+        return configuration
+            .plugin_artifacts
+            .iter()
+            .any(|artifact| artifact.library_path == record.path);
+    };
+    configuration.plugin_artifacts.iter().any(|artifact| {
+        artifact.library_path == record.path
+            && plugin_reference_selects(&artifact.reference, reference)
+    })
+}
+
+fn mobile_frame_record_is_selected(
+    registry: &PluginRegistry,
+    record: &PluginDiagnosticRecord,
+    configuration: &MobileFrameProcessorConfiguration,
+) -> bool {
+    if configuration.plugin_artifacts.is_empty() {
+        return true;
+    }
+    let Some(reference) = registry.reference_for_record(record) else {
+        return configuration
+            .plugin_artifacts
+            .iter()
+            .any(|artifact| artifact.library_path == record.path);
+    };
+    configuration.plugin_artifacts.iter().any(|artifact| {
+        artifact.library_path == record.path
+            && plugin_reference_selects(&artifact.reference, reference)
+    })
+}
+
+fn plugin_reference_selects(requested: &PluginReference, canonical: &PluginReference) -> bool {
+    requested.plugin_id() == canonical.plugin_id()
+        && requested.transport() == canonical.transport()
+        && requested
+            .capability_instance_id()
+            .is_none_or(|instance_id| canonical.capability_instance_id() == Some(instance_id))
+}
+
+fn format_plugin_reference(reference: &PluginReference) -> String {
+    match reference.capability_instance_id() {
+        Some(instance_id) => format!("{}#{instance_id}", reference.plugin_id()),
+        None => reference.plugin_id().to_owned(),
+    }
+}
+
+fn configured_mobile_plugin_count(
+    artifacts: &[MobileNativePluginArtifact],
+    unbound_paths: &[PathBuf],
+) -> usize {
+    if artifacts.is_empty() {
+        unbound_paths.len()
+    } else {
+        artifacts.len()
+    }
+}
+
+fn host_verified_mobile_native_plugin_artifacts(
+    artifacts: &[MobileNativePluginArtifact],
+) -> Result<Vec<NativePluginArtifact>, String> {
+    let mut loader_artifacts = Vec::with_capacity(artifacts.len());
+    for artifact in artifacts {
+        if loader_artifacts
+            .iter()
+            .any(|candidate: &NativePluginArtifact| {
+                candidate.plugin_id() == artifact.reference.plugin_id()
+                    && candidate.path() == artifact.library_path.as_path()
+            })
+        {
+            continue;
+        }
+        loader_artifacts.push(
+            NativePluginArtifact::new(
+                artifact.reference.plugin_id(),
+                artifact.library_path.clone(),
+            )
+            .map_err(|error| {
+                format!(
+                    "host-verified mobile plugin artifact `{}` at `{}` is invalid: {error}",
+                    artifact.reference.plugin_id(),
+                    artifact.library_path.display()
+                )
+            })?,
+        );
+    }
+    Ok(loader_artifacts)
 }
 
 fn best_mobile_source_normalizer_resource<'a>(
@@ -2794,6 +3667,7 @@ impl MobileSourceNormalizerResourceWire {
         let info = opened.status.info.as_ref().unwrap_or(&opened.info);
         Self {
             handle,
+            plugin_reference: opened.reference.clone(),
             plugin_name: opened.plugin_name.clone(),
             plugin_path: opened.plugin_path.clone(),
             output_route: info.output_route.wire_name().to_owned(),
@@ -3185,6 +4059,268 @@ mod tests {
             .unwrap_or_else(|error| error.into_inner())
     }
 
+    fn test_mobile_artifact(instance_id: &str, path: &str) -> MobileNativePluginArtifact {
+        MobileNativePluginArtifact::new(
+            PluginReference::new(
+                "dev.vesper.mobile-plugin",
+                Some(instance_id.to_owned()),
+                PluginTransport::Native,
+            )
+            .expect("test plugin reference"),
+            path,
+        )
+        .expect("test mobile artifact")
+    }
+
+    #[test]
+    fn mobile_plugin_artifact_json_preserves_capability_instance_identity() {
+        let artifacts = parse_mobile_native_plugin_artifacts_json(
+            r#"[{"reference":{"pluginId":"dev.vesper.mobile-plugin","capabilityInstanceId":"dev.vesper.mobile-plugin.second","transport":"native"},"libraryPath":"/plugins/mobile.dylib"}]"#,
+        )
+        .expect("valid mobile artifact JSON");
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(
+            artifacts[0].reference.plugin_id(),
+            "dev.vesper.mobile-plugin"
+        );
+        assert_eq!(
+            artifacts[0].reference.capability_instance_id(),
+            Some("dev.vesper.mobile-plugin.second")
+        );
+        assert_eq!(
+            artifacts[0].library_path,
+            PathBuf::from("/plugins/mobile.dylib")
+        );
+    }
+
+    #[test]
+    fn mobile_plugin_artifact_json_rejects_wasm_transport() {
+        let error = parse_mobile_native_plugin_artifacts_json(
+            r#"[{"reference":{"pluginId":"dev.vesper.mobile-plugin","transport":"wasm"},"libraryPath":"/plugins/mobile.wasm"}]"#,
+        )
+        .expect_err("mobile native bridge must reject WASM artifacts");
+
+        assert!(error.contains("must use native transport"));
+    }
+
+    #[test]
+    fn mobile_plugin_configuration_rejects_mixed_bound_and_unbound_artifacts() {
+        let artifact =
+            test_mobile_artifact("dev.vesper.mobile-plugin.source", "/plugins/mobile.dylib");
+        let source = MobileSourceNormalizerConfiguration {
+            plugin_artifacts: vec![artifact.clone()],
+            plugin_library_paths: vec![PathBuf::from("/plugins/legacy.dylib")],
+            ..MobileSourceNormalizerConfiguration::default()
+        };
+        let frame = MobileFrameProcessorConfiguration {
+            plugin_artifacts: vec![artifact.clone()],
+            plugin_library_paths: vec![PathBuf::from("/plugins/legacy.dylib")],
+            ..MobileFrameProcessorConfiguration::default()
+        };
+        let native_frame = MobileNativeFramePipelineConfiguration {
+            decoder_plugin_artifacts: vec![artifact],
+            decoder_plugin_library_paths: vec![PathBuf::from("/plugins/legacy.dylib")],
+            ..MobileNativeFramePipelineConfiguration::default()
+        };
+
+        assert!(source.resolved_plugin_library_paths().is_err());
+        assert!(frame.resolved_plugin_library_paths().is_err());
+        assert!(
+            native_frame
+                .resolved_decoder_plugin_library_paths()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn host_verified_mobile_artifacts_load_each_root_identity_once() {
+        let artifacts = vec![
+            test_mobile_artifact(
+                "dev.vesper.mobile-plugin.source-packet",
+                "/plugins/mobile.dylib",
+            ),
+            test_mobile_artifact(
+                "dev.vesper.mobile-plugin.source-resource",
+                "/plugins/mobile.dylib",
+            ),
+        ];
+
+        let loader_artifacts = host_verified_mobile_native_plugin_artifacts(&artifacts)
+            .expect("valid host-verified mobile artifacts");
+
+        assert_eq!(loader_artifacts.len(), 1);
+        assert_eq!(loader_artifacts[0].plugin_id(), "dev.vesper.mobile-plugin");
+        assert_eq!(
+            loader_artifacts[0].path(),
+            std::path::Path::new("/plugins/mobile.dylib")
+        );
+    }
+
+    #[test]
+    fn runtime_options_preserve_default_deny_for_mobile_raw_paths() {
+        let options = PlayerRuntimeOptions::default()
+            .with_source_normalizer_plugin_library_paths([PathBuf::from(
+                "/tmp/must-not-open-source-normalizer.dylib",
+            )])
+            .with_frame_processor_library_paths([PathBuf::from(
+                "/tmp/must-not-open-frame-processor.dylib",
+            )]);
+        let configuration = MobilePluginConfiguration::from_runtime_options(&options);
+
+        assert_eq!(
+            configuration.source_normalizer.native_plugin_loading_policy,
+            NativePluginLoadingPolicy::DenyRawPaths
+        );
+        assert_eq!(
+            configuration.frame_processor.native_plugin_loading_policy,
+            NativePluginLoadingPolicy::DenyRawPaths
+        );
+        let diagnostics = apply_mobile_plugin_diagnostics(
+            PlayerRuntimeStartup {
+                ffmpeg_initialized: false,
+                audio_output: None,
+                decoded_audio: None,
+                video_decode: None,
+                plugin_diagnostics: Vec::new(),
+            },
+            &MediaSource::new("placeholder.mp4"),
+            &configuration,
+        )
+        .plugin_diagnostics;
+        let messages = diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.message.as_deref())
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(messages.contains("require explicit development loading policy"));
+        assert!(!messages.contains("failed to open plugin library"));
+        assert!(!messages.contains("dlopen"));
+    }
+
+    #[test]
+    fn direct_mobile_raw_path_open_requires_development_policy() {
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::RequireNormalized,
+            plugin_library_paths: vec![PathBuf::from("/tmp/must-not-open-source-normalizer.dylib")],
+            ..MobileSourceNormalizerConfiguration::default()
+        };
+
+        let error = open_mobile_source_normalizer_packet_session(
+            &MediaSource::new("file:///tmp/source.flv"),
+            &configuration,
+        )
+        .err()
+        .expect("raw path must be rejected before loading");
+
+        assert!(error.contains("require explicit development loading policy"));
+        assert!(!error.contains("failed to open plugin library"));
+        assert!(!error.contains("dlopen"));
+    }
+
+    #[test]
+    fn direct_mobile_raw_path_development_policy_reaches_the_loader() {
+        let configuration = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::DiagnosticsOnly,
+            plugin_library_paths: vec![PathBuf::from(
+                "/tmp/missing-development-source-normalizer.dylib",
+            )],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
+            ..MobileSourceNormalizerConfiguration::default()
+        };
+
+        let diagnostics = source_normalizer_diagnostics(
+            &MediaSource::new("file:///tmp/source.flv"),
+            &configuration,
+        );
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.status == PlayerPluginDiagnosticStatus::LoadFailed
+                && diagnostic
+                    .message
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("failed to open plugin library")
+        }));
+    }
+
+    #[test]
+    fn referenced_mobile_configuration_cannot_be_applied_to_path_only_runtime_options() {
+        let configuration = MobilePluginConfiguration {
+            source_normalizer: MobileSourceNormalizerConfiguration {
+                mode: SourceNormalizerMode::PreflightOnly,
+                plugin_artifacts: vec![test_mobile_artifact(
+                    "dev.vesper.mobile-plugin.source",
+                    "/plugins/mobile.dylib",
+                )],
+                ..MobileSourceNormalizerConfiguration::default()
+            },
+            ..MobilePluginConfiguration::default()
+        };
+        let mut options = PlayerRuntimeOptions::default();
+
+        let error = configuration
+            .apply_to_runtime_options(&mut options)
+            .expect_err("path-only runtime options cannot retain plugin identity");
+
+        assert!(error.contains("cannot be represented"));
+        assert_eq!(
+            options.source_normalizer_mode,
+            SourceNormalizerMode::Disabled
+        );
+        assert!(options.source_normalizer_plugin_library_paths.is_empty());
+    }
+
+    #[test]
+    fn preflight_cache_key_distinguishes_instances_from_the_same_artifact() {
+        let source = MediaSource::new("https://cdn.example.test/video.flv");
+        let first = MobileSourceNormalizerConfiguration {
+            mode: SourceNormalizerMode::PreflightOnly,
+            plugin_artifacts: vec![test_mobile_artifact(
+                "dev.vesper.mobile-plugin.first",
+                "/plugins/mobile.dylib",
+            )],
+            ..MobileSourceNormalizerConfiguration::default()
+        };
+        let second = MobileSourceNormalizerConfiguration {
+            plugin_artifacts: vec![test_mobile_artifact(
+                "dev.vesper.mobile-plugin.second",
+                "/plugins/mobile.dylib",
+            )],
+            ..first.clone()
+        };
+
+        assert_ne!(
+            PreflightDiagnosticCacheKey::from_source(&source, &first),
+            PreflightDiagnosticCacheKey::from_source(&source, &second)
+        );
+    }
+
+    #[test]
+    fn mobile_command_queue_rejects_new_commands_at_capacity() {
+        let queue = MobileCommandQueue::new("test");
+        for command in 0..MOBILE_COMMAND_QUEUE_CAPACITY {
+            assert!(queue.push(command).is_ok());
+        }
+
+        let error = match queue.push(MOBILE_COMMAND_QUEUE_CAPACITY) {
+            Ok(()) => panic!("a full mobile command queue must reject the newest command"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), PlayerErrorCode::InvalidState);
+        assert!(
+            error
+                .message()
+                .contains(&format!("{MOBILE_COMMAND_QUEUE_CAPACITY}-command capacity"))
+        );
+
+        let drained = queue.drain();
+        assert_eq!(drained.len(), MOBILE_COMMAND_QUEUE_CAPACITY);
+        assert_eq!(drained.first(), Some(&0));
+        assert_eq!(drained.last(), Some(&(MOBILE_COMMAND_QUEUE_CAPACITY - 1)));
+        assert!(queue.push(MOBILE_COMMAND_QUEUE_CAPACITY).is_ok());
+    }
+
     #[test]
     fn disabled_configs_emit_no_diagnostics() {
         let diagnostics = apply_mobile_plugin_diagnostics(
@@ -3209,13 +4345,17 @@ mod tests {
         MobilePluginConfiguration {
             native_frame_pipeline: MobileNativeFramePipelineConfiguration {
                 mode: NativeFramePipelineMode::RequireNativeFrame,
+                decoder_plugin_artifacts: Vec::new(),
                 decoder_plugin_library_paths: vec![PathBuf::from("/tmp/libdecoder.dylib")],
+                frame_processor_plugin_artifacts: Vec::new(),
                 frame_processor_plugin_library_paths: vec![PathBuf::from("/tmp/libframe.dylib")],
+                native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
                 max_in_flight_frames: Some(3),
             },
             ..MobilePluginConfiguration::default()
         }
-        .apply_to_runtime_options(&mut options);
+        .apply_to_runtime_options(&mut options)
+        .expect("path-only mobile configuration");
 
         assert_eq!(
             options.decoder_plugin_video_mode,
@@ -3269,7 +4409,8 @@ mod tests {
     #[test]
     fn runtime_options_with_decoder_paths_remain_diagnostics_only_until_opted_in() {
         let options = PlayerRuntimeOptions::default()
-            .with_decoder_plugin_library_paths([PathBuf::from("/tmp/libmediacodec.so")]);
+            .with_decoder_plugin_library_paths([PathBuf::from("/tmp/libmediacodec.so")])
+            .with_development_native_plugin_loading();
 
         let configuration = MobilePluginConfiguration::from_runtime_options(&options);
 
@@ -3314,7 +4455,9 @@ mod tests {
         let source = MediaSource::new("https://cdn.example.test/video.flv");
         let configuration = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreflightOnly,
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
             runtime_profile: Some("flv".to_owned()),
         };
         let key = PreflightDiagnosticCacheKey::from_source(&source, &configuration);
@@ -3381,7 +4524,9 @@ mod tests {
         let source = MediaSource::new("https://cdn.example.test/video.flv");
         let configuration = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreflightOnly,
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
             runtime_profile: Some("flv".to_owned()),
         };
         let key = PreflightDiagnosticCacheKey::from_source(&source, &configuration);
@@ -3436,7 +4581,9 @@ mod tests {
         let source = MediaSource::new("https://cdn.example.test/video.flv");
         let configuration = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreflightOnly,
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
             runtime_profile: Some("flv".to_owned()),
         };
         let key = Arc::new(PreflightDiagnosticCacheKey::from_source(
@@ -3495,7 +4642,9 @@ mod tests {
         let source = MediaSource::new("https://cdn.example.test/video.flv");
         let configuration = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreflightOnly,
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
             runtime_profile: Some("flv".to_owned()),
         };
         let key = PreflightDiagnosticCacheKey::from_source(&source, &configuration);
@@ -3534,7 +4683,9 @@ mod tests {
         let source = MediaSource::new("https://cdn.example.test/video.flv");
         let configuration = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreflightOnly,
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
             runtime_profile: Some("flv".to_owned()),
         };
         let key = PreflightDiagnosticCacheKey::from_source(&source, &configuration);
@@ -3591,7 +4742,9 @@ mod tests {
     fn preflight_cache_bounds_distinct_in_flight_owners() {
         let configuration = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreflightOnly,
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
             runtime_profile: Some("flv".to_owned()),
         };
         let source_a = MediaSource::new("https://cdn.example.test/a.flv");
@@ -3666,7 +4819,9 @@ mod tests {
         std::fs::write(&path, b"one").expect("write plugin fingerprint fixture");
         let generic = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreflightOnly,
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![path.clone()],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
             runtime_profile: Some("generic-fallback".to_owned()),
         };
         let flv = MobileSourceNormalizerConfiguration {
@@ -3690,7 +4845,9 @@ mod tests {
         let source = MediaSource::new("https://cdn.example.test/video.flv");
         let base = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreflightOnly,
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
             runtime_profile: Some(" FLV ".to_owned()),
         };
         let normalized = MobileSourceNormalizerConfiguration {
@@ -3731,7 +4888,9 @@ mod tests {
         let source = MediaSource::new("https://cdn.example.test/video.flv");
         let configuration = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreflightOnly,
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
             runtime_profile: None,
         };
         let key = PreflightDiagnosticCacheKey::from_source(&source, &configuration);
@@ -3793,7 +4952,9 @@ mod tests {
             &MediaSource::new("https://cdn.example.test/video.flv"),
             &MobileSourceNormalizerConfiguration {
                 mode: SourceNormalizerMode::RequireNormalized,
+                plugin_artifacts: Vec::new(),
                 plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+                native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
                 runtime_profile: Some("flv".to_owned()),
             },
         );
@@ -3837,8 +4998,11 @@ mod tests {
         let diagnostics =
             native_frame_pipeline_diagnostics(&MobileNativeFramePipelineConfiguration {
                 mode: NativeFramePipelineMode::PreferNativeFrame,
+                decoder_plugin_artifacts: Vec::new(),
                 decoder_plugin_library_paths: vec![PathBuf::from("/tmp/libdecoder.dylib")],
+                frame_processor_plugin_artifacts: Vec::new(),
                 frame_processor_plugin_library_paths: vec![PathBuf::from("/tmp/libframe.dylib")],
+                native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
                 max_in_flight_frames: Some(2),
             });
 
@@ -3872,8 +5036,11 @@ mod tests {
         let diagnostics =
             native_frame_pipeline_diagnostics(&MobileNativeFramePipelineConfiguration {
                 mode: NativeFramePipelineMode::DiagnosticsOnly,
+                decoder_plugin_artifacts: Vec::new(),
                 decoder_plugin_library_paths: vec![PathBuf::from("/tmp/libdecoder.dylib")],
+                frame_processor_plugin_artifacts: Vec::new(),
                 frame_processor_plugin_library_paths: Vec::new(),
+                native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
                 max_in_flight_frames: None,
             });
 
@@ -3888,6 +5055,37 @@ mod tests {
                 .as_deref()
                 .unwrap_or_default()
                 .contains("route=systemPlayer")
+        );
+    }
+
+    #[test]
+    fn native_frame_pipeline_diagnostics_reject_mixed_artifacts_and_raw_paths() {
+        let diagnostics =
+            native_frame_pipeline_diagnostics(&MobileNativeFramePipelineConfiguration {
+                mode: NativeFramePipelineMode::PreferNativeFrame,
+                decoder_plugin_artifacts: vec![test_mobile_artifact(
+                    "dev.vesper.mobile-plugin.decoder",
+                    "/plugins/mobile.dylib",
+                )],
+                decoder_plugin_library_paths: vec![PathBuf::from("/plugins/raw.dylib")],
+                ..MobileNativeFramePipelineConfiguration::default()
+            });
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].status,
+            PlayerPluginDiagnosticStatus::LoadFailed
+        );
+        assert_eq!(
+            diagnostics[0].participation,
+            PlayerPluginParticipation::Bypassed
+        );
+        assert!(
+            diagnostics[0]
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("cannot mix referenced artifacts with unbound library paths")
         );
     }
 
@@ -3909,6 +5107,35 @@ mod tests {
         assert!(json.contains("sourceNormalizerUnsupported"));
         assert!(json.contains("frameProcessorUnsupported"));
         assert!(json.contains("participation"));
+    }
+
+    #[test]
+    fn loader_diagnostics_include_the_canonical_plugin_reference() {
+        let reference = PluginReference::new(
+            "dev.vesper.mobile-plugin",
+            Some("dev.vesper.mobile-plugin.second".to_owned()),
+            PluginTransport::Native,
+        )
+        .expect("valid diagnostic reference");
+        let record = mobile_packet_record("second-packet", &["flv"]);
+
+        let diagnostic = diagnostic_from_record(
+            &record,
+            PlayerPluginParticipation::Selected,
+            Some(&reference),
+        );
+        let details = diagnostic
+            .details
+            .iter()
+            .map(|detail| (detail.key.as_str(), detail.value.as_str()))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(details.get("pluginId"), Some(&"dev.vesper.mobile-plugin"));
+        assert_eq!(
+            details.get("capabilityInstanceId"),
+            Some(&"dev.vesper.mobile-plugin.second")
+        );
+        assert_eq!(details.get("transport"), Some(&"native"));
     }
 
     #[test]
@@ -3985,7 +5212,9 @@ mod tests {
             &MediaSource::new("https://cdn.example.test/master.m3u8"),
             &MobileSourceNormalizerConfiguration {
                 mode: SourceNormalizerMode::PreferNormalized,
+                plugin_artifacts: Vec::new(),
                 plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+                native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
                 runtime_profile: None,
             },
             std::env::temp_dir().display().to_string(),
@@ -4003,7 +5232,9 @@ mod tests {
             &MobileSourceNormalizerConfiguration {
                 mode: SourceNormalizerMode::PreferNormalized,
                 runtime_profile: None,
+                plugin_artifacts: Vec::new(),
                 plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+                native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
             },
             MobileSourceNormalizerRouteDecision::NativeFirst,
         );
@@ -4027,7 +5258,9 @@ mod tests {
             &MobileSourceNormalizerConfiguration {
                 mode: SourceNormalizerMode::PreferNormalized,
                 runtime_profile: None,
+                plugin_artifacts: Vec::new(),
                 plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+                native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
             },
             MobileSourceNormalizerRouteDecision::NativeFirst,
         );
@@ -4050,7 +5283,9 @@ mod tests {
                 &MobileSourceNormalizerConfiguration {
                     mode: SourceNormalizerMode::PreferNormalized,
                     runtime_profile: Some("generic-fallback".to_owned()),
+                    plugin_artifacts: Vec::new(),
                     plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+                    native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
                 },
                 MobileSourceNormalizerRouteDecision::NativeFirst,
             );
@@ -4080,7 +5315,9 @@ mod tests {
             &MobileSourceNormalizerConfiguration {
                 mode: SourceNormalizerMode::PreferNormalized,
                 runtime_profile: Some("generic-fallback".to_owned()),
+                plugin_artifacts: Vec::new(),
                 plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+                native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
             },
             MobileSourceNormalizerRouteDecision::NativeFirst,
         );
@@ -4100,7 +5337,9 @@ mod tests {
         let configuration = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreferNormalized,
             runtime_profile: Some("FLV".to_owned()),
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![PathBuf::from("/plugins/generic.so")],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
         };
 
         assert_eq!(
@@ -4120,7 +5359,9 @@ mod tests {
         let configuration = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreflightOnly,
             runtime_profile: Some(" FLV ".to_owned()),
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
         };
 
         assert_eq!(
@@ -4135,7 +5376,9 @@ mod tests {
         let configuration = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreflightOnly,
             runtime_profile: Some(" Fixture-Packet ".to_owned()),
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![PathBuf::from("/plugins/source-normalizer.so")],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
         };
 
         assert_eq!(
@@ -4153,7 +5396,9 @@ mod tests {
         let configuration = MobileSourceNormalizerConfiguration {
             mode: SourceNormalizerMode::PreferNormalized,
             runtime_profile: Some("flv".to_owned()),
+            plugin_artifacts: Vec::new(),
             plugin_library_paths: vec![PathBuf::from("/plugins/packet.so")],
+            native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
         };
 
         assert!(
@@ -4176,7 +5421,9 @@ mod tests {
             &MediaSource::new("https://cdn.example.test/master.m3u8"),
             &MobileSourceNormalizerConfiguration {
                 mode: SourceNormalizerMode::PreferNormalized,
+                plugin_artifacts: Vec::new(),
                 plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+                native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
                 runtime_profile: Some("generic-fallback".to_owned()),
             },
         );
@@ -4203,7 +5450,9 @@ mod tests {
             &MediaSource::new("https://cdn.example.test/manifest.mpd"),
             &MobileSourceNormalizerConfiguration {
                 mode: SourceNormalizerMode::PreferNormalized,
+                plugin_artifacts: Vec::new(),
                 plugin_library_paths: vec![PathBuf::from("/missing/source-normalizer.so")],
+                native_plugin_loading_policy: NativePluginLoadingPolicy::DevelopmentRawPaths,
                 runtime_profile: Some("generic-fallback".to_owned()),
             },
             std::env::temp_dir().display().to_string(),
@@ -4223,7 +5472,9 @@ mod tests {
             &MediaSource::new("https://cdn.example.test/manifest.mpd"),
             &MobileSourceNormalizerConfiguration {
                 mode: SourceNormalizerMode::RequireNormalized,
+                plugin_artifacts: Vec::new(),
                 plugin_library_paths: Vec::new(),
+                native_plugin_loading_policy: NativePluginLoadingPolicy::DenyRawPaths,
                 runtime_profile: Some("generic-fallback".to_owned()),
             },
             std::env::temp_dir().display().to_string(),
@@ -4261,7 +5512,7 @@ mod tests {
         let value: Value = serde_json::from_str(manifest).expect("parse smoke matrix");
         assert_eq!(
             value["generatedBy"],
-            "scripts/media/generate-source-normalizer-smoke-fixtures.sh"
+            "./scripts/vesper media generate-source-normalizer-fixtures"
         );
         let cases = value["cases"].as_array().expect("cases array");
 
@@ -4326,7 +5577,7 @@ mod tests {
                     .join(path);
                 if !repo_path.exists() {
                     eprintln!(
-                        "skipping generated smoke fixture {path}; run scripts/media/generate-source-normalizer-smoke-fixtures.sh"
+                        "skipping generated smoke fixture {path}; run ./scripts/vesper media generate-source-normalizer-fixtures"
                     );
                 }
             }
@@ -4644,7 +5895,7 @@ mod tests {
             path: PathBuf::from(format!("/plugins/{name}.so")),
             status: PluginDiagnosticStatus::SourceNormalizerSupported,
             plugin_name: Some(name.to_owned()),
-            plugin_kind: Some(player_plugin::VesperPluginKind::SourceNormalizer),
+            plugin_kind: Some(PluginCapabilityKind::SourceNormalizer),
             capability_summary: Some(PluginCapabilitySummary::SourceNormalizerResource(
                 SourceNormalizerResourcePluginCapabilitySummary {
                     supported_runtime_profiles: profiles
@@ -4671,7 +5922,7 @@ mod tests {
             path: PathBuf::from(format!("/plugins/{name}.so")),
             status: PluginDiagnosticStatus::SourceNormalizerSupported,
             plugin_name: Some(name.to_owned()),
-            plugin_kind: Some(player_plugin::VesperPluginKind::SourceNormalizer),
+            plugin_kind: Some(PluginCapabilityKind::SourceNormalizer),
             capability_summary: Some(PluginCapabilitySummary::SourceNormalizerPacket(
                 SourceNormalizerPacketPluginCapabilitySummary {
                     supported_runtime_profiles: profiles

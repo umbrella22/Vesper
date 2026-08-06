@@ -68,6 +68,7 @@ private final class DownloadRecoveryContinuationBox {
 public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private static let hostDetachGraceDelayNanoseconds: UInt64 = 250_000_000
     private static let downloadRecoveryTimeoutNanoseconds: UInt64 = 30_000_000_000
+    private static let benchmarkShutdownTimeoutSeconds: TimeInterval = 2
 
     private var methodChannel: FlutterMethodChannel?
     private var eventChannel: FlutterEventChannel?
@@ -175,6 +176,10 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     emitSnapshot(for: session)
                     return nil
                 }
+            }
+        case "drainPipelineEventHookReports":
+            handleSessionCommand(call, result: result) { session in
+                session.controller.drainPipelineEventHookReports().toMap()
             }
         case "sampleTimeline":
             handleTimelineSample(call, result: result)
@@ -552,29 +557,36 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             }
             let benchmarkConfiguration: VesperBenchmarkConfiguration
             if let benchmarkConfigurationMap = try nestedMap(arguments["benchmarkConfiguration"]) {
-                benchmarkConfiguration = benchmarkConfigurationMap.toBenchmarkConfiguration()
+                benchmarkConfiguration = try benchmarkConfigurationMap.toBenchmarkConfiguration()
             } else {
                 benchmarkConfiguration = .disabled
             }
             let sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration
             if let sourceNormalizerMap = try nestedMap(arguments["sourceNormalizer"]) {
                 sourceNormalizerConfiguration =
-                    sourceNormalizerMap.toSourceNormalizerConfiguration()
+                    try sourceNormalizerMap.toSourceNormalizerConfiguration()
             } else {
                 sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration()
             }
             let frameProcessorConfiguration: VesperFrameProcessorConfiguration
             if let frameProcessorMap = try nestedMap(arguments["frameProcessor"]) {
-                frameProcessorConfiguration = frameProcessorMap.toFrameProcessorConfiguration()
+                frameProcessorConfiguration = try frameProcessorMap.toFrameProcessorConfiguration()
             } else {
                 frameProcessorConfiguration = VesperFrameProcessorConfiguration()
             }
             let nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration
             if let nativeFramePipelineMap = try nestedMap(arguments["nativeFramePipeline"]) {
                 nativeFramePipelineConfiguration =
-                    nativeFramePipelineMap.toNativeFramePipelineConfiguration()
+                    try nativeFramePipelineMap.toNativeFramePipelineConfiguration()
             } else {
                 nativeFramePipelineConfiguration = VesperNativeFramePipelineConfiguration()
+            }
+            let pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration
+            if let pipelineEventHookMap = try nestedMap(arguments["pipelineEventHook"]) {
+                pipelineEventHookConfiguration =
+                    try pipelineEventHookMap.toPipelineEventHookConfiguration()
+            } else {
+                pipelineEventHookConfiguration = VesperPipelineEventHookConfiguration()
             }
             let keepScreenOnDuringPlayback =
                 (arguments["keepScreenOnDuringPlayback"] as? Bool) ?? true
@@ -590,7 +602,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     benchmarkConfiguration: benchmarkConfiguration,
                     sourceNormalizerConfiguration: sourceNormalizerConfiguration,
                     frameProcessorConfiguration: frameProcessorConfiguration,
-                    nativeFramePipelineConfiguration: nativeFramePipelineConfiguration
+                    nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
+                    pipelineEventHookConfiguration: pipelineEventHookConfiguration
                 ),
                 benchmarkConsoleLogging: benchmarkConfiguration.consoleLogging
             )
@@ -662,7 +675,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             let configurationMap = try requireNestedMap(arguments: arguments, key: "configuration")
             let downloadId = UUID().uuidString
             let hasStaleResourceRecovery = arguments["hasStaleResourceRecovery"] as? Bool ?? false
-            let configuration = configurationMap.toDownloadConfiguration()
+            let configuration = try configurationMap.toDownloadConfiguration()
             let recoveryHandler: VesperDownloadStaleResourcePlanRecoveryHandler?
             if hasStaleResourceRecovery {
                 recoveryHandler = { [weak self] task, staleResource in
@@ -675,7 +688,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             } else {
                 recoveryHandler = nil
             }
-            let manager = VesperDownloadManager(
+            let manager = try VesperDownloadManager(
                 configuration: configuration,
                 staleResourcePlanRecoveryHandler: recoveryHandler
             )
@@ -1185,6 +1198,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         }
         let snapshot = buildSnapshotMap(for: session)
         emitHostTerminalErrorIfNeeded(for: session, snapshot: snapshot)
+        emitPipelineEventHookReports(for: session)
         VesperFlutterPlaybackTrace.interval("VesperRefresh#emitSnapshotEvent") {
             emitEvent([
                 "playerId": session.id,
@@ -1193,6 +1207,22 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             ])
         }
         emitBenchmarkConsoleLog(for: session)
+    }
+
+    @MainActor
+    private func emitPipelineEventHookReports(for session: PlayerSession) {
+        guard eventSink != nil else {
+            return
+        }
+        let batch = session.controller.drainPipelineEventHookReports()
+        guard !batch.isEmpty else {
+            return
+        }
+        emitEvent([
+            "playerId": session.id,
+            "type": "pipelineEventHookReports",
+            "reports": batch.toMap(),
+        ])
     }
 
     @MainActor
@@ -1742,41 +1772,13 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     @MainActor
     func emitDownloadRuntimeEvents(for session: DownloadSession) {
         guard isCurrentDownloadSession(session) else { return }
-        for event in session.manager.drainEvents() {
-            switch event {
-            case .created(let task):
-                downloadEventSink?([
-                    "downloadId": session.id,
-                    "type": "taskCreated",
-                    "task": task.toMap,
-                ])
-            case .assetIndexUpdated(let task):
-                downloadEventSink?([
-                    "downloadId": session.id,
-                    "type": "taskUpdated",
-                    "task": task.toMap,
-                ])
-            case .stateChanged(let patch):
-                if patch.state == .removed {
-                    downloadEventSink?([
-                        "downloadId": session.id,
-                        "type": "taskRemoved",
-                        "taskId": NSNumber(value: patch.taskId),
-                    ])
-                } else {
-                    downloadEventSink?([
-                        "downloadId": session.id,
-                        "type": "taskUpdated",
-                        "patch": patch.toMap,
-                    ])
-                }
-            case .progressUpdated(let patch):
-                downloadEventSink?([
-                    "downloadId": session.id,
-                    "type": "taskUpdated",
-                    "progressPatch": patch.toMap,
-                ])
-            }
+        let batch = session.manager.drainEvents()
+        for payload in flutterDownloadEventPayloads(
+            downloadId: session.id,
+            snapshot: buildDownloadSnapshotMap(for: session),
+            batch: batch
+        ) {
+            downloadEventSink?(payload)
         }
     }
 
@@ -1957,12 +1959,22 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         session.controller.detachSurfaceHost()
         session.hostView = nil
         session.controller.dispose()
-        emitBenchmarkConsoleLog(for: session, force: true)
+        emitPipelineEventHookReports(for: session)
         sessions.removeValue(forKey: session.id)
         emitEvent([
             "playerId": session.id,
             "type": "disposed",
         ])
+        guard session.benchmarkConsoleLogging else {
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            _ = await session.controller.awaitBenchmarkSinkShutdown(
+                timeout: Self.benchmarkShutdownTimeoutSeconds
+            )
+            emitBenchmarkConsoleLog(for: session, force: true)
+        }
     }
 
     @MainActor

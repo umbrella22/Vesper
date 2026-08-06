@@ -2,23 +2,41 @@ import Foundation
 internal import VesperPlayerKitBridgeShim
 
 extension VesperDownloadConfiguration {
-    func toRuntimeBridgePayload() -> VesperRuntimeDownloadConfig {
-        let pointer: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
-        if pluginLibraryPaths.isEmpty {
-            pointer = nil
-        } else {
-            pointer = .allocate(capacity: pluginLibraryPaths.count)
-            for (index, value) in pluginLibraryPaths.enumerated() {
-                pointer?[index] = duplicateDownloadCString(value)
-            }
+    func toRuntimeBridgePayload(
+        pluginRegistryHandle: UInt64
+    ) throws -> VesperRuntimeDownloadConfig {
+        let postDownloadReferencesJSON = try encodeVesperPluginReferencesJSON(
+            postDownloadPluginReferences
+        )
+        let eventHookReferencesJSON = try encodeVesperPluginReferencesJSON(
+            eventHookPluginReferences
+        )
+        guard let postDownloadReferencesPointer = duplicateDownloadCString(
+            postDownloadReferencesJSON
+        ) else {
+            throw VesperDownloadBridgePayloadError.allocationFailed
+        }
+        guard let eventHookReferencesPointer = duplicateDownloadCString(eventHookReferencesJSON)
+        else {
+            freeDownloadCString(postDownloadReferencesPointer)
+            throw VesperDownloadBridgePayloadError.allocationFailed
         }
 
         return VesperRuntimeDownloadConfig(
             auto_start: autoStart,
             run_post_processors_on_completion: runPostProcessorsOnCompletion,
-            plugin_library_paths: pointer,
-            plugin_library_paths_len: UInt(pluginLibraryPaths.count)
+            plugin_registry_handle: pluginRegistryHandle,
+            post_download_plugin_references_json: postDownloadReferencesPointer,
+            event_hook_plugin_references_json: eventHookReferencesPointer
         )
+    }
+}
+
+private enum VesperDownloadBridgePayloadError: LocalizedError {
+    case allocationFailed
+
+    var errorDescription: String? {
+        "Failed to allocate the iOS download plugin bridge payload."
     }
 }
 
@@ -230,4 +248,3 @@ extension VesperDownloadAssetIndex {
         )
     }
 }
-

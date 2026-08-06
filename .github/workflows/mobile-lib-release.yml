@@ -40,6 +40,9 @@ jobs:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
 
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
+
       - name: Verify release tag is on main
         shell: bash
         run: |
@@ -65,13 +68,17 @@ jobs:
         run: cargo install cbindgen --locked
 
       - name: Prepare release version metadata
-        run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+        run: |
+          ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+          cargo build --locked --release -p player-cli --bin vesper
 
       - name: Verify generated FFI header
         run: ./scripts/vesper ffi verify
 
-      - name: Test FFmpeg profiles
-        run: scripts/ffmpeg/test-profiles.sh
+      - name: Verify FFmpeg source policy and profiles
+        run: |
+          ./scripts/vesper ffmpeg --platform all --profile default --dry-run
+          cargo test -p player-cli --bin vesper ffmpeg -- --test-threads=1
 
       - name: Check Rust workspace
         run: cargo check --workspace ${{ env.LINUX_WORKSPACE_EXCLUDES }}
@@ -93,6 +100,9 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -132,7 +142,9 @@ jobs:
           gradle-version: "9.6.0"
 
       - name: Prepare release version metadata
-        run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+        run: |
+          ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+          cargo build --locked --release -p player-cli --bin vesper
 
       - name: Build VesperPlayerKit Android release asset
         run: ./scripts/vesper android stage-release release-assets/android ${{ matrix.abi }}
@@ -194,6 +206,9 @@ jobs:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
 
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -239,7 +254,9 @@ jobs:
           cache: true
 
       - name: Prepare release version metadata
-        run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+        run: |
+          ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+          cargo build --locked --release -p player-cli --bin vesper
 
       - name: Write Android local.properties
         run: |
@@ -293,6 +310,9 @@ jobs:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
 
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -310,15 +330,31 @@ jobs:
           minimum-major: "16"
 
       - name: Prepare release version metadata
-        run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+        run: |
+          ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+          cargo build --locked --release -p player-cli --bin vesper
 
       - name: Build VesperPlayerKit iOS release assets
-        env:
-          VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS: "1"
-        run: ./scripts/vesper ios stage-release release-assets/ios
+        run: ./scripts/vesper ios stage-release release-assets/ios --include-optional-plugins
 
       - name: Verify VesperPlayerKit iOS release assets
         run: ./scripts/vesper ios verify-release release-assets/ios --scope complete
+
+      - name: Test core iOS release validation failures
+        env:
+          VESPER_IOS_CORE_RELEASE_FIXTURE: release-assets/ios
+        run: >-
+          cargo test -p player-cli --test ios_release_regressions
+          ios_core_release_real_fixture_rejects_policy_drift
+          -- --ignored --exact --nocapture --test-threads=1
+
+      - name: Test optional iOS release validation failures
+        env:
+          VESPER_IOS_OPTIONAL_RELEASE_FIXTURE: release-assets/ios
+        run: >-
+          cargo test -p player-cli --test ios_release_regressions
+          ios_optional_release_real_fixture_rejects_policy_drift
+          -- --ignored --exact --nocapture --test-threads=1
 
       - name: Upload VesperPlayerKit iOS release assets
         uses: actions/upload-artifact@v4
@@ -342,6 +378,9 @@ jobs:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
 
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
+
       - name: Verify release tag is on main
         shell: bash
         run: |
@@ -361,7 +400,9 @@ jobs:
           merge-multiple: true
 
       - name: Prepare release version metadata
-        run: ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+        run: |
+          ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+          cargo build --locked --release -p player-cli --bin vesper
 
       - name: Generate VesperPlayerKit release notes
         run: ./scripts/vesper release notes "${RELEASE_TAG}" release-assets/RELEASE_NOTES.md

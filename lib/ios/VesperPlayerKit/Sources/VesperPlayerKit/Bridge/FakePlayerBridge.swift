@@ -379,6 +379,10 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
         benchmarkRecorder.summary()
     }
 
+    func awaitBenchmarkSinkShutdown(timeout: TimeInterval) async -> Bool {
+        await benchmarkRecorder.awaitSinkShutdown(timeout: timeout)
+    }
+
     private func update(_ transform: (PlayerHostUiState) -> PlayerHostUiState) {
         publishedUiState = transform(publishedUiState)
     }

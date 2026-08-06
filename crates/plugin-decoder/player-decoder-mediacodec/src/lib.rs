@@ -1,271 +1,61 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 use std::borrow::Cow;
-use std::ffi::{c_char, c_void};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use player_plugin::{
     DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
     DecoderFrameFormat, DecoderMediaKind, DecoderNativeDeviceContext,
-    DecoderNativeDeviceContextKind, DecoderNativeHandleKind, DecoderNativeRequirements,
-    DecoderOperationStatus, DecoderPacket, DecoderReceiveNativeFrameMetadata, DecoderSessionConfig,
-    DecoderSessionInfo, NativeFrameColorMetadata, NativeFrameHdrMetadata,
-    NativeFramePipelineProfile, VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-    VesperDecoderOpenSessionResult, VesperDecoderPluginApiV5,
-    VesperDecoderReceiveNativeFrameResult, VesperDecoderReceivePcmFrameResult, VesperPluginBytes,
-    VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
+    DecoderNativeDeviceContextKind, DecoderNativeFrame, DecoderNativeHandleKind,
+    DecoderNativeRequirements, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameOutput,
+    DecoderSessionConfig, DecoderSessionInfo, NativeDecoderPluginFactory, NativeDecoderSession,
+    NativeFrameColorMetadata, NativeFrameHdrMetadata, NativeFramePipelineProfile, Plugin,
+    PluginBuildError, normalize_decoder_codec_identifier,
 };
 
-static PLUGIN_NAME: &[u8] = b"player-decoder-mediacodec\0";
+const PLUGIN_ID: &str = "io.github.ikaros.vesper.decoder-mediacodec";
+const INSTANCE_ID: &str = "io.github.ikaros.vesper.decoder-mediacodec.native";
+const PLUGIN_NAME: &str = "player-decoder-mediacodec";
 const MEDIACODEC_SUPPORTED: bool = cfg!(target_os = "android");
 const MEDIACODEC_SURFACE_TEXTURE_FORMAT: &str = "mediacodec_surface_texture";
+#[cfg(any(test, target_os = "android"))]
+const MAX_OUTPUT_DEQUEUE_STEPS_PER_CALL: usize = 16;
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 type MediaStatus = i32;
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 const AMEDIA_OK: MediaStatus = 0;
 
-struct PluginBundle {
-    api: VesperDecoderPluginApiV5,
-    descriptor: VesperPluginDescriptor,
+#[derive(Debug, Default)]
+struct MediaCodecDecoderFactory;
+
+impl NativeDecoderPluginFactory for MediaCodecDecoderFactory {
+    fn name(&self) -> &str {
+        PLUGIN_NAME
+    }
+
+    fn capabilities(&self) -> DecoderCapabilities {
+        decoder_capabilities()
+    }
+
+    fn native_requirements(&self) -> DecoderNativeRequirements {
+        decoder_native_requirements()
+    }
+
+    fn open_native_session(
+        &self,
+        config: &DecoderSessionConfig,
+    ) -> Result<Box<dyn NativeDecoderSession>, DecoderError> {
+        Ok(Box::new(MediaCodecDecoderSession::open(config.clone())?))
+    }
 }
 
 #[derive(Debug)]
 struct MediaCodecDecoderSession {
+    #[cfg(target_os = "android")]
     codec: String,
-    width: u32,
-    height: u32,
-    native_window_ptr: usize,
+    decoder_implementation_name: String,
     #[cfg(target_os = "android")]
     backend: android_media::AndroidMediaCodecBackend,
     closed: bool,
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
-    catch_unwind(AssertUnwindSafe(vesper_plugin_entry_impl)).unwrap_or(std::ptr::null())
-}
-
-fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
-    let mut bundle = Box::new(PluginBundle {
-        api: VesperDecoderPluginApiV5 {
-            context: std::ptr::null_mut(),
-            destroy: None,
-            name: Some(decoder_name),
-            capabilities_json: Some(decoder_capabilities_json),
-            native_requirements_json: Some(decoder_native_requirements_json),
-            open_session_json: Some(decoder_open_session_json),
-            send_packet: Some(decoder_send_packet),
-            receive_native_frame: Some(decoder_receive_native_frame),
-            release_native_frame: Some(decoder_release_native_frame),
-            flush_session: Some(decoder_flush_session),
-            close_session: Some(decoder_close_session),
-            free_bytes: Some(free_plugin_bytes),
-            receive_pcm_frame: Some(decoder_receive_pcm_frame),
-            release_native_frame2: Some(decoder_release_native_frame_with_presentation),
-        },
-        descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-            plugin_kind: VesperPluginKind::Decoder as u32,
-            plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
-            api: std::ptr::null(),
-        },
-    });
-    bundle.descriptor.api = (&bundle.api as *const VesperDecoderPluginApiV5).cast::<c_void>();
-    let bundle = Box::leak(bundle);
-    &bundle.descriptor
-}
-
-// SAFETY: The plugin loader calls this callback through the decoder ABI and
-// keeps the returned static plugin name pointer borrowed only.
-unsafe extern "C" fn decoder_name(_context: *mut c_void) -> *const c_char {
-    catch_unwind(AssertUnwindSafe(|| PLUGIN_NAME.as_ptr().cast::<c_char>()))
-        .unwrap_or(std::ptr::null())
-}
-
-// SAFETY: The plugin loader calls this callback through the decoder ABI and
-// releases the returned bytes with this plugin's `free_bytes` callback.
-unsafe extern "C" fn decoder_capabilities_json(_context: *mut c_void) -> VesperPluginBytes {
-    catch_decoder_bytes(|| serialize_payload(&decoder_capabilities()))
-}
-
-// SAFETY: The plugin loader calls this callback through the decoder ABI and
-// releases the returned bytes with this plugin's `free_bytes` callback.
-unsafe extern "C" fn decoder_native_requirements_json(_context: *mut c_void) -> VesperPluginBytes {
-    catch_decoder_bytes(|| serialize_payload(&decoder_native_requirements()))
-}
-
-// SAFETY: The plugin loader provides a valid JSON buffer for the duration of
-// this synchronous callback and owns the returned session pointer.
-unsafe extern "C" fn decoder_open_session_json(
-    _context: *mut c_void,
-    config_json: *const u8,
-    config_json_len: usize,
-) -> VesperDecoderOpenSessionResult {
-    catch_decoder_open(|| {
-        let config = match decode_json::<DecoderSessionConfig>(config_json, config_json_len) {
-            Ok(config) => config,
-            Err(error) => return open_error(error),
-        };
-        match MediaCodecDecoderSession::open(config) {
-            Ok(session) => {
-                let info = session.session_info();
-                open_success(Box::into_raw(Box::new(session)).cast::<c_void>(), &info)
-            }
-            Err(error) => open_error(error),
-        }
-    })
-}
-
-// SAFETY: The plugin loader passes a session pointer created by this plugin and
-// valid packet JSON/data buffers for the duration of this synchronous callback.
-unsafe extern "C" fn decoder_send_packet(
-    _context: *mut c_void,
-    session: *mut c_void,
-    packet_json: *const u8,
-    packet_json_len: usize,
-    packet_data: *const u8,
-    packet_data_len: usize,
-) -> VesperPluginProcessResult {
-    catch_decoder_process(|| {
-        let Some(session) = media_codec_session_mut(session) else {
-            return process_error(DecoderError::NotConfigured);
-        };
-        let packet = match decode_json::<DecoderPacket>(packet_json, packet_json_len) {
-            Ok(packet) => packet,
-            Err(error) => return process_error(error),
-        };
-        if packet_data.is_null() && packet_data_len > 0 {
-            return process_error(DecoderError::abi_violation(
-                "packet data pointer was null with non-zero len",
-            ));
-        }
-        let packet_data = if packet_data_len == 0 {
-            &[]
-        } else {
-            // SAFETY: the ABI caller provides the compressed packet byte slice
-            // for the duration of this synchronous callback.
-            unsafe { std::slice::from_raw_parts(packet_data, packet_data_len) }
-        };
-        session.send_packet(&packet, packet_data)
-    })
-}
-
-// SAFETY: The plugin loader passes a live session pointer created by this
-// plugin and consumes the returned frame metadata/handle synchronously.
-unsafe extern "C" fn decoder_receive_native_frame(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperDecoderReceiveNativeFrameResult {
-    catch_decoder_native_frame(|| {
-        let Some(session) = media_codec_session_mut(session) else {
-            return native_frame_error(DecoderError::NotConfigured);
-        };
-        match session.receive_native_frame() {
-            Ok((metadata, handle)) => native_frame_success(&metadata, handle),
-            Err(error) => native_frame_error(error),
-        }
-    })
-}
-
-// SAFETY: The plugin loader passes a live session pointer and a frame handle
-// previously returned by this plugin for non-presenting release.
-unsafe extern "C" fn decoder_release_native_frame(
-    _context: *mut c_void,
-    session: *mut c_void,
-    handle_kind: u32,
-    handle: usize,
-) -> VesperPluginProcessResult {
-    decoder_release_native_frame_impl(session, handle_kind, handle, false)
-}
-
-// SAFETY: The plugin loader passes a live session pointer and a frame handle
-// previously returned by this plugin, plus the host presentation decision.
-unsafe extern "C" fn decoder_release_native_frame_with_presentation(
-    _context: *mut c_void,
-    session: *mut c_void,
-    handle_kind: u32,
-    handle: usize,
-    presented: bool,
-) -> VesperPluginProcessResult {
-    decoder_release_native_frame_impl(session, handle_kind, handle, presented)
-}
-
-fn decoder_release_native_frame_impl(
-    session: *mut c_void,
-    handle_kind: u32,
-    handle: usize,
-    presented: bool,
-) -> VesperPluginProcessResult {
-    catch_decoder_process(|| {
-        let Some(session) = media_codec_session_mut(session) else {
-            return process_error(DecoderError::NotConfigured);
-        };
-        if handle_kind != mediacodec_surface_texture_handle_kind_code() {
-            return process_error(DecoderError::abi_violation(format!(
-                "MediaCodec plugin expected SurfaceTexture handle kind, got {handle_kind}"
-            )));
-        }
-        if handle == 0 {
-            return process_error(DecoderError::abi_violation(
-                "MediaCodec plugin received a null native frame handle",
-            ));
-        }
-        session.release_native_frame(handle, presented)
-    })
-}
-
-// SAFETY: The plugin loader passes a live session pointer created by this
-// plugin and serializes flush with close for the same session.
-unsafe extern "C" fn decoder_flush_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_decoder_process(|| {
-        let Some(session) = media_codec_session_mut(session) else {
-            return process_error(DecoderError::NotConfigured);
-        };
-        session.flush()
-    })
-}
-
-// SAFETY: The plugin loader passes a session pointer created by this plugin
-// with `Box::into_raw`; each non-null pointer is closed exactly once.
-unsafe extern "C" fn decoder_close_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_decoder_process(|| {
-        if session.is_null() {
-            return process_success(&DecoderOperationStatus { completed: true });
-        }
-        // SAFETY: `session` was allocated by this plugin with `Box::into_raw`
-        // and is closed exactly once by the dynamic loader.
-        let mut session = unsafe { Box::from_raw(session.cast::<MediaCodecDecoderSession>()) };
-        session.close()
-    })
-}
-
-// SAFETY: The plugin loader passes a session pointer through the decoder ABI;
-// MediaCodec currently reports unsupported PCM output without dereferencing it.
-unsafe extern "C" fn decoder_receive_pcm_frame(
-    _context: *mut c_void,
-    _session: *mut c_void,
-) -> VesperDecoderReceivePcmFrameResult {
-    catch_decoder_pcm_frame(|| {
-        pcm_frame_error(DecoderError::UnsupportedCapability {
-            capability: "audio-pcm-output".to_owned(),
-        })
-    })
-}
-
-// SAFETY: The plugin loader returns only byte payloads allocated by this plugin
-// to this callback for deallocation.
-unsafe extern "C" fn free_plugin_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
-    // SAFETY: payloads returned by this plugin are allocated from Vec<u8> with
-    // capacity equal to len in this dynamic library.
-    unsafe {
-        let _ = payload.into_vec();
-    }
 }
 
 impl MediaCodecDecoderSession {
@@ -285,14 +75,28 @@ impl MediaCodecDecoderSession {
                 codec: config.codec,
             });
         }
-        let native_window_ptr = android_native_window_ptr(config.native_device_context.as_ref())?;
+        if config.require_cpu_output {
+            return Err(DecoderError::UnsupportedCapability {
+                capability: "cpu-video-frame-output".to_owned(),
+            });
+        }
+        validate_mediacodec_bitstream_format(config.bitstream_format.as_ref())?;
+        let decoder_implementation_name =
+            required_mediacodec_decoder_implementation_name(&config)?.to_owned();
         #[cfg(target_os = "android")]
-        let backend = android_media::AndroidMediaCodecBackend::open(&config, native_window_ptr)?;
+        let backend = {
+            let native_window_ptr =
+                android_native_window_ptr(config.native_device_context.as_ref())?;
+            android_media::AndroidMediaCodecBackend::open(
+                &config,
+                native_window_ptr,
+                &decoder_implementation_name,
+            )?
+        };
         Ok(Self {
+            #[cfg(target_os = "android")]
             codec: config.codec,
-            width: config.width.unwrap_or(config.coded_width.unwrap_or(0)),
-            height: config.height.unwrap_or(config.coded_height.unwrap_or(0)),
-            native_window_ptr,
+            decoder_implementation_name,
             #[cfg(target_os = "android")]
             backend,
             closed: false,
@@ -300,45 +104,40 @@ impl MediaCodecDecoderSession {
     }
 
     fn session_info(&self) -> DecoderSessionInfo {
-        let _ = (
-            self.codec.as_str(),
-            self.width,
-            self.height,
-            self.native_window_ptr,
-        );
         DecoderSessionInfo {
-            decoder_name: Some("player-decoder-mediacodec".to_owned()),
+            decoder_name: Some(self.decoder_implementation_name.clone()),
             selected_hardware_backend: Some("MediaCodec".to_owned()),
             output_format: Some(mediacodec_surface_texture_format()),
         }
     }
 
-    fn send_packet(&mut self, packet: &DecoderPacket, data: &[u8]) -> VesperPluginProcessResult {
+    fn send_packet_impl(
+        &mut self,
+        packet: &DecoderPacket,
+        data: &[u8],
+    ) -> Result<DecoderPacketResult, DecoderError> {
         if self.closed {
-            return process_error(DecoderError::NotConfigured);
+            return Err(DecoderError::NotConfigured);
         }
         if packet.media_kind != DecoderMediaKind::Video {
-            return process_error(DecoderError::UnsupportedCapability {
+            return Err(DecoderError::UnsupportedCapability {
                 capability: "video-packet-input".to_owned(),
             });
         }
         #[cfg(target_os = "android")]
-        match self.backend.send_packet(packet, data) {
-            Ok(result) => process_success(&result),
-            Err(error) => process_error(error),
-        }
+        return self.backend.send_packet(packet, data);
         #[cfg(not(target_os = "android"))]
         {
             let _ = (packet, data);
-            process_error(DecoderError::UnsupportedCapability {
+            Err(DecoderError::UnsupportedCapability {
                 capability: "android-mediacodec-decoder".to_owned(),
             })
         }
     }
 
-    fn receive_native_frame(
+    fn receive_native_frame_impl(
         &mut self,
-    ) -> Result<(DecoderReceiveNativeFrameMetadata, usize), DecoderError> {
+    ) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
         if self.closed {
             return Err(DecoderError::NotConfigured);
         }
@@ -348,67 +147,140 @@ impl MediaCodecDecoderSession {
         }
         #[cfg(not(target_os = "android"))]
         {
-            Ok((DecoderReceiveNativeFrameMetadata::need_more_input(), 0))
+            Ok(DecoderReceiveNativeFrameOutput::NeedMoreInput)
         }
     }
 
-    fn release_native_frame(
+    fn release_native_frame_impl(
         &mut self,
-        handle: usize,
+        frame: DecoderNativeFrame,
         presented: bool,
-    ) -> VesperPluginProcessResult {
+    ) -> Result<(), DecoderError> {
         if self.closed {
-            return process_error(DecoderError::NotConfigured);
+            return Err(DecoderError::NotConfigured);
+        }
+        if frame.metadata.handle_kind != DecoderNativeHandleKind::MediaCodecSurfaceTexture {
+            return Err(DecoderError::abi_violation(format!(
+                "MediaCodec plugin expected SurfaceTexture handle kind, got {:?}",
+                frame.metadata.handle_kind
+            )));
+        }
+        if frame.handle == 0 {
+            return Err(DecoderError::abi_violation(
+                "MediaCodec plugin received a null native frame handle",
+            ));
+        }
+        let frame_id = frame.metadata.frame_id.ok_or_else(|| {
+            DecoderError::abi_violation("MediaCodec plugin release is missing its frame id")
+        })?;
+        let handle_frame_id = u64::try_from(frame.handle).map_err(|_| {
+            DecoderError::abi_violation("MediaCodec frame handle does not fit its frame id")
+        })?;
+        if frame_id != handle_frame_id {
+            return Err(DecoderError::abi_violation(
+                "MediaCodec frame handle does not match its frame id",
+            ));
         }
         #[cfg(target_os = "android")]
-        match self.backend.release_native_frame(handle, presented) {
-            Ok(()) => process_success(&DecoderOperationStatus { completed: true }),
-            Err(error) => process_error(error),
-        }
+        return self.backend.release_native_frame(frame.handle, presented);
         #[cfg(not(target_os = "android"))]
         {
-            let _ = (handle, presented);
-            process_success(&DecoderOperationStatus { completed: true })
+            let _ = presented;
+            Ok(())
         }
     }
 
-    fn flush(&mut self) -> VesperPluginProcessResult {
+    fn flush_impl(&mut self) -> Result<(), DecoderError> {
         if self.closed {
-            return process_error(DecoderError::NotConfigured);
+            return Err(DecoderError::NotConfigured);
         }
         #[cfg(target_os = "android")]
-        if let Err(error) = self.backend.flush() {
-            return process_error(error);
-        }
-        process_success(&DecoderOperationStatus { completed: true })
+        return self.backend.flush();
+        #[cfg(not(target_os = "android"))]
+        Ok(())
     }
 
-    fn close(&mut self) -> VesperPluginProcessResult {
+    fn close_impl(&mut self) -> Result<(), DecoderError> {
         if self.closed {
-            return process_success(&DecoderOperationStatus { completed: true });
+            return Ok(());
         }
         #[cfg(target_os = "android")]
         if let Err(error) = self.backend.close() {
             self.closed = true;
-            return process_error(error);
+            return Err(error);
         }
         self.closed = true;
-        process_success(&DecoderOperationStatus { completed: true })
+        Ok(())
     }
+}
+
+impl NativeDecoderSession for MediaCodecDecoderSession {
+    fn session_info(&self) -> DecoderSessionInfo {
+        MediaCodecDecoderSession::session_info(self)
+    }
+
+    fn send_packet(
+        &mut self,
+        packet: &DecoderPacket,
+        data: &[u8],
+    ) -> Result<DecoderPacketResult, DecoderError> {
+        self.send_packet_impl(packet, data)
+    }
+
+    fn receive_native_frame(&mut self) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
+        self.receive_native_frame_impl()
+    }
+
+    fn release_native_frame(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError> {
+        self.release_native_frame_impl(frame, false)
+    }
+
+    fn release_native_frame_with_presentation(
+        &mut self,
+        frame: DecoderNativeFrame,
+        presented: bool,
+    ) -> Result<(), DecoderError> {
+        self.release_native_frame_impl(frame, presented)
+    }
+
+    fn flush(&mut self) -> Result<(), DecoderError> {
+        self.flush_impl()
+    }
+
+    fn close(&mut self) -> Result<(), DecoderError> {
+        self.close_impl()
+    }
+}
+
+impl Drop for MediaCodecDecoderSession {
+    fn drop(&mut self) {
+        let _ = self.close_impl();
+    }
+}
+
+#[player_plugin::export]
+fn mediacodec_decoder_plugin() -> Result<Plugin, PluginBuildError> {
+    Plugin::builder(PLUGIN_ID, PLUGIN_NAME)?
+        .with_native_decoder(INSTANCE_ID, MediaCodecDecoderFactory)?
+        .build()
 }
 
 fn decoder_capabilities() -> DecoderCapabilities {
     DecoderCapabilities {
-        codecs: vec![
-            video_codec_capability("H264"),
-            video_codec_capability("AVC1"),
-            video_codec_capability("HEVC"),
-            video_codec_capability("H265"),
-            video_codec_capability("HVC1"),
-            video_codec_capability("HEV1"),
-            video_codec_capability("DVH1"),
-            video_codec_capability("DVHE"),
-        ],
+        codecs: if MEDIACODEC_SUPPORTED {
+            vec![
+                video_codec_capability("H264"),
+                video_codec_capability("AVC"),
+                video_codec_capability("AVC1"),
+                video_codec_capability("AVC3"),
+                video_codec_capability("HEVC"),
+                video_codec_capability("H265"),
+                video_codec_capability("HVC1"),
+                video_codec_capability("HEV1"),
+            ]
+        } else {
+            Vec::new()
+        },
         supports_hardware_decode: MEDIACODEC_SUPPORTED,
         supports_cpu_video_frames: false,
         supports_audio_frames: false,
@@ -428,6 +300,7 @@ fn decoder_native_requirements() -> DecoderNativeRequirements {
         output_pipeline_profiles: vec![NativeFramePipelineProfile::MediaCodecSurfaceTexture],
         requires_native_device_context: true,
         accepted_bitstream_formats: vec![
+            DecoderBitstreamFormat::AnnexB,
             DecoderBitstreamFormat::Avcc,
             DecoderBitstreamFormat::Hvcc,
         ],
@@ -447,6 +320,56 @@ fn mediacodec_surface_texture_format() -> DecoderFrameFormat {
     DecoderFrameFormat::Unknown(MEDIACODEC_SURFACE_TEXTURE_FORMAT.to_owned())
 }
 
+fn validate_mediacodec_bitstream_format(
+    bitstream_format: Option<&DecoderBitstreamFormat>,
+) -> Result<(), DecoderError> {
+    match bitstream_format {
+        Some(
+            DecoderBitstreamFormat::AnnexB
+            | DecoderBitstreamFormat::Avcc
+            | DecoderBitstreamFormat::Hvcc,
+        ) => Ok(()),
+        Some(DecoderBitstreamFormat::Unknown(_)) | None => {
+            Err(DecoderError::UnsupportedCapability {
+                capability: "explicit-annex-b-avcc-or-hvcc-bitstream-format".to_owned(),
+            })
+        }
+    }
+}
+
+fn required_mediacodec_decoder_implementation_name(
+    config: &DecoderSessionConfig,
+) -> Result<&str, DecoderError> {
+    config
+        .required_decoder_implementation_name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| DecoderError::UnsupportedCapability {
+            capability: "host-selected-hardware-decoder-implementation".to_owned(),
+        })
+}
+
+#[cfg(any(test, target_os = "android"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediaCodecDequeueStep<T> {
+    Yield(T),
+    Skip,
+}
+
+#[cfg(any(test, target_os = "android"))]
+fn run_bounded_mediacodec_dequeue<T, E>(
+    mut dequeue_step: impl FnMut() -> Result<MediaCodecDequeueStep<T>, E>,
+) -> Result<Option<T>, E> {
+    for _ in 0..MAX_OUTPUT_DEQUEUE_STEPS_PER_CALL {
+        match dequeue_step()? {
+            MediaCodecDequeueStep::Yield(output) => return Ok(Some(output)),
+            MediaCodecDequeueStep::Skip => {}
+        }
+    }
+    Ok(None)
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn android_native_window_ptr(
     context: Option<&DecoderNativeDeviceContext>,
 ) -> Result<usize, DecoderError> {
@@ -468,36 +391,12 @@ fn android_native_window_ptr(
     Ok(window_ptr)
 }
 
-fn mediacodec_surface_texture_handle_kind_code() -> u32 {
-    10
-}
-
-fn media_codec_session_mut<'a>(session: *mut c_void) -> Option<&'a mut MediaCodecDecoderSession> {
-    if session.is_null() {
-        return None;
-    }
-    // SAFETY: `session` must be the opaque pointer returned by this plugin's
-    // open callback and remains owned by the host until close.
-    unsafe { session.cast::<MediaCodecDecoderSession>().as_mut() }
-}
-
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn codec_mime(codec: &str) -> Option<&'static str> {
-    let normalized = codec
-        .trim()
-        .to_ascii_lowercase()
-        .strip_prefix("video/")
-        .map(str::to_owned)
-        .unwrap_or_else(|| codec.trim().to_ascii_lowercase());
-    if normalized == "h264" || normalized == "avc" || normalized.starts_with("avc1") {
+    let normalized = normalize_decoder_codec_identifier(codec);
+    if matches!(normalized.as_str(), "h264" | "avc" | "avc1" | "avc3") {
         Some("video/avc")
-    } else if normalized == "hevc"
-        || normalized == "h265"
-        || normalized.starts_with("hvc1")
-        || normalized.starts_with("hev1")
-        || normalized.starts_with("dvh1")
-        || normalized.starts_with("dvhe")
-    {
+    } else if matches!(normalized.as_str(), "hevc" | "h265" | "hvc1" | "hev1") {
         Some("video/hevc")
     } else {
         None
@@ -916,14 +815,14 @@ mod android_media {
     use std::ptr::NonNull;
 
     use player_plugin::{
-        DecoderBitstreamFormat, DecoderError, DecoderMediaKind, DecoderNativeFrameMetadata,
-        DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind, DecoderPacket,
-        DecoderPacketResult, DecoderReceiveNativeFrameMetadata, DecoderVisibleRect,
+        DecoderBitstreamFormat, DecoderError, DecoderMediaKind, DecoderNativeFrame,
+        DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
+        DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameOutput, DecoderVisibleRect,
         NativeFrameColorMetadata, NativeFrameHdrMetadata, NativeFramePipelineProfile,
     };
 
     use super::{
-        AMEDIA_OK, MediaCodecFrameLeaseIds, MediaCodecOutputBufferKind,
+        AMEDIA_OK, MediaCodecDequeueStep, MediaCodecFrameLeaseIds, MediaCodecOutputBufferKind,
         MediaCodecPendingOutputEosAction, MediaStatus, android_color_range_label,
         android_color_standard_label, android_color_standard_matrix_label,
         android_color_transfer_label, codec_config_buffers, codec_mime,
@@ -931,7 +830,7 @@ mod android_media {
         mediacodec_hdr_metadata_from_color, mediacodec_output_buffer_kind,
         mediacodec_pending_output_eos_action, mediacodec_surface_texture_format,
         merge_mediacodec_color_metadata, merge_mediacodec_hdr_metadata, nal_length_size_for_config,
-        packet_input_data_for_mediacodec,
+        packet_input_data_for_mediacodec, run_bounded_mediacodec_dequeue,
     };
 
     const AMEDIACODEC_INFO_TRY_AGAIN_LATER: isize = -1;
@@ -1000,7 +899,7 @@ mod android_media {
             size: usize,
         );
 
-        fn AMediaCodec_createDecoderByType(mime_type: *const c_char) -> *mut AMediaCodec;
+        fn AMediaCodec_createCodecByName(name: *const c_char) -> *mut AMediaCodec;
         fn AMediaCodec_configure(
             codec: *mut AMediaCodec,
             format: *const AMediaFormat,
@@ -1041,7 +940,7 @@ mod android_media {
 
     #[derive(Debug)]
     pub(super) struct AndroidMediaCodecBackend {
-        codec: NonNull<AMediaCodec>,
+        codec: MediaCodecHandle,
         output_format: MediaCodecOutputFormat,
         bitstream_format: Option<DecoderBitstreamFormat>,
         nal_length_size: usize,
@@ -1056,6 +955,56 @@ mod android_media {
     #[derive(Debug, Clone, Copy)]
     struct MediaCodecOutputFrame {
         index: usize,
+    }
+
+    #[derive(Debug)]
+    struct MediaCodecHandle {
+        raw: Option<NonNull<AMediaCodec>>,
+    }
+
+    impl MediaCodecHandle {
+        fn new(raw: NonNull<AMediaCodec>) -> Self {
+            Self { raw: Some(raw) }
+        }
+
+        fn as_ptr(&self) -> Result<*mut AMediaCodec, DecoderError> {
+            self.raw
+                .map(NonNull::as_ptr)
+                .ok_or(DecoderError::NotConfigured)
+        }
+
+        fn delete(&mut self) -> MediaStatus {
+            let Some(raw) = self.raw.take() else {
+                return AMEDIA_OK;
+            };
+            // SAFETY: `raw` is uniquely owned by this wrapper and is removed
+            // before the destructive delete call, so it cannot be deleted twice.
+            unsafe { AMediaCodec_delete(raw.as_ptr()) }
+        }
+    }
+
+    // SAFETY: the synchronous NDK MediaCodec API has no caller-thread
+    // affinity. This wrapper uniquely owns the handle, never registers async
+    // callbacks, and all operations are serialized through mutable backend
+    // access. It is intentionally not `Sync`.
+    unsafe impl Send for MediaCodecHandle {}
+
+    impl Drop for MediaCodecHandle {
+        fn drop(&mut self) {
+            let status = self.delete();
+            if status != AMEDIA_OK {
+                tracing::warn!(
+                    media_status = status,
+                    "AMediaCodec_delete failed while dropping an owned codec"
+                );
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn assert_android_backend_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<AndroidMediaCodecBackend>();
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1097,6 +1046,7 @@ mod android_media {
         pub(super) fn open(
             config: &player_plugin::DecoderSessionConfig,
             native_window_ptr: usize,
+            decoder_implementation_name: &str,
         ) -> Result<Self, DecoderError> {
             let mime = codec_mime(&config.codec).ok_or_else(|| DecoderError::UnsupportedCodec {
                 codec: config.codec.clone(),
@@ -1104,6 +1054,12 @@ mod android_media {
             let mime = CString::new(mime).map_err(|error| {
                 DecoderError::payload_codec(format!("invalid MediaCodec MIME string: {error}"))
             })?;
+            let decoder_implementation_name =
+                CString::new(decoder_implementation_name).map_err(|error| {
+                    DecoderError::payload_codec(format!(
+                        "invalid MediaCodec implementation name: {error}"
+                    ))
+                })?;
             let width = config.width.or(config.coded_width).unwrap_or(0);
             let height = config.height.or(config.coded_height).unwrap_or(0);
             if width == 0 || height == 0 {
@@ -1137,39 +1093,31 @@ mod android_media {
                     );
                 }
             }
-            // SAFETY: the MIME CString is valid and NUL-terminated.
-            let codec = NonNull::new(unsafe { AMediaCodec_createDecoderByType(mime.as_ptr()) })
+            // SAFETY: the implementation-name CString is valid and
+            // NUL-terminated. The returned codec is uniquely owned here.
+            let codec = MediaCodecHandle::new(
+                NonNull::new(unsafe {
+                    AMediaCodec_createCodecByName(decoder_implementation_name.as_ptr())
+                })
                 .ok_or_else(|| DecoderError::UnsupportedCapability {
-                    capability: "android-mediacodec-create-decoder".to_owned(),
-                })?;
+                    capability: "host-selected-hardware-decoder-implementation".to_owned(),
+                })?,
+            );
             let surface = native_window_ptr as *mut ANativeWindow;
+            let codec_ptr = codec.as_ptr()?;
             // SAFETY: `codec`, `format`, and `surface` are valid for this call.
             let configure_status = unsafe {
-                AMediaCodec_configure(
-                    codec.as_ptr(),
-                    format.as_ptr(),
-                    surface,
-                    std::ptr::null_mut(),
-                    0,
-                )
+                AMediaCodec_configure(codec_ptr, format.as_ptr(), surface, std::ptr::null_mut(), 0)
             };
             if configure_status != AMEDIA_OK {
-                // SAFETY: codec was created above and has not been deleted yet.
-                unsafe {
-                    let _ = AMediaCodec_delete(codec.as_ptr());
-                }
                 return Err(media_status_error(
                     "AMediaCodec_configure",
                     configure_status,
                 ));
             }
             // SAFETY: `codec` is configured and ready to start.
-            let start_status = unsafe { AMediaCodec_start(codec.as_ptr()) };
+            let start_status = unsafe { AMediaCodec_start(codec_ptr) };
             if start_status != AMEDIA_OK {
-                // SAFETY: codec was created above and has not been deleted yet.
-                unsafe {
-                    let _ = AMediaCodec_delete(codec.as_ptr());
-                }
                 return Err(media_status_error("AMediaCodec_start", start_status));
             }
             Ok(Self {
@@ -1221,17 +1169,11 @@ mod android_media {
             if !packet.end_of_stream {
                 self.copy_input(index, input_data.as_ref())?;
             }
+            let codec = self.codec.as_ptr()?;
             // SAFETY: `index` came from dequeueInputBuffer and the copied data
             // length fits that input buffer.
             let status = unsafe {
-                AMediaCodec_queueInputBuffer(
-                    self.codec.as_ptr(),
-                    index,
-                    0,
-                    input_data.len(),
-                    pts_us,
-                    flags,
-                )
+                AMediaCodec_queueInputBuffer(codec, index, 0, input_data.len(), pts_us, flags)
             };
             if status != AMEDIA_OK {
                 return Err(media_status_error("AMediaCodec_queueInputBuffer", status));
@@ -1245,49 +1187,44 @@ mod android_media {
         pub(super) fn receive_native_frame(
             &mut self,
             codec_name: &str,
-        ) -> Result<(DecoderReceiveNativeFrameMetadata, usize), DecoderError> {
+        ) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
             if self.closed {
                 return Err(DecoderError::NotConfigured);
             }
             if self.saw_output_eos {
-                return Ok((DecoderReceiveNativeFrameMetadata::eof(), 0));
+                return Ok(DecoderReceiveNativeFrameOutput::Eof);
             }
             if self.pending_output_eos {
                 match mediacodec_pending_output_eos_action(self.outstanding.len()) {
                     MediaCodecPendingOutputEosAction::ReportEof => {
                         self.pending_output_eos = false;
                         self.saw_output_eos = true;
-                        return Ok((DecoderReceiveNativeFrameMetadata::eof(), 0));
+                        return Ok(DecoderReceiveNativeFrameOutput::Eof);
                     }
                     MediaCodecPendingOutputEosAction::WaitForOutstandingRelease => {
-                        return Ok((DecoderReceiveNativeFrameMetadata::need_more_input(), 0));
+                        return Ok(DecoderReceiveNativeFrameOutput::NeedMoreInput);
                     }
                 }
             }
-            loop {
+            let output = run_bounded_mediacodec_dequeue(|| {
                 let mut info = AMediaCodecBufferInfo::default();
+                let codec = self.codec.as_ptr()?;
                 // SAFETY: `codec` is valid and `info` is writable.
                 let output = unsafe {
-                    AMediaCodec_dequeueOutputBuffer(
-                        self.codec.as_ptr(),
-                        &mut info,
-                        DEQUEUE_TIMEOUT_US,
-                    )
+                    AMediaCodec_dequeueOutputBuffer(codec, &mut info, DEQUEUE_TIMEOUT_US)
                 };
                 match output {
-                    AMEDIACODEC_INFO_TRY_AGAIN_LATER => {
-                        return Ok((DecoderReceiveNativeFrameMetadata::need_more_input(), 0));
-                    }
+                    AMEDIACODEC_INFO_TRY_AGAIN_LATER => Ok(MediaCodecDequeueStep::Yield(
+                        DecoderReceiveNativeFrameOutput::NeedMoreInput,
+                    )),
                     AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED => {
                         self.update_output_format()?;
-                        continue;
+                        Ok(MediaCodecDequeueStep::Skip)
                     }
-                    AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED => continue,
-                    value if value < 0 => {
-                        return Err(DecoderError::internal(format!(
-                            "AMediaCodec_dequeueOutputBuffer returned {value}"
-                        )));
-                    }
+                    AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED => Ok(MediaCodecDequeueStep::Skip),
+                    value if value < 0 => Err(DecoderError::internal(format!(
+                        "AMediaCodec_dequeueOutputBuffer returned {value}"
+                    ))),
                     value => {
                         let index = usize::try_from(value).map_err(|_| {
                             DecoderError::internal("MediaCodec output index overflowed usize")
@@ -1296,12 +1233,14 @@ mod android_media {
                         match output_kind {
                             MediaCodecOutputBufferKind::CodecConfig => {
                                 self.release_output_index(index, false)?;
-                                continue;
+                                return Ok(MediaCodecDequeueStep::Skip);
                             }
                             MediaCodecOutputBufferKind::Eof => {
                                 self.release_output_index(index, false)?;
                                 self.saw_output_eos = true;
-                                return Ok((DecoderReceiveNativeFrameMetadata::eof(), 0));
+                                return Ok(MediaCodecDequeueStep::Yield(
+                                    DecoderReceiveNativeFrameOutput::Eof,
+                                ));
                             }
                             MediaCodecOutputBufferKind::Frame { pending_eos } => {
                                 if pending_eos {
@@ -1324,6 +1263,11 @@ mod android_media {
                         }
                         self.outstanding
                             .insert(handle, MediaCodecOutputFrame { index });
+                        let frame_id = u64::try_from(handle).map_err(|_| {
+                            DecoderError::internal(
+                                "MediaCodec frame lease id overflowed the native frame id",
+                            )
+                        })?;
                         let output_format = self.output_format.clone();
                         let metadata = DecoderNativeFrameMetadata {
                             media_kind: DecoderMediaKind::Video,
@@ -1346,16 +1290,26 @@ mod android_media {
                             hdr: output_format.hdr.clone(),
                             sync_info: None,
                             transform: None,
-                            frame_id: Some(handle as u64),
+                            frame_id: Some(frame_id),
                             release_tracking: Some(DecoderNativeFrameReleaseTracking {
-                                frame_id: Some(handle as u64),
+                                frame_id: Some(frame_id),
                                 requires_release: true,
                             }),
                         };
-                        return Ok((DecoderReceiveNativeFrameMetadata::frame(metadata), handle));
+                        Ok(MediaCodecDequeueStep::Yield(
+                            DecoderReceiveNativeFrameOutput::Frame(DecoderNativeFrame {
+                                metadata,
+                                handle,
+                                lease_token: None,
+                            }),
+                        ))
                     }
                 }
-            }
+            })?;
+            Ok(match output {
+                Some(output) => output,
+                None => DecoderReceiveNativeFrameOutput::NeedMoreInput,
+            })
         }
 
         pub(super) fn release_native_frame(
@@ -1374,8 +1328,9 @@ mod android_media {
 
         pub(super) fn flush(&mut self) -> Result<(), DecoderError> {
             self.release_all_outstanding(false)?;
+            let codec = self.codec.as_ptr()?;
             // SAFETY: `codec` is valid and started.
-            let status = unsafe { AMediaCodec_flush(self.codec.as_ptr()) };
+            let status = unsafe { AMediaCodec_flush(codec) };
             if status != AMEDIA_OK {
                 return Err(media_status_error("AMediaCodec_flush", status));
             }
@@ -1390,18 +1345,18 @@ mod android_media {
                 return Ok(());
             }
             let release_result = self.release_all_outstanding(false);
+            let codec = self.codec.as_ptr()?;
             // SAFETY: `codec` is valid until delete completes.
-            let stop_status = unsafe { AMediaCodec_stop(self.codec.as_ptr()) };
-            // SAFETY: `codec` is valid and deleted exactly once here.
-            let delete_status = unsafe { AMediaCodec_delete(self.codec.as_ptr()) };
+            let stop_status = unsafe { AMediaCodec_stop(codec) };
+            let delete_status = self.codec.delete();
             self.closed = true;
             media_codec_close_result(release_result, stop_status, delete_status)
         }
 
         fn dequeue_input(&mut self) -> Result<Option<usize>, DecoderError> {
+            let codec = self.codec.as_ptr()?;
             // SAFETY: `codec` is valid and started.
-            let index =
-                unsafe { AMediaCodec_dequeueInputBuffer(self.codec.as_ptr(), DEQUEUE_TIMEOUT_US) };
+            let index = unsafe { AMediaCodec_dequeueInputBuffer(codec, DEQUEUE_TIMEOUT_US) };
             match index {
                 AMEDIACODEC_INFO_TRY_AGAIN_LATER => Ok(None),
                 value if value < 0 => Err(DecoderError::internal(format!(
@@ -1415,9 +1370,9 @@ mod android_media {
 
         fn copy_input(&mut self, index: usize, data: &[u8]) -> Result<(), DecoderError> {
             let mut capacity = 0_usize;
+            let codec = self.codec.as_ptr()?;
             // SAFETY: `index` came from dequeueInputBuffer and `capacity` is writable.
-            let buffer =
-                unsafe { AMediaCodec_getInputBuffer(self.codec.as_ptr(), index, &mut capacity) };
+            let buffer = unsafe { AMediaCodec_getInputBuffer(codec, index, &mut capacity) };
             let Some(buffer) = NonNull::new(buffer) else {
                 return Err(DecoderError::internal(
                     "AMediaCodec_getInputBuffer returned null",
@@ -1441,11 +1396,10 @@ mod android_media {
         }
 
         fn update_output_format(&mut self) -> Result<(), DecoderError> {
+            let codec = self.codec.as_ptr()?;
             // SAFETY: `codec` is valid and started. The returned AMediaFormat is
             // owned by the caller and released by the MediaFormat wrapper below.
-            let Some(format) =
-                NonNull::new(unsafe { AMediaCodec_getOutputFormat(self.codec.as_ptr()) })
-            else {
+            let Some(format) = NonNull::new(unsafe { AMediaCodec_getOutputFormat(codec) }) else {
                 return Err(DecoderError::internal(
                     "AMediaCodec_getOutputFormat returned null",
                 ));
@@ -1476,9 +1430,9 @@ mod android_media {
             index: usize,
             presented: bool,
         ) -> Result<(), DecoderError> {
+            let codec = self.codec.as_ptr()?;
             // SAFETY: `index` is an outstanding output buffer index from this codec.
-            let status =
-                unsafe { AMediaCodec_releaseOutputBuffer(self.codec.as_ptr(), index, presented) };
+            let status = unsafe { AMediaCodec_releaseOutputBuffer(codec, index, presented) };
             if status == AMEDIA_OK {
                 Ok(())
             } else {
@@ -1670,141 +1624,22 @@ fn media_status_error(operation: &str, status: MediaStatus) -> DecoderError {
     DecoderError::internal(format!("{operation} failed with media_status_t={status}"))
 }
 
-fn decode_json<T>(data: *const u8, len: usize) -> Result<T, DecoderError>
-where
-    T: serde::de::DeserializeOwned,
-{
-    if data.is_null() && len > 0 {
-        return Err(DecoderError::payload_codec(
-            "JSON payload pointer is null while len is non-zero",
-        ));
-    }
-    let slice = if len == 0 {
-        &[]
-    } else {
-        // SAFETY: the ABI caller provides a valid JSON byte slice for the
-        // duration of this call.
-        unsafe { std::slice::from_raw_parts(data, len) }
-    };
-    serde_json::from_slice(slice).map_err(|error| DecoderError::payload_codec(error.to_string()))
-}
-
-fn serialize_payload<T>(payload: &T) -> VesperPluginBytes
-where
-    T: serde::Serialize,
-{
-    match serde_json::to_vec(payload) {
-        Ok(bytes) => VesperPluginBytes::from_vec(bytes),
-        Err(error) => VesperPluginBytes::from_vec(error.to_string().into_bytes()),
-    }
-}
-
-fn open_success(session: *mut c_void, info: &DecoderSessionInfo) -> VesperDecoderOpenSessionResult {
-    VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Success as u32,
-        session,
-        payload: serialize_payload(info),
-    }
-}
-
-fn open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
-    VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        session: std::ptr::null_mut(),
-        payload: serialize_payload(&error),
-    }
-}
-
-fn process_success<T>(payload: &T) -> VesperPluginProcessResult
-where
-    T: serde::Serialize,
-{
-    VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success as u32,
-        payload: serialize_payload(payload),
-    }
-}
-
-fn process_error(error: DecoderError) -> VesperPluginProcessResult {
-    VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        payload: serialize_payload(&error),
-    }
-}
-
-fn native_frame_success(
-    metadata: &DecoderReceiveNativeFrameMetadata,
-    handle: usize,
-) -> VesperDecoderReceiveNativeFrameResult {
-    VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Success as u32,
-        metadata: serialize_payload(metadata),
-        handle,
-    }
-}
-
-fn native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameResult {
-    VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        metadata: serialize_payload(&error),
-        handle: 0,
-    }
-}
-
-fn pcm_frame_error(error: DecoderError) -> VesperDecoderReceivePcmFrameResult {
-    VesperDecoderReceivePcmFrameResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        metadata: serialize_payload(&error),
-        data: VesperPluginBytes::default(),
-    }
-}
-
-fn catch_decoder_bytes(f: impl FnOnce() -> VesperPluginBytes) -> VesperPluginBytes {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| serialize_payload(&plugin_panic_error()))
-}
-
-fn catch_decoder_open(
-    f: impl FnOnce() -> VesperDecoderOpenSessionResult,
-) -> VesperDecoderOpenSessionResult {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| open_error(plugin_panic_error()))
-}
-
-fn catch_decoder_process(
-    f: impl FnOnce() -> VesperPluginProcessResult,
-) -> VesperPluginProcessResult {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| process_error(plugin_panic_error()))
-}
-
-fn catch_decoder_native_frame(
-    f: impl FnOnce() -> VesperDecoderReceiveNativeFrameResult,
-) -> VesperDecoderReceiveNativeFrameResult {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| native_frame_error(plugin_panic_error()))
-}
-
-fn catch_decoder_pcm_frame(
-    f: impl FnOnce() -> VesperDecoderReceivePcmFrameResult,
-) -> VesperDecoderReceivePcmFrameResult {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| pcm_frame_error(plugin_panic_error()))
-}
-
-fn plugin_panic_error() -> DecoderError {
-    DecoderError::internal("decoder plugin callback panicked")
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        AMEDIA_OK, MediaCodecFrameLeaseIds, MediaCodecOutputBufferKind,
+        AMEDIA_OK, MAX_OUTPUT_DEQUEUE_STEPS_PER_CALL, MediaCodecDecoderSession,
+        MediaCodecDequeueStep, MediaCodecFrameLeaseIds, MediaCodecOutputBufferKind,
         MediaCodecPendingOutputEosAction, android_color_standard_label,
         android_color_standard_matrix_label, android_color_transfer_label,
         android_native_window_ptr, codec_config_buffers, codec_mime,
         complete_mediacodec_frame_release, decoder_capabilities, decoder_native_requirements,
-        decoder_open_session_json, length_prefixed_sample_to_annex_b, media_codec_close_result,
+        length_prefixed_sample_to_annex_b, media_codec_close_result,
         mediacodec_hdr_metadata_from_color, mediacodec_output_buffer_kind,
         mediacodec_pending_output_eos_action, mediacodec_surface_texture_format,
         merge_mediacodec_color_metadata, merge_mediacodec_hdr_metadata, nal_length_size_for_config,
-        packet_data_for_mediacodec, packet_input_data_for_mediacodec, split_avcc_extradata,
-        split_hvcc_extradata, vesper_plugin_entry,
+        packet_data_for_mediacodec, packet_input_data_for_mediacodec,
+        required_mediacodec_decoder_implementation_name, run_bounded_mediacodec_dequeue,
+        split_avcc_extradata, split_hvcc_extradata, vesper_plugin_entry,
     };
     use player_plugin::{
         DecoderBitstreamFormat, DecoderError, DecoderFrameFormat, DecoderMediaKind,
@@ -1812,7 +1647,6 @@ mod tests {
         DecoderPacket, DecoderSessionConfig, NativeFrameColorMetadata,
         NativeFrameContentLightMetadata, NativeFrameDolbyVisionMetadata, NativeFrameHdrMetadata,
         NativeFrameMasteringDisplayMetadata, NativeFramePipelineProfile,
-        VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VesperPluginKind, VesperPluginResultStatus,
     };
     use std::collections::HashMap;
 
@@ -1843,28 +1677,96 @@ mod tests {
     }
 
     #[test]
-    fn exported_descriptor_matches_decoder_plugin_metadata() {
-        // SAFETY: the MediaCodec entry point returns a process-lifetime
-        // descriptor pointer or null; this test immediately borrows it.
-        let descriptor = unsafe { vesper_plugin_entry().as_ref() }.expect("descriptor");
+    fn exports_plugin_entry() {
+        let entry: extern "C" fn() -> *const player_plugin::__private::VesperPluginRoot =
+            vesper_plugin_entry;
+        assert!(!entry().is_null());
+    }
 
+    #[test]
+    fn decoder_implementation_name_is_required_and_preserved_exactly() {
+        let mut config = DecoderSessionConfig::default();
+        let missing = required_mediacodec_decoder_implementation_name(&config)
+            .expect_err("MediaCodec requires an exact host-selected decoder name");
+        assert!(matches!(
+            missing,
+            DecoderError::UnsupportedCapability { capability }
+                if capability == "host-selected-hardware-decoder-implementation"
+        ));
+
+        config.required_decoder_implementation_name = Some(" \t ".to_owned());
+        assert!(required_mediacodec_decoder_implementation_name(&config).is_err());
+
+        config.required_decoder_implementation_name = Some("c2.vendor.avc.decoder".to_owned());
         assert_eq!(
-            descriptor.abi_version,
-            VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT
+            required_mediacodec_decoder_implementation_name(&config),
+            Ok("c2.vendor.avc.decoder")
         );
-        assert_eq!(descriptor.plugin_kind, VesperPluginKind::Decoder as u32);
-        assert!(!descriptor.api.is_null());
-        assert!(!descriptor.plugin_name.is_null());
+
+        config.required_decoder_implementation_name = Some(" c2.vendor.avc.decoder ".to_owned());
+        assert_eq!(
+            required_mediacodec_decoder_implementation_name(&config),
+            Ok(" c2.vendor.avc.decoder ")
+        );
+    }
+
+    #[test]
+    fn bounded_dequeue_stops_after_sixteen_skippable_events() {
+        let mut calls = 0_usize;
+        let output = run_bounded_mediacodec_dequeue(|| {
+            calls += 1;
+            Ok::<_, DecoderError>(MediaCodecDequeueStep::<&str>::Skip)
+        })
+        .expect("skippable dequeue events do not fail");
+
+        assert_eq!(output, None);
+        assert_eq!(calls, MAX_OUTPUT_DEQUEUE_STEPS_PER_CALL);
+    }
+
+    #[test]
+    fn bounded_dequeue_returns_frame_after_fifteen_skippable_events() {
+        let mut calls = 0_usize;
+        let output = run_bounded_mediacodec_dequeue(|| {
+            calls += 1;
+            if calls < MAX_OUTPUT_DEQUEUE_STEPS_PER_CALL {
+                Ok::<_, DecoderError>(MediaCodecDequeueStep::Skip)
+            } else {
+                Ok(MediaCodecDequeueStep::Yield("frame"))
+            }
+        })
+        .expect("the sixteenth dequeue step can yield a frame");
+
+        assert_eq!(output, Some("frame"));
+        assert_eq!(calls, MAX_OUTPUT_DEQUEUE_STEPS_PER_CALL);
+    }
+
+    #[test]
+    fn bounded_dequeue_returns_immediate_try_again_result() {
+        let mut calls = 0_usize;
+        let output = run_bounded_mediacodec_dequeue(|| {
+            calls += 1;
+            Ok::<_, DecoderError>(MediaCodecDequeueStep::Yield("need-more-input"))
+        })
+        .expect("try-again is a successful dequeue outcome");
+
+        assert_eq!(output, Some("need-more-input"));
+        assert_eq!(calls, 1);
     }
 
     #[test]
     fn capabilities_advertise_android_mediacodec_video_contract() {
         let capabilities = decoder_capabilities();
 
-        assert!(capabilities.supports_codec("h264", DecoderMediaKind::Video));
-        assert!(capabilities.supports_codec("HEV1", DecoderMediaKind::Video));
-        assert!(capabilities.supports_codec("dvh1", DecoderMediaKind::Video));
-        assert!(capabilities.supports_codec("dvhe", DecoderMediaKind::Video));
+        assert_eq!(
+            capabilities.supports_codec("h264", DecoderMediaKind::Video),
+            cfg!(target_os = "android")
+        );
+        assert_eq!(
+            capabilities.supports_codec("HEV1", DecoderMediaKind::Video),
+            cfg!(target_os = "android")
+        );
+        assert!(!capabilities.supports_codec("dvh1", DecoderMediaKind::Video));
+        assert!(!capabilities.supports_codec("dvhe", DecoderMediaKind::Video));
         assert!(!capabilities.supports_audio_frames);
         assert!(!capabilities.supports_cpu_video_frames);
         assert_eq!(
@@ -2065,7 +1967,11 @@ mod tests {
         assert!(requirements.requires_native_device_context);
         assert_eq!(
             requirements.accepted_bitstream_formats,
-            vec![DecoderBitstreamFormat::Avcc, DecoderBitstreamFormat::Hvcc]
+            vec![
+                DecoderBitstreamFormat::AnnexB,
+                DecoderBitstreamFormat::Avcc,
+                DecoderBitstreamFormat::Hvcc,
+            ]
         );
     }
 
@@ -2115,10 +2021,11 @@ mod tests {
     fn codec_mime_maps_supported_android_video_codecs() {
         assert_eq!(codec_mime("h264"), Some("video/avc"));
         assert_eq!(codec_mime("AVC1"), Some("video/avc"));
+        assert_eq!(codec_mime("AVC3"), Some("video/avc"));
         assert_eq!(codec_mime("hevc"), Some("video/hevc"));
         assert_eq!(codec_mime("HVC1"), Some("video/hevc"));
-        assert_eq!(codec_mime("dvh1.05.06"), Some("video/hevc"));
-        assert_eq!(codec_mime("dvhe.08.07"), Some("video/hevc"));
+        assert_eq!(codec_mime("dvh1.05.06"), None);
+        assert_eq!(codec_mime("dvhe.08.07"), None);
         assert_eq!(codec_mime("vp9"), None);
     }
 
@@ -2319,7 +2226,7 @@ mod tests {
 
     #[test]
     #[cfg(not(target_os = "android"))]
-    fn open_session_reports_unsupported_outside_android() {
+    fn safe_session_reports_unsupported_outside_android() {
         let config = DecoderSessionConfig {
             codec: "h264".to_owned(),
             media_kind: DecoderMediaKind::Video,
@@ -2328,24 +2235,8 @@ mod tests {
             }),
             ..DecoderSessionConfig::default()
         };
-        let config_json = serde_json::to_vec(&config).expect("config json");
-
-        // SAFETY: all pointers passed to the callback are valid for this
-        // synchronous test call.
-        let result = unsafe {
-            decoder_open_session_json(
-                std::ptr::null_mut(),
-                config_json.as_ptr(),
-                config_json.len(),
-            )
-        };
-
-        assert_eq!(result.status, VesperPluginResultStatus::Failure as u32);
-        assert!(result.session.is_null());
-        // SAFETY: the payload was produced by this plugin in the current
-        // dynamic library and the test consumes it once.
-        let payload = unsafe { result.payload.into_vec() };
-        let error = serde_json::from_slice::<DecoderError>(&payload).expect("decoder error");
+        let error = MediaCodecDecoderSession::open(config)
+            .expect_err("MediaCodec is unavailable outside Android");
         assert!(matches!(
             error,
             DecoderError::UnsupportedCapability { capability }

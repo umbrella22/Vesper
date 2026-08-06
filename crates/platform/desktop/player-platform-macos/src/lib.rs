@@ -39,14 +39,15 @@ use player_plugin::{
     DecoderBitstreamFormat, DecoderMediaKind, DecoderNativeFrame, DecoderNativeHandleKind,
     DecoderPacket, DecoderReceiveNativeFrameOutput, DecoderSessionConfig,
     DecoderSessionRequirements, FrameProcessorSessionConfig, NativeDecoderSession,
-    NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind, SourceNormalizerPacket,
-    SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
-    SourceNormalizerPacketSessionConfig, SourceNormalizerPacketSessionRequirements,
-    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketStatus,
+    NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind, PluginReference,
+    SourceNormalizerPacket, SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
+    SourceNormalizerPacketSession, SourceNormalizerPacketSessionConfig,
+    SourceNormalizerPacketSessionRequirements, SourceNormalizerPacketTrackInfo,
+    SourceNormalizerReadPacketStatus,
 };
 use player_plugin_loader::{
-    DecoderPluginMatchRequest, LoadedDynamicPlugin, PluginCapabilitySummary,
-    PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
+    DecoderPluginMatchRequest, PluginCapabilitySummary, PluginDiagnosticRecord,
+    PluginDiagnosticStatus, PluginRegistry,
 };
 #[cfg(test)]
 use player_runtime::PlayerFrameProcessingMetrics;

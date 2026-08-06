@@ -235,8 +235,9 @@ typedef struct VesperRuntimePlaylistActiveItem {
 typedef struct VesperRuntimeDownloadConfig {
   bool auto_start;
   bool run_post_processors_on_completion;
-  char **plugin_library_paths;
-  uintptr_t plugin_library_paths_len;
+  uint64_t plugin_registry_handle;
+  char *post_download_plugin_references_json;
+  char *event_hook_plugin_references_json;
 } VesperRuntimeDownloadConfig;
 
 typedef enum VesperRuntimeDownloadContentFormat {
@@ -430,6 +431,7 @@ typedef struct VesperRuntimeDownloadEvent {
 typedef struct VesperRuntimeDownloadEventList {
   VesperRuntimeDownloadEvent *events;
   uintptr_t len;
+  uint64_t dropped_events;
 } VesperRuntimeDownloadEventList;
 
 typedef struct VesperRuntimeDownloadExportCallbacks {
@@ -556,7 +558,10 @@ void vesper_runtime_playlist_session_dispose(uint64_t handle);
 
 bool vesper_runtime_download_session_create(
     const VesperRuntimeDownloadConfig *config,
-    uint64_t *out_handle);
+    uint64_t *out_handle,
+    char **out_error_message);
+
+void vesper_runtime_download_error_string_free(char *value);
 
 bool vesper_runtime_download_session_create_task(
     uint64_t handle,
@@ -628,9 +633,13 @@ bool vesper_runtime_download_session_snapshot(
     uint64_t handle,
     VesperRuntimeDownloadSnapshot *out_snapshot);
 
-bool vesper_runtime_download_session_drain_commands(
+bool vesper_runtime_download_session_peek_commands(
     uint64_t handle,
     VesperRuntimeDownloadCommandList *out_commands);
+
+bool vesper_runtime_download_session_acknowledge_commands(
+    uint64_t handle,
+    uintptr_t command_count);
 
 bool vesper_runtime_download_session_drain_events(
     uint64_t handle,
@@ -650,9 +659,35 @@ bool vesper_runtime_resolve_track_preferences(
 
 void vesper_runtime_track_preferences_free(VesperRuntimeTrackPreferencePolicy *track_preferences);
 
-bool vesper_runtime_benchmark_sink_session_create(
-    char **plugin_library_paths,
-    uintptr_t plugin_library_paths_len,
+bool vesper_runtime_ios_plugin_plan_create(
+    const uint8_t *fragment_set_json,
+    uintptr_t fragment_set_json_len,
+    const uint8_t *references_json,
+    uintptr_t references_json_len,
+    uint64_t *out_handle,
+    char **out_error_message);
+
+bool vesper_runtime_ios_plugin_plan_resolutions_json(
+    uint64_t handle,
+    char **out_json,
+    char **out_error_message);
+
+void vesper_runtime_ios_plugin_plan_dispose(uint64_t handle);
+
+bool vesper_runtime_ios_plugin_registry_load(
+    uint64_t plan_handle,
+    const uint8_t *resolved_frameworks_json,
+    uintptr_t resolved_frameworks_json_len,
+    uint64_t *out_handle,
+    char **out_error_message);
+
+void vesper_runtime_ios_plugin_registry_dispose(uint64_t handle);
+
+void vesper_runtime_ios_plugin_string_free(char *value);
+
+bool vesper_runtime_benchmark_sink_session_create_with_references_json(
+    uint64_t plugin_registry_handle,
+    const char *references_json,
     uint64_t *out_handle,
     char **out_error_message);
 
@@ -669,6 +704,35 @@ bool vesper_runtime_benchmark_sink_session_flush_json(
     char **out_report_json,
     char **out_error_message);
 
+bool vesper_runtime_playback_event_hook_session_create(
+    uint64_t plugin_registry_handle,
+    const char *references_json,
+    uint64_t *out_handle,
+    char **out_error_message);
+
+bool vesper_runtime_playback_event_hook_session_submit_json(
+    uint64_t handle,
+    const char *event_json,
+    char **out_error_message);
+
+bool vesper_runtime_playback_event_hook_session_flush(
+    uint64_t handle,
+    uint64_t timeout_ms,
+    char **out_error_message);
+
+bool vesper_runtime_playback_event_hook_session_drain_json(
+    uint64_t handle,
+    char **out_report_json,
+    char **out_error_message);
+
+bool vesper_runtime_playback_event_hook_session_close(
+    uint64_t handle,
+    char **out_error_message);
+
+void vesper_runtime_playback_event_hook_session_dispose(uint64_t handle);
+
+void vesper_runtime_playback_event_hook_report_string_free(char *value);
+
 void vesper_runtime_benchmark_string_free(char *value);
 
 bool vesper_ios_plugin_abi_summary_json(
@@ -678,12 +742,10 @@ bool vesper_ios_plugin_abi_summary_json(
 bool vesper_mobile_plugin_diagnostics_json(
     const char *source_uri,
     uint32_t source_mode,
-    char **source_plugin_library_paths,
-    uintptr_t source_plugin_library_paths_len,
+    const char *source_plugin_artifacts_json,
     const char *runtime_profile,
     uint32_t frame_mode,
-    char **frame_plugin_library_paths,
-    uintptr_t frame_plugin_library_paths_len,
+    const char *frame_plugin_artifacts_json,
     char **out_json,
     char **out_error_message);
 
@@ -692,8 +754,7 @@ void vesper_mobile_plugin_diagnostics_string_free(char *value);
 bool vesper_source_normalizer_resource_open(
     const char *source_uri,
     uint32_t source_mode,
-    char **source_plugin_library_paths,
-    uintptr_t source_plugin_library_paths_len,
+    const char *source_plugin_artifacts_json,
     const char *runtime_profile,
     const char *output_root,
     bool force_normalized,
@@ -711,14 +772,11 @@ void vesper_source_normalizer_resource_dispose(uint64_t handle);
 bool vesper_ios_native_frame_pipeline_open(
     const char *source_uri,
     uint32_t source_mode,
-    char **source_plugin_library_paths,
-    uintptr_t source_plugin_library_paths_len,
+    const char *source_plugin_artifacts_json,
     const char *runtime_profile,
     uint32_t native_frame_mode,
-    char **decoder_plugin_library_paths,
-    uintptr_t decoder_plugin_library_paths_len,
-    char **frame_plugin_library_paths,
-    uintptr_t frame_plugin_library_paths_len,
+    const char *decoder_plugin_artifacts_json,
+    const char *frame_plugin_artifacts_json,
     uint32_t max_in_flight_frames,
     uint64_t *out_handle,
     char **out_json,

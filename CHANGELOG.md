@@ -5,6 +5,11 @@
 ### Breaking Changes
 
 - Raised the Rust workspace MSRV and dedicated CI check from 1.94 to 1.97.
+- Consolidated the native plugin ABI under the `vesper_plugin_entry` root and
+  typed interface query contract. The loader accepts only this contract.
+- Public plugin authorship is Rust Native or Rust WASM only. C/C++ author SDKs,
+  mobile WASM, and plugin access to protected media are outside the plugin
+  product boundary.
 - Android `setSubtitleTrackSelection` is now suspending and iOS is now
   `async throws`; both complete after native confirmation.
 - External subtitle source declarations now use `VesperExternalSubtitleSource`
@@ -16,6 +21,14 @@
 
 ### Added
 
+- Added the safe Rust plugin SDK, Native and WASM scaffolds, stable interface
+  identifiers, `PluginReference`, deterministic `.vesper-plugin` packaging,
+  Ed25519 publisher signatures, trust-store key rotation, and install checks.
+- Added the Rust `vesper plugin` CLI for scaffold, build, inspect, check,
+  package, verify, install, uninstall, list, and key management workflows.
+- Added the Wasmtime Component host for bounded EventHook and BenchmarkSink
+  plugins with memory/fuel/deadline limits, queue caps, structured logs, and
+  quarantine after traps or timeouts.
 - Added a mobile subtitle baseline across Android, iOS, and Flutter: external
   SRT, WebVTT, and SSA/ASS attachment, track selection, visibility, and bounded
   font scaling. Android renders Media3 cues in the native surface host; iOS uses
@@ -32,19 +45,36 @@
   FFmpeg compliance bundle and exactly one corresponding source archive before
   those XCFrameworks can be published, and binds that archive to the SHA-256
   recorded in each framework's build metadata.
+- Added a physical-device optional-plugin verifier that materializes a retained,
+  sanitized snapshot of the verified Release archives into an isolated Xcode
+  project. It records both the original Release ZIP and tested ZIP SHA-256 values
+  in `verified-release-inputs.json` and preserves the exact XCResult bundle.
 
 ### Changed
 
+- Moved the repository Codex marketplace and maintainer plugins under
+  `.agents/plugins`, reserving the root `plugins/` directory for Vesper runtime
+  plugin projects.
+- Isolated Gradle distributions, service homes, and Android build locks under
+  their Android projects; Vesper CLI commands no longer create repository-root
+  `.gradle/` state.
+- Expanded the Stage UI integration note into `lib/README.md`, the canonical
+  Android, iOS, and Flutter package guide, and corrected the iOS temporary-rate
+  callback and Flutter mobile-only examples.
 - HTTP URLs ending in `.flv` remain progressive VOD sources unless callers use
   the explicit `flvLive` source factory.
 - Native-frame plugin breakers now enforce queue/in-flight load decisions and
   reset consecutive failure counters after every successful adapter call.
 - Subtitle selection restore, source refresh, and stale callback handling now
   pass through bounded source-epoch and command-id coordination.
-- Native and Flutter iOS hosts now consume the App-target
-  `VesperPlayerOptionalPlugins` SwiftPM product, which embeds and signs three
-  FFmpeg component frameworks plus four plugin frameworks as top-level siblings.
+- Native and Flutter iOS hosts now consume seven direct products from the
+  `VesperPlayerOptionalPlugins` Swift package, one for each FFmpeg component or
+  plugin framework, and embed and sign them as top-level siblings.
   The flat-dylib and legacy umbrella-runtime embedding paths were removed.
+- Removed product-level plugin generation labels from the public entry symbol,
+  loader types, WIT package, schemas, mobile registry paths, templates, and
+  diagnostics. ABI and interface major/minor fields remain the compatibility
+  contract.
 
 ### Fixed
 

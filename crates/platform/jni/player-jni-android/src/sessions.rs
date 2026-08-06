@@ -1,11 +1,11 @@
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use jni::Env;
 use jni::sys::jlong;
 use player_platform_android::{AndroidHostBridgeSession, AndroidNativeFramePipelineSession};
 use player_platform_mobile::MobileSourceNormalizerResourceOpen;
-use player_plugin_loader::BenchmarkSinkPluginSession;
+use player_plugin::PluginReference;
+use player_plugin_loader::{BenchmarkSinkPluginSession, PluginRegistry};
 use player_runtime::{
     MediaSourceKind, MediaSourceProtocol, PlayerBufferingPolicy, PlayerCachePolicy,
     PlayerPreloadBudgetPolicy, PlayerResolvedPreloadBudgetPolicy, PlayerResolvedResiliencePolicy,
@@ -26,7 +26,11 @@ pub(crate) type AndroidJniSession = Arc<Mutex<AndroidHostBridgeSession>>;
 /// lock, drop the registry lock, and only then take the per-session lock while
 /// running caller closures. This keeps plugin FFI off the global registry
 /// mutex, mirroring `with_session_mut` / `with_source_normalizer_resource_session_mut`.
-pub(crate) type AndroidBenchmarkSinkSession = Arc<Mutex<BenchmarkSinkPluginSession>>;
+pub(crate) struct AndroidBenchmarkSinkSessionState {
+    session: BenchmarkSinkPluginSession,
+    _registry: Option<Arc<PluginRegistry>>,
+}
+pub(crate) type AndroidBenchmarkSinkSession = Arc<Mutex<AndroidBenchmarkSinkSessionState>>;
 
 /// Source-normalizer resource sessions wrap blocking plugin `poll()` calls that
 /// perform filesystem I/O (directory walks, disk-usage scans). They are stored
@@ -125,20 +129,47 @@ pub(crate) fn with_session_mut_checked<R>(
     Ok(f(&mut session))
 }
 
-pub(crate) fn new_session(source_uri: String) -> Result<jlong, &'static str> {
-    let session = Arc::new(Mutex::new(AndroidHostBridgeSession::new(source_uri)));
+pub(crate) fn new_session_with_plugin_registry(
+    source_uri: String,
+    registry: Option<Arc<PluginRegistry>>,
+    references: Vec<PluginReference>,
+) -> Result<jlong, String> {
+    let session = match registry {
+        Some(registry) => {
+            AndroidHostBridgeSession::new_with_plugin_registry(source_uri, registry, references)
+                .map_err(|error| error.to_string())?
+        }
+        None if references.is_empty() => AndroidHostBridgeSession::new(source_uri),
+        None => {
+            return Err(
+                "Android plugin registry handle is required for playback event-hook references"
+                    .to_owned(),
+            );
+        }
+    };
     let mut guard = lock_or_recover(sessions());
-    let handle = guard.insert(session);
+    let handle = guard.insert(Arc::new(Mutex::new(session)));
     if handle == 0 {
-        return Err("android JNI session registry overflow");
+        return Err("android JNI session registry overflow".to_owned());
     }
     Ok(handle)
 }
 
-pub(crate) fn new_benchmark_sink_session(paths: Vec<String>) -> Result<jlong, String> {
-    let paths = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
-    let session =
-        BenchmarkSinkPluginSession::load_paths(paths).map_err(|error| error.to_string())?;
+pub(crate) fn new_benchmark_sink_session_from_registry(
+    registry: Arc<PluginRegistry>,
+    references: Vec<PluginReference>,
+) -> Result<jlong, String> {
+    let session = BenchmarkSinkPluginSession::from_registry(&registry, references)
+        .map_err(|error| error.to_string())?;
+    register_benchmark_sink_session(AndroidBenchmarkSinkSessionState {
+        session,
+        _registry: Some(registry),
+    })
+}
+
+fn register_benchmark_sink_session(
+    session: AndroidBenchmarkSinkSessionState,
+) -> Result<jlong, String> {
     let mut guard = lock_or_recover(benchmark_sink_sessions());
     let handle = guard.insert(Arc::new(Mutex::new(session)));
     if handle == 0 {
@@ -293,7 +324,7 @@ pub(crate) fn with_benchmark_sink_session<R>(
     };
 
     let session = lock_or_recover(session.as_ref());
-    match f(&session) {
+    match f(&session.session) {
         Ok(value) => Some(value),
         Err(message) => {
             let _ = env.throw_new(

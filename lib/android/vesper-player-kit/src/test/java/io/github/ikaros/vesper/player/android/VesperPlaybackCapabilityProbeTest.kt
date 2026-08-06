@@ -18,7 +18,7 @@ class VesperPlaybackCapabilityProbeTest {
                         nativeFramePipelineConfiguration =
                             VesperNativeFramePipelineConfiguration(
                                 mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                                decoderPluginLibraryPaths = listOf("/tmp/libmediacodec.so"),
+                                decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                             ),
                     ),
                 codecProbeProvider = hardwareCodecs("video/hevc"),
@@ -44,12 +44,12 @@ class VesperPlaybackCapabilityProbeTest {
                         sourceNormalizerConfiguration =
                             VesperSourceNormalizerConfiguration(
                                 mode = VesperSourceNormalizerMode.PreferNormalized,
-                                pluginLibraryPaths = listOf("/tmp/libnormalizer.so"),
+                                pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                             ),
                         nativeFramePipelineConfiguration =
                             VesperNativeFramePipelineConfiguration(
                                 mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                                decoderPluginLibraryPaths = listOf("/tmp/libmediacodec.so"),
+                                decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                             ),
                     ),
                 codecProbeProvider = hardwareCodecs("video/hevc"),
@@ -76,12 +76,12 @@ class VesperPlaybackCapabilityProbeTest {
                         sourceNormalizerConfiguration =
                             VesperSourceNormalizerConfiguration(
                                 mode = VesperSourceNormalizerMode.PreferNormalized,
-                                pluginLibraryPaths = listOf("/tmp/libnormalizer.so"),
+                                pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                             ),
                         nativeFramePipelineConfiguration =
                             VesperNativeFramePipelineConfiguration(
                                 mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                                decoderPluginLibraryPaths = listOf("/tmp/libmediacodec.so"),
+                                decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                             ),
                     ),
                 codecProbeProvider = hardwareCodecs("video/hevc"),
@@ -110,7 +110,7 @@ class VesperPlaybackCapabilityProbeTest {
                         nativeFramePipelineConfiguration =
                             VesperNativeFramePipelineConfiguration(
                                 mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                                decoderPluginLibraryPaths = listOf("/tmp/libmediacodec.so"),
+                                decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                             ),
                     ),
                 codecProbeProvider = hardwareCodecs("video/hevc"),
@@ -235,7 +235,7 @@ class VesperPlaybackCapabilityProbeTest {
                         nativeFramePipelineConfiguration =
                             VesperNativeFramePipelineConfiguration(
                                 mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                                decoderPluginLibraryPaths = listOf("/tmp/libmediacodec.so"),
+                                decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                             ),
                     ),
                 codecProbeProvider = hardwareCodecs("video/hevc"),
@@ -264,7 +264,7 @@ class VesperPlaybackCapabilityProbeTest {
                         nativeFramePipelineConfiguration =
                             VesperNativeFramePipelineConfiguration(
                                 mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                                decoderPluginLibraryPaths = listOf("/tmp/libmediacodec.so"),
+                                decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                             ),
                     ),
                 codecProbeProvider = hardwareCodecs("video/hevc"),
@@ -293,7 +293,7 @@ class VesperPlaybackCapabilityProbeTest {
                         nativeFramePipelineConfiguration =
                             VesperNativeFramePipelineConfiguration(
                                 mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                                decoderPluginLibraryPaths = listOf("/tmp/libmediacodec.so"),
+                                decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                             ),
                     ),
                 codecProbeProvider = hardwareCodecs("video/hevc"),
@@ -340,7 +340,7 @@ class VesperPlaybackCapabilityProbeTest {
                         nativeFramePipelineConfiguration =
                             VesperNativeFramePipelineConfiguration(
                                 mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                                decoderPluginLibraryPaths = listOf("/tmp/libmediacodec.so"),
+                                decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                             ),
                     ),
                 codecProbeProvider = hardwareCodecs("video/hevc"),
@@ -378,7 +378,7 @@ class VesperPlaybackCapabilityProbeTest {
                         nativeFramePipelineConfiguration =
                             VesperNativeFramePipelineConfiguration(
                                 mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                                decoderPluginLibraryPaths = listOf("/tmp/libmediacodec.so"),
+                                decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                             ),
                     ),
                 codecProbeProvider = hardwareCodecs("video/hevc"),
@@ -518,7 +518,7 @@ class VesperPlaybackCapabilityProbeTest {
                         requiresNativeFrame = true,
                         nativeFramePipelineConfiguration =
                             VesperNativeFramePipelineConfiguration(
-                                decoderPluginLibraryPaths = listOf("/tmp/libmediacodec.so"),
+                                decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                             ),
                     ),
                 codecProbeProvider = hardwareCodecs("video/avc"),

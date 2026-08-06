@@ -53,18 +53,19 @@ use player_plugin::{
     DecoderBitstreamFormat, DecoderError, DecoderMediaKind, DecoderNativeFrame,
     DecoderNativeFrameMetadata, DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult,
     DecoderReceiveNativeFrameOutput, DecoderSessionConfig, DecoderSessionInfo, FrameProcessorError,
-    FrameProcessorFrameTimings, FrameProcessorOutputFrame, FrameProcessorReceiveOutput,
-    FrameProcessorSession, FrameProcessorSessionInfo, FrameProcessorSubmitFrame,
-    FrameProcessorSubmitResult, FrameProcessorSubmitStatus, NativeDecoderSession, NativeFrame,
-    SourceNormalizerError, SourceNormalizerOperationStatus, SourceNormalizerPacket,
-    SourceNormalizerPacketLease, SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
-    SourceNormalizerPacketSession, SourceNormalizerPacketStreamInfo,
-    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata,
-    SourceNormalizerReadPacketStatus, VesperPluginKind,
+    FrameProcessorFrameTimings, FrameProcessorInputFrame, FrameProcessorOutputFrame,
+    FrameProcessorReceiveOutput, FrameProcessorSession, FrameProcessorSessionInfo,
+    FrameProcessorSubmitFrame, FrameProcessorSubmitResult, FrameProcessorSubmitStatus,
+    NativeDecoderSession, NativeFrame, PluginReference, PluginTransport, SourceNormalizerError,
+    SourceNormalizerOperationStatus, SourceNormalizerPacket, SourceNormalizerPacketLease,
+    SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
+    SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
+    SourceNormalizerReadPacketMetadata, SourceNormalizerReadPacketStatus,
 };
 use player_plugin_loader::{
-    DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, LoadedDynamicPlugin,
-    PluginCapabilitySummary, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
+    DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, LoadedNativePlugin,
+    PluginCapabilityKind, PluginCapabilitySummary, PluginDiagnosticRecord, PluginDiagnosticStatus,
+    PluginRegistry,
 };
 use player_runtime::{
     DecodedVideoFrame, FrameProcessorMode, FrameProcessorPolicy, FrameProcessorPolicyAction,
@@ -416,7 +417,8 @@ fn host_strategy_initializer_falls_back_to_software_when_native_initialize_fails
 fn strict_frame_processor_fallback_error_is_forwarded_without_host_wrapper() {
     let mut strict_options = PlayerRuntimeOptions::default()
         .with_frame_processor_library_paths([PathBuf::from("fixture-frame-processor")])
-        .with_frame_processor_mode(FrameProcessorMode::RequireProcessed);
+        .with_frame_processor_mode(FrameProcessorMode::RequireProcessed)
+        .with_development_native_plugin_loading();
     assert!(strict_frame_processor_fallback_enabled(&strict_options));
     let strict_error = PlayerError::new(
         PlayerErrorCode::BackendFailure,
@@ -637,6 +639,7 @@ fn runtime_advance_backend_failure_falls_back_to_software_runtime() {
         progress: PlaybackProgress::new(Duration::from_secs(5), Some(Duration::from_secs(30))),
         state: PresentationState::Playing,
         events: VecDeque::new(),
+        dropped_events: 0,
         advance_error: Some(PlayerError::new(
             PlayerErrorCode::BackendFailure,
             "forced presenter failure",
@@ -728,6 +731,7 @@ fn runtime_fallback_marks_selected_plugin_diagnostics_as_fallback() {
         progress: PlaybackProgress::new(Duration::ZERO, Some(Duration::from_secs(30))),
         state: PresentationState::Paused,
         events: VecDeque::new(),
+        dropped_events: 0,
         advance_error: None,
         dispatch_error: None,
     });
@@ -826,6 +830,7 @@ fn runtime_dispatch_seek_backend_failure_falls_back_to_software_runtime() {
         progress: PlaybackProgress::new(Duration::from_secs(2), Some(Duration::from_secs(30))),
         state: PresentationState::Playing,
         events: VecDeque::new(),
+        dropped_events: 0,
         advance_error: None,
         dispatch_error: Some(PlayerError::new(
             PlayerErrorCode::BackendFailure,
@@ -907,6 +912,7 @@ fn runtime_dispatch_play_and_rate_backend_failure_fall_back_to_software_runtime(
                 ),
                 state: PresentationState::Paused,
                 events: VecDeque::new(),
+                dropped_events: 0,
                 advance_error: None,
                 dispatch_error: Some(PlayerError::new(
                     PlayerErrorCode::BackendFailure,
@@ -1044,6 +1050,7 @@ fn runtime_dispatch_pause_and_stop_do_not_trigger_fallback() {
                 ),
                 state: PresentationState::Playing,
                 events: VecDeque::new(),
+                dropped_events: 0,
                 advance_error: None,
                 dispatch_error: Some(PlayerError::new(
                     PlayerErrorCode::BackendFailure,
@@ -1137,7 +1144,8 @@ fn macos_video_decode_info_records_configured_decoder_plugin_paths() {
         macos_video_decode_info(&media_info),
         &media_info,
         &PlayerRuntimeOptions::default()
-            .with_decoder_plugin_library_paths([PathBuf::from("/tmp/missing-decoder-plugin")]),
+            .with_decoder_plugin_library_paths([PathBuf::from("/tmp/missing-decoder-plugin")])
+            .with_development_native_plugin_loading(),
     );
 
     assert!(
@@ -1148,6 +1156,29 @@ fn macos_video_decode_info_records_configured_decoder_plugin_paths() {
     );
     let fallback = info.fallback_reason.as_deref().unwrap_or_default();
     assert!(fallback.contains("/tmp/missing-decoder-plugin"));
+    assert!(!fallback.contains("failed to open plugin library"));
+    assert!(!fallback.contains("dlopen"));
+}
+
+#[test]
+fn macos_video_decode_info_rejects_raw_paths_without_explicit_policy() {
+    let media_info = media_info_with_codec("fixture-video");
+    let info = super::apply_native_frame_plugin_preference_to_video_decode(
+        macos_video_decode_info(&media_info),
+        &media_info,
+        &PlayerRuntimeOptions::default()
+            .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
+            .with_video_surface(PlayerVideoSurfaceTarget {
+                kind: PlayerVideoSurfaceKind::PlayerLayer,
+                handle: 1,
+            })
+            .with_decoder_plugin_library_paths([PathBuf::from(
+                "/tmp/must-not-be-opened-decoder-plugin",
+            )]),
+    );
+
+    let fallback = info.fallback_reason.as_deref().unwrap_or_default();
+    assert!(fallback.contains("require explicit development loading policy"));
     assert!(!fallback.contains("failed to open plugin library"));
     assert!(!fallback.contains("dlopen"));
 }
@@ -1211,7 +1242,8 @@ fn macos_startup_records_decoder_plugin_registry_diagnostics() {
         startup_with_video_decode(macos_video_decode_info(&media_info)),
         &media_info,
         &PlayerRuntimeOptions::default()
-            .with_decoder_plugin_library_paths([PathBuf::from("/tmp/missing-decoder-plugin")]),
+            .with_decoder_plugin_library_paths([PathBuf::from("/tmp/missing-decoder-plugin")])
+            .with_development_native_plugin_loading(),
     );
 
     assert_eq!(startup.plugin_diagnostics.len(), 1);
@@ -1260,7 +1292,8 @@ fn macos_source_normalizer_prefer_missing_plugin_falls_back_with_diagnostics() {
             .with_source_normalizer_plugin_library_paths([PathBuf::from(
                 "/tmp/missing-source-normalizer",
             )])
-            .with_source_normalizer_mode(SourceNormalizerMode::PreferNormalized),
+            .with_source_normalizer_mode(SourceNormalizerMode::PreferNormalized)
+            .with_development_native_plugin_loading(),
     )
     .expect("prefer mode should fall back when a plugin is missing");
 
@@ -1285,7 +1318,8 @@ fn macos_source_normalizer_skips_native_adaptive_sources() {
             .with_source_normalizer_plugin_library_paths([PathBuf::from(
                 "/tmp/missing-source-normalizer",
             )])
-            .with_source_normalizer_mode(SourceNormalizerMode::RequireNormalized),
+            .with_source_normalizer_mode(SourceNormalizerMode::RequireNormalized)
+            .with_development_native_plugin_loading(),
     )
     .expect("native adaptive sources should bypass packet source normalization");
 
@@ -1317,7 +1351,8 @@ fn macos_source_normalizer_require_missing_plugin_fails() {
             .with_source_normalizer_plugin_library_paths([PathBuf::from(
                 "/tmp/missing-source-normalizer",
             )])
-            .with_source_normalizer_mode(SourceNormalizerMode::RequireNormalized),
+            .with_source_normalizer_mode(SourceNormalizerMode::RequireNormalized)
+            .with_development_native_plugin_loading(),
     );
     let error = match result {
         Ok(_) => panic!("require mode should fail when no plugin is available"),
@@ -1521,7 +1556,8 @@ fn macos_source_normalizer_session_guard_keeps_runtime_source() {
                 playback_rate: 1.0,
                 progress: PlaybackProgress::new(Duration::ZERO, None),
                 state: PresentationState::Ready,
-                events: VecDeque::new(),
+                events: VecDeque::from([PlayerRuntimeEvent::Ended]),
+                dropped_events: 3,
                 advance_error: None,
                 dispatch_error: None,
             }),
@@ -1531,7 +1567,7 @@ fn macos_source_normalizer_session_guard_keeps_runtime_source() {
             ))),
         },
     );
-    let bootstrap = attach_source_normalizer_to_runtime(
+    let mut bootstrap = attach_source_normalizer_to_runtime(
         bootstrap,
         MacosSourceNormalizationOutcome {
             source: MediaSource::new("/tmp/normalized.mp4"),
@@ -1547,6 +1583,10 @@ fn macos_source_normalizer_session_guard_keeps_runtime_source() {
     );
 
     assert_eq!(bootstrap.runtime.source_uri(), "/tmp/normalized.mp4");
+    let events = bootstrap.runtime.drain_events();
+    assert!(matches!(events.as_slice(), [PlayerRuntimeEvent::Ended]));
+    assert_eq!(bootstrap.runtime.take_dropped_event_count(), 3);
+    assert_eq!(bootstrap.runtime.take_dropped_event_count(), 0);
 }
 
 #[test]
@@ -1612,7 +1652,8 @@ fn macos_runtime_diagnostics_loads_real_decoder_fixture_library() {
         let diagnostics = macos_runtime_diagnostics(
             &media_info,
             &PlayerRuntimeOptions::default()
-                .with_decoder_plugin_library_paths([plugin_path.clone()]),
+                .with_decoder_plugin_library_paths([plugin_path.clone()])
+                .with_development_native_plugin_loading(),
         );
 
         assert_eq!(diagnostics.plugin_diagnostics.len(), 1);
@@ -1658,7 +1699,8 @@ fn macos_runtime_diagnostics_loads_real_videotoolbox_decoder_library() {
         let diagnostics = macos_runtime_diagnostics(
             &media_info,
             &PlayerRuntimeOptions::default()
-                .with_decoder_plugin_library_paths([plugin_path.clone()]),
+                .with_decoder_plugin_library_paths([plugin_path.clone()])
+                .with_development_native_plugin_loading(),
         );
 
         assert_eq!(diagnostics.plugin_diagnostics.len(), 1);
@@ -1722,14 +1764,16 @@ fn macos_videotoolbox_decoder_decodes_ffmpeg_packets_headless() {
         stream_info.reorder_depth.unwrap_or_default() > 0,
         "VideoToolbox reorder regression requires a source with decoder reorder depth: {source}"
     );
-    let plugin = LoadedDynamicPlugin::load(&plugin_path).unwrap_or_else(|error| {
+    let plugin = LoadedNativePlugin::load_development(&plugin_path).unwrap_or_else(|error| {
         panic!(
             "failed to load VideoToolbox decoder plugin `{}`: {error}",
             plugin_path.display()
         )
     });
+    let reference = PluginReference::new(plugin.plugin_id(), None, PluginTransport::Native)
+        .expect("loaded VideoToolbox plugin identity should form a canonical reference");
     let factory = plugin
-        .native_decoder_plugin_factory()
+        .resolve_native_decoder(&reference)
         .expect("VideoToolbox plugin should export a native decoder factory");
     if !factory
         .capabilities()
@@ -1946,7 +1990,8 @@ fn macos_native_frame_decoder_plugin_runtime_probes_with_surface() {
             handle: layer_handle as usize,
         })
         .with_decoder_plugin_library_paths([plugin_path])
-        .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame);
+        .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
+        .with_development_native_plugin_loading();
     let initializer = PlayerRuntimeInitializer::probe_source_with_factory(
         MediaSource::new(source),
         options,
@@ -2026,7 +2071,8 @@ fn macos_native_frame_runtime_loads_frame_processor_diagnostic_plugin() {
         .with_decoder_plugin_library_paths([decoder_plugin_path])
         .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
         .with_frame_processor_library_paths([frame_processor_path])
-        .with_frame_processor_mode(FrameProcessorMode::PreferProcessed);
+        .with_frame_processor_mode(FrameProcessorMode::PreferProcessed)
+        .with_development_native_plugin_loading();
     let bootstrap = open_macos_host_runtime_source_with_options(MediaSource::new(source), options)
         .expect("macOS host runtime should open the native-frame frame processor path");
     unsafe {
@@ -2122,7 +2168,8 @@ fn macos_native_frame_strict_frame_processor_failure_does_not_fallback_to_softwa
         .with_decoder_plugin_library_paths([decoder_plugin_path])
         .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
         .with_frame_processor_library_paths([frame_processor_path])
-        .with_frame_processor_mode(FrameProcessorMode::RequireProcessed);
+        .with_frame_processor_mode(FrameProcessorMode::RequireProcessed)
+        .with_development_native_plugin_loading();
     let error = match open_macos_software_runtime_source_with_options_and_interrupt(
         MediaSource::new(source),
         options,
@@ -2200,7 +2247,8 @@ fn macos_host_strict_frame_processor_failure_forwards_software_error_message() {
         .with_decoder_plugin_library_paths([decoder_plugin_path])
         .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
         .with_frame_processor_library_paths([frame_processor_path])
-        .with_frame_processor_mode(FrameProcessorMode::RequireProcessed);
+        .with_frame_processor_mode(FrameProcessorMode::RequireProcessed)
+        .with_development_native_plugin_loading();
     let error = match open_macos_host_runtime_source_with_options(MediaSource::new(source), options)
     {
         Ok(_) => {
@@ -2266,7 +2314,8 @@ fn macos_native_frame_runtime_reopens_as_software_after_presenter_failure() {
             handle: layer_handle as usize,
         })
         .with_decoder_plugin_library_paths([plugin_path])
-        .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame);
+        .with_decoder_plugin_video_mode(PlayerDecoderPluginVideoMode::PreferNativeFrame)
+        .with_development_native_plugin_loading();
     let bootstrap = open_macos_software_runtime_source_with_options_and_interrupt(
         MediaSource::new(source),
         options,
@@ -2376,7 +2425,8 @@ fn macos_software_direct_open_records_decoder_plugin_registry_diagnostics() {
     let bootstrap = open_macos_software_runtime_source_with_options_and_interrupt(
         MediaSource::new(test_video_path),
         PlayerRuntimeOptions::default()
-            .with_decoder_plugin_library_paths([PathBuf::from("/tmp/missing-decoder-plugin")]),
+            .with_decoder_plugin_library_paths([PathBuf::from("/tmp/missing-decoder-plugin")])
+            .with_development_native_plugin_loading(),
         Arc::new(AtomicBool::new(false)),
     )
     .expect("macos software direct open should succeed");
@@ -2719,6 +2769,7 @@ fn release_native_frame_tracking_decrements_outstanding_count() {
             release_tracking: None,
         },
         handle: 7,
+        lease_token: None,
     };
 
     release_native_frame_with_counter(&mut session, outstanding_frames.as_ref(), frame)
@@ -2758,6 +2809,7 @@ fn present_failure_still_releases_native_frame() {
             release_tracking: None,
         },
         handle: 11,
+        lease_token: None,
     };
 
     let error = present_and_release_native_frame_with_presenter(
@@ -2804,6 +2856,7 @@ fn stale_presentation_epoch_releases_frame_without_presenting() {
             release_tracking: None,
         },
         handle: 13,
+        lease_token: None,
     };
 
     let result = present_if_current_epoch_and_release(
@@ -4256,7 +4309,7 @@ fn decoder_plugin_record_with_native_frame_output(
         path: PathBuf::from("fixture-decoder"),
         status,
         plugin_name: Some("fixture-decoder".to_owned()),
-        plugin_kind: Some(VesperPluginKind::Decoder),
+        plugin_kind: Some(PluginCapabilityKind::Decoder),
         capability_summary: Some(PluginCapabilitySummary::Decoder(decoder_capabilities)),
         message: Some(message.to_owned()),
     }
@@ -4286,7 +4339,7 @@ fn decoder_audio_pcm_plugin_record(codec: &str, plugin_name: &str) -> PluginDiag
         path: PathBuf::from(plugin_name),
         status: PluginDiagnosticStatus::DecoderSupported,
         plugin_name: Some(plugin_name.to_owned()),
-        plugin_kind: Some(VesperPluginKind::Decoder),
+        plugin_kind: Some(PluginCapabilityKind::Decoder),
         capability_summary: Some(PluginCapabilitySummary::Decoder(decoder_capabilities)),
         message: Some(format!(
             "{plugin_name} advertises Audio {codec} PCM support"
@@ -4326,14 +4379,16 @@ fn open_videotoolbox_smoke_packet_source_and_session(
         .open_video_packet_source(MediaSource::new(source.to_owned()))
         .unwrap_or_else(|error| panic!("failed to open packet source `{source}`: {error}"));
     let stream_info = packet_source.stream_info().clone();
-    let plugin = LoadedDynamicPlugin::load(plugin_path).unwrap_or_else(|error| {
+    let plugin = LoadedNativePlugin::load_development(plugin_path).unwrap_or_else(|error| {
         panic!(
             "failed to load VideoToolbox decoder plugin `{}`: {error}",
             plugin_path.display()
         )
     });
+    let reference = PluginReference::new(plugin.plugin_id(), None, PluginTransport::Native)
+        .expect("loaded VideoToolbox plugin identity should form a canonical reference");
     let factory = plugin
-        .native_decoder_plugin_factory()
+        .resolve_native_decoder(&reference)
         .expect("VideoToolbox plugin should export a native decoder factory");
     if !factory
         .capabilities()
@@ -4490,6 +4545,7 @@ fn test_fallback_bootstrap() -> PlayerRuntimeAdapterBootstrap {
             progress: PlaybackProgress::new(Duration::ZERO, Some(Duration::from_secs(30))),
             state: PresentationState::Ready,
             events: VecDeque::new(),
+            dropped_events: 0,
             advance_error: None,
             dispatch_error: None,
         }),
@@ -4602,6 +4658,7 @@ impl PlayerRuntimeAdapterInitializer for FakeStrategyInitializer {
                 progress: PlaybackProgress::new(Duration::ZERO, None),
                 state: PresentationState::Ready,
                 events: VecDeque::new(),
+                dropped_events: 0,
                 advance_error,
                 dispatch_error: None,
             }),
@@ -4618,6 +4675,7 @@ struct FakeStrategyRuntime {
     progress: PlaybackProgress,
     state: PresentationState,
     events: VecDeque<PlayerRuntimeEvent>,
+    dropped_events: u64,
     advance_error: Option<PlayerError>,
     dispatch_error: Option<PlayerError>,
 }
@@ -4792,6 +4850,10 @@ impl PlayerRuntimeAdapter for FakeStrategyRuntime {
 
     fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
         self.events.drain(..).collect()
+    }
+
+    fn take_dropped_event_count(&mut self) -> u64 {
+        std::mem::take(&mut self.dropped_events)
     }
 
     fn dispatch(
@@ -5255,6 +5317,7 @@ fn test_native_frame(handle: usize, pts_us: Option<i64>) -> DecoderNativeFrame {
             release_tracking: None,
         },
         handle,
+        lease_token: None,
     }
 }
 
@@ -5287,6 +5350,7 @@ fn macos_frame_processor_frame_for_test_with_processor_output(
             frame: NativeFrame {
                 metadata: processor_frame.metadata.into(),
                 handle: processor_frame.handle,
+                lease_token: None,
             },
         }],
     })
@@ -5377,14 +5441,14 @@ impl FrameProcessorSession for RecordingFrameProcessorSession {
 
     fn submit_frame(
         &mut self,
-        frame: &NativeFrame,
+        frame: FrameProcessorInputFrame<'_>,
         _submit: &FrameProcessorSubmitFrame,
     ) -> Result<FrameProcessorSubmitResult, FrameProcessorError> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| FrameProcessorError::internal("recording processor poisoned"))?;
-        state.submitted_handles.push(frame.handle);
+        state.submitted_handles.push(frame.native_handle());
         if let Some(status) = state.submit_status {
             return Ok(FrameProcessorSubmitResult {
                 status,
@@ -5396,7 +5460,7 @@ impl FrameProcessorSession for RecordingFrameProcessorSession {
         if state.receive_pending {
             return Ok(FrameProcessorSubmitResult::default());
         }
-        let mut output_metadata = frame.metadata.clone();
+        let mut output_metadata = frame.metadata().clone();
         output_metadata.frame_id = output_metadata
             .frame_id
             .map(|frame_id| frame_id.saturating_add(10_000));
@@ -5406,18 +5470,22 @@ impl FrameProcessorSession for RecordingFrameProcessorSession {
                 requires_release,
             });
         }
-        let output_handle = state.output_handle_offset.saturating_add(frame.handle);
+        let output_handle = state
+            .output_handle_offset
+            .saturating_add(frame.native_handle());
         self.pending = Some(FrameProcessorOutputFrame {
             frame: NativeFrame {
                 metadata: output_metadata,
                 handle: output_handle,
+                lease_token: None,
             },
             timings: FrameProcessorFrameTimings {
                 queue_wait_us: Some(0),
                 process_time_us: state.submit_to_ready_us,
                 submit_to_ready_us: state.submit_to_ready_us.or(Some(100)),
             },
-            source_frame_id: frame.metadata.frame_id,
+            source_frame_id: frame.metadata().frame_id,
+            message: None,
         });
         Ok(FrameProcessorSubmitResult::default())
     }

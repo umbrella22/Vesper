@@ -41,6 +41,8 @@ class VesperPlayerController {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
+    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
+        const VesperPipelineEventHookConfiguration(),
   }) async {
     final platform = VesperPlayerPlatform.instance;
     final result = await platform.createPlayer(
@@ -54,6 +56,7 @@ class VesperPlayerController {
       sourceNormalizerConfiguration: sourceNormalizerConfiguration,
       frameProcessorConfiguration: frameProcessorConfiguration,
       nativeFramePipelineConfiguration: nativeFramePipelineConfiguration,
+      pipelineEventHookConfiguration: pipelineEventHookConfiguration,
     );
     return VesperPlayerController._(
       playerId: result.playerId,

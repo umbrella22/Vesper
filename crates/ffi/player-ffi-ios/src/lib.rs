@@ -18,15 +18,17 @@ use player_platform_mobile::{
     mobile_source_normalizer_resource_bypass_diagnostics_json,
     mobile_source_normalizer_resource_open_json, mobile_source_normalizer_resource_status_json,
     open_mobile_source_normalizer_resource_with_diagnostics,
+    parse_mobile_native_plugin_artifacts_json,
 };
-use player_plugin::{
-    ProcessorProgress, VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-    VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-    VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
+use player_plugin::{PipelineEvent, PluginReference, ProcessorProgress};
+use player_plugin_abi::{
+    VESPER_INTERFACE_MAJOR, VESPER_INTERFACE_MINOR, VESPER_PLUGIN_ABI_MAJOR,
+    VESPER_PLUGIN_ABI_MINOR,
 };
 use player_plugin_loader::BenchmarkSinkPluginSession;
 use player_runtime::{
-    DownloadTaskSnapshot, FrameProcessorMode, NativeFramePipelineMode, PlayerError, PreloadBudget,
+    DownloadTaskSnapshot, FrameProcessorMode, NativeFramePipelineMode, PipelineEventDispatcher,
+    PipelineEventHookRegistration, PipelineEventHookReportBatch, PlayerError, PreloadBudget,
     SourceNormalizerMode,
     policy::{
         resolve_preload_budget as resolve_preload_budget_with_runtime,
@@ -38,6 +40,7 @@ use player_runtime::{
 mod conversions;
 mod handles;
 mod native_frame_pipeline;
+mod plugin_registry;
 mod types;
 
 use conversions::*;
@@ -52,6 +55,99 @@ pub use types::*;
 
 #[cfg(test)]
 mod tests;
+
+/// # Safety
+///
+/// Non-null byte pointers must remain readable for their corresponding lengths
+/// for the duration of the call. Output pointers must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_plugin_plan_create(
+    fragment_set_json: *const u8,
+    fragment_set_json_len: usize,
+    references_json: *const u8,
+    references_json_len: usize,
+    out_handle: *mut u64,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    // SAFETY: this export forwards the caller's documented pointer contract
+    // unchanged to the boundary implementation.
+    unsafe {
+        plugin_registry::player_ffi_ios_plugin_plan_create_impl(
+            fragment_set_json,
+            fragment_set_json_len,
+            references_json,
+            references_json_len,
+            out_handle,
+            out_error,
+        )
+    }
+}
+
+/// # Safety
+///
+/// Output pointers must be writable when non-null. The returned string must be
+/// freed with `player_ffi_ios_plugin_string_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_plugin_plan_resolutions_json(
+    handle: u64,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    // SAFETY: this export forwards the caller's documented pointer contract
+    // unchanged to the boundary implementation.
+    unsafe {
+        plugin_registry::player_ffi_ios_plugin_plan_resolutions_json_impl(
+            handle, out_json, out_error,
+        )
+    }
+}
+
+/// # Safety
+///
+/// `resolved_frameworks_json` must remain readable for its length. Output
+/// pointers must be writable when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_plugin_registry_load(
+    plan_handle: u64,
+    resolved_frameworks_json: *const u8,
+    resolved_frameworks_json_len: usize,
+    out_handle: *mut u64,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    // SAFETY: this export forwards the caller's documented pointer contract
+    // unchanged to the boundary implementation.
+    unsafe {
+        plugin_registry::player_ffi_ios_plugin_registry_load_impl(
+            plan_handle,
+            resolved_frameworks_json,
+            resolved_frameworks_json_len,
+            out_handle,
+            out_error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_plugin_plan_dispose(handle: u64) {
+    // SAFETY: opaque handles carry no Rust pointer provenance across FFI.
+    unsafe { plugin_registry::player_ffi_ios_plugin_plan_dispose_impl(handle) };
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_plugin_registry_dispose(handle: u64) {
+    // SAFETY: opaque handles carry no Rust pointer provenance across FFI.
+    unsafe { plugin_registry::player_ffi_ios_plugin_registry_dispose_impl(handle) };
+}
+
+/// # Safety
+///
+/// `value` must be null or a Rust-owned string returned by an iOS plugin plan
+/// API.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_plugin_string_free(value: *mut c_char) {
+    // SAFETY: the caller upholds the allocator-pairing contract above.
+    unsafe { plugin_registry::player_ffi_ios_plugin_string_free_impl(value) };
+}
 
 /// # Safety
 ///
@@ -76,12 +172,26 @@ pub unsafe extern "C" fn player_ffi_ios_plugin_abi_summary_json(
         // SAFETY: the output pointer was validated non-null above; the slot is writable per the FFI contract
         unsafe { clear_c_string_output(out_json) };
 
+        let interface_version = serde_json::json!({
+            "major": VESPER_INTERFACE_MAJOR,
+            "minor": VESPER_INTERFACE_MINOR,
+        });
         let summary = serde_json::json!({
-            "decoderAbiVersion": VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-            "frameProcessorAbiVersion": VESPER_FRAME_PROCESSOR_PLUGIN_ABI_VERSION_CURRENT,
-            "sourceNormalizerAbiVersion": VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-            "abiSemantics": "signature-only",
-            "capabilityMatching": "requirements-first",
+            "rootAbi": {
+                "major": VESPER_PLUGIN_ABI_MAJOR,
+                "minor": VESPER_PLUGIN_ABI_MINOR,
+            },
+            "typedInterfaces": {
+                "postDownloadProcessor": interface_version,
+                "pipelineEventHook": interface_version,
+                "benchmarkSink": interface_version,
+                "nativeDecoder": interface_version,
+                "frameProcessor": interface_version,
+                "sourceNormalizerPacket": interface_version,
+                "sourceNormalizerResource": interface_version,
+            },
+            "abiSemantics": "stable-root-typed-interfaces",
+            "capabilityMatching": "explicit-plugin-reference",
         });
         // SAFETY: `out_json` was validated non-null above; the slot is
         // writable per the FFI contract.
@@ -559,6 +669,10 @@ pub unsafe extern "C" fn player_ffi_download_session_create(
             );
             return PlayerFfiCallStatus::Error;
         }
+        // SAFETY: `out_handle` was checked above and is valid for this call.
+        unsafe {
+            ptr::write(out_handle, 0);
+        }
 
         let config = match read_download_config(config) {
             Ok(config) => config,
@@ -568,10 +682,22 @@ pub unsafe extern "C" fn player_ffi_download_session_create(
             }
         };
 
-        let session = match IosDownloadBridgeSession::new_with_plugin_library_paths(
+        let registry = match plugin_registry::clone_plugin_registry(config.plugin_registry_handle) {
+            Ok(registry) => registry,
+            Err(message) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &message),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let session = match IosDownloadBridgeSession::new_with_plugin_registry(
             config.auto_start,
             config.run_post_processors_on_completion,
-            config.plugin_library_paths,
+            registry.as_ref(),
+            config.post_download_plugin_references,
+            config.event_hook_plugin_references,
         ) {
             Ok(session) => session,
             Err(error) => {
@@ -1500,7 +1626,7 @@ pub unsafe extern "C" fn player_ffi_download_session_snapshot(
 /// matching Vesper FFI API for the duration of the call. Callers must serialize shared
 /// handle access according to the host binding contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_download_session_drain_commands(
+pub unsafe extern "C" fn player_ffi_download_session_peek_commands(
     handle: u64,
     out_commands: *mut PlayerFfiDownloadCommandList,
     out_error: *mut PlayerFfiError,
@@ -1546,7 +1672,7 @@ pub unsafe extern "C" fn player_ffi_download_session_drain_commands(
         };
 
         let commands = session
-            .drain_commands()
+            .peek_commands()
             .into_iter()
             .map(PlayerFfiDownloadCommand::from)
             .collect::<Vec<_>>();
@@ -1562,6 +1688,63 @@ pub unsafe extern "C" fn player_ffi_download_session_drain_commands(
                 out_commands,
                 PlayerFfiDownloadCommandList { commands: ptr, len },
             );
+        }
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// # Safety
+///
+/// Raw pointers and opaque handles passed to this FFI entry point must either be null when
+/// the parameter is documented as optional or point to valid objects allocated by the
+/// matching Vesper FFI API for the duration of the call. Callers must serialize shared
+/// handle access according to the host binding contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_download_session_acknowledge_commands(
+    handle: u64,
+    command_count: usize,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        let session = {
+            let sessions = match lock_registry(download_sessions()) {
+                Ok(sessions) => sessions,
+                Err(_) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(
+                            PlayerFfiErrorCode::InvalidArgument,
+                            "download session registry lock failed",
+                        ),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid download session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
+        };
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if !session.acknowledge_commands(command_count) {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidArgument,
+                    "download command acknowledgement count did not match the pending batch",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
         }
         PlayerFfiCallStatus::Ok
     })
@@ -1619,8 +1802,9 @@ pub unsafe extern "C" fn player_ffi_download_session_drain_events(
             Err(poisoned) => poisoned.into_inner(),
         };
 
-        let events = session
-            .drain_events()
+        let batch = session.drain_event_batch();
+        let events = batch
+            .events
             .into_iter()
             .map(PlayerFfiDownloadEvent::from)
             .collect::<Vec<_>>();
@@ -1632,7 +1816,14 @@ pub unsafe extern "C" fn player_ffi_download_session_drain_events(
         };
         // SAFETY: caller upholds the FFI contract for this pointer operation
         unsafe {
-            ptr::write(out_events, PlayerFfiDownloadEventList { events: ptr, len });
+            ptr::write(
+                out_events,
+                PlayerFfiDownloadEventList {
+                    events: ptr,
+                    len,
+                    dropped_events: batch.dropped_events,
+                },
+            );
         }
         PlayerFfiCallStatus::Ok
     })
@@ -2366,14 +2557,14 @@ pub unsafe extern "C" fn player_ffi_resolve_track_preferences(
 
 /// # Safety
 ///
-/// Raw pointers and opaque handles passed to this FFI entry point must either be null when
-/// the parameter is documented as optional or point to valid objects allocated by the
-/// matching Vesper FFI API for the duration of the call. Callers must serialize shared
-/// handle access according to the host binding contract.
+/// The reference JSON and output pointers must remain valid for the duration of
+/// this call. `plugin_registry_handle` must identify a live embedded registry.
+/// The caller owns returned error strings and the session handle according to
+/// the matching FFI free/dispose functions.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn player_ffi_benchmark_session_create(
-    plugin_library_paths: *mut *mut c_char,
-    plugin_library_paths_len: usize,
+pub unsafe extern "C" fn player_ffi_benchmark_session_create_with_references_json(
+    plugin_registry_handle: u64,
+    references_json: *const c_char,
     out_handle: *mut u64,
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
@@ -2385,20 +2576,52 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_create(
             );
             return PlayerFfiCallStatus::Error;
         }
-
-        let plugin_library_paths = match read_string_list(
-            plugin_library_paths,
-            plugin_library_paths_len,
-            "plugin_library_paths",
-        ) {
-            Ok(paths) => paths.into_iter().map(PathBuf::from).collect::<Vec<_>>(),
+        // SAFETY: `out_handle` was validated non-null above and is writable
+        // for the duration of this call.
+        unsafe { ptr::write(out_handle, 0) };
+        let Some(references_json) =
+            (match read_optional_c_string(references_json, "references_json") {
+                Ok(value) => value,
+                Err(error) => {
+                    write_error(out_error, error);
+                    return PlayerFfiCallStatus::Error;
+                }
+            })
+        else {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidArgument,
+                    "references_json was null",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        };
+        let references = match serde_json::from_str::<Vec<PluginReference>>(&references_json) {
+            Ok(references) => references,
             Err(error) => {
-                write_error(out_error, error);
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        &format!("invalid benchmark plugin references JSON: {error}"),
+                    ),
+                );
                 return PlayerFfiCallStatus::Error;
             }
         };
-
-        let session = match BenchmarkSinkPluginSession::load_paths(plugin_library_paths) {
+        let registry = match plugin_registry::clone_plugin_registry(plugin_registry_handle) {
+            Ok(registry) => registry,
+            Err(message) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &message),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let session = match BenchmarkSinkPluginSession::from_registry(registry.as_ref(), references)
+        {
             Ok(session) => session,
             Err(error) => {
                 write_error(
@@ -2408,7 +2631,6 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_create(
                 return PlayerFfiCallStatus::Error;
             }
         };
-
         let Ok(mut sessions) = lock_registry(benchmark_sessions()) else {
             write_error(
                 out_error,
@@ -2420,7 +2642,7 @@ pub unsafe extern "C" fn player_ffi_benchmark_session_create(
             return PlayerFfiCallStatus::Error;
         };
         let handle = sessions.insert(IosBenchmarkSinkSession::new(Mutex::new(session)));
-        // SAFETY: caller upholds the FFI contract for this pointer operation
+        // SAFETY: `out_handle` was validated non-null above and is writable for this call.
         unsafe {
             ptr::write(out_handle, handle);
         }
@@ -2635,6 +2857,432 @@ pub unsafe extern "C" fn player_ffi_benchmark_report_string_free(value: *mut c_c
     });
 }
 
+/// Creates an iOS playback EventHook session from a checked embedded registry
+/// and explicit capability references. The returned handle uses the same
+/// slot+generation semantics as the other iOS FFI sessions and must be disposed with
+/// `player_ffi_ios_playback_event_hook_session_dispose`.
+///
+/// # Safety
+///
+/// `references_json` must be valid for the duration of this call.
+/// `plugin_registry_handle` must identify a live embedded registry. Output
+/// pointers must point to writable caller-owned storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_create(
+    plugin_registry_handle: u64,
+    references_json: *const c_char,
+    out_handle: *mut u64,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        if out_handle.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_handle was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        // SAFETY: `out_handle` was validated non-null above and is writable for this call.
+        unsafe { ptr::write(out_handle, 0) };
+
+        let references_json = match read_optional_c_string(references_json, "references_json") {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::NullPointer, "references_json was null"),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let references = match serde_json::from_str::<Vec<PluginReference>>(&references_json) {
+            Ok(value) => value,
+            Err(error) => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        &format!("invalid playback event-hook references JSON: {error}"),
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        if references.len() > player_runtime::MAX_PIPELINE_EVENT_HOOKS {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidArgument,
+                    "playback event-hook references exceed the 256-hook limit",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        let registry = match plugin_registry::clone_plugin_registry(plugin_registry_handle) {
+            Ok(registry) => registry,
+            Err(message) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &message),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let registrations = match references
+            .iter()
+            .map(|reference| {
+                registry
+                    .resolve_pipeline_event_hook(reference)
+                    .map(|resolved| {
+                        PipelineEventHookRegistration::new(
+                            resolved.reference().clone(),
+                            resolved.capability(),
+                        )
+                    })
+            })
+            .collect::<Result<Result<Vec<_>, _>, _>>()
+        {
+            Ok(Ok(registrations)) => registrations,
+            Ok(Err(error)) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+            Err(error) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error.to_string()),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+
+        let session = std::sync::Arc::new(Mutex::new(PipelineEventDispatcher::new(registrations)));
+        let Ok(mut sessions) = lock_registry(playback_event_hook_sessions()) else {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::InvalidArgument,
+                    "playback event-hook session registry lock failed",
+                ),
+            );
+            return PlayerFfiCallStatus::Error;
+        };
+        let handle = sessions.insert(session);
+        // SAFETY: `out_handle` was validated non-null above and remains writable for this call.
+        unsafe { ptr::write(out_handle, handle) };
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// Enqueues one validated playback EventHook event. Dispatch is non-blocking and uses the shared
+/// bounded queue; overflow is reported through the drained report batch counters.
+///
+/// # Safety
+///
+/// `event_json` must point to a valid null-terminated UTF-8 JSON string for the duration of this
+/// call. `out_error` must point to writable caller-owned storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_submit_json(
+    handle: u64,
+    event_json: *const c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        let event_json = match read_optional_c_string(event_json, "event_json") {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                write_error(
+                    out_error,
+                    owned_api_error(PlayerFfiErrorCode::NullPointer, "event_json was null"),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+            Err(error) => {
+                write_error(out_error, error);
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let event = match serde_json::from_str::<PipelineEvent>(&event_json) {
+            Ok(value) => value,
+            Err(error) => {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        &format!("invalid playback event JSON: {error}"),
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            }
+        };
+        let session = {
+            let Ok(sessions) = lock_registry(playback_event_hook_sessions()) else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "playback event-hook session registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid playback event-hook session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
+        };
+        let dispatcher = session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        dispatcher.enqueue(event);
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// Flushes queued playback EventHook events before a lifecycle transition.
+///
+/// # Safety
+///
+/// `out_error` must point to writable caller-owned storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_flush(
+    handle: u64,
+    timeout_ms: u64,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        let session = {
+            let Ok(sessions) = lock_registry(playback_event_hook_sessions()) else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "playback event-hook session registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid playback event-hook session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
+        };
+        let dispatcher = session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if dispatcher.flush(Duration::from_millis(timeout_ms)) {
+            PlayerFfiCallStatus::Ok
+        } else {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::Timeout,
+                    "playback event-hook flush timed out or the worker failed",
+                ),
+            );
+            PlayerFfiCallStatus::Error
+        }
+    })
+}
+
+/// Drains structured playback EventHook reports into a Rust-owned JSON string.
+///
+/// # Safety
+///
+/// `out_report_json` must point to writable caller-owned storage. The returned string must be
+/// released with `player_ffi_ios_playback_event_hook_report_string_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_drain_json(
+    handle: u64,
+    out_report_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        if out_report_json.is_null() {
+            write_error(
+                out_error,
+                owned_api_error(PlayerFfiErrorCode::NullPointer, "out_report_json was null"),
+            );
+            return PlayerFfiCallStatus::Error;
+        }
+        // SAFETY: `out_report_json` was validated non-null above and is writable for this call.
+        unsafe { clear_c_string_output(out_report_json) };
+        let session = {
+            let Ok(sessions) = lock_registry(playback_event_hook_sessions()) else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "playback event-hook session registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid playback event-hook session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
+        };
+        let dispatcher = session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Keep the wire shape aligned with the Android host and benchmark report APIs.
+        let report_json = pipeline_event_hook_reports_json(dispatcher.drain_reports());
+        // SAFETY: `out_report_json` was validated non-null above and is writable for this call.
+        unsafe { write_c_string_output(out_report_json, report_json) };
+        PlayerFfiCallStatus::Ok
+    })
+}
+
+/// Closes the playback EventHook worker. Closing is idempotent; the handle remains valid until
+/// `player_ffi_ios_playback_event_hook_session_dispose` is called.
+///
+/// # Safety
+///
+/// `out_error` must point to writable caller-owned storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_close(
+    handle: u64,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    ffi_call(out_error, || {
+        let session = {
+            let Ok(sessions) = lock_registry(playback_event_hook_sessions()) else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "playback event-hook session registry lock failed",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            let Some(session) = sessions.get(handle).cloned() else {
+                write_error(
+                    out_error,
+                    owned_api_error(
+                        PlayerFfiErrorCode::InvalidArgument,
+                        "invalid playback event-hook session handle",
+                    ),
+                );
+                return PlayerFfiCallStatus::Error;
+            };
+            session
+        };
+        let dispatcher = session
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if dispatcher.close() {
+            PlayerFfiCallStatus::Ok
+        } else {
+            write_error(
+                out_error,
+                owned_api_error(
+                    PlayerFfiErrorCode::BackendFailure,
+                    "playback event-hook worker could not be closed",
+                ),
+            );
+            PlayerFfiCallStatus::Error
+        }
+    })
+}
+
+/// Disposes a playback EventHook session. The registry entry is removed before the dispatcher
+/// is dropped so plugin cleanup never runs while the global registry mutex is held.
+///
+/// # Safety
+///
+/// `handle` must be a handle returned by the matching create function, or zero/stale for a no-op.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_dispose(handle: u64) {
+    ffi_void(|| {
+        let session = {
+            if let Ok(mut sessions) = lock_registry(playback_event_hook_sessions()) {
+                sessions.remove(handle)
+            } else {
+                None
+            }
+        };
+        drop(session);
+    });
+}
+
+/// Frees a report JSON string returned by the playback EventHook session.
+///
+/// # Safety
+///
+/// `value` must be null or a pointer returned by the matching drain function.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_report_string_free(value: *mut c_char) {
+    ffi_void(|| {
+        let mut value = value;
+        free_c_string(&mut value);
+    });
+}
+
+fn pipeline_event_hook_reports_json(batch: PipelineEventHookReportBatch) -> String {
+    let reports = batch
+        .reports
+        .into_iter()
+        .map(|report| {
+            let result = match report.result {
+                Ok(outcome) => serde_json::json!({
+                    "status": if outcome.accepted { "accepted" } else { "rejected" },
+                    "outcome": outcome,
+                }),
+                Err(error) => serde_json::json!({
+                    "status": "error",
+                    "error": error,
+                }),
+            };
+            serde_json::json!({
+                "pluginId": report.reference.plugin_id(),
+                "capabilityInstanceId": report.reference.capability_instance_id(),
+                "transport": report.reference.transport(),
+                "runId": report.run_id,
+                "sessionId": report.session_id,
+                "eventName": report.event_name,
+                "result": result,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "reports": reports,
+        "droppedEvents": batch.dropped_events,
+        "droppedReports": batch.dropped_reports,
+        "dispatcherError": batch.dispatcher_error,
+    })
+    .to_string()
+}
+
 /// # Safety
 ///
 /// String and array pointers must be valid for the duration of the call. The returned JSON string
@@ -2643,12 +3291,10 @@ pub unsafe extern "C" fn player_ffi_benchmark_report_string_free(value: *mut c_c
 pub unsafe extern "C" fn player_ffi_mobile_plugin_diagnostics_json(
     source_uri: *const c_char,
     source_mode: u32,
-    source_plugin_library_paths: *mut *mut c_char,
-    source_plugin_library_paths_len: usize,
+    source_plugin_artifacts_json: *const c_char,
     runtime_profile: *const c_char,
     frame_mode: u32,
-    frame_plugin_library_paths: *mut *mut c_char,
-    frame_plugin_library_paths_len: usize,
+    frame_plugin_artifacts_json: *const c_char,
     out_json: *mut *mut c_char,
     out_error: *mut PlayerFfiError,
 ) -> PlayerFfiCallStatus {
@@ -2679,28 +3325,48 @@ pub unsafe extern "C" fn player_ffi_mobile_plugin_diagnostics_json(
                 return PlayerFfiCallStatus::Error;
             }
         };
-        let source_plugin_library_paths = match read_string_list(
-            source_plugin_library_paths,
-            source_plugin_library_paths_len,
-            "source_plugin_library_paths",
+        let source_plugin_artifacts_json = match read_required_c_string(
+            source_plugin_artifacts_json,
+            "source_plugin_artifacts_json",
         ) {
-            Ok(value) => value.into_iter().map(PathBuf::from).collect(),
+            Ok(value) => value,
             Err(error) => {
                 write_error(out_error, error);
                 return PlayerFfiCallStatus::Error;
             }
         };
-        let frame_plugin_library_paths = match read_string_list(
-            frame_plugin_library_paths,
-            frame_plugin_library_paths_len,
-            "frame_plugin_library_paths",
+        let source_plugin_artifacts =
+            match parse_mobile_native_plugin_artifacts_json(&source_plugin_artifacts_json) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+        let frame_plugin_artifacts_json = match read_required_c_string(
+            frame_plugin_artifacts_json,
+            "frame_plugin_artifacts_json",
         ) {
-            Ok(value) => value.into_iter().map(PathBuf::from).collect(),
+            Ok(value) => value,
             Err(error) => {
                 write_error(out_error, error);
                 return PlayerFfiCallStatus::Error;
             }
         };
+        let frame_plugin_artifacts =
+            match parse_mobile_native_plugin_artifacts_json(&frame_plugin_artifacts_json) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
         let runtime_profile = match read_optional_c_string(runtime_profile, "runtime_profile") {
             Ok(value) => value,
             Err(error) => {
@@ -2712,12 +3378,18 @@ pub unsafe extern "C" fn player_ffi_mobile_plugin_diagnostics_json(
             &MediaSource::new(source_uri),
             &MobileSourceNormalizerConfiguration {
                 mode: source_normalizer_mode_from_u32(source_mode),
-                plugin_library_paths: source_plugin_library_paths,
+                plugin_artifacts: source_plugin_artifacts,
+                plugin_library_paths: Vec::new(),
+                native_plugin_loading_policy:
+                    player_runtime::NativePluginLoadingPolicy::DenyRawPaths,
                 runtime_profile,
             },
             &MobileFrameProcessorConfiguration {
                 mode: frame_processor_mode_from_u32(frame_mode),
-                plugin_library_paths: frame_plugin_library_paths,
+                plugin_artifacts: frame_plugin_artifacts,
+                plugin_library_paths: Vec::new(),
+                native_plugin_loading_policy:
+                    player_runtime::NativePluginLoadingPolicy::DenyRawPaths,
             },
         ) {
             Ok(value) => value,
@@ -2761,8 +3433,7 @@ pub unsafe extern "C" fn player_ffi_mobile_plugin_diagnostics_string_free(value:
 pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
     source_uri: *const c_char,
     source_mode: u32,
-    source_plugin_library_paths: *mut *mut c_char,
-    source_plugin_library_paths_len: usize,
+    source_plugin_artifacts_json: *const c_char,
     runtime_profile: *const c_char,
     output_root: *const c_char,
     force_normalized: bool,
@@ -2815,17 +3486,27 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
                 return PlayerFfiCallStatus::Error;
             }
         };
-        let plugin_library_paths = match read_string_list(
-            source_plugin_library_paths,
-            source_plugin_library_paths_len,
-            "source_plugin_library_paths",
+        let plugin_artifacts_json = match read_required_c_string(
+            source_plugin_artifacts_json,
+            "source_plugin_artifacts_json",
         ) {
-            Ok(value) => value.into_iter().map(PathBuf::from).collect(),
+            Ok(value) => value,
             Err(error) => {
                 write_error(out_error, error);
                 return PlayerFfiCallStatus::Error;
             }
         };
+        let plugin_artifacts =
+            match parse_mobile_native_plugin_artifacts_json(&plugin_artifacts_json) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
         let runtime_profile = match read_optional_c_string(runtime_profile, "runtime_profile") {
             Ok(value) => value,
             Err(error) => {
@@ -2842,7 +3523,10 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_open(
             &MediaSource::new(source_uri),
             &MobileSourceNormalizerConfiguration {
                 mode: source_normalizer_mode_from_u32(source_mode),
-                plugin_library_paths,
+                plugin_artifacts,
+                plugin_library_paths: Vec::new(),
+                native_plugin_loading_policy:
+                    player_runtime::NativePluginLoadingPolicy::DenyRawPaths,
                 runtime_profile,
             },
             output_root,
@@ -3056,14 +3740,11 @@ pub unsafe extern "C" fn player_ffi_source_normalizer_resource_dispose(handle: u
 pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_open(
     source_uri: *const c_char,
     source_mode: u32,
-    source_plugin_library_paths: *mut *mut c_char,
-    source_plugin_library_paths_len: usize,
+    source_plugin_artifacts_json: *const c_char,
     runtime_profile: *const c_char,
     native_frame_mode: u32,
-    decoder_plugin_library_paths: *mut *mut c_char,
-    decoder_plugin_library_paths_len: usize,
-    frame_plugin_library_paths: *mut *mut c_char,
-    frame_plugin_library_paths_len: usize,
+    decoder_plugin_artifacts_json: *const c_char,
+    frame_plugin_artifacts_json: *const c_char,
     max_in_flight_frames: u32,
     out_handle: *mut u64,
     out_json: *mut *mut c_char,
@@ -3099,39 +3780,69 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_open(
                 return PlayerFfiCallStatus::Error;
             }
         };
-        let source_plugin_library_paths = match read_string_list(
-            source_plugin_library_paths,
-            source_plugin_library_paths_len,
-            "source_plugin_library_paths",
+        let source_plugin_artifacts_json = match read_required_c_string(
+            source_plugin_artifacts_json,
+            "source_plugin_artifacts_json",
         ) {
-            Ok(value) => value.into_iter().map(PathBuf::from).collect(),
+            Ok(value) => value,
             Err(error) => {
                 write_error(out_error, error);
                 return PlayerFfiCallStatus::Error;
             }
         };
-        let decoder_plugin_library_paths = match read_string_list(
-            decoder_plugin_library_paths,
-            decoder_plugin_library_paths_len,
-            "decoder_plugin_library_paths",
+        let source_plugin_artifacts =
+            match parse_mobile_native_plugin_artifacts_json(&source_plugin_artifacts_json) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+        let decoder_plugin_artifacts_json = match read_required_c_string(
+            decoder_plugin_artifacts_json,
+            "decoder_plugin_artifacts_json",
         ) {
-            Ok(value) => value.into_iter().map(PathBuf::from).collect(),
+            Ok(value) => value,
             Err(error) => {
                 write_error(out_error, error);
                 return PlayerFfiCallStatus::Error;
             }
         };
-        let frame_plugin_library_paths = match read_string_list(
-            frame_plugin_library_paths,
-            frame_plugin_library_paths_len,
-            "frame_plugin_library_paths",
+        let decoder_plugin_artifacts =
+            match parse_mobile_native_plugin_artifacts_json(&decoder_plugin_artifacts_json) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
+        let frame_plugin_artifacts_json = match read_required_c_string(
+            frame_plugin_artifacts_json,
+            "frame_plugin_artifacts_json",
         ) {
-            Ok(value) => value.into_iter().map(PathBuf::from).collect(),
+            Ok(value) => value,
             Err(error) => {
                 write_error(out_error, error);
                 return PlayerFfiCallStatus::Error;
             }
         };
+        let frame_plugin_artifacts =
+            match parse_mobile_native_plugin_artifacts_json(&frame_plugin_artifacts_json) {
+                Ok(value) => value,
+                Err(error) => {
+                    write_error(
+                        out_error,
+                        owned_api_error(PlayerFfiErrorCode::InvalidArgument, &error),
+                    );
+                    return PlayerFfiCallStatus::Error;
+                }
+            };
         let runtime_profile = match read_optional_c_string(runtime_profile, "runtime_profile") {
             Ok(value) => value,
             Err(error) => {
@@ -3142,11 +3853,15 @@ pub unsafe extern "C" fn player_ffi_ios_native_frame_pipeline_open(
         let session = match IosNativeFramePipelineSession::open(IosNativeFramePipelineOpenConfig {
             source_uri,
             source_normalizer_mode: source_normalizer_mode_from_u32(source_mode),
-            source_normalizer_plugin_library_paths: source_plugin_library_paths,
+            source_normalizer_plugin_artifacts: source_plugin_artifacts,
+            source_normalizer_plugin_library_paths: Vec::new(),
             runtime_profile,
             native_frame_pipeline_mode: native_frame_pipeline_mode_from_u32(native_frame_mode),
-            decoder_plugin_library_paths,
-            frame_processor_plugin_library_paths: frame_plugin_library_paths,
+            decoder_plugin_artifacts,
+            decoder_plugin_library_paths: Vec::new(),
+            frame_processor_plugin_artifacts: frame_plugin_artifacts,
+            frame_processor_plugin_library_paths: Vec::new(),
+            native_plugin_loading_policy: player_runtime::NativePluginLoadingPolicy::DenyRawPaths,
             max_in_flight_frames: (max_in_flight_frames > 0).then_some(max_in_flight_frames),
         }) {
             Ok(session) => session,

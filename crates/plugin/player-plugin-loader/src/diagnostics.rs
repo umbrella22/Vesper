@@ -1,4 +1,5 @@
 use super::*;
+use player_plugin::PluginReference;
 
 /// Codec/media request used when matching decoder plugin capabilities.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -231,6 +232,30 @@ pub enum PluginDiagnosticStatus {
     SourceNormalizerUnsupported,
 }
 
+/// Diagnostic capability family independent from the native ABI layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginCapabilityKind {
+    PostDownloadProcessor,
+    PipelineEventHook,
+    Decoder,
+    BenchmarkSink,
+    FrameProcessor,
+    SourceNormalizer,
+}
+
+impl PluginCapabilityKind {
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::PostDownloadProcessor => "post_download_processor",
+            Self::PipelineEventHook => "pipeline_event_hook",
+            Self::Decoder => "decoder",
+            Self::BenchmarkSink => "benchmark_sink",
+            Self::FrameProcessor => "frame_processor",
+            Self::SourceNormalizer => "source_normalizer",
+        }
+    }
+}
+
 impl PluginDiagnosticStatus {
     pub const fn wire_name(self) -> &'static str {
         match self {
@@ -253,7 +278,7 @@ pub struct PluginDiagnosticRecord {
     pub path: PathBuf,
     pub status: PluginDiagnosticStatus,
     pub plugin_name: Option<String>,
-    pub plugin_kind: Option<VesperPluginKind>,
+    pub plugin_kind: Option<PluginCapabilityKind>,
     pub capability_summary: Option<PluginCapabilitySummary>,
     pub message: Option<String>,
 }
@@ -286,271 +311,287 @@ pub(crate) fn source_normalizer_resource_capability_summary(
 }
 
 impl PluginDiagnosticRecord {
-    pub fn from_loaded_plugin(
+    pub(crate) fn from_native_decoder_interface(
         path: impl Into<PathBuf>,
-        plugin: &LoadedDynamicPlugin,
-        decoder_match: Option<&DecoderPluginMatchRequest>,
+        plugin: &LoadedNativePlugin,
+        reference: &PluginReference,
+        decoder_match: &DecoderPluginMatchRequest,
     ) -> Self {
         let path = path.into();
-        match decoder_factory_summary(plugin) {
-            Some((name, capabilities, native_frame_output, native_requirements)) => {
+        match plugin.resolve_native_decoder(reference) {
+            Ok(factory) => {
+                let capabilities = factory.capabilities();
+                let native_requirements = factory.native_requirements();
                 let capability_summary = DecoderPluginCapabilitySummary::from_capabilities(
                     &capabilities,
-                    native_frame_output,
-                    native_requirements.clone(),
+                    true,
+                    Some(native_requirements),
                 );
-                match decoder_match {
-                    Some(request)
-                        if capabilities.supports_codec(&request.codec, request.media_kind) =>
-                    {
-                        Self {
-                            path,
-                            status: PluginDiagnosticStatus::DecoderSupported,
-                            plugin_name: Some(name.clone()),
-                            plugin_kind: Some(plugin.plugin_kind()),
-                            capability_summary: Some(PluginCapabilitySummary::Decoder(
-                                capability_summary,
-                            )),
-                            message: Some(format!(
-                                "{} advertises {:?} {} support{}",
-                                name,
-                                request.media_kind,
-                                request.codec,
-                                if native_frame_output {
-                                    " with native-frame output"
-                                } else {
-                                    ""
-                                }
-                            )),
-                        }
-                    }
-                    Some(request) => Self {
-                        path,
-                        status: PluginDiagnosticStatus::DecoderUnsupported,
-                        plugin_name: Some(name.clone()),
-                        plugin_kind: Some(plugin.plugin_kind()),
-                        capability_summary: Some(PluginCapabilitySummary::Decoder(
-                            capability_summary,
-                        )),
-                        message: Some(format!(
-                            "{} does not advertise {:?} {} support",
-                            name, request.media_kind, request.codec
-                        )),
-                    },
-                    None => Self {
-                        path,
-                        status: PluginDiagnosticStatus::Loaded,
-                        plugin_name: Some(name.clone()),
-                        plugin_kind: Some(plugin.plugin_kind()),
-                        capability_summary: Some(PluginCapabilitySummary::Decoder(
-                            capability_summary,
-                        )),
-                        message: Some(format!(
-                            "{} decoder plugin loaded{}",
-                            name,
-                            if native_frame_output {
-                                " with native-frame output"
-                            } else {
-                                ""
-                            }
-                        )),
-                    },
+                let supported =
+                    capabilities.supports_codec(&decoder_match.codec, decoder_match.media_kind);
+                let status = if supported {
+                    PluginDiagnosticStatus::DecoderSupported
+                } else {
+                    PluginDiagnosticStatus::DecoderUnsupported
+                };
+                let message = if supported {
+                    format!(
+                        "{} instance `{}` advertises {:?} {} support with native-frame output",
+                        factory.name(),
+                        reference.capability_instance_id().unwrap_or("unknown"),
+                        decoder_match.media_kind,
+                        decoder_match.codec
+                    )
+                } else {
+                    format!(
+                        "{} instance `{}` does not advertise {:?} {} support",
+                        factory.name(),
+                        reference.capability_instance_id().unwrap_or("unknown"),
+                        decoder_match.media_kind,
+                        decoder_match.codec
+                    )
+                };
+                Self {
+                    path,
+                    status,
+                    plugin_name: Some(factory.name().to_owned()),
+                    plugin_kind: Some(PluginCapabilityKind::Decoder),
+                    capability_summary: Some(PluginCapabilitySummary::Decoder(capability_summary)),
+                    message: Some(message),
                 }
             }
-            None => Self {
+            Err(error) => Self {
                 path,
-                status: PluginDiagnosticStatus::UnsupportedKind,
+                status: PluginDiagnosticStatus::DecoderUnsupported,
                 plugin_name: Some(plugin.plugin_name().to_owned()),
-                plugin_kind: Some(plugin.plugin_kind()),
-                capability_summary: frame_processor_factory_summary(plugin)
-                    .map(|capabilities| {
-                        PluginCapabilitySummary::FrameProcessor(
-                            FrameProcessorPluginCapabilitySummary::from(&capabilities),
-                        )
-                    })
-                    .or_else(|| source_normalizer_capability_summary(plugin)),
-                message: Some(format!("{} is not a decoder plugin", plugin.plugin_name())),
+                plugin_kind: Some(PluginCapabilityKind::Decoder),
+                capability_summary: None,
+                message: Some(format!(
+                    "instance `{}` is unavailable: {error}",
+                    reference.capability_instance_id().unwrap_or("unknown")
+                )),
             },
         }
     }
 
-    pub fn from_loaded_frame_processor_plugin(
+    pub(crate) fn from_native_frame_processor_interface(
         path: impl Into<PathBuf>,
-        plugin: &LoadedDynamicPlugin,
+        plugin: &LoadedNativePlugin,
+        reference: &PluginReference,
     ) -> Self {
         let path = path.into();
-        if let Some((name, capabilities)) = frame_processor_summary(plugin) {
-            let capability_summary = FrameProcessorPluginCapabilitySummary::from(&capabilities);
-            let supported =
-                capabilities.supports_video_frames && !capabilities.may_change_dimensions;
-            let status = if supported {
-                PluginDiagnosticStatus::FrameProcessorSupported
-            } else {
-                PluginDiagnosticStatus::FrameProcessorUnsupported
-            };
-            let message = if supported {
-                format!("{name} frame processor plugin loaded")
-            } else if capabilities.may_change_dimensions {
-                format!("{name} frame processor changes frame dimensions, which v1 does not allow")
-            } else {
-                format!("{name} does not advertise video frame processing support")
-            };
-            return Self {
+        match plugin.resolve_frame_processor(reference) {
+            Ok(factory) => {
+                let capabilities = factory.capabilities();
+                let capability_summary = FrameProcessorPluginCapabilitySummary::from(&capabilities);
+                let supported =
+                    capabilities.supports_video_frames && !capabilities.may_change_dimensions;
+                let status = if supported {
+                    PluginDiagnosticStatus::FrameProcessorSupported
+                } else {
+                    PluginDiagnosticStatus::FrameProcessorUnsupported
+                };
+                let message = if supported {
+                    format!(
+                        "{} frame processor instance `{}` loaded",
+                        factory.name(),
+                        reference.capability_instance_id().unwrap_or("unknown")
+                    )
+                } else if capabilities.may_change_dimensions {
+                    format!(
+                        "{} frame processor instance `{}` changes frame dimensions, which the current interface does not allow",
+                        factory.name(),
+                        reference.capability_instance_id().unwrap_or("unknown")
+                    )
+                } else {
+                    format!(
+                        "{} frame processor instance `{}` does not advertise video frame processing support",
+                        factory.name(),
+                        reference.capability_instance_id().unwrap_or("unknown")
+                    )
+                };
+                Self {
+                    path,
+                    status,
+                    plugin_name: Some(factory.name().to_owned()),
+                    plugin_kind: Some(PluginCapabilityKind::FrameProcessor),
+                    capability_summary: Some(PluginCapabilitySummary::FrameProcessor(
+                        capability_summary,
+                    )),
+                    message: Some(message),
+                }
+            }
+            Err(error) => Self {
                 path,
-                status,
-                plugin_name: Some(name),
-                plugin_kind: Some(plugin.plugin_kind()),
-                capability_summary: Some(PluginCapabilitySummary::FrameProcessor(
-                    capability_summary,
+                status: PluginDiagnosticStatus::FrameProcessorUnsupported,
+                plugin_name: Some(plugin.plugin_name().to_owned()),
+                plugin_kind: Some(PluginCapabilityKind::FrameProcessor),
+                capability_summary: None,
+                message: Some(format!(
+                    "instance `{}` is unavailable: {error}",
+                    reference.capability_instance_id().unwrap_or("unknown")
                 )),
-                message: Some(message),
-            };
-        }
-
-        let decoder_summary = decoder_factory_summary(plugin).map(
-            |(_, capabilities, native_frame_output, native_requirements)| {
-                PluginCapabilitySummary::Decoder(DecoderPluginCapabilitySummary::from_capabilities(
-                    &capabilities,
-                    native_frame_output,
-                    native_requirements,
-                ))
             },
-        );
-
-        Self {
-            path,
-            status: PluginDiagnosticStatus::UnsupportedKind,
-            plugin_name: Some(plugin.plugin_name().to_owned()),
-            plugin_kind: Some(plugin.plugin_kind()),
-            capability_summary: decoder_summary
-                .or_else(|| source_normalizer_capability_summary(plugin)),
-            message: Some(format!(
-                "{} is not a frame processor plugin",
-                plugin.plugin_name()
-            )),
         }
     }
 
-    pub fn from_loaded_source_normalizer_plugin(
+    pub(crate) fn from_native_source_packet_interface(
         path: impl Into<PathBuf>,
-        plugin: &LoadedDynamicPlugin,
-    ) -> Option<Self> {
-        Self::from_loaded_source_normalizer_plugin_records(path, plugin)
-            .into_iter()
-            .next()
-    }
-
-    pub(crate) fn from_loaded_source_normalizer_plugin_records(
-        path: impl Into<PathBuf>,
-        plugin: &LoadedDynamicPlugin,
-    ) -> Vec<Self> {
+        plugin: &LoadedNativePlugin,
+        reference: &PluginReference,
+    ) -> Self {
         let path = path.into();
-        let mut records = Vec::new();
-        if let Some((name, capabilities)) = source_normalizer_resource_summary(plugin) {
-            let capability_summary =
-                SourceNormalizerResourcePluginCapabilitySummary::from(&capabilities);
-            let supported = !capabilities.supported_runtime_profiles.is_empty()
-                && !capabilities.supported_output_routes.is_empty();
-            let status = if supported {
-                PluginDiagnosticStatus::SourceNormalizerSupported
-            } else {
-                PluginDiagnosticStatus::SourceNormalizerUnsupported
-            };
-            let message = if supported {
-                format!("{name} source normalizer resource route loaded")
-            } else if capabilities.supported_runtime_profiles.is_empty() {
-                format!("{name} does not advertise resource source normalizer runtime profiles")
-            } else {
-                format!("{name} does not advertise resource source normalizer output routes")
-            };
-            records.push(Self {
-                path: path.clone(),
-                status,
-                plugin_name: Some(name),
-                plugin_kind: Some(plugin.plugin_kind()),
-                capability_summary: Some(PluginCapabilitySummary::SourceNormalizerResource(
-                    capability_summary,
-                )),
-                message: Some(message),
-            });
-        }
-
-        if let Some((name, capabilities)) = source_normalizer_packet_summary(plugin) {
-            let capability_summary =
-                SourceNormalizerPacketPluginCapabilitySummary::from(&capabilities);
-            let supported = !capabilities.supported_runtime_profiles.is_empty()
-                && !capabilities.media_kinds.is_empty();
-            let status = if supported {
-                PluginDiagnosticStatus::SourceNormalizerSupported
-            } else {
-                PluginDiagnosticStatus::SourceNormalizerUnsupported
-            };
-            let message = if supported {
-                format!("{name} source normalizer packet route loaded")
-            } else if capabilities.supported_runtime_profiles.is_empty() {
-                format!("{name} does not advertise packet source normalizer runtime profiles")
-            } else {
-                format!("{name} does not advertise packet source normalizer media kinds")
-            };
-            records.push(Self {
-                path: path.clone(),
-                status,
-                plugin_name: Some(name),
-                plugin_kind: Some(plugin.plugin_kind()),
-                capability_summary: Some(PluginCapabilitySummary::SourceNormalizerPacket(
-                    capability_summary,
-                )),
-                message: Some(message),
-            });
-        }
-
-        if !records.is_empty() {
-            return records;
-        }
-
-        let capability_summary = decoder_factory_summary(plugin)
-            .map(
-                |(_, capabilities, native_frame_output, native_requirements)| {
-                    PluginCapabilitySummary::Decoder(
-                        DecoderPluginCapabilitySummary::from_capabilities(
-                            &capabilities,
-                            native_frame_output,
-                            native_requirements,
-                        ),
+        match plugin.resolve_source_packet(reference) {
+            Ok(factory) => {
+                let capabilities = factory.packet_capabilities();
+                let capability_summary =
+                    SourceNormalizerPacketPluginCapabilitySummary::from(&capabilities);
+                let supported = !capabilities.supported_runtime_profiles.is_empty()
+                    && !capabilities.media_kinds.is_empty();
+                let status = if supported {
+                    PluginDiagnosticStatus::SourceNormalizerSupported
+                } else {
+                    PluginDiagnosticStatus::SourceNormalizerUnsupported
+                };
+                let message = if supported {
+                    format!(
+                        "{} source normalizer packet instance `{}` loaded",
+                        factory.name(),
+                        reference.capability_instance_id().unwrap_or("unknown")
                     )
-                },
-            )
-            .or_else(|| {
-                frame_processor_factory_summary(plugin).map(|capabilities| {
-                    PluginCapabilitySummary::FrameProcessor(
-                        FrameProcessorPluginCapabilitySummary::from(&capabilities),
+                } else if capabilities.supported_runtime_profiles.is_empty() {
+                    format!(
+                        "{} packet instance `{}` does not advertise source normalizer runtime profiles",
+                        factory.name(),
+                        reference.capability_instance_id().unwrap_or("unknown")
                     )
-                })
-            })
-            .or_else(|| source_normalizer_capability_summary(plugin));
+                } else {
+                    format!(
+                        "{} packet instance `{}` does not advertise source normalizer media kinds",
+                        factory.name(),
+                        reference.capability_instance_id().unwrap_or("unknown")
+                    )
+                };
+                Self {
+                    path,
+                    status,
+                    plugin_name: Some(factory.name().to_owned()),
+                    plugin_kind: Some(PluginCapabilityKind::SourceNormalizer),
+                    capability_summary: Some(PluginCapabilitySummary::SourceNormalizerPacket(
+                        capability_summary,
+                    )),
+                    message: Some(message),
+                }
+            }
+            Err(error) => Self {
+                path,
+                status: PluginDiagnosticStatus::SourceNormalizerUnsupported,
+                plugin_name: Some(plugin.plugin_name().to_owned()),
+                plugin_kind: Some(PluginCapabilityKind::SourceNormalizer),
+                capability_summary: None,
+                message: Some(format!(
+                    "instance `{}` is unavailable: {error}",
+                    reference.capability_instance_id().unwrap_or("unknown")
+                )),
+            },
+        }
+    }
 
-        vec![Self {
-            path,
+    pub(crate) fn from_native_source_resource_interface(
+        path: impl Into<PathBuf>,
+        plugin: &LoadedNativePlugin,
+        reference: &PluginReference,
+    ) -> Self {
+        let path = path.into();
+        match plugin.resolve_source_resource(reference) {
+            Ok(factory) => {
+                let capabilities = factory.resource_capabilities();
+                let capability_summary =
+                    SourceNormalizerResourcePluginCapabilitySummary::from(&capabilities);
+                let supported = !capabilities.supported_runtime_profiles.is_empty()
+                    && !capabilities.supported_output_routes.is_empty();
+                let status = if supported {
+                    PluginDiagnosticStatus::SourceNormalizerSupported
+                } else {
+                    PluginDiagnosticStatus::SourceNormalizerUnsupported
+                };
+                let message = if supported {
+                    format!(
+                        "{} source normalizer resource instance `{}` loaded",
+                        factory.name(),
+                        reference.capability_instance_id().unwrap_or("unknown")
+                    )
+                } else if capabilities.supported_runtime_profiles.is_empty() {
+                    format!(
+                        "{} resource instance `{}` does not advertise source normalizer runtime profiles",
+                        factory.name(),
+                        reference.capability_instance_id().unwrap_or("unknown")
+                    )
+                } else {
+                    format!(
+                        "{} resource instance `{}` does not advertise source normalizer output routes",
+                        factory.name(),
+                        reference.capability_instance_id().unwrap_or("unknown")
+                    )
+                };
+                Self {
+                    path,
+                    status,
+                    plugin_name: Some(factory.name().to_owned()),
+                    plugin_kind: Some(PluginCapabilityKind::SourceNormalizer),
+                    capability_summary: Some(PluginCapabilitySummary::SourceNormalizerResource(
+                        capability_summary,
+                    )),
+                    message: Some(message),
+                }
+            }
+            Err(error) => Self {
+                path,
+                status: PluginDiagnosticStatus::SourceNormalizerUnsupported,
+                plugin_name: Some(plugin.plugin_name().to_owned()),
+                plugin_kind: Some(PluginCapabilityKind::SourceNormalizer),
+                capability_summary: None,
+                message: Some(format!(
+                    "instance `{}` is unavailable: {error}",
+                    reference.capability_instance_id().unwrap_or("unknown")
+                )),
+            },
+        }
+    }
+
+    pub(crate) fn unsupported_native_interface(
+        path: impl Into<PathBuf>,
+        plugin: &LoadedNativePlugin,
+        interface: &'static str,
+    ) -> Self {
+        Self {
+            path: path.into(),
             status: PluginDiagnosticStatus::UnsupportedKind,
             plugin_name: Some(plugin.plugin_name().to_owned()),
-            plugin_kind: Some(plugin.plugin_kind()),
-            capability_summary,
+            plugin_kind: None,
+            capability_summary: None,
             message: Some(format!(
-                "{} is not a source normalizer plugin",
+                "{} does not expose interface {interface}",
                 plugin.plugin_name()
             )),
-        }]
+        }
     }
 
     pub fn load_failed(path: impl Into<PathBuf>, error: PluginLoadError) -> Self {
-        let path = path.into();
+        Self::load_failed_message(path, error.to_string())
+    }
+
+    pub(crate) fn load_failed_message(
+        path: impl Into<PathBuf>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
-            path,
+            path: path.into(),
             status: PluginDiagnosticStatus::LoadFailed,
             plugin_name: None,
             plugin_kind: None,
             capability_summary: None,
-            message: Some(error.to_string()),
+            message: Some(message.into()),
         }
     }
 
@@ -560,88 +601,4 @@ impl PluginDiagnosticRecord {
             .or_else(|| self.plugin_name.clone())
             .unwrap_or_else(|| self.path.display().to_string())
     }
-}
-
-fn decoder_factory_summary(
-    plugin: &LoadedDynamicPlugin,
-) -> Option<(
-    String,
-    DecoderCapabilities,
-    bool,
-    Option<DecoderNativeRequirements>,
-)> {
-    plugin.native_decoder_plugin_factory().map(|factory| {
-        (
-            factory.name().to_owned(),
-            factory.capabilities(),
-            true,
-            Some(factory.native_requirements()),
-        )
-    })
-}
-
-fn frame_processor_summary(
-    plugin: &LoadedDynamicPlugin,
-) -> Option<(String, FrameProcessorCapabilities)> {
-    plugin
-        .frame_processor_plugin_factory()
-        .map(|factory| (factory.name().to_owned(), factory.capabilities()))
-}
-
-fn frame_processor_factory_summary(
-    plugin: &LoadedDynamicPlugin,
-) -> Option<FrameProcessorCapabilities> {
-    plugin
-        .frame_processor_plugin_factory()
-        .map(|factory| factory.capabilities())
-}
-
-fn source_normalizer_packet_summary(
-    plugin: &LoadedDynamicPlugin,
-) -> Option<(String, SourceNormalizerPacketCapabilities)> {
-    plugin
-        .source_normalizer_packet_plugin_factory()
-        .map(|factory| (factory.name().to_owned(), factory.packet_capabilities()))
-}
-
-fn source_normalizer_resource_summary(
-    plugin: &LoadedDynamicPlugin,
-) -> Option<(String, SourceNormalizerResourceCapabilities)> {
-    plugin
-        .source_normalizer_resource_plugin_factory()
-        .map(|factory| (factory.name().to_owned(), factory.resource_capabilities()))
-}
-
-fn source_normalizer_packet_factory_summary(
-    plugin: &LoadedDynamicPlugin,
-) -> Option<SourceNormalizerPacketCapabilities> {
-    plugin
-        .source_normalizer_packet_plugin_factory()
-        .map(|factory| factory.packet_capabilities())
-}
-
-fn source_normalizer_resource_factory_summary(
-    plugin: &LoadedDynamicPlugin,
-) -> Option<SourceNormalizerResourceCapabilities> {
-    plugin
-        .source_normalizer_resource_plugin_factory()
-        .map(|factory| factory.resource_capabilities())
-}
-
-fn source_normalizer_capability_summary(
-    plugin: &LoadedDynamicPlugin,
-) -> Option<PluginCapabilitySummary> {
-    source_normalizer_resource_factory_summary(plugin)
-        .map(|capabilities| {
-            PluginCapabilitySummary::SourceNormalizerResource(
-                SourceNormalizerResourcePluginCapabilitySummary::from(&capabilities),
-            )
-        })
-        .or_else(|| {
-            source_normalizer_packet_factory_summary(plugin).map(|capabilities| {
-                PluginCapabilitySummary::SourceNormalizerPacket(
-                    SourceNormalizerPacketPluginCapabilitySummary::from(&capabilities),
-                )
-            })
-        })
 }

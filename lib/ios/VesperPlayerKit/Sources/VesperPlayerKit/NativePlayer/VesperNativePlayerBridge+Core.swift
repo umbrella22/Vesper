@@ -95,7 +95,13 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     let sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration
     let frameProcessorConfiguration: VesperFrameProcessorConfiguration
     let nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration
+    let pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration
+    let pipelineEventHookSession: VesperPlaybackEventHookSession?
+    let pipelineEventRunId: String
+    let pipelineEventSessionId: String
+    let pipelineEventResourceIdentity: String
     var currentPluginDiagnostics: [[String: Any]]
+    var finalizedPipelineEventHookReports: VesperPipelineEventHookReportBatch? = nil
     /// Set immediately before a periodic AVPlayer update publishes its state.
     /// The Flutter-facing controller consumes this marker to suppress a full
     /// snapshot while native hosts still observe playback and Now Playing
@@ -182,6 +188,38 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             sourceProtocol: currentSource?.protocol,
             attributes: attributes
         )
+        _ = pipelineEventHookSession?.submit(
+            runId: pipelineEventRunId,
+            sessionId: pipelineEventSessionId,
+            protocolName: currentSource?.protocol.rawValue,
+            eventName: eventName,
+            timestampNs: DispatchTime.now().uptimeNanoseconds,
+            resourceIdentity: pipelineEventResourceIdentity,
+            attributes: sanitizedPipelineEventAttributes(attributes)
+        )
+    }
+
+    func drainPipelineEventHookReports() -> VesperPipelineEventHookReportBatch {
+        if let finalized = finalizedPipelineEventHookReports {
+            finalizedPipelineEventHookReports = nil
+            return finalized
+        }
+        return pipelineEventHookSession?.drainReports() ?? VesperPipelineEventHookReportBatch()
+    }
+
+    /// EventHook attributes are a separate, redacted contract from benchmark
+    /// diagnostics. Never forward free-form paths, URLs, or error text.
+    private func sanitizedPipelineEventAttributes(
+        _ attributes: [String: String]
+    ) -> [String: String] {
+        let forbiddenKeys = Set(["error", "url", "sourceUri", "path", "resourcePath"])
+        return attributes
+            .filter { key, _ in !forbiddenKeys.contains(key) }
+            .sorted { $0.key < $1.key }
+            .prefix(32)
+            .reduce(into: [String: String]()) { result, item in
+                result[item.key] = String(item.value.prefix(256))
+            }
     }
 
     init(
@@ -196,6 +234,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
             VesperFrameProcessorConfiguration(),
         nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
             VesperNativeFramePipelineConfiguration(),
+        pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration =
+            VesperPipelineEventHookConfiguration(),
         nativeFramePipelineCoordinator: VesperNativeFramePipelineCoordinator? = nil,
         subtitleSelectionWaitPolicy: VesperSubtitleSelectionWaitPolicy = .production
     ) {
@@ -206,6 +246,23 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         self.sourceNormalizerConfiguration = sourceNormalizerConfiguration
         self.frameProcessorConfiguration = frameProcessorConfiguration
         self.nativeFramePipelineConfiguration = nativeFramePipelineConfiguration
+        self.pipelineEventHookConfiguration = pipelineEventHookConfiguration
+        let pipelineEventIdentity = UUID().uuidString.lowercased()
+        pipelineEventRunId = "playback-run:\(pipelineEventIdentity)"
+        pipelineEventSessionId = "playback-session:\(pipelineEventIdentity)"
+        pipelineEventResourceIdentity = "playback-session:\(pipelineEventIdentity)"
+        if pipelineEventHookConfiguration.isDisabled {
+            pipelineEventHookSession = nil
+        } else {
+            do {
+                pipelineEventHookSession = try VesperPlaybackEventHookSession(
+                    configuration: pipelineEventHookConfiguration
+                )
+            } catch {
+                pipelineEventHookSession = nil
+                iosHostLog("playback EventHook session create failed: \(error.localizedDescription)")
+            }
+        }
         self.nativeFramePipelineCoordinator = nativeFramePipelineCoordinator ?? VesperNativeFramePipelineCoordinator()
         self.subtitleSelectionWaitPolicy = subtitleSelectionWaitPolicy
         currentPluginDiagnostics = []

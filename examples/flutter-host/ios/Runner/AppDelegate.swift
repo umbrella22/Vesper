@@ -29,20 +29,6 @@ import UIKit
       switch call.method {
       case "pickVideo":
         self?.presentVideoPicker(result: result)
-      case "bundledDownloadPluginLibraryPaths":
-        result(
-          self?.bundledPluginLibraryPaths(
-            frameworkName: "VesperPlayerRemuxFfmpegPlugin",
-            binaryName: "VesperPlayerRemuxFfmpegPlugin"
-          ) ?? []
-        )
-      case "bundledFrameProcessorPluginLibraryPaths":
-        result(
-          self?.bundledPluginLibraryPaths(
-            frameworkName: "VesperPlayerFrameProcessorDiagnosticPlugin",
-            binaryName: "VesperPlayerFrameProcessorDiagnosticPlugin"
-          ) ?? []
-        )
       case "saveVideoToGallery":
         self?.handleSaveVideoToGallery(call: call, result: result)
       case "hdrEvidenceOutputRoot":
@@ -392,20 +378,6 @@ import UIKit
     return keyWindow?.rootViewController
   }
 
-  private func bundledPluginLibraryPaths(
-    frameworkName: String,
-    binaryName: String
-  ) -> [String] {
-    let frameworksURL =
-      Bundle.main.privateFrameworksURL
-      ?? Bundle.main.bundleURL.appendingPathComponent("Frameworks", isDirectory: true)
-    return resolveBundledPluginLibraryPaths(
-      frameworkName: frameworkName,
-      binaryName: binaryName,
-      frameworksURL: frameworksURL
-    )
-  }
-
   private func handleSaveVideoToGallery(call: FlutterMethodCall, result: @escaping FlutterResult) {
     guard
       let arguments = call.arguments as? [String: Any],
@@ -548,22 +520,6 @@ import UIKit
       pointer.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) }
     }
   }
-}
-
-func resolveBundledPluginLibraryPaths(
-  frameworkName: String,
-  binaryName: String,
-  frameworksURL: URL,
-  fileManager: FileManager = .default
-) -> [String] {
-  let pluginURL = frameworksURL
-    .appendingPathComponent("\(frameworkName).framework", isDirectory: true)
-    .appendingPathComponent(binaryName, isDirectory: false)
-
-  guard fileManager.fileExists(atPath: pluginURL.path) else {
-    return []
-  }
-  return [pluginURL.standardizedFileURL.path]
 }
 
 private enum ExamplePhotoLibraryExportError: LocalizedError {

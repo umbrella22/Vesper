@@ -1,0 +1,41 @@
+schema_version = 1
+
+[plugin]
+id = "dev.vesper.frame-processor-diagnostic"
+name = "Vesper Diagnostic Frame Processor"
+version = "0.4.0"
+description = "Experimental diagnostic FrameProcessor plugin for native-frame conformance testing."
+license = "Apache-2.0"
+publisher = "io.github.ikaros"
+
+[compatibility]
+host_sdk = ">=0.4.0, <0.5.0"
+abi_major = 1
+abi_minor_min = 0
+abi_minor_max = 0
+
+[[capabilities]]
+interface_id = "fc050597-b7b7-5c81-83b9-b42555f8b825"
+instance_id = "dev.vesper.frame-processor-diagnostic.frame"
+interface_major = 1
+interface_minor = 0
+stability = "experimental"
+
+[[artifacts]]
+transport = "native"
+target = "aarch64-apple-darwin"
+format = "dylib"
+source = "dist/libvesper_frame_processor_diagnostic.dylib"
+path = "artifacts/aarch64-apple-darwin/libvesper_frame_processor_diagnostic.dylib"
+architecture = "arm64"
+capabilities = [{ interface_id = "fc050597-b7b7-5c81-83b9-b42555f8b825", instance_id = "dev.vesper.frame-processor-diagnostic.frame" }]
+
+[[package_files]]
+source = "../../LICENSE"
+path = "licenses/LICENSE"
+kind = "license"
+
+[[package_files]]
+source = "../../NOTICE"
+path = "notices/NOTICE"
+kind = "notice"

@@ -39,7 +39,7 @@ scripts/vesper ffi c-host-smoke --build-only
 
 The public C header is checked in at
 [`include/player_ffi.h`](../../include/player_ffi.h) and is generated from
-`crates/ffi/player-ffi` via `cbindgen`.
+`crates/ffi/player-ffi` via `cbindgen` through the Rust `vesper ffi` CLI.
 
 - Sync before local builds: `scripts/vesper ffi sync`
 - Regenerate explicitly: `scripts/vesper ffi generate`

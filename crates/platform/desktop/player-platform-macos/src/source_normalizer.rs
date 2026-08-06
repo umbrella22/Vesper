@@ -57,6 +57,10 @@ impl PlayerRuntimeAdapter for MacosSourceNormalizerRuntimeGuard {
             .collect()
     }
 
+    fn take_dropped_event_count(&mut self) -> u64 {
+        self.inner.take_dropped_event_count()
+    }
+
     fn dispatch(
         &mut self,
         command: PlayerRuntimeCommand,
@@ -137,8 +141,13 @@ pub(crate) fn source_normalizer_packet_decoder_unavailable_message(
             video_stream.codec
         ));
     }
+    if let Err(error) =
+        options.validate_native_plugin_loading_policy("macOS SourceNormalizer decoder")
+    {
+        return Some(error.to_string());
+    }
     let request = DecoderPluginMatchRequest::video(video_stream.codec.clone());
-    let registry = PluginRegistry::inspect_decoder_support(
+    let registry = PluginRegistry::inspect_decoder_support_development(
         &options.decoder_plugin_library_paths,
         request.clone(),
     );
@@ -208,7 +217,27 @@ pub(crate) fn prepare_source_normalizer_for_open(
         };
     }
 
-    let registry = PluginRegistry::inspect_source_normalizer_support(
+    if let Err(error) = options.validate_native_plugin_loading_policy("macOS SourceNormalizer") {
+        let message = error.to_string();
+        outcome
+            .diagnostics
+            .push(source_normalizer_runtime_diagnostic(
+                None,
+                message.clone(),
+                PlayerPluginParticipation::Bypassed,
+            ));
+        return match options.source_normalizer_mode {
+            SourceNormalizerMode::RequireNormalized => {
+                Err(PlayerError::new(PlayerErrorCode::Unsupported, message))
+            }
+            SourceNormalizerMode::Disabled
+            | SourceNormalizerMode::DiagnosticsOnly
+            | SourceNormalizerMode::PreflightOnly
+            | SourceNormalizerMode::PreferNormalized => Ok(outcome),
+        };
+    }
+
+    let registry = PluginRegistry::inspect_source_normalizer_support_development(
         &options.source_normalizer_plugin_library_paths,
     );
     outcome
@@ -243,7 +272,7 @@ pub(crate) fn prepare_source_normalizer_for_open(
     }
 
     if let Some(packet_record) = registry.best_source_normalizer_packet() {
-        match open_source_normalizer_packet_session(&source, options, packet_record) {
+        match open_source_normalizer_packet_session(&source, options, &registry, packet_record) {
             Ok(ready) => {
                 outcome.selected_profile = ready.selected_profile.clone();
                 outcome.ready_latency = Some(ready.ready_latency);
@@ -347,18 +376,16 @@ pub(crate) struct ReadySourceNormalizerPacketSession {
 pub(crate) fn open_source_normalizer_packet_session(
     source: &MediaSource,
     _options: &PlayerRuntimeOptions,
+    registry: &PluginRegistry,
     record: &PluginDiagnosticRecord,
 ) -> Result<ReadySourceNormalizerPacketSession, String> {
-    let plugin = LoadedDynamicPlugin::load(&record.path)
-        .map_err(|error| format!("failed to load source normalizer plugin: {error}"))?;
-    let factory = plugin
-        .source_normalizer_packet_plugin_factory()
-        .ok_or_else(|| {
-            format!(
-                "{} is not a packet source normalizer plugin",
-                plugin.plugin_name()
-            )
-        })?;
+    let reference = registry.reference_for_record(record).ok_or_else(|| {
+        "selected source normalizer packet record has no plugin capability reference".to_owned()
+    })?;
+    let factory = registry
+        .resolve_source_packet(reference)
+        .map_err(|error| format!("failed to resolve source normalizer packet plugin: {error}"))?
+        .capability();
     let requirements = SourceNormalizerPacketSessionRequirements {
         runtime_profile: String::new(),
         media_kind: Some(SourceNormalizerPacketMediaKind::Video),
@@ -725,7 +752,13 @@ pub(crate) fn source_normalizer_audio_decoder_registry(
     if options.decoder_plugin_library_paths.is_empty() {
         return None;
     }
-    Some(PluginRegistry::inspect_decoder_support(
+    if let Err(error) =
+        options.validate_native_plugin_loading_policy("macOS SourceNormalizer audio decoder")
+    {
+        tracing::warn!(error = %error);
+        return None;
+    }
+    Some(PluginRegistry::inspect_decoder_support_development(
         &options.decoder_plugin_library_paths,
         DecoderPluginMatchRequest::audio(audio_track.codec.clone()),
     ))
@@ -798,7 +831,6 @@ pub(crate) fn attach_source_normalizer_to_runtime(
 ) -> PlayerRuntimeBootstrap {
     if normalization.packet_session.is_some() {
         let packet_session = normalization.packet_session.take();
-        let adapter_id = bootstrap.runtime.adapter_id().to_owned();
         let PlayerRuntimeBootstrap {
             runtime,
             initial_frame,
@@ -810,25 +842,18 @@ pub(crate) fn attach_source_normalizer_to_runtime(
             .filter(|diagnostic| diagnostic.plugin_kind.as_deref() == Some("source_normalizer"))
             .cloned()
             .collect::<Vec<_>>();
-        let adapter_id = if adapter_id == MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID {
-            MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID
-        } else if adapter_id == MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID {
-            MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID
-        } else {
-            MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID
+        let runtime = runtime.wrap_adapter(|runtime| {
+            Box::new(MacosSourceNormalizerRuntimeGuard {
+                inner: runtime,
+                source_normalizer_packet_session: packet_session,
+                source_normalizer_diagnostics,
+            })
+        });
+        return PlayerRuntimeBootstrap {
+            runtime,
+            initial_frame,
+            startup,
         };
-        return PlayerRuntime::from_adapter_bootstrap(
-            adapter_id,
-            PlayerRuntimeAdapterBootstrap {
-                runtime: Box::new(MacosSourceNormalizerRuntimeGuard {
-                    inner: runtime,
-                    source_normalizer_packet_session: packet_session,
-                    source_normalizer_diagnostics,
-                }),
-                initial_frame,
-                startup,
-            },
-        );
     }
     bootstrap
 }

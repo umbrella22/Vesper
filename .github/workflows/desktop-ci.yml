@@ -5,13 +5,20 @@ on:
     paths:
       - ".github/workflows/desktop-ci.yml"
       - ".github/actions/install-linux-desktop-deps/**"
+      - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "crates/tools/player-cli/**"
       - "scripts/**"
+      - "plugins/**"
+      - "fixtures/plugins/**"
       - "crates/model/**"
       - "crates/core/**"
       - "crates/ffi/**"
       - "crates/plugin/**"
+      - "schemas/**"
+      - "templates/**"
+      - "wit/**"
       - "crates/audio/**"
       - "crates/render/**"
       - "crates/backend/**"
@@ -27,13 +34,20 @@ on:
     paths:
       - ".github/workflows/desktop-ci.yml"
       - ".github/actions/install-linux-desktop-deps/**"
+      - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "crates/tools/player-cli/**"
       - "scripts/**"
+      - "plugins/**"
+      - "fixtures/plugins/**"
       - "crates/model/**"
       - "crates/core/**"
       - "crates/ffi/**"
       - "crates/plugin/**"
+      - "schemas/**"
+      - "templates/**"
+      - "wit/**"
       - "crates/audio/**"
       - "crates/render/**"
       - "crates/backend/**"
@@ -147,6 +161,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -257,6 +274,7 @@ jobs:
 
       - name: Verify generated FFI header
         if: runner.os == 'Linux'
+        shell: bash
         run: ./scripts/vesper ffi verify
 
       - name: Desktop platform check
@@ -266,10 +284,12 @@ jobs:
         run: cargo test -p ${{ matrix.platform_crate }} --no-fail-fast
 
       - name: Verify decoder fixture diagnostics
+        shell: bash
         run: ./scripts/vesper desktop verify-decoder-diagnostics
 
       - name: Verify VideoToolbox decoder plugin
         if: runner.os == 'macOS'
+        shell: bash
         run: ./scripts/vesper desktop verify-decoder-videotoolbox loader
 
       - name: Example host check
@@ -277,6 +297,7 @@ jobs:
 
       - name: Build C host smoke example
         if: runner.os == 'macOS'
+        shell: bash
         run: ./scripts/vesper ffi c-host-smoke --build-only
 
       - name: Verify desktop player-remux-ffmpeg remux path

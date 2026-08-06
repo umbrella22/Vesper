@@ -37,6 +37,7 @@ internal class VesperNativePlayerBridge(
         VesperFrameProcessorConfiguration(),
     internal val nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
         VesperNativeFramePipelineConfiguration(),
+    internal val pipelineEventHookRegistryOwner: VesperPluginRegistryHandleOwner? = null,
     internal val nativeFramePipelinePumpScheduler: NativeFramePipelinePumpScheduler =
         HandlerNativeFramePipelinePumpScheduler(),
 ) : PlayerBridge {
@@ -310,6 +311,9 @@ internal class VesperNativePlayerBridge(
     override fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> =
         benchmarkRecorder.drainEvents()
 
+    override fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch =
+        bindings.drainPipelineEventHookReports()
+
     override fun drainRuntimeWarnings(): List<VesperRuntimeWarning> {
         synchronized(runtimeWarnings) {
             if (runtimeWarnings.isEmpty()) {
@@ -323,5 +327,8 @@ internal class VesperNativePlayerBridge(
 
     override fun benchmarkSummary(): VesperBenchmarkSummary =
         benchmarkRecorder.summary()
+
+    override fun awaitBenchmarkSinkShutdown(timeoutMs: Long): Boolean =
+        benchmarkRecorder.awaitSinkShutdown(timeoutMs)
 
 }

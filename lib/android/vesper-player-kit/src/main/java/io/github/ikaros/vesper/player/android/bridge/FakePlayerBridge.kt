@@ -21,7 +21,11 @@ internal class FakePlayerBridge(
     private var currentSource: VesperPlayerSource? = initialSource
     private var attachedHost: ViewGroup? = null
     private val i18n = VesperPlayerI18n.fromContext(appContext)
-    private val benchmarkRecorder = VesperBenchmarkRecorder(benchmarkConfiguration)
+    private val benchmarkRecorder =
+        VesperBenchmarkRecorder(
+            configuration = benchmarkConfiguration,
+            context = appContext,
+        )
     private val isDisposed = AtomicBoolean(false)
 
     private val _uiState = MutableStateFlow(
@@ -333,8 +337,14 @@ internal class FakePlayerBridge(
     override fun drainBenchmarkEvents(): List<VesperBenchmarkEvent> =
         benchmarkRecorder.drainEvents()
 
+    override fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch =
+        VesperPipelineEventHookReportBatch()
+
     override fun benchmarkSummary(): VesperBenchmarkSummary =
         benchmarkRecorder.summary()
+
+    override fun awaitBenchmarkSinkShutdown(timeoutMs: Long): Boolean =
+        benchmarkRecorder.awaitSinkShutdown(timeoutMs)
 
     private inline fun updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
         _uiState.value = _uiState.value.transform()

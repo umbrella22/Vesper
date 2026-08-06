@@ -40,34 +40,54 @@ func stringFromRuntimeCString(_ pointer: UnsafeMutablePointer<CChar>?) -> String
     return String(cString: pointer)
 }
 
-func stringArrayFromRuntimeCStringArray(
-    _ pointer: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
-    count: Int
-) -> [String] {
-    guard let pointer, count > 0 else {
-        return []
+func requiredRuntimeCString(_ pointer: UnsafeMutablePointer<CChar>?) -> String? {
+    guard let value = stringFromRuntimeCString(pointer), !value.isEmpty else {
+        return nil
     }
-    return (0..<count).compactMap { index in
-        stringFromRuntimeCString(pointer[index])
-    }
+    return value
 }
 
-func stringDictionaryFromRuntimeCStringArrays(
+func decodeRuntimeCStringArray(
+    _ pointer: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
+    count: UInt
+) -> [String]? {
+    guard let count = Int(exactly: count) else {
+        return nil
+    }
+    guard count > 0 else {
+        return pointer == nil ? [] : nil
+    }
+    guard let pointer else {
+        return nil
+    }
+    var result: [String] = []
+    result.reserveCapacity(count)
+    for index in 0..<count {
+        guard let value = stringFromRuntimeCString(pointer[index]) else {
+            return nil
+        }
+        result.append(value)
+    }
+    return result
+}
+
+func decodeRuntimeStringDictionary(
     keys: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
     values: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
-    count: Int
-) -> [String: String] {
-    guard let keys, let values, count > 0 else {
-        return [:]
+    count: UInt
+) -> [String: String]? {
+    guard let decodedKeys = decodeRuntimeCStringArray(keys, count: count),
+          let decodedValues = decodeRuntimeCStringArray(values, count: count),
+          decodedKeys.count == decodedValues.count
+    else {
+        return nil
     }
     var result: [String: String] = [:]
-    for index in 0..<count {
-        guard let key = stringFromRuntimeCString(keys[index]),
-              let value = stringFromRuntimeCString(values[index])
-        else {
-            continue
+    result.reserveCapacity(decodedKeys.count)
+    for (key, value) in zip(decodedKeys, decodedValues) {
+        guard result.updateValue(value, forKey: key) == nil else {
+            return nil
         }
-        result[key] = value
     }
     return result
 }
@@ -105,17 +125,14 @@ func freeRuntimeDownloadSource(_ source: inout VesperRuntimeDownloadSource) {
 }
 
 func freeRuntimeDownloadConfig(_ config: inout VesperRuntimeDownloadConfig) {
-    if let pointers = config.plugin_library_paths, config.plugin_library_paths_len > 0 {
-        for index in 0..<Int(config.plugin_library_paths_len) {
-            freeDownloadCString(pointers[index])
-        }
-        pointers.deallocate()
-    }
+    freeDownloadCString(config.post_download_plugin_references_json)
+    freeDownloadCString(config.event_hook_plugin_references_json)
     config = VesperRuntimeDownloadConfig(
         auto_start: false,
         run_post_processors_on_completion: false,
-        plugin_library_paths: nil,
-        plugin_library_paths_len: 0
+        plugin_registry_handle: 0,
+        post_download_plugin_references_json: nil,
+        event_hook_plugin_references_json: nil
     )
 }
 
@@ -257,4 +274,3 @@ func freeRuntimeDownloadTask(_ task: inout VesperRuntimeDownloadTask) {
         error_message: nil
     )
 }
-

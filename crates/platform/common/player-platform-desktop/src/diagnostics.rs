@@ -1,8 +1,8 @@
-use player_plugin::{DecoderMediaKind, NativeHandleKind, VesperPluginKind};
+use player_plugin::{DecoderMediaKind, NativeHandleKind};
 use player_plugin_loader::{
     DecoderPluginCapabilitySummary, DecoderPluginCodecSummary,
-    FrameProcessorPluginCapabilitySummary, PluginCapabilitySummary, PluginDiagnosticRecord,
-    PluginDiagnosticStatus, SourceNormalizerPacketPluginCapabilitySummary,
+    FrameProcessorPluginCapabilitySummary, PluginCapabilityKind, PluginCapabilitySummary,
+    PluginDiagnosticRecord, PluginDiagnosticStatus, SourceNormalizerPacketPluginCapabilitySummary,
     SourceNormalizerResourcePluginCapabilitySummary,
 };
 use player_runtime::{
@@ -331,13 +331,6 @@ pub fn native_handle_kind_label(handle_kind: &NativeHandleKind) -> String {
     }
 }
 
-pub fn plugin_kind_label(kind: VesperPluginKind) -> &'static str {
-    match kind {
-        VesperPluginKind::PostDownloadProcessor => "post_download_processor",
-        VesperPluginKind::PipelineEventHook => "pipeline_event_hook",
-        VesperPluginKind::Decoder => "decoder",
-        VesperPluginKind::BenchmarkSink => "benchmark_sink",
-        VesperPluginKind::FrameProcessor => "frame_processor",
-        VesperPluginKind::SourceNormalizer => "source_normalizer",
-    }
+pub fn plugin_kind_label(kind: PluginCapabilityKind) -> &'static str {
+    kind.wire_name()
 }

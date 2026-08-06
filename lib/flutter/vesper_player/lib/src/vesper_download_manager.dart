@@ -184,6 +184,8 @@ class VesperDownloadManager {
         switch (event) {
           case VesperDownloadInitialSnapshotEvent():
             _applySnapshot(event.snapshot, forwardEvent: event);
+          case VesperDownloadResyncEvent():
+            _applySnapshot(event.snapshot, forwardEvent: event);
           case VesperDownloadErrorEvent():
             _applyErrorEvent(event);
           case VesperDownloadExportProgressEvent():

@@ -220,9 +220,16 @@ pub(crate) fn apply_native_frame_plugin_preference_to_video_decode(
             best_video.codec,
             PlayerPlaybackRoute::SoftwareDecoder.wire_name()
         ))
+    } else if let Err(error) =
+        options.validate_native_plugin_loading_policy("macOS native-frame decoder")
+    {
+        Some(format!(
+            "{error}; selected {} route",
+            PlayerPlaybackRoute::SoftwareDecoder.wire_name()
+        ))
     } else {
         let request = DecoderPluginMatchRequest::video(best_video.codec.clone());
-        let registry = PluginRegistry::inspect_decoder_support(
+        let registry = PluginRegistry::inspect_decoder_support_development(
             &options.decoder_plugin_library_paths,
             request.clone(),
         );
@@ -253,7 +260,11 @@ pub(crate) fn decoder_plugin_registry(
     if options.decoder_plugin_library_paths.is_empty() {
         return None;
     }
-    Some(PluginRegistry::inspect_decoder_support(
+    if let Err(error) = options.validate_native_plugin_loading_policy("macOS decoder diagnostics") {
+        tracing::warn!(error = %error);
+        return None;
+    }
+    Some(PluginRegistry::inspect_decoder_support_development(
         &options.decoder_plugin_library_paths,
         DecoderPluginMatchRequest::video(best_video.codec.clone()),
     ))
@@ -267,7 +278,13 @@ pub(crate) fn frame_processor_plugin_registry(
     {
         return None;
     }
-    Some(PluginRegistry::inspect_frame_processor_support(
+    if let Err(error) =
+        options.validate_native_plugin_loading_policy("macOS frame processor diagnostics")
+    {
+        tracing::warn!(error = %error);
+        return None;
+    }
+    Some(PluginRegistry::inspect_frame_processor_support_development(
         &options.frame_processor_library_paths,
     ))
 }

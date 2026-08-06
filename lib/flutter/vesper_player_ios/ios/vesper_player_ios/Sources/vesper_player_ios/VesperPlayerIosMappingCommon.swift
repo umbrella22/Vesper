@@ -136,3 +136,31 @@ func stringMap(_ value: Any?) -> [String: String] {
     }
     return decoded
 }
+
+func toVesperPluginReferences(
+    _ value: Any?,
+    fieldName: String = "pluginReferences"
+) throws -> [VesperPluginReference] {
+    guard let value else {
+        return []
+    }
+    guard let entries = value as? [Any] else {
+        throw PluginError.operationFailed("\(fieldName) must be a list")
+    }
+
+    return try entries.map { entry in
+        guard let map = stringKeyedMap(entry),
+              let pluginId = map["pluginId"] as? String,
+              let transport = map["transport"] as? String,
+              !transport.isEmpty
+        else {
+            throw PluginError.operationFailed("Invalid \(fieldName) entry")
+        }
+        let capabilityInstanceId = map["capabilityInstanceId"] as? String
+        return try VesperPluginReference(
+            pluginId: pluginId,
+            capabilityInstanceId: capabilityInstanceId,
+            transportRawValue: transport
+        )
+    }
+}

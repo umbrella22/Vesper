@@ -557,9 +557,9 @@ struct ExamplePluginDiagnosticsSection: View {
     let palette: ExampleHostPalette
     let sourceNormalizerSetting: ExampleSourceNormalizerSetting
     let nativeFramePipelineSetting: ExampleNativeFramePipelineSetting
-    let sourceNormalizerPluginLibraryPaths: [String]
-    let decoderPluginLibraryPaths: [String]
-    let frameProcessorPluginLibraryPaths: [String]
+    let sourceNormalizerPluginReferences: [VesperPluginReference]
+    let decoderPluginReferences: [VesperPluginReference]
+    let frameProcessorPluginReferences: [VesperPluginReference]
     let pluginDiagnostics: [[String: Any]]
     let hdrEvidencePresets: [ExampleHdrEvidenceSamplePreset]
     let selectedHdrEvidencePreset: ExampleHdrEvidenceSamplePreset
@@ -705,17 +705,17 @@ struct ExamplePluginDiagnosticsSection: View {
 
                 ExampleFactRow(
                     label: ExampleI18n.pluginSourcePath,
-                    value: pluginDisplayValue(sourceNormalizerPluginLibraryPaths),
+                    value: pluginDisplayValue(sourceNormalizerPluginReferences),
                     palette: palette
                 )
                 ExampleFactRow(
                     label: ExampleI18n.pluginDecoderPath,
-                    value: pluginDisplayValue(decoderPluginLibraryPaths),
+                    value: pluginDisplayValue(decoderPluginReferences),
                     palette: palette
                 )
                 ExampleFactRow(
                     label: ExampleI18n.pluginFramePath,
-                    value: pluginDisplayValue(frameProcessorPluginLibraryPaths),
+                    value: pluginDisplayValue(frameProcessorPluginReferences),
                     palette: palette
                 )
 
@@ -937,8 +937,8 @@ private struct PluginDiagnosticRow: View {
     }
 }
 
-private func pluginDisplayValue(_ paths: [String]) -> String {
-    let value = paths.joined(separator: ", ")
+private func pluginDisplayValue(_ references: [VesperPluginReference]) -> String {
+    let value = references.map(\.pluginId).joined(separator: ", ")
     return value.isEmpty ? ExampleI18n.pluginMissing : value
 }
 

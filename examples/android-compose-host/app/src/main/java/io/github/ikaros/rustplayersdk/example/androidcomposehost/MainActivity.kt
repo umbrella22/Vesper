@@ -34,12 +34,12 @@ class MainActivity : FragmentActivity() {
                 downloadManager = playerHostViewModel.downloadManager,
                 externalPlaybackController = playerHostViewModel.externalPlaybackController,
                 isDownloadExportPluginInstalled = playerHostViewModel.isDownloadExportPluginInstalled,
-                sourceNormalizerPluginLibraryPaths =
-                    playerHostViewModel.sourceNormalizerPluginLibraryPaths,
-                decoderMediaCodecPluginLibraryPaths =
-                    playerHostViewModel.decoderMediaCodecPluginLibraryPaths,
-                frameProcessorPluginLibraryPaths =
-                    playerHostViewModel.frameProcessorPluginLibraryPaths,
+                sourceNormalizerPluginReferences =
+                    playerHostViewModel.sourceNormalizerPluginReferences,
+                decoderMediaCodecPluginReferences =
+                    playerHostViewModel.decoderMediaCodecPluginReferences,
+                frameProcessorPluginReferences =
+                    playerHostViewModel.frameProcessorPluginReferences,
             )
         }
     }

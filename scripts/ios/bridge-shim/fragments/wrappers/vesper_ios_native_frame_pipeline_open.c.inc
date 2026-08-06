@@ -1,5 +1,7 @@
 {
-  if (source_uri == NULL || out_handle == NULL || out_json == NULL) {
+  if (source_uri == NULL || source_plugin_artifacts_json == NULL ||
+      decoder_plugin_artifacts_json == NULL || frame_plugin_artifacts_json == NULL ||
+      out_handle == NULL || out_json == NULL) {
     return false;
   }
   if (out_error_message != NULL) {
@@ -14,14 +16,11 @@
   PlayerFfiCallStatus status = player_ffi_ios_native_frame_pipeline_open(
       source_uri,
       source_mode,
-      source_plugin_library_paths,
-      source_plugin_library_paths_len,
+      source_plugin_artifacts_json,
       runtime_profile,
       native_frame_mode,
-      decoder_plugin_library_paths,
-      decoder_plugin_library_paths_len,
-      frame_plugin_library_paths,
-      frame_plugin_library_paths_len,
+      decoder_plugin_artifacts_json,
+      frame_plugin_artifacts_json,
       max_in_flight_frames,
       out_handle,
       out_json,

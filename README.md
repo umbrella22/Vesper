@@ -32,7 +32,8 @@ surfaces and do not define mobile release readiness.
 
 Choose the integration path that matches your app. Read the first document for
 the public API and packaging model, then use the example app as a runnable
-reference.
+reference. The complete host-kit, optional-package, artifact, and Stage UI map
+lives in the [platform package guide](lib/README.md).
 
 | Target                   | Read first                                                                                                       | Run / inspect next                                                                 | Useful when                                                                           |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -68,9 +69,18 @@ reference.
   Widevine is configured on Android Media3, and FairPlay is configured on iOS
   AVPlayer. DRM sources are not processed by Rust, FFI, plugins, download,
   preload, remux, SourceNormalizer, or external playback relays.
-- Optional plugin architecture for advanced media workflows: post-download
-  remux, native-frame decoder experiments, internal frame processor diagnostics,
-  and desktop-first source normalization.
+- Typed plugin architecture with stable `PostDownloadProcessor`,
+  `PipelineEventHook`, and `BenchmarkSink` interfaces. `NativeDecoder`,
+  `FrameProcessor`, and packet/resource `SourceNormalizer` interfaces remain
+  experimental.
+- Plugin authors use the safe Rust SDK and explicit `PluginReference` values.
+  Native plugins export one `vesper_plugin_entry`; Rust WASM Component
+  plugins are limited to desktop/tooling `PipelineEventHook` and
+  `BenchmarkSink` workloads with bounded structured input. C/C++ author SDKs,
+  mobile WASM, media-byte transforms, and DRM plugins are outside this release.
+- The Rust `vesper plugin` CLI creates, checks, signs, packages, verifies, and
+  installs deterministic `.vesper-plugin` archives. Native signatures prove
+  publisher and artifact integrity; they do not sandbox trusted native code.
 - Generated, generation-checked C value handles for hosts that integrate through
   the FFI boundary.
 - Runnable host applications for Android, iOS, Flutter, desktop Rust, and C.
@@ -126,20 +136,27 @@ the current Widevine / FairPlay DRM contract.
 ## Repository Layout
 
 ```text
+.agents/     Repository Codex marketplace, maintainer agent, and Rust skills
 crates/      Rust workspace: shared core, runtime, FFI, backends, render, platform glue
-lib/         Distributable platform integration layers
+lib/         Distributable platform integration layers; start with lib/README.md
   android/   Android AAR modules: core kit, external playback, FFmpeg runtime, Compose adapter, optional Compose UI
   ios/       VesperPlayerKit Swift Package / XCFramework project
   flutter/   Federated Flutter packages: main API, platform packages, optional UI
 examples/    Runnable host apps for Android, iOS, Flutter, desktop Rust, and C
 include/     Generated C header: player_ffi.h
-scripts/     Build, packaging, verification, and release helper scripts
+plugins/     Vesper runtime plugin projects and package manifests
+schemas/     Public language-neutral Vesper plugin package schemas
+templates/   Native Rust and Rust WASM plugin author scaffolds
+wit/         Vesper WASM Component contracts
+scripts/     Thin vesper launcher and checked build / release policy data
 third_party/ Vendored dependencies and generated prebuilt media libraries
 ```
 
-The public integration surface is concentrated under [lib/](lib/),
+The public integration surface is concentrated under [lib/](lib/README.md),
 [examples/](examples/), and [include/](include/). The Rust crates under
-[crates/](crates/) power the shared runtime and platform bridges.
+[crates/](crates/) power the shared runtime and platform bridges. Repository
+Codex integrations live under [.agents/](.agents/README.md); they are separate
+from the Vesper runtime plugins under [plugins/](plugins/).
 
 ## Quick Start
 
@@ -208,9 +225,10 @@ for how FFmpeg is resolved when desktop builds need demuxing / decoding support.
 
 Desktop plugin experiments are opt-in. `basic-player` can load native-frame
 decoder plugins, frame processor diagnostic plugins, and packet-stream source
-normalizer plugins through environment-configured library paths. These routes
+normalizer plugins through internal environment-configured paths. These routes
 are for SDK development and diagnostics; Android and iOS public host-kit APIs
-stay on native platform playback by default.
+stay on native platform playback by default and select build-time embedded
+artifacts with `VesperPluginReference`.
 
 Desktop rendering caveat: the current `wgpu` software-render path uses the
 repository shader path for SDR video and is calibrated around Rec.709 limited
@@ -226,7 +244,61 @@ then run the smoke example described in [examples/c-host/README.md](examples/c-h
 scripts/vesper ffi c-host-smoke
 ```
 
+### Plugin authoring
+
+Create a Rust Native or Rust WASM plugin outside this workspace with the
+scaffold templates, then use the Rust CLI for the complete local workflow. The
+following cross-platform example creates a WASM EventHook plugin:
+
+```sh
+vesper plugin new \
+  --plugin-id dev.example.analytics \
+  --publisher dev.example \
+  --license Apache-2.0 \
+  --transport wasm \
+  --capability event-hook \
+  ./analytics-plugin
+cd ./analytics-plugin
+vesper plugin build vesper-plugin.toml --profile dev
+vesper plugin inspect vesper-plugin.toml --manifest-only
+vesper plugin inspect vesper-plugin.toml \
+  --artifact dist/vesper_plugin_analytics.wasm \
+  --transport wasm
+vesper plugin check vesper-plugin.toml \
+  --artifact dist/vesper_plugin_analytics.wasm \
+  --transport wasm
+vesper plugin key generate \
+  --publisher dev.example \
+  --signing-key-output publisher-key.json \
+  --trust-store-output trust-store.json
+vesper plugin package vesper-plugin.toml \
+  --signing-key publisher-key.json \
+  --output analytics.vesper-plugin
+vesper plugin verify analytics.vesper-plugin --trust-store trust-store.json
+```
+
+Native scaffolds use the same workflow with `--transport native`; the generated
+plugin README and `artifacts[0].source` field provide the platform-specific
+dynamic-library path for `inspect` and `check`.
+
+This is the intended published author workflow. The `player-plugin` and
+`player-plugin-wasm` crates are not on crates.io yet, so a newly generated
+external project cannot currently resolve the SDK without a repository-local
+Cargo patch. Native and WASM scaffolds have passed that local patched
+acceptance path; public authoring availability remains a release gate tracked in
+[`CURRENT-CHECKLIST.md`](CURRENT-CHECKLIST.md).
+
+`vesper-plugin.toml` is the author-owned source record. Packaging generates the
+canonical manifest, sorted `SHA256SUMS`, Ed25519 signature envelope, notices,
+and target metadata. Mobile hosts embed verified Native artifacts during the
+Android/iOS build; they do not download or execute plugin code at runtime.
+
 ## Platform Packages
+
+The [platform package guide](lib/README.md) is the canonical package map. It
+lists every Android, iOS, and Flutter package, separates core, optional, and
+experimental surfaces, and includes the shared Stage UI gesture and integration
+contract.
 
 ### Android
 
@@ -238,6 +310,8 @@ Android is distributed as AAR modules:
   and local relay integration.
 - `vesper-player-kit-ffmpeg-runtime`: optional FFmpeg runtime package used by
   remux and relay workflows.
+- Decoder, SourceNormalizer, and FrameProcessor plugin AARs: explicit
+  experimental native-frame and diagnostic extensions.
 - `vesper-player-kit-compose`: Compose adapter with `VesperPlayerSurface` and
   controller/state helpers.
 - `vesper-player-kit-compose-ui`: optional opinionated Compose player stage.
@@ -264,6 +338,8 @@ Flutter is a federated plugin family:
 - `vesper_player_ios`: iOS implementation over `VesperPlayerKit`.
 - `vesper_player_external_playback`: optional Android Cast / DLNA controller
   with local HTTP relay support.
+- `vesper_player_source_normalizer_ffmpeg`: optional experimental native
+  SourceNormalizer artifacts.
 - `vesper_player_ui`: optional Flutter controls and player stage widgets.
 
 The Flutter packages currently ship from source in this repository and are not
@@ -292,12 +368,14 @@ cargo check --workspace
 ./scripts/vesper desktop verify-remux
 ```
 
-Android helper scripts use project-local cached Gradle distributions for local
-development and a CI-provisioned `gradle` executable in GitHub Actions. This
-keeps local agent work offline-safe while letting CI install Gradle through
-`gradle/actions/setup-gradle`.
+The Android CLI uses project-local cached Gradle distributions for local
+development and a CI-provisioned `gradle` executable in GitHub Actions. Each
+Android project also keeps its service home under
+`<project>/.gradle/gradle-user-home`; the repository root has no shared Gradle
+state. This keeps local agent work offline-safe while letting CI install Gradle
+through `gradle/actions/setup-gradle`.
 
-iOS Rust build helpers resolve the workspace through the SDK root Cargo
+iOS CLI build commands resolve the workspace through the SDK root Cargo
 manifest, so they can be called from Xcode build phases, Flutter plugin builds,
 CI working directories, or the repository root without depending on the current
 shell directory.
@@ -346,8 +424,18 @@ Desktop Rust builds that link FFmpeg resolve libraries in this order:
    `third_party/ffmpeg/desktop` when it already exists.
 2. Otherwise use the latest system FFmpeg exposed through `pkg-config` or
    Homebrew `ffmpeg`.
-3. If neither exists, build and install the shared audited FFmpeg source release
-   into `third_party/ffmpeg/desktop`.
+3. If neither exists, fail with the normal `pkg-config` diagnostic.
+
+Provision the repository-local macOS fallback explicitly before building:
+
+```sh
+./scripts/vesper desktop ensure-ffmpeg
+```
+
+The Rust CLI resolves the highest available patch in the configured FFmpeg
+series, downloads or reuses the audited source archive, and atomically installs
+the resulting static libraries under `third_party/ffmpeg/desktop`. Cargo does
+not run provisioning code from a build-script wrapper.
 
 The local source archive cache is `third_party/_cache` by default. FFmpeg,
 OpenSSL, and libxml2 source archives are reused from that directory before any
@@ -366,7 +454,13 @@ Useful overrides:
 | `VESPER_DESKTOP_FFMPEG_SOURCE_ARCHIVE` | Point to a pre-downloaded FFmpeg source archive.                |
 | `VESPER_DESKTOP_FFMPEG_SOURCE_URL`     | Override the source download URL.                               |
 | `VESPER_THIRD_PARTY_SOURCE_CACHE_DIR`  | Override the shared source archive cache directory.             |
-| `VESPER_REAL_PKG_CONFIG`               | Force the wrapper to use a specific `pkg-config` binary.        |
+
+When `VESPER_DESKTOP_FFMPEG_DIR` points outside the default repository path,
+also expose its metadata to Cargo, for example:
+
+```sh
+export PKG_CONFIG_PATH="$VESPER_DESKTOP_FFMPEG_DIR/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+```
 
 ### FFmpeg License Compliance
 
@@ -395,7 +489,7 @@ template live in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 - `player-ffi` exposes generation-checked value handles in
   [include/player_ffi.h](include/player_ffi.h). The header is generated by
-  cbindgen and should be synced with the script below instead of edited by hand.
+  cbindgen and should be synced with the Rust `vesper ffi` CLI instead of edited by hand.
   The C host smoke build also syncs it before compiling the example.
 - Zero-initialized handles are invalid sentinels and may be used for plain C
   stack storage.
@@ -447,6 +541,21 @@ caches:
 ./scripts/vesper ios verify-release /path/to/ios-release --scope complete
 ```
 
+Archive verification does not execute plugin code on a device. Release owners
+run the separate physical-device gate and retain its provenance and XCResult:
+
+```sh
+./scripts/vesper ios verify-optional-plugins-device /path/to/ios-release \
+  --device <UDID> \
+  --development-team <TEAM_ID> \
+  --output-directory /path/to/new-evidence-directory \
+  --allow-provisioning-updates
+```
+
+See [`scripts/README.md`](scripts/README.md) for the retained evidence contract
+and [`CURRENT-CHECKLIST.md`](CURRENT-CHECKLIST.md) for the current acceptance
+result.
+
 Android packaging is currently `arm64-v8a` only, including the downloadable
 sample APKs. The sample APKs are debug-signed for side-load evaluation only and
 are not production app-store artifacts. iOS binary packaging is arm64 only for
@@ -459,10 +568,11 @@ the GitHub Release asset list so retired artifacts are removed. The iOS core
 `VesperPlayerKit.xcframework` does not embed FFmpeg; FFmpeg-backed remux support
 and SourceNormalizer support are staged through the canonical optional-plugin
 command. The iOS App target embeds three FFmpeg component frameworks plus four
-plugin frameworks as signed top-level siblings. Plugin library path
-configuration points only at plugin framework executables; the FFmpeg component
-frameworks are dependencies, not plugin paths. All FFmpeg-backed siblings must
-come from the same FFmpeg profile so `profile-hash.txt` values match.
+plugin frameworks as signed top-level siblings. Hosts select plugins with
+`VesperPluginReference`; the iOS artifact resolver maps those identities to the
+embedded executables. The FFmpeg component frameworks are sibling dynamic
+dependencies, not plugin registry entries. All FFmpeg-backed siblings must come
+from the same FFmpeg profile so `profile-hash.txt` values match.
 
 Optional SourceNormalizer, decoder, and FrameProcessor artifacts are for
 diagnostics and explicit opt-in workflows. Default mobile playback remains
@@ -490,7 +600,12 @@ Android and iOS host kits have releasable package paths for the deliberate
 modern arm64 platform boundary, while the Flutter federated packages are still
 source-distributed from this repository. Desktop Flutter packages are not
 shipped in the current package set. Desktop and SDK-managed native-frame paths
-remain experimental and do not block mobile release readiness.
+remain experimental and do not block mobile release readiness. The plugin
+contracts, package schemas, Rust CLI, and WASM host are implemented in the
+current checkout, and the complete iOS archive verifier has passed. Public plugin
+release readiness still requires crates.io publication, a successful signed
+iOS physical-device plugin gate, real-device DRM/live/lifecycle coverage, and a
+clean independent author, WASM, and iOS consumption validation pass.
 
 ## License
 

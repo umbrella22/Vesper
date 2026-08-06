@@ -1,0 +1,8 @@
+[package]
+name = "player-plugin-abi"
+description = "Stable raw ABI contracts for Vesper Rust and WASM plugins."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true

@@ -13,6 +13,9 @@ use super::{
 };
 use player_model::MediaSource;
 use player_platform_mobile::MobileCommandQueue;
+use player_plugin::{
+    PipelineEvent, PipelineEventHook, PipelineEventHookOutcome, PluginReference, PluginTransport,
+};
 use player_runtime::{
     DecodedVideoFrame, FrameProcessorMode, MediaAbrMode, MediaAbrPolicy, MediaTrack,
     MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionSnapshot,
@@ -23,6 +26,23 @@ use player_runtime::{
     PlayerSnapshot, PlayerTimelineSnapshot, PlayerVideoSurfaceKind, PlayerVideoSurfaceTarget,
     PresentationState,
 };
+
+struct RecordingPipelineHook {
+    event_names: Arc<Mutex<Vec<String>>>,
+}
+
+impl PipelineEventHook for RecordingPipelineHook {
+    fn on_event(
+        &self,
+        event: &PipelineEvent,
+    ) -> Result<PipelineEventHookOutcome, player_plugin::PipelineEventHookError> {
+        self.event_names
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(event.event_name.clone());
+        Ok(PipelineEventHookOutcome::accepted())
+    }
+}
 
 #[test]
 fn ios_factory_exposes_native_capabilities() {
@@ -791,6 +811,50 @@ fn ios_host_bridge_session_reports_surface_and_interruption_events() {
             .any(|event| matches!(event, IosHostEvent::SeekCompleted { position_ms: 900 }))
     );
     assert!(session.snapshot().has_video_surface);
+}
+
+#[test]
+fn ios_host_bridge_session_forwards_events_to_pipeline_hooks() {
+    let event_names = Arc::new(Mutex::new(Vec::new()));
+    let reference = PluginReference::new(
+        "dev.vesper.ios-playback-hook",
+        Some("dev.vesper.ios-playback-hook.primary".to_owned()),
+        PluginTransport::Native,
+    )
+    .expect("valid event hook reference");
+    let registration = player_runtime::PipelineEventHookRegistration::new(
+        reference,
+        Arc::new(RecordingPipelineHook {
+            event_names: event_names.clone(),
+        }),
+    )
+    .expect("valid event hook registration");
+    let mut session = IosHostBridgeSession::new_with_pipeline_event_hooks(
+        "https://example.com/master.m3u8",
+        vec![registration],
+    )
+    .expect("hook session should initialize");
+
+    session.report_seek_completed(Duration::from_millis(900));
+    let events = session.drain_events();
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, IosHostEvent::SeekCompleted { position_ms: 900 }))
+    );
+    assert!(session.flush_pipeline_event_hooks(Duration::from_secs(1)));
+    let reports = session.drain_pipeline_event_hook_reports();
+    assert_eq!(reports.reports.len(), 1);
+    assert_eq!(reports.reports[0].event_name, "playback.seek_completed");
+    assert_eq!(
+        event_names
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_slice(),
+        ["playback.seek_completed"]
+    );
+    assert!(session.close_pipeline_event_hooks());
+    assert!(session.close_pipeline_event_hooks());
 }
 
 #[test]

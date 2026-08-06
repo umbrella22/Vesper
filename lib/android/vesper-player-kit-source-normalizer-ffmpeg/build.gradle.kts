@@ -4,6 +4,15 @@ plugins {
     id("com.android.library")
 }
 
+val sourceNormalizerJniLibraries =
+    providers
+        .environmentVariable("VESPER_ANDROID_SOURCE_NORMALIZER_JNI_LIBS")
+        .orElse("src/main/jniLibs")
+val sourceNormalizerAssets =
+    providers
+        .environmentVariable("VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS")
+        .orElse("src/main/assets")
+
 if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
     apply(plugin = "org.jetbrains.kotlin.android")
 }
@@ -15,6 +24,13 @@ android {
     defaultConfig {
         minSdk = 26
         consumerProguardFiles("consumer-rules.pro")
+    }
+
+    sourceSets {
+        getByName("main").apply {
+            jniLibs.setSrcDirs(listOf(sourceNormalizerJniLibraries.get()))
+            assets.setSrcDirs(listOf(sourceNormalizerAssets.get()))
+        }
     }
 
     buildTypes {
@@ -40,7 +56,7 @@ dependencies {
 val checkNoBundledFfmpegRuntimeLibraries = tasks.register("checkNoBundledFfmpegRuntimeLibraries") {
     group = "verification"
     description = "Fails if the SourceNormalizer AAR bundles FFmpeg/runtime shared libraries."
-    val nativeLibraries = fileTree("src/main/jniLibs") {
+    val nativeLibraries = fileTree(sourceNormalizerJniLibraries.get()) {
         include("**/*.so")
     }
     inputs.files(nativeLibraries)

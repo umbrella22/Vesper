@@ -1,0 +1,20 @@
+#![no_std]
+#![deny(unsafe_code)]
+
+extern crate alloc;
+
+use alloc::vec::Vec;
+
+mod bindings {
+    player_plugin_wasm::generate!({
+        path: "wit",
+        world: {{WIT_WORLD}},
+        runtime_path: "player_plugin_wasm::rt",
+    });
+}
+
+struct Component;
+
+{{IMPLEMENTATIONS}}
+
+player_plugin_wasm::export_component!(bindings, Component);

@@ -1,0 +1,10 @@
+schema_version = 1
+
+[compatibility]
+requirement = ">=8.1.0, <8.2.0"
+default_series = "8.1"
+
+[release]
+version = "8.1.2"
+source_url = "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz"
+source_sha256 = "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"

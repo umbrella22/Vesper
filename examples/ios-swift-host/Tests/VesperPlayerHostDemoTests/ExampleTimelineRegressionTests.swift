@@ -208,19 +208,23 @@ final class ExampleTimelineRegressionTests: XCTestCase {
             let pluginConfiguration = makeExamplePlaybackPluginConfiguration(
                 sourceNormalizerSetting: .requireNormalized,
                 nativeFramePipelineSetting: .requireNativeFrame,
-                sourceNormalizerPluginLibraryPaths: ["/tmp/source-normalizer.dylib"],
-                decoderPluginLibraryPaths: ["/tmp/decoder.dylib"],
-                frameProcessorPluginLibraryPaths: ["/tmp/frame-processor.dylib"],
+                sourceNormalizerPluginReferences: [
+                    VesperBundledPluginReferences.sourceNormalizerFfmpeg
+                ],
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox],
+                frameProcessorPluginReferences: [
+                    VesperBundledPluginReferences.frameProcessorDiagnostic
+                ],
                 directNativePlaybackRequired: true
             )
 
             XCTAssertEqual(pluginConfiguration.sourceNormalizerConfiguration.mode, .disabled, preset.id)
-            XCTAssertTrue(pluginConfiguration.sourceNormalizerConfiguration.pluginLibraryPaths.isEmpty, preset.id)
+            XCTAssertTrue(pluginConfiguration.sourceNormalizerConfiguration.pluginReferences.isEmpty, preset.id)
             XCTAssertEqual(pluginConfiguration.frameProcessorConfiguration.mode, .disabled, preset.id)
-            XCTAssertTrue(pluginConfiguration.frameProcessorConfiguration.pluginLibraryPaths.isEmpty, preset.id)
+            XCTAssertTrue(pluginConfiguration.frameProcessorConfiguration.pluginReferences.isEmpty, preset.id)
             XCTAssertEqual(pluginConfiguration.nativeFramePipelineConfiguration.mode, .disabled, preset.id)
-            XCTAssertTrue(pluginConfiguration.nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty, preset.id)
-            XCTAssertTrue(pluginConfiguration.nativeFramePipelineConfiguration.frameProcessorPluginLibraryPaths.isEmpty, preset.id)
+            XCTAssertTrue(pluginConfiguration.nativeFramePipelineConfiguration.decoderPluginReferences.isEmpty, preset.id)
+            XCTAssertTrue(pluginConfiguration.nativeFramePipelineConfiguration.frameProcessorPluginReferences.isEmpty, preset.id)
             XCTAssertNil(pluginConfiguration.nativeFramePipelineConfiguration.maxInFlightFrames, preset.id)
         }
     }

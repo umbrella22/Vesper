@@ -5,9 +5,14 @@ on:
     paths:
       - ".github/workflows/mobile-hosts-ci.yml"
       - ".github/actions/select-xcode/**"
+      - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "crates/tools/player-cli/**"
       - "scripts/**"
+      - "schemas/**"
+      - "templates/**"
+      - "wit/**"
       - "crates/model/**"
       - "crates/core/**"
       - "crates/ffi/**"
@@ -25,15 +30,23 @@ on:
       - "lib/ios/VesperPlayerOptionalPlugins/**"
       - "examples/android-compose-host/**"
       - "examples/ios-swift-host/**"
+      - "fixtures/plugins/android-aar-consumer/**"
+      - "fixtures/media/**"
+      - "plugins/**"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/mobile-hosts-ci.yml"
       - ".github/actions/select-xcode/**"
+      - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "crates/tools/player-cli/**"
       - "scripts/**"
+      - "schemas/**"
+      - "templates/**"
+      - "wit/**"
       - "crates/model/**"
       - "crates/core/**"
       - "crates/ffi/**"
@@ -51,6 +64,9 @@ on:
       - "lib/ios/VesperPlayerOptionalPlugins/**"
       - "examples/android-compose-host/**"
       - "examples/ios-swift-host/**"
+      - "fixtures/plugins/android-aar-consumer/**"
+      - "fixtures/media/**"
+      - "plugins/**"
   workflow_dispatch:
 
 concurrency:
@@ -70,6 +86,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -138,6 +157,20 @@ jobs:
       - name: Build Android JNI libraries
         run: ./scripts/vesper android jni release ${{ matrix.abi }}
 
+      - name: Stage complete Android release for raw AAR consumer
+        run: |
+          ./scripts/vesper android stage-release \
+            "$RUNNER_TEMP/vesper-android-aar-consumer-release" \
+            "${{ matrix.abi }}" \
+            --include-optional-plugins
+
+      - name: Assemble raw Android AAR consumer Release
+        run: |
+          gradle -p fixtures/plugins/android-aar-consumer \
+            -Pvesper.releaseDir="$RUNNER_TEMP/vesper-android-aar-consumer-release" \
+            :app:assembleRelease \
+            :app:assembleReleaseAndroidTest
+
       - name: Verify Android host kits do not bundle player-remux-ffmpeg by default
         run: ./scripts/vesper mobile verify-no-remux android
 
@@ -179,6 +212,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -198,11 +234,18 @@ jobs:
       - name: Stage canonical optional iOS plugin XCFrameworks
         run: ./scripts/vesper ios stage-optional-plugins-release /tmp/vesper-ios-optional-plugins-release --profile source-normalizer ios-arm64 ios-simulator-arm64
 
-      - name: Test iOS framework platform validation
-        run: bash scripts/ios/test-framework-platform-validation.sh
+      - name: Verify staged optional iOS release
+        run: >-
+          ./scripts/vesper ios verify-optional-plugins-release
+          /tmp/vesper-ios-optional-plugins-release
 
       - name: Test optional iOS release validation failures
-        run: bash scripts/ios/test-player-optional-plugins-release.sh /tmp/vesper-ios-optional-plugins-release
+        env:
+          VESPER_IOS_OPTIONAL_RELEASE_FIXTURE: /tmp/vesper-ios-optional-plugins-release
+        run: >-
+          cargo test -p player-cli --test ios_release_regressions
+          ios_optional_release_real_fixture_rejects_policy_drift
+          -- --ignored --exact --nocapture --test-threads=1
 
       - name: Verify native binary library names
         run: ./scripts/vesper mobile verify-binary-names

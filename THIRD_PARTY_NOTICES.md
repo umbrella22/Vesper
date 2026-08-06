@@ -165,6 +165,20 @@ User-facing notice location: <about screen / release notes / download page>
 Notes: <additional attribution, patent, or platform-specific details>
 ```
 
+## Android HTTP Transport Dependencies
+
+The optional `vesper-player-kit-external-playback` Android artifact uses the
+following libraries for its private relay HTTP transport:
+
+- OkHttp 4.12.0, Copyright 2019 Square, Inc., Apache License 2.0,
+  <https://square.github.io/okhttp/>.
+- Okio 3.6.0, Copyright 2013 Square, Inc., Apache License 2.0,
+  <https://square.github.io/okio/>.
+
+These libraries are packaged under their own Apache-2.0 terms. Their upstream
+license and notice materials must remain present in any redistributed Android
+artifact that bundles them.
+
 ## Maintenance Note
 
 This file is intentionally conservative. Do not treat it as a substitute for

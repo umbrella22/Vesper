@@ -113,9 +113,10 @@ network and Cast metadata only; it does not enable
 ## Optional `player-remux-ffmpeg` Remux Plugin
 
 To export downloaded HLS, DASH, or FLV assets as `.mp4`, the host app must package
-the optional `player-remux-ffmpeg` plugin and pass the absolute path to
-`libvesper_remux_ffmpeg.so` through
-`VesperDownloadConfiguration.pluginLibraryPaths`.
+the optional `player-remux-ffmpeg` plugin and its generated embedded-registry
+metadata. Select it with a native `VesperPluginReference` in
+`VesperDownloadConfiguration.postDownloadPluginReferences`; library paths are
+not part of the public download API.
 
 Typical setup:
 
@@ -134,8 +135,10 @@ Typical setup:
 
 3. Add `vesper-player-kit-ffmpeg-runtime` and the plugin output directory to the
    host app packaging.
-4. Resolve `libvesper_remux_ffmpeg.so` from `applicationInfo.nativeLibraryDir` at runtime.
-5. Pass the resolved absolute path into the download manager configuration.
+4. Configure plugin ID `io.github.ikaros.vesper.remux-ffmpeg`, capability
+   instance `io.github.ikaros.vesper.remux-ffmpeg.post-download`, and native
+   transport in the download manager. The host kit resolves the packaged
+   artifact through its verified embedded registry.
 
 When the same app also enables DLNA relay remux, build the runtime with both
 consumers:
@@ -172,7 +175,7 @@ The repository-level release checklist is in
 `VesperFrameProcessorConfiguration` to the Android host kit. Both are disabled
 by default.
 
-For SourceNormalizer v1, `diagnosticsOnly` loads the optional plugin and reports
+For SourceNormalizer, `diagnosticsOnly` loads the optional plugin and reports
 capabilities through `pluginDiagnostics`; `preflightOnly` may also open and
 close a packet session for the selected source. The Android player still gives
 the original source to ExoPlayer, and preflight failures are non-fatal. Apps can
@@ -182,14 +185,16 @@ package `vesper-player-kit-source-normalizer-ffmpeg` must also package the
 matching `vesper-player-kit-ffmpeg-runtime`; the SourceNormalizer AAR carries
 plugin metadata/profile hash but must not contain FFmpeg runtime `.so` files.
 
-For FrameProcessor v1, `diagnosticsOnly` reports availability without opening
+For FrameProcessor, `diagnosticsOnly` reports availability without opening
 frame sessions or marking playback participation. Android playback participation
 requires the explicit SDK-managed native-frame route: pass
 `VesperNativeFramePipelineConfiguration` with `preferNativeFrame` or
 `requireNativeFrame`, package the SourceNormalizer packet input, the
 `vesper-player-kit-decoder-mediacodec` decoder plugin, and any optional
-FrameProcessor plugin paths. The normal ExoPlayer / system-player route remains
-unchanged and does not expose decoded frames to FrameProcessor plugins.
+FrameProcessor plugin plus its generated registry metadata. Select each plugin
+with a native `VesperPluginReference`. The normal ExoPlayer / system-player
+route remains unchanged and does not expose decoded frames to FrameProcessor
+plugins.
 
 ## Minimum Requirements
 

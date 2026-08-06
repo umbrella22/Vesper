@@ -5,8 +5,8 @@ class ExamplePluginDiagnosticsSection extends StatelessWidget {
     super.key,
     required this.palette,
     required this.sourceNormalizerSetting,
-    required this.sourceNormalizerPluginLibraryPaths,
-    required this.frameProcessorPluginLibraryPaths,
+    required this.sourceNormalizerPluginReferences,
+    required this.frameProcessorPluginReferences,
     required this.pluginDiagnostics,
     required this.isCapturingHdrEvidence,
     required this.hdrEvidenceActiveSourceAvailable,
@@ -19,8 +19,8 @@ class ExamplePluginDiagnosticsSection extends StatelessWidget {
 
   final ExampleHostPalette palette;
   final ExampleSourceNormalizerSetting sourceNormalizerSetting;
-  final List<String> sourceNormalizerPluginLibraryPaths;
-  final List<String> frameProcessorPluginLibraryPaths;
+  final List<VesperPluginReference> sourceNormalizerPluginReferences;
+  final List<VesperPluginReference> frameProcessorPluginReferences;
   final List<VesperPluginDiagnostic> pluginDiagnostics;
   final bool isCapturingHdrEvidence;
   final bool hdrEvidenceActiveSourceAvailable;
@@ -92,11 +92,11 @@ class ExamplePluginDiagnosticsSection extends StatelessWidget {
           const SizedBox(height: 14),
           ExampleFactRow(
             label: 'source',
-            value: _pluginPathLabel(sourceNormalizerPluginLibraryPaths),
+            value: _pluginReferenceLabel(sourceNormalizerPluginReferences),
           ),
           ExampleFactRow(
             label: 'frame',
-            value: _pluginPathLabel(frameProcessorPluginLibraryPaths),
+            value: _pluginReferenceLabel(frameProcessorPluginReferences),
           ),
           const SizedBox(height: 14),
           PluginDiagnosticGroup(
@@ -366,6 +366,8 @@ class PluginDiagnosticRow extends StatelessWidget {
   }
 }
 
-String _pluginPathLabel(List<String> paths) {
-  return paths.isEmpty ? '缺失' : paths.join(', ');
+String _pluginReferenceLabel(List<VesperPluginReference> references) {
+  return references.isEmpty
+      ? '未选择'
+      : references.map((reference) => reference.pluginId).join(', ');
 }

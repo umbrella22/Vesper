@@ -1,7 +1,6 @@
 package io.github.ikaros.vesper.player.android
 
 import android.util.Log
-import java.io.File
 
 internal fun VesperNativePlayerBridge.probePluginsForSource(
     source: VesperPlayerSource,
@@ -96,15 +95,15 @@ internal fun VesperNativePlayerBridge.nativeFramePipelineDiagnostics(): List<Map
         mutableMapOf<String, Any?>(
             "path" to
                 (
-                    nativeFramePipelineConfiguration.decoderPluginLibraryPaths +
-                        nativeFramePipelineConfiguration.frameProcessorPluginLibraryPaths
-                ).joinToString(separator = File.pathSeparator),
+                    nativeFramePipelineConfiguration.decoderPluginReferences +
+                        nativeFramePipelineConfiguration.frameProcessorPluginReferences
+                ).joinToString(separator = ",") { reference -> reference.pluginId },
             "pluginName" to "vesper-android-native-frame-pipeline",
             "pluginKind" to "native_frame_pipeline",
             "status" to status,
             "message" to
-                "$resolvedMessage decoderPlugins=${nativeFramePipelineConfiguration.decoderPluginLibraryPaths.size}; " +
-                    "frameProcessors=${nativeFramePipelineConfiguration.frameProcessorPluginLibraryPaths.size}; " +
+                "$resolvedMessage decoderPlugins=${nativeFramePipelineConfiguration.decoderPluginReferences.size}; " +
+                    "frameProcessors=${nativeFramePipelineConfiguration.frameProcessorPluginReferences.size}; " +
                     "maxInFlightFrames=${nativeFramePipelineConfiguration.maxInFlightFrames ?: "default"}",
             "participation" to participation,
             "route" to route,
@@ -190,17 +189,20 @@ internal fun VesperNativePlayerBridge.nativeFramePipelineUnavailableReason(): St
     if (currentSource?.drmConfiguration != null) {
         return drmUnsupportedRouteMessage("nativeFrame")
     }
-    if (nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty()) {
-        return "Android native-frame pipeline requires a MediaCodec decoder plugin path."
+    if (nativeFramePipelineConfiguration.decoderPluginReferences.none(::isNativePluginReference)) {
+        return "Android native-frame pipeline requires a native MediaCodec decoder plugin reference."
     }
-    if (sourceNormalizerConfiguration.pluginLibraryPaths.isEmpty()) {
-        return "Android native-frame pipeline requires a SourceNormalizer packet-stream plugin path."
+    if (sourceNormalizerConfiguration.pluginReferences.none(::isNativePluginReference)) {
+        return "Android native-frame pipeline requires a native SourceNormalizer packet-stream plugin reference."
     }
     if (surfaceKind != NativeVideoSurfaceKind.SurfaceView) {
         return "Android native-frame pipeline currently supports SurfaceView only; TextureView falls back to system playback."
     }
     return null
 }
+
+private fun isNativePluginReference(reference: VesperPluginReference): Boolean =
+    reference.transport == VesperPluginTransport.Native
 
 internal sealed interface NativeFramePipelineRoute {
     data object SystemPlayer : NativeFramePipelineRoute

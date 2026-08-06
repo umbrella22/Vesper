@@ -301,8 +301,17 @@ FFmpeg packaging profiles。
 1. 如果 `third_party/ffmpeg/desktop` 下已经存在仓库本地 desktop FFmpeg install，
    优先使用它。
 2. 否则使用通过 `pkg-config` 或 Homebrew `ffmpeg` 暴露的最新系统 FFmpeg。
-3. 如果两者都不存在，则构建共享的已审计 FFmpeg source release，并安装到
-   `third_party/ffmpeg/desktop`。
+3. 如果两者都不存在，则以常规 `pkg-config` 诊断失败。
+
+Desktop 构建前需要显式 provision 仓库本地的 macOS fallback：
+
+```sh
+./scripts/vesper desktop ensure-ffmpeg
+```
+
+Rust CLI 会解析所配置 FFmpeg 系列中的最高可用 patch，下载或复用已审计的源码
+压缩包，并以原子方式把静态库安装到 `third_party/ffmpeg/desktop`。Cargo 不再从
+build-script wrapper 自动启动 provision 逻辑。
 
 本地源码压缩包默认缓存到 `third_party/_cache`。FFmpeg、OpenSSL 和 libxml2
 源码压缩包会先从该目录复用；缺失时，构建 helper 会从上游 release URL 下载到该目录。
@@ -319,7 +328,9 @@ FFmpeg packaging profiles。
 | `VESPER_DESKTOP_FFMPEG_SOURCE_ARCHIVE` | 指向已经预下载的 FFmpeg source archive。      |
 | `VESPER_DESKTOP_FFMPEG_SOURCE_URL`     | 覆盖源码下载 URL。                            |
 | `VESPER_THIRD_PARTY_SOURCE_CACHE_DIR`  | 覆盖共享源码压缩包缓存目录。                  |
-| `VESPER_REAL_PKG_CONFIG`               | 强制 wrapper 使用指定的 `pkg-config` binary。 |
+
+如果 `VESPER_DESKTOP_FFMPEG_DIR` 指向默认仓库路径以外的目录，还需要为后续 Cargo
+命令把该目录的 `lib/pkgconfig` 子目录加入 `PKG_CONFIG_PATH`。
 
 ### FFmpeg 许可合规
 

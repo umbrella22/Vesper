@@ -247,9 +247,9 @@ struct ExamplePlaybackPluginConfiguration: Equatable {
 func makeExamplePlaybackPluginConfiguration(
     sourceNormalizerSetting: ExampleSourceNormalizerSetting,
     nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
-    sourceNormalizerPluginLibraryPaths: [String],
-    decoderPluginLibraryPaths: [String],
-    frameProcessorPluginLibraryPaths: [String],
+    sourceNormalizerPluginReferences: [VesperPluginReference],
+    decoderPluginReferences: [VesperPluginReference],
+    frameProcessorPluginReferences: [VesperPluginReference],
     directNativePlaybackRequired: Bool = false
 ) -> ExamplePlaybackPluginConfiguration {
     if directNativePlaybackRequired {
@@ -263,16 +263,16 @@ func makeExamplePlaybackPluginConfiguration(
     return ExamplePlaybackPluginConfiguration(
         sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
             mode: sourceNormalizerSetting.mode,
-            pluginLibraryPaths: sourceNormalizerPluginLibraryPaths
+            pluginReferences: sourceNormalizerPluginReferences
         ),
         frameProcessorConfiguration: VesperFrameProcessorConfiguration(
-            mode: frameProcessorPluginLibraryPaths.isEmpty ? .disabled : .diagnosticsOnly,
-            pluginLibraryPaths: frameProcessorPluginLibraryPaths
+            mode: frameProcessorPluginReferences.isEmpty ? .disabled : .diagnosticsOnly,
+            pluginReferences: frameProcessorPluginReferences
         ),
         nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
             mode: nativeFramePipelineSetting.mode,
-            decoderPluginLibraryPaths: decoderPluginLibraryPaths,
-            frameProcessorPluginLibraryPaths: frameProcessorPluginLibraryPaths,
+            decoderPluginReferences: decoderPluginReferences,
+            frameProcessorPluginReferences: frameProcessorPluginReferences,
             maxInFlightFrames: 2
         )
     )

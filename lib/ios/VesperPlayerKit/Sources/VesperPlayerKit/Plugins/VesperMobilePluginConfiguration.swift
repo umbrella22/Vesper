@@ -1,6 +1,24 @@
 import Foundation
 internal import VesperPlayerKitBridgeShim
 
+/// Native playback EventHook plugins selected for this player instance.
+///
+/// The host resolves references against build-time embedded artifacts before
+/// creating the Rust dispatcher.
+public struct VesperPipelineEventHookConfiguration: Equatable {
+    public let pluginReferences: [VesperPluginReference]
+
+    public init(
+        pluginReferences: [VesperPluginReference] = []
+    ) {
+        self.pluginReferences = pluginReferences
+    }
+
+    var isDisabled: Bool {
+        pluginReferences.isEmpty
+    }
+}
+
 public enum VesperSourceNormalizerMode: String, Equatable {
     case disabled
     case diagnosticsOnly
@@ -11,21 +29,22 @@ public enum VesperSourceNormalizerMode: String, Equatable {
 
 public struct VesperSourceNormalizerConfiguration: Equatable {
     public let mode: VesperSourceNormalizerMode
-    public let pluginLibraryPaths: [String]
+    /// Explicit plugin identities resolved by the build-time host registry.
+    public let pluginReferences: [VesperPluginReference]
     public let runtimeProfile: String?
 
     public init(
         mode: VesperSourceNormalizerMode = .disabled,
-        pluginLibraryPaths: [String] = [],
+        pluginReferences: [VesperPluginReference] = [],
         runtimeProfile: String? = nil
     ) {
         self.mode = mode
-        self.pluginLibraryPaths = pluginLibraryPaths
+        self.pluginReferences = pluginReferences
         self.runtimeProfile = runtimeProfile
     }
 
     var isDisabled: Bool {
-        mode == .disabled && pluginLibraryPaths.isEmpty
+        mode == .disabled
     }
 
     var supportsPacketInput: Bool {
@@ -67,18 +86,19 @@ public enum VesperNativeFramePipelineMode: String, Equatable {
 
 public struct VesperFrameProcessorConfiguration: Equatable {
     public let mode: VesperFrameProcessorMode
-    public let pluginLibraryPaths: [String]
+    /// Explicit plugin identities resolved by the build-time host registry.
+    public let pluginReferences: [VesperPluginReference]
 
     public init(
         mode: VesperFrameProcessorMode = .disabled,
-        pluginLibraryPaths: [String] = []
+        pluginReferences: [VesperPluginReference] = []
     ) {
         self.mode = mode
-        self.pluginLibraryPaths = pluginLibraryPaths
+        self.pluginReferences = pluginReferences
     }
 
     var isDisabled: Bool {
-        mode == .disabled && pluginLibraryPaths.isEmpty
+        mode == .disabled
     }
 
     var ffiMode: UInt32 {
@@ -93,27 +113,26 @@ public struct VesperFrameProcessorConfiguration: Equatable {
 
 public struct VesperNativeFramePipelineConfiguration: Equatable {
     public let mode: VesperNativeFramePipelineMode
-    public let decoderPluginLibraryPaths: [String]
-    public let frameProcessorPluginLibraryPaths: [String]
+    /// Explicit decoder plugin identities resolved by the build-time registry.
+    public let decoderPluginReferences: [VesperPluginReference]
+    /// Explicit frame processor plugin identities resolved by the build-time registry.
+    public let frameProcessorPluginReferences: [VesperPluginReference]
     public let maxInFlightFrames: Int?
 
     public init(
         mode: VesperNativeFramePipelineMode = .disabled,
-        decoderPluginLibraryPaths: [String] = [],
-        frameProcessorPluginLibraryPaths: [String] = [],
+        decoderPluginReferences: [VesperPluginReference] = [],
+        frameProcessorPluginReferences: [VesperPluginReference] = [],
         maxInFlightFrames: Int? = nil
     ) {
         self.mode = mode
-        self.decoderPluginLibraryPaths = decoderPluginLibraryPaths
-        self.frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths
+        self.decoderPluginReferences = decoderPluginReferences
+        self.frameProcessorPluginReferences = frameProcessorPluginReferences
         self.maxInFlightFrames = maxInFlightFrames
     }
 
     var isDisabled: Bool {
-        mode == .disabled &&
-            decoderPluginLibraryPaths.isEmpty &&
-            frameProcessorPluginLibraryPaths.isEmpty &&
-            maxInFlightFrames == nil
+        mode == .disabled
     }
 
     var ffiMode: UInt32 {
@@ -140,25 +159,81 @@ enum VesperMobilePluginDiagnosticsProbe {
             return []
         }
 
+        var resolutionDiagnostics: [[String: Any]] = []
+        let sourceArtifacts: VesperResolvedPluginArtifacts
+        if sourceNormalizer.isDisabled {
+            sourceArtifacts = VesperResolvedPluginArtifacts(artifacts: [])
+        } else {
+            do {
+                sourceArtifacts = try VesperBundledPluginResolver.resolvePluginArtifacts(
+                    sourceNormalizer.pluginReferences
+                )
+            } catch {
+                sourceArtifacts = VesperResolvedPluginArtifacts(artifacts: [])
+                resolutionDiagnostics.append(
+                    pluginResolutionDiagnostic(
+                        error: error,
+                        pluginKind: "source_normalizer",
+                        references: sourceNormalizer.pluginReferences
+                    )
+                )
+            }
+        }
+        let frameArtifacts: VesperResolvedPluginArtifacts
+        if frameProcessor.isDisabled {
+            frameArtifacts = VesperResolvedPluginArtifacts(artifacts: [])
+        } else {
+            do {
+                frameArtifacts = try VesperBundledPluginResolver.resolvePluginArtifacts(
+                    frameProcessor.pluginReferences
+                )
+            } catch {
+                frameArtifacts = VesperResolvedPluginArtifacts(artifacts: [])
+                resolutionDiagnostics.append(
+                    pluginResolutionDiagnostic(
+                        error: error,
+                        pluginKind: "frame_processor",
+                        references: frameProcessor.pluginReferences
+                    )
+                )
+            }
+        }
+
+        // A failed build-time resolution is already a complete diagnostic for
+        // this probe. Do not call into the Rust loader with an enabled mode and
+        // an empty artifact list: that would turn a deterministic host error
+        // into an unbounded/expensive plugin inspection attempt.
+        guard resolutionDiagnostics.isEmpty else {
+            return resolutionDiagnostics
+        }
+        let sourceArtifactsJSON: String
+        let frameArtifactsJSON: String
+        do {
+            sourceArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(sourceArtifacts)
+            frameArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(frameArtifacts)
+        } catch {
+            return [
+                pluginResolutionDiagnostic(
+                    error: error,
+                    pluginKind: "mobile_plugin",
+                    references: sourceNormalizer.pluginReferences + frameProcessor.pluginReferences
+                )
+            ]
+        }
+
         var outputPointer: UnsafeMutablePointer<CChar>?
         var errorPointer: UnsafeMutablePointer<CChar>?
         let ok = source.uri.withCString { sourceUriPointer in
             withOptionalCString(sourceNormalizer.runtimeProfile) { runtimeProfilePointer in
-                withCStringArray(sourceNormalizer.pluginLibraryPaths) {
-                    sourcePathPointers,
-                    sourcePathCount in
-                    withCStringArray(frameProcessor.pluginLibraryPaths) {
-                        framePathPointers,
-                        framePathCount in
+                sourceArtifactsJSON.withCString { sourceArtifactsPointer in
+                    frameArtifactsJSON.withCString { frameArtifactsPointer in
                         vesper_mobile_plugin_diagnostics_json(
                             sourceUriPointer,
                             sourceNormalizer.ffiMode,
-                            sourcePathPointers,
-                            UInt(sourcePathCount),
+                            sourceArtifactsPointer,
                             runtimeProfilePointer,
                             frameProcessor.ffiMode,
-                            framePathPointers,
-                            UInt(framePathCount),
+                            frameArtifactsPointer,
                             &outputPointer,
                             &errorPointer
                         )
@@ -179,7 +254,7 @@ enum VesperMobilePluginDiagnosticsProbe {
             if let errorPointer {
                 iosHostLog("mobile plugin diagnostics failed: \(String(cString: errorPointer))")
             }
-            return []
+            return resolutionDiagnostics
         }
 
         let json = String(cString: outputPointer)
@@ -188,7 +263,10 @@ enum VesperMobilePluginDiagnosticsProbe {
         else {
             return []
         }
-        return records
+        return pluginDiagnosticsReplacingArtifactPaths(
+            records,
+            artifacts: [sourceArtifacts, frameArtifacts]
+        ) + resolutionDiagnostics
     }
 }
 
@@ -232,18 +310,50 @@ enum VesperMobileSourceNormalizerResource {
             return VesperSourceNormalizerResourceOpenOutcome(resource: nil, diagnostics: [])
         }
 
+        let resolvedArtifacts: VesperResolvedPluginArtifacts
+        do {
+            resolvedArtifacts = try VesperBundledPluginResolver.resolvePluginArtifacts(
+                configuration.pluginReferences
+            )
+        } catch {
+            return VesperSourceNormalizerResourceOpenOutcome(
+                resource: nil,
+                diagnostics: [
+                    pluginResolutionDiagnostic(
+                        error: error,
+                        pluginKind: "source_normalizer",
+                        references: configuration.pluginReferences
+                    )
+                ]
+            )
+        }
+        let artifactsJSON: String
+        do {
+            artifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(resolvedArtifacts)
+        } catch {
+            return VesperSourceNormalizerResourceOpenOutcome(
+                resource: nil,
+                diagnostics: [
+                    pluginResolutionDiagnostic(
+                        error: error,
+                        pluginKind: "source_normalizer",
+                        references: configuration.pluginReferences
+                    )
+                ]
+            )
+        }
+
         var handle: UInt64 = 0
         var outputPointer: UnsafeMutablePointer<CChar>?
         var errorPointer: UnsafeMutablePointer<CChar>?
         let ok = source.uri.withCString { sourceUriPointer in
             outputRoot.path.withCString { outputRootPointer in
                 withOptionalCString(configuration.runtimeProfile) { runtimeProfilePointer in
-                    withCStringArray(configuration.pluginLibraryPaths) { pathPointers, pathCount in
+                    artifactsJSON.withCString { artifactsPointer in
                         vesper_source_normalizer_resource_open(
                             sourceUriPointer,
                             configuration.ffiMode,
-                            pathPointers,
-                            UInt(pathCount),
+                            artifactsPointer,
                             runtimeProfilePointer,
                             outputRootPointer,
                             forceNormalized,
@@ -270,7 +380,10 @@ enum VesperMobileSourceNormalizerResource {
             }
             return VesperSourceNormalizerResourceOpenOutcome(
                 resource: nil,
-                diagnostics: parseDiagnostics(from: outputPointer)
+                diagnostics: pluginDiagnosticsReplacingArtifactPaths(
+                    parseDiagnostics(from: outputPointer),
+                    artifacts: [resolvedArtifacts]
+                )
             )
         }
 
@@ -285,6 +398,10 @@ enum VesperMobileSourceNormalizerResource {
             return VesperSourceNormalizerResourceOpenOutcome(resource: nil, diagnostics: [])
         }
 
+        let diagnostics = pluginDiagnosticsReplacingArtifactPaths(
+            object["diagnostics"] as? [[String: Any]] ?? [],
+            artifacts: [resolvedArtifacts]
+        )
         return VesperSourceNormalizerResourceOpenOutcome(
             resource: VesperSourceNormalizerResourceOpenResult(
                 handle: handle,
@@ -300,9 +417,9 @@ enum VesperMobileSourceNormalizerResource {
                 participation: object["participation"] as? String,
                 fallbackReason: object["fallbackReason"] as? String,
                 cacheQuota: (object["cacheQuota"] as? NSNumber)?.uint64Value,
-                diagnostics: object["diagnostics"] as? [[String: Any]] ?? []
+                diagnostics: diagnostics
             ),
-            diagnostics: object["diagnostics"] as? [[String: Any]] ?? []
+            diagnostics: diagnostics
         )
     }
 
@@ -325,6 +442,88 @@ enum VesperMobileSourceNormalizerResource {
             return []
         }
         return diagnostics
+    }
+}
+
+private func pluginResolutionDiagnostic(
+    error: Error,
+    pluginKind: String,
+    references: [VesperPluginReference]
+) -> [String: Any] {
+    [
+        "pluginId": references.first?.pluginId ?? "unknown",
+        "pluginKind": pluginKind,
+        "status": "loadFailed",
+        "message": error.localizedDescription,
+        "participation": "selected",
+        "route": "unavailable",
+    ]
+}
+
+func pluginDiagnosticsReplacingArtifactPaths(
+    _ records: [[String: Any]],
+    artifacts: [VesperResolvedPluginArtifacts]
+) -> [[String: Any]] {
+    records.map { record in
+        var sanitized = record
+        let path = sanitized.removeValue(forKey: "path") as? String
+        if let reference = canonicalPluginReferenceObject(
+            fromDiagnosticDetails: sanitized["details"]
+        ) {
+            attachPluginReference(reference, to: &sanitized)
+            return sanitized
+        }
+        guard let path else {
+            return sanitized
+        }
+
+        var references: [VesperPluginReference] = []
+        for reference in artifacts.flatMap({ $0.references(forLibraryPath: path) })
+        where !references.contains(reference) {
+            references.append(reference)
+        }
+        if references.count == 1, let reference = references.first {
+            attachPluginReference(vesperPluginReferenceJSONObject(reference), to: &sanitized)
+        } else if !references.isEmpty {
+            sanitized["pluginReferences"] = references.map(vesperPluginReferenceJSONObject)
+            let pluginIds = Set(references.map(\.pluginId))
+            if pluginIds.count == 1 {
+                sanitized["pluginId"] = pluginIds.first
+            }
+        }
+        return sanitized
+    }
+}
+
+private func canonicalPluginReferenceObject(
+    fromDiagnosticDetails value: Any?
+) -> [String: Any]? {
+    guard
+        let details = value as? [String: Any],
+        let pluginId = details["pluginId"] as? String,
+        let transport = details["transport"] as? String
+    else {
+        return nil
+    }
+    var reference: [String: Any] = [
+        "pluginId": pluginId,
+        "transport": transport,
+    ]
+    if let instanceId = details["capabilityInstanceId"] as? String {
+        reference["capabilityInstanceId"] = instanceId
+    }
+    return reference
+}
+
+private func attachPluginReference(
+    _ reference: [String: Any],
+    to diagnostic: inout [String: Any]
+) {
+    diagnostic["pluginReference"] = reference
+    diagnostic["pluginId"] = reference["pluginId"]
+    diagnostic["transport"] = reference["transport"]
+    if let instanceId = reference["capabilityInstanceId"] {
+        diagnostic["capabilityInstanceId"] = instanceId
     }
 }
 

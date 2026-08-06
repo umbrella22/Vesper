@@ -7,7 +7,6 @@ use std::ptr;
 use std::sync::{
     Arc, Condvar, Mutex, OnceLock,
     atomic::{AtomicBool, AtomicU64, Ordering},
-    mpsc::{self, RecvTimeoutError, TrySendError},
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -17,20 +16,18 @@ use ffmpeg_next::{self as ffmpeg, codec, encoder, format, media};
 use player_plugin::{
     DecoderBitstreamFormat, NativeFrameColorMetadata, NativeFrameContentLightMetadata,
     NativeFrameDolbyVisionMetadata, NativeFrameHdrMetadata, NativeFrameMasteringDisplayMetadata,
-    SourceNormalizerError, SourceNormalizerNormalizeLevel, SourceNormalizerOperationStatus,
-    SourceNormalizerOutputRoute, SourceNormalizerPacketCapabilities,
-    SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek,
-    SourceNormalizerPacketSessionConfig, SourceNormalizerPacketStreamInfo,
-    SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketMetadata,
-    SourceNormalizerRequiredCapabilities, SourceNormalizerResourceCachePolicy,
-    SourceNormalizerResourceCapabilities, SourceNormalizerResourceInfo,
-    SourceNormalizerResourceSessionConfig, SourceNormalizerResourceSessionInfo,
-    SourceNormalizerResourceSessionState, SourceNormalizerResourceSessionStatus,
-    SourceNormalizerResourceSessionWaitStatus, VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-    VesperPluginBytes, VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult,
-    VesperPluginResultStatus, VesperSourceNormalizerOpenPacketSessionResult,
-    VesperSourceNormalizerOpenResourceSessionResult, VesperSourceNormalizerPluginApiV4,
-    VesperSourceNormalizerReadPacketResult,
+    Plugin, PluginBuildError, SourceNormalizerError, SourceNormalizerNormalizeLevel,
+    SourceNormalizerOperationStatus, SourceNormalizerOutputRoute, SourceNormalizerPacket,
+    SourceNormalizerPacketCapabilities, SourceNormalizerPacketLease,
+    SourceNormalizerPacketMediaKind, SourceNormalizerPacketPluginFactory,
+    SourceNormalizerPacketSeek, SourceNormalizerPacketSession, SourceNormalizerPacketSessionConfig,
+    SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
+    SourceNormalizerReadPacketMetadata, SourceNormalizerRequiredCapabilities,
+    SourceNormalizerResourceCachePolicy, SourceNormalizerResourceCapabilities,
+    SourceNormalizerResourceInfo, SourceNormalizerResourcePluginFactory,
+    SourceNormalizerResourceSession, SourceNormalizerResourceSessionConfig,
+    SourceNormalizerResourceSessionInfo, SourceNormalizerResourceSessionState,
+    SourceNormalizerResourceSessionStatus, SourceNormalizerResourceSessionWaitStatus,
 };
 use player_source_normalizer::{
     SourceNormalizerOutputContainer, SourceNormalizerProfile, SourceNormalizerProfileSet,
@@ -39,13 +36,17 @@ use player_source_normalizer::{
 use std::os::raw::c_int;
 use url::Url;
 
-static PLUGIN_NAME: &[u8] = b"player-source-normalizer-ffmpeg\0";
+const PLUGIN_ID: &str = "io.github.ikaros.vesper.source-normalizer-ffmpeg";
+const PACKET_INSTANCE_ID: &str = "io.github.ikaros.vesper.source-normalizer-ffmpeg.packet";
+const RESOURCE_INSTANCE_ID: &str = "io.github.ikaros.vesper.source-normalizer-ffmpeg.resource";
+const PLUGIN_NAME: &str = "player-source-normalizer-ffmpeg";
 const DEFAULT_PROFILE_TOML: &str =
     include_str!("../../../../scripts/source-normalizer-profiles.toml");
 const PROFILE_PATH_ENV: &str = "VESPER_SOURCE_NORMALIZER_PROFILE_PATH";
 const MAX_SKIPPED_NON_AV_PACKETS: usize = 10_000;
 const RESOURCE_CLOSE_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
-const RESOURCE_CLEANUP_QUEUE_CAPACITY: usize = 64;
+const MAX_RESOURCE_SESSIONS: u32 = 64;
+const RESOURCE_CLEANUP_QUEUE_CAPACITY: usize = MAX_RESOURCE_SESSIONS as usize;
 const RESOURCE_CLEANUP_POLL_INTERVAL: Duration = Duration::from_millis(25);
 static NEXT_SESSION_SUFFIX: AtomicU64 = AtomicU64::new(1);
 static RESOURCE_CLEANUP_SCHEDULER: OnceLock<Result<ResourceCleanupScheduler, String>> =
@@ -87,12 +88,8 @@ struct ResourceWorkerConfig {
     shared: Arc<ResourceWorkerShared>,
 }
 
-struct PluginBundle {
-    api: VesperSourceNormalizerPluginApiV4,
-    descriptor: VesperPluginDescriptor,
-}
-
 struct PacketNormalizerSession {
+    stream_info: SourceNormalizerPacketStreamInfo,
     input: TimedFfmpegInput,
     selected_video_stream_index: usize,
     selected_audio_stream_index: Option<usize>,
@@ -124,8 +121,15 @@ struct ResourceCleanupJob {
 
 #[derive(Debug)]
 struct ResourceCleanupScheduler {
-    sender: mpsc::SyncSender<ResourceCleanupJob>,
+    queue: Arc<ResourceCleanupQueue>,
     permit_pool: Arc<ResourceCleanupPermitPool>,
+}
+
+#[derive(Debug)]
+struct ResourceCleanupQueue {
+    pending: Mutex<Vec<ResourceCleanupJob>>,
+    changed: Condvar,
+    capacity: usize,
 }
 
 #[derive(Debug)]
@@ -147,8 +151,14 @@ struct ResourceNormalizerSession {
     observed_sequence: u64,
     cancel_requested: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
-    cleanup_permit: ResourceCleanupPermit,
+    cleanup_permit: Option<ResourceCleanupPermit>,
     closed: bool,
+}
+
+#[derive(Debug)]
+struct ResourceOutputDirGuard {
+    output_dir: PathBuf,
+    armed: bool,
 }
 
 #[derive(Debug)]
@@ -168,13 +178,18 @@ struct ResourceWorkerState {
 
 impl ResourceCleanupScheduler {
     fn start(capacity: usize, thread_name: &str) -> Result<Self, String> {
-        let (sender, receiver) = mpsc::sync_channel::<ResourceCleanupJob>(capacity);
+        let queue = Arc::new(ResourceCleanupQueue {
+            pending: Mutex::new(Vec::with_capacity(capacity)),
+            changed: Condvar::new(),
+            capacity,
+        });
+        let worker_queue = queue.clone();
         thread::Builder::new()
             .name(thread_name.to_owned())
-            .spawn(move || run_resource_cleanup_worker(receiver))
+            .spawn(move || run_resource_cleanup_worker(worker_queue))
             .map_err(|error| format!("failed to start resource cleanup worker: {error}"))?;
         Ok(Self {
-            sender,
+            queue,
             permit_pool: Arc::new(ResourceCleanupPermitPool {
                 available: Mutex::new(capacity),
                 capacity,
@@ -187,10 +202,17 @@ impl ResourceCleanupScheduler {
     }
 
     fn try_schedule(&self, job: ResourceCleanupJob) -> Result<(), ResourceCleanupJob> {
-        match self.sender.try_send(job) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(job) | TrySendError::Disconnected(job)) => Err(job),
+        let mut pending = self
+            .queue
+            .pending
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if pending.len() >= self.queue.capacity {
+            return Err(job);
         }
+        pending.push(job);
+        self.queue.changed.notify_one();
+        Ok(())
     }
 }
 
@@ -223,11 +245,28 @@ impl Drop for ResourceCleanupPermit {
 
 impl Drop for PacketNormalizerSession {
     fn drop(&mut self) {
-        self.input.cancel();
-        // Leased packet data is owned Rust memory, and the FFmpeg input context
-        // is released by its own Drop implementation after this session drops.
-        self.leased_packet = None;
-        self.closed = true;
+        let _ = self.close();
+    }
+}
+
+impl ResourceOutputDirGuard {
+    fn new(output_dir: PathBuf) -> Self {
+        Self {
+            output_dir,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ResourceOutputDirGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = cleanup_resource_output_dir(&self.output_dir);
+        }
     }
 }
 
@@ -409,125 +448,56 @@ extern "C" fn ffmpeg_interrupt_callback(opaque: *mut c_void) -> c_int {
     if state.should_interrupt() { 1 } else { 0 }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
-    std::panic::catch_unwind(vesper_plugin_entry_impl).unwrap_or(std::ptr::null())
-}
+#[derive(Debug, Default)]
+struct FfmpegPacketFactory;
 
-fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
-    let mut bundle = Box::new(PluginBundle {
-        api: VesperSourceNormalizerPluginApiV4 {
-            context: std::ptr::null_mut(),
-            destroy: None,
-            name: Some(normalizer_name),
-            packet_capabilities_json: Some(normalizer_packet_capabilities_json),
-            open_packet_session_json: Some(normalizer_open_packet_session_json),
-            read_packet: Some(normalizer_read_packet),
-            release_packet: Some(normalizer_release_packet),
-            seek_packet_session_json: Some(normalizer_seek_packet_session_json),
-            flush_packet_session: Some(normalizer_flush_packet_session),
-            close_packet_session: Some(normalizer_close_packet_session),
-            resource_capabilities_json: Some(normalizer_resource_capabilities_json),
-            open_resource_session_json: Some(normalizer_open_resource_session_json),
-            poll_resource_session: Some(normalizer_poll_resource_session),
-            wait_resource_session_update: Some(normalizer_wait_resource_session_update),
-            cancel_resource_session: Some(normalizer_cancel_resource_session),
-            close_resource_session: Some(normalizer_close_resource_session),
-            free_bytes: Some(free_plugin_bytes),
-        },
-        descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_SOURCE_NORMALIZER_PLUGIN_ABI_VERSION_CURRENT,
-            plugin_kind: VesperPluginKind::SourceNormalizer as u32,
-            plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
-            api: std::ptr::null(),
-        },
-    });
-    bundle.descriptor.api =
-        (&bundle.api as *const VesperSourceNormalizerPluginApiV4).cast::<c_void>();
-    let bundle = Box::leak(bundle);
-    &bundle.descriptor
-}
+impl SourceNormalizerPacketPluginFactory for FfmpegPacketFactory {
+    fn name(&self) -> &str {
+        PLUGIN_NAME
+    }
 
-unsafe extern "C" fn normalizer_name(_context: *mut c_void) -> *const c_char {
-    PLUGIN_NAME.as_ptr().cast::<c_char>()
-}
+    fn packet_capabilities(&self) -> SourceNormalizerPacketCapabilities {
+        packet_capabilities_from_profiles(load_profile_set())
+    }
 
-unsafe extern "C" fn normalizer_packet_capabilities_json(
-    _context: *mut c_void,
-) -> VesperPluginBytes {
-    catch_bytes(|| serialize_payload(&packet_capabilities_from_profiles(load_profile_set())))
-}
-
-unsafe extern "C" fn normalizer_resource_capabilities_json(
-    _context: *mut c_void,
-) -> VesperPluginBytes {
-    catch_bytes(|| serialize_payload(&resource_capabilities_from_profiles(load_profile_set())))
-}
-
-unsafe extern "C" fn normalizer_open_packet_session_json(
-    _context: *mut c_void,
-    config_json: *const u8,
-    config_json_len: usize,
-) -> VesperSourceNormalizerOpenPacketSessionResult {
-    catch_packet_open(|| {
-        let config = match decode_json::<SourceNormalizerPacketSessionConfig>(
-            config_json,
-            config_json_len,
-        ) {
-            Ok(config) => config,
-            Err(error) => return packet_open_error(error),
-        };
+    fn open_packet_session(
+        &self,
+        config: &SourceNormalizerPacketSessionConfig,
+    ) -> Result<Box<dyn SourceNormalizerPacketSession>, SourceNormalizerError> {
         if config.input.is_empty() {
-            return packet_open_error(SourceNormalizerError::invalid_input(
+            return Err(SourceNormalizerError::invalid_input(
                 "input must not be empty",
             ));
         }
 
-        let profile_set = match load_profile_set() {
-            Ok(profile_set) => profile_set,
-            Err(error) => return packet_open_error(error),
-        };
+        let profile_set = load_profile_set()?;
         let profile_name = if config.runtime_profile.is_empty() {
             detect_profile_name(&profile_set, &config.input)
         } else {
             config.runtime_profile.clone()
         };
-        let profile = match profile_set.require(&profile_name) {
-            Ok(profile) => profile,
-            Err(error) => return packet_open_error(map_core_error(error)),
-        };
-        if let Err(error) = validate_packet_profile(&profile_name, profile) {
-            return packet_open_error(error);
-        }
+        let profile = profile_set.require(&profile_name).map_err(map_core_error)?;
+        validate_packet_profile(&profile_name, profile)?;
 
-        let input = match open_ffmpeg_input(
+        let input = open_ffmpeg_input(
             &config.input,
-            &profile,
+            profile,
             config.startup_timeout_ms,
             config.session_timeout_ms,
             None,
-        ) {
-            Ok(input) => input,
-            Err(error) => return packet_open_error(error),
-        };
+        )?;
         let Some(stream) = input.streams().best(ffmpeg::media::Type::Video) else {
-            return packet_open_error(SourceNormalizerError::invalid_input(
+            return Err(SourceNormalizerError::invalid_input(
                 "input does not contain a video stream",
             ));
         };
         let video_stream_index = stream.index();
-        let video_track = match packet_track_info(&stream) {
-            Ok(track) => track,
-            Err(error) => return packet_open_error(error),
-        };
+        let video_track = packet_track_info(&stream)?;
         let mut tracks = vec![video_track];
         let selected_audio_stream_index =
             if let Some(audio_stream) = input.streams().best(ffmpeg::media::Type::Audio) {
                 let audio_stream_index = audio_stream.index();
-                match audio_track_info(&audio_stream) {
-                    Ok(track) => tracks.push(track),
-                    Err(error) => return packet_open_error(error),
-                }
+                tracks.push(audio_track_info(&audio_stream)?);
                 Some(audio_stream_index)
             } else {
                 None
@@ -544,7 +514,8 @@ unsafe extern "C" fn normalizer_open_packet_session_json(
             duration_millis,
             seekable,
         };
-        let session = Box::into_raw(Box::new(PacketNormalizerSession {
+        Ok(Box::new(PacketNormalizerSession {
+            stream_info,
             input,
             selected_video_stream_index: video_stream_index,
             selected_audio_stream_index,
@@ -552,41 +523,31 @@ unsafe extern "C" fn normalizer_open_packet_session_json(
             next_packet_handle: 1,
             leased_packet: None,
             closed: false,
-        }));
-
-        VesperSourceNormalizerOpenPacketSessionResult {
-            status: VesperPluginResultStatus::Success as u32,
-            session: session.cast::<c_void>(),
-            payload: serialize_payload(&stream_info),
-        }
-    })
+        }))
+    }
 }
 
-unsafe extern "C" fn normalizer_read_packet(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperSourceNormalizerReadPacketResult {
-    catch_read_packet(|| {
-        // SAFETY: packet session handles are created by this plugin with
-        // `Box::into_raw` and are exclusively driven by the host until close.
-        let Some(session) = (unsafe { session.cast::<PacketNormalizerSession>().as_mut() }) else {
-            return read_packet_error(SourceNormalizerError::NotConfigured);
-        };
-        if session.closed {
-            return read_packet_error(SourceNormalizerError::NotConfigured);
+impl SourceNormalizerPacketSession for PacketNormalizerSession {
+    fn stream_info(&self) -> SourceNormalizerPacketStreamInfo {
+        self.stream_info.clone()
+    }
+
+    fn read_packet(&mut self) -> Result<SourceNormalizerPacketLease<'_>, SourceNormalizerError> {
+        if self.closed {
+            return Err(SourceNormalizerError::NotConfigured);
         }
-        if session.leased_packet.is_some() {
-            return read_packet_error(SourceNormalizerError::abi_violation(
+        if self.leased_packet.is_some() {
+            return Err(SourceNormalizerError::abi_violation(
                 "previous packet lease has not been released",
             ));
         }
 
-        let selected_video_stream_index = session.selected_video_stream_index;
-        let selected_audio_stream_index = session.selected_audio_stream_index;
-        let tracks = session.tracks.clone();
+        let selected_video_stream_index = self.selected_video_stream_index;
+        let selected_audio_stream_index = self.selected_audio_stream_index;
+        let tracks = self.tracks.clone();
         let mut skipped_packets = 0usize;
         loop {
-            match session.input.read_packet() {
+            match self.input.read_packet() {
                 Ok(Some((stream, packet)))
                     if stream.index() == selected_video_stream_index
                         || selected_audio_stream_index == Some(stream.index()) =>
@@ -604,11 +565,10 @@ unsafe extern "C" fn normalizer_read_packet(
                         .unwrap_or(SourceNormalizerPacketMediaKind::Video);
                     let time_base = stream.time_base();
                     let data = packet.data().map(<[u8]>::to_vec).unwrap_or_default();
-                    let handle = session.next_packet_handle;
-                    session.next_packet_handle =
-                        session.next_packet_handle.saturating_add(1).max(1);
-                    let metadata = SourceNormalizerReadPacketMetadata::packet(
-                        player_plugin::SourceNormalizerPacket {
+                    let handle = self.next_packet_handle;
+                    self.next_packet_handle = self.next_packet_handle.saturating_add(1).max(1);
+                    let metadata =
+                        SourceNormalizerReadPacketMetadata::packet(SourceNormalizerPacket {
                             pts_us: packet
                                 .pts()
                                 .and_then(|timestamp| timestamp_to_micros(timestamp, time_base)),
@@ -633,207 +593,134 @@ unsafe extern "C" fn normalizer_read_packet(
                                 }
                             }),
                             end_of_stream: false,
-                        },
-                    );
-                    let leased = session.leased_packet.insert(LeasedPacket { handle, data });
-                    return VesperSourceNormalizerReadPacketResult {
-                        status: VesperPluginResultStatus::Success as u32,
-                        metadata: serialize_payload(&metadata),
-                        data: leased.data.as_ptr(),
-                        data_len: leased.data.len(),
-                        packet_handle: leased.handle,
-                    };
+                        });
+                    let leased = self.leased_packet.insert(LeasedPacket { handle, data });
+                    return Ok(SourceNormalizerPacketLease {
+                        metadata,
+                        data: &leased.data,
+                        handle: leased.handle,
+                    });
                 }
                 Ok(Some((_stream, _packet))) => {
                     skipped_packets = skipped_packets.saturating_add(1);
                     if skipped_packets > MAX_SKIPPED_NON_AV_PACKETS {
-                        return read_packet_error(SourceNormalizerError::internal(format!(
+                        return Err(SourceNormalizerError::internal(format!(
                             "skipped too many non-selected packets ({skipped_packets})"
                         )));
                     }
                 }
                 Ok(None) => {
-                    return VesperSourceNormalizerReadPacketResult {
-                        status: VesperPluginResultStatus::Success as u32,
-                        metadata: serialize_payload(
-                            &SourceNormalizerReadPacketMetadata::end_of_stream(),
-                        ),
-                        data: std::ptr::null(),
-                        data_len: 0,
-                        packet_handle: 0,
-                    };
+                    return Ok(SourceNormalizerPacketLease {
+                        metadata: SourceNormalizerReadPacketMetadata::end_of_stream(),
+                        data: &[],
+                        handle: 0,
+                    });
                 }
-                Err(error) => return read_packet_error(error),
+                Err(error) => return Err(error),
             }
         }
-    })
-}
+    }
 
-unsafe extern "C" fn normalizer_release_packet(
-    _context: *mut c_void,
-    session: *mut c_void,
-    packet_handle: usize,
-) -> VesperPluginProcessResult {
-    catch_process(|| {
-        // SAFETY: packet session handles are created by this plugin with
-        // `Box::into_raw` and remain valid until the host calls close.
-        let Some(session) = (unsafe { session.cast::<PacketNormalizerSession>().as_mut() }) else {
-            return process_error(SourceNormalizerError::NotConfigured);
-        };
-        if session.closed {
-            return process_error(SourceNormalizerError::NotConfigured);
+    fn release_packet(&mut self, packet_handle: usize) -> Result<(), SourceNormalizerError> {
+        if self.closed {
+            return Err(SourceNormalizerError::NotConfigured);
         }
-        match session.leased_packet.as_ref() {
+        match self.leased_packet.as_ref() {
             Some(packet) if packet.handle == packet_handle => {
-                session.leased_packet = None;
-                process_success(&SourceNormalizerOperationStatus {
-                    completed: true,
-                    message: None,
-                })
+                self.leased_packet = None;
+                Ok(())
             }
-            Some(_packet) => process_error(SourceNormalizerError::abi_violation(format!(
+            Some(_packet) => Err(SourceNormalizerError::abi_violation(format!(
                 "unknown packet handle {packet_handle}"
             ))),
-            None => process_error(SourceNormalizerError::abi_violation(
+            None => Err(SourceNormalizerError::abi_violation(
                 "no packet lease is outstanding",
             )),
         }
-    })
-}
+    }
 
-unsafe extern "C" fn normalizer_seek_packet_session_json(
-    _context: *mut c_void,
-    session: *mut c_void,
-    seek_json: *const u8,
-    seek_json_len: usize,
-) -> VesperPluginProcessResult {
-    catch_process(|| {
-        // SAFETY: packet session handles are created by this plugin with
-        // `Box::into_raw` and remain valid until the host calls close.
-        let Some(session) = (unsafe { session.cast::<PacketNormalizerSession>().as_mut() }) else {
-            return process_error(SourceNormalizerError::NotConfigured);
-        };
-        if session.closed {
-            return process_error(SourceNormalizerError::NotConfigured);
+    fn seek(
+        &mut self,
+        seek: &SourceNormalizerPacketSeek,
+    ) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
+        if self.closed {
+            return Err(SourceNormalizerError::NotConfigured);
         }
-        let seek = match decode_json::<SourceNormalizerPacketSeek>(seek_json, seek_json_len) {
-            Ok(seek) => seek,
-            Err(error) => return process_error(error),
-        };
-        session.leased_packet = None;
+        self.leased_packet = None;
         let timestamp = seek
             .position_millis
             .saturating_mul(1_000)
             .min(i64::MAX as u64) as i64;
-        match session.input.seek_packet(timestamp) {
-            Ok(()) => process_success(&SourceNormalizerOperationStatus {
-                completed: true,
-                message: Some(format!("seeked to {} ms", seek.position_millis)),
-            }),
-            Err(error) => process_error(error),
-        }
-    })
-}
+        self.input.seek_packet(timestamp)?;
+        Ok(SourceNormalizerOperationStatus {
+            completed: true,
+            message: Some(format!("seeked to {} ms", seek.position_millis)),
+        })
+    }
 
-unsafe extern "C" fn normalizer_flush_packet_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_process(|| {
-        // SAFETY: packet session handles are created by this plugin with
-        // `Box::into_raw` and remain valid until the host calls close.
-        let Some(session) = (unsafe { session.cast::<PacketNormalizerSession>().as_mut() }) else {
-            return process_error(SourceNormalizerError::NotConfigured);
-        };
-        if session.closed {
-            return process_error(SourceNormalizerError::NotConfigured);
+    fn flush(&mut self) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
+        if self.closed {
+            return Err(SourceNormalizerError::NotConfigured);
         }
-        session.leased_packet = None;
-        process_success(&SourceNormalizerOperationStatus {
+        self.leased_packet = None;
+        Ok(SourceNormalizerOperationStatus {
             completed: true,
             message: None,
         })
-    })
-}
+    }
 
-unsafe extern "C" fn normalizer_close_packet_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_process(|| {
-        if session.is_null() {
-            return process_error(SourceNormalizerError::NotConfigured);
+    fn close(&mut self) -> Result<(), SourceNormalizerError> {
+        if self.closed {
+            return Ok(());
         }
-        // SAFETY: the session pointer was allocated with `Box::into_raw` by
-        // this plugin and close is called once by the host.
-        drop(unsafe { Box::from_raw(session.cast::<PacketNormalizerSession>()) });
-        process_success(&SourceNormalizerOperationStatus {
-            completed: true,
-            message: None,
-        })
-    })
+        self.input.cancel();
+        self.leased_packet = None;
+        self.closed = true;
+        Ok(())
+    }
 }
 
-unsafe extern "C" fn normalizer_open_resource_session_json(
-    _context: *mut c_void,
-    config_json: *const u8,
-    config_json_len: usize,
-) -> VesperSourceNormalizerOpenResourceSessionResult {
-    catch_resource_open(|| {
-        let config = match decode_json::<SourceNormalizerResourceSessionConfig>(
-            config_json,
-            config_json_len,
-        ) {
-            Ok(config) => config,
-            Err(error) => return resource_open_error(error),
-        };
+#[derive(Debug, Default)]
+struct FfmpegResourceFactory;
+
+impl SourceNormalizerResourcePluginFactory for FfmpegResourceFactory {
+    fn name(&self) -> &str {
+        PLUGIN_NAME
+    }
+
+    fn resource_capabilities(&self) -> SourceNormalizerResourceCapabilities {
+        resource_capabilities_from_profiles(load_profile_set())
+    }
+
+    fn open_resource_session(
+        &self,
+        config: &SourceNormalizerResourceSessionConfig,
+    ) -> Result<Box<dyn SourceNormalizerResourceSession>, SourceNormalizerError> {
         if config.input.is_empty() {
-            return resource_open_error(SourceNormalizerError::invalid_input(
+            return Err(SourceNormalizerError::invalid_input(
                 "input must not be empty",
             ));
         }
         if config.output_root.is_empty() {
-            return resource_open_error(SourceNormalizerError::configuration(
+            return Err(SourceNormalizerError::configuration(
                 "output_root must not be empty",
             ));
         }
 
-        let profile_set = match load_profile_set() {
-            Ok(profile_set) => profile_set,
-            Err(error) => return resource_open_error(error),
-        };
+        let profile_set = load_profile_set()?;
         let profile_name = if config.runtime_profile.is_empty() {
             detect_profile_name(&profile_set, &config.input)
         } else {
             config.runtime_profile.clone()
         };
-        let profile = match profile_set.require(&profile_name) {
-            Ok(profile) => profile,
-            Err(error) => return resource_open_error(map_core_error(error)),
-        };
-        let route = match resource_route_for_profile(profile, config.preferred_route) {
-            Ok(route) => route,
-            Err(error) => return resource_open_error(error),
-        };
-        let cleanup_permit = match resource_cleanup_scheduler().and_then(|scheduler| {
-            scheduler.try_acquire().ok_or_else(|| {
-                SourceNormalizerError::internal(format!(
-                    "resource session capacity exhausted; at most {RESOURCE_CLEANUP_QUEUE_CAPACITY} workers may be active or awaiting cleanup"
-                ))
-            })
-        }) {
-            Ok(permit) => permit,
-            Err(error) => return resource_open_error(error),
-        };
+        let profile = profile_set.require(&profile_name).map_err(map_core_error)?;
+        let route = resource_route_for_profile(profile, config.preferred_route)?;
+        let cleanup_permit =
+            resource_cleanup_scheduler().and_then(acquire_resource_cleanup_permit)?;
         let session_id = format!("ffmpeg-resource-{}", unique_session_suffix());
         let output_dir = Path::new(&config.output_root).join(&session_id);
-        if let Err(error) = std::fs::create_dir_all(&output_dir) {
-            return resource_open_error(SourceNormalizerError::internal(format!(
-                "failed to create resource output directory: {error}"
-            )));
-        }
         let output_path = output_path_for_route(&output_dir, route);
-        let command_plan = match build_ffmpeg_command_plan(
+        let command_plan = build_ffmpeg_command_plan(
             profile,
             &SourceNormalizerSessionConfig {
                 runtime_profile: profile_name.clone(),
@@ -842,10 +729,14 @@ unsafe extern "C" fn normalizer_open_resource_session_json(
                 ffmpeg_program: "ffmpeg".to_owned(),
                 output_to_stdout: false,
             },
-        ) {
-            Ok(plan) => plan,
-            Err(error) => return resource_open_error(map_core_error(error)),
-        };
+        )
+        .map_err(map_core_error)?;
+        std::fs::create_dir_all(&output_dir).map_err(|error| {
+            SourceNormalizerError::internal(format!(
+                "failed to create resource output directory: {error}"
+            ))
+        })?;
+        let mut output_dir_guard = ResourceOutputDirGuard::new(output_dir.clone());
         let container = match route {
             SourceNormalizerOutputRoute::Fmp4LocalStream => "fmp4",
             SourceNormalizerOutputRoute::HlsShortWindow => "hls",
@@ -894,62 +785,58 @@ unsafe extern "C" fn normalizer_open_resource_session_json(
         let worker_cache_policy = config.cache_policy.clone();
         let worker_startup_timeout_ms = config.startup_timeout_ms;
         let worker_read_idle_timeout_ms = config.read_idle_timeout_ms;
-        let worker = thread::spawn(move || {
-            let terminal_shared = worker_shared.clone();
-            run_resource_worker_with_panic_guard(terminal_shared, || {
-                run_resource_worker(ResourceWorkerConfig {
-                    profile_name: worker_profile_name,
-                    profile: worker_profile,
-                    input: worker_input,
-                    output_dir: worker_output_dir,
-                    output_path: worker_output_path,
-                    route: worker_route,
-                    cache_policy: worker_cache_policy,
-                    startup_timeout_ms: worker_startup_timeout_ms,
-                    read_idle_timeout_ms: worker_read_idle_timeout_ms,
-                    cancel_requested: worker_cancel,
-                    shared: worker_shared,
+        let worker = thread::Builder::new()
+            .name("vesper-source-normalizer-resource".to_owned())
+            .spawn(move || {
+                let terminal_shared = worker_shared.clone();
+                run_resource_worker_with_panic_guard(terminal_shared, || {
+                    run_resource_worker(ResourceWorkerConfig {
+                        profile_name: worker_profile_name,
+                        profile: worker_profile,
+                        input: worker_input,
+                        output_dir: worker_output_dir,
+                        output_path: worker_output_path,
+                        route: worker_route,
+                        cache_policy: worker_cache_policy,
+                        startup_timeout_ms: worker_startup_timeout_ms,
+                        read_idle_timeout_ms: worker_read_idle_timeout_ms,
+                        cancel_requested: worker_cancel,
+                        shared: worker_shared,
+                    });
                 });
-            });
-        });
-        let session = Box::into_raw(Box::new(ResourceNormalizerSession {
+            })
+            .map_err(|error| {
+                SourceNormalizerError::internal(format!("failed to start resource worker: {error}"))
+            })?;
+        let session = ResourceNormalizerSession {
             info: info.clone(),
             output_dir,
             shared,
             observed_sequence: 0,
             cancel_requested,
             worker: Some(worker),
-            cleanup_permit,
+            cleanup_permit: Some(cleanup_permit),
             closed: false,
-        }));
-
-        VesperSourceNormalizerOpenResourceSessionResult {
-            status: VesperPluginResultStatus::Success as u32,
-            session: session.cast::<c_void>(),
-            payload: serialize_payload(&info),
-        }
-    })
+        };
+        output_dir_guard.disarm();
+        Ok(Box::new(session))
+    }
 }
 
-unsafe extern "C" fn normalizer_poll_resource_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_process(|| {
-        // SAFETY: resource session handles are created by this plugin with
-        // `Box::into_raw` and are exclusively driven by the host until close.
-        let Some(session) = (unsafe { session.cast::<ResourceNormalizerSession>().as_mut() })
-        else {
-            return process_error(SourceNormalizerError::NotConfigured);
-        };
-        if session.closed {
-            return process_error(SourceNormalizerError::NotConfigured);
+impl SourceNormalizerResourceSession for ResourceNormalizerSession {
+    fn session_info(&self) -> SourceNormalizerResourceSessionInfo {
+        self.info.clone()
+    }
+
+    fn poll(&mut self) -> Result<SourceNormalizerResourceSessionStatus, SourceNormalizerError> {
+        if self.closed {
+            return Err(SourceNormalizerError::NotConfigured);
         }
-        let worker_state = resource_worker_state(&session.shared);
-        session.observed_sequence = worker_state.sequence;
-        let mut info = session.info.clone();
+        let worker_state = resource_worker_state(&self.shared);
+        self.observed_sequence = worker_state.sequence;
+        let mut info = self.info.clone();
         info.resources = resource_infos_for_route(
-            &session.output_dir,
+            &self.output_dir,
             Path::new(info.primary_resource_path.as_deref().unwrap_or_default()),
             info.output_route,
             matches!(
@@ -962,57 +849,37 @@ unsafe extern "C" fn normalizer_poll_resource_session(
         if !worker_state.tracks.is_empty() {
             info.tracks = worker_state.tracks;
         }
-        info.disk_bytes_used = disk_usage_bytes(&session.output_dir);
-        process_success(&SourceNormalizerResourceSessionStatus {
+        info.disk_bytes_used = disk_usage_bytes(&self.output_dir);
+        Ok(SourceNormalizerResourceSessionStatus {
             state: worker_state.state,
             info: Some(info),
             message: worker_state.message,
-            disk_bytes_used: disk_usage_bytes(&session.output_dir),
+            disk_bytes_used: disk_usage_bytes(&self.output_dir),
         })
-    })
-}
+    }
 
-unsafe extern "C" fn normalizer_wait_resource_session_update(
-    _context: *mut c_void,
-    session: *mut c_void,
-    timeout_ms: u64,
-) -> VesperPluginProcessResult {
-    catch_process(|| {
-        // SAFETY: resource session handles are created by this plugin with
-        // `Box::into_raw` and remain valid until the host calls close.
-        let Some(session) = (unsafe { session.cast::<ResourceNormalizerSession>().as_mut() })
-        else {
-            return process_error(SourceNormalizerError::NotConfigured);
-        };
-        if session.closed {
-            return process_error(SourceNormalizerError::NotConfigured);
+    fn wait_for_update(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<SourceNormalizerResourceSessionWaitStatus, SourceNormalizerError> {
+        if self.closed {
+            return Err(SourceNormalizerError::NotConfigured);
         }
-        let status = wait_resource_worker_update(
-            &session.shared,
-            &mut session.observed_sequence,
+        let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
+        Ok(wait_resource_worker_update(
+            &self.shared,
+            &mut self.observed_sequence,
             timeout_ms,
-        );
-        process_success(&status)
-    })
-}
+        ))
+    }
 
-unsafe extern "C" fn normalizer_cancel_resource_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_process(|| {
-        // SAFETY: resource session handles are created by this plugin with
-        // `Box::into_raw` and remain valid until the host calls close.
-        let Some(session) = (unsafe { session.cast::<ResourceNormalizerSession>().as_mut() })
-        else {
-            return process_error(SourceNormalizerError::NotConfigured);
-        };
-        if session.closed {
-            return process_error(SourceNormalizerError::NotConfigured);
+    fn cancel(&mut self) -> Result<SourceNormalizerOperationStatus, SourceNormalizerError> {
+        if self.closed {
+            return Err(SourceNormalizerError::NotConfigured);
         }
-        session.cancel_requested.store(true, Ordering::SeqCst);
-        let completed = request_resource_worker_cancel(&session.shared);
-        process_success(&SourceNormalizerOperationStatus {
+        self.cancel_requested.store(true, Ordering::SeqCst);
+        let completed = request_resource_worker_cancel(&self.shared);
+        Ok(SourceNormalizerOperationStatus {
             completed,
             message: Some(if completed {
                 "resource session already stopped".to_owned()
@@ -1020,77 +887,78 @@ unsafe extern "C" fn normalizer_cancel_resource_session(
                 "resource session cancellation requested".to_owned()
             }),
         })
-    })
+    }
+
+    fn close(&mut self) -> Result<(), SourceNormalizerError> {
+        self.close_inner()
+    }
 }
 
-unsafe extern "C" fn normalizer_close_resource_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_process(|| {
-        if session.is_null() {
-            return process_error(SourceNormalizerError::NotConfigured);
+impl ResourceNormalizerSession {
+    fn close_inner(&mut self) -> Result<(), SourceNormalizerError> {
+        if self.closed {
+            return Ok(());
         }
-        // SAFETY: the session pointer was allocated with `Box::into_raw` by
-        // this plugin and close is called once by the host.
-        let mut session = unsafe { Box::from_raw(session.cast::<ResourceNormalizerSession>()) };
-        session.closed = true;
-        session.cancel_requested.store(true, Ordering::SeqCst);
-        request_resource_worker_cancel(&session.shared);
-        let worker = session.worker.take();
-        let cleanup_permit = session.cleanup_permit;
+        self.cancel_requested.store(true, Ordering::SeqCst);
+        request_resource_worker_cancel(&self.shared);
+        let cleanup_permit = self.cleanup_permit.take().ok_or_else(|| {
+            SourceNormalizerError::abi_violation("resource cleanup permit is missing")
+        })?;
+        let worker = self.worker.take();
         let worker_joinable = worker.as_ref().is_none_or(|_| {
-            wait_resource_worker_joinable(&session.shared, RESOURCE_CLOSE_JOIN_TIMEOUT)
+            wait_resource_worker_joinable(&self.shared, RESOURCE_CLOSE_JOIN_TIMEOUT)
         });
-        let (message, timed_out) = match (worker, worker_joinable) {
+        match (worker, worker_joinable) {
             (Some(worker), true) => {
-                let join_message = match worker.join() {
-                    Ok(()) => None,
-                    Err(_) => Some("resource worker panicked".to_owned()),
-                };
-                let cleanup_message = cleanup_resource_output_dir(&session.output_dir);
-                drop(cleanup_permit);
-                let message = [join_message, cleanup_message]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                (message, false)
+                let join_failed = worker.join().is_err();
+                if let Some(message) = cleanup_resource_output_dir(&self.output_dir) {
+                    self.cleanup_permit = Some(cleanup_permit);
+                    return Err(SourceNormalizerError::internal(message));
+                }
+                if join_failed {
+                    self.cleanup_permit = Some(cleanup_permit);
+                    return Err(SourceNormalizerError::internal(
+                        "resource worker panicked during cleanup",
+                    ));
+                }
             }
             (Some(worker), false) => {
-                let message =
-                    schedule_resource_cleanup(worker, session.output_dir.clone(), cleanup_permit)
-                        .unwrap_or_else(|| "resource worker cleanup deferred".to_owned());
-                (message, true)
+                if let Err(job) =
+                    schedule_resource_cleanup(worker, self.output_dir.clone(), cleanup_permit)
+                {
+                    self.worker = Some(job.worker);
+                    self.cleanup_permit = Some(job.permit);
+                    return Err(SourceNormalizerError::resource_exhausted(
+                        "resource cleanup queue is full; retry close",
+                    ));
+                }
             }
             (None, _) => {
-                let cleanup_message = cleanup_resource_output_dir(&session.output_dir);
-                drop(cleanup_permit);
-                (cleanup_message.unwrap_or_default(), false)
+                if let Some(message) = cleanup_resource_output_dir(&self.output_dir) {
+                    self.cleanup_permit = Some(cleanup_permit);
+                    return Err(SourceNormalizerError::internal(message));
+                }
             }
-        };
-        if timed_out {
-            let detail = if message.is_empty() {
-                "resource worker cleanup was deferred".to_owned()
-            } else {
-                message
-            };
-            return process_error(SourceNormalizerError::Timeout {
-                message: format!(
-                    "resource worker did not stop within {:?}; {detail}",
-                    RESOURCE_CLOSE_JOIN_TIMEOUT
-                ),
-            });
         }
-        process_success(&SourceNormalizerOperationStatus {
-            completed: true,
-            message: if message.is_empty() {
-                None
-            } else {
-                Some(message)
-            },
-        })
-    })
+        self.closed = true;
+        Ok(())
+    }
+}
+
+impl Drop for ResourceNormalizerSession {
+    fn drop(&mut self) {
+        if self.close_inner().is_err() {
+            let _ = self.close_inner();
+        }
+    }
+}
+
+#[player_plugin::export]
+fn ffmpeg_source_normalizer_plugin() -> Result<Plugin, PluginBuildError> {
+    Plugin::builder(PLUGIN_ID, PLUGIN_NAME)?
+        .with_source_normalizer_packet(PACKET_INSTANCE_ID, FfmpegPacketFactory)?
+        .with_source_normalizer_resource(RESOURCE_INSTANCE_ID, FfmpegResourceFactory)?
+        .build()
 }
 
 fn load_profile_set() -> Result<SourceNormalizerProfileSet, SourceNormalizerError> {
@@ -1139,7 +1007,10 @@ fn resource_capabilities_from_profiles(
     profile_set: Result<SourceNormalizerProfileSet, SourceNormalizerError>,
 ) -> SourceNormalizerResourceCapabilities {
     let Ok(profile_set) = profile_set else {
-        return SourceNormalizerResourceCapabilities::default();
+        return SourceNormalizerResourceCapabilities {
+            max_sessions: Some(MAX_RESOURCE_SESSIONS),
+            ..SourceNormalizerResourceCapabilities::default()
+        };
     };
     let mut profiles = Vec::new();
     let mut routes = Vec::new();
@@ -1181,7 +1052,7 @@ fn resource_capabilities_from_profiles(
         supports_cancel: true,
         required_capabilities: required,
         cache_policy,
-        max_sessions: None,
+        max_sessions: Some(MAX_RESOURCE_SESSIONS),
     }
 }
 
@@ -1522,91 +1393,63 @@ fn resource_cleanup_scheduler() -> Result<&'static ResourceCleanupScheduler, Sou
     }
 }
 
+fn acquire_resource_cleanup_permit(
+    scheduler: &ResourceCleanupScheduler,
+) -> Result<ResourceCleanupPermit, SourceNormalizerError> {
+    scheduler.try_acquire().ok_or_else(|| {
+        SourceNormalizerError::resource_exhausted(format!(
+            "resource session capacity exhausted; at most {} workers may be active or awaiting cleanup",
+            scheduler.permit_pool.capacity
+        ))
+    })
+}
+
 fn schedule_resource_cleanup(
     worker: JoinHandle<()>,
     output_dir: PathBuf,
     permit: ResourceCleanupPermit,
-) -> Option<String> {
+) -> Result<(), ResourceCleanupJob> {
     let job = ResourceCleanupJob {
         worker,
         output_dir,
         permit,
     };
     match resource_cleanup_scheduler() {
-        Ok(scheduler) => match scheduler.try_schedule(job) {
-            Ok(()) => Some("resource worker cleanup deferred".to_owned()),
-            Err(job) => cleanup_resource_job_without_join(
-                job,
-                "resource cleanup scheduler unavailable; cleanup moved to a bounded fallback worker",
-            ),
-        },
-        Err(error) => cleanup_resource_job_without_join(
-            job,
-            &format!(
-                "resource cleanup scheduler unavailable ({error}); cleanup moved to a bounded fallback worker"
-            ),
-        ),
+        Ok(scheduler) => scheduler.try_schedule(job),
+        Err(_) => Err(job),
     }
 }
 
-fn cleanup_resource_job_without_join(job: ResourceCleanupJob, message: &str) -> Option<String> {
-    let job = Arc::new(Mutex::new(Some(job)));
-    let worker_job = job.clone();
-    match thread::Builder::new()
-        .name("vesper-source-normalizer-cleanup-fallback".to_owned())
-        .spawn(move || {
-            let job = worker_job
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .take();
-            if let Some(job) = job {
-                cleanup_resource_job(job);
-            }
-        }) {
-        Ok(_) => Some(message.to_owned()),
-        Err(error) => {
-            let job = job
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take();
-            if let Some(job) = job {
-                cleanup_resource_job(job);
-            }
-            Some(format!(
-                "{message}; fallback worker could not start and cleanup completed synchronously: {error}"
-            ))
-        }
-    }
-}
-
-fn run_resource_cleanup_worker(receiver: mpsc::Receiver<ResourceCleanupJob>) {
-    let mut pending = Vec::with_capacity(RESOURCE_CLEANUP_QUEUE_CAPACITY);
-    let mut disconnected = false;
+fn run_resource_cleanup_worker(queue: Arc<ResourceCleanupQueue>) {
     loop {
-        if disconnected {
-            thread::sleep(RESOURCE_CLEANUP_POLL_INTERVAL);
-        } else {
-            match receiver.recv_timeout(RESOURCE_CLEANUP_POLL_INTERVAL) {
-                Ok(job) => pending.push(job),
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => disconnected = true,
+        let ready = {
+            let mut pending = queue
+                .pending
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            while pending.is_empty() {
+                pending = queue
+                    .changed
+                    .wait(pending)
+                    .unwrap_or_else(|error| error.into_inner());
             }
-            while let Ok(job) = receiver.try_recv() {
-                pending.push(job);
+            let (mut pending, _) = queue
+                .changed
+                .wait_timeout(pending, RESOURCE_CLEANUP_POLL_INTERVAL)
+                .unwrap_or_else(|error| error.into_inner());
+            let mut ready = Vec::new();
+            let mut index = 0;
+            while index < pending.len() {
+                if pending[index].worker.is_finished() {
+                    ready.push(pending.swap_remove(index));
+                } else {
+                    index += 1;
+                }
             }
-        }
-
-        let mut index = 0;
-        while index < pending.len() {
-            if pending[index].worker.is_finished() {
-                let job = pending.swap_remove(index);
-                cleanup_resource_job(job);
-            } else {
-                index += 1;
-            }
-        }
-        if disconnected && pending.is_empty() {
-            return;
+            ready
+        };
+        for job in ready {
+            cleanup_resource_job(job);
         }
     }
 }
@@ -2790,146 +2633,29 @@ fn map_core_error(error: player_source_normalizer::SourceNormalizerError) -> Sou
     }
 }
 
-fn decode_json<T: serde::de::DeserializeOwned>(
-    data: *const u8,
-    len: usize,
-) -> Result<T, SourceNormalizerError> {
-    if data.is_null() && len > 0 {
-        return Err(SourceNormalizerError::abi_violation(
-            "plugin JSON pointer was null with non-zero len",
-        ));
-    }
-    let payload = if data.is_null() || len == 0 {
-        &[]
-    } else {
-        // SAFETY: the ABI caller keeps the byte range alive for this synchronous
-        // callback.
-        unsafe { std::slice::from_raw_parts(data, len) }
-    };
-    serde_json::from_slice(payload)
-        .map_err(|error| SourceNormalizerError::payload_codec(error.to_string()))
-}
-
-fn packet_open_error(
-    error: SourceNormalizerError,
-) -> VesperSourceNormalizerOpenPacketSessionResult {
-    VesperSourceNormalizerOpenPacketSessionResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        session: std::ptr::null_mut(),
-        payload: serialize_payload(&error),
-    }
-}
-
-fn process_success<T: serde::Serialize>(value: &T) -> VesperPluginProcessResult {
-    VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success as u32,
-        payload: serialize_payload(value),
-    }
-}
-
-fn process_error(error: SourceNormalizerError) -> VesperPluginProcessResult {
-    VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        payload: serialize_payload(&error),
-    }
-}
-
-fn read_packet_error(error: SourceNormalizerError) -> VesperSourceNormalizerReadPacketResult {
-    VesperSourceNormalizerReadPacketResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        metadata: serialize_payload(&error),
-        data: std::ptr::null(),
-        data_len: 0,
-        packet_handle: 0,
-    }
-}
-
-fn resource_open_error(
-    error: SourceNormalizerError,
-) -> VesperSourceNormalizerOpenResourceSessionResult {
-    VesperSourceNormalizerOpenResourceSessionResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        session: std::ptr::null_mut(),
-        payload: serialize_payload(&error),
-    }
-}
-
-unsafe extern "C" fn free_plugin_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
-    // SAFETY: the payload was produced by this dynamic library and has not been
-    // reclaimed yet.
-    let _ = unsafe { payload.into_vec() };
-}
-
-fn serialize_payload<T: serde::Serialize>(value: &T) -> VesperPluginBytes {
-    match serde_json::to_vec(value) {
-        Ok(payload) => VesperPluginBytes::from_vec(payload),
-        Err(error) => VesperPluginBytes::from_vec(error.to_string().into_bytes()),
-    }
-}
-
-fn catch_bytes(operation: impl FnOnce() -> VesperPluginBytes) -> VesperPluginBytes {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation)).unwrap_or_else(|_| {
-        serialize_payload(&SourceNormalizerError::abi_violation(
-            "source normalizer callback panicked",
-        ))
-    })
-}
-
-fn catch_packet_open(
-    operation: impl FnOnce() -> VesperSourceNormalizerOpenPacketSessionResult,
-) -> VesperSourceNormalizerOpenPacketSessionResult {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
-        .unwrap_or_else(|_| packet_open_error(SourceNormalizerError::internal("callback panicked")))
-}
-
-fn catch_read_packet(
-    operation: impl FnOnce() -> VesperSourceNormalizerReadPacketResult,
-) -> VesperSourceNormalizerReadPacketResult {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
-        .unwrap_or_else(|_| read_packet_error(SourceNormalizerError::internal("callback panicked")))
-}
-
-fn catch_resource_open(
-    operation: impl FnOnce() -> VesperSourceNormalizerOpenResourceSessionResult,
-) -> VesperSourceNormalizerOpenResourceSessionResult {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation)).unwrap_or_else(|_| {
-        resource_open_error(SourceNormalizerError::internal("callback panicked"))
-    })
-}
-
-fn catch_process(
-    operation: impl FnOnce() -> VesperPluginProcessResult,
-) -> VesperPluginProcessResult {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
-        .unwrap_or_else(|_| process_error(SourceNormalizerError::internal("callback panicked")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        FfmpegInputAuthority, ResourceCleanupJob, ResourceCleanupPermit, ResourceCleanupPermitPool,
-        ResourceCleanupScheduler, ResourceNormalizerSession, ResourceWorkerShared,
-        ResourceWorkerState, classify_ffmpeg_input_authority, cleanup_resource_job_without_join,
-        detect_profile_name, enforce_ffmpeg_input_protocol_policy, free_plugin_bytes,
-        load_profile_set, normalizer_cancel_resource_session, normalizer_close_packet_session,
-        normalizer_close_resource_session, normalizer_open_packet_session_json,
-        normalizer_packet_capabilities_json, normalizer_read_packet, normalizer_release_packet,
-        normalizer_seek_packet_session_json, notify_if_primary_resource_has_bytes,
-        open_ffmpeg_input, packet_capabilities_from_profiles, pixel_format_component_depth,
-        resolve_ffmpeg_open_target, resource_packet_stream_route,
+        FfmpegInputAuthority, FfmpegPacketFactory, FfmpegResourceFactory, ResourceCleanupJob,
+        ResourceCleanupPermit, ResourceCleanupPermitPool, ResourceCleanupScheduler,
+        ResourceNormalizerSession, ResourceOutputDirGuard, ResourceWorkerShared,
+        ResourceWorkerState, acquire_resource_cleanup_permit, classify_ffmpeg_input_authority,
+        detect_profile_name, enforce_ffmpeg_input_protocol_policy, load_profile_set,
+        notify_if_primary_resource_has_bytes, open_ffmpeg_input, packet_capabilities_from_profiles,
+        pixel_format_component_depth, resolve_ffmpeg_open_target, resource_packet_stream_route,
         run_resource_worker_with_panic_guard, set_resource_worker_state, unique_session_suffix,
         validate_packet_profile, video_dimensions_from_parameters, wait_resource_worker_update,
     };
     use ffmpeg_next::util::format::Pixel;
     use player_plugin::{
-        SourceNormalizerError, SourceNormalizerOperationStatus, SourceNormalizerOutputRoute,
-        SourceNormalizerPacketCapabilities, SourceNormalizerPacketMediaKind,
-        SourceNormalizerPacketSeek, SourceNormalizerPacketSessionConfig,
-        SourceNormalizerPacketStreamInfo, SourceNormalizerReadPacketMetadata,
-        SourceNormalizerResourceSessionInfo, SourceNormalizerResourceSessionState,
-        VesperPluginBytes, VesperPluginResultStatus,
+        SourceNormalizerError, SourceNormalizerOutputRoute, SourceNormalizerPacketMediaKind,
+        SourceNormalizerPacketPluginFactory, SourceNormalizerPacketSeek,
+        SourceNormalizerPacketSession, SourceNormalizerPacketSessionConfig,
+        SourceNormalizerReadPacketStatus, SourceNormalizerResourcePluginFactory,
+        SourceNormalizerResourceSession, SourceNormalizerResourceSessionInfo,
+        SourceNormalizerResourceSessionState,
     };
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Condvar, Mutex, atomic::AtomicBool, mpsc};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -2954,6 +2680,51 @@ mod tests {
         })
         .try_acquire()
         .expect("test cleanup permit")
+    }
+
+    fn test_resource_session(
+        output_dir: PathBuf,
+        shared: Arc<ResourceWorkerShared>,
+        cancel_requested: Arc<AtomicBool>,
+        worker: thread::JoinHandle<()>,
+    ) -> ResourceNormalizerSession {
+        ResourceNormalizerSession {
+            info: SourceNormalizerResourceSessionInfo {
+                session_id: Some("resource-lifecycle-test".to_owned()),
+                normalizer_name: Some("player-source-normalizer-ffmpeg".to_owned()),
+                runtime_profile: Some("generic-fallback".to_owned()),
+                selected_backend: Some("test".to_owned()),
+                output_route: SourceNormalizerOutputRoute::Fmp4LocalStream,
+                container: "fmp4".to_owned(),
+                primary_resource_path: None,
+                primary_content_type: None,
+                resources: Vec::new(),
+                tracks: Vec::new(),
+                duration_millis: None,
+                seekable: true,
+                disk_bytes_used: None,
+            },
+            output_dir,
+            shared,
+            observed_sequence: 0,
+            cancel_requested,
+            worker: Some(worker),
+            cleanup_permit: Some(test_resource_cleanup_permit()),
+            closed: false,
+        }
+    }
+
+    fn wait_until_removed(path: &Path) {
+        for _ in 0..100 {
+            if !path.exists() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "path was not removed after deferred cleanup: {}",
+            path.display()
+        );
     }
 
     #[test]
@@ -3088,7 +2859,7 @@ mod tests {
     }
 
     #[test]
-    fn packet_capabilities_from_default_profiles_are_serializable() {
+    fn packet_capabilities_from_default_profiles_match_safe_factory() {
         let capabilities = packet_capabilities_from_profiles(load_profile_set());
 
         assert!(
@@ -3118,11 +2889,60 @@ mod tests {
         assert!(capabilities.supports_codec("av1"));
         assert!(capabilities.supports_seek);
         assert!(capabilities.supports_flush);
+        assert_eq!(FfmpegPacketFactory.packet_capabilities(), capabilities);
+    }
 
-        // SAFETY: the callback ignores context and returns a plugin-owned payload.
-        let payload = unsafe { normalizer_packet_capabilities_json(std::ptr::null_mut()) };
-        let decoded: SourceNormalizerPacketCapabilities = take_plugin_bytes(payload);
-        assert_eq!(decoded, capabilities);
+    #[test]
+    fn resource_capabilities_report_64_session_limit() {
+        let capabilities = FfmpegResourceFactory.resource_capabilities();
+
+        assert_eq!(capabilities.max_sessions, Some(64));
+    }
+
+    #[test]
+    fn resource_session_capacity_exhaustion_is_typed() {
+        let scheduler =
+            ResourceCleanupScheduler::start(1, "vesper-source-normalizer-capacity-error-test")
+                .expect("start capacity test scheduler");
+        let permit = acquire_resource_cleanup_permit(&scheduler).expect("acquire first permit");
+
+        let error = acquire_resource_cleanup_permit(&scheduler)
+            .expect_err("second permit must exceed capacity");
+        assert!(matches!(
+            error,
+            SourceNormalizerError::ResourceExhausted { .. }
+        ));
+
+        drop(permit);
+        assert!(acquire_resource_cleanup_permit(&scheduler).is_ok());
+    }
+
+    #[test]
+    fn resource_output_guard_removes_abandoned_directory() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "vesper-source-normalizer-open-guard-test-{}",
+            unique_session_suffix()
+        ));
+        std::fs::create_dir_all(&output_dir).expect("create guarded output directory");
+
+        {
+            let _guard = ResourceOutputDirGuard::new(output_dir.clone());
+        }
+
+        assert!(!output_dir.exists());
+    }
+
+    #[test]
+    fn exports_plugin_root_with_both_source_interfaces() {
+        let entry: extern "C" fn() -> *const player_plugin::__private::VesperPluginRoot =
+            super::vesper_plugin_entry;
+        let root_ptr = entry();
+        assert!(!root_ptr.is_null());
+        // SAFETY: the generated entry returned one live root owner.
+        let root = unsafe { root_ptr.read() };
+        assert_eq!(root.interface_count, 2);
+        // SAFETY: the generated owner is destroyed exactly once.
+        unsafe { root.destroy_owner.expect("destroy owner")(root.owner) };
     }
 
     #[test]
@@ -3157,7 +2977,7 @@ mod tests {
 
     #[test]
     fn open_rejects_empty_input() {
-        let open = open_packet_session(SourceNormalizerPacketSessionConfig {
+        let result = open_packet_session(SourceNormalizerPacketSessionConfig {
             runtime_profile: "generic-fallback".to_owned(),
             input: String::new(),
             headers: Vec::new(),
@@ -3166,15 +2986,16 @@ mod tests {
             preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
         });
 
-        assert_eq!(open.status, VesperPluginResultStatus::Failure as u32);
-        assert!(open.session.is_null());
-        let error: SourceNormalizerError = take_plugin_bytes(open.payload);
+        let error = match result {
+            Ok(_) => panic!("empty input must be rejected"),
+            Err(error) => error,
+        };
         assert!(matches!(error, SourceNormalizerError::InvalidInput { .. }));
     }
 
     #[test]
     fn open_rejects_hls_profile_before_ffmpeg_probe() {
-        let open = open_packet_session(SourceNormalizerPacketSessionConfig {
+        let result = open_packet_session(SourceNormalizerPacketSessionConfig {
             runtime_profile: "hls-nonstandard".to_owned(),
             input: "https://example.test/master.m3u8".to_owned(),
             headers: Vec::new(),
@@ -3183,9 +3004,10 @@ mod tests {
             preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
         });
 
-        assert_eq!(open.status, VesperPluginResultStatus::Failure as u32);
-        assert!(open.session.is_null());
-        let error: SourceNormalizerError = take_plugin_bytes(open.payload);
+        let error = match result {
+            Ok(_) => panic!("HLS packet profile must be rejected"),
+            Err(error) => error,
+        };
         assert!(matches!(error, SourceNormalizerError::InvalidInput { .. }));
         assert!(format!("{error}").contains("adaptive HLS/DASH sources"));
     }
@@ -3339,36 +3161,10 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("worker entered");
         let observed_shared = shared.clone();
-        let session = Box::into_raw(Box::new(ResourceNormalizerSession {
-            info: SourceNormalizerResourceSessionInfo {
-                session_id: Some("cancel-close-test".to_owned()),
-                normalizer_name: Some("player-source-normalizer-ffmpeg".to_owned()),
-                runtime_profile: Some("generic-fallback".to_owned()),
-                selected_backend: Some("test".to_owned()),
-                output_route: SourceNormalizerOutputRoute::Fmp4LocalStream,
-                container: "fmp4".to_owned(),
-                primary_resource_path: None,
-                primary_content_type: None,
-                resources: Vec::new(),
-                tracks: Vec::new(),
-                duration_millis: None,
-                seekable: true,
-                disk_bytes_used: None,
-            },
-            output_dir: output_dir.clone(),
-            shared,
-            observed_sequence: 0,
-            cancel_requested,
-            worker: Some(worker),
-            cleanup_permit: test_resource_cleanup_permit(),
-            closed: false,
-        }));
+        let mut session =
+            test_resource_session(output_dir.clone(), shared, cancel_requested, worker);
 
-        // SAFETY: the session pointer is owned by this test until close consumes it.
-        let cancel =
-            unsafe { normalizer_cancel_resource_session(std::ptr::null_mut(), session.cast()) };
-        assert_eq!(cancel.status, VesperPluginResultStatus::Success as u32);
-        let cancel_status: SourceNormalizerOperationStatus = take_plugin_bytes(cancel.payload);
+        let cancel_status = session.cancel().expect("request resource cancellation");
         assert!(!cancel_status.completed);
         let cancel_state = super::resource_worker_state(&observed_shared);
         assert_eq!(
@@ -3377,26 +3173,63 @@ mod tests {
         );
         assert!(!cancel_state.worker_finished);
         let started_at = Instant::now();
-        // SAFETY: close consumes the Box allocated above exactly once.
-        let close =
-            unsafe { normalizer_close_resource_session(std::ptr::null_mut(), session.cast()) };
+        session.close().expect("defer unfinished worker cleanup");
         let elapsed = started_at.elapsed();
-        release_worker_sender
-            .send(())
-            .expect("release deferred cleanup worker");
-
-        assert_eq!(close.status, VesperPluginResultStatus::Failure as u32);
-        let close_error: SourceNormalizerError = take_plugin_bytes(close.payload);
         assert!(
             elapsed < Duration::from_millis(2_500),
             "close blocked for {elapsed:?}"
         );
-        assert!(matches!(close_error, SourceNormalizerError::Timeout { .. }));
-        let _ = std::fs::remove_dir_all(output_dir);
+        assert!(session.closed);
+        session.close().expect("close remains idempotent");
+        assert!(output_dir.is_dir());
+
+        release_worker_sender
+            .send(())
+            .expect("release deferred cleanup worker");
+        wait_until_removed(&output_dir);
     }
 
     #[test]
-    fn resource_cleanup_fallback_keeps_output_until_worker_finishes() {
+    fn resource_session_drop_cancels_and_defers_cleanup() {
+        let shared = test_resource_worker_shared();
+        let output_dir = std::env::temp_dir().join(format!(
+            "vesper-source-normalizer-drop-test-{}",
+            unique_session_suffix()
+        ));
+        std::fs::create_dir_all(&output_dir).expect("create test output directory");
+        let cancel_requested = Arc::new(AtomicBool::new(false));
+        let observed_cancel = cancel_requested.clone();
+        let (worker_entered_sender, worker_entered_receiver) = mpsc::channel();
+        let (release_worker_sender, release_worker_receiver) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            worker_entered_sender
+                .send(())
+                .expect("signal worker entered");
+            let _ = release_worker_receiver.recv_timeout(Duration::from_secs(5));
+        });
+        worker_entered_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker entered");
+        let session = test_resource_session(output_dir.clone(), shared, cancel_requested, worker);
+
+        let started_at = Instant::now();
+        drop(session);
+        let elapsed = started_at.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(2_500),
+            "drop blocked for {elapsed:?}"
+        );
+        assert!(observed_cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(output_dir.is_dir());
+        release_worker_sender
+            .send(())
+            .expect("release deferred cleanup worker");
+        wait_until_removed(&output_dir);
+    }
+
+    #[test]
+    fn resource_cleanup_queue_keeps_output_until_worker_finishes() {
         let output_dir = std::env::temp_dir().join(format!(
             "vesper-source-normalizer-cleanup-fallback-test-{}",
             unique_session_suffix()
@@ -3423,18 +3256,21 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("worker entered");
 
-        let _ = cleanup_resource_job_without_join(
-            ResourceCleanupJob {
+        let scheduler =
+            ResourceCleanupScheduler::start(1, "vesper-source-normalizer-cleanup-lifetime-test")
+                .expect("start cleanup scheduler");
+        let permit = scheduler.try_acquire().expect("acquire cleanup permit");
+        scheduler
+            .try_schedule(ResourceCleanupJob {
                 worker,
                 output_dir: output_dir.clone(),
-                permit: test_resource_cleanup_permit(),
-            },
-            "resource worker cleanup fallback",
-        );
+                permit,
+            })
+            .expect("schedule cleanup job");
 
         assert!(
             output_dir.is_dir(),
-            "cleanup fallback must retain worker output until join"
+            "cleanup queue must retain worker output until join"
         );
         release_worker_sender
             .send(())
@@ -3442,13 +3278,7 @@ mod tests {
         worker_checked_receiver
             .recv_timeout(Duration::from_secs(1))
             .expect("worker observed its output directory before cleanup");
-        for _ in 0..100 {
-            if !output_dir.exists() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        panic!("cleanup fallback did not remove the output directory after worker join");
+        wait_until_removed(&output_dir);
     }
 
     #[test]
@@ -3556,17 +3386,16 @@ mod tests {
             return;
         }
 
-        let open = open_packet_session(SourceNormalizerPacketSessionConfig {
+        let mut session = open_packet_session(SourceNormalizerPacketSessionConfig {
             runtime_profile: "generic-fallback".to_owned(),
             input: fixture.to_string_lossy().into_owned(),
             headers: Vec::new(),
             startup_timeout_ms: None,
             session_timeout_ms: None,
             preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
-        });
-        assert_eq!(open.status, VesperPluginResultStatus::Success as u32);
-        assert!(!open.session.is_null());
-        let stream_info: SourceNormalizerPacketStreamInfo = take_plugin_bytes(open.payload);
+        })
+        .expect("open fixture packet session");
+        let stream_info = session.stream_info();
         assert_eq!(
             stream_info.normalizer_name.as_deref(),
             Some("player-source-normalizer-ffmpeg")
@@ -3583,6 +3412,7 @@ mod tests {
             .tracks
             .iter()
             .find(|track| track.media_kind == SourceNormalizerPacketMediaKind::Audio)
+            .cloned()
             .expect("fixture exposes audio track");
         assert!(audio_track.sample_rate.is_some());
         assert!(audio_track.channels.is_some());
@@ -3601,15 +3431,24 @@ mod tests {
         let mut saw_audio_packet = false;
         let mut saw_video_packet = false;
         for _ in 0..32 {
-            // SAFETY: the session pointer is valid and the previous packet lease
-            // has been released.
-            let packet = unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
-            assert_eq!(packet.status, VesperPluginResultStatus::Success as u32);
-            if packet.packet_handle == 0 {
+            let (status, metadata_packet, handle, data_is_empty) = {
+                let packet = session.read_packet().expect("read fixture packet");
+                (
+                    packet.metadata.status,
+                    packet.metadata.packet,
+                    packet.handle,
+                    packet.data.is_empty(),
+                )
+            };
+            if status == SourceNormalizerReadPacketStatus::EndOfStream {
+                assert_eq!(handle, 0);
+                assert!(data_is_empty);
                 break;
             }
-            let metadata: SourceNormalizerReadPacketMetadata = take_plugin_bytes(packet.metadata);
-            let metadata_packet = metadata.packet.expect("packet metadata");
+            assert_eq!(status, SourceNormalizerReadPacketStatus::Packet);
+            assert!(handle > 0);
+            assert!(!data_is_empty);
+            let metadata_packet = metadata_packet.expect("packet metadata");
             match metadata_packet.media_kind {
                 SourceNormalizerPacketMediaKind::Audio => {
                     saw_audio_packet = true;
@@ -3627,14 +3466,9 @@ mod tests {
                 }
                 SourceNormalizerPacketMediaKind::Subtitle => {}
             }
-            // SAFETY: the handle was returned by the preceding read.
-            let release = unsafe {
-                normalizer_release_packet(std::ptr::null_mut(), open.session, packet.packet_handle)
-            };
-            assert_eq!(release.status, VesperPluginResultStatus::Success as u32);
-            let release_status: SourceNormalizerOperationStatus =
-                take_plugin_bytes(release.payload);
-            assert!(release_status.completed);
+            session
+                .release_packet(handle)
+                .expect("release fixture packet");
             if saw_audio_packet && saw_video_packet {
                 break;
             }
@@ -3642,11 +3476,10 @@ mod tests {
         assert!(saw_audio_packet);
         assert!(saw_video_packet);
 
-        // SAFETY: the session pointer was returned by open and is closed once.
-        let close = unsafe { normalizer_close_packet_session(std::ptr::null_mut(), open.session) };
-        assert_eq!(close.status, VesperPluginResultStatus::Success as u32);
-        let close_status: SourceNormalizerOperationStatus = take_plugin_bytes(close.payload);
-        assert!(close_status.completed);
+        session.close().expect("close fixture packet session");
+        session
+            .close()
+            .expect("fixture packet close remains idempotent");
     }
 
     #[test]
@@ -3660,53 +3493,30 @@ mod tests {
             return;
         }
 
-        let open = open_packet_session(SourceNormalizerPacketSessionConfig {
+        let mut session = open_packet_session(SourceNormalizerPacketSessionConfig {
             runtime_profile: "generic-fallback".to_owned(),
             input: fixture.to_string_lossy().into_owned(),
             headers: Vec::new(),
             startup_timeout_ms: None,
             session_timeout_ms: None,
             preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
-        });
-        assert_eq!(open.status, VesperPluginResultStatus::Success as u32);
-        assert!(!open.session.is_null());
-
-        // SAFETY: the session pointer was returned by this plugin's open call.
-        let packet = unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
-        assert_eq!(packet.status, VesperPluginResultStatus::Success as u32);
-        assert!(packet.packet_handle > 0);
-
-        // SAFETY: this intentionally exercises an ABI-violating stale handle.
-        let mismatched_release = unsafe {
-            normalizer_release_packet(
-                std::ptr::null_mut(),
-                open.session,
-                packet.packet_handle.saturating_add(1),
-            )
+        })
+        .expect("open fixture packet session");
+        let packet_handle = {
+            let packet = session.read_packet().expect("read fixture packet");
+            assert!(packet.handle > 0);
+            packet.handle
         };
-        assert_eq!(
-            mismatched_release.status,
-            VesperPluginResultStatus::Failure as u32
-        );
-        let mismatch_error: SourceNormalizerError = take_plugin_bytes(mismatched_release.payload);
+
+        let mismatch_error = session
+            .release_packet(packet_handle.saturating_add(1))
+            .expect_err("mismatched handle must be rejected");
         assert!(format!("{mismatch_error}").contains("unknown packet handle"));
 
-        // SAFETY: the mismatched release must not clear the outstanding lease;
-        // the correct handle remains valid for retry.
-        let retry_release = unsafe {
-            normalizer_release_packet(std::ptr::null_mut(), open.session, packet.packet_handle)
-        };
-        assert_eq!(
-            retry_release.status,
-            VesperPluginResultStatus::Success as u32
-        );
-        let retry_status: SourceNormalizerOperationStatus =
-            take_plugin_bytes(retry_release.payload);
-        assert!(retry_status.completed);
-
-        // SAFETY: the session pointer was returned by open and is closed once.
-        let close = unsafe { normalizer_close_packet_session(std::ptr::null_mut(), open.session) };
-        assert_eq!(close.status, VesperPluginResultStatus::Success as u32);
+        session
+            .release_packet(packet_handle)
+            .expect("correct handle remains valid for retry");
+        session.close().expect("close fixture packet session");
     }
 
     #[test]
@@ -3720,88 +3530,50 @@ mod tests {
             return;
         }
 
-        let open = open_packet_session(SourceNormalizerPacketSessionConfig {
+        let mut session = open_packet_session(SourceNormalizerPacketSessionConfig {
             runtime_profile: "generic-fallback".to_owned(),
             input: fixture.to_string_lossy().into_owned(),
             headers: Vec::new(),
             startup_timeout_ms: None,
             session_timeout_ms: None,
             preferred_media_kind: SourceNormalizerPacketMediaKind::Video,
-        });
-        assert_eq!(open.status, VesperPluginResultStatus::Success as u32);
-        assert!(!open.session.is_null());
+        })
+        .expect("open fixture packet session");
+        let packet_handle = {
+            let packet = session.read_packet().expect("read fixture packet");
+            assert!(packet.handle > 0);
+            packet.handle
+        };
 
-        // SAFETY: the session pointer was returned by this plugin's open call.
-        let packet = unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
-        assert_eq!(packet.status, VesperPluginResultStatus::Success as u32);
-        assert!(packet.packet_handle > 0);
-
-        // SAFETY: the session pointer is valid and intentionally still has an
-        // outstanding packet lease.
-        let flush =
-            unsafe { super::normalizer_flush_packet_session(std::ptr::null_mut(), open.session) };
-        assert_eq!(flush.status, VesperPluginResultStatus::Success as u32);
-        let flush_status: SourceNormalizerOperationStatus = take_plugin_bytes(flush.payload);
+        let flush_status = session.flush().expect("flush packet session");
         assert!(flush_status.completed);
 
-        // SAFETY: the stale handle was invalidated by the preceding flush.
-        let stale_release = unsafe {
-            normalizer_release_packet(std::ptr::null_mut(), open.session, packet.packet_handle)
-        };
-        assert_eq!(
-            stale_release.status,
-            VesperPluginResultStatus::Failure as u32
-        );
-        let stale_error: SourceNormalizerError = take_plugin_bytes(stale_release.payload);
+        let stale_error = session
+            .release_packet(packet_handle)
+            .expect_err("flush must invalidate the outstanding packet handle");
         assert!(format!("{stale_error}").contains("no packet lease is outstanding"));
 
-        // SAFETY: the flush cleared the lease and the session can read again.
-        let packet_after_flush =
-            unsafe { normalizer_read_packet(std::ptr::null_mut(), open.session) };
-        assert_eq!(
-            packet_after_flush.status,
-            VesperPluginResultStatus::Success as u32
-        );
-        assert!(packet_after_flush.packet_handle > 0);
+        let packet_after_flush_handle = {
+            let packet = session
+                .read_packet()
+                .expect("read packet after flush invalidation");
+            assert!(packet.handle > 0);
+            packet.handle
+        };
 
         let seek = SourceNormalizerPacketSeek {
             position_millis: 0,
             exact: false,
         };
-        let seek_json = serde_json::to_vec(&seek).expect("serialize seek");
-        // SAFETY: the session pointer is valid and intentionally still has an
-        // outstanding packet lease.
-        let seek_result = unsafe {
-            normalizer_seek_packet_session_json(
-                std::ptr::null_mut(),
-                open.session,
-                seek_json.as_ptr(),
-                seek_json.len(),
-            )
-        };
-        assert_eq!(seek_result.status, VesperPluginResultStatus::Success as u32);
-        let seek_status: SourceNormalizerOperationStatus = take_plugin_bytes(seek_result.payload);
+        let seek_status = session.seek(&seek).expect("seek packet session");
         assert!(seek_status.completed);
 
-        // SAFETY: the stale handle was invalidated by the preceding seek.
-        let stale_release_after_seek = unsafe {
-            normalizer_release_packet(
-                std::ptr::null_mut(),
-                open.session,
-                packet_after_flush.packet_handle,
-            )
-        };
-        assert_eq!(
-            stale_release_after_seek.status,
-            VesperPluginResultStatus::Failure as u32
-        );
-        let stale_seek_error: SourceNormalizerError =
-            take_plugin_bytes(stale_release_after_seek.payload);
+        let stale_seek_error = session
+            .release_packet(packet_after_flush_handle)
+            .expect_err("seek must invalidate the outstanding packet handle");
         assert!(format!("{stale_seek_error}").contains("no packet lease is outstanding"));
 
-        // SAFETY: the session pointer was returned by open and is closed once.
-        let close = unsafe { normalizer_close_packet_session(std::ptr::null_mut(), open.session) };
-        assert_eq!(close.status, VesperPluginResultStatus::Success as u32);
+        session.close().expect("close fixture packet session");
     }
 
     #[test]
@@ -3812,35 +3584,13 @@ mod tests {
         assert_ne!(first, second);
     }
 
-    #[test]
-    fn free_bytes_accepts_null_payload() {
-        // SAFETY: freeing a null/empty payload is a no-op by the shared bytes
-        // contract.
-        unsafe { free_plugin_bytes(std::ptr::null_mut(), VesperPluginBytes::null()) };
-    }
-
     fn open_packet_session(
         config: SourceNormalizerPacketSessionConfig,
-    ) -> player_plugin::VesperSourceNormalizerOpenPacketSessionResult {
-        let config_json = serde_json::to_vec(&config).expect("serialize config");
-        // SAFETY: the JSON buffer remains alive for this synchronous callback.
-        unsafe {
-            normalizer_open_packet_session_json(
-                std::ptr::null_mut(),
-                config_json.as_ptr(),
-                config_json.len(),
-            )
-        }
+    ) -> Result<Box<dyn SourceNormalizerPacketSession>, SourceNormalizerError> {
+        FfmpegPacketFactory.open_packet_session(&config)
     }
 
     fn fixture_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/media/tiny-h264-aac.m4v")
-    }
-
-    fn take_plugin_bytes<T: serde::de::DeserializeOwned>(payload: VesperPluginBytes) -> T {
-        // SAFETY: test payloads are allocated by this plugin and have not been
-        // reclaimed before this helper.
-        let bytes = unsafe { payload.into_vec() };
-        serde_json::from_slice(&bytes).expect("deserialize payload")
     }
 }

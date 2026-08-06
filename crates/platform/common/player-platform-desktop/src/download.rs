@@ -186,8 +186,8 @@ impl player_runtime::DownloadExecutor for DesktopDownloadExecutor {
         self.spawn_worker(task.clone())
     }
 
-    fn remove(&mut self, task_id: DownloadTaskId) -> player_runtime::PlayerResult<()> {
-        self.cancel(task_id);
+    fn remove(&mut self, task: &DownloadTaskSnapshot) -> player_runtime::PlayerResult<()> {
+        self.cancel(task.task_id);
         Ok(())
     }
 }
@@ -215,8 +215,11 @@ impl DesktopDownloadController {
             DownloadManagerConfig {
                 auto_start: true,
                 run_post_processors_on_completion: false,
-                post_processors: vec![processor.clone()],
+                post_processors: vec![player_runtime::PostDownloadProcessorRegistration::built_in(
+                    processor.clone(),
+                )],
                 event_hooks: Vec::new(),
+                pipeline_event_platform: "desktop".to_owned(),
             },
             InMemoryDownloadStore::default(),
             DesktopDownloadExecutor::new(worker_tx),
@@ -1606,7 +1609,8 @@ mod tests {
         prepare_download_task,
     };
     use player_model::MediaSource;
-    use player_plugin_loader::LoadedDynamicPlugin;
+    use player_plugin::{PluginReference, PluginTransport};
+    use player_plugin_loader::LoadedNativePlugin;
     use player_runtime::{DownloadTaskId, DownloadTaskStatus};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1663,12 +1667,21 @@ mod tests {
 
         let workspace = TestWorkspace::new("desktop-remux");
         let manifest_path = create_local_hls_fixture(workspace.path());
-        let plugin = LoadedDynamicPlugin::load(resolve_vesper_remux_ffmpeg_plugin_path())
-            .unwrap_or_else(|error| {
-                panic!("failed to load player-remux-ffmpeg plugin for desktop remux test: {error}")
-            });
+        let plugin =
+            LoadedNativePlugin::load_development(resolve_vesper_remux_ffmpeg_plugin_path())
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "failed to load player-remux-ffmpeg plugin for desktop remux test: {error}"
+                    )
+                });
+        let reference = PluginReference::new(
+            "io.github.ikaros.vesper.remux-ffmpeg",
+            None,
+            PluginTransport::Native,
+        )
+        .expect("valid remux plugin reference");
         let processor = plugin
-            .post_download_processor()
+            .resolve_post_download(&reference)
             .expect("player-remux-ffmpeg plugin should export a post-download processor");
 
         let mut controller = DesktopDownloadController::with_post_processor(processor);

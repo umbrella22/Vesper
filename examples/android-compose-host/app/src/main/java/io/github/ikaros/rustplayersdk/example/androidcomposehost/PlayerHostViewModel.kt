@@ -3,25 +3,26 @@ package io.github.ikaros.vesper.example.androidcomposehost
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import dalvik.system.BaseDexClassLoader
+import io.github.ikaros.vesper.player.android.VesperBundledPluginReferences
 import io.github.ikaros.vesper.player.android.VesperDownloadConfiguration
+import io.github.ikaros.vesper.player.android.VesperDownloadManager
 import io.github.ikaros.vesper.player.android.VesperFrameProcessorConfiguration
 import io.github.ikaros.vesper.player.android.VesperFrameProcessorMode
 import io.github.ikaros.vesper.player.android.VesperPlaylistConfiguration
 import io.github.ikaros.vesper.player.android.VesperPlaylistCoordinator
 import io.github.ikaros.vesper.player.android.VesperPlaylistNeighborWindow
 import io.github.ikaros.vesper.player.android.VesperPlaylistPreloadWindow
-import io.github.ikaros.vesper.player.android.VesperDownloadManager
 import io.github.ikaros.vesper.player.android.VesperNativeFramePipelineConfiguration
 import io.github.ikaros.vesper.player.android.VesperNativeFramePipelineMode
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerControllerFactory
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
+import io.github.ikaros.vesper.player.android.VesperPluginReference
 import io.github.ikaros.vesper.player.android.VesperPreloadBudgetPolicy
 import io.github.ikaros.vesper.player.android.VesperSourceNormalizerConfiguration
+import io.github.ikaros.vesper.player.android.VesperSourceNormalizerMode
 import io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackController
-import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,12 +47,12 @@ internal class PlayerHostViewModel(
             warmupWindowMs = 30_000L,
         )
 
-    val sourceNormalizerPluginLibraryPaths: List<String> =
-        bundledPluginLibraryPaths(application, "vesper_source_normalizer_ffmpeg")
-    val decoderMediaCodecPluginLibraryPaths: List<String> =
-        bundledPluginLibraryPaths(application, "vesper_decoder_mediacodec")
-    val frameProcessorPluginLibraryPaths: List<String> =
-        bundledPluginLibraryPaths(application, "vesper_frame_processor_diagnostic")
+    val sourceNormalizerPluginReferences: List<VesperPluginReference> =
+        listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg)
+    val decoderMediaCodecPluginReferences: List<VesperPluginReference> =
+        listOf(VesperBundledPluginReferences.decoderMediaCodec)
+    val frameProcessorPluginReferences: List<VesperPluginReference> =
+        listOf(VesperBundledPluginReferences.frameProcessorDiagnostic)
 
     private val _controller =
         MutableStateFlow(
@@ -79,18 +80,9 @@ internal class PlayerHostViewModel(
             resiliencePolicy = ExampleResilienceProfile.Balanced.policy,
         )
 
-    private val downloadPluginLibraryPaths = bundledDownloadPluginLibraryPaths(application)
-
-    val downloadManager =
-        VesperDownloadManager(
-            context = application.applicationContext,
-            configuration =
-                VesperDownloadConfiguration(
-                    pluginLibraryPaths = downloadPluginLibraryPaths,
-                    runPostProcessorsOnCompletion = false,
-                ),
-        )
-    val isDownloadExportPluginInstalled: Boolean = downloadPluginLibraryPaths.isNotEmpty()
+    private val downloadManagerSelection = createDownloadManagerSelection(application)
+    val downloadManager = downloadManagerSelection.first
+    val isDownloadExportPluginInstalled: Boolean = downloadManagerSelection.second
 
     val externalPlaybackController =
         VesperExternalPlaybackController(application.applicationContext)
@@ -166,17 +158,20 @@ internal class PlayerHostViewModel(
             sourceNormalizerConfiguration =
                 VesperSourceNormalizerConfiguration(
                     mode = sourceNormalizerSetting.mode,
-                    pluginLibraryPaths = sourceNormalizerPluginLibraryPaths,
+                    pluginReferences =
+                        sourceNormalizerPluginReferences.takeUnless {
+                            sourceNormalizerSetting.mode == VesperSourceNormalizerMode.Disabled
+                        }.orEmpty(),
                 ),
             frameProcessorConfiguration =
                 VesperFrameProcessorConfiguration(
                     mode =
-                        if (frameProcessorPluginLibraryPaths.isEmpty()) {
+                        if (frameProcessorPluginReferences.isEmpty()) {
                             VesperFrameProcessorMode.Disabled
                         } else {
                             VesperFrameProcessorMode.DiagnosticsOnly
                         },
-                    pluginLibraryPaths = frameProcessorPluginLibraryPaths,
+                    pluginReferences = frameProcessorPluginReferences,
                 ),
             nativeFramePipelineConfiguration =
                 nativeFramePipelineConfiguration(nativeFramePipelineSetting),
@@ -197,32 +192,32 @@ internal class PlayerHostViewModel(
             VesperNativeFramePipelineMode.RequireNativeFrame ->
                 VesperNativeFramePipelineConfiguration(
                     mode = setting.mode,
-                    decoderPluginLibraryPaths = decoderMediaCodecPluginLibraryPaths,
-                    frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths,
+                    decoderPluginReferences = decoderMediaCodecPluginReferences,
+                    frameProcessorPluginReferences = frameProcessorPluginReferences,
                     maxInFlightFrames = 3,
                 )
         }
 
-    private fun bundledDownloadPluginLibraryPaths(application: Application): List<String> {
-        return bundledPluginLibraryPaths(application, "vesper_remux_ffmpeg")
-    }
-
-    private fun bundledPluginLibraryPaths(
+    private fun createDownloadManagerSelection(
         application: Application,
-        libraryName: String,
-    ): List<String> {
-        val resolvedPath =
-            (application.classLoader as? BaseDexClassLoader)
-                ?.findLibrary(libraryName)
-                ?.takeIf { path -> path.isNotBlank() && File(path).isFile }
-                ?: run {
-                    val nativeLibraryDir = application.applicationInfo.nativeLibraryDir
-                    val pluginLibrary =
-                        nativeLibraryDir?.let { directory ->
-                            File(directory, System.mapLibraryName(libraryName))
-                        }
-                    pluginLibrary?.takeIf(File::isFile)?.absolutePath
-                }
-        return resolvedPath?.let(::listOf) ?: emptyList()
-    }
+    ): Pair<VesperDownloadManager, Boolean> =
+        runCatching {
+            VesperDownloadManager(
+                context = application.applicationContext,
+                configuration =
+                    VesperDownloadConfiguration(
+                        postDownloadPluginReferences =
+                            listOf(VesperBundledPluginReferences.remuxFfmpeg),
+                        runPostProcessorsOnCompletion = false,
+                    ),
+            ) to true
+        }.getOrElse {
+            VesperDownloadManager(
+                context = application.applicationContext,
+                configuration =
+                    VesperDownloadConfiguration(
+                        runPostProcessorsOnCompletion = false,
+                    ),
+            ) to false
+        }
 }

@@ -12,13 +12,16 @@ use jni::{Env, EnvUnowned, JavaVM};
 use player_model::MediaSource;
 use player_platform_android::{AndroidDownloadBridgeSession, AndroidDownloadCommand};
 use player_plugin::{OutputFormat, ProcessorProgress};
+use player_plugin_loader::PluginRegistry;
 use player_runtime::{
     DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
-    DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadProfile,
-    DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord, DownloadSource,
-    DownloadStreamKind, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskStatus, PlayerError,
+    DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadEventBatch,
+    DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord,
+    DownloadSource, DownloadStreamKind, DownloadTaskId, DownloadTaskSnapshot, DownloadTaskStatus,
+    PlayerError,
 };
 
+use crate::plugin_registry_jni::{clone_android_plugin_registry, parse_plugin_references};
 use crate::{
     HandleRegistry, PKG, error_category_from_jni_ordinal, error_code_from_jni_ordinal, field_sig,
     jni_name, lock_or_recover, method_sig,
@@ -103,6 +106,7 @@ impl<M> Drop for PersistentBoundedWorker<M> {
 struct AndroidJniDownloadSession {
     bridge: Mutex<AndroidDownloadBridgeSession>,
     export_worker: Arc<JniDownloadExportCallbackWorker>,
+    _registry: Option<Arc<PluginRegistry>>,
 }
 
 type SharedAndroidJniDownloadSession = Arc<AndroidJniDownloadSession>;
@@ -111,7 +115,9 @@ type SharedAndroidJniDownloadSession = Arc<AndroidJniDownloadSession>;
 struct AndroidDownloadSessionConfig {
     auto_start: bool,
     run_post_processors_on_completion: bool,
-    plugin_library_paths: Vec<PathBuf>,
+    registry_handle: jlong,
+    post_download_references_json: String,
+    event_hook_references_json: String,
 }
 
 struct JniDownloadExportProgress {
@@ -293,16 +299,40 @@ fn new_download_session(
     config: AndroidDownloadSessionConfig,
     java_vm: JavaVM,
 ) -> Result<jlong, String> {
-    let bridge = AndroidDownloadBridgeSession::new_with_plugin_library_paths(
+    let post_download_references = parse_plugin_references(&config.post_download_references_json)?;
+    let event_hook_references = parse_plugin_references(&config.event_hook_references_json)?;
+    let has_references = !post_download_references.is_empty() || !event_hook_references.is_empty();
+    let registry = if has_references {
+        if config.registry_handle == 0 {
+            return Err(
+                "Android plugin registry handle is required for download plugin references"
+                    .to_owned(),
+            );
+        }
+        Some(clone_android_plugin_registry(config.registry_handle).map_err(str::to_owned)?)
+    } else {
+        if config.registry_handle != 0 {
+            return Err(
+                "Android plugin registry handle must be zero when download plugin references are empty"
+                    .to_owned(),
+            );
+        }
+        None
+    };
+    let empty_registry = PluginRegistry::default();
+    let bridge = AndroidDownloadBridgeSession::new_with_plugin_registry(
         config.auto_start,
         config.run_post_processors_on_completion,
-        config.plugin_library_paths,
+        registry.as_deref().unwrap_or(&empty_registry),
+        post_download_references,
+        event_hook_references,
     )
     .map_err(|error| error.to_string())?;
     let export_worker = Arc::new(JniDownloadExportCallbackWorker::new(java_vm)?);
     let session = Arc::new(AndroidJniDownloadSession {
         bridge: Mutex::new(bridge),
         export_worker,
+        _registry: registry,
     });
     let mut guard = lock_or_recover(download_sessions());
     let handle = guard.insert(session);
@@ -386,10 +416,15 @@ fn download_config_from_java(
             &config,
             "runPostProcessorsOnCompletion",
         )?,
-        plugin_library_paths: string_array_field(env, &config, "pluginLibraryPaths")?
-            .into_iter()
-            .map(PathBuf::from)
-            .collect(),
+        registry_handle: long_field(env, &config, "pluginRegistryHandle")?,
+        post_download_references_json: string_field(
+            env,
+            &config,
+            "postDownloadPluginReferencesJson",
+        )?
+        .unwrap_or_else(|| "[]".to_owned()),
+        event_hook_references_json: string_field(env, &config, "eventHookPluginReferencesJson")?
+            .unwrap_or_else(|| "[]".to_owned()),
     })
 }
 
@@ -1187,12 +1222,13 @@ fn download_command_object<'local>(
                 &[JValue::Object(&task)],
             )
         }
-        AndroidDownloadCommand::Remove { task_id } => {
+        AndroidDownloadCommand::Remove { task } => {
             let class = env.find_class(jni_name(format!("{PKG}/NativeDownloadCommand$Remove")))?;
+            let task = download_task_object(env, task)?;
             env.new_object(
                 class,
-                method_sig("(J)V").method_signature(),
-                &[JValue::Long(u64_to_jlong_saturating(task_id.get()))],
+                method_sig(&format!("(L{PKG}/NativeDownloadTask;)V")).method_signature(),
+                &[JValue::Object(&task)],
             )
         }
     }
@@ -1290,6 +1326,28 @@ fn download_event_object<'local>(
             )
         }
     }
+}
+
+fn download_event_batch_object<'local>(
+    env: &mut Env<'local>,
+    batch: &DownloadEventBatch,
+) -> JniResult<JObject<'local>> {
+    let event_class = env.find_class(jni_name(format!("{PKG}/NativeDownloadEvent")))?;
+    let events: JObjectArray<'_, JObject<'_>> =
+        env.new_object_array(batch.events.len() as i32, event_class, JObject::null())?;
+    for (index, event) in batch.events.iter().enumerate() {
+        let object = download_event_object(env, event)?;
+        events.set_element(env, index, object)?;
+    }
+    let batch_class = env.find_class(jni_name(format!("{PKG}/NativeDownloadEventBatch")))?;
+    env.new_object(
+        batch_class,
+        method_sig(&format!("([L{PKG}/NativeDownloadEvent;J)V")).method_signature(),
+        &[
+            JValue::Object(&events),
+            JValue::Long(u64_to_jlong_saturating(batch.dropped_events)),
+        ],
+    )
 }
 
 #[unsafe(no_mangle)]
@@ -1778,28 +1836,16 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
-) -> jobjectArray {
+) -> jobject {
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
-            .with_env(|env| -> JniResult<jobjectArray> {
-                let Some(events) = with_download_session_mut(env, session_handle, |session| {
-                    session.drain_events()
+            .with_env(|env| -> JniResult<jobject> {
+                let Some(batch) = with_download_session_mut(env, session_handle, |session| {
+                    session.drain_event_batch()
                 }) else {
-                    let event_class =
-                        env.find_class(jni_name(format!("{PKG}/NativeDownloadEvent")))?;
-                    let array: JObjectArray<'_> =
-                        env.new_object_array(0, event_class, JObject::null())?;
-                    return Ok(array.into_raw());
+                    return Ok(JObject::null().into_raw());
                 };
-
-                let event_class = env.find_class(jni_name(format!("{PKG}/NativeDownloadEvent")))?;
-                let array: JObjectArray<'_> =
-                    env.new_object_array(events.len() as i32, event_class, JObject::null())?;
-                for (index, event) in events.iter().enumerate() {
-                    let object = download_event_object(env, event)?;
-                    array.set_element(env, index, object)?;
-                }
-                Ok(array.into_raw())
+                Ok(download_event_batch_object(env, &batch)?.into_raw())
             })
             .resolve::<ThrowRuntimeExAndDefault>()
     })

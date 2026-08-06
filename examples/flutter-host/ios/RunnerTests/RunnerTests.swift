@@ -1,10 +1,48 @@
 import Darwin
 import Flutter
 @testable import Runner
+@testable import vesper_player_ios
 import UIKit
+import VesperPlayerKit
 import XCTest
 
 class RunnerTests: XCTestCase {
+
+  func testPendingDownloadSnapshotResyncEmitsNoFlutterEvent() {
+    let payloads = flutterDownloadEventPayloads(
+      downloadId: "downloads",
+      snapshot: ["tasks": []],
+      batch: VesperDownloadEventBatch(
+        events: [downloadProgressEvent()],
+        droppedEvents: 2,
+        requiresSnapshotResync: true,
+        snapshotIsAuthoritative: false
+      )
+    )
+
+    XCTAssertTrue(payloads.isEmpty)
+  }
+
+  func testAuthoritativeDownloadSnapshotResyncSuppressesRetainedEvents() throws {
+    let payloads = flutterDownloadEventPayloads(
+      downloadId: "downloads",
+      snapshot: ["tasks": [["taskId": NSNumber(value: 7)]]],
+      batch: VesperDownloadEventBatch(
+        events: [downloadProgressEvent()],
+        droppedEvents: 3,
+        requiresSnapshotResync: true,
+        snapshotIsAuthoritative: true
+      )
+    )
+
+    let payload = try XCTUnwrap(payloads.first)
+    XCTAssertEqual(payloads.count, 1)
+    XCTAssertEqual(payload["downloadId"] as? String, "downloads")
+    XCTAssertEqual(payload["type"] as? String, "downloadResync")
+    XCTAssertEqual((payload["droppedEvents"] as? NSNumber)?.uint64Value, 3)
+    let snapshot = try XCTUnwrap(payload["snapshot"] as? [String: Any])
+    XCTAssertEqual((snapshot["tasks"] as? [[String: Any]])?.count, 1)
+  }
 
   func testBundledOptionalPluginFrameworkEntriesLoad() throws {
     let frameworksURL = try XCTUnwrap(Bundle.main.privateFrameworksURL)
@@ -30,66 +68,11 @@ class RunnerTests: XCTestCase {
       defer { dlclose(handle) }
 
       dlerror()
-      guard let symbol = dlsym(handle, "vesper_plugin_entry") else {
+      guard dlsym(handle, "vesper_plugin_entry") != nil else {
         XCTFail("Missing vesper_plugin_entry in \(frameworkName): \(dynamicLoaderMessage())")
         continue
       }
-      typealias PluginEntry = @convention(c) () -> UnsafeRawPointer?
-      let entry = unsafeBitCast(symbol, to: PluginEntry.self)
-      XCTAssertNotNil(entry(), "The plugin descriptor must not be null: \(frameworkName)")
     }
-  }
-
-  func testBundledPluginResolverIgnoresFlatDylibAndUsesFramework() throws {
-    let frameworksURL = FileManager.default.temporaryDirectory
-      .appendingPathComponent(UUID().uuidString, isDirectory: true)
-    try FileManager.default.createDirectory(at: frameworksURL, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: frameworksURL) }
-
-    let dylibURL = frameworksURL.appendingPathComponent("libvesper_remux_ffmpeg.dylib")
-    XCTAssertTrue(FileManager.default.createFile(atPath: dylibURL.path, contents: Data()))
-    let frameworkBinaryURL = frameworksURL
-      .appendingPathComponent("VesperPlayerRemuxFfmpegPlugin.framework", isDirectory: true)
-      .appendingPathComponent("VesperPlayerRemuxFfmpegPlugin")
-    try FileManager.default.createDirectory(
-      at: frameworkBinaryURL.deletingLastPathComponent(),
-      withIntermediateDirectories: true
-    )
-    XCTAssertTrue(FileManager.default.createFile(atPath: frameworkBinaryURL.path, contents: Data()))
-
-    XCTAssertEqual(
-      resolveBundledPluginLibraryPaths(
-        frameworkName: "VesperPlayerRemuxFfmpegPlugin",
-        binaryName: "VesperPlayerRemuxFfmpegPlugin",
-        frameworksURL: frameworksURL
-      ),
-      [frameworkBinaryURL.standardizedFileURL.path]
-    )
-  }
-
-  func testBundledPluginResolverUsesFramework() throws {
-    let frameworksURL = FileManager.default.temporaryDirectory
-      .appendingPathComponent(UUID().uuidString, isDirectory: true)
-    try FileManager.default.createDirectory(at: frameworksURL, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: frameworksURL) }
-
-    let frameworkBinaryURL = frameworksURL
-      .appendingPathComponent("VesperPlayerRemuxFfmpegPlugin.framework", isDirectory: true)
-      .appendingPathComponent("VesperPlayerRemuxFfmpegPlugin")
-    try FileManager.default.createDirectory(
-      at: frameworkBinaryURL.deletingLastPathComponent(),
-      withIntermediateDirectories: true
-    )
-    XCTAssertTrue(FileManager.default.createFile(atPath: frameworkBinaryURL.path, contents: Data()))
-
-    XCTAssertEqual(
-      resolveBundledPluginLibraryPaths(
-        frameworkName: "VesperPlayerRemuxFfmpegPlugin",
-        binaryName: "VesperPlayerRemuxFfmpegPlugin",
-        frameworksURL: frameworksURL
-      ),
-      [frameworkBinaryURL.standardizedFileURL.path]
-    )
   }
 
   private func dynamicLoaderMessage() -> String {
@@ -97,6 +80,15 @@ class RunnerTests: XCTestCase {
       return "unknown dynamic loader error"
     }
     return String(cString: message)
+  }
+
+  private func downloadProgressEvent() -> VesperDownloadEvent {
+    .progressUpdated(
+      VesperDownloadTaskProgressPatch(
+        taskId: 7,
+        progress: VesperDownloadProgressSnapshot(receivedBytes: 512)
+      )
+    )
   }
 
 }

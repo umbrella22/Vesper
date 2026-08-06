@@ -5,6 +5,70 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 void main() {
+  test('plugin references preserve unknown transport and reject lossy identity',
+      () {
+    final reference = VesperPluginReference.fromMap(<Object?, Object?>{
+      'pluginId': 'dev.vesper.example-plugin',
+      'capabilityInstanceId': 'dev.vesper.example-plugin.decoder',
+      'transport': 'future-sandbox',
+    });
+
+    expect(reference.transport, VesperPluginTransport.unknown);
+    expect(reference.transportRawValue, 'future-sandbox');
+    expect(reference.toMap(), <String, Object?>{
+      'pluginId': 'dev.vesper.example-plugin',
+      'capabilityInstanceId': 'dev.vesper.example-plugin.decoder',
+      'transport': 'future-sandbox',
+    });
+    expect(
+      () => VesperPluginReference.fromMap(<Object?, Object?>{
+        'pluginId': 'dev.vesper.example-plugin',
+      }),
+      throwsFormatException,
+    );
+    for (final invalid in <String>[
+      'Vesper.Plugin',
+      ' dev.vesper.plugin ',
+      'dev..plugin',
+      '开发.插件',
+    ]) {
+      expect(
+        () => VesperPluginReference(
+          pluginId: invalid,
+          transport: VesperPluginTransport.native,
+        ),
+        throwsFormatException,
+      );
+    }
+  });
+
+  test('pipeline EventHook configuration round-trips plugin references', () {
+    final configuration = VesperPipelineEventHookConfiguration(
+      pluginReferences: <VesperPluginReference>[
+        VesperPluginReference(
+          pluginId: 'dev.vesper.pipeline-hook',
+          capabilityInstanceId: 'dev.vesper.pipeline-hook.default',
+          transport: VesperPluginTransport.native,
+        ),
+      ],
+    );
+
+    final decoded = VesperPipelineEventHookConfiguration.fromMap(
+      Map<Object?, Object?>.from(configuration.toMap()),
+    );
+
+    expect(decoded.pluginReferences, configuration.pluginReferences);
+    expect(decoded.hasOverrides, isTrue);
+    expect(decoded.toMap().containsKey('pluginLibraryPaths'), isFalse);
+  });
+
+  test('bundled remux reference has the canonical native identity', () {
+    expect(VesperBundledPluginReferences.remuxFfmpeg.toMap(), <String, Object?>{
+      'pluginId': 'io.github.ikaros.vesper.remux-ffmpeg',
+      'transport': 'native',
+    });
+  });
+
   test('timeline samples reject unknown kinds and missing positions', () {
     expect(
       () => VesperTimeline.fromSampleMap(<Object?, Object?>{
@@ -150,18 +214,22 @@ void main() {
   });
 
   test('playback capability probe DTOs round-trip stable wire fields', () {
-    const sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(
+    final sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(
       mode: VesperSourceNormalizerMode.preflightOnly,
-      pluginLibraryPaths: <String>['/tmp/libsource.so'],
+      pluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.sourceNormalizerFfmpeg,
+      ],
       runtimeProfile: 'generic-fallback',
     );
-    const nativeFramePipelineConfiguration =
+    final nativeFramePipelineConfiguration =
         VesperNativeFramePipelineConfiguration(
       mode: VesperNativeFramePipelineMode.preferNativeFrame,
-      decoderPluginLibraryPaths: <String>['/tmp/libdecoder.so'],
+      decoderPluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.decoderMediaCodec,
+      ],
     );
-    const request = VesperPlaybackCapabilityProbeRequest(
-      source: VesperPlayerSource(
+    final request = VesperPlaybackCapabilityProbeRequest(
+      source: const VesperPlayerSource(
         uri: 'file:///tmp/hdr.mov',
         label: 'hdr.mov',
         kind: VesperPlayerSourceKind.local,
@@ -1413,12 +1481,17 @@ void main() {
 
   test('benchmark configuration serializes explicit console logging options',
       () {
-    const configuration = VesperBenchmarkConfiguration(
+    final reference = VesperPluginReference(
+      pluginId: 'dev.vesper.benchmark-sink',
+      capabilityInstanceId: 'dev.vesper.benchmark-sink.default',
+      transport: VesperPluginTransport.native,
+    );
+    final configuration = VesperBenchmarkConfiguration(
       enabled: true,
       maxBufferedEvents: 512,
       includeRawEvents: false,
       consoleLogging: true,
-      pluginLibraryPaths: <String>['/tmp/libvesper_benchmark_sink.dylib'],
+      pluginReferences: <VesperPluginReference>[reference],
     );
 
     expect(configuration.hasOverrides, isTrue);
@@ -1427,7 +1500,7 @@ void main() {
       'maxBufferedEvents': 512,
       'includeRawEvents': false,
       'consoleLogging': true,
-      'pluginLibraryPaths': <String>['/tmp/libvesper_benchmark_sink.dylib'],
+      'pluginReferences': <Map<String, Object?>>[reference.toMap()],
     });
 
     final restored = VesperBenchmarkConfiguration.fromMap(
@@ -1437,9 +1510,7 @@ void main() {
     expect(restored.maxBufferedEvents, 512);
     expect(restored.includeRawEvents, isFalse);
     expect(restored.consoleLogging, isTrue);
-    expect(restored.pluginLibraryPaths, <String>[
-      '/tmp/libvesper_benchmark_sink.dylib',
-    ]);
+    expect(restored.pluginReferences, <VesperPluginReference>[reference]);
   });
 
   test('disabled benchmark configuration has no channel overrides', () {
@@ -1451,7 +1522,7 @@ void main() {
       'maxBufferedEvents': 2048,
       'includeRawEvents': true,
       'consoleLogging': false,
-      'pluginLibraryPaths': <String>[],
+      'pluginReferences': <Map<String, Object?>>[],
     });
   });
 

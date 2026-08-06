@@ -1,21 +1,17 @@
 # scripts Directory
 
-`scripts/` is organized by platform and purpose. Use `scripts/vesper` for common local tasks. The categorized scripts remain available for CI, Gradle, Xcode, and advanced flows that need direct script arguments.
+`scripts/` contains the thin `scripts/vesper` launcher and checked-in data used by
+the Rust CLI. Build, verification, packaging, and release behavior live in the
+`player-cli` binary so local and CI execution share one implementation.
 
 ## Layout
 
 ```text
 scripts/
   vesper      Unified task entrypoint
-  lib/        Shared Bash functions and platform constants
-  android/    Android private FFmpeg implementation details, JNI, AAR, release staging, optional plugins
-  apple/      Apple private FFmpeg prebuilt implementation details
-  ios/        iOS FFI, XCFramework, optional framework packages, layout verification, release staging
-  desktop/    desktop FFmpeg, pkg-config wrapper, desktop plugin verification
-  ffi/        C header generation / verification and C host smoke tests
-  flutter/    Flutter pub staging, dry-run, and automated publish helpers
-  mobile/     mobile host kit packaging verification
-  release/    Version metadata checks and GitHub Release notes generation
+  ffmpeg-profiles.toml       FFmpeg profile declarations
+  ffmpeg-source-policy.toml  FFmpeg source and license policy
+  ios/bridge-shim/            Generated C bridge fragments and manifest
 ```
 
 ## Common Commands
@@ -38,15 +34,24 @@ VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper android stage-release
 ./scripts/vesper android sample-apks /tmp/vesper-android-samples arm64-v8a
 
 ./scripts/vesper ios ffi release
+./scripts/vesper ios sync-bridge-shim
 ./scripts/vesper ios verify-bridge-shim
 ./scripts/vesper ios stage-optional-plugins-release /tmp/vesper-ios-release --profile source-normalizer ios-arm64 ios-simulator-arm64
 ./scripts/vesper ios verify-optional-plugins-release /tmp/vesper-ios-release
+./scripts/vesper ios verify-optional-plugins-device /tmp/vesper-ios-release \
+  --device <UDID> \
+  --development-team <TEAM_ID> \
+  --output-directory /tmp/vesper-ios-device-evidence \
+  --allow-provisioning-updates
 ./scripts/vesper ios verify-app-store-layout /path/to/App.app
-bash scripts/ios/test-player-optional-plugins-release.sh /tmp/vesper-ios-release
+VESPER_IOS_OPTIONAL_RELEASE_FIXTURE=/tmp/vesper-ios-release \
+  cargo test -p player-cli --test ios_release_regressions \
+  ios_optional_release_real_fixture_rejects_policy_drift \
+  -- --ignored --exact --nocapture --test-threads=1
 ./scripts/vesper ios kit-xcframework
 ./scripts/vesper ios stage-release /tmp/vesper-ios-release
 ./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope core
-VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper ios stage-release /tmp/vesper-ios-release
+./scripts/vesper ios stage-release /tmp/vesper-ios-release --include-optional-plugins
 ./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope complete
 
 ./scripts/vesper desktop ensure-ffmpeg
@@ -65,23 +70,65 @@ VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper flutter pub-dry-run /
 ./scripts/vesper release notes <tag> [output-path]
 ```
 
+`desktop ensure-ffmpeg` is an explicit macOS provisioning step. It installs the
+repository-local FFmpeg fallback before Cargo builds that need FFmpeg; Cargo no
+longer launches a shell provisioning wrapper during dependency discovery. When
+using `VESPER_DESKTOP_FFMPEG_DIR`, add that directory's `lib/pkgconfig` child to
+`PKG_CONFIG_PATH` for subsequent Cargo commands.
+
 ## Gradle Resolution
 
-Android helper scripts use a CI-provisioned `gradle` executable when `CI=true`.
-GitHub Actions jobs install that executable with `gradle/actions/setup-gradle`.
-The CI-provisioned version must match the project's
-`gradle-wrapper.properties` declaration.
-Local agent work remains offline-safe: scripts look for a project-local cached
-Gradle distribution under `.gradle/wrapper/dists/**/bin/gradle` and do not
-invoke `gradlew` when that cache is missing.
+The Rust CLI resolves Gradle through the same policy in local and CI runs.
+GitHub Actions installs Gradle with `gradle/actions/setup-gradle`; local runs
+use a cached project distribution under `.gradle/wrapper/dists/**/bin/gradle`
+and fail clearly when that cache is absent. Each Android project also keeps its
+Gradle service home under `<project>/.gradle/gradle-user-home`; the repository
+root does not contain shared Gradle state. An explicit non-empty
+`GRADLE_USER_HOME` override still takes precedence. Invoke Android commands
+through `./scripts/vesper`; no shell helper is required.
+
+## GitHub Actions
+
+Every workflow that invokes `./scripts/vesper` first runs the local
+`.github/actions/setup-vesper-cli` composite action. The action installs Rust
+1.97, builds `player-cli` once with `cargo build --locked --release`, and
+exports the resulting executable through `VESPER_CLI`. The thin
+`scripts/vesper` launcher then executes that prebuilt binary instead of running
+Cargo for every command. On Windows, CLI steps that use the launcher explicitly
+select Bash while the setup action exports `vesper.exe`.
+
+The workflow split is intentional:
+
+- `boundary-ci.yml` verifies repository contracts and boundary invariants.
+- `desktop-ci.yml` runs Rust lint/test gates plus desktop plugin, FFI, and remux
+  checks across Linux, macOS, and Windows.
+- `mobile-hosts-ci.yml` builds and tests the Android and iOS host integrations;
+  its iOS job verifies archives and Simulator behavior without claiming a
+  signed physical-device result.
+- `flutter-ci.yml` analyzes, tests, and packages the federated Flutter hosts.
+- `mobile-lib-release.yml` stages, verifies, and publishes tagged Android/iOS
+  release assets.
+- `flutter-pub-release.yml` publishes stable-tag Flutter packages after applying
+  tag-derived version metadata.
+
+The signed iOS physical-device acceptance command remains a release-owner gate
+because it requires a connected device, a current Apple Development identity,
+and device trust. Its current execution status is tracked in
+`CURRENT-CHECKLIST.md`, not inferred from a successful archive-only CI job.
 
 ## Flutter Pub Publishing
 
-Repository `pubspec.yaml` files keep path dependencies for local development.
-The pub helpers stage temporary packages, remove `publish_to: none`, copy the
-root license, and rewrite internal package dependencies to hosted constraints
-for the selected version. If no version argument is passed, the staging helper
-uses the current `vesper_player` package version.
+Repository `pubspec.yaml` files use publish-ready hosted constraints. Local
+development uses generated, ignored `pubspec_overrides.yaml` files:
+
+```sh
+./scripts/vesper flutter local-overrides
+```
+
+The pub helpers stage temporary packages, copy the root license, remove any
+local-only publication metadata, and normalize internal package constraints for
+the selected version. If no version argument is passed, the staging helper uses
+the current `vesper_player` package version.
 
 Default Flutter pub staging, dry-run, and publish commands include only the
 main package family. Optional native dependency packages such as
@@ -140,8 +187,9 @@ The external-playback relay FFmpeg JNI library is built by the Android
 profile so the shared runtime and relay JNI profile hashes match.
 
 iOS core kit packaging does not include FFmpeg. Local `stage-release` calls are
-core-only unless `VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1` is set. Tagged release
-CI enables that option and publishes the optional FFmpeg runtime, remux,
+core-only unless `--include-optional-plugins` is passed or the lower-priority
+`VESPER_IOS_INCLUDE_OPTIONAL_PLUGINS=1` environment setting is present. Tagged
+release CI enables that option and publishes the optional FFmpeg runtime, remux,
 SourceNormalizer, decoder, and FrameProcessor XCFrameworks. Repository native
 and Flutter hosts use one canonical optional staging entrypoint:
 
@@ -170,9 +218,20 @@ verifier or its release regressions directly with:
 
 ```sh
 ./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope complete
-bash scripts/ios/test-framework-platform-validation.sh
-bash scripts/ios/test-player-optional-plugins-release.sh /tmp/vesper-ios-release
+./scripts/vesper ios verify-optional-plugins-release /tmp/vesper-ios-release
+VESPER_IOS_OPTIONAL_RELEASE_FIXTURE=/tmp/vesper-ios-release \
+  cargo test -p player-cli --test ios_release_regressions \
+  ios_optional_release_real_fixture_rejects_policy_drift \
+  -- --ignored --exact --nocapture --test-threads=1
 ```
+
+The physical-device verifier is a separate execution gate from
+`verify-release --scope complete`. It retains the verified optional Release
+snapshot through project generation, Release XCTest execution, and XCResult
+parsing. Acceptance requires exactly 3 passed, 0 failed, 0 skipped, and 0
+expected failures. The new output directory retains
+`verified-release-inputs.json`, with both original Release ZIP and sanitized
+tested ZIP SHA-256 values, plus `VesperOptionalPlugins.xcresult`.
 
 Every FFmpeg-backed framework writes `profile-hash.txt`; staging and app-layout
 verification fail if the hashes do not match. Plugin XCFrameworks must not
@@ -210,18 +269,18 @@ tarballs somewhere else.
 
 - The default Android ABI is `arm64-v8a`; override it with command arguments or `RUST_ANDROID_ABIS`.
 - The default Android NDK version is `29.0.14206865`. Gradle and CI pin that
-  version. Shell helpers honor explicit overrides and otherwise resolve a
+  version. The Rust CLI honors explicit overrides and otherwise resolves a
   complete installation from `ANDROID_SDK_ROOT` / `ANDROID_HOME`, including a
   fallback installed NDK when the default version is unavailable.
 - The default Apple/iOS slices are `ios-arm64` and `ios-simulator-arm64`; do not reintroduce x86 / x86_64 distribution slices.
-- iOS Rust build scripts pass `--manifest-path "$ROOT_DIR/Cargo.toml"` to
-  Cargo so they can be run from Xcode build phases, Flutter plugin builds, CI
-  workspaces, or temporary directories.
+- iOS CLI build commands pass the resolved SDK root `Cargo.toml` through
+  `--manifest-path` so they can run from Xcode build phases, Flutter plugin
+  builds, CI workspaces, or temporary directories.
 - FFmpeg, OpenSSL, and libxml2 version, source URL, source archive, and output
   directory overrides continue to use the existing `VESPER_*` environment
   variable semantics.
 - FFmpeg source builds default to the shared audited source series declared in
-  `scripts/lib/ffmpeg.sh`. The resolver selects the highest matching patch from
+  `scripts/ffmpeg-source-policy.toml`. The resolver selects the highest matching patch from
   `third_party/_cache` before consulting upstream release indexes. Use
   `VESPER_FFMPEG_SERIES` / `VESPER_<PLATFORM>_FFMPEG_SERIES` for intentional
   series moves, and `VESPER_FFMPEG_VERSION` /
@@ -231,4 +290,5 @@ tarballs somewhere else.
   patch selection as FFmpeg. Override `VESPER_ANDROID_OPENSSL_SERIES` only for
   intentional LTS-series moves and `VESPER_ANDROID_OPENSSL_VERSION` only for
   exact-version reproduction.
-- `scripts/lib/` contains only shared functions and default constants. Sourcing these files must not start build work.
+- Shell implementation helpers are not part of the supported interface. Keep
+  argument parsing and build behavior in the Rust CLI.

@@ -9,3 +9,6 @@ rust-version.workspace = true
 player-model = { path = "../../model/player-model" }
 player-plugin = { path = "../../plugin/player-plugin" }
 quick-xml.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -65,6 +65,12 @@ private data class NativeSourceLoadPreparation(
     val sourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
 )
 
+private fun mergeSourceLoadPluginDiagnostics(
+    probeDiagnostics: List<Map<String, Any?>>,
+    startupDiagnostics: List<Map<String, Any?>>,
+): List<Map<String, Any?>> =
+    (probeDiagnostics + startupDiagnostics).distinct()
+
 internal fun VesperNativePlayerBridge.initializeNativeBridge() {
     if (runOnMainSynchronously("initialize") {
             if (!isDisposed.get()) {
@@ -259,9 +265,9 @@ private fun VesperNativePlayerBridge.prepareSourceLoadOnMain(
         NATIVE_PLAYER_BRIDGE_TAG,
         "native-frame route decision=${nativeFrameRouteLogLabel(nativeFrameDecision)} " +
             "mode=${nativeFramePipelineConfiguration.mode} surface=$surfaceKind " +
-            "sourceNormalizerPlugins=${sourceNormalizerConfiguration.pluginLibraryPaths.size} " +
-            "decoderPlugins=${nativeFramePipelineConfiguration.decoderPluginLibraryPaths.size} " +
-            "frameProcessors=${nativeFramePipelineConfiguration.frameProcessorPluginLibraryPaths.size}",
+            "sourceNormalizerPlugins=${sourceNormalizerConfiguration.pluginReferences.size} " +
+            "decoderPlugins=${nativeFramePipelineConfiguration.decoderPluginReferences.size} " +
+            "frameProcessors=${nativeFramePipelineConfiguration.frameProcessorPluginReferences.size}",
     )
     source.androidDrmPhase0Failure(nativeFrameDecision)?.let { failure ->
         recordBenchmark(
@@ -348,14 +354,19 @@ private fun VesperNativePlayerBridge.applyPreparedSourceLoadOnMain(
         )
     }
         .onSuccess {
+            val pluginDiagnostics =
+                mergeSourceLoadPluginDiagnostics(
+                    preparation.pluginDiagnostics,
+                    it.pluginDiagnostics,
+                )
             if (nativeFrameDecision == NativeFramePipelineRoute.SdkManaged &&
-                !openNativeFramePipelineAfterSystemStartup(epoch, source, it.pluginDiagnostics)
+                !openNativeFramePipelineAfterSystemStartup(epoch, source, pluginDiagnostics)
             ) {
                 return@onSuccess
             }
-            if (it.pluginDiagnostics.isNotEmpty() || !nativeFramePipelineConfiguration.isDisabled) {
+            if (pluginDiagnostics.isNotEmpty() || !nativeFramePipelineConfiguration.isDisabled) {
                 currentPluginDiagnostics =
-                    pluginDiagnosticsWithNativeFramePipeline(it.pluginDiagnostics)
+                    pluginDiagnosticsWithNativeFramePipeline(pluginDiagnostics)
             }
             recordBenchmark("initialize_completed")
             hasInitializedSource = true
@@ -489,6 +500,7 @@ private fun VesperNativePlayerBridge.disposeNativeBridgeOnMain() {
     surfaceHost.close()
     surfaceHost.detach()
     bindings.dispose()
+    pipelineEventHookRegistryOwner?.close()
     sourceLoadJob?.cancel()
     sourceLoadScope.cancel()
     sourceLoadDispatcher.close()

@@ -6,26 +6,26 @@ public struct VesperBenchmarkConfiguration: Equatable {
     public let maxBufferedEvents: Int
     public let includeRawEvents: Bool
     public let consoleLogging: Bool
-    public let pluginLibraryPaths: [String]
+    public let pluginReferences: [VesperPluginReference]
 
     public init(
         enabled: Bool = false,
         maxBufferedEvents: Int = 2_048,
         includeRawEvents: Bool = true,
         consoleLogging: Bool = false,
-        pluginLibraryPaths: [String] = []
+        pluginReferences: [VesperPluginReference] = []
     ) {
         self.enabled = enabled
         self.maxBufferedEvents = max(maxBufferedEvents, 0)
         self.includeRawEvents = includeRawEvents
         self.consoleLogging = consoleLogging
-        self.pluginLibraryPaths = pluginLibraryPaths
+        self.pluginReferences = pluginReferences
     }
 
     public static let disabled = VesperBenchmarkConfiguration()
 }
 
-public struct VesperBenchmarkEvent: Codable, Equatable {
+public struct VesperBenchmarkEvent: Codable, Equatable, Sendable {
     public let runId: String
     public let sessionId: String
     public let platform: String
@@ -37,7 +37,7 @@ public struct VesperBenchmarkEvent: Codable, Equatable {
     public let attributes: [String: String]
 }
 
-public struct VesperBenchmarkMetricSummary: Codable, Equatable {
+public struct VesperBenchmarkMetricSummary: Codable, Equatable, Sendable {
     public let name: String
     public let count: Int
     public let minNs: UInt64
@@ -47,7 +47,110 @@ public struct VesperBenchmarkMetricSummary: Codable, Equatable {
     public let p95Ns: UInt64
 }
 
-public struct VesperBenchmarkSummary: Codable, Equatable {
+public struct VesperPluginMeasurement: Codable, Equatable, Sendable {
+    public let name: String
+    public let value: Double
+    public let unit: String
+    public let attributes: [String: String]
+
+    public init(
+        name: String,
+        value: Double,
+        unit: String,
+        attributes: [String: String] = [:]
+    ) {
+        self.name = name
+        self.value = value
+        self.unit = unit
+        self.attributes = attributes
+    }
+}
+
+public struct VesperBenchmarkThresholdViolation: Codable, Equatable, Sendable {
+    public let measurement: String
+    public let actual: Double
+    public let threshold: Double
+    public let comparison: String
+
+    public init(
+        measurement: String,
+        actual: Double,
+        threshold: Double,
+        comparison: String
+    ) {
+        self.measurement = measurement
+        self.actual = actual
+        self.threshold = threshold
+        self.comparison = comparison
+    }
+}
+
+public struct VesperPluginDiagnosticSeverity: RawRepresentable, Codable, Equatable, Hashable,
+    Sendable
+{
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let info = VesperPluginDiagnosticSeverity(rawValue: "info")
+    public static let warning = VesperPluginDiagnosticSeverity(rawValue: "warning")
+    public static let error = VesperPluginDiagnosticSeverity(rawValue: "error")
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        rawValue = try container.decode(String.self)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public struct VesperPluginDiagnostic: Codable, Equatable, Sendable {
+    public let code: String
+    public let severity: VesperPluginDiagnosticSeverity
+    public let message: String
+    public let attributes: [String: String]
+
+    public init(
+        code: String,
+        severity: VesperPluginDiagnosticSeverity,
+        message: String,
+        attributes: [String: String] = [:]
+    ) {
+        self.code = code
+        self.severity = severity
+        self.message = message
+        self.attributes = attributes
+    }
+}
+
+public struct VesperBenchmarkSinkReport: Codable, Equatable, Sendable {
+    public let acceptedEvents: UInt64
+    public let droppedEvents: UInt64
+    public let measurements: [VesperPluginMeasurement]
+    public let thresholdViolations: [VesperBenchmarkThresholdViolation]
+    public let diagnostics: [VesperPluginDiagnostic]
+
+    public init(
+        acceptedEvents: UInt64,
+        droppedEvents: UInt64,
+        measurements: [VesperPluginMeasurement] = [],
+        thresholdViolations: [VesperBenchmarkThresholdViolation] = [],
+        diagnostics: [VesperPluginDiagnostic] = []
+    ) {
+        self.acceptedEvents = acceptedEvents
+        self.droppedEvents = droppedEvents
+        self.measurements = measurements
+        self.thresholdViolations = thresholdViolations
+        self.diagnostics = diagnostics
+    }
+}
+
+public struct VesperBenchmarkSummary: Codable, Equatable, Sendable {
     public let runId: String
     public let sessionId: String
     public let acceptedEvents: UInt64
@@ -55,6 +158,7 @@ public struct VesperBenchmarkSummary: Codable, Equatable {
     public let pluginAcceptedEvents: UInt64
     public let pluginDroppedEvents: UInt64
     public let metrics: [VesperBenchmarkMetricSummary]
+    public let pluginFinalReport: VesperBenchmarkSinkReport?
     public let pluginErrors: [String]
 }
 
@@ -62,10 +166,280 @@ private struct VesperBenchmarkEventBatchPayload: Encodable {
     let events: [VesperBenchmarkEvent]
 }
 
-private struct VesperBenchmarkSinkReportPayload: Decodable {
+typealias VesperBenchmarkSinkReportPayload = VesperBenchmarkSinkReport
+
+protocol VesperBenchmarkSinkSessionProtocol: AnyObject, Sendable {
+    func submit(_ events: [VesperBenchmarkEvent]) throws -> VesperBenchmarkSinkReportPayload
+    func flush() throws -> VesperBenchmarkSinkReportPayload
+    func dispose()
+}
+
+typealias VesperBenchmarkSinkSessionFactory =
+    @Sendable ([VesperPluginReference]) throws -> any VesperBenchmarkSinkSessionProtocol
+
+private final class VesperBenchmarkShutdownWaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(returning value: Bool) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: value)
+    }
+}
+
+private struct VesperBenchmarkSinkStatsSnapshot {
     let acceptedEvents: UInt64
     let droppedEvents: UInt64
-    let pluginErrors: [String]
+    let finalReport: VesperBenchmarkSinkReport?
+    let errors: [String]
+
+    static let empty = VesperBenchmarkSinkStatsSnapshot(
+        acceptedEvents: 0,
+        droppedEvents: 0,
+        finalReport: nil,
+        errors: []
+    )
+}
+
+private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
+    private enum Command {
+        case submit(VesperBenchmarkEvent)
+        case flush
+        case dispose
+    }
+
+    private let commandCapacity = 1_024
+    private let maxErrors = 128
+    private let commandWaitInterval: TimeInterval = 1
+    private let condition = NSCondition()
+    private var commands: [Command] = []
+    private var accepting = true
+    private let statsLock = NSLock()
+    private var acceptedEvents: UInt64 = 0
+    private var droppedEvents: UInt64 = 0
+    private var finalReport: VesperBenchmarkSinkReport?
+    private var errors: [String] = []
+    private var didRecordShutdownTimeout = false
+    private let pluginReferences: [VesperPluginReference]
+    private let sessionFactory: VesperBenchmarkSinkSessionFactory
+    private let workerQueue = DispatchQueue(
+        label: "io.github.ikaros.vesper.benchmark-sink",
+        qos: .utility
+    )
+    private let shutdownGroup = DispatchGroup()
+    private static let shutdownNotificationQueue = DispatchQueue(
+        label: "io.github.ikaros.vesper.benchmark-sink.shutdown",
+        qos: .utility,
+        attributes: .concurrent
+    )
+
+    init(
+        pluginReferences: [VesperPluginReference],
+        sessionFactory: @escaping VesperBenchmarkSinkSessionFactory
+    ) {
+        self.pluginReferences = pluginReferences
+        self.sessionFactory = sessionFactory
+        shutdownGroup.enter()
+        workerQueue.async { [self] in
+            defer { shutdownGroup.leave() }
+            run()
+        }
+    }
+
+    func offer(_ event: VesperBenchmarkEvent) {
+        condition.lock()
+        guard accepting else {
+            condition.unlock()
+            recordQueueDrop()
+            return
+        }
+        guard commands.count < commandCapacity else {
+            condition.unlock()
+            recordQueueDrop()
+            return
+        }
+        commands.append(.submit(event))
+        condition.signal()
+        condition.unlock()
+    }
+
+    func flush() {
+        condition.lock()
+        guard accepting, !commands.contains(where: { command in
+            if case .flush = command { return true }
+            return false
+        }) else {
+            condition.unlock()
+            return
+        }
+        enqueueControlLocked(.flush)
+        condition.unlock()
+    }
+
+    func dispose() {
+        condition.lock()
+        guard accepting else {
+            condition.unlock()
+            return
+        }
+        accepting = false
+        enqueueControlLocked(.dispose)
+        condition.unlock()
+    }
+
+    func snapshot() -> VesperBenchmarkSinkStatsSnapshot {
+        statsLock.lock()
+        defer { statsLock.unlock() }
+        return VesperBenchmarkSinkStatsSnapshot(
+            acceptedEvents: acceptedEvents,
+            droppedEvents: droppedEvents,
+            finalReport: finalReport,
+            errors: errors
+        )
+    }
+
+    func awaitShutdown(timeout: TimeInterval) async -> Bool {
+        let boundedTimeout = max(timeout, 0)
+        return await withCheckedContinuation { continuation in
+            let waiter = VesperBenchmarkShutdownWaiter(continuation: continuation)
+            shutdownGroup.notify(queue: Self.shutdownNotificationQueue) {
+                waiter.resume(returning: true)
+            }
+            Self.shutdownNotificationQueue.asyncAfter(
+                deadline: .now() + boundedTimeout
+            ) {
+                waiter.resume(returning: false)
+            }
+        }
+    }
+
+    func recordShutdownTimeout() {
+        statsLock.lock()
+        guard !didRecordShutdownTimeout else {
+            statsLock.unlock()
+            return
+        }
+        didRecordShutdownTimeout = true
+        appendErrorLocked("benchmark sink shutdown timed out")
+        statsLock.unlock()
+    }
+
+    private func enqueueControlLocked(_ command: Command) {
+        if commands.count >= commandCapacity,
+           let eventIndex = commands.lastIndex(where: { pending in
+               if case .submit = pending { return true }
+               return false
+           })
+        {
+            commands.remove(at: eventIndex)
+            recordQueueDrop()
+        }
+        guard commands.count < commandCapacity else {
+            recordError("benchmark sink control queue is unavailable")
+            return
+        }
+        commands.append(command)
+        condition.signal()
+    }
+
+    private func run() {
+        let session: (any VesperBenchmarkSinkSessionProtocol)?
+        do {
+            session = try sessionFactory(pluginReferences)
+        } catch {
+            session = nil
+            recordError(error.localizedDescription)
+        }
+        defer { session?.dispose() }
+
+        while true {
+            let command = nextCommand()
+            switch command {
+            case let .submit(event):
+                guard let session else { continue }
+                executeSubmit { try session.submit([event]) }
+            case .flush:
+                guard let session else { continue }
+                executeFlush { try session.flush() }
+            case .dispose:
+                if let session {
+                    executeFlush { try session.flush() }
+                }
+                return
+            }
+        }
+    }
+
+    private func nextCommand() -> Command {
+        condition.lock()
+        while commands.isEmpty {
+            _ = condition.wait(
+                until: Date(timeIntervalSinceNow: commandWaitInterval)
+            )
+        }
+        let command = commands.removeFirst()
+        condition.unlock()
+        return command
+    }
+
+    private func executeSubmit(
+        _ operation: () throws -> VesperBenchmarkSinkReportPayload
+    ) {
+        do {
+            recordSubmitReport(try operation())
+        } catch {
+            recordError(error.localizedDescription)
+        }
+    }
+
+    private func executeFlush(
+        _ operation: () throws -> VesperBenchmarkSinkReportPayload
+    ) {
+        do {
+            recordFinalReport(try operation())
+        } catch {
+            recordError(error.localizedDescription)
+        }
+    }
+
+    private func recordSubmitReport(_ report: VesperBenchmarkSinkReportPayload) {
+        statsLock.lock()
+        acceptedEvents += report.acceptedEvents
+        droppedEvents += report.droppedEvents
+        statsLock.unlock()
+    }
+
+    private func recordFinalReport(_ report: VesperBenchmarkSinkReportPayload) {
+        statsLock.lock()
+        finalReport = report
+        statsLock.unlock()
+    }
+
+    private func recordQueueDrop() {
+        statsLock.lock()
+        droppedEvents += 1
+        statsLock.unlock()
+    }
+
+    private func recordError(_ error: String) {
+        statsLock.lock()
+        appendErrorLocked(error)
+        statsLock.unlock()
+    }
+
+    private func appendErrorLocked(_ error: String) {
+        if errors.count >= maxErrors {
+            errors.removeFirst(errors.count - maxErrors + 1)
+        }
+        errors.append(error)
+    }
 }
 
 @MainActor
@@ -79,24 +453,23 @@ final class VesperBenchmarkRecorder {
     private let maxSamplesPerName = 10_000
     private var acceptedEvents: UInt64 = 0
     private var droppedEvents: UInt64 = 0
-    private var pluginAcceptedEvents: UInt64 = 0
-    private var pluginDroppedEvents: UInt64 = 0
-    private var pluginErrors: [String] = []
-    private let sinkSession: VesperBenchmarkSinkSession?
+    private var disposed = false
+    private let sinkWorker: VesperBenchmarkSinkWorker?
 
-    init(configuration: VesperBenchmarkConfiguration) {
+    init(
+        configuration: VesperBenchmarkConfiguration,
+        sinkSessionFactory: @escaping VesperBenchmarkSinkSessionFactory = {
+            try VesperBenchmarkSinkSession(pluginReferences: $0)
+        }
+    ) {
         self.configuration = configuration
-        if configuration.enabled, !configuration.pluginLibraryPaths.isEmpty {
-            do {
-                sinkSession = try VesperBenchmarkSinkSession(
-                    pluginLibraryPaths: configuration.pluginLibraryPaths
-                )
-            } catch {
-                sinkSession = nil
-                pluginErrors.append(error.localizedDescription)
-            }
+        if configuration.enabled, !configuration.pluginReferences.isEmpty {
+            sinkWorker = VesperBenchmarkSinkWorker(
+                pluginReferences: configuration.pluginReferences,
+                sessionFactory: sinkSessionFactory
+            )
         } else {
-            sinkSession = nil
+            sinkWorker = nil
         }
     }
 
@@ -109,7 +482,7 @@ final class VesperBenchmarkRecorder {
         sourceProtocol: VesperPlayerSourceProtocol?,
         attributes: [String: String] = [:]
     ) {
-        guard configuration.enabled else {
+        guard configuration.enabled, !disposed else {
             return
         }
         let now = DispatchTime.now().uptimeNanoseconds
@@ -142,7 +515,7 @@ final class VesperBenchmarkRecorder {
             }
         }
 
-        submitBenchmarkEvents([event])
+        sinkWorker?.offer(event)
     }
 
     func drainEvents() -> [VesperBenchmarkEvent] {
@@ -152,22 +525,39 @@ final class VesperBenchmarkRecorder {
     }
 
     func summary() -> VesperBenchmarkSummary {
-        VesperBenchmarkSummary(
+        let sinkStats = sinkWorker?.snapshot() ?? .empty
+        return VesperBenchmarkSummary(
             runId: runId,
             sessionId: sessionId,
             acceptedEvents: acceptedEvents,
             droppedEvents: droppedEvents,
-            pluginAcceptedEvents: pluginAcceptedEvents,
-            pluginDroppedEvents: pluginDroppedEvents,
+            pluginAcceptedEvents: sinkStats.acceptedEvents,
+            pluginDroppedEvents: sinkStats.droppedEvents,
             metrics: samplesByName
                 .map { name, samples in metricSummary(name: name, samples: samples) }
                 .sorted { $0.name < $1.name },
-            pluginErrors: pluginErrors
+            pluginFinalReport: sinkStats.finalReport,
+            pluginErrors: sinkStats.errors
         )
     }
 
     func dispose() {
-        flushSinks()
+        guard !disposed else {
+            return
+        }
+        disposed = true
+        sinkWorker?.dispose()
+    }
+
+    func awaitSinkShutdown(timeout: TimeInterval) async -> Bool {
+        guard let sinkWorker else {
+            return true
+        }
+        let completed = await sinkWorker.awaitShutdown(timeout: timeout)
+        if !completed {
+            sinkWorker.recordShutdownTimeout()
+        }
+        return completed
     }
 
     private func metricSummary(
@@ -194,54 +584,32 @@ final class VesperBenchmarkRecorder {
         return sorted[min(max(index, 0), sorted.count - 1)]
     }
 
-    private func submitBenchmarkEvents(_ events: [VesperBenchmarkEvent]) {
-        guard let sinkSession, !events.isEmpty else {
-            return
-        }
-
-        do {
-            let report = try sinkSession.submit(events)
-            pluginAcceptedEvents += report.acceptedEvents
-            pluginDroppedEvents += report.droppedEvents
-            pluginErrors.append(contentsOf: report.pluginErrors)
-        } catch {
-            pluginErrors.append(error.localizedDescription)
-        }
-    }
-
-    private func flushSinks() {
-        guard let sinkSession else {
-            return
-        }
-
-        do {
-            let report = try sinkSession.flush()
-            pluginErrors.append(contentsOf: report.pluginErrors)
-        } catch {
-            pluginErrors.append(error.localizedDescription)
-        }
-    }
 }
 
-private final class VesperBenchmarkSinkSession {
-    private let handle: UInt64
+// The worker owns this session and serializes every access on one queue.
+private final class VesperBenchmarkSinkSession: VesperBenchmarkSinkSessionProtocol,
+    @unchecked Sendable
+{
+    private var handle: UInt64
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    init(pluginLibraryPaths: [String]) throws {
-        var pathPointers = makeCStringList(pluginLibraryPaths)
-        defer { freeCStringList(&pathPointers, count: pluginLibraryPaths.count) }
+    init(pluginReferences: [VesperPluginReference]) throws {
+        let pluginRegistry = try VesperEmbeddedPluginRegistry.create(references: pluginReferences)
+        let referenceJson = try encodeVesperPluginReferencesJSON(pluginReferences)
 
         var handle: UInt64 = 0
         var errorMessage: UnsafeMutablePointer<CChar>?
-        let created = withUnsafeMutablePointer(to: &handle) { handlePointer in
-            withUnsafeMutablePointer(to: &errorMessage) { errorPointer in
-                vesper_runtime_benchmark_sink_session_create(
-                    pathPointers,
-                    UInt(pluginLibraryPaths.count),
-                    handlePointer,
-                    errorPointer
-                )
+        let created = withExtendedLifetime(pluginRegistry) {
+            withUnsafeMutablePointer(to: &handle) { handlePointer in
+                withUnsafeMutablePointer(to: &errorMessage) { errorPointer in
+                    vesper_runtime_benchmark_sink_session_create_with_references_json(
+                        pluginRegistry.handle,
+                        referenceJson,
+                        handlePointer,
+                        errorPointer
+                    )
+                }
             }
         }
         defer { freeBenchmarkCString(errorMessage) }
@@ -256,10 +624,15 @@ private final class VesperBenchmarkSinkSession {
     }
 
     deinit {
-        vesper_runtime_benchmark_sink_session_dispose(handle)
+        dispose()
     }
 
     func submit(_ events: [VesperBenchmarkEvent]) throws -> VesperBenchmarkSinkReportPayload {
+        guard handle != 0 else {
+            throw VesperBenchmarkSinkSessionError.bridgeError(
+                "benchmark sink session was disposed"
+            )
+        }
         let batch = VesperBenchmarkEventBatchPayload(events: events)
         let payload = try encoder.encode(batch)
         guard let json = String(data: payload, encoding: .utf8) else {
@@ -281,13 +654,26 @@ private final class VesperBenchmarkSinkSession {
     }
 
     func flush() throws -> VesperBenchmarkSinkReportPayload {
-        try executeReportCall { reportPointer, errorPointer in
+        guard handle != 0 else {
+            throw VesperBenchmarkSinkSessionError.bridgeError(
+                "benchmark sink session was disposed"
+            )
+        }
+        return try executeReportCall { reportPointer, errorPointer in
             vesper_runtime_benchmark_sink_session_flush_json(
                 handle,
                 reportPointer,
                 errorPointer
             )
         }
+    }
+
+    func dispose() {
+        guard handle != 0 else {
+            return
+        }
+        vesper_runtime_benchmark_sink_session_dispose(handle)
+        handle = 0
     }
 
     private func executeReportCall(

@@ -1,7 +1,16 @@
+import java.io.File
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+data class VesperAppPluginRegistryMetadata(
+    val taskSegment: String,
+    val manifestPath: String,
+    val libraryName: String,
+    val pluginId: String,
+)
 
 val configuredAndroidAbis =
     providers.gradleProperty("vesper.player.android.abis").orNull
@@ -34,6 +43,55 @@ val playerFfmpegPluginBuildProfile =
         } else {
             "debug"
         }
+    }
+val vesperAppPluginRegistries =
+    listOf(
+        VesperAppPluginRegistryMetadata(
+            taskSegment = "RemuxFfmpeg",
+            manifestPath = "plugins/remux-ffmpeg/vesper-plugin.toml",
+            libraryName = "vesper_remux_ffmpeg",
+            pluginId = "io.github.ikaros.vesper.remux-ffmpeg",
+        ),
+        VesperAppPluginRegistryMetadata(
+            taskSegment = "DecoderMediaCodec",
+            manifestPath = "plugins/decoder-mediacodec/vesper-plugin.toml",
+            libraryName = "vesper_decoder_mediacodec",
+            pluginId = "io.github.ikaros.vesper.decoder-mediacodec",
+        ),
+        VesperAppPluginRegistryMetadata(
+            taskSegment = "SourceNormalizerFfmpeg",
+            manifestPath = "plugins/source-normalizer-ffmpeg/vesper-plugin.toml",
+            libraryName = "vesper_source_normalizer_ffmpeg",
+            pluginId = "io.github.ikaros.vesper.source-normalizer-ffmpeg",
+        ),
+        VesperAppPluginRegistryMetadata(
+            taskSegment = "FrameProcessorDiagnostic",
+            manifestPath = "plugins/frame-processor-diagnostic/vesper-plugin.toml",
+            libraryName = "vesper_frame_processor_diagnostic",
+            pluginId = "dev.vesper.frame-processor-diagnostic",
+        ),
+    )
+val configuredVesperCli = providers.environmentVariable("VESPER_CLI")
+val defaultVesperCli = workspaceRootDir.file("target/release/vesper").asFile
+val vesperCli =
+    configuredVesperCli
+        .map { configuredPath ->
+            val configuredFile = File(configuredPath)
+            if (configuredFile.isAbsolute) {
+                configuredFile
+            } else {
+                workspaceRootDir.file(configuredPath).asFile
+            }
+        }.orElse(defaultVesperCli)
+val buildVesperPluginCli =
+    tasks.register<Exec>("buildVesperPluginCli") {
+        group = "vesper"
+        description = "Builds the Rust CLI used to generate app plugin registry fragments."
+        onlyIf { !configuredVesperCli.isPresent }
+        workingDir = workspaceRootDir.asFile
+        commandLine("cargo", "build", "-p", "player-cli", "--bin", "vesper", "--release")
+        outputs.file(defaultVesperCli)
+        outputs.upToDateWhen { false }
     }
 
 android {
@@ -83,7 +141,7 @@ android {
 
     packaging {
         jniLibs {
-            // The example exposes the remux plugin at a stable file path for the dynamic plugin loader.
+            // Native extraction keeps FFmpeg dependencies available to the internal plugin loader.
             useLegacyPackaging = true
         }
     }
@@ -114,9 +172,9 @@ val buildPlayerRemuxFfmpegAndroidPlugin = tasks.register<Exec>("buildPlayerRemux
     description = "Builds the Android player-remux-ffmpeg plugin libraries used by the example host."
     group = "vesper"
 
-    val scriptFile = workspaceRootDir.file("scripts/android/build-player-remux-ffmpeg-plugin.sh")
+    val vesperCli = workspaceRootDir.file("scripts/vesper")
 
-    inputs.file(scriptFile)
+    inputs.file(vesperCli)
     inputs.file(workspaceRootDir.file("Cargo.toml"))
     inputs.file(workspaceRootDir.file("Cargo.lock"))
     inputs.dir(workspaceRootDir.dir("crates/plugin-remux/player-remux-ffmpeg"))
@@ -131,7 +189,9 @@ val buildPlayerRemuxFfmpegAndroidPlugin = tasks.register<Exec>("buildPlayerRemux
 
     doFirst {
         commandLine(
-            scriptFile.asFile.absolutePath,
+            vesperCli.asFile.absolutePath,
+            "android",
+            "remux-plugin",
             playerFfmpegPluginJniLibsDirFile.absolutePath,
             playerFfmpegPluginBuildProfile.get(),
             "--profile",
@@ -145,9 +205,9 @@ val buildPlayerSourceNormalizerFfmpegAndroidPlugin =
     description = "Builds the Android player-source-normalizer-ffmpeg plugin libraries used by the example host."
     group = "vesper"
 
-    val scriptFile = workspaceRootDir.file("scripts/android/build-player-source-normalizer-ffmpeg-plugin.sh")
+    val vesperCli = workspaceRootDir.file("scripts/vesper")
 
-    inputs.file(scriptFile)
+    inputs.file(vesperCli)
     inputs.file(workspaceRootDir.file("Cargo.toml"))
     inputs.file(workspaceRootDir.file("Cargo.lock"))
     inputs.file(workspaceRootDir.file("scripts/source-normalizer-profiles.toml"))
@@ -164,7 +224,9 @@ val buildPlayerSourceNormalizerFfmpegAndroidPlugin =
 
     doFirst {
         commandLine(
-            scriptFile.asFile.absolutePath,
+            vesperCli.asFile.absolutePath,
+            "android",
+            "source-normalizer-plugin",
             playerSourceNormalizerPluginJniLibsDirFile.absolutePath,
             playerFfmpegPluginBuildProfile.get(),
             "--profile",
@@ -178,10 +240,9 @@ val buildPlayerFrameProcessorDiagnosticAndroidPlugin =
     description = "Builds the Android player-frame-processor-diagnostic plugin libraries used by the example host."
     group = "vesper"
 
-    val scriptFile = workspaceRootDir.file("scripts/android/build-player-frame-processor-diagnostic-plugin.sh")
+    val vesperCli = workspaceRootDir.file("scripts/vesper")
 
-    inputs.file(scriptFile)
-    inputs.file(workspaceRootDir.file("scripts/lib/android.sh"))
+    inputs.file(vesperCli)
     inputs.file(workspaceRootDir.file("Cargo.toml"))
     inputs.file(workspaceRootDir.file("Cargo.lock"))
     inputs.dir(workspaceRootDir.dir("crates/plugin/player-frame-processor-diagnostic"))
@@ -195,7 +256,9 @@ val buildPlayerFrameProcessorDiagnosticAndroidPlugin =
 
     doFirst {
         commandLine(
-            scriptFile.asFile.absolutePath,
+            vesperCli.asFile.absolutePath,
+            "android",
+            "frame-processor-plugin",
             playerFrameProcessorDiagnosticPluginJniLibsDirFile.absolutePath,
             playerFfmpegPluginBuildProfile.get(),
         )
@@ -207,10 +270,9 @@ val buildPlayerDecoderMediaCodecAndroidPlugin =
     description = "Builds the Android player-decoder-mediacodec plugin libraries used by the example host."
     group = "vesper"
 
-    val scriptFile = workspaceRootDir.file("scripts/android/build-player-decoder-mediacodec-plugin.sh")
+    val vesperCli = workspaceRootDir.file("scripts/vesper")
 
-    inputs.file(scriptFile)
-    inputs.file(workspaceRootDir.file("scripts/lib/android.sh"))
+    inputs.file(vesperCli)
     inputs.file(workspaceRootDir.file("Cargo.toml"))
     inputs.file(workspaceRootDir.file("Cargo.lock"))
     inputs.dir(workspaceRootDir.dir("crates/plugin-decoder/player-decoder-mediacodec"))
@@ -224,7 +286,9 @@ val buildPlayerDecoderMediaCodecAndroidPlugin =
 
     doFirst {
         commandLine(
-            scriptFile.asFile.absolutePath,
+            vesperCli.asFile.absolutePath,
+            "android",
+            "decoder-mediacodec-plugin",
             playerDecoderMediaCodecPluginJniLibsDirFile.absolutePath,
             playerFfmpegPluginBuildProfile.get(),
         )
@@ -257,5 +321,82 @@ ffmpegRuntimeProject.plugins.withId("com.android.library") {
     }.configureEach {
         dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
         dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)
+    }
+}
+
+listOf("debug", "release").forEach { variant ->
+    val variantTitle = variant.replaceFirstChar(Char::uppercaseChar)
+    val generatedAssets =
+        layout.buildDirectory.dir("generated/vesperPluginRegistryAssets/$variant")
+    android.sourceSets.maybeCreate(variant).assets.directories.add(
+        generatedAssets.get().asFile.absolutePath,
+    )
+    val stripTaskName = "strip${variantTitle}DebugSymbols"
+    val registryTasks =
+        vesperAppPluginRegistries.map { metadata ->
+            val pluginManifest = workspaceRootDir.file(metadata.manifestPath)
+            val strippedPlugin =
+                layout.buildDirectory.file(
+                    "intermediates/stripped_native_libs/$variant/$stripTaskName/out/" +
+                        "lib/arm64-v8a/lib${metadata.libraryName}.so",
+                )
+            val registryFragment =
+                generatedAssets.map { directory ->
+                    directory.file(
+                        "vesper/plugins/arm64-v8a/${metadata.pluginId}.json",
+                    )
+                }
+            tasks.register<Exec>(
+                "generate${variantTitle}Vesper${metadata.taskSegment}PluginRegistry",
+            ) {
+                group = "vesper"
+                description =
+                    "Generates the $variant ${metadata.pluginId} registry from final stripped bytes."
+                dependsOn(stripTaskName)
+                dependsOn(buildVesperPluginCli)
+                inputs.file(vesperCli)
+                inputs.file(pluginManifest)
+                inputs.file(strippedPlugin)
+                inputs.property("target", "aarch64-linux-android")
+                inputs.property("architecture", "arm64-v8a")
+                inputs.property("minimumOs", "26")
+                inputs.property("locatorName", metadata.libraryName)
+                outputs.file(registryFragment)
+
+                doFirst {
+                    registryFragment.get().asFile.parentFile.mkdirs()
+                    commandLine(
+                        vesperCli.get().absolutePath,
+                        "plugin",
+                        "registry-fragment",
+                        pluginManifest.asFile.absolutePath,
+                        "--platform",
+                        "android",
+                        "--target",
+                        "aarch64-linux-android",
+                        "--architecture",
+                        "arm64-v8a",
+                        "--minimum-os",
+                        "26",
+                        "--locator-name",
+                        metadata.libraryName,
+                        "--artifact",
+                        strippedPlugin.get().asFile.absolutePath,
+                        "--output",
+                        registryFragment.get().asFile.absolutePath,
+                    )
+                }
+            }
+        }
+    tasks.matching { task ->
+        task.name == "merge${variantTitle}Assets" ||
+            (task.name.startsWith("generate$variantTitle") &&
+                task.name.contains("Lint") &&
+                task.name.endsWith("Model")) ||
+            (task.name.startsWith("lint") &&
+                task.name.contains(variantTitle) &&
+                task.name.contains("Analyze"))
+    }.configureEach {
+        dependsOn(registryTasks)
     }
 }

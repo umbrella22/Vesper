@@ -13,7 +13,11 @@ enum class VesperSourceNormalizerMode {
 
 data class VesperSourceNormalizerConfiguration(
     val mode: VesperSourceNormalizerMode = VesperSourceNormalizerMode.Disabled,
-    val pluginLibraryPaths: List<String> = emptyList(),
+    /**
+     * Explicit plugin identities selected by the host. The registry resolves
+     * these references to build-time or packaged artifacts.
+     */
+    val pluginReferences: List<VesperPluginReference> = emptyList(),
     val runtimeProfile: String? = null,
 ) {
     internal val isDisabled: Boolean
@@ -43,7 +47,8 @@ enum class VesperNativeFramePipelineMode {
 
 data class VesperFrameProcessorConfiguration(
     val mode: VesperFrameProcessorMode = VesperFrameProcessorMode.Disabled,
-    val pluginLibraryPaths: List<String> = emptyList(),
+    /** Explicit plugin identities selected by the host. */
+    val pluginReferences: List<VesperPluginReference> = emptyList(),
 ) {
     internal val isDisabled: Boolean
         get() = mode == VesperFrameProcessorMode.Disabled
@@ -57,13 +62,14 @@ data class VesperFrameProcessorConfiguration(
 
 data class VesperNativeFramePipelineConfiguration(
     val mode: VesperNativeFramePipelineMode = VesperNativeFramePipelineMode.Disabled,
-    val decoderPluginLibraryPaths: List<String> = emptyList(),
-    val frameProcessorPluginLibraryPaths: List<String> = emptyList(),
+    /** Explicit decoder plugin identities selected by the host. */
+    val decoderPluginReferences: List<VesperPluginReference> = emptyList(),
+    /** Explicit frame-processor plugin identities selected by the host. */
+    val frameProcessorPluginReferences: List<VesperPluginReference> = emptyList(),
     val maxInFlightFrames: Int? = null,
 ) {
     internal val isDisabled: Boolean
-        get() =
-            mode == VesperNativeFramePipelineMode.Disabled
+        get() = mode == VesperNativeFramePipelineMode.Disabled
 
     internal val modeOrdinal: Int
         get() = when (mode) {
@@ -79,8 +85,19 @@ data class VesperNativeFramePipelineConfiguration(
             VesperNativeFramePipelineMode.DiagnosticsOnly -> "diagnosticsOnly"
             VesperNativeFramePipelineMode.PreferNativeFrame -> "preferNativeFrame"
             VesperNativeFramePipelineMode.RequireNativeFrame -> "requireNativeFrame"
-        }
+    }
 }
+
+/**
+ * Selects the native playback event hooks used by one Android host kit.
+ *
+ * Android playback only accepts explicitly selected native references. WASM
+ * event hooks are desktop/tooling capabilities and are rejected by the native
+ * Android registry during session creation.
+ */
+data class VesperPipelineEventHookConfiguration(
+    val pluginReferences: List<VesperPluginReference> = emptyList(),
+)
 
 internal fun parsePluginDiagnosticsJson(json: String?): List<Map<String, Any?>> {
     if (json.isNullOrBlank()) {

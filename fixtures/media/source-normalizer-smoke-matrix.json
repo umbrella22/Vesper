@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedBy": "scripts/media/generate-source-normalizer-smoke-fixtures.sh",
+  "generatedBy": "./scripts/vesper media generate-source-normalizer-fixtures",
   "defaults": {
     "mode": "preferNormalized",
     "decision": "nativeFirst",

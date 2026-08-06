@@ -96,6 +96,8 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
+    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
+        const VesperPipelineEventHookConfiguration(),
   });
 
   Future<VesperPlaybackCapabilityProbeResult> probePlaybackCapability(
@@ -339,6 +341,8 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
+    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
+        const VesperPipelineEventHookConfiguration(),
   }) async {
     throw VesperUnsupportedError();
   }

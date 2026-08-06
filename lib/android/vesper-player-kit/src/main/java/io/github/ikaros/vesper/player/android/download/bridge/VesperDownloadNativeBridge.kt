@@ -98,7 +98,7 @@ internal interface DownloadBindings {
 
     fun drainDownloadCommands(sessionHandle: Long): Array<NativeDownloadCommand>
 
-    fun drainDownloadEvents(sessionHandle: Long): Array<NativeDownloadEvent>
+    fun drainDownloadEvents(sessionHandle: Long): NativeDownloadEventBatch
 }
 
 internal object NativeDownloadBindings : DownloadBindings {
@@ -256,15 +256,20 @@ internal object NativeDownloadBindings : DownloadBindings {
     override fun drainDownloadCommands(sessionHandle: Long): Array<NativeDownloadCommand> =
         VesperNativeJni.drainDownloadCommands(sessionHandle)
 
-    override fun drainDownloadEvents(sessionHandle: Long): Array<NativeDownloadEvent> =
+    override fun drainDownloadEvents(sessionHandle: Long): NativeDownloadEventBatch =
         VesperNativeJni.drainDownloadEvents(sessionHandle)
 }
 
-internal fun VesperDownloadConfiguration.toNativePayload(): NativeDownloadConfig =
+internal fun VesperDownloadConfiguration.toNativePayload(
+    pluginRegistryHandle: Long = 0L,
+): NativeDownloadConfig =
     NativeDownloadConfig(
         autoStart = autoStart,
         runPostProcessorsOnCompletion = runPostProcessorsOnCompletion,
-        pluginLibraryPaths = pluginLibraryPaths.toTypedArray(),
+        pluginRegistryHandle = pluginRegistryHandle,
+        postDownloadPluginReferencesJson =
+            encodeVesperPluginReferences(postDownloadPluginReferences),
+        eventHookPluginReferencesJson = encodeVesperPluginReferences(eventHookPluginReferences),
     )
 
 internal fun VesperDownloadSource.toNativePayload(): NativeDownloadSource =
@@ -399,6 +404,9 @@ internal fun NativeDownloadTask.toPublic(): VesperDownloadTaskSnapshot =
     )
 
 internal fun Int.toDownloadState(): VesperDownloadState =
+    toKnownDownloadState() ?: VesperDownloadState.Queued
+
+private fun Int.toKnownDownloadState(): VesperDownloadState? =
     when (this) {
         0 -> VesperDownloadState.Queued
         1 -> VesperDownloadState.Preparing
@@ -407,7 +415,7 @@ internal fun Int.toDownloadState(): VesperDownloadState =
         4 -> VesperDownloadState.Completed
         5 -> VesperDownloadState.Failed
         6 -> VesperDownloadState.Removed
-        else -> VesperDownloadState.Queued
+        else -> null
     }
 
 internal fun NativeDownloadSource.toPublic(): VesperDownloadSource =
@@ -523,29 +531,39 @@ internal fun NativeDownloadProgress.toPublic(): VesperDownloadProgressSnapshot =
         totalSegments = if (hasTotalSegments) totalSegments else null,
     )
 
-internal fun NativeDownloadEvent.toPublic(): VesperDownloadEvent =
+internal fun NativeDownloadEventBatch.decodePublicEvents(): List<VesperDownloadEvent>? {
+    val decoded = ArrayList<VesperDownloadEvent>(events.size)
+    for (event in events) {
+        decoded += event.decodePublicEvent() ?: return null
+    }
+    return decoded
+}
+
+private fun NativeDownloadEvent.decodePublicEvent(): VesperDownloadEvent? =
     when (this) {
         is NativeDownloadEvent.Created -> VesperDownloadEvent.Created(task.toPublic())
         is NativeDownloadEvent.StateChanged ->
-            VesperDownloadEvent.StateChanged(
-                VesperDownloadTaskStatePatch(
-                    taskId = taskId,
-                    state = statusOrdinal.toDownloadState(),
-                    progress = progress.toPublic(),
-                    error =
-                        if (hasError) {
-                            VesperDownloadError(
-                                code = VesperPlayerErrorCode.fromJniOrdinal(errorCodeOrdinal),
-                                category = VesperPlayerErrorCategory.fromJniOrdinal(errorCategoryOrdinal),
-                                retriable = errorRetriable,
-                                message = errorMessage.orEmpty(),
-                            )
-                        } else {
-                            null
-                        },
-                    completedPath = completedPath,
-                ),
-            )
+            statusOrdinal.toKnownDownloadState()?.let { state ->
+                VesperDownloadEvent.StateChanged(
+                    VesperDownloadTaskStatePatch(
+                        taskId = taskId,
+                        state = state,
+                        progress = progress.toPublic(),
+                        error =
+                            if (hasError) {
+                                VesperDownloadError(
+                                    code = VesperPlayerErrorCode.fromJniOrdinal(errorCodeOrdinal),
+                                    category = VesperPlayerErrorCategory.fromJniOrdinal(errorCategoryOrdinal),
+                                    retriable = errorRetriable,
+                                    message = errorMessage.orEmpty(),
+                                )
+                            } else {
+                                null
+                            },
+                        completedPath = completedPath,
+                    ),
+                )
+            }
         is NativeDownloadEvent.AssetIndexUpdated -> VesperDownloadEvent.AssetIndexUpdated(task.toPublic())
         is NativeDownloadEvent.ProgressUpdated ->
             VesperDownloadEvent.ProgressUpdated(
@@ -555,4 +573,3 @@ internal fun NativeDownloadEvent.toPublic(): VesperDownloadEvent =
                 ),
             )
     }
-

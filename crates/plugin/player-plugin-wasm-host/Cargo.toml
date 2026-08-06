@@ -1,0 +1,20 @@
+[package]
+name = "player-plugin-wasm-host"
+description = "Bounded Wasmtime host adapters for Vesper WASM EventHook and BenchmarkSink plugins."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+player-plugin = { version = "0.4.0", path = "../player-plugin" }
+thiserror.workspace = true
+tracing.workspace = true
+wasmtime.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+wat.workspace = true
+wit-component.workspace = true
+wit-parser.workspace = true

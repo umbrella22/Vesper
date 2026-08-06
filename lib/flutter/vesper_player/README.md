@@ -35,9 +35,16 @@ are not a compatibility backlog. Desktop Flutter implementations are not shipped
 
 ## Installation
 
-The Flutter packages are source-distributed from this repository and currently
-set `publish_to: none`. In a host app, use path or git dependencies until the
-package family is published:
+The Flutter package family is not published yet. Repository development writes
+the package and example overrides with:
+
+```sh
+./scripts/vesper flutter local-overrides
+```
+
+External hosts must provide root-level overrides for the federated packages
+that `vesper_player` resolves through hosted constraints. The following source
+checkout example includes the core family plus two optional packages:
 
 ```yaml
 dependencies:
@@ -49,7 +56,19 @@ dependencies:
   # Optional stage controls and AirPlay route button.
   vesper_player_ui:
     path: path/to/rust-player-sdk/lib/flutter/vesper_player_ui
+
+dependency_overrides:
+  vesper_player_platform_interface:
+    path: path/to/rust-player-sdk/lib/flutter/vesper_player_platform_interface
+  vesper_player_android:
+    path: path/to/rust-player-sdk/lib/flutter/vesper_player_android
+  vesper_player_ios:
+    path: path/to/rust-player-sdk/lib/flutter/vesper_player_ios
 ```
+
+Add each other optional Vesper package as a direct path or Git dependency when
+the host enables that feature. Once the family is published, normal hosted
+constraints replace these source-checkout overrides.
 
 ## Quick Start
 
@@ -597,19 +616,21 @@ DASH, or FLV assets into `.mp4`. Android hosts must package the shared
 signed `VesperPlayerRemuxFfmpegPlugin.framework` together with the sibling
 `VesperFFmpegAVCodec`, `VesperFFmpegAVFormat`, and `VesperFFmpegAVUtil`
 frameworks. Export becomes available only after the host app packages the
-runtime components and plugin, then passes the plugin framework executable path
-through `VesperDownloadConfiguration.pluginLibraryPaths`.
+runtime components and plugin, then selects the packaged plugin with a native
+`VesperPluginReference`.
 
 ```dart
-final pluginLibraryPaths = <String>[
-  '/absolute/path/to/libvesper_remux_ffmpeg.so',
-  '/absolute/path/to/VesperPlayerRemuxFfmpegPlugin.framework/VesperPlayerRemuxFfmpegPlugin',
-];
+final remuxPlugin = VesperPluginReference(
+  pluginId: 'io.github.ikaros.vesper.remux-ffmpeg',
+  capabilityInstanceId:
+      'io.github.ikaros.vesper.remux-ffmpeg.post-download',
+  transport: VesperPluginTransport.native,
+);
 
 final manager = await VesperDownloadManager.create(
   configuration: VesperDownloadConfiguration(
     runPostProcessorsOnCompletion: false,
-    pluginLibraryPaths: pluginLibraryPaths,
+    postDownloadPluginReferences: <VesperPluginReference>[remuxPlugin],
   ),
 );
 
@@ -630,16 +651,15 @@ final savedUri = await manager.saveTaskOutput(
 
 Key points:
 
-- `pluginLibraryPaths` must point to an already packaged and accessible
-  Android `libvesper_remux_ffmpeg.so` or iOS remux plugin binary.
-  Do not include any iOS FFmpeg component framework path in
-  `pluginLibraryPaths`.
+- The reference selects an already packaged Android
+  `libvesper_remux_ffmpeg.so` or signed iOS remux plugin framework. FFmpeg
+  component frameworks are dependencies, not plugin references.
 - `exportTaskOutput(...)` triggers the plugin and reports progress through
   `VesperDownloadExportProgressEvent`.
 - The mobile examples in this repository already show the full host wiring.
-  Android builds the plugin during Gradle `preBuild`; Flutter iOS links the
-  aggregate `VesperPlayerOptionalPlugins` SwiftPM product from the App target so
-  Xcode embeds and signs the seven sibling frameworks.
+  Android builds the plugin during Gradle `preBuild`; Flutter iOS adds the seven
+  direct products from `VesperPlayerOptionalPlugins` to the App target so Xcode
+  embeds and signs the sibling frameworks.
 - Depending on `vesper_player` alone does not pull FFmpeg into your app. That
   keeps app size stable when export is not needed.
 - FFmpeg prebuilts are selected through `./scripts/vesper ffmpeg --platform
@@ -653,7 +673,7 @@ Key points:
 
 ### Optional mobile plugin diagnostics
 
-`VesperPlayerController.create(...)` accepts two optional mobile plugin
+`VesperPlayerController.create(...)` accepts three optional mobile plugin
 configurations:
 
 - `sourceNormalizerConfiguration` with `disabled`, `diagnosticsOnly`,
@@ -662,17 +682,19 @@ configurations:
 - `nativeFramePipelineConfiguration` with `disabled`, `diagnosticsOnly`,
   `preferNativeFrame`, and `requireNativeFrame` modes
 
-Both are disabled by default. Apps can depend on the optional
+All three are disabled by default. Apps can depend on the optional
 `vesper_player_source_normalizer_ffmpeg` package and pass
 `VesperSourceNormalizerConfiguration.preferBundled()` or
 `VesperSourceNormalizerConfiguration.requireBundled()` to use the Android AAR
-or the iOS host-embedded plugin without app-side path lookup code. The iOS SPM
-package depends on the canonical SourceNormalizer framework product, while the
-App target's aggregate product embeds all required sibling frameworks.
-`pluginLibraryPaths` remains available for custom builds and must contain plugin
-binary paths only: Android `.so` paths or iOS framework executable paths.
-Android and iOS FFmpeg runtime libraries should not be placed in
-`pluginLibraryPaths`.
+or the iOS host-embedded plugin without app-side path lookup code. On iOS, the
+App target directly embeds `VesperPlayerSourceNormalizerFfmpegPlugin` and its
+three `VesperFFmpeg*` dependencies; the Flutter package does not expose binary
+paths or an aggregate optional-plugin product.
+Custom builds also select plugins with `VesperPluginReference`; the Android
+embedded registry or iOS host resolver must map the selected identity to its
+build-time artifact. Flutter does not accept arbitrary plugin binary paths.
+Android and iOS FFmpeg runtime libraries remain ordinary dynamic dependencies,
+not plugin references.
 
 SourceNormalizer mobile can load the optional FFmpeg plugin, report capability
 diagnostics in `controller.pluginDiagnostics`, and in `preflightOnly` mode
@@ -691,9 +713,9 @@ for SourceNormalizer packet input, platform decoder adapter, presenter profile,
 fallback reason, and counters. iOS local/VOD SDR native-frame playback can run
 through VideoToolbox, MetalLayer presentation, and the Swift native audio
 bridge. Android can use the explicit MediaCodec/SurfaceView packet route when
-the required mobile plugin paths are present. HDR and Dolby Vision stay on
-platform system playback; the SDK-managed native-frame lane is SDR-only today
-and is not an HDR-ready path. `probePlaybackCapability` reports
+the selected plugin references resolve to embedded artifacts. HDR and Dolby
+Vision stay on platform system playback; the SDK-managed native-frame lane is
+SDR-only today and is not an HDR-ready path. `probePlaybackCapability` reports
 `recommendedPlaybackPath = systemPlayer` and emits a capability warning with
 `hdrNativeFrameUnsupported` instead of treating SDK-managed native-frame as HDR
 support. `requireNativeFrame` reports a capability error when the requested

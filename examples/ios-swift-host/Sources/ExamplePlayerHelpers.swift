@@ -588,28 +588,44 @@ func formatStorageBytes(_ value: Int64?) -> String {
     return "\(value) B"
 }
 
-func bundledDownloadPluginLibraryPaths() -> [String] {
+func bundledDownloadPluginArtifactPaths() -> [String] {
     bundledPluginLibraryPaths(
         frameworkName: "VesperPlayerRemuxFfmpegPlugin",
         binaryName: "VesperPlayerRemuxFfmpegPlugin"
     )
 }
 
-func bundledSourceNormalizerPluginLibraryPaths() -> [String] {
+func bundledDownloadPluginReferences() -> [VesperPluginReference] {
+    [VesperBundledPluginReferences.remuxFfmpeg]
+}
+
+func bundledSourceNormalizerPluginReferences() -> [VesperPluginReference] {
+    [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
+}
+
+func bundledSourceNormalizerPluginArtifactPaths() -> [String] {
     bundledPluginLibraryPaths(
         frameworkName: "VesperPlayerSourceNormalizerFfmpegPlugin",
         binaryName: "VesperPlayerSourceNormalizerFfmpegPlugin"
     )
 }
 
-func bundledDecoderPluginLibraryPaths() -> [String] {
+func bundledDecoderPluginReferences() -> [VesperPluginReference] {
+    [VesperBundledPluginReferences.decoderVideoToolbox]
+}
+
+func bundledDecoderPluginArtifactPaths() -> [String] {
     bundledPluginLibraryPaths(
         frameworkName: "VesperPlayerDecoderVideoToolboxPlugin",
         binaryName: "VesperPlayerDecoderVideoToolboxPlugin"
     )
 }
 
-func bundledFrameProcessorPluginLibraryPaths() -> [String] {
+func bundledFrameProcessorPluginReferences() -> [VesperPluginReference] {
+    [VesperBundledPluginReferences.frameProcessorDiagnostic]
+}
+
+func bundledFrameProcessorPluginArtifactPaths() -> [String] {
     bundledPluginLibraryPaths(
         frameworkName: "VesperPlayerFrameProcessorDiagnosticPlugin",
         binaryName: "VesperPlayerFrameProcessorDiagnosticPlugin"
@@ -1199,9 +1215,9 @@ struct ExampleHdrEvidenceCaptureContext {
     let controller: VesperPlayerController
     let sourceNormalizerSetting: ExampleSourceNormalizerSetting
     let nativeFramePipelineSetting: ExampleNativeFramePipelineSetting
-    let sourceNormalizerPluginLibraryPaths: [String]
-    let decoderPluginLibraryPaths: [String]
-    let frameProcessorPluginLibraryPaths: [String]
+    let sourceNormalizerPluginReferences: [VesperPluginReference]
+    let decoderPluginReferences: [VesperPluginReference]
+    let frameProcessorPluginReferences: [VesperPluginReference]
 }
 
 enum ExampleHdrEvidenceCaptureError: LocalizedError {
@@ -1232,16 +1248,16 @@ func captureExampleHdrEvidenceBundle(
             frameRate: sourceMetadata["frameRate"] as? Double,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: context.sourceNormalizerSetting.mode,
-                pluginLibraryPaths: context.sourceNormalizerPluginLibraryPaths
+                pluginReferences: context.sourceNormalizerPluginReferences
             ),
             frameProcessorConfiguration: VesperFrameProcessorConfiguration(
-                mode: context.frameProcessorPluginLibraryPaths.isEmpty ? .disabled : .diagnosticsOnly,
-                pluginLibraryPaths: context.frameProcessorPluginLibraryPaths
+                mode: context.frameProcessorPluginReferences.isEmpty ? .disabled : .diagnosticsOnly,
+                pluginReferences: context.frameProcessorPluginReferences
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: context.nativeFramePipelineSetting.mode,
-                decoderPluginLibraryPaths: context.decoderPluginLibraryPaths,
-                frameProcessorPluginLibraryPaths: context.frameProcessorPluginLibraryPaths,
+                decoderPluginReferences: context.decoderPluginReferences,
+                frameProcessorPluginReferences: context.frameProcessorPluginReferences,
                 maxInFlightFrames: 2
             )
         )

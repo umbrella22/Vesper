@@ -98,7 +98,14 @@ internal class NativeResolvedPreloadBudgetPolicy(
 internal class NativeDownloadConfig(
     @JvmField val autoStart: Boolean,
     @JvmField val runPostProcessorsOnCompletion: Boolean,
-    @JvmField val pluginLibraryPaths: Array<String> = emptyArray(),
+    @JvmField val pluginRegistryHandle: Long,
+    @JvmField val postDownloadPluginReferencesJson: String,
+    @JvmField val eventHookPluginReferencesJson: String,
+)
+
+internal class NativePipelineEventHookConfig(
+    @JvmField val pluginRegistryHandle: Long,
+    @JvmField val pluginReferencesJson: String,
 )
 
 internal class NativePlaylistConfig(
@@ -441,7 +448,7 @@ internal sealed interface NativeDownloadCommand {
     data class Start(val task: NativeDownloadTask) : NativeDownloadCommand
     data class Pause(val taskId: Long) : NativeDownloadCommand
     data class Resume(val task: NativeDownloadTask) : NativeDownloadCommand
-    data class Remove(val taskId: Long) : NativeDownloadCommand
+    data class Remove(val task: NativeDownloadTask) : NativeDownloadCommand
 }
 
 internal sealed interface NativeDownloadEvent {
@@ -463,3 +470,8 @@ internal sealed interface NativeDownloadEvent {
         val progress: NativeDownloadProgress,
     ) : NativeDownloadEvent
 }
+
+internal data class NativeDownloadEventBatch(
+    val events: Array<NativeDownloadEvent>,
+    val droppedEvents: Long,
+)

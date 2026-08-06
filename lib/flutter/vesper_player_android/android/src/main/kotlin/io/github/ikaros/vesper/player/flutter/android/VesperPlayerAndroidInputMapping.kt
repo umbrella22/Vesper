@@ -26,11 +26,13 @@ import io.github.ikaros.vesper.player.android.VesperNativeFramePipelineConfigura
 import io.github.ikaros.vesper.player.android.VesperNativeFramePipelineMode
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeRequest
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
+import io.github.ikaros.vesper.player.android.VesperPluginReference
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.VesperPlayerUnsupportedOperation
 import io.github.ikaros.vesper.player.android.VesperPreloadBudgetPolicy
+import io.github.ikaros.vesper.player.android.VesperPipelineEventHookConfiguration
 import io.github.ikaros.vesper.player.android.VesperRetryBackoff
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
 import io.github.ikaros.vesper.player.android.VesperSourceNormalizerConfiguration
@@ -53,11 +55,32 @@ internal fun Map<String, Any?>.toBenchmarkConfiguration(): VesperBenchmarkConfig
         maxBufferedEvents = (this["maxBufferedEvents"] as? Number)?.toInt() ?: 2_048,
         includeRawEvents = this["includeRawEvents"] as? Boolean ?: true,
         consoleLogging = this["consoleLogging"] as? Boolean ?: false,
-        pluginLibraryPaths =
-            (this["pluginLibraryPaths"] as? List<*>)
-                ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
-                ?: emptyList(),
+        pluginReferences = decodeVesperPluginReferences(this["pluginReferences"]),
     )
+
+private fun decodeVesperPluginReferences(value: Any?): List<VesperPluginReference> {
+    if (value == null) {
+        return emptyList()
+    }
+    require(value is List<*>) { "pluginReferences must be a list" }
+    return value.map { entry ->
+        require(entry is Map<*, *>) { "invalid plugin reference" }
+        val map = entry.stringMap()
+        val pluginId = map["pluginId"] as? String
+            ?: throw IllegalArgumentException("plugin reference pluginId is required")
+        val capabilityInstanceId = map["capabilityInstanceId"]
+        require(capabilityInstanceId == null || capabilityInstanceId is String) {
+            "plugin reference capabilityInstanceId must be a string"
+        }
+        val transport = map["transport"] as? String
+            ?: throw IllegalArgumentException("plugin reference transport is required")
+        VesperPluginReference.fromWire(
+            pluginId = pluginId,
+            capabilityInstanceId = capabilityInstanceId,
+            transportRawValue = transport,
+        )
+    }
+}
 
 internal fun Map<String, Any?>?.toSourceNormalizerConfiguration():
     VesperSourceNormalizerConfiguration {
@@ -73,10 +96,7 @@ internal fun Map<String, Any?>?.toSourceNormalizerConfiguration():
                 "requireNormalized" -> VesperSourceNormalizerMode.RequireNormalized
                 else -> VesperSourceNormalizerMode.Disabled
             },
-        pluginLibraryPaths =
-            (this["pluginLibraryPaths"] as? List<*>)
-                ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
-                ?: emptyList(),
+        pluginReferences = decodeVesperPluginReferences(this["pluginReferences"]),
         runtimeProfile = (this["runtimeProfile"] as? String)?.takeIf(String::isNotEmpty),
     )
 }
@@ -92,10 +112,7 @@ internal fun Map<String, Any?>?.toFrameProcessorConfiguration():
                 "diagnosticsOnly" -> VesperFrameProcessorMode.DiagnosticsOnly
                 else -> VesperFrameProcessorMode.Disabled
             },
-        pluginLibraryPaths =
-            (this["pluginLibraryPaths"] as? List<*>)
-                ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
-                ?: emptyList(),
+        pluginReferences = decodeVesperPluginReferences(this["pluginReferences"]),
     )
 }
 
@@ -112,17 +129,18 @@ internal fun Map<String, Any?>?.toNativeFramePipelineConfiguration():
                 "requireNativeFrame" -> VesperNativeFramePipelineMode.RequireNativeFrame
                 else -> VesperNativeFramePipelineMode.Disabled
             },
-        decoderPluginLibraryPaths =
-            (this["decoderPluginLibraryPaths"] as? List<*>)
-                ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
-                ?: emptyList(),
-        frameProcessorPluginLibraryPaths =
-            (this["frameProcessorPluginLibraryPaths"] as? List<*>)
-                ?.mapNotNull { value -> value?.toString()?.takeIf(String::isNotEmpty) }
-                ?: emptyList(),
+        decoderPluginReferences = decodeVesperPluginReferences(this["decoderPluginReferences"]),
+        frameProcessorPluginReferences =
+            decodeVesperPluginReferences(this["frameProcessorPluginReferences"]),
         maxInFlightFrames = (this["maxInFlightFrames"] as? Number)?.toInt(),
     )
 }
+
+internal fun Map<String, Any?>.toPipelineEventHookConfiguration():
+    VesperPipelineEventHookConfiguration =
+    VesperPipelineEventHookConfiguration(
+        pluginReferences = decodeVesperPluginReferences(this["eventHookPluginReferences"]),
+    )
 
 internal fun Map<String, Any?>.toPlaybackCapabilityProbeRequest():
     VesperPlaybackCapabilityProbeRequest =
@@ -284,10 +302,12 @@ internal fun Map<String, Any?>.toDownloadConfiguration(): VesperDownloadConfigur
         resumePartialDownloads = this["resumePartialDownloads"] as? Boolean ?: true,
         restoreTasksOnStartup = this["restoreTasksOnStartup"] as? Boolean ?: true,
         baseDirectory = (this["baseDirectory"] as? String)?.let(::File),
-        pluginLibraryPaths =
-            (this["pluginLibraryPaths"] as? List<*>)
-                ?.mapNotNull { value -> value?.toString() }
-                ?: emptyList(),
+        postDownloadPluginReferences = decodeVesperPluginReferences(
+            this["postDownloadPluginReferences"],
+        ),
+        eventHookPluginReferences = decodeVesperPluginReferences(
+            this["eventHookPluginReferences"],
+        ),
         rangeChunkBytes = (this["rangeChunkBytes"] as? Number)?.toLong(),
         minProgressBytes = (this["minProgressBytes"] as? Number)?.toLong() ?: 512L * 1024L,
         minProgressIntervalMs = (this["minProgressIntervalMs"] as? Number)?.toLong() ?: 250L,

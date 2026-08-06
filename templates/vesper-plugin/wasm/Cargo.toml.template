@@ -1,0 +1,15 @@
+[package]
+name = {{CRATE_NAME}}
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = {{LICENSE}}
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+player-plugin-wasm = "={{VESPER_SDK_VERSION}}"
+
+[profile.release]
+panic = "abort"

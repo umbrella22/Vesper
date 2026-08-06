@@ -2,194 +2,46 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-usage() {
-  cat <<EOF >&2
-Usage: scripts/vesper <group> <command> [args...]
+run_rust_cli() {
+  export VESPER_REPO_ROOT="$REPO_ROOT"
 
-Groups:
-  ffmpeg  --platform android|ios|all [options]
-  ffi      generate | sync | verify | c-host-smoke
-  android  jni | aar | remux-plugin | source-normalizer-plugin | decoder-mediacodec-plugin | frame-processor-plugin | stage-release | sample-apks | verify-subtitles
-  ios      ffi | remux-plugin | source-normalizer-plugin | frame-processor-plugin | ffmpeg-runtime-release | stage-remux-plugin-release | stage-source-normalizer-plugin-release | stage-frame-processor-plugin-release | stage-optional-plugins-release | verify-optional-plugins-release | kit-xcframework | stage-release | verify-release | verify-subtitles | sync-bridge-shim | verify-bridge-shim | verify-native-frame | verify-app-store-layout
-  desktop  ensure-ffmpeg | verify-remux | verify-decoder-diagnostics | verify-decoder-d3d11 | verify-decoder-videotoolbox
-  mobile   verify-no-remux | verify-binary-names
-  flutter  stage-pub | pub-dry-run | pub-publish | local-overrides | verify-android-plugin
-  release  notes | set-version | prepare-from-tag | metadata-from-tag | verify-version | verify-current
-  contract verify | boundary
-EOF
+  if [[ -n "${VESPER_CLI:-}" ]]; then
+    if [[ ! -x "$VESPER_CLI" ]]; then
+      echo "VESPER_CLI is not executable: $VESPER_CLI" >&2
+      exit 4
+    fi
+    if "$VESPER_CLI" "$@"; then
+      exit 0
+    else
+      normalize_rust_cli_status "$?"
+    fi
+  fi
+
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "The Vesper Rust CLI is not installed and cargo is unavailable." >&2
+    exit 4
+  fi
+  if cargo run --quiet --locked --manifest-path "$REPO_ROOT/Cargo.toml" -p player-cli -- "$@"; then
+    exit 0
+  else
+    normalize_rust_cli_status "$?"
+  fi
 }
 
-if [[ "${1:-}" == "ffmpeg" ]]; then
-  shift
-  exec "$SCRIPT_DIR/ffmpeg/build.sh" "$@"
-fi
+normalize_rust_cli_status() {
+  local status="$1"
+  case "$status" in
+    2|3|4|5|6)
+      exit "$status"
+      ;;
+  esac
+  if (( status == 101 || status >= 128 )); then
+    exit 6
+  fi
+  echo "The Vesper Rust CLI launcher failed with status $status." >&2
+  exit 4
+}
 
-if [[ $# -lt 2 ]]; then
-  usage
-  exit 1
-fi
-
-group="$1"
-command="$2"
-shift 2
-
-case "$group:$command" in
-  ffi:generate)
-    exec "$SCRIPT_DIR/ffi/player-ffi-header.sh" generate "$@"
-    ;;
-  ffi:sync)
-    exec "$SCRIPT_DIR/ffi/player-ffi-header.sh" sync "$@"
-    ;;
-  ffi:verify)
-    exec "$SCRIPT_DIR/ffi/player-ffi-header.sh" verify "$@"
-    ;;
-  ffi:c-host-smoke)
-    exec "$SCRIPT_DIR/ffi/run-c-host-smoke.sh" "$@"
-    ;;
-  android:jni)
-    exec "$SCRIPT_DIR/android/build-vesper-player-kit-jni.sh" "$@"
-    ;;
-  android:aar)
-    exec "$SCRIPT_DIR/android/build-vesper-player-kit-aar.sh" "$@"
-    ;;
-  android:remux-plugin)
-    exec "$SCRIPT_DIR/android/build-player-remux-ffmpeg-plugin.sh" "$@"
-    ;;
-  android:source-normalizer-plugin)
-    exec "$SCRIPT_DIR/android/build-player-source-normalizer-ffmpeg-plugin.sh" "$@"
-    ;;
-  android:decoder-mediacodec-plugin)
-    exec "$SCRIPT_DIR/android/build-player-decoder-mediacodec-plugin.sh" "$@"
-    ;;
-  android:frame-processor-plugin)
-    exec "$SCRIPT_DIR/android/build-player-frame-processor-diagnostic-plugin.sh" "$@"
-    ;;
-  android:stage-release)
-    exec "$SCRIPT_DIR/android/stage-vesper-player-kit-release.sh" "$@"
-    ;;
-  android:sample-apks)
-    exec "$SCRIPT_DIR/android/stage-sample-apks.sh" "$@"
-    ;;
-  android:verify-subtitles)
-    exec "$SCRIPT_DIR/mobile/verify-subtitles.sh" android "$@"
-    ;;
-  ios:ffi)
-    exec "$SCRIPT_DIR/ios/build-player-ffi-xcframework.sh" "$@"
-    ;;
-  ios:remux-plugin)
-    exec "$SCRIPT_DIR/ios/build-player-plugin.sh" remux-ffmpeg "$@"
-    ;;
-  ios:source-normalizer-plugin)
-    exec "$SCRIPT_DIR/ios/build-player-plugin.sh" source-normalizer-ffmpeg "$@"
-    ;;
-  ios:frame-processor-plugin)
-    exec "$SCRIPT_DIR/ios/build-player-plugin.sh" frame-processor-diagnostic "$@"
-    ;;
-  ios:ffmpeg-runtime-release)
-    exec "$SCRIPT_DIR/ios/stage-player-ffmpeg-runtime-release.sh" "$@"
-    ;;
-  ios:stage-remux-plugin-release)
-    exec "$SCRIPT_DIR/ios/stage-player-plugin-release.sh" remux-ffmpeg "$@"
-    ;;
-  ios:stage-source-normalizer-plugin-release)
-    exec "$SCRIPT_DIR/ios/stage-player-plugin-release.sh" source-normalizer-ffmpeg "$@"
-    ;;
-  ios:stage-frame-processor-plugin-release)
-    exec "$SCRIPT_DIR/ios/stage-player-plugin-release.sh" frame-processor-diagnostic "$@"
-    ;;
-  ios:stage-optional-plugins-release)
-    exec "$SCRIPT_DIR/ios/stage-player-optional-plugins-release.sh" "$@"
-    ;;
-  ios:verify-optional-plugins-release)
-    exec "$SCRIPT_DIR/ios/verify-player-optional-plugins-release.sh" "$@"
-    ;;
-  ios:kit-xcframework)
-    exec "$SCRIPT_DIR/ios/build-vesper-player-kit-xcframework.sh" "$@"
-    ;;
-  ios:stage-release)
-    exec "$SCRIPT_DIR/ios/stage-vesper-player-kit-release.sh" "$@"
-    ;;
-  ios:verify-release)
-    exec "$SCRIPT_DIR/ios/verify-vesper-player-kit-release.sh" "$@"
-    ;;
-  ios:verify-subtitles)
-    exec "$SCRIPT_DIR/mobile/verify-subtitles.sh" ios "$@"
-    ;;
-  ios:sync-bridge-shim)
-    exec "$SCRIPT_DIR/ios/sync-vesper-player-kit-bridge-shim.sh" "$@"
-    ;;
-  ios:verify-bridge-shim)
-    exec "$SCRIPT_DIR/ios/verify-vesper-player-kit-bridge-shim.sh" "$@"
-    ;;
-  ios:verify-native-frame)
-    exec "$SCRIPT_DIR/ios/verify-native-frame-pipeline.sh" "$@"
-    ;;
-  ios:verify-app-store-layout)
-    exec "$SCRIPT_DIR/ios/verify-app-store-framework-layout.sh" "$@"
-    ;;
-  desktop:ensure-ffmpeg)
-    exec "$SCRIPT_DIR/desktop/ensure-ffmpeg.sh" "$@"
-    ;;
-  desktop:verify-remux)
-    exec "$SCRIPT_DIR/desktop/verify-player-remux-ffmpeg.sh" "$@"
-    ;;
-  desktop:verify-decoder-diagnostics)
-    exec "$SCRIPT_DIR/desktop/verify-decoder-plugin-diagnostics.sh" "$@"
-    ;;
-  desktop:verify-decoder-d3d11)
-    exec "$SCRIPT_DIR/desktop/verify-decoder-plugin-v2-d3d11.sh" "$@"
-    ;;
-  desktop:verify-decoder-videotoolbox)
-    exec "$SCRIPT_DIR/desktop/verify-decoder-plugin-v2-videotoolbox.sh" "$@"
-    ;;
-  mobile:verify-no-remux)
-    exec "$SCRIPT_DIR/mobile/verify-host-kit-without-player-remux-ffmpeg.sh" "$@"
-    ;;
-  mobile:verify-binary-names)
-    exec "$SCRIPT_DIR/mobile/verify-binary-library-names.sh" "$@"
-    ;;
-  flutter:stage-pub)
-    exec "$SCRIPT_DIR/flutter/stage-pub-packages.sh" "$@"
-    ;;
-  flutter:pub-dry-run)
-    exec "$SCRIPT_DIR/flutter/pub-dry-run.sh" "$@"
-    ;;
-  flutter:pub-publish)
-    exec "$SCRIPT_DIR/flutter/publish-pub-packages.sh" "$@"
-    ;;
-  flutter:local-overrides)
-    exec "$SCRIPT_DIR/flutter/write-local-overrides.sh" "$@"
-    ;;
-  flutter:verify-android-plugin)
-    exec "$SCRIPT_DIR/flutter/verify-android-plugin.sh" "$@"
-    ;;
-  release:notes)
-    exec "$SCRIPT_DIR/release/generate-notes.sh" "$@"
-    ;;
-  release:set-version)
-    exec "$SCRIPT_DIR/release/version.sh" set "$@"
-    ;;
-  release:prepare-from-tag)
-    exec "$SCRIPT_DIR/release/version.sh" prepare-from-tag "$@"
-    ;;
-  release:metadata-from-tag)
-    exec "$SCRIPT_DIR/release/version.sh" metadata-from-tag "$@"
-    ;;
-  release:verify-version)
-    exec "$SCRIPT_DIR/release/version.sh" verify "$@"
-    ;;
-  release:verify-current)
-    exec "$SCRIPT_DIR/release/version.sh" verify-current "$@"
-    ;;
-  contract:verify)
-    exec "$SCRIPT_DIR/verify-contract-fixtures.sh" "$@"
-    ;;
-  contract:boundary)
-    exec ruby "$SCRIPT_DIR/contract/verify-boundary-invariants.rb" "$@"
-    ;;
-  *)
-    usage
-    exit 1
-    ;;
-esac
+run_rust_cli "$@"

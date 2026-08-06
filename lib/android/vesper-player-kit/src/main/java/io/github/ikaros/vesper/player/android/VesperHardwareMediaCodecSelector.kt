@@ -51,6 +51,21 @@ internal object VesperHardwareMediaCodecSelector : MediaCodecSelector {
         }.getOrDefault(false)
     }
 
+    fun preferredHardwareDecoderName(mimeType: String?): String? {
+        if (mimeType.isNullOrBlank() || !MimeTypes.isVideo(mimeType)) {
+            return null
+        }
+        return runCatching {
+            getDecoderInfos(
+                mimeType,
+                requiresSecureDecoder = false,
+                requiresTunnelingDecoder = false,
+            ).firstOrNull()?.name
+        }.onFailure { error ->
+            Log.w(TAG, "failed to select hardware decoder for $mimeType", error)
+        }.getOrNull()
+    }
+
     fun decoderDiagnostics(mimeType: String?): Map<String, String> {
         if (mimeType.isNullOrBlank() || !MimeTypes.isVideo(mimeType)) {
             return mapOf(

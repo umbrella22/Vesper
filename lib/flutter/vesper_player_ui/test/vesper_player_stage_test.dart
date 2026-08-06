@@ -26,7 +26,7 @@ void main() {
     WidgetTester tester, {
     Widget? topBarPrimaryAction,
     Widget? topBarSecondaryAction,
-    VesperPlayerSnapshot snapshot = _playingSnapshot,
+    VesperPlayerSnapshot? snapshot,
     VesperPlayerStageStrings strings = const VesperPlayerStageStrings(),
     bool pictureInPicturePresentation = false,
   }) async {
@@ -44,7 +44,7 @@ void main() {
               height: 240,
               child: VesperPlayerStage(
                 controller: controller,
-                snapshot: snapshot,
+                snapshot: snapshot ?? _playingSnapshot,
                 isPortrait: true,
                 deviceControls: deviceControls,
                 topBarPrimaryAction: topBarPrimaryAction,
@@ -295,8 +295,10 @@ final class _FakeVesperPlayerPlatform extends VesperPlayerPlatform {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
+    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
+        const VesperPipelineEventHookConfiguration(),
   }) async =>
-      const VesperPlatformCreateResult(
+      VesperPlatformCreateResult(
         playerId: 'stage-test-player',
         snapshot: _playingSnapshot,
       );

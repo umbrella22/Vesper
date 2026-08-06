@@ -62,6 +62,8 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
         const VesperFrameProcessorConfiguration(),
     VesperNativeFramePipelineConfiguration nativeFramePipelineConfiguration =
         const VesperNativeFramePipelineConfiguration(),
+    VesperPipelineEventHookConfiguration pipelineEventHookConfiguration =
+        const VesperPipelineEventHookConfiguration(),
   }) async {
     final trackPreferenceMap = trackPreferencePolicy.toMap();
     final preloadBudgetMap = preloadBudgetPolicy.toMap();
@@ -83,6 +85,8 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
         'frameProcessor': frameProcessorConfiguration.toMap(),
       if (nativeFramePipelineConfiguration.hasOverrides)
         'nativeFramePipeline': nativeFramePipelineConfiguration.toMap(),
+      if (pipelineEventHookConfiguration.hasOverrides)
+        'pipelineEventHook': pipelineEventHookConfiguration.toMap(),
     });
     final decoded = result is Map
         ? Map<Object?, Object?>.from(result)

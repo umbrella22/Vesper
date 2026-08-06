@@ -10,6 +10,7 @@ pub(crate) fn strict_frame_processor_selection(
 #[derive(Debug, Clone)]
 pub(crate) struct MacosNativeFrameDecoderSelection {
     pub(crate) plugin_path: PathBuf,
+    pub(crate) plugin_reference: PluginReference,
     pub(crate) plugin_name: Option<String>,
     pub(crate) video_surface: PlayerVideoSurfaceTarget,
     pub(crate) frame_processor_paths: Vec<PathBuf>,
@@ -28,6 +29,11 @@ pub(crate) fn select_macos_native_frame_decoder(
     }
     let video_surface = options.video_surface?;
     if options.decoder_plugin_library_paths.is_empty() {
+        return None;
+    }
+    if let Err(error) = options.validate_native_plugin_loading_policy("macOS native-frame decoder")
+    {
+        tracing::warn!(error = %error);
         return None;
     }
     let codec =
@@ -49,7 +55,7 @@ pub(crate) fn select_macos_native_frame_decoder(
         return None;
     }
     let request = DecoderPluginMatchRequest::video(codec);
-    let registry = PluginRegistry::inspect_decoder_support(
+    let registry = PluginRegistry::inspect_decoder_support_development(
         &options.decoder_plugin_library_paths,
         request.clone(),
     );
@@ -71,6 +77,7 @@ pub(crate) fn select_macos_native_frame_decoder(
     }
     Some(MacosNativeFrameDecoderSelection {
         plugin_path: record.path.clone(),
+        plugin_reference: registry.reference_for_record(record)?.clone(),
         plugin_name: record.plugin_name.clone(),
         video_surface,
         frame_processor_paths: if options.frame_processor_mode == FrameProcessorMode::Disabled {
@@ -92,6 +99,12 @@ pub(crate) fn select_macos_source_normalizer_packet_decoder(
     }
     let video_surface = options.video_surface?;
     if options.decoder_plugin_library_paths.is_empty() {
+        return None;
+    }
+    if let Err(error) =
+        options.validate_native_plugin_loading_policy("macOS SourceNormalizer decoder")
+    {
+        tracing::warn!(error = %error);
         return None;
     }
     let stream_info = stream_info?;
@@ -116,7 +129,7 @@ pub(crate) fn select_macos_source_normalizer_packet_decoder(
         return None;
     }
     let request = DecoderPluginMatchRequest::video(video_stream.packet.codec);
-    let registry = PluginRegistry::inspect_decoder_support(
+    let registry = PluginRegistry::inspect_decoder_support_development(
         &options.decoder_plugin_library_paths,
         request.clone(),
     );
@@ -138,6 +151,7 @@ pub(crate) fn select_macos_source_normalizer_packet_decoder(
     }
     Some(MacosNativeFrameDecoderSelection {
         plugin_path: record.path.clone(),
+        plugin_reference: registry.reference_for_record(record)?.clone(),
         plugin_name: record.plugin_name.clone(),
         video_surface,
         frame_processor_paths: if options.frame_processor_mode == FrameProcessorMode::Disabled {

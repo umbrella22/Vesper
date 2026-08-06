@@ -2,6 +2,35 @@ use serde::{Deserialize, Serialize};
 
 use crate::{DecoderFrameFormat, DecoderMediaKind};
 
+/// Opaque host-side identity for one plugin-owned native-frame lease.
+///
+/// The token is separate from the platform native handle and media frame IDs.
+/// Plugin authors should leave it unset; checked host loaders attach it to
+/// frames that require an explicit release through the producing session.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NativeFrameLeaseToken {
+    interface_token: u64,
+    session_token: u64,
+    lease_token: u64,
+}
+
+impl NativeFrameLeaseToken {
+    #[doc(hidden)]
+    pub fn from_host_lease(interface_token: u64, session_token: u64, lease_token: u64) -> Self {
+        Self {
+            interface_token,
+            session_token,
+            lease_token,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn host_lease_parts(self) -> (u64, u64, u64) {
+        (self.interface_token, self.session_token, self.lease_token)
+    }
+}
+
 /// Native frame handle kinds shared by decoder, frame processor, and presenter paths.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NativeHandleKind {
@@ -314,6 +343,31 @@ impl NativeFrameMetadata {
 pub struct NativeFrame {
     pub metadata: NativeFrameMetadata,
     pub handle: usize,
+    #[doc(hidden)]
+    pub lease_token: Option<NativeFrameLeaseToken>,
+}
+
+impl NativeFrame {
+    pub fn new(metadata: NativeFrameMetadata, handle: usize) -> Self {
+        Self {
+            metadata,
+            handle,
+            lease_token: None,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn with_plugin_lease(
+        metadata: NativeFrameMetadata,
+        handle: usize,
+        lease_token: NativeFrameLeaseToken,
+    ) -> Self {
+        Self {
+            metadata,
+            handle,
+            lease_token: Some(lease_token),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -4,177 +4,81 @@
 )]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::ffi::{c_char, c_void};
-use std::panic::{AssertUnwindSafe, catch_unwind};
-
 use player_plugin::{
     DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
     DecoderFrameFormat, DecoderMediaKind, DecoderNativeHandleKind, DecoderNativeRequirements,
-    DecoderOperationStatus, DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameMetadata,
-    DecoderSessionConfig, DecoderSessionInfo, NativeFrameColorMetadata, NativeFramePipelineProfile,
-    VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT, VesperDecoderOpenSessionResult,
-    VesperDecoderPluginApiV5, VesperDecoderReceiveNativeFrameResult, VesperPluginBytes,
-    VesperPluginDescriptor, VesperPluginKind, VesperPluginProcessResult, VesperPluginResultStatus,
+    DecoderSessionConfig, NativeDecoderPluginFactory, NativeDecoderSession,
+    NativeFrameColorMetadata, NativeFramePipelineProfile, Plugin, PluginBuildError,
+    normalize_decoder_codec_identifier,
 };
 
-static PLUGIN_NAME: &[u8] = b"player-decoder-videotoolbox\0";
+const PLUGIN_ID: &str = "io.github.ikaros.vesper.decoder-videotoolbox";
+const INSTANCE_ID: &str = "io.github.ikaros.vesper.decoder-videotoolbox.native";
+const PLUGIN_NAME: &str = "player-decoder-videotoolbox";
 const VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED: bool =
     cfg!(any(target_os = "macos", target_os = "ios"));
 
-struct PluginBundle {
-    api: VesperDecoderPluginApiV5,
-    descriptor: VesperPluginDescriptor,
-}
+#[derive(Debug, Default)]
+struct VideoToolboxDecoderFactory;
 
-#[unsafe(no_mangle)]
-pub extern "C" fn vesper_plugin_entry() -> *const VesperPluginDescriptor {
-    catch_unwind(AssertUnwindSafe(vesper_plugin_entry_impl)).unwrap_or(std::ptr::null())
-}
+impl NativeDecoderPluginFactory for VideoToolboxDecoderFactory {
+    fn name(&self) -> &str {
+        PLUGIN_NAME
+    }
 
-fn vesper_plugin_entry_impl() -> *const VesperPluginDescriptor {
-    let mut bundle = Box::new(PluginBundle {
-        api: VesperDecoderPluginApiV5 {
-            context: std::ptr::null_mut(),
-            destroy: None,
-            name: Some(decoder_name),
-            capabilities_json: Some(decoder_capabilities_json),
-            native_requirements_json: Some(decoder_native_requirements_json),
-            free_bytes: Some(free_plugin_bytes),
-            open_session_json: Some(decoder_open_session_json),
-            send_packet: Some(decoder_send_packet),
-            receive_native_frame: Some(decoder_receive_native_frame),
-            release_native_frame: Some(decoder_release_native_frame),
-            flush_session: Some(decoder_flush_session),
-            close_session: Some(decoder_close_session),
-            receive_pcm_frame: None,
-            release_native_frame2: None,
-        },
-        descriptor: VesperPluginDescriptor {
-            abi_version: VESPER_DECODER_PLUGIN_ABI_VERSION_CURRENT,
-            plugin_kind: VesperPluginKind::Decoder as u32,
-            plugin_name: PLUGIN_NAME.as_ptr().cast::<c_char>(),
-            api: std::ptr::null(),
-        },
-    });
-    bundle.descriptor.api = (&bundle.api as *const VesperDecoderPluginApiV5).cast::<c_void>();
-    let bundle = Box::leak(bundle);
-    &bundle.descriptor
-}
+    fn capabilities(&self) -> DecoderCapabilities {
+        decoder_capabilities()
+    }
 
-unsafe extern "C" fn decoder_name(_context: *mut c_void) -> *const c_char {
-    catch_unwind(AssertUnwindSafe(|| PLUGIN_NAME.as_ptr().cast::<c_char>()))
-        .unwrap_or(std::ptr::null())
-}
+    fn native_requirements(&self) -> DecoderNativeRequirements {
+        decoder_native_requirements()
+    }
 
-unsafe extern "C" fn decoder_capabilities_json(_context: *mut c_void) -> VesperPluginBytes {
-    catch_decoder_bytes(|| serialize_payload(&decoder_capabilities()))
-}
-
-unsafe extern "C" fn decoder_native_requirements_json(_context: *mut c_void) -> VesperPluginBytes {
-    catch_decoder_bytes(|| serialize_payload(&decoder_native_requirements()))
-}
-
-unsafe extern "C" fn decoder_open_session_json(
-    _context: *mut c_void,
-    config_json: *const u8,
-    config_json_len: usize,
-) -> VesperDecoderOpenSessionResult {
-    catch_decoder_open(|| {
-        let config = match decode_json::<DecoderSessionConfig>(config_json, config_json_len) {
-            Ok(config) => config,
-            Err(error) => return open_error(error),
+    fn open_native_session(
+        &self,
+        config: &DecoderSessionConfig,
+    ) -> Result<Box<dyn NativeDecoderSession>, DecoderError> {
+        let Some(codec) = video_codec_kind(&config.codec) else {
+            return Err(DecoderError::UnsupportedCodec {
+                codec: config.codec.clone(),
+            });
         };
-        if !decoder_capabilities().supports_codec(&config.codec, config.media_kind) {
-            return open_error(DecoderError::UnsupportedCodec {
-                codec: config.codec,
+        if config.media_kind != DecoderMediaKind::Video
+            || !self
+                .capabilities()
+                .supports_codec(&config.codec, config.media_kind)
+        {
+            return Err(DecoderError::UnsupportedCodec {
+                codec: config.codec.clone(),
             });
         }
-
-        platform::open_session(config)
-    })
-}
-
-unsafe extern "C" fn decoder_send_packet(
-    _context: *mut c_void,
-    session: *mut c_void,
-    packet_json: *const u8,
-    packet_json_len: usize,
-    packet_data: *const u8,
-    packet_data_len: usize,
-) -> VesperPluginProcessResult {
-    catch_decoder_process(|| {
-        let packet = match decode_json::<DecoderPacket>(packet_json, packet_json_len) {
-            Ok(packet) => packet,
-            Err(error) => return process_error(error),
-        };
-        if packet_data.is_null() && packet_data_len > 0 {
-            return process_error(DecoderError::abi_violation(
-                "packet data pointer was null with non-zero len",
-            ));
+        if config.require_cpu_output {
+            return Err(DecoderError::UnsupportedCapability {
+                capability: "cpu-video-frame-output".to_owned(),
+            });
         }
-
-        let data = if packet_data.is_null() || packet_data_len == 0 {
-            &[]
-        } else {
-            // SAFETY: host passes a borrowed packet byte range that is valid for
-            // this call; the plugin copies it before returning when needed.
-            unsafe { std::slice::from_raw_parts(packet_data, packet_data_len) }
-        };
-
-        platform::send_packet(session, &packet, data)
-    })
-}
-
-unsafe extern "C" fn decoder_receive_native_frame(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperDecoderReceiveNativeFrameResult {
-    catch_decoder_native_frame(|| platform::receive_native_frame(session))
-}
-
-unsafe extern "C" fn decoder_release_native_frame(
-    _context: *mut c_void,
-    session: *mut c_void,
-    handle_kind: u32,
-    handle: usize,
-) -> VesperPluginProcessResult {
-    catch_decoder_process(|| platform::release_native_frame(session, handle_kind, handle))
-}
-
-unsafe extern "C" fn decoder_flush_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_decoder_process(|| platform::flush_session(session))
-}
-
-unsafe extern "C" fn decoder_close_session(
-    _context: *mut c_void,
-    session: *mut c_void,
-) -> VesperPluginProcessResult {
-    catch_decoder_process(|| platform::close_session(session))
-}
-
-unsafe extern "C" fn free_plugin_bytes(_context: *mut c_void, payload: VesperPluginBytes) {
-    // SAFETY: payloads returned by this plugin are allocated from Vec<u8> with
-    // capacity equal to len in this dynamic library.
-    unsafe {
-        let _ = payload.into_vec();
+        platform::open_session(config.clone(), codec)
     }
 }
 
 fn decoder_capabilities() -> DecoderCapabilities {
     DecoderCapabilities {
-        codecs: vec![
-            video_codec_capability("H264"),
-            video_codec_capability("AVC1"),
-            video_codec_capability("HEVC"),
-            video_codec_capability("H265"),
-            video_codec_capability("HVC1"),
-            video_codec_capability("HEV1"),
-            video_codec_capability("DVH1"),
-            video_codec_capability("DVHE"),
-        ],
+        codecs: if VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED {
+            vec![
+                video_codec_capability("H264"),
+                video_codec_capability("AVC"),
+                video_codec_capability("AVC1"),
+                video_codec_capability("AVC3"),
+                video_codec_capability("HEVC"),
+                video_codec_capability("H265"),
+                video_codec_capability("HVC1"),
+                video_codec_capability("HEV1"),
+                video_codec_capability("DVH1"),
+                video_codec_capability("DVHE"),
+            ]
+        } else {
+            Vec::new()
+        },
         supports_hardware_decode: VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED,
         supports_cpu_video_frames: false,
         supports_audio_frames: false,
@@ -225,115 +129,11 @@ fn legacy_color_space_label(color: &NativeFrameColorMetadata) -> Option<String> 
     }
 }
 
-fn decode_json<T>(data: *const u8, len: usize) -> Result<T, DecoderError>
-where
-    T: serde::de::DeserializeOwned,
-{
-    if data.is_null() && len > 0 {
-        return Err(DecoderError::payload_codec(
-            "JSON payload pointer is null while len is non-zero",
-        ));
-    }
-    let slice = if len == 0 {
-        &[]
-    } else {
-        // SAFETY: the ABI caller provides a valid JSON byte slice for the
-        // duration of this call.
-        unsafe { std::slice::from_raw_parts(data, len) }
-    };
-    serde_json::from_slice(slice).map_err(|error| DecoderError::payload_codec(error.to_string()))
-}
-
-fn serialize_payload<T>(payload: &T) -> VesperPluginBytes
-where
-    T: serde::Serialize,
-{
-    match serde_json::to_vec(payload) {
-        Ok(bytes) => VesperPluginBytes::from_vec(bytes),
-        Err(error) => VesperPluginBytes::from_vec(error.to_string().into_bytes()),
-    }
-}
-
-fn open_error(error: DecoderError) -> VesperDecoderOpenSessionResult {
-    VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        session: std::ptr::null_mut(),
-        payload: serialize_payload(&error),
-    }
-}
-
-fn open_success(session: *mut c_void, info: &DecoderSessionInfo) -> VesperDecoderOpenSessionResult {
-    VesperDecoderOpenSessionResult {
-        status: VesperPluginResultStatus::Success as u32,
-        session,
-        payload: serialize_payload(info),
-    }
-}
-
-fn process_success(status: &DecoderOperationStatus) -> VesperPluginProcessResult {
-    VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success as u32,
-        payload: serialize_payload(status),
-    }
-}
-
-fn packet_success(result: &DecoderPacketResult) -> VesperPluginProcessResult {
-    VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Success as u32,
-        payload: serialize_payload(result),
-    }
-}
-
-fn process_error(error: DecoderError) -> VesperPluginProcessResult {
-    VesperPluginProcessResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        payload: serialize_payload(&error),
-    }
-}
-
-fn native_frame_success(
-    metadata: &DecoderReceiveNativeFrameMetadata,
-    handle: usize,
-) -> VesperDecoderReceiveNativeFrameResult {
-    VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Success as u32,
-        metadata: serialize_payload(metadata),
-        handle,
-    }
-}
-
-fn native_frame_error(error: DecoderError) -> VesperDecoderReceiveNativeFrameResult {
-    VesperDecoderReceiveNativeFrameResult {
-        status: VesperPluginResultStatus::Failure as u32,
-        metadata: serialize_payload(&error),
-        handle: 0,
-    }
-}
-
-fn catch_decoder_bytes(f: impl FnOnce() -> VesperPluginBytes) -> VesperPluginBytes {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| serialize_payload(&plugin_panic_error()))
-}
-
-fn catch_decoder_open(
-    f: impl FnOnce() -> VesperDecoderOpenSessionResult,
-) -> VesperDecoderOpenSessionResult {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| open_error(plugin_panic_error()))
-}
-
-fn catch_decoder_process(
-    f: impl FnOnce() -> VesperPluginProcessResult,
-) -> VesperPluginProcessResult {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| process_error(plugin_panic_error()))
-}
-
-fn catch_decoder_native_frame(
-    f: impl FnOnce() -> VesperDecoderReceiveNativeFrameResult,
-) -> VesperDecoderReceiveNativeFrameResult {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| native_frame_error(plugin_panic_error()))
-}
-
-fn plugin_panic_error() -> DecoderError {
-    DecoderError::internal("decoder plugin callback panicked")
+#[player_plugin::export]
+fn videotoolbox_decoder_plugin() -> Result<Plugin, PluginBuildError> {
+    Plugin::builder(PLUGIN_ID, PLUGIN_NAME)?
+        .with_native_decoder(INSTANCE_ID, VideoToolboxDecoderFactory)?
+        .build()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -343,24 +143,10 @@ enum VideoCodecKind {
 }
 
 fn video_codec_kind(codec: &str) -> Option<VideoCodecKind> {
-    let normalized = codec
-        .trim()
-        .to_ascii_lowercase()
-        .strip_prefix("video/")
-        .map(str::to_owned)
-        .unwrap_or_else(|| codec.trim().to_ascii_lowercase());
-    if normalized == "h264" || normalized == "avc" || normalized.starts_with("avc1") {
-        Some(VideoCodecKind::H264)
-    } else if normalized == "hevc"
-        || normalized == "h265"
-        || normalized.starts_with("hvc1")
-        || normalized.starts_with("hev1")
-        || normalized.starts_with("dvh1")
-        || normalized.starts_with("dvhe")
-    {
-        Some(VideoCodecKind::Hevc)
-    } else {
-        None
+    match normalize_decoder_codec_identifier(codec).as_str() {
+        "h264" | "avc" | "avc1" | "avc3" => Some(VideoCodecKind::H264),
+        "hevc" | "h265" | "hvc1" | "hev1" | "dvh1" | "dvhe" => Some(VideoCodecKind::Hevc),
+        _ => None,
     }
 }
 
@@ -370,22 +156,18 @@ mod platform {
     use std::ffi::c_void;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::ptr;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, MutexGuard};
 
     use player_plugin::{
         DecoderBitstreamFormat, DecoderError, DecoderFrameFormat, DecoderMediaKind,
-        DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
-        DecoderPacket, DecoderPacketResult, DecoderReceiveNativeFrameMetadata,
-        DecoderSessionConfig, DecoderSessionInfo, NativeFrameColorMetadata, NativeFrameHdrMetadata,
-        NativeFramePipelineProfile, VesperDecoderOpenSessionResult,
-        VesperDecoderReceiveNativeFrameResult, VesperPluginProcessResult,
+        DecoderNativeFrame, DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking,
+        DecoderNativeHandleKind, DecoderPacket, DecoderPacketResult,
+        DecoderReceiveNativeFrameOutput, DecoderSessionConfig, DecoderSessionInfo,
+        NativeDecoderSession, NativeFrameColorMetadata, NativeFrameHdrMetadata,
+        NativeFramePipelineProfile,
     };
 
-    use super::{
-        DecoderOperationStatus, VideoCodecKind, legacy_color_space_label, native_frame_error,
-        native_frame_success, open_error, open_success, packet_success, process_error,
-        process_success, video_codec_kind,
-    };
+    use super::{VideoCodecKind, legacy_color_space_label};
 
     type OSStatus = i32;
     type CFTypeRef = *const c_void;
@@ -403,7 +185,6 @@ mod platform {
 
     const NO_ERR: OSStatus = 0;
     const CM_TIME_FLAGS_VALID: u32 = 1;
-    const CV_PIXEL_BUFFER_HANDLE_KIND: u32 = 1;
     const K_CF_NUMBER_SINT32_TYPE: i32 = 3;
     const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR8_BIPLANAR_VIDEO_RANGE: i32 = fourcc(*b"420v");
     const K_CV_PIXEL_FORMAT_TYPE_420YPCBCR8_BIPLANAR_FULL_RANGE: u32 = fourcc_u32(*b"420f");
@@ -591,112 +372,11 @@ mod platform {
         fn VTDecompressionSessionInvalidate(session: VTDecompressionSessionRef);
     }
 
-    pub fn open_session(config: DecoderSessionConfig) -> VesperDecoderOpenSessionResult {
-        let Some(codec) = video_codec_kind(&config.codec) else {
-            return open_error(DecoderError::UnsupportedCodec {
-                codec: config.codec,
-            });
-        };
-
-        let session = match VideoToolboxDecoderSession::new(config, codec) {
-            Ok(session) => session,
-            Err(error) => return open_error(error),
-        };
-        let info = session.session_info();
-        let session = Box::into_raw(Box::new(session)).cast::<c_void>();
-        open_success(session, &info)
-    }
-
-    pub fn send_packet(
-        session: *mut c_void,
-        packet: &DecoderPacket,
-        data: &[u8],
-    ) -> VesperPluginProcessResult {
-        // SAFETY: `session` is the opaque pointer returned by this plugin's
-        // open callback and remains owned by the host until close.
-        let Some(session) = (unsafe { session.cast::<VideoToolboxDecoderSession>().as_mut() })
-        else {
-            return process_error(DecoderError::NotConfigured);
-        };
-
-        match session.send_packet(packet, data) {
-            Ok(result) => packet_success(&result),
-            Err(error) => process_error(error),
-        }
-    }
-
-    pub fn receive_native_frame(session: *mut c_void) -> VesperDecoderReceiveNativeFrameResult {
-        // SAFETY: `session` is the opaque pointer returned by this plugin's
-        // open callback and remains owned by the host until close.
-        let Some(session) = (unsafe { session.cast::<VideoToolboxDecoderSession>().as_mut() })
-        else {
-            return native_frame_error(DecoderError::NotConfigured);
-        };
-
-        match session.receive_native_frame() {
-            Ok(NativeReceiveResult::Frame(frame)) => native_frame_success(
-                &DecoderReceiveNativeFrameMetadata::frame(frame.metadata),
-                frame.handle,
-            ),
-            Ok(NativeReceiveResult::NeedMoreInput) => {
-                native_frame_success(&DecoderReceiveNativeFrameMetadata::need_more_input(), 0)
-            }
-            Ok(NativeReceiveResult::Eof) => {
-                native_frame_success(&DecoderReceiveNativeFrameMetadata::eof(), 0)
-            }
-            Err(error) => native_frame_error(error),
-        }
-    }
-
-    pub fn release_native_frame(
-        session: *mut c_void,
-        handle_kind: u32,
-        handle: usize,
-    ) -> VesperPluginProcessResult {
-        if handle_kind != CV_PIXEL_BUFFER_HANDLE_KIND {
-            return process_error(DecoderError::abi_violation(format!(
-                "VideoToolbox plugin expected CVPixelBuffer handle kind, got {handle_kind}"
-            )));
-        }
-        if handle == 0 {
-            return process_error(DecoderError::abi_violation(
-                "VideoToolbox plugin received a null native frame handle",
-            ));
-        }
-        if session.is_null() {
-            return process_error(DecoderError::NotConfigured);
-        }
-
-        // SAFETY: ownership of this retained CVPixelBuffer handle was
-        // transferred to the host by receive_native_frame.
-        unsafe { CFRelease(handle as CFTypeRef) };
-        process_success(&DecoderOperationStatus { completed: true })
-    }
-
-    pub fn flush_session(session: *mut c_void) -> VesperPluginProcessResult {
-        // SAFETY: `session` is the opaque pointer returned by this plugin's
-        // open callback and remains owned by the host until close.
-        let Some(session) = (unsafe { session.cast::<VideoToolboxDecoderSession>().as_mut() })
-        else {
-            return process_error(DecoderError::NotConfigured);
-        };
-        match session.flush() {
-            Ok(()) => process_success(&DecoderOperationStatus { completed: true }),
-            Err(error) => process_error(error),
-        }
-    }
-
-    pub fn close_session(session: *mut c_void) -> VesperPluginProcessResult {
-        if session.is_null() {
-            return process_error(DecoderError::NotConfigured);
-        }
-        // SAFETY: the session pointer was returned by open_session and is
-        // consumed exactly once by the loader close path.
-        let mut session = unsafe { Box::from_raw(session.cast::<VideoToolboxDecoderSession>()) };
-        match session.close() {
-            Ok(()) => process_success(&DecoderOperationStatus { completed: true }),
-            Err(error) => process_error(error),
-        }
+    pub(super) fn open_session(
+        config: DecoderSessionConfig,
+        codec: VideoCodecKind,
+    ) -> Result<Box<dyn NativeDecoderSession>, DecoderError> {
+        Ok(Box::new(VideoToolboxDecoderSession::new(config, codec)?))
     }
 
     struct VideoToolboxDecoderSession {
@@ -826,8 +506,8 @@ mod platform {
             // create_sample_buffer.
             unsafe { CFRelease(sample_buffer as CFTypeRef) };
             os_status_result("VTDecompressionSessionDecodeFrame", decode_status)?;
-            // SAFETY: waiting after each submitted frame keeps the v2 ABI simple
-            // until the host owns an async native-frame queue.
+            // SAFETY: waiting after each submitted frame keeps this native ABI
+            // path synchronous until the host provides an async native-frame queue.
             let wait_status = unsafe {
                 VTDecompressionSessionWaitForAsynchronousFrames(self.decompression_session)
             };
@@ -838,21 +518,19 @@ mod platform {
             Ok(DecoderPacketResult { accepted: true })
         }
 
-        fn receive_native_frame(&mut self) -> Result<NativeReceiveResult, DecoderError> {
-            let mut frames = self
-                .callback_state
-                .frames
-                .lock()
-                .map_err(|_| DecoderError::internal("VideoToolbox frame queue is poisoned"))?;
+        fn receive_native_frame(
+            &mut self,
+        ) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
+            let mut frames = pending_frames(&self.callback_state);
             let Some(frame) = dequeue_pending_native_frame(
                 &mut frames,
                 self.reorder_depth,
                 self.end_of_stream_sent,
             ) else {
                 return if self.end_of_stream_sent {
-                    Ok(NativeReceiveResult::Eof)
+                    Ok(DecoderReceiveNativeFrameOutput::Eof)
                 } else {
-                    Ok(NativeReceiveResult::NeedMoreInput)
+                    Ok(DecoderReceiveNativeFrameOutput::NeedMoreInput)
                 };
             };
             // SAFETY: `frame.pixel_buffer` is a retained CVPixelBuffer from the
@@ -860,7 +538,7 @@ mod platform {
             let pixel_format = unsafe { CVPixelBufferGetPixelFormatType(frame.pixel_buffer) };
             let format = decoder_frame_format_from_pixel_format(pixel_format);
             let color = color_metadata_for_pixel_format(self.color.clone(), &format);
-            Ok(NativeReceiveResult::Frame(NativeFrame {
+            Ok(DecoderReceiveNativeFrameOutput::Frame(DecoderNativeFrame {
                 metadata: DecoderNativeFrameMetadata {
                     media_kind: DecoderMediaKind::Video,
                     format,
@@ -895,6 +573,7 @@ mod platform {
                     }),
                 },
                 handle: frame.pixel_buffer as usize,
+                lease_token: None,
             }))
         }
 
@@ -968,13 +647,21 @@ mod platform {
             }
             let format_description =
                 create_format_description(self.codec, self.nal_length_size, &self.parameter_sets)?;
+            let pixel_buffer_attributes =
+                match create_pixel_buffer_attributes(&self.requested_output_format) {
+                    Ok(attributes) => attributes,
+                    Err(error) => {
+                        // SAFETY: format_description was created by CoreMedia
+                        // and has not been transferred to a session.
+                        unsafe { CFRelease(format_description as CFTypeRef) };
+                        return Err(error);
+                    }
+                };
             let callback_state_ref_con = Arc::into_raw(self.callback_state.clone());
             let callback = VTDecompressionOutputCallbackRecord {
                 decompression_output_callback: Some(decompression_output_callback),
                 decompression_output_ref_con: callback_state_ref_con.cast_mut().cast(),
             };
-            let pixel_buffer_attributes =
-                create_pixel_buffer_attributes(&self.requested_output_format)?;
             let mut decompression_session = ptr::null_mut();
             // SAFETY: format_description and callback are valid for the call.
             let status = unsafe {
@@ -1023,13 +710,61 @@ mod platform {
         }
 
         fn release_queued_frames(&mut self) {
-            if let Ok(mut frames) = self.callback_state.frames.lock() {
-                while let Some(frame) = frames.pop_front() {
-                    // SAFETY: queued frames are retained in the callback and
-                    // still owned by this session.
-                    unsafe { CFRelease(frame.pixel_buffer as CFTypeRef) };
-                }
+            let mut frames = pending_frames(&self.callback_state);
+            while let Some(frame) = frames.pop_front() {
+                // SAFETY: queued frames are retained in the callback and still
+                // owned by this session.
+                unsafe { CFRelease(frame.pixel_buffer as CFTypeRef) };
             }
+        }
+    }
+
+    impl NativeDecoderSession for VideoToolboxDecoderSession {
+        fn session_info(&self) -> DecoderSessionInfo {
+            VideoToolboxDecoderSession::session_info(self)
+        }
+
+        fn send_packet(
+            &mut self,
+            packet: &DecoderPacket,
+            data: &[u8],
+        ) -> Result<DecoderPacketResult, DecoderError> {
+            VideoToolboxDecoderSession::send_packet(self, packet, data)
+        }
+
+        fn receive_native_frame(
+            &mut self,
+        ) -> Result<DecoderReceiveNativeFrameOutput, DecoderError> {
+            VideoToolboxDecoderSession::receive_native_frame(self)
+        }
+
+        fn release_native_frame(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError> {
+            if self.closed {
+                return Err(DecoderError::NotConfigured);
+            }
+            if frame.metadata.handle_kind != DecoderNativeHandleKind::CvPixelBuffer {
+                return Err(DecoderError::abi_violation(format!(
+                    "VideoToolbox plugin expected CVPixelBuffer handle kind, got {:?}",
+                    frame.metadata.handle_kind
+                )));
+            }
+            if frame.handle == 0 {
+                return Err(DecoderError::abi_violation(
+                    "VideoToolbox plugin received a null native frame handle",
+                ));
+            }
+            // SAFETY: receive_native_frame transfers one retained
+            // CVPixelBuffer reference into this session-owned frame lease.
+            unsafe { CFRelease(frame.handle as CFTypeRef) };
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), DecoderError> {
+            VideoToolboxDecoderSession::flush(self)
+        }
+
+        fn close(&mut self) -> Result<(), DecoderError> {
+            VideoToolboxDecoderSession::close(self)
         }
     }
 
@@ -1044,6 +779,13 @@ mod platform {
         frames: Mutex<VecDeque<PendingNativeFrame>>,
     }
 
+    fn pending_frames(state: &CallbackState) -> MutexGuard<'_, VecDeque<PendingNativeFrame>> {
+        state
+            .frames
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
     #[derive(Debug)]
     struct PendingNativeFrame {
         pixel_buffer: CVPixelBufferRef,
@@ -1056,17 +798,6 @@ mod platform {
     // SAFETY: `PendingNativeFrame` owns a retained pixel buffer reference, and
     // release is serialized by the decoder session queue.
     unsafe impl Send for PendingNativeFrame {}
-
-    struct NativeFrame {
-        metadata: DecoderNativeFrameMetadata,
-        handle: usize,
-    }
-
-    enum NativeReceiveResult {
-        Frame(NativeFrame),
-        NeedMoreInput,
-        Eof,
-    }
 
     unsafe extern "C" fn decompression_output_callback(
         decompression_output_ref_con: *mut c_void,
@@ -1122,18 +853,11 @@ mod platform {
             width,
             height,
         };
-        match callback_state.frames.lock() {
-            Ok(mut frames) => {
-                if let Err(frame) = enqueue_pending_native_frame(&mut frames, frame) {
-                    // SAFETY: release the retain above if the bounded queue
-                    // cannot accept another frame.
-                    unsafe { CFRelease(frame.pixel_buffer as CFTypeRef) };
-                }
-            }
-            Err(_) => {
-                // SAFETY: release the retain above if the queue is unavailable.
-                unsafe { CFRelease(pixel_buffer as CFTypeRef) };
-            }
+        let mut frames = pending_frames(callback_state);
+        if let Err(frame) = enqueue_pending_native_frame(&mut frames, frame) {
+            // SAFETY: release the retain above if the bounded queue cannot
+            // accept another frame.
+            unsafe { CFRelease(frame.pixel_buffer as CFTypeRef) };
         }
     }
 
@@ -1926,65 +1650,49 @@ mod platform {
 
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 mod platform {
-    use std::ffi::c_void;
+    use player_plugin::{DecoderError, DecoderSessionConfig, NativeDecoderSession};
 
-    use player_plugin::{
-        DecoderError, DecoderPacket, DecoderSessionConfig, VesperDecoderOpenSessionResult,
-        VesperDecoderReceiveNativeFrameResult, VesperPluginProcessResult,
-    };
+    use super::VideoCodecKind;
 
-    use super::{native_frame_error, open_error, process_error};
-
-    pub fn open_session(_config: DecoderSessionConfig) -> VesperDecoderOpenSessionResult {
-        open_error(DecoderError::internal(
-            "VideoToolbox decoder plugin is only available on Apple VideoToolbox platforms",
-        ))
-    }
-
-    pub fn send_packet(
-        _session: *mut c_void,
-        _packet: &DecoderPacket,
-        _data: &[u8],
-    ) -> VesperPluginProcessResult {
-        process_error(DecoderError::NotConfigured)
-    }
-
-    pub fn receive_native_frame(_session: *mut c_void) -> VesperDecoderReceiveNativeFrameResult {
-        native_frame_error(DecoderError::NotConfigured)
-    }
-
-    pub fn release_native_frame(
-        _session: *mut c_void,
-        _handle_kind: u32,
-        _handle: usize,
-    ) -> VesperPluginProcessResult {
-        process_error(DecoderError::NotConfigured)
-    }
-
-    pub fn flush_session(_session: *mut c_void) -> VesperPluginProcessResult {
-        process_error(DecoderError::NotConfigured)
-    }
-
-    pub fn close_session(_session: *mut c_void) -> VesperPluginProcessResult {
-        process_error(DecoderError::NotConfigured)
+    pub(super) fn open_session(
+        _config: DecoderSessionConfig,
+        _codec: VideoCodecKind,
+    ) -> Result<Box<dyn NativeDecoderSession>, DecoderError> {
+        Err(DecoderError::UnsupportedCapability {
+            capability: "apple-videotoolbox-platform".to_owned(),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{decoder_capabilities, decoder_send_packet, video_codec_kind};
-    use player_plugin::{DecoderError, DecoderPacket, VesperPluginResultStatus};
+    use super::{
+        VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED, VideoToolboxDecoderFactory, decoder_capabilities,
+        video_codec_kind,
+    };
+    use player_plugin::{DecoderMediaKind, DecoderSessionConfig, NativeDecoderPluginFactory};
+
+    #[test]
+    fn exports_plugin_entry() {
+        assert!(!super::vesper_plugin_entry().is_null());
+    }
 
     #[test]
     fn capabilities_advertise_video_hardware_native_frames() {
         let capabilities = decoder_capabilities();
 
-        assert!(capabilities.supports_codec("H264", player_plugin::DecoderMediaKind::Video));
-        assert!(capabilities.supports_codec("avc1", player_plugin::DecoderMediaKind::Video));
-        assert!(capabilities.supports_codec("HEVC", player_plugin::DecoderMediaKind::Video));
-        assert!(capabilities.supports_codec("hvc1", player_plugin::DecoderMediaKind::Video));
-        assert!(capabilities.supports_codec("dvh1", player_plugin::DecoderMediaKind::Video));
-        assert!(capabilities.supports_codec("dvhe", player_plugin::DecoderMediaKind::Video));
+        assert_eq!(
+            capabilities.supports_codec("H264", DecoderMediaKind::Video),
+            VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED
+        );
+        assert_eq!(
+            capabilities.supports_codec("video/avc1.640028", DecoderMediaKind::Video),
+            VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED
+        );
+        assert_eq!(
+            capabilities.supports_codec("dvh1.05.06", DecoderMediaKind::Video),
+            VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED
+        );
         assert!(capabilities.supports_gpu_handles == super::VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED);
         assert!(!capabilities.supports_cpu_video_frames);
     }
@@ -1996,31 +1704,41 @@ mod tests {
         assert!(video_codec_kind("H265").is_some());
         assert!(video_codec_kind("dvh1.05.06").is_some());
         assert!(video_codec_kind("dvhe.08.07").is_some());
+        assert!(video_codec_kind("video/avc1.640028").is_some());
+        assert!(video_codec_kind("avc1garbage").is_none());
         assert!(video_codec_kind("vp9").is_none());
     }
 
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     #[test]
-    fn send_packet_rejects_null_packet_data_with_non_zero_len() {
-        let packet_json = serde_json::to_vec(&DecoderPacket::default()).expect("packet json");
+    fn factory_opens_profile_qualified_h264_and_rejects_cpu_output() {
+        let factory = VideoToolboxDecoderFactory;
+        let mut session = factory
+            .open_native_session(&DecoderSessionConfig {
+                codec: "video/avc1.640028".to_owned(),
+                media_kind: DecoderMediaKind::Video,
+                ..DecoderSessionConfig::default()
+            })
+            .expect("open VideoToolbox session without eager format description");
+        assert_eq!(
+            session.session_info().selected_hardware_backend.as_deref(),
+            Some("VideoToolbox")
+        );
+        session.close().expect("close VideoToolbox session");
 
-        // SAFETY: the JSON buffer is valid for this synchronous callback and
-        // the null packet data deliberately exercises ABI validation.
-        let result = unsafe {
-            decoder_send_packet(
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                packet_json.as_ptr(),
-                packet_json.len(),
-                std::ptr::null(),
-                1,
-            )
+        let error = match factory.open_native_session(&DecoderSessionConfig {
+            codec: "H264".to_owned(),
+            media_kind: DecoderMediaKind::Video,
+            require_cpu_output: true,
+            ..DecoderSessionConfig::default()
+        }) {
+            Ok(_) => panic!("CPU output must be rejected"),
+            Err(error) => error,
         };
-
-        assert_eq!(result.status, VesperPluginResultStatus::Failure as u32);
-        // SAFETY: the plugin produced this payload in the current dynamic
-        // library and the test has not reclaimed it yet.
-        let payload = unsafe { result.payload.into_vec() };
-        let error = serde_json::from_slice::<DecoderError>(&payload).expect("decoder error");
-        assert!(matches!(error, DecoderError::AbiViolation { .. }));
+        assert!(matches!(
+            error,
+            player_plugin::DecoderError::UnsupportedCapability { capability }
+                if capability == "cpu-video-frame-output"
+        ));
     }
 }

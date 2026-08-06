@@ -11,11 +11,17 @@ mod clock;
 /// Shared policy resolution helpers.
 pub mod policy;
 
+use std::collections::{BTreeMap, VecDeque};
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use player_model::MediaSource;
+use player_plugin::{
+    MAX_PLUGIN_PLATFORM_BYTES, PipelineEvent, PluginDiagnostic, PluginDiagnosticSeverity,
+};
 use serde::{Deserialize, Serialize};
 
 pub use adapter::{
@@ -25,12 +31,15 @@ pub use adapter::{
 pub use clock::{MediaClock, PlaybackClock};
 pub use player_download::{
     DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
-    DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadExecutor,
-    DownloadExportPlan, DownloadManager, DownloadManagerConfig, DownloadPrepareResult,
-    DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord,
-    DownloadSnapshot, DownloadSource, DownloadStore, DownloadStreamKind, DownloadTaskId,
-    DownloadTaskProgressPatch, DownloadTaskSnapshot, DownloadTaskState, DownloadTaskStatePatch,
-    DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
+    DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadEventBatch,
+    DownloadExecutor, DownloadExportPlan, DownloadManager, DownloadManagerConfig,
+    DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord,
+    DownloadSegmentRecord, DownloadSnapshot, DownloadSource, DownloadStore, DownloadStreamKind,
+    DownloadTaskId, DownloadTaskProgressPatch, DownloadTaskSnapshot, DownloadTaskState,
+    DownloadTaskStatePatch, DownloadTaskStatus, InMemoryDownloadExecutor, InMemoryDownloadStore,
+    MAX_PENDING_DOWNLOAD_EVENTS, MAX_PENDING_PIPELINE_EVENT_REPORTS, MAX_PENDING_PIPELINE_EVENTS,
+    MAX_PIPELINE_EVENT_HOOKS, PipelineEventDispatcher, PipelineEventHookRegistration,
+    PipelineEventHookReport, PipelineEventHookReportBatch, PostDownloadProcessorRegistration,
 };
 pub use player_model::{
     DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
@@ -39,33 +48,38 @@ pub use player_model::{
     PlayerErrorCode, PlayerResult, PresentationState, SubtitleErrorDetails, VideoPixelFormat,
 };
 pub use player_playlist::{
-    PlaylistActivationReason, PlaylistActiveItem, PlaylistAdvanceDecision, PlaylistAdvanceOutcome,
-    PlaylistAdvanceTrigger, PlaylistCoordinator, PlaylistCoordinatorConfig, PlaylistEvent,
-    PlaylistFailureStrategy, PlaylistId, PlaylistItemPreloadProfile, PlaylistNeighborWindow,
-    PlaylistPreloadWindow, PlaylistQueueItem, PlaylistQueueItemId, PlaylistQueueItemSnapshot,
-    PlaylistRepeatMode, PlaylistSnapshot, PlaylistSwitchPolicy, PlaylistViewportHint,
-    PlaylistViewportHintKind,
+    MAX_PENDING_PLAYLIST_EVENTS, PlaylistActivationReason, PlaylistActiveItem,
+    PlaylistAdvanceDecision, PlaylistAdvanceOutcome, PlaylistAdvanceTrigger, PlaylistCoordinator,
+    PlaylistCoordinatorConfig, PlaylistEvent, PlaylistFailureStrategy, PlaylistId,
+    PlaylistItemPreloadProfile, PlaylistNeighborWindow, PlaylistPreloadWindow, PlaylistQueueItem,
+    PlaylistQueueItemId, PlaylistQueueItemSnapshot, PlaylistRepeatMode, PlaylistSnapshot,
+    PlaylistSwitchPolicy, PlaylistViewportHint, PlaylistViewportHintKind,
 };
+pub use player_plugin::{PipelineEventHook, PipelineEventHookError};
 pub use player_preload::{
     DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
     DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW, InMemoryPreloadBudgetProvider,
-    InMemoryPreloadExecutor, PlayerPreloadBudgetPolicy, PlayerResolvedPreloadBudgetPolicy,
-    PreloadBudget, PreloadBudgetProvider, PreloadBudgetScope, PreloadCacheKey, PreloadCandidate,
-    PreloadCandidateKind, PreloadConfig, PreloadErrorSummary, PreloadEvent, PreloadExecutor,
-    PreloadPlanner, PreloadPriority, PreloadSelectionHint, PreloadSnapshot, PreloadSourceIdentity,
-    PreloadTaskId, PreloadTaskSnapshot, PreloadTaskState, PreloadTaskStatus,
+    InMemoryPreloadExecutor, MAX_PENDING_PRELOAD_EVENTS, PlayerPreloadBudgetPolicy,
+    PlayerResolvedPreloadBudgetPolicy, PreloadBudget, PreloadBudgetProvider, PreloadBudgetScope,
+    PreloadCacheKey, PreloadCandidate, PreloadCandidateKind, PreloadConfig, PreloadErrorSummary,
+    PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadPriority, PreloadSelectionHint,
+    PreloadSnapshot, PreloadSourceIdentity, PreloadTaskId, PreloadTaskSnapshot, PreloadTaskState,
+    PreloadTaskStatus,
 };
 
 /// Download API re-exports.
 pub mod download {
     pub use player_download::{
         DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
-        DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadExecutor,
-        DownloadExportPlan, DownloadManager, DownloadManagerConfig, DownloadPrepareResult,
-        DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord, DownloadSegmentRecord,
-        DownloadSnapshot, DownloadSource, DownloadStore, DownloadStreamKind, DownloadTaskId,
-        DownloadTaskSnapshot, DownloadTaskState, DownloadTaskStatus, InMemoryDownloadExecutor,
-        InMemoryDownloadStore,
+        DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadEventBatch,
+        DownloadExecutor, DownloadExportPlan, DownloadManager, DownloadManagerConfig,
+        DownloadPrepareResult, DownloadProfile, DownloadProgressSnapshot, DownloadResourceRecord,
+        DownloadSegmentRecord, DownloadSnapshot, DownloadSource, DownloadStore, DownloadStreamKind,
+        DownloadTaskId, DownloadTaskSnapshot, DownloadTaskState, DownloadTaskStatus,
+        InMemoryDownloadExecutor, InMemoryDownloadStore, MAX_PENDING_DOWNLOAD_EVENTS,
+        MAX_PENDING_PIPELINE_EVENT_REPORTS, MAX_PENDING_PIPELINE_EVENTS, MAX_PIPELINE_EVENT_HOOKS,
+        PipelineEventDispatcher, PipelineEventHookRegistration, PipelineEventHookReport,
+        PipelineEventHookReportBatch, PostDownloadProcessorRegistration,
     };
 }
 
@@ -81,22 +95,23 @@ pub mod preload {
     pub use player_preload::{
         DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
         DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW,
-        InMemoryPreloadBudgetProvider, InMemoryPreloadExecutor, PlayerPreloadBudgetPolicy,
-        PlayerResolvedPreloadBudgetPolicy, PreloadBudget, PreloadBudgetProvider,
-        PreloadBudgetScope, PreloadCacheKey, PreloadCandidate, PreloadCandidateKind, PreloadConfig,
-        PreloadErrorSummary, PreloadEvent, PreloadExecutor, PreloadPlanner, PreloadPriority,
-        PreloadSelectionHint, PreloadSnapshot, PreloadSourceIdentity, PreloadTaskId,
-        PreloadTaskSnapshot, PreloadTaskState, PreloadTaskStatus,
+        InMemoryPreloadBudgetProvider, InMemoryPreloadExecutor, MAX_PENDING_PRELOAD_EVENTS,
+        PlayerPreloadBudgetPolicy, PlayerResolvedPreloadBudgetPolicy, PreloadBudget,
+        PreloadBudgetProvider, PreloadBudgetScope, PreloadCacheKey, PreloadCandidate,
+        PreloadCandidateKind, PreloadConfig, PreloadErrorSummary, PreloadEvent, PreloadExecutor,
+        PreloadPlanner, PreloadPriority, PreloadSelectionHint, PreloadSnapshot,
+        PreloadSourceIdentity, PreloadTaskId, PreloadTaskSnapshot, PreloadTaskState,
+        PreloadTaskStatus,
     };
 }
 
 /// Playlist API re-exports.
 pub mod playlist {
     pub use player_playlist::{
-        PlaylistActivationReason, PlaylistActiveItem, PlaylistAdvanceDecision,
-        PlaylistAdvanceOutcome, PlaylistAdvanceTrigger, PlaylistCoordinator,
-        PlaylistCoordinatorConfig, PlaylistEvent, PlaylistFailureStrategy, PlaylistId,
-        PlaylistItemPreloadProfile, PlaylistNeighborWindow, PlaylistPreloadWindow,
+        MAX_PENDING_PLAYLIST_EVENTS, PlaylistActivationReason, PlaylistActiveItem,
+        PlaylistAdvanceDecision, PlaylistAdvanceOutcome, PlaylistAdvanceTrigger,
+        PlaylistCoordinator, PlaylistCoordinatorConfig, PlaylistEvent, PlaylistFailureStrategy,
+        PlaylistId, PlaylistItemPreloadProfile, PlaylistNeighborWindow, PlaylistPreloadWindow,
         PlaylistQueueItem, PlaylistQueueItemId, PlaylistQueueItemSnapshot, PlaylistRepeatMode,
         PlaylistSnapshot, PlaylistSwitchPolicy, PlaylistViewportHint, PlaylistViewportHintKind,
     };
@@ -135,8 +150,105 @@ pub const DEFAULT_RETRY_BASE_DELAY: Duration = Duration::from_millis(1_000);
 /// Default maximum delay for retry policies.
 pub const DEFAULT_RETRY_MAX_DELAY: Duration = Duration::from_millis(5_000);
 
+/// Maximum runtime events forwarded to a pipeline hook during one drain call.
+pub const MAX_PLAYBACK_PIPELINE_EVENTS_PER_DRAIN: usize = 256;
+/// Maximum number of pending adapter events retained before new events are dropped.
+pub const MAX_PENDING_RUNTIME_EVENTS: usize = 1_024;
+
+static NEXT_PLAYBACK_PIPELINE_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
 static DEFAULT_RUNTIME_ADAPTER_FACTORY: OnceLock<&'static dyn PlayerRuntimeAdapterFactory> =
     OnceLock::new();
+
+/// Shared event identity and dispatch context for a playback host session.
+///
+/// `PlayerRuntime` owns this context internally for SDK-managed adapters, while
+/// native host bridges can use it directly when platform callbacks are routed
+/// around the runtime facade. Keeping the conversion here prevents Android and
+/// iOS adapters from inventing different event names or resource identities.
+#[derive(Debug, Clone)]
+pub struct PipelineEventContext {
+    dispatcher: PipelineEventDispatcher,
+    run_id: String,
+    session_id: String,
+    resource_identity: String,
+    platform: String,
+    protocol: MediaSourceProtocol,
+    started_at: Instant,
+}
+
+impl PipelineEventContext {
+    /// Creates a context with a fresh playback session identity.
+    pub fn new(
+        dispatcher: PipelineEventDispatcher,
+        platform: impl Into<String>,
+        protocol: MediaSourceProtocol,
+    ) -> PlayerResult<Self> {
+        let platform = resolve_pipeline_event_platform(&platform.into(), "mobile")?;
+        let session_number = NEXT_PLAYBACK_PIPELINE_SESSION_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                Some(value.saturating_add(1).max(1))
+            })
+            .unwrap_or(1);
+        let session_id = format!("playback-session:{session_number}");
+        Ok(Self {
+            dispatcher,
+            run_id: session_id.clone(),
+            session_id: session_id.clone(),
+            resource_identity: session_id,
+            platform,
+            protocol,
+            started_at: Instant::now(),
+        })
+    }
+
+    /// Creates a context using the protocol inferred from a media source.
+    pub fn for_source(
+        dispatcher: PipelineEventDispatcher,
+        platform: impl Into<String>,
+        source: &MediaSource,
+    ) -> PlayerResult<Self> {
+        Self::new(dispatcher, platform, source.protocol())
+    }
+
+    /// Enqueues one runtime event for all registered hooks.
+    pub fn enqueue(&self, event: &PlayerRuntimeEvent) {
+        self.dispatcher.enqueue(self.pipeline_event_for(event));
+    }
+
+    /// Records events dropped before they reached the dispatcher.
+    pub fn record_dropped_events(&self, count: usize) {
+        self.dispatcher
+            .record_dropped_events(count.min(u64::MAX as usize) as u64);
+    }
+
+    /// Waits until all accepted events are processed, subject to `timeout`.
+    pub fn flush(&self, timeout: Duration) -> bool {
+        self.dispatcher.flush(timeout)
+    }
+
+    /// Closes the hook worker. This operation is idempotent.
+    pub fn close(&self) -> bool {
+        self.dispatcher.close()
+    }
+
+    /// Drains hook reports and dispatcher counters.
+    pub fn drain_reports(&self) -> PipelineEventHookReportBatch {
+        self.dispatcher.drain_reports()
+    }
+
+    fn pipeline_event_for(&self, event: &PlayerRuntimeEvent) -> PipelineEvent {
+        pipeline_event_for_runtime_event(
+            event,
+            &self.run_id,
+            &self.session_id,
+            &self.resource_identity,
+            &self.platform,
+            self.protocol,
+            self.started_at,
+        )
+    }
+}
 
 /// Options used while probing and opening a runtime.
 #[derive(Debug, Clone)]
@@ -155,6 +267,8 @@ pub struct PlayerRuntimeOptions {
     pub source_normalizer_mode: SourceNormalizerMode,
     /// Frame processor plugin library paths considered during startup.
     pub frame_processor_library_paths: Vec<PathBuf>,
+    /// Policy required before raw native plugin library paths may be loaded.
+    pub native_plugin_loading_policy: NativePluginLoadingPolicy,
     /// Frame processor rollout mode.
     pub frame_processor_mode: FrameProcessorMode,
     /// Frame processor scheduling policy.
@@ -175,7 +289,90 @@ pub struct PlayerRuntimeOptions {
     pub preload_budget: PlayerPreloadBudgetPolicy,
     /// Track selection preferences.
     pub track_preferences: PlayerTrackPreferencePolicy,
+    /// Optional dispatcher for structured playback pipeline events.
+    pub pipeline_event_dispatcher: Option<PipelineEventDispatcher>,
+    /// Platform label attached to playback pipeline events.
+    pub pipeline_event_platform: String,
 }
+
+/// Host policy for raw native plugin libraries supplied through runtime options.
+///
+/// Native libraries run in-process and are not sandboxed. The default rejects
+/// raw paths so production hosts use signed packages or embedded registries;
+/// desktop tooling must opt into development loading explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativePluginLoadingPolicy {
+    /// Reject raw native plugin library paths.
+    #[default]
+    DenyRawPaths,
+    /// Permit unsigned raw libraries for local development and diagnostics.
+    DevelopmentRawPaths,
+}
+
+impl NativePluginLoadingPolicy {
+    /// Returns whether this policy allows unsigned development library paths.
+    pub const fn allows_development_raw_paths(self) -> bool {
+        matches!(self, Self::DevelopmentRawPaths)
+    }
+
+    /// Returns a stable diagnostic label for the policy.
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::DenyRawPaths => "deny-raw-paths",
+            Self::DevelopmentRawPaths => "development-raw-paths",
+        }
+    }
+
+    /// Checks whether one runtime surface may load unsigned development
+    /// library paths.
+    pub fn validate_development_raw_paths(
+        self,
+        surface: &'static str,
+    ) -> Result<(), NativePluginLoadingPolicyError> {
+        if self.allows_development_raw_paths() {
+            Ok(())
+        } else {
+            Err(NativePluginLoadingPolicyError::new(surface, self))
+        }
+    }
+}
+
+/// Error returned when raw native plugin paths are present without an explicit
+/// loading policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativePluginLoadingPolicyError {
+    surface: &'static str,
+    policy: NativePluginLoadingPolicy,
+}
+
+impl NativePluginLoadingPolicyError {
+    fn new(surface: &'static str, policy: NativePluginLoadingPolicy) -> Self {
+        Self { surface, policy }
+    }
+
+    /// Runtime surface that requested raw native plugin paths.
+    pub const fn surface(&self) -> &'static str {
+        self.surface
+    }
+
+    /// Policy that rejected the request.
+    pub const fn policy(&self) -> NativePluginLoadingPolicy {
+        self.policy
+    }
+}
+
+impl fmt::Display for NativePluginLoadingPolicyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} raw native plugin paths require explicit development loading policy; current policy is {}",
+            self.surface,
+            self.policy.wire_name()
+        )
+    }
+}
+
+impl std::error::Error for NativePluginLoadingPolicyError {}
 
 /// Rollout mode for decoder plugin video output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -598,6 +795,8 @@ pub struct PlayerRuntimeAdapterCapabilities {
 pub struct PlayerRuntimeInitializer {
     adapter_id: &'static str,
     inner: Box<dyn PlayerRuntimeAdapterInitializer>,
+    pipeline_event_dispatcher: Option<PipelineEventDispatcher>,
+    pipeline_event_platform: String,
 }
 
 /// Summary of decoded audio collected during startup.
@@ -1381,6 +1580,30 @@ pub enum PlayerRuntimeEvent {
     Ended,
 }
 
+/// Pushes one runtime event while enforcing the shared adapter queue bound.
+pub fn push_runtime_event_bounded(
+    queue: &mut VecDeque<PlayerRuntimeEvent>,
+    dropped_events: &mut u64,
+    event: PlayerRuntimeEvent,
+) {
+    if queue.len() >= MAX_PENDING_RUNTIME_EVENTS {
+        *dropped_events = dropped_events.saturating_add(1);
+        return;
+    }
+    queue.push_back(event);
+}
+
+/// Extends a runtime event queue while enforcing the shared adapter queue bound.
+pub fn extend_runtime_events_bounded(
+    queue: &mut VecDeque<PlayerRuntimeEvent>,
+    dropped_events: &mut u64,
+    events: impl IntoIterator<Item = PlayerRuntimeEvent>,
+) {
+    for event in events {
+        push_runtime_event_bounded(queue, dropped_events, event);
+    }
+}
+
 /// Runtime returned after opening a source.
 pub struct PlayerRuntimeBootstrap {
     /// Runtime wrapper.
@@ -1395,6 +1618,13 @@ pub struct PlayerRuntimeBootstrap {
 pub struct PlayerRuntime {
     adapter_id: &'static str,
     inner: Box<dyn PlayerRuntimeAdapter>,
+    pipeline_event_dispatcher: Option<PipelineEventDispatcher>,
+    pipeline_event_run_id: String,
+    pipeline_event_session_id: String,
+    pipeline_event_resource_identity: String,
+    pipeline_event_platform: String,
+    pipeline_event_started_at: Instant,
+    dropped_runtime_events: u64,
 }
 
 impl std::fmt::Debug for PlayerRuntimeInitializer {
@@ -1425,6 +1655,7 @@ impl Default for PlayerRuntimeOptions {
             source_normalizer_plugin_library_paths: Vec::new(),
             source_normalizer_mode: SourceNormalizerMode::Disabled,
             frame_processor_library_paths: Vec::new(),
+            native_plugin_loading_policy: NativePluginLoadingPolicy::default(),
             frame_processor_mode: FrameProcessorMode::Disabled,
             frame_processor_policy: FrameProcessorPolicy::default(),
             video_prefetch_capacity: DEFAULT_VIDEO_PREFETCH_CAPACITY,
@@ -1435,11 +1666,36 @@ impl Default for PlayerRuntimeOptions {
             cache_policy: PlayerCachePolicy::default(),
             preload_budget: PlayerPreloadBudgetPolicy::default(),
             track_preferences: PlayerTrackPreferencePolicy::default(),
+            pipeline_event_dispatcher: None,
+            pipeline_event_platform: "unknown".to_owned(),
         }
     }
 }
 
 impl PlayerRuntimeOptions {
+    /// Installs a shared dispatcher for structured playback pipeline events.
+    pub fn with_pipeline_event_dispatcher(mut self, dispatcher: PipelineEventDispatcher) -> Self {
+        self.pipeline_event_dispatcher = Some(dispatcher);
+        self
+    }
+
+    /// Creates and installs a dispatcher for structured playback pipeline events.
+    pub fn with_pipeline_event_hooks(
+        mut self,
+        registrations: Vec<PipelineEventHookRegistration>,
+        platform: impl Into<String>,
+    ) -> Self {
+        self.pipeline_event_dispatcher = Some(PipelineEventDispatcher::new(registrations));
+        self.pipeline_event_platform = platform.into();
+        self
+    }
+
+    /// Sets the platform label attached to playback pipeline events.
+    pub fn with_pipeline_event_platform(mut self, platform: impl Into<String>) -> Self {
+        self.pipeline_event_platform = platform.into();
+        self
+    }
+
     /// Sets the initial host-owned video surface.
     pub fn with_video_surface(mut self, video_surface: PlayerVideoSurfaceTarget) -> Self {
         self.video_surface = Some(video_surface);
@@ -1489,6 +1745,27 @@ impl PlayerRuntimeOptions {
     ) -> Self {
         self.frame_processor_library_paths = paths.into_iter().collect();
         self
+    }
+
+    /// Sets the policy used when runtime options contain raw native plugin
+    /// library paths.
+    pub fn with_native_plugin_loading_policy(mut self, policy: NativePluginLoadingPolicy) -> Self {
+        self.native_plugin_loading_policy = policy;
+        self
+    }
+
+    /// Enables raw native plugin paths for local development and diagnostics.
+    pub fn with_development_native_plugin_loading(self) -> Self {
+        self.with_native_plugin_loading_policy(NativePluginLoadingPolicy::DevelopmentRawPaths)
+    }
+
+    /// Checks whether raw native plugin paths are allowed for a runtime surface.
+    pub fn validate_native_plugin_loading_policy(
+        &self,
+        surface: &'static str,
+    ) -> Result<(), NativePluginLoadingPolicyError> {
+        self.native_plugin_loading_policy
+            .validate_development_raw_paths(surface)
     }
 
     /// Sets frame processor scheduling policy.
@@ -2148,9 +2425,16 @@ impl PlayerRuntimeInitializer {
         options: PlayerRuntimeOptions,
         factory: &dyn PlayerRuntimeAdapterFactory,
     ) -> PlayerResult<Self> {
+        let pipeline_event_platform = resolve_pipeline_event_platform(
+            &options.pipeline_event_platform,
+            factory.adapter_id(),
+        )?;
+        let pipeline_event_dispatcher = options.pipeline_event_dispatcher.clone();
         Ok(Self {
             adapter_id: factory.adapter_id(),
             inner: factory.probe_source_with_options(source, options)?,
+            pipeline_event_dispatcher,
+            pipeline_event_platform,
         })
     }
 
@@ -2176,10 +2460,17 @@ impl PlayerRuntimeInitializer {
 
     /// Initializes the probed runtime.
     pub fn initialize(self) -> PlayerResult<PlayerRuntimeBootstrap> {
-        let Self { adapter_id, inner } = self;
-        Ok(PlayerRuntime::from_adapter_bootstrap(
+        let Self {
+            adapter_id,
+            inner,
+            pipeline_event_dispatcher,
+            pipeline_event_platform,
+        } = self;
+        Ok(PlayerRuntime::from_adapter_bootstrap_with_pipeline(
             adapter_id,
             inner.initialize()?,
+            pipeline_event_dispatcher,
+            pipeline_event_platform,
         ))
     }
 }
@@ -2190,19 +2481,96 @@ impl PlayerRuntime {
         adapter_id: &'static str,
         bootstrap: PlayerRuntimeAdapterBootstrap,
     ) -> PlayerRuntimeBootstrap {
+        Self::from_adapter_bootstrap_with_pipeline(
+            adapter_id,
+            bootstrap,
+            None,
+            adapter_id.to_owned(),
+        )
+    }
+
+    /// Wraps an adapter bootstrap and attaches an optional playback event dispatcher.
+    pub fn from_adapter_bootstrap_with_pipeline(
+        adapter_id: &'static str,
+        bootstrap: PlayerRuntimeAdapterBootstrap,
+        pipeline_event_dispatcher: Option<PipelineEventDispatcher>,
+        pipeline_event_platform: String,
+    ) -> PlayerRuntimeBootstrap {
         let PlayerRuntimeAdapterBootstrap {
             runtime,
             initial_frame,
             startup,
         } = bootstrap;
 
+        let session_id = NEXT_PLAYBACK_PIPELINE_SESSION_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                Some(value.saturating_add(1).max(1))
+            })
+            .unwrap_or(1);
+        let pipeline_event_session_id = format!("playback-session:{session_id}");
+        let pipeline_event_resource_identity = pipeline_event_session_id.clone();
+        let pipeline_event_run_id = pipeline_event_session_id.clone();
         PlayerRuntimeBootstrap {
             runtime: PlayerRuntime {
                 adapter_id,
                 inner: runtime,
+                pipeline_event_dispatcher,
+                pipeline_event_run_id,
+                pipeline_event_session_id,
+                pipeline_event_resource_identity,
+                pipeline_event_platform: resolve_pipeline_event_platform(
+                    &pipeline_event_platform,
+                    adapter_id,
+                )
+                .unwrap_or_else(|_| adapter_id.to_owned()),
+                pipeline_event_started_at: Instant::now(),
+                dropped_runtime_events: 0,
             },
             initial_frame,
             startup,
+        }
+    }
+
+    /// Replaces the adapter while preserving the outer runtime's pipeline
+    /// identity, dispatcher, and dropped-event accounting. Platform wrappers
+    /// must forward dropped-event counts from the supplied inner runtime.
+    pub fn wrap_adapter(
+        self,
+        wrapper: impl FnOnce(PlayerRuntime) -> Box<dyn PlayerRuntimeAdapter>,
+    ) -> PlayerRuntime {
+        let Self {
+            adapter_id,
+            inner,
+            pipeline_event_dispatcher,
+            pipeline_event_run_id,
+            pipeline_event_session_id,
+            pipeline_event_resource_identity,
+            pipeline_event_platform,
+            pipeline_event_started_at,
+            dropped_runtime_events,
+        } = self;
+        let runtime = Self {
+            adapter_id,
+            inner,
+            pipeline_event_dispatcher: None,
+            pipeline_event_run_id: pipeline_event_run_id.clone(),
+            pipeline_event_session_id: pipeline_event_session_id.clone(),
+            pipeline_event_resource_identity: pipeline_event_resource_identity.clone(),
+            pipeline_event_platform: pipeline_event_platform.clone(),
+            pipeline_event_started_at,
+            dropped_runtime_events: 0,
+        };
+        let inner = wrapper(runtime);
+        Self {
+            adapter_id,
+            inner,
+            pipeline_event_dispatcher,
+            pipeline_event_run_id,
+            pipeline_event_session_id,
+            pipeline_event_resource_identity,
+            pipeline_event_platform,
+            pipeline_event_started_at,
+            dropped_runtime_events,
         }
     }
 
@@ -2299,7 +2667,184 @@ impl PlayerRuntime {
 
     /// Drains pending runtime events.
     pub fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
-        self.inner.drain_events()
+        let events = self.inner.drain_events();
+        let adapter_dropped_events = self.inner.take_dropped_event_count();
+        self.dropped_runtime_events = self
+            .dropped_runtime_events
+            .saturating_add(adapter_dropped_events);
+        if let Some(dispatcher) = &self.pipeline_event_dispatcher {
+            let forwarded_events = events.len().min(MAX_PLAYBACK_PIPELINE_EVENTS_PER_DRAIN);
+            for event in events.iter().take(forwarded_events) {
+                dispatcher.enqueue(self.pipeline_event_for(event));
+            }
+            dispatcher.record_dropped_events(events.len().saturating_sub(forwarded_events) as u64);
+            dispatcher.record_dropped_events(adapter_dropped_events);
+        }
+        events
+    }
+
+    /// Returns and clears runtime events dropped by an adapter queue or the
+    /// runtime-to-hook batch bound.
+    pub fn take_dropped_event_count(&mut self) -> u64 {
+        let dropped = self.dropped_runtime_events;
+        self.dropped_runtime_events = 0;
+        dropped
+    }
+
+    /// Flushes accepted playback pipeline events within the supplied deadline.
+    pub fn flush_pipeline_event_hooks(&self, timeout: Duration) -> bool {
+        self.pipeline_event_dispatcher
+            .as_ref()
+            .map(|dispatcher| dispatcher.flush(timeout))
+            .unwrap_or(true)
+    }
+
+    /// Closes the playback pipeline event dispatcher, if configured.
+    pub fn close_pipeline_event_hooks(&self) -> bool {
+        self.pipeline_event_dispatcher
+            .as_ref()
+            .map(PipelineEventDispatcher::close)
+            .unwrap_or(true)
+    }
+
+    /// Drains playback pipeline hook reports, if configured.
+    pub fn drain_pipeline_event_hook_reports(&self) -> PipelineEventHookReportBatch {
+        self.pipeline_event_dispatcher
+            .as_ref()
+            .map(PipelineEventDispatcher::drain_reports)
+            .unwrap_or_default()
+    }
+
+    fn pipeline_event_for(&self, event: &PlayerRuntimeEvent) -> PipelineEvent {
+        pipeline_event_for_runtime_event(
+            event,
+            &self.pipeline_event_run_id,
+            &self.pipeline_event_session_id,
+            &self.pipeline_event_resource_identity,
+            &self.pipeline_event_platform,
+            self.inner.media_info().source_protocol,
+            self.pipeline_event_started_at,
+        )
+    }
+
+    #[allow(dead_code)]
+    fn pipeline_event_for_legacy(&self, event: &PlayerRuntimeEvent) -> PipelineEvent {
+        let mut attributes = BTreeMap::new();
+        let (event_name, diagnostic) = match event {
+            PlayerRuntimeEvent::Initialized(startup) => {
+                attributes.insert(
+                    "ffmpegInitialized".to_owned(),
+                    startup.ffmpeg_initialized.to_string(),
+                );
+                ("playback.initialized", None)
+            }
+            PlayerRuntimeEvent::MetadataReady(media_info) => {
+                attributes.insert(
+                    "sourceKind".to_owned(),
+                    playback_source_kind(media_info.source_kind).to_owned(),
+                );
+                attributes.insert(
+                    "sourceProtocol".to_owned(),
+                    playback_protocol(media_info.source_protocol).to_owned(),
+                );
+                attributes.insert(
+                    "audioStreams".to_owned(),
+                    media_info.audio_streams.to_string(),
+                );
+                attributes.insert(
+                    "videoStreams".to_owned(),
+                    media_info.video_streams.to_string(),
+                );
+                ("playback.metadata_ready", None)
+            }
+            PlayerRuntimeEvent::FirstFrameReady(frame) => {
+                attributes.insert("width".to_owned(), frame.width.to_string());
+                attributes.insert("height".to_owned(), frame.height.to_string());
+                attributes.insert(
+                    "presentationTimeMs".to_owned(),
+                    frame.presentation_time.as_millis().to_string(),
+                );
+                ("playback.first_frame_ready", None)
+            }
+            PlayerRuntimeEvent::PlaybackStateChanged(state) => {
+                attributes.insert("state".to_owned(), playback_state(*state).to_owned());
+                ("playback.state_changed", None)
+            }
+            PlayerRuntimeEvent::InterruptionChanged { interrupted } => {
+                attributes.insert("interrupted".to_owned(), interrupted.to_string());
+                ("playback.interruption_changed", None)
+            }
+            PlayerRuntimeEvent::BufferingChanged { buffering } => {
+                attributes.insert("buffering".to_owned(), buffering.to_string());
+                ("playback.buffering_changed", None)
+            }
+            PlayerRuntimeEvent::VideoSurfaceChanged { attached } => {
+                attributes.insert("attached".to_owned(), attached.to_string());
+                ("playback.video_surface_changed", None)
+            }
+            PlayerRuntimeEvent::AudioOutputChanged(output) => {
+                attributes.insert("available".to_owned(), output.is_some().to_string());
+                ("playback.audio_output_changed", None)
+            }
+            PlayerRuntimeEvent::PlaybackRateChanged { rate } => {
+                attributes.insert("rate".to_owned(), rate.to_string());
+                ("playback.rate_changed", None)
+            }
+            PlayerRuntimeEvent::SeekCompleted { position } => {
+                attributes.insert("positionMs".to_owned(), position.as_millis().to_string());
+                ("playback.seek_completed", None)
+            }
+            PlayerRuntimeEvent::RetryScheduled { attempt, delay } => {
+                attributes.insert("attempt".to_owned(), attempt.to_string());
+                attributes.insert("delayMs".to_owned(), delay.as_millis().to_string());
+                ("playback.retry_scheduled", None)
+            }
+            PlayerRuntimeEvent::Warning(warning) => {
+                attributes.insert(
+                    "domain".to_owned(),
+                    playback_warning_domain(warning.domain()).to_owned(),
+                );
+                ("playback.warning", None)
+            }
+            PlayerRuntimeEvent::Error(error) => {
+                attributes.insert(
+                    "code".to_owned(),
+                    playback_error_code(error.code()).to_owned(),
+                );
+                attributes.insert(
+                    "category".to_owned(),
+                    playback_error_category(error.category()).to_owned(),
+                );
+                attributes.insert("retriable".to_owned(), error.is_retriable().to_string());
+                (
+                    "playback.error",
+                    Some(PluginDiagnostic {
+                        code: "playback.error".to_owned(),
+                        severity: PluginDiagnosticSeverity::Error,
+                        message: "playback runtime error".to_owned(),
+                        attributes: BTreeMap::new(),
+                    }),
+                )
+            }
+            PlayerRuntimeEvent::Ended => ("playback.ended", None),
+        };
+        let timestamp_ns = self
+            .pipeline_event_started_at
+            .elapsed()
+            .as_nanos()
+            .min(u128::from(u64::MAX)) as u64;
+        PipelineEvent {
+            run_id: self.pipeline_event_run_id.clone(),
+            session_id: self.pipeline_event_session_id.clone(),
+            platform: self.pipeline_event_platform.clone(),
+            protocol: Some(playback_protocol(self.inner.media_info().source_protocol).to_owned()),
+            event_name: event_name.to_owned(),
+            timestamp_ns,
+            thread: None,
+            resource_identity: Some(self.pipeline_event_resource_identity.clone()),
+            attributes,
+            diagnostic,
+        }
     }
 
     /// Dispatches a command to the underlying adapter.
@@ -2366,6 +2911,218 @@ impl PlayerRuntime {
     }
 }
 
+fn pipeline_event_for_runtime_event(
+    event: &PlayerRuntimeEvent,
+    run_id: &str,
+    session_id: &str,
+    resource_identity: &str,
+    platform: &str,
+    protocol: MediaSourceProtocol,
+    started_at: Instant,
+) -> PipelineEvent {
+    let mut attributes = BTreeMap::new();
+    let (event_name, diagnostic) = match event {
+        PlayerRuntimeEvent::Initialized(startup) => {
+            attributes.insert(
+                "ffmpegInitialized".to_owned(),
+                startup.ffmpeg_initialized.to_string(),
+            );
+            ("playback.initialized", None)
+        }
+        PlayerRuntimeEvent::MetadataReady(media_info) => {
+            attributes.insert(
+                "sourceKind".to_owned(),
+                playback_source_kind(media_info.source_kind).to_owned(),
+            );
+            attributes.insert(
+                "sourceProtocol".to_owned(),
+                playback_protocol(media_info.source_protocol).to_owned(),
+            );
+            attributes.insert(
+                "audioStreams".to_owned(),
+                media_info.audio_streams.to_string(),
+            );
+            attributes.insert(
+                "videoStreams".to_owned(),
+                media_info.video_streams.to_string(),
+            );
+            ("playback.metadata_ready", None)
+        }
+        PlayerRuntimeEvent::FirstFrameReady(frame) => {
+            attributes.insert("width".to_owned(), frame.width.to_string());
+            attributes.insert("height".to_owned(), frame.height.to_string());
+            attributes.insert(
+                "presentationTimeMs".to_owned(),
+                frame.presentation_time.as_millis().to_string(),
+            );
+            ("playback.first_frame_ready", None)
+        }
+        PlayerRuntimeEvent::PlaybackStateChanged(state) => {
+            attributes.insert("state".to_owned(), playback_state(*state).to_owned());
+            ("playback.state_changed", None)
+        }
+        PlayerRuntimeEvent::InterruptionChanged { interrupted } => {
+            attributes.insert("interrupted".to_owned(), interrupted.to_string());
+            ("playback.interruption_changed", None)
+        }
+        PlayerRuntimeEvent::BufferingChanged { buffering } => {
+            attributes.insert("buffering".to_owned(), buffering.to_string());
+            ("playback.buffering_changed", None)
+        }
+        PlayerRuntimeEvent::VideoSurfaceChanged { attached } => {
+            attributes.insert("attached".to_owned(), attached.to_string());
+            ("playback.video_surface_changed", None)
+        }
+        PlayerRuntimeEvent::AudioOutputChanged(output) => {
+            attributes.insert("available".to_owned(), output.is_some().to_string());
+            ("playback.audio_output_changed", None)
+        }
+        PlayerRuntimeEvent::PlaybackRateChanged { rate } => {
+            attributes.insert("rate".to_owned(), rate.to_string());
+            ("playback.rate_changed", None)
+        }
+        PlayerRuntimeEvent::SeekCompleted { position } => {
+            attributes.insert("positionMs".to_owned(), position.as_millis().to_string());
+            ("playback.seek_completed", None)
+        }
+        PlayerRuntimeEvent::RetryScheduled { attempt, delay } => {
+            attributes.insert("attempt".to_owned(), attempt.to_string());
+            attributes.insert("delayMs".to_owned(), delay.as_millis().to_string());
+            ("playback.retry_scheduled", None)
+        }
+        PlayerRuntimeEvent::Warning(warning) => {
+            attributes.insert(
+                "domain".to_owned(),
+                playback_warning_domain(warning.domain()).to_owned(),
+            );
+            ("playback.warning", None)
+        }
+        PlayerRuntimeEvent::Error(error) => {
+            attributes.insert(
+                "code".to_owned(),
+                playback_error_code(error.code()).to_owned(),
+            );
+            attributes.insert(
+                "category".to_owned(),
+                playback_error_category(error.category()).to_owned(),
+            );
+            attributes.insert("retriable".to_owned(), error.is_retriable().to_string());
+            (
+                "playback.error",
+                Some(PluginDiagnostic {
+                    code: "playback.error".to_owned(),
+                    severity: PluginDiagnosticSeverity::Error,
+                    message: "playback runtime error".to_owned(),
+                    attributes: BTreeMap::new(),
+                }),
+            )
+        }
+        PlayerRuntimeEvent::Ended => ("playback.ended", None),
+    };
+    let timestamp_ns = started_at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+    PipelineEvent {
+        run_id: run_id.to_owned(),
+        session_id: session_id.to_owned(),
+        platform: platform.to_owned(),
+        protocol: Some(playback_protocol(protocol).to_owned()),
+        event_name: event_name.to_owned(),
+        timestamp_ns,
+        thread: None,
+        resource_identity: Some(resource_identity.to_owned()),
+        attributes,
+        diagnostic,
+    }
+}
+
+fn playback_protocol(protocol: MediaSourceProtocol) -> &'static str {
+    match protocol {
+        MediaSourceProtocol::Unknown => "unknown",
+        MediaSourceProtocol::File => "file",
+        MediaSourceProtocol::Content => "content",
+        MediaSourceProtocol::Progressive => "progressive",
+        MediaSourceProtocol::Hls => "hls",
+        MediaSourceProtocol::Dash => "dash",
+        MediaSourceProtocol::Rtmp => "rtmp",
+        MediaSourceProtocol::Rtsp => "rtsp",
+        MediaSourceProtocol::Flv => "flv",
+    }
+}
+
+fn playback_source_kind(kind: MediaSourceKind) -> &'static str {
+    match kind {
+        MediaSourceKind::Local => "local",
+        MediaSourceKind::Remote => "remote",
+    }
+}
+
+fn playback_state(state: PresentationState) -> &'static str {
+    match state {
+        PresentationState::Ready => "ready",
+        PresentationState::Playing => "playing",
+        PresentationState::Paused => "paused",
+        PresentationState::Finished => "finished",
+    }
+}
+
+fn playback_warning_domain(domain: PlayerRuntimeWarningDomain) -> &'static str {
+    match domain {
+        PlayerRuntimeWarningDomain::FrameProcessor => "frameProcessor",
+    }
+}
+
+fn playback_error_code(code: PlayerErrorCode) -> &'static str {
+    match code {
+        PlayerErrorCode::InvalidArgument => "invalidArgument",
+        PlayerErrorCode::InvalidState => "invalidState",
+        PlayerErrorCode::InvalidSource => "invalidSource",
+        PlayerErrorCode::BackendFailure => "backendFailure",
+        PlayerErrorCode::AudioOutputUnavailable => "audioOutputUnavailable",
+        PlayerErrorCode::DecodeFailure => "decodeFailure",
+        PlayerErrorCode::SeekFailure => "seekFailure",
+        PlayerErrorCode::Unsupported => "unsupported",
+        PlayerErrorCode::CommandChannelClosed => "commandChannelClosed",
+        PlayerErrorCode::EventChannelClosed => "eventChannelClosed",
+        PlayerErrorCode::Cancelled => "cancelled",
+        PlayerErrorCode::Timeout => "timeout",
+    }
+}
+
+fn playback_error_category(category: PlayerErrorCategory) -> &'static str {
+    match category {
+        PlayerErrorCategory::Input => "input",
+        PlayerErrorCategory::Source => "source",
+        PlayerErrorCategory::Network => "network",
+        PlayerErrorCategory::Decode => "decode",
+        PlayerErrorCategory::AudioOutput => "audioOutput",
+        PlayerErrorCategory::Playback => "playback",
+        PlayerErrorCategory::Capability => "capability",
+        PlayerErrorCategory::Platform => "platform",
+    }
+}
+
+fn resolve_pipeline_event_platform(configured: &str, adapter_id: &str) -> PlayerResult<String> {
+    let platform = if configured.trim().is_empty() || configured == "unknown" {
+        adapter_id
+    } else {
+        configured
+    };
+    if platform.trim().is_empty() {
+        return Err(PlayerError::with_category(
+            PlayerErrorCode::InvalidArgument,
+            PlayerErrorCategory::Input,
+            "pipeline event platform must not be empty",
+        ));
+    }
+    if platform.len() > MAX_PLUGIN_PLATFORM_BYTES {
+        return Err(PlayerError::with_category(
+            PlayerErrorCode::InvalidArgument,
+            PlayerErrorCategory::Input,
+            format!("pipeline event platform exceeds {MAX_PLUGIN_PLATFORM_BYTES} bytes"),
+        ));
+    }
+    Ok(platform.to_owned())
+}
+
 /// Registers the process-wide default runtime adapter factory.
 pub fn register_default_runtime_adapter_factory(
     factory: &'static dyn PlayerRuntimeAdapterFactory,
@@ -2402,19 +3159,33 @@ mod tests {
     };
     use super::{
         DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
-        DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW, FrameProcessorMode,
-        FrameProcessorPolicy, FrameProcessorPolicyAction, FrameProcessorWarning,
-        FrameProcessorWarningKind, MediaAbrMode, MediaAbrPolicy, MediaSourceKind,
-        MediaSourceProtocol, MediaTrackSelection, MediaTrackSelectionMode, PlaybackProgress,
-        PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
+        DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW, FirstFrameReady,
+        FrameProcessorMode, FrameProcessorPolicy, FrameProcessorPolicyAction,
+        FrameProcessorWarning, FrameProcessorWarningKind, MAX_PENDING_RUNTIME_EVENTS,
+        MAX_PLAYBACK_PIPELINE_EVENTS_PER_DRAIN, MediaAbrMode, MediaAbrPolicy, MediaSourceKind,
+        MediaSourceProtocol, MediaTrackSelection, MediaTrackSelectionMode,
+        NativePluginLoadingPolicy, PlaybackProgress, PlayerAudioOutputInfo, PlayerBufferingPolicy,
+        PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset, PlayerError,
         PlayerErrorCategory, PlayerErrorCode, PlayerFrameProcessingMetrics, PlayerMediaInfo,
         PlayerPlaybackRoute, PlayerPluginDiagnosticStatus, PlayerPluginParticipation,
         PlayerPreloadBudgetPolicy, PlayerResilienceMetricsTracker,
-        PlayerResolvedPreloadBudgetPolicy, PlayerRetryBackoff, PlayerRetryPolicy,
-        PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeWarning, PlayerRuntimeWarningDomain,
-        PlayerSeekableRange, PlayerTimelineKind, PlayerTimelineSnapshot,
-        PlayerTrackPreferencePolicy, PresentationState, SourceNormalizerMode,
+        PlayerResolvedPreloadBudgetPolicy, PlayerResult, PlayerRetryBackoff, PlayerRetryPolicy,
+        PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+        PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
+        PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
+        PlayerRuntimeEvent, PlayerRuntimeInitializer, PlayerRuntimeOptions, PlayerRuntimeStartup,
+        PlayerRuntimeWarning, PlayerRuntimeWarningDomain, PlayerSeekableRange, PlayerTimelineKind,
+        PlayerTimelineSnapshot, PlayerTrackPreferencePolicy, PlayerVideoSurfaceTarget,
+        PresentationState, SourceNormalizerMode, extend_runtime_events_bounded,
+        push_runtime_event_bounded,
     };
+    use player_plugin::{
+        PipelineEvent, PipelineEventHook, PipelineEventHookOutcome, PluginReference,
+        PluginTransport,
+    };
+    use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     fn test_media_info(
@@ -2435,6 +3206,619 @@ mod tests {
             track_catalog: Default::default(),
             track_selection: Default::default(),
         }
+    }
+
+    fn test_startup() -> PlayerRuntimeStartup {
+        PlayerRuntimeStartup {
+            ffmpeg_initialized: true,
+            audio_output: None,
+            decoded_audio: None,
+            video_decode: None,
+            plugin_diagnostics: Vec::new(),
+        }
+    }
+
+    fn fake_capabilities() -> PlayerRuntimeAdapterCapabilities {
+        PlayerRuntimeAdapterCapabilities {
+            adapter_id: "fake-adapter",
+            backend_family: PlayerRuntimeAdapterBackendFamily::Unknown,
+            supports_audio_output: false,
+            supports_frame_output: false,
+            supports_external_video_surface: false,
+            supports_seek: true,
+            supports_stop: true,
+            supports_playback_rate: true,
+            playback_rate_min: Some(0.5),
+            playback_rate_max: Some(3.0),
+            natural_playback_rate_max: Some(2.0),
+            supports_hardware_decode: false,
+            supports_streaming: true,
+            supports_hdr: false,
+        }
+    }
+
+    struct FakeAdapter {
+        media_info: PlayerMediaInfo,
+        events: Vec<PlayerRuntimeEvent>,
+        dropped_events: u64,
+    }
+
+    impl PlayerRuntimeAdapter for FakeAdapter {
+        fn source_uri(&self) -> &str {
+            &self.media_info.source_uri
+        }
+
+        fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities {
+            fake_capabilities()
+        }
+
+        fn media_info(&self) -> &PlayerMediaInfo {
+            &self.media_info
+        }
+
+        fn presentation_state(&self) -> PresentationState {
+            PresentationState::Ready
+        }
+
+        fn playback_rate(&self) -> f32 {
+            1.0
+        }
+
+        fn progress(&self) -> PlaybackProgress {
+            PlaybackProgress::new(Duration::ZERO, self.media_info.duration)
+        }
+
+        fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
+            std::mem::take(&mut self.events)
+        }
+
+        fn take_dropped_event_count(&mut self) -> u64 {
+            std::mem::take(&mut self.dropped_events)
+        }
+
+        fn dispatch(
+            &mut self,
+            _command: PlayerRuntimeCommand,
+        ) -> PlayerResult<PlayerRuntimeCommandResult> {
+            Err(PlayerError::new(
+                PlayerErrorCode::Unsupported,
+                "fake adapter does not dispatch commands",
+            ))
+        }
+
+        fn advance(&mut self) -> PlayerResult<Option<super::DecodedVideoFrame>> {
+            Ok(None)
+        }
+
+        fn next_deadline(&self) -> Option<std::time::Instant> {
+            None
+        }
+    }
+
+    struct ForwardingRuntimeAdapter {
+        inner: super::PlayerRuntime,
+    }
+
+    impl PlayerRuntimeAdapter for ForwardingRuntimeAdapter {
+        fn source_uri(&self) -> &str {
+            self.inner.source_uri()
+        }
+
+        fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities {
+            self.inner.capabilities()
+        }
+
+        fn media_info(&self) -> &PlayerMediaInfo {
+            self.inner.media_info()
+        }
+
+        fn presentation_state(&self) -> PresentationState {
+            self.inner.presentation_state()
+        }
+
+        fn has_video_surface(&self) -> bool {
+            self.inner.has_video_surface()
+        }
+
+        fn is_interrupted(&self) -> bool {
+            self.inner.is_interrupted()
+        }
+
+        fn is_buffering(&self) -> bool {
+            self.inner.is_buffering()
+        }
+
+        fn playback_rate(&self) -> f32 {
+            self.inner.playback_rate()
+        }
+
+        fn progress(&self) -> PlaybackProgress {
+            self.inner.progress()
+        }
+
+        fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
+            self.inner.drain_events()
+        }
+
+        fn take_dropped_event_count(&mut self) -> u64 {
+            self.inner.take_dropped_event_count()
+        }
+
+        fn dispatch(
+            &mut self,
+            command: PlayerRuntimeCommand,
+        ) -> PlayerResult<PlayerRuntimeCommandResult> {
+            self.inner.dispatch(command)
+        }
+
+        fn replace_video_surface(
+            &mut self,
+            video_surface: Option<PlayerVideoSurfaceTarget>,
+        ) -> PlayerResult<()> {
+            self.inner.replace_video_surface(video_surface)
+        }
+
+        fn advance(&mut self) -> PlayerResult<Option<super::DecodedVideoFrame>> {
+            self.inner.advance()
+        }
+
+        fn next_deadline(&self) -> Option<std::time::Instant> {
+            self.inner.next_deadline()
+        }
+    }
+
+    struct FakeInitializer {
+        media_info: PlayerMediaInfo,
+        events: Vec<PlayerRuntimeEvent>,
+    }
+
+    impl PlayerRuntimeAdapterInitializer for FakeInitializer {
+        fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities {
+            fake_capabilities()
+        }
+
+        fn media_info(&self) -> PlayerMediaInfo {
+            self.media_info.clone()
+        }
+
+        fn startup(&self) -> PlayerRuntimeStartup {
+            test_startup()
+        }
+
+        fn initialize(self: Box<Self>) -> PlayerResult<PlayerRuntimeAdapterBootstrap> {
+            let FakeInitializer { media_info, events } = *self;
+            Ok(PlayerRuntimeAdapterBootstrap {
+                runtime: Box::new(FakeAdapter {
+                    media_info,
+                    events,
+                    dropped_events: 0,
+                }),
+                initial_frame: None,
+                startup: test_startup(),
+            })
+        }
+    }
+
+    struct FakeFactory {
+        seen_platform: Arc<Mutex<Option<String>>>,
+        media_info: PlayerMediaInfo,
+        events: Vec<PlayerRuntimeEvent>,
+    }
+
+    impl PlayerRuntimeAdapterFactory for FakeFactory {
+        fn adapter_id(&self) -> &'static str {
+            "fake-adapter"
+        }
+
+        fn probe_source_with_options(
+            &self,
+            _source: player_model::MediaSource,
+            options: PlayerRuntimeOptions,
+        ) -> PlayerResult<Box<dyn PlayerRuntimeAdapterInitializer>> {
+            *self
+                .seen_platform
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                Some(options.pipeline_event_platform.clone());
+            Ok(Box::new(FakeInitializer {
+                media_info: self.media_info.clone(),
+                events: self.events.clone(),
+            }))
+        }
+    }
+
+    struct CapturingHook {
+        events: Arc<Mutex<Vec<PipelineEvent>>>,
+    }
+
+    impl PipelineEventHook for CapturingHook {
+        fn on_event(
+            &self,
+            event: &PipelineEvent,
+        ) -> Result<PipelineEventHookOutcome, player_plugin::PipelineEventHookError> {
+            self.events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(event.clone());
+            Ok(PipelineEventHookOutcome::accepted())
+        }
+    }
+
+    fn capturing_dispatcher() -> (
+        super::PipelineEventDispatcher,
+        Arc<Mutex<Vec<PipelineEvent>>>,
+    ) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let registration = super::PipelineEventHookRegistration::new(
+            PluginReference::new(
+                "dev.vesper.runtime-test",
+                Some("dev.vesper.runtime-test.primary".to_owned()),
+                PluginTransport::Native,
+            )
+            .expect("valid test reference"),
+            Arc::new(CapturingHook {
+                events: events.clone(),
+            }),
+        )
+        .expect("valid test registration");
+        (
+            super::PipelineEventDispatcher::new(vec![registration]),
+            events,
+        )
+    }
+
+    fn fake_bootstrap(
+        media_info: PlayerMediaInfo,
+        events: Vec<PlayerRuntimeEvent>,
+    ) -> PlayerRuntimeAdapterBootstrap {
+        PlayerRuntimeAdapterBootstrap {
+            runtime: Box::new(FakeAdapter {
+                media_info,
+                events,
+                dropped_events: 0,
+            }),
+            initial_frame: None,
+            startup: test_startup(),
+        }
+    }
+
+    fn playback_warning_event() -> PlayerRuntimeEvent {
+        PlayerRuntimeEvent::Warning(PlayerRuntimeWarning::FrameProcessor(
+            FrameProcessorWarning {
+                kind: FrameProcessorWarningKind::DeadlineMissed,
+                plugin_name: "fixture".to_owned(),
+                processor_index: 0,
+                frame_id: None,
+                frame_pts_us: None,
+                frame_duration_us: None,
+                input_handle_kind: None,
+                output_handle_kind: None,
+                queue_depth: None,
+                in_flight_frames: None,
+                queue_wait_us: None,
+                process_time_us: None,
+                submit_to_ready_us: None,
+                present_deadline_us: None,
+                deadline_overrun_us: None,
+                consecutive_miss_count: None,
+                policy_action: FrameProcessorPolicyAction::Continue,
+                message: Some("internal warning".to_owned()),
+            },
+        ))
+    }
+
+    fn valid_pipeline_event() -> PipelineEvent {
+        PipelineEvent {
+            run_id: "run".to_owned(),
+            session_id: "session".to_owned(),
+            platform: "test".to_owned(),
+            protocol: Some("hls".to_owned()),
+            event_name: "playback.test".to_owned(),
+            timestamp_ns: 0,
+            thread: None,
+            resource_identity: Some("playback-session:test".to_owned()),
+            attributes: Default::default(),
+            diagnostic: None,
+        }
+    }
+
+    #[test]
+    fn runtime_event_queue_keeps_capacity_and_drop_accounting_stable() {
+        let mut queue = VecDeque::new();
+        let mut dropped = 0;
+        for _ in 0..(MAX_PENDING_RUNTIME_EVENTS + 3) {
+            push_runtime_event_bounded(&mut queue, &mut dropped, PlayerRuntimeEvent::Ended);
+        }
+        extend_runtime_events_bounded(
+            &mut queue,
+            &mut dropped,
+            [PlayerRuntimeEvent::Ended, PlayerRuntimeEvent::Ended],
+        );
+
+        assert_eq!(queue.len(), MAX_PENDING_RUNTIME_EVENTS);
+        assert_eq!(dropped, 5);
+    }
+
+    #[test]
+    fn playback_events_forward_stable_wire_values_and_redact_sensitive_text() {
+        let mut media_info = test_media_info(
+            MediaSourceKind::Remote,
+            MediaSourceProtocol::Hls,
+            Some(Duration::from_secs(30)),
+        );
+        media_info.source_uri = "https://secret.example/video.m3u8?token=secret".to_owned();
+        let error_message = "decode failed for https://secret.example/video.m3u8?token=secret";
+        let events = vec![
+            PlayerRuntimeEvent::Initialized(test_startup()),
+            PlayerRuntimeEvent::MetadataReady(media_info.clone()),
+            PlayerRuntimeEvent::FirstFrameReady(FirstFrameReady {
+                presentation_time: Duration::from_millis(33),
+                width: 1920,
+                height: 1080,
+            }),
+            PlayerRuntimeEvent::PlaybackStateChanged(PresentationState::Playing),
+            PlayerRuntimeEvent::InterruptionChanged { interrupted: true },
+            PlayerRuntimeEvent::BufferingChanged { buffering: true },
+            PlayerRuntimeEvent::VideoSurfaceChanged { attached: true },
+            PlayerRuntimeEvent::AudioOutputChanged(Some(PlayerAudioOutputInfo {
+                device_name: Some("secret-device".to_owned()),
+                channels: Some(2),
+                sample_rate: Some(48_000),
+                sample_format: Some("float".to_owned()),
+            })),
+            PlayerRuntimeEvent::PlaybackRateChanged { rate: 1.25 },
+            PlayerRuntimeEvent::SeekCompleted {
+                position: Duration::from_secs(4),
+            },
+            PlayerRuntimeEvent::RetryScheduled {
+                attempt: 2,
+                delay: Duration::from_millis(500),
+            },
+            playback_warning_event(),
+            PlayerRuntimeEvent::Error(PlayerError::new(
+                PlayerErrorCode::DecodeFailure,
+                error_message,
+            )),
+            PlayerRuntimeEvent::Ended,
+        ];
+        let (dispatcher, captured) = capturing_dispatcher();
+        let mut runtime = super::PlayerRuntime::from_adapter_bootstrap_with_pipeline(
+            "fake-adapter",
+            fake_bootstrap(media_info, events.clone()),
+            Some(dispatcher),
+            "host.test".to_owned(),
+        )
+        .runtime;
+
+        assert_eq!(runtime.drain_events().len(), events.len());
+        assert!(runtime.flush_pipeline_event_hooks(Duration::from_secs(1)));
+        let captured = captured
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let names = captured
+            .iter()
+            .map(|event| event.event_name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "playback.initialized",
+                "playback.metadata_ready",
+                "playback.first_frame_ready",
+                "playback.state_changed",
+                "playback.interruption_changed",
+                "playback.buffering_changed",
+                "playback.video_surface_changed",
+                "playback.audio_output_changed",
+                "playback.rate_changed",
+                "playback.seek_completed",
+                "playback.retry_scheduled",
+                "playback.warning",
+                "playback.error",
+                "playback.ended",
+            ]
+        );
+        for event in &captured {
+            assert!(event.run_id.starts_with("playback-session:"));
+            assert_eq!(event.run_id, event.session_id);
+            assert_eq!(
+                event.resource_identity.as_deref(),
+                Some(event.session_id.as_str())
+            );
+            assert_eq!(event.platform, "host.test");
+            assert_eq!(event.protocol.as_deref(), Some("hls"));
+            assert!(
+                event
+                    .attributes
+                    .values()
+                    .all(|value| !value.contains("secret"))
+            );
+        }
+        let metadata = &captured[1];
+        assert_eq!(
+            metadata.attributes.get("sourceKind"),
+            Some(&"remote".to_owned())
+        );
+        assert_eq!(
+            metadata.attributes.get("sourceProtocol"),
+            Some(&"hls".to_owned())
+        );
+        assert_eq!(
+            captured[3].attributes.get("state"),
+            Some(&"playing".to_owned())
+        );
+        assert_eq!(
+            captured[11].attributes.get("domain"),
+            Some(&"frameProcessor".to_owned())
+        );
+        let error = &captured[12];
+        assert_eq!(
+            error.attributes.get("code"),
+            Some(&"decodeFailure".to_owned())
+        );
+        assert_eq!(error.attributes.get("category"), Some(&"decode".to_owned()));
+        assert_eq!(
+            error
+                .diagnostic
+                .as_ref()
+                .map(|diagnostic| diagnostic.message.as_str()),
+            Some("playback runtime error")
+        );
+        assert!(!format!("{captured:?}").contains("secret.example"));
+
+        let reports = runtime.drain_pipeline_event_hook_reports();
+        assert_eq!(reports.reports.len(), events.len());
+        assert_eq!(reports.dropped_events, 0);
+        assert!(reports.reports.iter().all(|report| report.result.is_ok()));
+        assert!(runtime.close_pipeline_event_hooks());
+        assert!(runtime.close_pipeline_event_hooks());
+    }
+
+    #[test]
+    fn playback_event_batch_cap_reports_omitted_events() {
+        let media_info = test_media_info(
+            MediaSourceKind::Remote,
+            MediaSourceProtocol::Progressive,
+            None,
+        );
+        let events = (0..(MAX_PLAYBACK_PIPELINE_EVENTS_PER_DRAIN + 7))
+            .map(|_| PlayerRuntimeEvent::Ended)
+            .collect::<Vec<_>>();
+        let (dispatcher, captured) = capturing_dispatcher();
+        let mut runtime = super::PlayerRuntime::from_adapter_bootstrap_with_pipeline(
+            "fake-adapter",
+            fake_bootstrap(media_info, events.clone()),
+            Some(dispatcher),
+            "host.test".to_owned(),
+        )
+        .runtime;
+
+        assert_eq!(runtime.drain_events().len(), events.len());
+        assert!(runtime.flush_pipeline_event_hooks(Duration::from_secs(1)));
+        assert_eq!(
+            captured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            MAX_PLAYBACK_PIPELINE_EVENTS_PER_DRAIN
+        );
+        let reports = runtime.drain_pipeline_event_hook_reports();
+        assert_eq!(reports.dropped_events, 7);
+        assert_eq!(
+            reports.reports.len(),
+            MAX_PLAYBACK_PIPELINE_EVENTS_PER_DRAIN
+        );
+    }
+
+    #[test]
+    fn dropping_runtime_does_not_close_a_shared_dispatcher() {
+        let (dispatcher, captured) = capturing_dispatcher();
+        let media_info = test_media_info(
+            MediaSourceKind::Remote,
+            MediaSourceProtocol::Hls,
+            Some(Duration::from_secs(1)),
+        );
+        let runtime = super::PlayerRuntime::from_adapter_bootstrap_with_pipeline(
+            "fake-adapter",
+            fake_bootstrap(media_info, Vec::new()),
+            Some(dispatcher.clone()),
+            "host.test".to_owned(),
+        )
+        .runtime;
+        drop(runtime);
+
+        dispatcher.enqueue(valid_pipeline_event());
+        assert!(dispatcher.flush(Duration::from_secs(1)));
+        assert_eq!(
+            captured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            1
+        );
+        assert!(dispatcher.close());
+    }
+
+    #[test]
+    fn wrapping_runtime_adapter_preserves_pipeline_dispatcher() {
+        let (dispatcher, captured) = capturing_dispatcher();
+        let media_info = test_media_info(
+            MediaSourceKind::Remote,
+            MediaSourceProtocol::Hls,
+            Some(Duration::from_secs(1)),
+        );
+        let event = PlayerRuntimeEvent::Ended;
+        let mut runtime = super::PlayerRuntime::from_adapter_bootstrap_with_pipeline(
+            "fake-adapter",
+            PlayerRuntimeAdapterBootstrap {
+                runtime: Box::new(FakeAdapter {
+                    media_info,
+                    events: vec![event],
+                    dropped_events: 3,
+                }),
+                initial_frame: None,
+                startup: test_startup(),
+            },
+            Some(dispatcher),
+            "host.test".to_owned(),
+        )
+        .runtime
+        .wrap_adapter(|inner| Box::new(ForwardingRuntimeAdapter { inner }));
+
+        assert_eq!(runtime.drain_events().len(), 1);
+        assert_eq!(runtime.take_dropped_event_count(), 3);
+        assert!(runtime.flush_pipeline_event_hooks(Duration::from_secs(1)));
+        assert_eq!(
+            captured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            1
+        );
+        assert_eq!(
+            runtime.drain_pipeline_event_hook_reports().dropped_events,
+            3
+        );
+    }
+
+    #[test]
+    fn probing_preserves_platform_option_for_factory_and_rejects_oversized_labels() {
+        let seen_platform = Arc::new(Mutex::new(None));
+        let factory = FakeFactory {
+            seen_platform: seen_platform.clone(),
+            media_info: test_media_info(
+                MediaSourceKind::Remote,
+                MediaSourceProtocol::Hls,
+                Some(Duration::from_secs(1)),
+            ),
+            events: Vec::new(),
+        };
+        let initializer = PlayerRuntimeInitializer::probe_source_with_factory(
+            player_model::MediaSource::new("https://example.test/video.m3u8"),
+            PlayerRuntimeOptions::default().with_pipeline_event_platform("custom.test"),
+            &factory,
+        )
+        .expect("factory probe should succeed");
+        assert_eq!(
+            *seen_platform
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            Some("custom.test".to_owned())
+        );
+        let _ = initializer
+            .initialize()
+            .expect("fake initializer should initialize");
+
+        let oversized = "x".repeat(player_plugin::MAX_PLUGIN_PLATFORM_BYTES + 1);
+        let error = PlayerRuntimeInitializer::probe_source_with_factory(
+            player_model::MediaSource::new("https://example.test/video.m3u8"),
+            PlayerRuntimeOptions::default().with_pipeline_event_platform(oversized),
+            &factory,
+        )
+        .expect_err("oversized platform should be rejected at the runtime boundary");
+        assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
+        assert_eq!(error.category(), PlayerErrorCategory::Input);
     }
 
     #[test]
@@ -2614,6 +3998,15 @@ mod tests {
         let options = PlayerRuntimeOptions::default();
 
         assert_eq!(
+            options.native_plugin_loading_policy,
+            NativePluginLoadingPolicy::DenyRawPaths
+        );
+        assert!(
+            options
+                .validate_native_plugin_loading_policy("runtime")
+                .is_err()
+        );
+        assert_eq!(
             options.source_normalizer_mode,
             SourceNormalizerMode::Disabled
         );
@@ -2638,6 +4031,28 @@ mod tests {
         assert_eq!(
             options.track_preferences,
             PlayerTrackPreferencePolicy::default()
+        );
+    }
+
+    #[test]
+    fn native_plugin_loading_requires_an_explicit_policy() {
+        let options = PlayerRuntimeOptions::default()
+            .with_decoder_plugin_library_paths([PathBuf::from("/tmp/untrusted-plugin.dylib")]);
+        let error = options
+            .validate_native_plugin_loading_policy("decoder")
+            .expect_err("raw paths must be denied by default");
+        assert_eq!(error.surface(), "decoder");
+        assert_eq!(error.policy(), NativePluginLoadingPolicy::DenyRawPaths);
+
+        let development = options.clone().with_development_native_plugin_loading();
+        assert!(
+            development
+                .validate_native_plugin_loading_policy("decoder")
+                .is_ok()
+        );
+        assert_eq!(
+            development.native_plugin_loading_policy.wire_name(),
+            "development-raw-paths"
         );
     }
 

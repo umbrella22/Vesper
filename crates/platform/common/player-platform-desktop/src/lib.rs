@@ -29,7 +29,8 @@ use player_runtime::{
     PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
     PlayerRuntimeAdapterInitializer, PlayerRuntimeCommand, PlayerRuntimeCommandResult,
     PlayerRuntimeEvent, PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerVideoInfo,
-    PresentationState, register_default_runtime_adapter_factory,
+    PresentationState, extend_runtime_events_bounded, push_runtime_event_bounded,
+    register_default_runtime_adapter_factory,
 };
 use tracing::info;
 
@@ -388,6 +389,7 @@ pub struct SoftwarePlayerRuntime {
     retry_policy: PlayerRetryPolicy,
     resilience_metrics: PlayerResilienceMetricsTracker,
     events: VecDeque<PlayerRuntimeEvent>,
+    dropped_events: u64,
 }
 
 struct AudioSinkClock<'a>(&'a AudioSink);
@@ -809,8 +811,18 @@ impl PlayerRuntimeAdapter for SoftwarePlayerRuntime {
         self.poll_audio_output_device();
         self.poll_audio_metadata_worker();
         self.poll_audio_stream_worker();
-        self.events.extend(self.video_source.drain_events());
+        extend_runtime_events_bounded(
+            &mut self.events,
+            &mut self.dropped_events,
+            self.video_source.drain_events(),
+        );
         self.events.drain(..).collect()
+    }
+
+    fn take_dropped_event_count(&mut self) -> u64 {
+        let dropped = self.dropped_events;
+        self.dropped_events = 0;
+        dropped
     }
 
     fn dispatch(
@@ -924,6 +936,10 @@ impl PlayerRuntimeAdapter for PlatformDesktopRuntimeAdapter {
 
     fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
         self.inner.drain_events()
+    }
+
+    fn take_dropped_event_count(&mut self) -> u64 {
+        self.inner.take_dropped_event_count()
     }
 
     fn dispatch(
@@ -1062,6 +1078,7 @@ impl SoftwarePlayerRuntime {
             retry_policy: config.retry_policy,
             resilience_metrics: PlayerResilienceMetricsTracker::default(),
             events: VecDeque::new(),
+            dropped_events: 0,
         };
 
         let initial_media_position = initial_frame.presentation_time;
@@ -1464,7 +1481,7 @@ impl SoftwarePlayerRuntime {
 
     fn emit_event(&mut self, event: PlayerRuntimeEvent) {
         self.observe_resilience_event(&event);
-        self.events.push_back(event);
+        push_runtime_event_bounded(&mut self.events, &mut self.dropped_events, event);
     }
 
     fn emit_state_change_if_needed(&mut self, previous_state: PresentationState) {
@@ -3500,6 +3517,7 @@ mod tests {
             retry_policy: PlayerRetryPolicy::default(),
             resilience_metrics: PlayerResilienceMetricsTracker::default(),
             events: VecDeque::new(),
+            dropped_events: 0,
         }
     }
 }

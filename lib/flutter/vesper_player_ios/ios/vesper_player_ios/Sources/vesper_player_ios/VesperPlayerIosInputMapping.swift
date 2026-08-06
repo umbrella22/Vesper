@@ -256,20 +256,27 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 
-    func toBenchmarkConfiguration() -> VesperBenchmarkConfiguration {
-        VesperBenchmarkConfiguration(
+    func toBenchmarkConfiguration() throws -> VesperBenchmarkConfiguration {
+        let pluginReferences = try toVesperPluginReferences(self["pluginReferences"])
+        return VesperBenchmarkConfiguration(
             enabled: self["enabled"] as? Bool ?? false,
             maxBufferedEvents: (self["maxBufferedEvents"] as? NSNumber)?.intValue ?? 2_048,
             includeRawEvents: self["includeRawEvents"] as? Bool ?? true,
             consoleLogging: self["consoleLogging"] as? Bool ?? false,
-            pluginLibraryPaths:
-                (self["pluginLibraryPaths"] as? [Any])?.compactMap { value in
-                    value as? String
-                } ?? []
+            pluginReferences: pluginReferences
         )
     }
 
-    func toSourceNormalizerConfiguration() -> VesperSourceNormalizerConfiguration {
+    func toPipelineEventHookConfiguration() throws -> VesperPipelineEventHookConfiguration {
+        VesperPipelineEventHookConfiguration(
+            pluginReferences: try toVesperPluginReferences(
+                self["pluginReferences"],
+                fieldName: "pluginReferences"
+            )
+        )
+    }
+
+    func toSourceNormalizerConfiguration() throws -> VesperSourceNormalizerConfiguration {
         let mode: VesperSourceNormalizerMode
         switch self["mode"] as? String {
         case "diagnosticsOnly":
@@ -285,27 +292,27 @@ extension Dictionary where Key == String, Value == Any {
         }
         return VesperSourceNormalizerConfiguration(
             mode: mode,
-            pluginLibraryPaths:
-                (self["pluginLibraryPaths"] as? [Any])?.compactMap { value in
-                    value as? String
-                } ?? [],
+            pluginReferences: try toVesperPluginReferences(
+                self["pluginReferences"],
+                fieldName: "pluginReferences"
+            ),
             runtimeProfile: self["runtimeProfile"] as? String
         )
     }
 
-    func toFrameProcessorConfiguration() -> VesperFrameProcessorConfiguration {
+    func toFrameProcessorConfiguration() throws -> VesperFrameProcessorConfiguration {
         let mode: VesperFrameProcessorMode =
             (self["mode"] as? String) == "diagnosticsOnly" ? .diagnosticsOnly : .disabled
         return VesperFrameProcessorConfiguration(
             mode: mode,
-            pluginLibraryPaths:
-                (self["pluginLibraryPaths"] as? [Any])?.compactMap { value in
-                    value as? String
-                } ?? []
+            pluginReferences: try toVesperPluginReferences(
+                self["pluginReferences"],
+                fieldName: "pluginReferences"
+            )
         )
     }
 
-    func toNativeFramePipelineConfiguration() -> VesperNativeFramePipelineConfiguration {
+    func toNativeFramePipelineConfiguration() throws -> VesperNativeFramePipelineConfiguration {
         let mode: VesperNativeFramePipelineMode
         switch self["mode"] as? String {
         case "diagnosticsOnly":
@@ -319,19 +326,21 @@ extension Dictionary where Key == String, Value == Any {
         }
         return VesperNativeFramePipelineConfiguration(
             mode: mode,
-            decoderPluginLibraryPaths:
-                (self["decoderPluginLibraryPaths"] as? [Any])?.compactMap { value in
-                    value as? String
-                } ?? [],
-            frameProcessorPluginLibraryPaths:
-                (self["frameProcessorPluginLibraryPaths"] as? [Any])?.compactMap { value in
-                    value as? String
-                } ?? [],
+            decoderPluginReferences:
+                try toVesperPluginReferences(
+                    self["decoderPluginReferences"],
+                    fieldName: "decoderPluginReferences"
+                ),
+            frameProcessorPluginReferences:
+                try toVesperPluginReferences(
+                    self["frameProcessorPluginReferences"],
+                    fieldName: "frameProcessorPluginReferences"
+                ),
             maxInFlightFrames: (self["maxInFlightFrames"] as? NSNumber)?.intValue
         )
     }
 
-    func toDownloadConfiguration() -> VesperDownloadConfiguration {
+    func toDownloadConfiguration() throws -> VesperDownloadConfiguration {
         VesperDownloadConfiguration(
             autoStart: self["autoStart"] as? Bool ?? true,
             runPostProcessorsOnCompletion:
@@ -341,10 +350,14 @@ extension Dictionary where Key == String, Value == Any {
             baseDirectory: (self["baseDirectory"] as? String).map {
                 URL(fileURLWithPath: $0, isDirectory: true)
             },
-            pluginLibraryPaths:
-                (self["pluginLibraryPaths"] as? [Any])?.compactMap { value in
-                    value as? String
-                } ?? [],
+            postDownloadPluginReferences: try toVesperPluginReferences(
+                self["postDownloadPluginReferences"],
+                fieldName: "postDownloadPluginReferences"
+            ),
+            eventHookPluginReferences: try toVesperPluginReferences(
+                self["eventHookPluginReferences"],
+                fieldName: "eventHookPluginReferences"
+            ),
             rangeChunkBytes: (self["rangeChunkBytes"] as? NSNumber)?.uint64Value,
             minProgressBytes: (self["minProgressBytes"] as? NSNumber)?.uint64Value ?? 512 * 1024,
             minProgressIntervalMs: (self["minProgressIntervalMs"] as? NSNumber)?.uint64Value ?? 250

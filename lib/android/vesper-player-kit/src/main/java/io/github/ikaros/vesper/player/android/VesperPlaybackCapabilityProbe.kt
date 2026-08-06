@@ -49,7 +49,12 @@ object VesperPlaybackCapabilityProbe {
         if (effectiveRequiresNativeFrame && sourceIsRemote) {
             missing += "hostManagedNetworkProbeNotImplemented"
         }
-        if (effectiveRequiresNativeFrame && request.nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isEmpty()) {
+        val hasNativeFrameDecoder =
+            request.nativeFramePipelineConfiguration.decoderPluginReferences.any { reference ->
+                reference.transport == VesperPluginTransport.Native &&
+                    reference.pluginId == VesperBundledPluginReferences.decoderMediaCodec.pluginId
+            }
+        if (effectiveRequiresNativeFrame && !hasNativeFrameDecoder) {
             missing += "nativeFrameDecoderPlugin"
         }
         if (effectiveRequiresNativeFrame && !hardwareDecodeSupported) {
@@ -84,7 +89,7 @@ object VesperPlaybackCapabilityProbe {
             effectiveRequiresNativeFrame &&
                 !sourceIsRemote &&
                 hardwareDecodeSupported &&
-                request.nativeFramePipelineConfiguration.decoderPluginLibraryPaths.isNotEmpty()
+                hasNativeFrameDecoder
         val recommendedPlaybackPath =
             if (isHdrOrDolbyVision) {
                 VesperRecommendedPlaybackPath.SystemPlayer

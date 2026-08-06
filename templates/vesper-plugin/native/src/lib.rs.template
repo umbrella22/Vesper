@@ -1,0 +1,12 @@
+#![deny(unsafe_code)]
+
+use player_plugin::{Plugin, PluginBuildError};
+
+{{IMPLEMENTATIONS}}
+
+#[player_plugin::export]
+fn plugin() -> Result<Plugin, PluginBuildError> {
+    let builder = Plugin::builder({{PLUGIN_ID}}, {{PLUGIN_NAME}})?;
+{{BUILDER_STEPS}}
+    builder.build()
+}

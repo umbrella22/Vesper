@@ -11,6 +11,25 @@ public enum VesperDownloadEvent: Equatable {
     case progressUpdated(VesperDownloadTaskProgressPatch)
 }
 
+public struct VesperDownloadEventBatch: Equatable {
+    public let events: [VesperDownloadEvent]
+    public let droppedEvents: UInt64
+    public let requiresSnapshotResync: Bool
+    public let snapshotIsAuthoritative: Bool
+
+    public init(
+        events: [VesperDownloadEvent],
+        droppedEvents: UInt64,
+        requiresSnapshotResync: Bool = false,
+        snapshotIsAuthoritative: Bool = true
+    ) {
+        self.events = events
+        self.droppedEvents = droppedEvents
+        self.requiresSnapshotResync = requiresSnapshotResync
+        self.snapshotIsAuthoritative = snapshotIsAuthoritative
+    }
+}
+
 extension VesperDownloadEvent {
     var isRemovedStatePatch: Bool {
         if case let .stateChanged(patch) = self {

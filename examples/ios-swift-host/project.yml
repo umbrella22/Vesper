@@ -4,8 +4,6 @@ options:
 packages:
   VesperPlayerKit:
     path: ../../lib/ios/VesperPlayerKit
-  VesperPlayerOptionalPlugins:
-    path: ../../lib/ios/VesperPlayerOptionalPlugins
 targets:
   VesperPlayerHostDemo:
     type: application
@@ -18,8 +16,34 @@ targets:
         product: VesperPlayerKit
       - package: VesperPlayerKit
         product: VesperPlayerKitUI
-      - package: VesperPlayerOptionalPlugins
-        product: VesperPlayerOptionalPlugins
+      - framework: ../../lib/ios/VesperPlayerOptionalPlugins/Artifacts/VesperFFmpegAVCodec.xcframework
+        embed: true
+        link: false
+        codeSign: true
+      - framework: ../../lib/ios/VesperPlayerOptionalPlugins/Artifacts/VesperFFmpegAVFormat.xcframework
+        embed: true
+        link: false
+        codeSign: true
+      - framework: ../../lib/ios/VesperPlayerOptionalPlugins/Artifacts/VesperFFmpegAVUtil.xcframework
+        embed: true
+        link: false
+        codeSign: true
+      - framework: ../../lib/ios/VesperPlayerOptionalPlugins/Artifacts/VesperPlayerRemuxFfmpegPlugin.xcframework
+        embed: true
+        link: false
+        codeSign: true
+      - framework: ../../lib/ios/VesperPlayerOptionalPlugins/Artifacts/VesperPlayerSourceNormalizerFfmpegPlugin.xcframework
+        embed: true
+        link: false
+        codeSign: true
+      - framework: ../../lib/ios/VesperPlayerOptionalPlugins/Artifacts/VesperPlayerDecoderVideoToolboxPlugin.xcframework
+        embed: true
+        link: false
+        codeSign: true
+      - framework: ../../lib/ios/VesperPlayerOptionalPlugins/Artifacts/VesperPlayerFrameProcessorDiagnosticPlugin.xcframework
+        embed: true
+        link: false
+        codeSign: true
     settings:
       base:
         CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES

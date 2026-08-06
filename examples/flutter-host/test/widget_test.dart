@@ -17,13 +17,7 @@ void main() {
       'io.github.ikaros.vesper.example.flutter_host/media_picker',
     );
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (call) async {
-          return switch (call.method) {
-            'bundledDownloadPluginLibraryPaths' => const <String>[],
-            'bundledFrameProcessorPluginLibraryPaths' => const <String>[],
-            _ => null,
-          };
-        });
+        .setMockMethodCallHandler(channel, (_) async => null);
     addTearDown(() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, null);
@@ -54,8 +48,8 @@ void main() {
             child: ExamplePluginDiagnosticsSection(
               palette: exampleHostPalette(false),
               sourceNormalizerSetting: ExampleSourceNormalizerSetting.disabled,
-              sourceNormalizerPluginLibraryPaths: const <String>[],
-              frameProcessorPluginLibraryPaths: const <String>[],
+              sourceNormalizerPluginReferences: const <VesperPluginReference>[],
+              frameProcessorPluginReferences: const <VesperPluginReference>[],
               pluginDiagnostics: const <VesperPluginDiagnostic>[],
               isCapturingHdrEvidence: false,
               hdrEvidenceActiveSourceAvailable: true,
@@ -86,8 +80,8 @@ void main() {
             child: ExamplePluginDiagnosticsSection(
               palette: exampleHostPalette(false),
               sourceNormalizerSetting: ExampleSourceNormalizerSetting.disabled,
-              sourceNormalizerPluginLibraryPaths: const <String>[],
-              frameProcessorPluginLibraryPaths: const <String>[],
+              sourceNormalizerPluginReferences: const <VesperPluginReference>[],
+              frameProcessorPluginReferences: const <VesperPluginReference>[],
               pluginDiagnostics: const <VesperPluginDiagnostic>[],
               isCapturingHdrEvidence: false,
               hdrEvidenceActiveSourceAvailable: false,

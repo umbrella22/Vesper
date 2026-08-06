@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math' as math;
 part 'models/system_models.dart';
 part 'models/picture_in_picture_models.dart';
@@ -11,6 +12,7 @@ part 'models/diagnostics/runtime_warning_helpers.dart';
 part 'models/plugin_diagnostic_models.dart';
 part 'models/plugins/plugin_capability_models.dart';
 part 'models/plugins/plugin_diagnostic_helpers.dart';
+part 'models/plugins/pipeline_event_hook_models.dart';
 part 'models/mobile_plugin_configuration_models.dart';
 part 'models/source_models.dart';
 part 'models/capability_models.dart';

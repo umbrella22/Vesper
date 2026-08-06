@@ -1,0 +1,14 @@
+[package]
+name = "player-plugin-fixture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "vesper_plugin_fixture"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+player-plugin = { path = "../player-plugin" }

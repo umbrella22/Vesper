@@ -73,12 +73,18 @@ void main() {
 
   test('createPlayer forwards benchmark configuration when provided', () async {
     final platform = MethodChannelVesperPlayerAndroid();
-    const benchmarkConfiguration = VesperBenchmarkConfiguration(
+    final benchmarkConfiguration = VesperBenchmarkConfiguration(
       enabled: true,
       maxBufferedEvents: 1024,
       includeRawEvents: true,
       consoleLogging: true,
-      pluginLibraryPaths: <String>['/data/local/tmp/libvesper_sink.so'],
+      pluginReferences: <VesperPluginReference>[
+        VesperPluginReference(
+          pluginId: 'dev.vesper.benchmark-sink',
+          capabilityInstanceId: 'dev.vesper.benchmark-sink.default',
+          transport: VesperPluginTransport.native,
+        ),
+      ],
     );
 
     await platform.createPlayer(
@@ -101,20 +107,28 @@ void main() {
   test('createPlayer forwards mobile plugin configurations when provided',
       () async {
     final platform = MethodChannelVesperPlayerAndroid();
-    const sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(
+    final sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(
       mode: VesperSourceNormalizerMode.preflightOnly,
-      pluginLibraryPaths: <String>['/data/local/tmp/libsource.so'],
+      pluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.sourceNormalizerFfmpeg,
+      ],
       runtimeProfile: 'generic-fallback',
     );
-    const frameProcessorConfiguration = VesperFrameProcessorConfiguration(
+    final frameProcessorConfiguration = VesperFrameProcessorConfiguration(
       mode: VesperFrameProcessorMode.diagnosticsOnly,
-      pluginLibraryPaths: <String>['/data/local/tmp/libframe.so'],
+      pluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.frameProcessorDiagnostic,
+      ],
     );
-    const nativeFramePipelineConfiguration =
+    final nativeFramePipelineConfiguration =
         VesperNativeFramePipelineConfiguration(
       mode: VesperNativeFramePipelineMode.preferNativeFrame,
-      decoderPluginLibraryPaths: <String>['/data/local/tmp/libdecoder.so'],
-      frameProcessorPluginLibraryPaths: <String>['/data/local/tmp/libframe.so'],
+      decoderPluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.decoderMediaCodec,
+      ],
+      frameProcessorPluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.frameProcessorDiagnostic,
+      ],
       maxInFlightFrames: 2,
     );
 
@@ -239,7 +253,7 @@ void main() {
       kind: VesperPlayerSourceKind.local,
       protocol: VesperPlayerSourceProtocol.file,
     );
-    const request = VesperPlaybackCapabilityProbeRequest(
+    final request = VesperPlaybackCapabilityProbeRequest(
       source: source,
       codec: 'dvh1.05.06',
       width: 3840,
@@ -247,7 +261,9 @@ void main() {
       frameRate: 59.94,
       nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
         mode: VesperNativeFramePipelineMode.requireNativeFrame,
-        decoderPluginLibraryPaths: <String>['/tmp/libmediacodec.so'],
+        decoderPluginReferences: <VesperPluginReference>[
+          VesperBundledPluginReferences.decoderMediaCodec,
+        ],
       ),
     );
 

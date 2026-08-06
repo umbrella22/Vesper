@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -6,19 +6,83 @@ use std::sync::Arc;
 
 use player_plugin::{
     AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream, DownloadMetadata,
-    OutputFormat, PipelineEvent, PipelineEventHook, PostDownloadProcessor, ProcessorError,
-    ProcessorOutput, ProcessorProgress, StreamKind,
+    OutputFormat, PluginDiagnostic, PluginDiagnosticSeverity, PluginReference, PluginTransport,
+    PostDownloadProcessor, ProcessorError, ProcessorOutput, ProcessorProgress, StreamKind,
 };
 
 use crate::{PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult};
 
 use super::executor::DownloadExecutor;
 use super::manager::{DownloadExportPlan, DownloadManager};
+use super::pipeline_event::{PipelineEventDispatcher, download_pipeline_event};
 use super::store::DownloadStore;
 use super::types::{
     DownloadAssetIndex, DownloadAssetStream, DownloadContentFormat, DownloadStreamKind,
     DownloadTaskSnapshot,
 };
+
+#[derive(Clone)]
+pub struct PostDownloadProcessorRegistration {
+    reference: Option<PluginReference>,
+    processor: Arc<dyn PostDownloadProcessor>,
+}
+
+impl PostDownloadProcessorRegistration {
+    pub fn plugin(
+        reference: PluginReference,
+        processor: Arc<dyn PostDownloadProcessor>,
+    ) -> PlayerResult<Self> {
+        if reference.capability_instance_id().is_none() {
+            return Err(PlayerError::with_category(
+                PlayerErrorCode::InvalidArgument,
+                PlayerErrorCategory::Input,
+                format!(
+                    "post-download registration for '{}' requires a resolved capability instance",
+                    reference.plugin_id()
+                ),
+            ));
+        }
+        if reference.transport() != PluginTransport::Native {
+            return Err(PlayerError::with_category(
+                PlayerErrorCode::InvalidArgument,
+                PlayerErrorCategory::Input,
+                format!(
+                    "post-download registration for '{}' requires native transport",
+                    reference.plugin_id()
+                ),
+            ));
+        }
+        Ok(Self {
+            reference: Some(reference),
+            processor,
+        })
+    }
+
+    pub fn built_in(processor: Arc<dyn PostDownloadProcessor>) -> Self {
+        Self {
+            reference: None,
+            processor,
+        }
+    }
+
+    pub fn reference(&self) -> Option<&PluginReference> {
+        self.reference.as_ref()
+    }
+
+    pub fn processor(&self) -> Arc<dyn PostDownloadProcessor> {
+        self.processor.clone()
+    }
+}
+
+impl std::fmt::Debug for PostDownloadProcessorRegistration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PostDownloadProcessorRegistration")
+            .field("reference", &self.reference)
+            .field("processor_name", &self.processor.name())
+            .finish_non_exhaustive()
+    }
+}
 
 impl<S, E> DownloadManager<S, E>
 where
@@ -46,7 +110,8 @@ where
         let run = run_post_processor_chain(
             snapshot,
             &self.config.post_processors,
-            &self.config.event_hooks,
+            &self.pipeline_event_dispatcher,
+            &self.config.pipeline_event_platform,
             ProcessorOutputPathPolicy::Derived,
             &progress,
         )?;
@@ -64,7 +129,8 @@ impl DownloadExportPlan {
                     &self.snapshot,
                     self.output_path.as_deref(),
                     &self.post_processors,
-                    &self.event_hooks,
+                    &self.pipeline_event_dispatcher,
+                    &self.pipeline_event_platform,
                     progress,
                 )
             }
@@ -77,7 +143,8 @@ impl DownloadExportPlan {
                 &self.snapshot,
                 self.output_path.as_deref(),
                 &self.post_processors,
-                &self.event_hooks,
+                &self.pipeline_event_dispatcher,
+                &self.pipeline_event_platform,
                 progress,
             ),
             DownloadContentFormat::Unknown => Err(PlayerError::with_category(
@@ -95,14 +162,16 @@ impl DownloadExportPlan {
 fn export_processed_output(
     snapshot: &DownloadTaskSnapshot,
     output_path: Option<&Path>,
-    post_processors: &[Arc<dyn PostDownloadProcessor>],
-    event_hooks: &[Arc<dyn PipelineEventHook>],
+    post_processors: &[PostDownloadProcessorRegistration],
+    pipeline_event_dispatcher: &PipelineEventDispatcher,
+    pipeline_event_platform: &str,
     progress: &dyn ProcessorProgress,
 ) -> PlayerResult<PathBuf> {
     let run = run_post_processor_chain(
         snapshot,
         post_processors,
-        event_hooks,
+        pipeline_event_dispatcher,
+        pipeline_event_platform,
         ProcessorOutputPathPolicy::Export { output_path },
         progress,
     )?;
@@ -124,8 +193,9 @@ fn export_processed_output(
 
 fn run_post_processor_chain(
     snapshot: &DownloadTaskSnapshot,
-    post_processors: &[Arc<dyn PostDownloadProcessor>],
-    event_hooks: &[Arc<dyn PipelineEventHook>],
+    post_processors: &[PostDownloadProcessorRegistration],
+    pipeline_event_dispatcher: &PipelineEventDispatcher,
+    pipeline_event_platform: &str,
     output_path_policy: ProcessorOutputPathPolicy<'_>,
     progress: &dyn ProcessorProgress,
 ) -> PlayerResult<PostProcessorRun> {
@@ -133,7 +203,8 @@ fn run_post_processor_chain(
     let mut current_completed_path = snapshot.asset_index.completed_path.clone();
     let mut ran_processor = false;
 
-    for processor in post_processors {
+    for registration in post_processors {
+        let processor = &registration.processor;
         let input_kind = current_input.content_format.kind();
         let can_process = if completed_info_requires_assembly(&current_input) {
             processor_can_assemble(processor, &current_input)
@@ -153,11 +224,14 @@ fn run_post_processor_chain(
 
         ran_processor = true;
         dispatch_pipeline_event(
-            event_hooks,
-            PipelineEvent::PostProcessStarted {
-                task_id: snapshot.task_id.get().to_string(),
-                processor: processor.name().to_owned(),
-            },
+            pipeline_event_dispatcher,
+            download_pipeline_event(
+                snapshot,
+                pipeline_event_platform,
+                "post_process.started",
+                processor_event_attributes(registration),
+                None,
+            ),
         );
 
         let result = if completed_info_requires_assembly(&current_input) {
@@ -169,11 +243,14 @@ fn run_post_processor_chain(
         match result {
             Ok(ProcessorOutput::MuxedFile { path, .. }) => {
                 dispatch_pipeline_event(
-                    event_hooks,
-                    PipelineEvent::PostProcessCompleted {
-                        task_id: snapshot.task_id.get().to_string(),
-                        output_path: path.display().to_string(),
-                    },
+                    pipeline_event_dispatcher,
+                    download_pipeline_event(
+                        snapshot,
+                        pipeline_event_platform,
+                        "post_process.completed",
+                        processor_event_attributes(registration),
+                        None,
+                    ),
                 );
                 current_completed_path = Some(path.clone());
                 current_input = completed_info_for_processed_output(
@@ -182,14 +259,28 @@ fn run_post_processor_chain(
                     current_input.metadata.clone(),
                 );
             }
-            Ok(ProcessorOutput::Skipped) => {}
+            Ok(ProcessorOutput::Skipped) => {
+                dispatch_pipeline_event(
+                    pipeline_event_dispatcher,
+                    download_pipeline_event(
+                        snapshot,
+                        pipeline_event_platform,
+                        "post_process.skipped",
+                        processor_event_attributes(registration),
+                        None,
+                    ),
+                );
+            }
             Err(error) => {
                 dispatch_pipeline_event(
-                    event_hooks,
-                    PipelineEvent::PostProcessFailed {
-                        task_id: snapshot.task_id.get().to_string(),
-                        error: error.to_string(),
-                    },
+                    pipeline_event_dispatcher,
+                    download_pipeline_event(
+                        snapshot,
+                        pipeline_event_platform,
+                        "post_process.failed",
+                        processor_event_attributes(registration),
+                        Some(processor_failure_diagnostic(registration, &error)),
+                    ),
                 );
                 return Err(map_processor_error(processor.name(), error));
             }
@@ -277,9 +368,57 @@ fn completed_download_info(snapshot: &DownloadTaskSnapshot) -> PlayerResult<Comp
     })
 }
 
-fn dispatch_pipeline_event(event_hooks: &[Arc<dyn PipelineEventHook>], event: PipelineEvent) {
-    for hook in event_hooks {
-        hook.on_event(&event);
+fn processor_event_attributes(
+    registration: &PostDownloadProcessorRegistration,
+) -> BTreeMap<String, String> {
+    let mut attributes = BTreeMap::from([(
+        "processor".to_owned(),
+        registration.processor.name().to_owned(),
+    )]);
+    if let Some(reference) = registration.reference() {
+        attributes.insert("pluginId".to_owned(), reference.plugin_id().to_owned());
+        if let Some(instance_id) = reference.capability_instance_id() {
+            attributes.insert("capabilityInstanceId".to_owned(), instance_id.to_owned());
+        }
+        attributes.insert(
+            "transport".to_owned(),
+            match reference.transport() {
+                PluginTransport::Native => "native",
+                PluginTransport::Wasm => "wasm",
+            }
+            .to_owned(),
+        );
+    }
+    attributes
+}
+
+fn dispatch_pipeline_event(
+    dispatcher: &PipelineEventDispatcher,
+    event: player_plugin::PipelineEvent,
+) {
+    dispatcher.enqueue(event);
+}
+
+fn processor_failure_diagnostic(
+    registration: &PostDownloadProcessorRegistration,
+    error: &ProcessorError,
+) -> PluginDiagnostic {
+    let code = match error {
+        ProcessorError::UnsupportedFormat(_) => "post_process.unsupported_format",
+        ProcessorError::UnsupportedDynamicStream { .. } => {
+            "post_process.unsupported_dynamic_stream"
+        }
+        ProcessorError::PayloadCodec(_) => "post_process.payload_codec",
+        ProcessorError::AbiViolation(_) => "post_process.abi_violation",
+        ProcessorError::MuxFailed(_) => "post_process.mux_failed",
+        ProcessorError::OutputPath(_) => "post_process.output_path",
+        ProcessorError::Cancelled => "post_process.cancelled",
+    };
+    PluginDiagnostic {
+        code: code.to_owned(),
+        severity: PluginDiagnosticSeverity::Error,
+        message: "post-download processing failed".to_owned(),
+        attributes: processor_event_attributes(registration),
     }
 }
 

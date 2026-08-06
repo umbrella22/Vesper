@@ -1,0 +1,53 @@
+[package]
+name = "player-cli"
+description = "The vesper command-line tool for authoring, validating, and installing plugins."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "vesper"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+ed25519-dalek.workspace = true
+flate2.workspace = true
+indexmap.workspace = true
+player-plugin = { version = "0.4.0", path = "../../plugin/player-plugin" }
+player-plugin-abi = { version = "0.4.0", path = "../../plugin/player-plugin-abi" }
+player-plugin-loader = { version = "0.4.0", path = "../../plugin/player-plugin-loader" }
+player-plugin-package = { version = "0.4.0", path = "../../plugin/player-plugin-package" }
+player-plugin-wasm-host = { version = "0.4.0", path = "../../plugin/player-plugin-wasm-host" }
+quick-xml.workspace = true
+rand_core.workspace = true
+regex.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+signal-hook.workspace = true
+syn.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tar.workspace = true
+unicode-casefold.workspace = true
+unicode-normalization.workspace = true
+uuid.workspace = true
+xz2.workspace = true
+x509-parser.workspace = true
+zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true, features = ["fs"] }
+player-platform-process = { version = "0.4.0", path = "../../platform/common/player-platform-process" }
+rustix.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+player-platform-process = { version = "0.4.0", path = "../../platform/common/player-platform-process" }
+winapi-util = "0.1.11"

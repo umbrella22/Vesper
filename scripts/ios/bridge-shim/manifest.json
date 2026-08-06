@@ -781,12 +781,16 @@
           "name": "run_post_processors_on_completion"
         },
         {
-          "ty": "char **",
-          "name": "plugin_library_paths"
+          "ty": "uint64_t",
+          "name": "plugin_registry_handle"
         },
         {
-          "ty": "uintptr_t",
-          "name": "plugin_library_paths_len"
+          "ty": "char *",
+          "name": "post_download_plugin_references_json"
+        },
+        {
+          "ty": "char *",
+          "name": "event_hook_plugin_references_json"
         }
       ]
     },
@@ -1439,6 +1443,10 @@
         {
           "ty": "uintptr_t",
           "name": "len"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "dropped_events"
         }
       ]
     },
@@ -1954,6 +1962,22 @@
         {
           "ty": "uint64_t *",
           "name": "out_handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_download_error_string_free",
+      "parameters": [
+        {
+          "ty": "char *",
+          "name": "value"
         }
       ],
       "storage": "public"
@@ -2241,7 +2265,7 @@
     {
       "kind": "function",
       "return_type": "bool",
-      "name": "vesper_runtime_download_session_drain_commands",
+      "name": "vesper_runtime_download_session_peek_commands",
       "parameters": [
         {
           "ty": "uint64_t",
@@ -2250,6 +2274,22 @@
         {
           "ty": "VesperRuntimeDownloadCommandList *",
           "name": "out_commands"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_download_session_acknowledge_commands",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "command_count"
         }
       ],
       "storage": "public"
@@ -2349,15 +2389,131 @@
     {
       "kind": "function",
       "return_type": "bool",
-      "name": "vesper_runtime_benchmark_sink_session_create",
+      "name": "vesper_runtime_ios_plugin_plan_create",
       "parameters": [
         {
-          "ty": "char **",
-          "name": "plugin_library_paths"
+          "ty": "const uint8_t *",
+          "name": "fragment_set_json"
         },
         {
           "ty": "uintptr_t",
-          "name": "plugin_library_paths_len"
+          "name": "fragment_set_json_len"
+        },
+        {
+          "ty": "const uint8_t *",
+          "name": "references_json"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "references_json_len"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_ios_plugin_plan_resolutions_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_ios_plugin_plan_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_ios_plugin_registry_load",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "plan_handle"
+        },
+        {
+          "ty": "const uint8_t *",
+          "name": "resolved_frameworks_json"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "resolved_frameworks_json_len"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_ios_plugin_registry_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_ios_plugin_string_free",
+      "parameters": [
+        {
+          "ty": "char *",
+          "name": "value"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_benchmark_sink_session_create_with_references_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "plugin_registry_handle"
+        },
+        {
+          "ty": "const char *",
+          "name": "references_json"
         },
         {
           "ty": "uint64_t *",
@@ -2428,6 +2584,130 @@
     },
     {
       "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playback_event_hook_session_create",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "plugin_registry_handle"
+        },
+        {
+          "ty": "const char *",
+          "name": "references_json"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playback_event_hook_session_submit_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const char *",
+          "name": "event_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playback_event_hook_session_flush",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "timeout_ms"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playback_event_hook_session_drain_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_report_json"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_playback_event_hook_session_close",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_error_message"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_playback_event_hook_session_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_playback_event_hook_report_string_free",
+      "parameters": [
+        {
+          "ty": "char *",
+          "name": "value"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
       "return_type": "void",
       "name": "vesper_runtime_benchmark_string_free",
       "parameters": [
@@ -2468,12 +2748,8 @@
           "name": "source_mode"
         },
         {
-          "ty": "char **",
-          "name": "source_plugin_library_paths"
-        },
-        {
-          "ty": "uintptr_t",
-          "name": "source_plugin_library_paths_len"
+          "ty": "const char *",
+          "name": "source_plugin_artifacts_json"
         },
         {
           "ty": "const char *",
@@ -2484,12 +2760,8 @@
           "name": "frame_mode"
         },
         {
-          "ty": "char **",
-          "name": "frame_plugin_library_paths"
-        },
-        {
-          "ty": "uintptr_t",
-          "name": "frame_plugin_library_paths_len"
+          "ty": "const char *",
+          "name": "frame_plugin_artifacts_json"
         },
         {
           "ty": "char **",
@@ -2528,12 +2800,8 @@
           "name": "source_mode"
         },
         {
-          "ty": "char **",
-          "name": "source_plugin_library_paths"
-        },
-        {
-          "ty": "uintptr_t",
-          "name": "source_plugin_library_paths_len"
+          "ty": "const char *",
+          "name": "source_plugin_artifacts_json"
         },
         {
           "ty": "const char *",
@@ -2608,12 +2876,8 @@
           "name": "source_mode"
         },
         {
-          "ty": "char **",
-          "name": "source_plugin_library_paths"
-        },
-        {
-          "ty": "uintptr_t",
-          "name": "source_plugin_library_paths_len"
+          "ty": "const char *",
+          "name": "source_plugin_artifacts_json"
         },
         {
           "ty": "const char *",
@@ -2624,20 +2888,12 @@
           "name": "native_frame_mode"
         },
         {
-          "ty": "char **",
-          "name": "decoder_plugin_library_paths"
+          "ty": "const char *",
+          "name": "decoder_plugin_artifacts_json"
         },
         {
-          "ty": "uintptr_t",
-          "name": "decoder_plugin_library_paths_len"
-        },
-        {
-          "ty": "char **",
-          "name": "frame_plugin_library_paths"
-        },
-        {
-          "ty": "uintptr_t",
-          "name": "frame_plugin_library_paths_len"
+          "ty": "const char *",
+          "name": "frame_plugin_artifacts_json"
         },
         {
           "ty": "uint32_t",
@@ -3683,12 +3939,16 @@
           "name": "run_post_processors_on_completion"
         },
         {
-          "ty": "char **",
-          "name": "plugin_library_paths"
+          "ty": "uint64_t",
+          "name": "plugin_registry_handle"
         },
         {
-          "ty": "uintptr_t",
-          "name": "plugin_library_paths_len"
+          "ty": "const char *",
+          "name": "post_download_plugin_references_json"
+        },
+        {
+          "ty": "const char *",
+          "name": "event_hook_plugin_references_json"
         }
       ]
     },
@@ -4337,6 +4597,10 @@
         {
           "ty": "uintptr_t",
           "name": "len"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "dropped_events"
         }
       ]
     },
@@ -5129,7 +5393,7 @@
     {
       "kind": "function",
       "return_type": "PlayerFfiCallStatus",
-      "name": "player_ffi_download_session_drain_commands",
+      "name": "player_ffi_download_session_peek_commands",
       "parameters": [
         {
           "ty": "uint64_t",
@@ -5138,6 +5402,26 @@
         {
           "ty": "PlayerFfiDownloadCommandList *",
           "name": "out_commands"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_download_session_acknowledge_commands",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "command_count"
         },
         {
           "ty": "PlayerFfiError *",
@@ -5237,15 +5521,131 @@
     {
       "kind": "function",
       "return_type": "PlayerFfiCallStatus",
-      "name": "player_ffi_benchmark_session_create",
+      "name": "player_ffi_ios_plugin_plan_create",
       "parameters": [
         {
-          "ty": "char **",
-          "name": "plugin_library_paths"
+          "ty": "const uint8_t *",
+          "name": "fragment_set_json"
         },
         {
           "ty": "uintptr_t",
-          "name": "plugin_library_paths_len"
+          "name": "fragment_set_json_len"
+        },
+        {
+          "ty": "const uint8_t *",
+          "name": "references_json"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "references_json_len"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_ios_plugin_plan_resolutions_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_ios_plugin_plan_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_ios_plugin_registry_load",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "plan_handle"
+        },
+        {
+          "ty": "const uint8_t *",
+          "name": "resolved_frameworks_json"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "resolved_frameworks_json_len"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_ios_plugin_registry_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_ios_plugin_string_free",
+      "parameters": [
+        {
+          "ty": "char *",
+          "name": "value"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_benchmark_session_create_with_references_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "plugin_registry_handle"
+        },
+        {
+          "ty": "const char *",
+          "name": "references_json"
         },
         {
           "ty": "uint64_t *",
@@ -5329,6 +5729,130 @@
     {
       "kind": "function",
       "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_ios_playback_event_hook_session_create",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "plugin_registry_handle"
+        },
+        {
+          "ty": "const char *",
+          "name": "references_json"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_ios_playback_event_hook_session_submit_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const char *",
+          "name": "event_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_ios_playback_event_hook_session_flush",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "timeout_ms"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_ios_playback_event_hook_session_drain_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_report_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_ios_playback_event_hook_session_close",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_ios_playback_event_hook_session_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_ios_playback_event_hook_report_string_free",
+      "parameters": [
+        {
+          "ty": "char *",
+          "name": "value"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
       "name": "player_ffi_ios_plugin_abi_summary_json",
       "parameters": [
         {
@@ -5356,12 +5880,8 @@
           "name": "source_mode"
         },
         {
-          "ty": "char **",
-          "name": "source_plugin_library_paths"
-        },
-        {
-          "ty": "uintptr_t",
-          "name": "source_plugin_library_paths_len"
+          "ty": "const char *",
+          "name": "source_plugin_artifacts_json"
         },
         {
           "ty": "const char *",
@@ -5372,12 +5892,8 @@
           "name": "frame_mode"
         },
         {
-          "ty": "char **",
-          "name": "frame_plugin_library_paths"
-        },
-        {
-          "ty": "uintptr_t",
-          "name": "frame_plugin_library_paths_len"
+          "ty": "const char *",
+          "name": "frame_plugin_artifacts_json"
         },
         {
           "ty": "char **",
@@ -5416,12 +5932,8 @@
           "name": "source_mode"
         },
         {
-          "ty": "char **",
-          "name": "source_plugin_library_paths"
-        },
-        {
-          "ty": "uintptr_t",
-          "name": "source_plugin_library_paths_len"
+          "ty": "const char *",
+          "name": "source_plugin_artifacts_json"
         },
         {
           "ty": "const char *",
@@ -5496,12 +6008,8 @@
           "name": "source_mode"
         },
         {
-          "ty": "char **",
-          "name": "source_plugin_library_paths"
-        },
-        {
-          "ty": "uintptr_t",
-          "name": "source_plugin_library_paths_len"
+          "ty": "const char *",
+          "name": "source_plugin_artifacts_json"
         },
         {
           "ty": "const char *",
@@ -5512,20 +6020,12 @@
           "name": "native_frame_mode"
         },
         {
-          "ty": "char **",
-          "name": "decoder_plugin_library_paths"
+          "ty": "const char *",
+          "name": "decoder_plugin_artifacts_json"
         },
         {
-          "ty": "uintptr_t",
-          "name": "decoder_plugin_library_paths_len"
-        },
-        {
-          "ty": "char **",
-          "name": "frame_plugin_library_paths"
-        },
-        {
-          "ty": "uintptr_t",
-          "name": "frame_plugin_library_paths_len"
+          "ty": "const char *",
+          "name": "frame_plugin_artifacts_json"
         },
         {
           "ty": "uint32_t",
@@ -6031,10 +6531,24 @@
       "kind": "wrapper",
       "function": "vesper_runtime_download_session_create",
       "ffi_symbols": [
-        "player_ffi_download_session_create"
+        "player_ffi_download_session_create",
+        "player_ffi_error_free"
       ],
-      "ownership": [],
+      "ownership": [
+        "Transfers Rust-owned error messages to the caller and frees remaining error fields with player_ffi_error_free."
+      ],
       "body_fragment": "fragments/wrappers/vesper_runtime_download_session_create.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_error_string_free",
+      "ffi_symbols": [
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Returns transferred Rust-owned error messages to player_ffi_error_free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_error_string_free.c.inc"
     },
     {
       "kind": "wrapper",
@@ -6162,10 +6676,10 @@
     },
     {
       "kind": "wrapper",
-      "function": "vesper_runtime_download_session_drain_commands",
+      "function": "vesper_runtime_download_session_peek_commands",
       "ffi_symbols": [
         "player_ffi_download_command_list_free",
-        "player_ffi_download_session_drain_commands",
+        "player_ffi_download_session_peek_commands",
         "player_ffi_error_free"
       ],
       "ownership": [
@@ -6174,7 +6688,19 @@
         "Releases C-owned bridge allocations with free.",
         "Allocates copied C bridge DTO arrays with calloc and pairs them with bridge free wrappers."
       ],
-      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_drain_commands.c.inc"
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_peek_commands.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_download_session_acknowledge_commands",
+      "ffi_symbols": [
+        "player_ffi_download_session_acknowledge_commands",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_download_session_acknowledge_commands.c.inc"
     },
     {
       "kind": "wrapper",
@@ -6239,16 +6765,81 @@
     },
     {
       "kind": "wrapper",
-      "function": "vesper_runtime_benchmark_sink_session_create",
+      "function": "vesper_runtime_ios_plugin_plan_create",
       "ffi_symbols": [
-        "player_ffi_benchmark_session_create",
+        "player_ffi_ios_plugin_plan_create",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Transfers Rust-owned error messages to the caller and frees remaining error fields with player_ffi_error_free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_ios_plugin_plan_create.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_ios_plugin_plan_resolutions_json",
+      "ffi_symbols": [
+        "player_ffi_ios_plugin_plan_resolutions_json",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Transfers Rust-owned resolution JSON and error messages to the caller."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_ios_plugin_plan_resolutions_json.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_ios_plugin_plan_dispose",
+      "ffi_symbols": [
+        "player_ffi_ios_plugin_plan_dispose"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_ios_plugin_plan_dispose.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_ios_plugin_registry_load",
+      "ffi_symbols": [
+        "player_ffi_ios_plugin_registry_load",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Transfers Rust-owned error messages to the caller and frees remaining error fields with player_ffi_error_free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_ios_plugin_registry_load.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_ios_plugin_registry_dispose",
+      "ffi_symbols": [
+        "player_ffi_ios_plugin_registry_dispose"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_ios_plugin_registry_dispose.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_ios_plugin_string_free",
+      "ffi_symbols": [
+        "player_ffi_ios_plugin_string_free"
+      ],
+      "ownership": [
+        "Returns Rust-owned iOS plugin plan strings to their matching allocator."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_ios_plugin_string_free.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_benchmark_sink_session_create_with_references_json",
+      "ffi_symbols": [
+        "player_ffi_benchmark_session_create_with_references_json",
         "player_ffi_error_free"
       ],
       "ownership": [
         "Frees Rust-owned error messages with player_ffi_error_free.",
         "Releases C-owned bridge allocations with free."
       ],
-      "body_fragment": "fragments/wrappers/vesper_runtime_benchmark_sink_session_create.c.inc"
+      "body_fragment": "fragments/wrappers/vesper_runtime_benchmark_sink_session_create_with_references_json.c.inc"
     },
     {
       "kind": "wrapper",
@@ -6284,6 +6875,88 @@
         "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_benchmark_sink_session_flush_json.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playback_event_hook_session_create",
+      "ffi_symbols": [
+        "player_ffi_ios_playback_event_hook_session_create",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playback_event_hook_session_create.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playback_event_hook_session_submit_json",
+      "ffi_symbols": [
+        "player_ffi_ios_playback_event_hook_session_submit_json",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playback_event_hook_session_submit_json.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playback_event_hook_session_flush",
+      "ffi_symbols": [
+        "player_ffi_ios_playback_event_hook_session_flush",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playback_event_hook_session_flush.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playback_event_hook_session_drain_json",
+      "ffi_symbols": [
+        "player_ffi_ios_playback_event_hook_session_drain_json",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playback_event_hook_session_drain_json.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playback_event_hook_session_close",
+      "ffi_symbols": [
+        "player_ffi_ios_playback_event_hook_session_close",
+        "player_ffi_error_free"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playback_event_hook_session_close.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playback_event_hook_session_dispose",
+      "ffi_symbols": [
+        "player_ffi_ios_playback_event_hook_session_dispose"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playback_event_hook_session_dispose.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_playback_event_hook_report_string_free",
+      "ffi_symbols": [
+        "player_ffi_ios_playback_event_hook_report_string_free"
+      ],
+      "ownership": [
+        "Forwards playback EventHook report string release to the Rust FFI free function.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_playback_event_hook_report_string_free.c.inc"
     },
     {
       "kind": "wrapper",

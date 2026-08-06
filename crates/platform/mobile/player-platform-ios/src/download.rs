@@ -1,14 +1,16 @@
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use player_platform_mobile::{
-    MobileDownloadBridgeSession, MobileDownloadCommand, mobile_download_manager_config,
+    MobileDownloadBridgeSession, MobileDownloadCommand,
+    mobile_download_manager_config_from_registry,
 };
-use player_plugin::ProcessorProgress;
+use player_plugin::{PluginReference, ProcessorProgress};
+use player_plugin_loader::PluginRegistry;
 use player_runtime::{
-    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadExportPlan, DownloadManagerConfig,
-    DownloadProfile, DownloadSnapshot, DownloadSource, DownloadTaskId, DownloadTaskSnapshot,
-    PlayerError, PlayerResult,
+    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadEventBatch, DownloadExportPlan,
+    DownloadManagerConfig, DownloadProfile, DownloadSnapshot, DownloadSource, DownloadTaskId,
+    DownloadTaskSnapshot, PipelineEventHookReportBatch, PlayerError, PlayerResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,12 +19,13 @@ pub enum IosDownloadCommand {
     Start { task: DownloadTaskSnapshot },
     Pause { task_id: DownloadTaskId },
     Resume { task: DownloadTaskSnapshot },
-    Remove { task_id: DownloadTaskId },
+    Remove { task: DownloadTaskSnapshot },
 }
 
 #[derive(Debug)]
 pub struct IosDownloadBridgeSession {
     inner: MobileDownloadBridgeSession,
+    pending_commands: Vec<IosDownloadCommand>,
 }
 
 impl IosDownloadBridgeSession {
@@ -32,27 +35,34 @@ impl IosDownloadBridgeSession {
             run_post_processors_on_completion: true,
             post_processors: Vec::new(),
             event_hooks: Vec::new(),
+            pipeline_event_platform: "ios".to_owned(),
         };
 
         Self {
             inner: MobileDownloadBridgeSession::new(config, "ios download"),
+            pending_commands: Vec::new(),
         }
     }
 
-    pub fn new_with_plugin_library_paths(
+    pub fn new_with_plugin_registry(
         auto_start: bool,
         run_post_processors_on_completion: bool,
-        plugin_library_paths: impl IntoIterator<Item = PathBuf>,
+        registry: &PluginRegistry,
+        post_download_references: impl IntoIterator<Item = PluginReference>,
+        event_hook_references: impl IntoIterator<Item = PluginReference>,
     ) -> PlayerResult<Self> {
-        let config = mobile_download_manager_config(
+        let config = mobile_download_manager_config_from_registry(
             "ios",
             auto_start,
             run_post_processors_on_completion,
-            plugin_library_paths,
+            registry,
+            post_download_references,
+            event_hook_references,
         )?;
 
         Ok(Self {
             inner: MobileDownloadBridgeSession::new(config, "ios download"),
+            pending_commands: Vec::new(),
         })
     }
 
@@ -192,12 +202,43 @@ impl IosDownloadBridgeSession {
         self.inner.drain_events()
     }
 
+    pub fn drain_event_batch(&mut self) -> DownloadEventBatch {
+        self.inner.drain_event_batch()
+    }
+
+    pub fn flush_pipeline_event_hooks(&self, timeout: Duration) -> bool {
+        self.inner.flush_pipeline_event_hooks(timeout)
+    }
+
+    pub fn drain_pipeline_event_hook_reports(&self) -> PipelineEventHookReportBatch {
+        self.inner.drain_pipeline_event_hook_reports()
+    }
+
     pub fn drain_commands(&mut self) -> Vec<IosDownloadCommand> {
-        self.inner
-            .drain_commands()
-            .into_iter()
-            .map(IosDownloadCommand::from)
-            .collect()
+        let commands = self.peek_commands();
+        let acknowledged = self.acknowledge_commands(commands.len());
+        debug_assert!(acknowledged);
+        commands
+    }
+
+    pub fn peek_commands(&mut self) -> Vec<IosDownloadCommand> {
+        if self.pending_commands.is_empty() {
+            self.pending_commands = self
+                .inner
+                .drain_commands()
+                .into_iter()
+                .map(IosDownloadCommand::from)
+                .collect();
+        }
+        self.pending_commands.clone()
+    }
+
+    pub fn acknowledge_commands(&mut self, command_count: usize) -> bool {
+        if command_count != self.pending_commands.len() {
+            return false;
+        }
+        self.pending_commands.clear();
+        true
     }
 }
 
@@ -208,7 +249,7 @@ impl From<MobileDownloadCommand> for IosDownloadCommand {
             MobileDownloadCommand::Start { task } => Self::Start { task },
             MobileDownloadCommand::Pause { task_id } => Self::Pause { task_id },
             MobileDownloadCommand::Resume { task } => Self::Resume { task },
-            MobileDownloadCommand::Remove { task_id } => Self::Remove { task_id },
+            MobileDownloadCommand::Remove { task } => Self::Remove { task },
         }
     }
 }
@@ -219,7 +260,7 @@ mod tests {
     use player_model::MediaSource;
     use player_runtime::{
         DownloadAssetId, DownloadAssetIndex, DownloadContentFormat, DownloadProfile,
-        DownloadSource, DownloadTaskStatus, PlayerError, PlayerErrorCategory, PlayerErrorCode,
+        DownloadSource, DownloadTaskStatus, PlayerError, PlayerErrorCode,
     };
     use std::path::PathBuf;
     use std::time::Instant;
@@ -298,8 +339,37 @@ mod tests {
         assert_eq!(removed.status, DownloadTaskStatus::Removed);
         assert_eq!(
             session.drain_commands(),
-            vec![IosDownloadCommand::Remove { task_id }]
+            vec![IosDownloadCommand::Remove {
+                task: removed.clone(),
+            }]
         );
+    }
+
+    #[test]
+    fn ios_download_bridge_repeats_peeked_commands_until_acknowledged() {
+        let now = Instant::now();
+        let mut session = IosDownloadBridgeSession::new(true);
+        let task_id = session
+            .create_task(
+                "asset-a",
+                source("https://example.com/a.m3u8"),
+                DownloadProfile::default(),
+                DownloadAssetIndex::default(),
+                now,
+            )
+            .expect("task should be created");
+
+        let first = session.peek_commands();
+        let retried = session.peek_commands();
+        assert_eq!(first, retried);
+        assert!(matches!(
+            first.as_slice(),
+            [IosDownloadCommand::Prepare { task }] if task.task_id == task_id
+        ));
+        assert!(!session.acknowledge_commands(first.len() + 1));
+        assert_eq!(session.peek_commands(), first);
+        assert!(session.acknowledge_commands(first.len()));
+        assert!(session.peek_commands().is_empty());
     }
 
     #[test]
@@ -383,18 +453,5 @@ mod tests {
             player_runtime::DownloadEvent::StateChanged(task)
                 if task.status == DownloadTaskStatus::Failed
         )));
-    }
-
-    #[test]
-    fn ios_download_bridge_rejects_missing_plugin_library() {
-        let error = IosDownloadBridgeSession::new_with_plugin_library_paths(
-            false,
-            true,
-            vec![PathBuf::from("/tmp/vesper-missing-plugin.dylib")],
-        )
-        .expect_err("missing plugin should fail");
-
-        assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
-        assert_eq!(error.category(), PlayerErrorCategory::Input);
     }
 }

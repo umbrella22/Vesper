@@ -26,27 +26,10 @@ for artifactName in artifactNames {
     }
 }
 
-private let ffmpegTargets = [
-    "VesperFFmpegAVCodec",
-    "VesperFFmpegAVFormat",
-    "VesperFFmpegAVUtil",
-]
-
 private let binaryTargets: [Target] = artifactNames.map { artifactName in
     .binaryTarget(
         name: artifactName,
         path: "Artifacts/\(artifactName).xcframework"
-    )
-}
-
-private func productTarget(
-    _ name: String,
-    dependencies: [String]
-) -> Target {
-    .target(
-        name: name,
-        dependencies: dependencies.map { .target(name: $0) },
-        path: "Sources/\(name)"
     )
 }
 
@@ -55,56 +38,8 @@ let package = Package(
     platforms: [
         .iOS(.v17),
     ],
-    products: [
-        .library(
-            name: "VesperPlayerFfmpegRuntime",
-            targets: ["VesperPlayerFfmpegRuntimeProduct"]
-        ),
-        .library(
-            name: "VesperPlayerRemuxFfmpegPlugin",
-            targets: ["VesperPlayerRemuxFfmpegPluginProduct"]
-        ),
-        .library(
-            name: "VesperPlayerSourceNormalizerFfmpegPlugin",
-            targets: ["VesperPlayerSourceNormalizerFfmpegPluginProduct"]
-        ),
-        .library(
-            name: "VesperPlayerDecoderVideoToolboxPlugin",
-            targets: ["VesperPlayerDecoderVideoToolboxPluginProduct"]
-        ),
-        .library(
-            name: "VesperPlayerFrameProcessorDiagnosticPlugin",
-            targets: ["VesperPlayerFrameProcessorDiagnosticPluginProduct"]
-        ),
-        .library(
-            name: "VesperPlayerOptionalPlugins",
-            targets: ["VesperPlayerOptionalPluginsProduct"]
-        ),
-    ],
-    targets: binaryTargets + [
-        productTarget(
-            "VesperPlayerFfmpegRuntimeProduct",
-            dependencies: ffmpegTargets
-        ),
-        productTarget(
-            "VesperPlayerRemuxFfmpegPluginProduct",
-            dependencies: ["VesperPlayerRemuxFfmpegPlugin"] + ffmpegTargets
-        ),
-        productTarget(
-            "VesperPlayerSourceNormalizerFfmpegPluginProduct",
-            dependencies: ["VesperPlayerSourceNormalizerFfmpegPlugin"] + ffmpegTargets
-        ),
-        productTarget(
-            "VesperPlayerDecoderVideoToolboxPluginProduct",
-            dependencies: ["VesperPlayerDecoderVideoToolboxPlugin"]
-        ),
-        productTarget(
-            "VesperPlayerFrameProcessorDiagnosticPluginProduct",
-            dependencies: ["VesperPlayerFrameProcessorDiagnosticPlugin"]
-        ),
-        productTarget(
-            "VesperPlayerOptionalPluginsProduct",
-            dependencies: artifactNames
-        ),
-    ]
+    products: artifactNames.map { artifactName in
+        .library(name: artifactName, targets: [artifactName])
+    },
+    targets: binaryTargets
 )

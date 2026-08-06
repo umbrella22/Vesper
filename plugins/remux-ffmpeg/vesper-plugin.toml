@@ -1,0 +1,30 @@
+schema_version = 1
+
+[plugin]
+id = "io.github.ikaros.vesper.remux-ffmpeg"
+name = "Vesper FFmpeg Remux"
+version = "0.4.0"
+description = "FFmpeg-backed post-download remux plugin."
+license = "Apache-2.0"
+publisher = "io.github.ikaros"
+
+[compatibility]
+host_sdk = ">=0.4.0, <0.5.0"
+abi_major = 1
+abi_minor_min = 0
+abi_minor_max = 0
+
+[[capabilities]]
+interface_id = "e9479dbc-42d2-575e-b39e-a24bc512fbc7"
+instance_id = "io.github.ikaros.vesper.remux-ffmpeg.post-download"
+interface_major = 1
+interface_minor = 0
+stability = "stable"
+
+[[redistribution]]
+component = "FFmpeg"
+license = "LGPL-2.1-or-later"
+notice = "THIRD_PARTY_NOTICES.md"
+source = "VesperPlayerOptionalPlugins-FFmpeg-<version>-source.tar.xz"
+build_configuration = "VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip"
+relinking_materials = "Dynamic FFmpeg component libraries and release relinking instructions"

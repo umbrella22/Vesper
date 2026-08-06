@@ -252,6 +252,8 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         }
 
         let initialOwnerCount = VesperSharedAudioSession.activeOwnerCountForTesting
+        let expectedOperationsAfterActivation = initialOwnerCount == 0 ? [0] : []
+        let expectedOperationsAfterDeactivation = initialOwnerCount == 0 ? [0, 0] : []
         let firstLease = VesperSharedAudioSessionLease()
         let secondLease = VesperSharedAudioSessionLease()
         firstLease.activate()
@@ -263,7 +265,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             VesperSharedAudioSession.activeOwnerCountForTesting,
             initialOwnerCount + 1
         )
-        XCTAssertEqual(operationThreads.values, [0])
+        XCTAssertEqual(operationThreads.values, expectedOperationsAfterActivation)
 
         secondLease.deactivate()
         await VesperSharedAudioSession.waitForPendingOperationsForTesting()
@@ -272,7 +274,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             VesperSharedAudioSession.activeOwnerCountForTesting,
             initialOwnerCount
         )
-        XCTAssertEqual(operationThreads.values, [0, 0])
+        XCTAssertEqual(operationThreads.values, expectedOperationsAfterDeactivation)
     }
 
     func testBenchmarkRecorderDrainsRawEventsAndKeepsSummary() {
@@ -337,8 +339,8 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"],
-                frameProcessorPluginLibraryPaths: ["/tmp/libframe.dylib"],
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox],
+                frameProcessorPluginReferences: [VesperBundledPluginReferences.frameProcessorDiagnostic],
                 maxInFlightFrames: 2
             )
         )
@@ -365,7 +367,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .diagnosticsOnly,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
 
@@ -394,7 +396,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame
@@ -432,11 +434,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .disabled,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
         let surface = PlayerSurfaceView()
@@ -472,7 +474,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .requireNativeFrame
@@ -509,11 +511,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
 
@@ -544,11 +546,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
         let surface = PlayerSurfaceView()
@@ -602,11 +604,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             nativeFramePipelineCoordinator: coordinator
         )
@@ -642,11 +644,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
         let surface = PlayerSurfaceView()
@@ -681,11 +683,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .requireNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
         let surface = PlayerSurfaceView()
@@ -717,7 +719,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .requireNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
         let surface = PlayerSurfaceView()
@@ -751,11 +753,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
         let surface = PlayerSurfaceView()
@@ -791,11 +793,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
         let surface = PlayerSurfaceView()
@@ -829,11 +831,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
         let surface = PlayerSurfaceView()
@@ -867,11 +869,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .requireNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
         let surface = PlayerSurfaceView()
@@ -907,11 +909,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .requireNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
 
@@ -950,11 +952,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .requireNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
         let surface = PlayerSurfaceView()
@@ -1001,11 +1003,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             nativeFramePipelineCoordinator: coordinator
         )
@@ -1102,11 +1104,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             nativeFramePipelineCoordinator: coordinator
         )
@@ -1154,11 +1156,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             nativeFramePipelineCoordinator: coordinator
         )
@@ -1204,11 +1206,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             nativeFramePipelineCoordinator: coordinator
         )
@@ -1256,11 +1258,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: firstSource,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             nativeFramePipelineCoordinator: coordinator
         )
@@ -1312,11 +1314,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: firstSource,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             nativeFramePipelineCoordinator: coordinator
         )
@@ -1378,11 +1380,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         let audioOutput = TestNativeFrameAudioOutput()
         let configuration = VesperNativeFramePipelineConfiguration(
             mode: .preferNativeFrame,
-            decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+            decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
         )
         let sourceNormalizer = VesperSourceNormalizerConfiguration(
             mode: .preflightOnly,
-            pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+            pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
         )
         let surface = PlayerSurfaceView()
         let coordinator = VesperNativeFramePipelineCoordinator { source, configuration, sourceNormalizer, surfaceHost in
@@ -1470,11 +1472,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: firstSource,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             nativeFramePipelineCoordinator: coordinator
         )
@@ -1527,11 +1529,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             nativeFramePipelineCoordinator: coordinator
         )
@@ -1573,11 +1575,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             initialSource: source,
             sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             nativeFramePipelineCoordinator: coordinator
         )
@@ -1631,13 +1633,13 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             for: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"],
-                frameProcessorPluginLibraryPaths: ["/tmp/libframe.dylib"],
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox],
+                frameProcessorPluginReferences: [VesperBundledPluginReferences.frameProcessorDiagnostic],
                 maxInFlightFrames: 2
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: surface
         )
@@ -1648,7 +1650,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             coordinator.makeDiagnostics(
                 configuration: VesperNativeFramePipelineConfiguration(
                     mode: .preferNativeFrame,
-                    decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                    decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
                 )
             ).contains { diagnostic in
                 diagnostic["route"] as? String == "sdkManagedNativeFrame" &&
@@ -1679,11 +1681,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         let surface = PlayerSurfaceView()
         let configuration = VesperNativeFramePipelineConfiguration(
             mode: .preferNativeFrame,
-            decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+            decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
         )
         let sourceNormalizer = VesperSourceNormalizerConfiguration(
             mode: .preflightOnly,
-            pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+            pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
         )
 
         XCTAssertEqual(
@@ -1713,11 +1715,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         let coordinator = VesperNativeFramePipelineCoordinator()
         let configuration = VesperNativeFramePipelineConfiguration(
             mode: .requireNativeFrame,
-            decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+            decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
         )
         let sourceNormalizer = VesperSourceNormalizerConfiguration(
             mode: .preflightOnly,
-            pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+            pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
         )
 
         let decision = coordinator.evaluateRoute(
@@ -1760,11 +1762,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             for: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .requireNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: surface
         )
@@ -1781,7 +1783,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             coordinator.makeDiagnostics(
                 configuration: VesperNativeFramePipelineConfiguration(
                     mode: .requireNativeFrame,
-                    decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                    decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
                 )
             ).contains { diagnostic in
                 diagnostic["status"] as? String == "loadFailed" &&
@@ -1803,7 +1805,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         let coordinator = VesperNativeFramePipelineCoordinator()
         let configuration = VesperNativeFramePipelineConfiguration(
             mode: .preferNativeFrame,
-            decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+            decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
         )
         let surface = PlayerSurfaceView()
 
@@ -1812,7 +1814,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             configuration: configuration,
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: surface
         )
@@ -1849,7 +1851,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         let coordinator = VesperNativeFramePipelineCoordinator()
         let configuration = VesperNativeFramePipelineConfiguration(
             mode: .preferNativeFrame,
-            decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+            decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
         )
         let surface = PlayerSurfaceView()
 
@@ -1858,7 +1860,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             configuration: configuration,
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: surface
         )
@@ -1905,11 +1907,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -1940,11 +1942,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2012,11 +2014,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2071,11 +2073,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2124,11 +2126,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2163,11 +2165,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2204,11 +2206,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2251,11 +2253,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2301,11 +2303,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2348,11 +2350,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2393,11 +2395,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2429,11 +2431,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2505,11 +2507,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2566,11 +2568,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2628,11 +2630,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2692,11 +2694,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -2761,20 +2763,45 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         surfaceView.attachNativeFramePresenter()
 
         let presenter = RecordingNativeFramePresenter(wrapped: surfaceView)
+        let backend = VesperFfiNativeFramePipelineBackend { references in
+            let artifacts = references.compactMap { reference -> VesperResolvedPluginArtifacts.Artifact? in
+                let libraryPath: String?
+                switch reference.pluginId {
+                case VesperBundledPluginReferences.sourceNormalizerFfmpeg.pluginId:
+                    libraryPath = smoke.sourceNormalizerPluginPath
+                case VesperBundledPluginReferences.decoderVideoToolbox.pluginId:
+                    libraryPath = smoke.decoderPluginPath
+                case VesperBundledPluginReferences.frameProcessorDiagnostic.pluginId:
+                    libraryPath = smoke.frameProcessorPluginPath
+                default:
+                    libraryPath = nil
+                }
+                return libraryPath.map {
+                    VesperResolvedPluginArtifacts.Artifact(
+                        reference: reference,
+                        libraryPath: $0
+                    )
+                }
+            }
+            return VesperResolvedPluginArtifacts(artifacts: artifacts)
+        }
         let session = VesperNativeFramePipelineSession(
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .requireNativeFrame,
-                decoderPluginLibraryPaths: [smoke.decoderPluginPath],
-                frameProcessorPluginLibraryPaths: smoke.frameProcessorPluginPath.map { [$0] } ?? [],
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox],
+                frameProcessorPluginReferences: smoke.frameProcessorPluginPath == nil
+                    ? []
+                    : [VesperBundledPluginReferences.frameProcessorDiagnostic],
                 maxInFlightFrames: 1
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: [smoke.sourceNormalizerPluginPath],
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg],
                 runtimeProfile: smoke.runtimeProfile
             ),
             surfaceHost: surfaceView,
+            backend: backend,
             nativeFramePresenter: presenter
         )
         var timelines: [VesperNativeFramePipelineTimeline] = []
@@ -2883,11 +2910,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
                 mode: .preferNativeFrame,
-                decoderPluginLibraryPaths: ["/tmp/libdecoder.dylib"]
+                decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             ),
             sourceNormalizer: VesperSourceNormalizerConfiguration(
                 mode: .preflightOnly,
-                pluginLibraryPaths: ["/tmp/libsource_normalizer.dylib"]
+                pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
             surfaceHost: PlayerSurfaceView(),
             backend: backend,
@@ -3173,8 +3200,11 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         _ environment: [String: String],
         key: String
     ) -> String? {
-        let configPath = environment["VESPER_IOS_NATIVE_FRAME_SMOKE_CONFIG"]
-            ?? "/tmp/vesper-ios-native-frame-smoke.plist"
+        guard let configPath = environment["VESPER_IOS_NATIVE_FRAME_SMOKE_CONFIG"],
+              !configPath.isEmpty
+        else {
+            return nil
+        }
         guard FileManager.default.fileExists(atPath: configPath),
               let dictionary = NSDictionary(contentsOfFile: configPath) as? [String: Any]
         else {
@@ -3341,6 +3371,7 @@ private final class TestObservablePlayerBridge: ObservableObject, ObservablePlay
             pluginAcceptedEvents: 0,
             pluginDroppedEvents: 0,
             metrics: [],
+            pluginFinalReport: nil,
             pluginErrors: []
         )
     }

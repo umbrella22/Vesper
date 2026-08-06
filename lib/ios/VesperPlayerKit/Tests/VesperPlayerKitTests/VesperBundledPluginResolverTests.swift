@@ -13,53 +13,34 @@ final class VesperBundledPluginResolverTests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testDisabledSourceNormalizerDoesNotResolveBundledPlugins() throws {
+    func testEmptySelectionDoesNotAutoDiscoverBundledPlugins() throws {
         let root = try makeTemporaryDirectory()
         _ = try makeFrameworkBinary(named: "VesperPlayerSourceNormalizerFfmpegPlugin", in: root)
 
-        let resolved =
-            VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
-                VesperSourceNormalizerConfiguration(),
-                frameworkSearchURLs: [root]
-            )
+        let resolved = try VesperBundledPluginResolver.resolvePluginArtifacts(
+            [],
+            frameworkSearchURLs: [root]
+        )
 
-        XCTAssertEqual(resolved.mode, .disabled)
-        XCTAssertTrue(resolved.pluginLibraryPaths.isEmpty)
+        XCTAssertTrue(resolved.libraryPaths.isEmpty)
     }
 
-    func testExplicitSourceNormalizerPluginPathsOverrideBundledDiscovery() throws {
+    func testExplicitSourceNormalizerReferenceResolvesBundledArtifact() throws {
         let root = try makeTemporaryDirectory()
-        _ = try makeFrameworkBinary(named: "VesperPlayerSourceNormalizerFfmpegPlugin", in: root)
-        let explicitPath = "/custom/VesperPlayerSourceNormalizerFfmpegPlugin"
+        let frameworkPath = try makeFrameworkBinary(
+            named: "VesperPlayerSourceNormalizerFfmpegPlugin",
+            in: root
+        )
 
-        let resolved =
-            VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
-                VesperSourceNormalizerConfiguration(
-                    mode: .preferNormalized,
-                    pluginLibraryPaths: [explicitPath]
-                ),
-                frameworkSearchURLs: [root]
-            )
+        let resolved = try VesperBundledPluginResolver.resolvePluginArtifacts(
+            [VesperBundledPluginReferences.sourceNormalizerFfmpeg],
+            frameworkSearchURLs: [root]
+        )
 
-        XCTAssertEqual(resolved.pluginLibraryPaths, [explicitPath])
+        XCTAssertEqual(resolved.libraryPaths, [frameworkPath.path])
     }
 
-    func testEnabledSourceNormalizerUsesBundledPluginWhenAvailable() throws {
-        let root = try makeTemporaryDirectory()
-        let bundledPath =
-            try makeFrameworkBinary(named: "VesperPlayerSourceNormalizerFfmpegPlugin", in: root)
-
-        let resolved =
-            VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
-                VesperSourceNormalizerConfiguration(mode: .preferNormalized),
-                frameworkSearchURLs: [root]
-            )
-
-        XCTAssertEqual(resolved.mode, .preferNormalized)
-        XCTAssertEqual(resolved.pluginLibraryPaths, [bundledPath.path])
-    }
-
-    func testEnabledSourceNormalizerIgnoresFlatDylibAndUsesFramework() throws {
+    func testExplicitSourceNormalizerReferenceIgnoresFlatDylibAndUsesFramework() throws {
         let root = try makeTemporaryDirectory()
         _ = try makeFlatBinary(
             named: "libvesper_source_normalizer_ffmpeg.dylib",
@@ -70,39 +51,182 @@ final class VesperBundledPluginResolverTests: XCTestCase {
             in: root
         )
 
-        let resolved =
-            VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
-                VesperSourceNormalizerConfiguration(mode: .preferNormalized),
-                frameworkSearchURLs: [root]
-            )
+        let resolved = try VesperBundledPluginResolver.resolvePluginArtifacts(
+            [VesperBundledPluginReferences.sourceNormalizerFfmpeg],
+            frameworkSearchURLs: [root]
+        )
 
-        XCTAssertEqual(resolved.pluginLibraryPaths, [frameworkPath.path])
+        XCTAssertEqual(resolved.libraryPaths, [frameworkPath.path])
     }
 
-    func testPreferNormalizedWithoutBundledPluginLeavesConfigurationNonFatal() throws {
-        let root = try makeTemporaryDirectory()
-
-        let resolved =
-            VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
-                VesperSourceNormalizerConfiguration(mode: .preferNormalized),
-                frameworkSearchURLs: [root]
-            )
-
-        XCTAssertEqual(resolved.mode, .preferNormalized)
-        XCTAssertTrue(resolved.pluginLibraryPaths.isEmpty)
+    func testCanonicalMobileReferencesUseNativeTransport() {
+        XCTAssertEqual(VesperBundledPluginReferences.sourceNormalizerFfmpeg.transport, .native)
+        XCTAssertEqual(VesperBundledPluginReferences.decoderVideoToolbox.transport, .native)
+        XCTAssertEqual(VesperBundledPluginReferences.frameProcessorDiagnostic.transport, .native)
     }
 
-    func testRequireNormalizedWithoutBundledPluginKeepsRequiredModeForNativeFailure() throws {
+    func testPluginReferencesResolveOneArtifactPerPluginRoot() throws {
         let root = try makeTemporaryDirectory()
+        let remuxPath = try makeFrameworkBinary(
+            named: "VesperPlayerRemuxFfmpegPlugin",
+            in: root
+        )
+        let postDownload = try VesperPluginReference(
+            pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
+            capabilityInstanceId: "io.github.ikaros.vesper.remux-ffmpeg.post-download",
+            transport: .native
+        )
+        let eventHook = try VesperPluginReference(
+            pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
+            capabilityInstanceId: "io.github.ikaros.vesper.remux-ffmpeg.event-hook",
+            transport: .native
+        )
 
-        let resolved =
-            VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
-                VesperSourceNormalizerConfiguration(mode: .requireNormalized),
-                frameworkSearchURLs: [root]
+        let artifacts = try VesperBundledPluginResolver.resolvePluginArtifacts(
+            [postDownload, postDownload, eventHook],
+            frameworkSearchURLs: [root]
+        )
+
+        XCTAssertEqual(artifacts.libraryPaths, [remuxPath.path])
+        XCTAssertEqual(artifacts.artifacts.map(\.reference), [postDownload, eventHook])
+        XCTAssertEqual(
+            artifacts.artifacts.map(\.libraryPath),
+            [remuxPath.path, remuxPath.path]
+        )
+
+        let json = try encodeVesperResolvedPluginArtifactsJSON(artifacts)
+        let values = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
+        )
+        let capabilityInstanceIds = values.compactMap { value in
+            (value["reference"] as? [String: Any])?["capabilityInstanceId"] as? String
+        }
+        XCTAssertEqual(
+            capabilityInstanceIds,
+            [
+                "io.github.ikaros.vesper.remux-ffmpeg.post-download",
+                "io.github.ikaros.vesper.remux-ffmpeg.event-hook",
+            ]
+        )
+    }
+
+    func testDiagnosticSanitizationUsesCanonicalInstanceForSharedArtifact() throws {
+        let pluginId = "io.github.ikaros.vesper.remux-ffmpeg"
+        let first = try VesperPluginReference(
+            pluginId: pluginId,
+            capabilityInstanceId: "io.github.ikaros.vesper.remux-ffmpeg.first",
+            transport: .native
+        )
+        let second = try VesperPluginReference(
+            pluginId: pluginId,
+            capabilityInstanceId: "io.github.ikaros.vesper.remux-ffmpeg.second",
+            transport: .native
+        )
+        let secondInstanceId = try XCTUnwrap(second.capabilityInstanceId)
+        let path = "/Frameworks/VesperPlayerRemuxFfmpegPlugin"
+        let artifacts = VesperResolvedPluginArtifacts(
+            artifacts: [
+                .init(reference: first, libraryPath: path),
+                .init(reference: second, libraryPath: path),
+            ]
+        )
+
+        let canonical = try XCTUnwrap(
+            pluginDiagnosticsReplacingArtifactPaths(
+                [
+                    [
+                        "path": path,
+                        "details": [
+                            "pluginId": pluginId,
+                            "capabilityInstanceId": secondInstanceId,
+                            "transport": "native",
+                        ],
+                    ]
+                ],
+                artifacts: [artifacts]
+            ).first
+        )
+        XCTAssertNil(canonical["path"])
+        XCTAssertEqual(canonical["pluginId"] as? String, pluginId)
+        XCTAssertEqual(
+            canonical["capabilityInstanceId"] as? String,
+            secondInstanceId
+        )
+        XCTAssertEqual(
+            (canonical["pluginReference"] as? [String: Any])?["capabilityInstanceId"] as? String,
+            secondInstanceId
+        )
+
+        let candidates = try XCTUnwrap(
+            pluginDiagnosticsReplacingArtifactPaths(
+                [["path": path]],
+                artifacts: [artifacts]
+            ).first
+        )
+        XCTAssertNil(candidates["capabilityInstanceId"])
+        let candidateReferences = try XCTUnwrap(
+            candidates["pluginReferences"] as? [[String: Any]]
+        )
+        XCTAssertEqual(
+            candidateReferences.compactMap { $0["capabilityInstanceId"] as? String },
+            [first.capabilityInstanceId, second.capabilityInstanceId].compactMap { $0 }
+        )
+    }
+
+    func testPluginReferenceResolutionRejectsUnsupportedTransportAndMissingArtifact() throws {
+        let wasm = try VesperPluginReference(
+            pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
+            transport: .wasm
+        )
+        XCTAssertThrowsError(
+            try VesperBundledPluginResolver.resolvePluginArtifacts(
+                [wasm],
+                frameworkSearchURLs: []
             )
+        ) { error in
+            XCTAssertEqual(
+                error as? VesperBundledPluginResolutionError,
+                .unsupportedTransport("wasm")
+            )
+        }
 
-        XCTAssertEqual(resolved.mode, .requireNormalized)
-        XCTAssertTrue(resolved.pluginLibraryPaths.isEmpty)
+        let missing = try VesperPluginReference(
+            pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
+            transport: .native
+        )
+        XCTAssertThrowsError(
+            try VesperBundledPluginResolver.resolvePluginArtifacts(
+                [missing],
+                frameworkSearchURLs: []
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? VesperBundledPluginResolutionError,
+                .missingArtifact("io.github.ikaros.vesper.remux-ffmpeg")
+            )
+        }
+    }
+
+    func testPluginReferenceResolutionCapsUniqueReferences() throws {
+        let references = try (0...256).map { index in
+            try VesperPluginReference(
+                pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
+                capabilityInstanceId: "io.github.ikaros.vesper.remux-ffmpeg.capability-\(index)",
+                transport: .native
+            )
+        }
+
+        XCTAssertThrowsError(
+            try VesperBundledPluginResolver.resolvePluginArtifacts(
+                references,
+                frameworkSearchURLs: []
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? VesperBundledPluginResolutionError,
+                .tooManyReferences(257)
+            )
+        }
     }
 
     private func makeTemporaryDirectory() throws -> URL {

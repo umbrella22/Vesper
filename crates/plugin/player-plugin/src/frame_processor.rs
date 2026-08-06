@@ -3,6 +3,75 @@ use thiserror::Error;
 
 use crate::{NativeFrame, NativeFrameMetadata, NativeFramePipelineProfile, NativeHandleKind};
 
+/// Call-scoped view of a host-owned native frame submitted to a processor.
+///
+/// The view is intentionally neither `Clone` nor `Copy`. Its native handle is
+/// valid only for the synchronous submit/receive sequence. A plugin may echo
+/// the handle through `borrowed_passthrough`, but it must retain the platform
+/// resource through an explicit platform API before performing asynchronous
+/// work or returning an owned output.
+///
+/// ```compile_fail
+/// use player_plugin::FrameProcessorInputFrame;
+///
+/// fn retain_input(frame: FrameProcessorInputFrame<'_>) {
+///     let _retained = frame.clone();
+/// }
+/// ```
+#[must_use = "the borrowed native frame is valid only for the submit callback"]
+pub struct FrameProcessorInputFrame<'a> {
+    metadata: &'a NativeFrameMetadata,
+    native_handle: usize,
+}
+
+impl<'a> FrameProcessorInputFrame<'a> {
+    /// Borrows an existing native frame for one synchronous submit call.
+    pub fn new(frame: &'a NativeFrame) -> Self {
+        Self {
+            metadata: &frame.metadata,
+            native_handle: frame.handle,
+        }
+    }
+
+    pub(crate) fn from_abi(metadata: &'a NativeFrameMetadata, native_handle: usize) -> Self {
+        Self {
+            metadata,
+            native_handle,
+        }
+    }
+
+    /// Returns metadata borrowed from the host-owned input frame.
+    pub fn metadata(&self) -> &'a NativeFrameMetadata {
+        self.metadata
+    }
+
+    /// Returns the call-scoped opaque native handle.
+    ///
+    /// Copying this integer does not retain the underlying platform resource;
+    /// using it after `submit_frame` returns violates the plugin contract.
+    pub fn native_handle(&self) -> usize {
+        self.native_handle
+    }
+
+    /// Creates a host-owned passthrough result without transferring ownership.
+    ///
+    /// The returned frame must only be used as the immediate output for this
+    /// input. The host keeps the upstream resource alive while consuming that
+    /// output and will not call `FrameProcessorSession::release_frame` for it.
+    pub fn borrowed_passthrough(&self) -> NativeFrame {
+        let mut metadata = self.metadata.clone();
+        metadata.release_tracking = Some(crate::NativeFrameReleaseTracking {
+            frame_id: metadata.frame_id,
+            requires_release: false,
+        });
+        NativeFrame {
+            metadata,
+            handle: self.native_handle,
+            lease_token: None,
+        }
+    }
+}
+
 /// Frame metadata and scheduling hints submitted to a frame processor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameProcessorSubmitFrame {
@@ -326,6 +395,7 @@ pub struct FrameProcessorOutputFrame {
     pub frame: NativeFrame,
     pub timings: FrameProcessorFrameTimings,
     pub source_frame_id: Option<u64>,
+    pub message: Option<String>,
 }
 
 /// Rust-side receive result returned by frame processor sessions.
@@ -405,7 +475,7 @@ pub trait FrameProcessorSession: Send {
 
     fn submit_frame(
         &mut self,
-        frame: &NativeFrame,
+        frame: FrameProcessorInputFrame<'_>,
         submit: &FrameProcessorSubmitFrame,
     ) -> Result<FrameProcessorSubmitResult, FrameProcessorError>;
 

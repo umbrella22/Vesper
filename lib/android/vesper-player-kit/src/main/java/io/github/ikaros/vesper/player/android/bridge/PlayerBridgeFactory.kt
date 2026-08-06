@@ -21,9 +21,14 @@ internal object PlayerBridgeFactory {
             VesperFrameProcessorConfiguration(),
         nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration =
             VesperNativeFramePipelineConfiguration(),
+        pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration =
+            VesperPipelineEventHookConfiguration(),
     ): PlayerBridge =
         when (defaultBackend) {
-            PlayerBridgeBackend.FakeDemo ->
+            PlayerBridgeBackend.FakeDemo -> {
+                require(pipelineEventHookConfiguration.pluginReferences.isEmpty()) {
+                    "Fake demo players do not support Android playback event-hook references"
+                }
                 FakePlayerBridge(
                     initialSource = initialSource,
                     resiliencePolicy = resiliencePolicy,
@@ -33,36 +38,62 @@ internal object PlayerBridgeFactory {
                     benchmarkConfiguration = benchmarkConfiguration,
                     appContext = context.applicationContext,
                 )
+            }
             PlayerBridgeBackend.VesperNativeStub -> {
                 val appContext = context.applicationContext
-                val resolvedSourceNormalizerConfiguration =
-                    VesperBundledPluginResolver.resolveSourceNormalizerConfiguration(
+                val resolvedPluginArtifacts =
+                    VesperBundledPluginResolver.resolve(
                         context = appContext,
-                        configuration = sourceNormalizerConfiguration,
+                        sourceNormalizerConfiguration = sourceNormalizerConfiguration,
+                        frameProcessorConfiguration = frameProcessorConfiguration,
+                        nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
                     )
-                val benchmarkRecorder = VesperBenchmarkRecorder(benchmarkConfiguration)
-                VesperNativePlayerBridge(
-                    bindings =
-                        VesperNativeJniBindings(
+                val pipelineEventHookRegistryOwner =
+                    pipelineEventHookConfiguration.pluginReferences
+                        .takeIf { it.isNotEmpty() }
+                        ?.let { references ->
+                            DefaultVesperPluginRegistryFactory.create(appContext, references)
+                        }
+                try {
+                    val benchmarkRecorder =
+                        VesperBenchmarkRecorder(
+                            configuration = benchmarkConfiguration,
                             context = appContext,
-                            preloadBudgetPolicy = preloadBudgetPolicy,
-                            decoderBackend = decoderBackend,
-                            benchmarkRecorder = benchmarkRecorder,
-                            sourceNormalizerConfiguration = resolvedSourceNormalizerConfiguration,
-                        ),
-                    initialSource = initialSource,
-                    currentResiliencePolicy = resiliencePolicy,
-                    trackPreferencePolicy = trackPreferencePolicy,
-                    preloadBudgetPolicy = preloadBudgetPolicy,
-                    decoderBackend = decoderBackend,
-                    benchmarkRecorder = benchmarkRecorder,
-                    keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
-                    appContext = appContext,
-                    surfaceKind = surfaceKind,
-                    sourceNormalizerConfiguration = resolvedSourceNormalizerConfiguration,
-                    frameProcessorConfiguration = frameProcessorConfiguration,
-                    nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
-                )
+                        )
+                    VesperNativePlayerBridge(
+                        bindings =
+                            VesperNativeJniBindings(
+                                context = appContext,
+                                preloadBudgetPolicy = preloadBudgetPolicy,
+                                decoderBackend = decoderBackend,
+                                benchmarkRecorder = benchmarkRecorder,
+                                sourceNormalizerConfiguration = sourceNormalizerConfiguration,
+                                resolvedPluginArtifacts = resolvedPluginArtifacts,
+                                pipelineEventHookRegistryHandle =
+                                    pipelineEventHookRegistryOwner?.handle ?: 0L,
+                                pipelineEventHookReferencesJson =
+                                    encodeVesperPluginReferences(
+                                        pipelineEventHookConfiguration.pluginReferences,
+                                    ),
+                            ),
+                        initialSource = initialSource,
+                        currentResiliencePolicy = resiliencePolicy,
+                        trackPreferencePolicy = trackPreferencePolicy,
+                        preloadBudgetPolicy = preloadBudgetPolicy,
+                        decoderBackend = decoderBackend,
+                        benchmarkRecorder = benchmarkRecorder,
+                        keepScreenOnDuringPlayback = keepScreenOnDuringPlayback,
+                        appContext = appContext,
+                        surfaceKind = surfaceKind,
+                        sourceNormalizerConfiguration = sourceNormalizerConfiguration,
+                        frameProcessorConfiguration = frameProcessorConfiguration,
+                        nativeFramePipelineConfiguration = nativeFramePipelineConfiguration,
+                        pipelineEventHookRegistryOwner = pipelineEventHookRegistryOwner,
+                    )
+                } catch (error: Throwable) {
+                    pipelineEventHookRegistryOwner?.close()
+                    throw error
+                }
             }
         }
 }

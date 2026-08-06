@@ -4,9 +4,18 @@ on:
   pull_request:
     paths:
       - ".github/workflows/boundary-ci.yml"
+      - ".github/actions/setup-vesper-cli/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/tools/player-cli/**"
       - "scripts/**"
+      - "plugins/**"
+      - "fixtures/plugins/**"
       - "crates/ffi/**"
       - "crates/plugin/**"
+      - "schemas/**"
+      - "templates/**"
+      - "wit/**"
       - "lib/android/**"
       - "lib/ios/VesperPlayerKit/**"
       - "lib/flutter/**"
@@ -15,9 +24,18 @@ on:
       - main
     paths:
       - ".github/workflows/boundary-ci.yml"
+      - ".github/actions/setup-vesper-cli/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/tools/player-cli/**"
       - "scripts/**"
+      - "plugins/**"
+      - "fixtures/plugins/**"
       - "crates/ffi/**"
       - "crates/plugin/**"
+      - "schemas/**"
+      - "templates/**"
+      - "wit/**"
       - "lib/android/**"
       - "lib/ios/VesperPlayerKit/**"
       - "lib/flutter/**"
@@ -39,8 +57,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show Ruby version
-        run: ruby --version
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
 
       - name: Verify boundary invariants
         run: ./scripts/vesper contract boundary
+
+      - name: Verify public contracts
+        run: ./scripts/vesper contract verify

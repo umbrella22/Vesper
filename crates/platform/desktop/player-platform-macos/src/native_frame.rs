@@ -3,6 +3,7 @@ use super::*;
 #[derive(Debug)]
 pub(crate) struct MacosNativeFrameVideoSourceFactory {
     pub(crate) plugin_path: PathBuf,
+    pub(crate) plugin_reference: PluginReference,
     pub(crate) video_surface: PlayerVideoSurfaceTarget,
     pub(crate) frame_processor_paths: Vec<PathBuf>,
     pub(crate) frame_processor_mode: FrameProcessorMode,
@@ -82,6 +83,7 @@ fn macos_color_requires_hdr_system_playback(
 
 pub(crate) struct MacosSourceNormalizerPacketVideoSourceFactory {
     pub(crate) decoder_plugin_path: PathBuf,
+    pub(crate) decoder_plugin_reference: PluginReference,
     pub(crate) decoder_plugin_name: Option<String>,
     pub(crate) video_surface: PlayerVideoSurfaceTarget,
     pub(crate) frame_processor_paths: Vec<PathBuf>,
@@ -94,6 +96,7 @@ impl std::fmt::Debug for MacosSourceNormalizerPacketVideoSourceFactory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MacosSourceNormalizerPacketVideoSourceFactory")
             .field("decoder_plugin_path", &self.decoder_plugin_path)
+            .field("decoder_plugin_reference", &self.decoder_plugin_reference)
             .field("decoder_plugin_name", &self.decoder_plugin_name)
             .field("video_surface", &self.video_surface)
             .field("frame_processor_paths", &self.frame_processor_paths)
@@ -740,15 +743,16 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
             anyhow::bail!("{reason}");
         }
         let packet_stream_info = &stream_info.packet;
-        let plugin = LoadedDynamicPlugin::load(&self.decoder_plugin_path).with_context(|| {
-            format!(
-                "failed to load native-frame decoder plugin {}",
-                self.decoder_plugin_path.display()
-            )
-        })?;
-        let factory = plugin.native_decoder_plugin_factory().ok_or_else(|| {
-            anyhow::anyhow!("decoder plugin does not export a v2 native-frame API")
-        })?;
+        let registry = PluginRegistry::load_native_development([&self.decoder_plugin_path])
+            .with_context(|| {
+                format!(
+                    "failed to load native-frame decoder plugin {}",
+                    self.decoder_plugin_path.display()
+                )
+            })?;
+        let factory = registry
+            .resolve_native_decoder(&self.decoder_plugin_reference)?
+            .capability();
         let requirements = DecoderSessionRequirements::native_video(
             packet_stream_info.codec.clone(),
             DecoderNativeHandleKind::CvPixelBuffer,
@@ -898,15 +902,16 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
             );
         }
         let native_stream_info = MacosNativeFrameStreamInfo::from_packet(stream_info.clone());
-        let plugin = LoadedDynamicPlugin::load(&self.plugin_path).with_context(|| {
-            format!(
-                "failed to load native-frame decoder plugin {}",
-                self.plugin_path.display()
-            )
-        })?;
-        let factory = plugin.native_decoder_plugin_factory().ok_or_else(|| {
-            anyhow::anyhow!("decoder plugin does not export a v2 native-frame API")
-        })?;
+        let registry =
+            PluginRegistry::load_native_development([&self.plugin_path]).with_context(|| {
+                format!(
+                    "failed to load native-frame decoder plugin {}",
+                    self.plugin_path.display()
+                )
+            })?;
+        let factory = registry
+            .resolve_native_decoder(&self.plugin_reference)?
+            .capability();
         let requirements = DecoderSessionRequirements::native_video(
             stream_info.codec.clone(),
             DecoderNativeHandleKind::CvPixelBuffer,

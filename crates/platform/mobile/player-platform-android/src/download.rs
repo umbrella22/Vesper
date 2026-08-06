@@ -1,14 +1,16 @@
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use player_platform_mobile::{
-    MobileDownloadBridgeSession, MobileDownloadCommand, mobile_download_manager_config,
+    MobileDownloadBridgeSession, MobileDownloadCommand,
+    mobile_download_manager_config_from_registry,
 };
-use player_plugin::ProcessorProgress;
+use player_plugin::{PluginReference, ProcessorProgress};
+use player_plugin_loader::PluginRegistry;
 use player_runtime::{
-    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadExportPlan, DownloadManagerConfig,
-    DownloadProfile, DownloadSnapshot, DownloadSource, DownloadTaskId, DownloadTaskSnapshot,
-    PlayerError, PlayerResult,
+    DownloadAssetId, DownloadAssetIndex, DownloadEvent, DownloadEventBatch, DownloadExportPlan,
+    DownloadManagerConfig, DownloadProfile, DownloadSnapshot, DownloadSource, DownloadTaskId,
+    DownloadTaskSnapshot, PipelineEventHookReportBatch, PlayerError, PlayerResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,7 +19,7 @@ pub enum AndroidDownloadCommand {
     Start { task: DownloadTaskSnapshot },
     Pause { task_id: DownloadTaskId },
     Resume { task: DownloadTaskSnapshot },
-    Remove { task_id: DownloadTaskId },
+    Remove { task: DownloadTaskSnapshot },
 }
 
 #[derive(Debug)]
@@ -32,6 +34,7 @@ impl AndroidDownloadBridgeSession {
             run_post_processors_on_completion: true,
             post_processors: Vec::new(),
             event_hooks: Vec::new(),
+            pipeline_event_platform: "android".to_owned(),
         };
 
         Self {
@@ -39,16 +42,20 @@ impl AndroidDownloadBridgeSession {
         }
     }
 
-    pub fn new_with_plugin_library_paths(
+    pub fn new_with_plugin_registry(
         auto_start: bool,
         run_post_processors_on_completion: bool,
-        plugin_library_paths: impl IntoIterator<Item = PathBuf>,
+        registry: &PluginRegistry,
+        post_download_references: impl IntoIterator<Item = PluginReference>,
+        event_hook_references: impl IntoIterator<Item = PluginReference>,
     ) -> PlayerResult<Self> {
-        let config = mobile_download_manager_config(
+        let config = mobile_download_manager_config_from_registry(
             "android",
             auto_start,
             run_post_processors_on_completion,
-            plugin_library_paths,
+            registry,
+            post_download_references,
+            event_hook_references,
         )?;
 
         Ok(Self {
@@ -192,6 +199,18 @@ impl AndroidDownloadBridgeSession {
         self.inner.drain_events()
     }
 
+    pub fn drain_event_batch(&mut self) -> DownloadEventBatch {
+        self.inner.drain_event_batch()
+    }
+
+    pub fn flush_pipeline_event_hooks(&self, timeout: Duration) -> bool {
+        self.inner.flush_pipeline_event_hooks(timeout)
+    }
+
+    pub fn drain_pipeline_event_hook_reports(&self) -> PipelineEventHookReportBatch {
+        self.inner.drain_pipeline_event_hook_reports()
+    }
+
     pub fn drain_commands(&mut self) -> Vec<AndroidDownloadCommand> {
         self.inner
             .drain_commands()
@@ -208,7 +227,7 @@ impl From<MobileDownloadCommand> for AndroidDownloadCommand {
             MobileDownloadCommand::Start { task } => Self::Start { task },
             MobileDownloadCommand::Pause { task_id } => Self::Pause { task_id },
             MobileDownloadCommand::Resume { task } => Self::Resume { task },
-            MobileDownloadCommand::Remove { task_id } => Self::Remove { task_id },
+            MobileDownloadCommand::Remove { task } => Self::Remove { task },
         }
     }
 }
@@ -298,7 +317,9 @@ mod tests {
         assert_eq!(removed.status, DownloadTaskStatus::Removed);
         assert_eq!(
             session.drain_commands(),
-            vec![AndroidDownloadCommand::Remove { task_id }]
+            vec![AndroidDownloadCommand::Remove {
+                task: removed.clone(),
+            }]
         );
     }
 
@@ -386,13 +407,22 @@ mod tests {
     }
 
     #[test]
-    fn android_download_bridge_rejects_missing_plugin_library() {
-        let error = AndroidDownloadBridgeSession::new_with_plugin_library_paths(
+    fn android_download_bridge_rejects_missing_selected_plugin() {
+        let registry = player_plugin_loader::PluginRegistry::default();
+        let reference = player_plugin::PluginReference::new(
+            "dev.vesper.missing-plugin",
+            Some("dev.vesper.missing-plugin.post-download".to_owned()),
+            player_plugin::PluginTransport::Native,
+        )
+        .expect("valid reference");
+        let error = AndroidDownloadBridgeSession::new_with_plugin_registry(
             false,
             true,
-            vec![PathBuf::from("/tmp/vesper-missing-plugin.so")],
+            &registry,
+            vec![reference],
+            Vec::new(),
         )
-        .expect_err("missing plugin should fail");
+        .expect_err("missing selected plugin should fail");
 
         assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
         assert_eq!(error.category(), PlayerErrorCategory::Input);

@@ -25,7 +25,8 @@ data class VesperDownloadConfiguration(
     val resumePartialDownloads: Boolean = true,
     val restoreTasksOnStartup: Boolean = true,
     val baseDirectory: File? = null,
-    val pluginLibraryPaths: List<String> = emptyList(),
+    val postDownloadPluginReferences: List<VesperPluginReference> = emptyList(),
+    val eventHookPluginReferences: List<VesperPluginReference> = emptyList(),
     val rangeChunkBytes: Long? = null,
     val minProgressBytes: Long = ANDROID_DOWNLOAD_DEFAULT_MIN_PROGRESS_BYTES,
     val minProgressIntervalMs: Long = ANDROID_DOWNLOAD_DEFAULT_MIN_PROGRESS_INTERVAL_MS,
@@ -251,6 +252,13 @@ sealed interface VesperDownloadEvent {
 
     data class ProgressUpdated(val patch: VesperDownloadTaskProgressPatch) : VesperDownloadEvent
 }
+
+data class VesperDownloadEventBatch(
+    val events: List<VesperDownloadEvent>,
+    val droppedEvents: Long,
+    val requiresSnapshotResync: Boolean = false,
+    val snapshotIsAuthoritative: Boolean = true,
+)
 
 internal val VesperDownloadEvent.isRemovedStatePatch: Boolean
     get() = this is VesperDownloadEvent.StateChanged && patch.state == VesperDownloadState.Removed

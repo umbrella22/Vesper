@@ -6,6 +6,15 @@ plugins {
     id("com.android.library")
 }
 
+val ffmpegRuntimeJniLibraries =
+    providers
+        .environmentVariable("VESPER_ANDROID_FFMPEG_RUNTIME_JNI_LIBS")
+        .orElse("src/main/jniLibs")
+val ffmpegRuntimeAssets =
+    providers
+        .environmentVariable("VESPER_ANDROID_FFMPEG_RUNTIME_ASSETS")
+        .orElse("src/main/assets")
+
 if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
     apply(plugin = "org.jetbrains.kotlin.android")
 }
@@ -17,6 +26,15 @@ android {
     defaultConfig {
         minSdk = 26
         consumerProguardFiles("consumer-rules.pro")
+    }
+
+    sourceSets {
+        getByName("main").apply {
+            jniLibs.directories.clear()
+            jniLibs.directories.add(ffmpegRuntimeJniLibraries.get())
+            assets.directories.clear()
+            assets.directories.add(ffmpegRuntimeAssets.get())
+        }
     }
 
     buildTypes {

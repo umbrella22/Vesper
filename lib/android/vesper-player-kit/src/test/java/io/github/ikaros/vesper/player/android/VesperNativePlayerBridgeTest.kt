@@ -854,13 +854,13 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.Disabled,
-                        pluginLibraryPaths = listOf("/tmp/libvesper_source_normalizer_ffmpeg.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.Disabled,
-                        decoderPluginLibraryPaths = listOf("/tmp/libdecoder.so"),
-                        frameProcessorPluginLibraryPaths = listOf("/tmp/libframe.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
+                        frameProcessorPluginReferences = listOf(VesperBundledPluginReferences.frameProcessorDiagnostic),
                         maxInFlightFrames = 3,
                     ),
             )
@@ -891,7 +891,7 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreferNormalized,
-                        pluginLibraryPaths = listOf("/tmp/libvesper_source_normalizer_ffmpeg.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
             )
 
@@ -922,7 +922,7 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.DiagnosticsOnly,
-                        pluginLibraryPaths = listOf("/tmp/libvesper_source_normalizer_ffmpeg.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
             )
 
@@ -957,12 +957,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -992,12 +992,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -1141,12 +1141,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreferNormalized,
-                        pluginLibraryPaths = listOf("/tmp/libsource.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libdecoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = ManualNativeFramePipelinePumpScheduler(),
             )
@@ -1704,7 +1704,7 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libvesper_source_normalizer_ffmpeg.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
             )
 
@@ -1734,13 +1734,13 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libvesper_source_normalizer_ffmpeg.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                         runtimeProfile = "default",
                     ),
                 frameProcessorConfiguration =
                     VesperFrameProcessorConfiguration(
                         mode = VesperFrameProcessorMode.DiagnosticsOnly,
-                        pluginLibraryPaths = listOf("/tmp/libvesper_frame_processor_diagnostic.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.frameProcessorDiagnostic),
                     ),
             )
 
@@ -1808,7 +1808,7 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.RequireNormalized,
-                        pluginLibraryPaths = listOf("/tmp/libvesper_source_normalizer_ffmpeg.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
             )
 
@@ -1843,8 +1843,8 @@ class VesperNativePlayerBridgeTest {
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libdecoder.so"),
-                        frameProcessorPluginLibraryPaths = listOf("/tmp/libframe.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
+                        frameProcessorPluginReferences = listOf(VesperBundledPluginReferences.frameProcessorDiagnostic),
                         maxInFlightFrames = 2,
                     ),
             )
@@ -1878,13 +1878,13 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
-                        frameProcessorPluginLibraryPaths = listOf("/tmp/libframe.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
+                        frameProcessorPluginReferences = listOf(VesperBundledPluginReferences.frameProcessorDiagnostic),
                         maxInFlightFrames = 2,
                     ),
             )
@@ -1919,13 +1919,13 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
-                        frameProcessorPluginLibraryPaths = listOf("/tmp/libframe.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
+                        frameProcessorPluginReferences = listOf(VesperBundledPluginReferences.frameProcessorDiagnostic),
                         maxInFlightFrames = 2,
                     ),
             )
@@ -1980,13 +1980,13 @@ class VesperNativePlayerBridgeTest {
                     sourceNormalizerConfiguration =
                         VesperSourceNormalizerConfiguration(
                             mode = VesperSourceNormalizerMode.PreflightOnly,
-                            pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                            pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                         ),
                     nativeFramePipelineConfiguration =
                         VesperNativeFramePipelineConfiguration(
                             mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                            decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
-                            frameProcessorPluginLibraryPaths = listOf("/tmp/libframe.so"),
+                            decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
+                            frameProcessorPluginReferences = listOf(VesperBundledPluginReferences.frameProcessorDiagnostic),
                             maxInFlightFrames = 2,
                         ),
                     nativeFramePipelinePumpScheduler = scheduler,
@@ -2033,12 +2033,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.RequireNormalized,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -2069,12 +2069,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.RequireNormalized,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.DiagnosticsOnly,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -2090,12 +2090,12 @@ class VesperNativePlayerBridgeTest {
         val preferNormalized =
             VesperSourceNormalizerConfiguration(
                 mode = VesperSourceNormalizerMode.PreferNormalized,
-                pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
             )
         val requireNormalized =
             VesperSourceNormalizerConfiguration(
                 mode = VesperSourceNormalizerMode.RequireNormalized,
-                pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
             )
 
         assertFalse(
@@ -2192,7 +2192,7 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.RequireNormalized,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
             )
 
@@ -2229,7 +2229,7 @@ class VesperNativePlayerBridgeTest {
                     sourceNormalizerConfiguration =
                         VesperSourceNormalizerConfiguration(
                             mode = VesperSourceNormalizerMode.RequireNormalized,
-                            pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                            pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                         ),
                 )
 
@@ -2281,7 +2281,7 @@ class VesperNativePlayerBridgeTest {
                     sourceNormalizerConfiguration =
                         VesperSourceNormalizerConfiguration(
                             mode = VesperSourceNormalizerMode.RequireNormalized,
-                            pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                            pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                         ),
                 )
 
@@ -2329,12 +2329,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -2379,12 +2379,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -2447,12 +2447,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -2515,12 +2515,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -2582,12 +2582,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -2695,12 +2695,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -2751,12 +2751,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -2813,12 +2813,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -2905,12 +2905,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -2974,12 +2974,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -3057,12 +3057,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -3106,12 +3106,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -3155,12 +3155,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -3231,12 +3231,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -3310,12 +3310,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -3365,12 +3365,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -3408,12 +3408,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -3463,12 +3463,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -3518,12 +3518,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -3577,12 +3577,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -3627,12 +3627,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -3699,12 +3699,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -3765,12 +3765,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -3831,12 +3831,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -3884,12 +3884,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -3934,12 +3934,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -4000,12 +4000,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -4100,12 +4100,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -4167,12 +4167,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -4244,12 +4244,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -4313,12 +4313,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -4367,12 +4367,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -4398,12 +4398,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -4431,12 +4431,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -4474,12 +4474,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -4519,12 +4519,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -4595,12 +4595,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.PreferNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
                 nativeFramePipelinePumpScheduler = scheduler,
             )
@@ -4651,12 +4651,12 @@ class VesperNativePlayerBridgeTest {
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = VesperSourceNormalizerMode.PreflightOnly,
-                        pluginLibraryPaths = listOf("/tmp/libsource_normalizer.so"),
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libmediacodec_decoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 
@@ -4706,7 +4706,7 @@ class VesperNativePlayerBridgeTest {
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.DiagnosticsOnly,
-                        frameProcessorPluginLibraryPaths = listOf("/tmp/libframe.so"),
+                        frameProcessorPluginReferences = listOf(VesperBundledPluginReferences.frameProcessorDiagnostic),
                     ),
             )
 
@@ -4728,6 +4728,75 @@ class VesperNativePlayerBridgeTest {
     }
 
     @Test
+    fun nativeFramePipelineOpenPreservesMobileProbeDiagnostics() {
+        val initialSource =
+            VesperPlayerSource.remote(
+                uri = "https://example.com/video.mp4",
+                label = "MP4",
+                protocol = VesperPlayerSourceProtocol.Progressive,
+            )
+        val bindings =
+            FakeBindings(
+                mobilePluginDiagnostics =
+                    listOf(
+                        mapOf(
+                            "pluginKind" to "source_normalizer",
+                            "status" to "sourceNormalizerSupported",
+                            "participation" to "bypassed",
+                        ),
+                        mapOf(
+                            "pluginKind" to "frame_processor",
+                            "status" to "frameProcessorSupported",
+                            "participation" to "available",
+                        ),
+                    ),
+            )
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = initialSource,
+                sourceNormalizerConfiguration =
+                    VesperSourceNormalizerConfiguration(
+                        mode = VesperSourceNormalizerMode.PreflightOnly,
+                        pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
+                    ),
+                frameProcessorConfiguration =
+                    VesperFrameProcessorConfiguration(
+                        mode = VesperFrameProcessorMode.DiagnosticsOnly,
+                        pluginReferences = listOf(VesperBundledPluginReferences.frameProcessorDiagnostic),
+                    ),
+                nativeFramePipelineConfiguration =
+                    VesperNativeFramePipelineConfiguration(
+                        mode = VesperNativeFramePipelineMode.RequireNativeFrame,
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
+                        frameProcessorPluginReferences = listOf(VesperBundledPluginReferences.frameProcessorDiagnostic),
+                    ),
+            )
+
+        runBlocking { bridge.initializeAsync() }
+
+        assertEquals(1, bindings.openNativeFramePipelineCount)
+        assertTrue(
+            bridge.pluginDiagnostics.any {
+                it["pluginKind"] == "source_normalizer" &&
+                    it["status"] == "sourceNormalizerSupported"
+            }
+        )
+        assertTrue(
+            bridge.pluginDiagnostics.any {
+                it["pluginKind"] == "frame_processor" &&
+                    it["status"] == "frameProcessorSupported"
+            }
+        )
+        assertTrue(
+            bridge.pluginDiagnostics.any {
+                it["pluginKind"] == "native_frame_pipeline" &&
+                    it["lifecycle"] == "open"
+            }
+        )
+    }
+
+    @Test
     fun requireNativeFramePipelineFailsWithoutInitializingSystemPlayback() {
         val initialSource =
             VesperPlayerSource.remote(
@@ -4743,7 +4812,7 @@ class VesperNativePlayerBridgeTest {
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = VesperNativeFramePipelineMode.RequireNativeFrame,
-                        decoderPluginLibraryPaths = listOf("/tmp/libdecoder.so"),
+                        decoderPluginReferences = listOf(VesperBundledPluginReferences.decoderMediaCodec),
                     ),
             )
 

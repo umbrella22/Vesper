@@ -453,6 +453,9 @@ internal interface VesperNativeBindings {
     fun pollSnapshot(): NativeBridgeSnapshot?
     fun sampleTimeline(): TimelineUiState? = null
     fun drainEvents(): List<NativeBridgeEvent>
+    /** Returns and clears structured reports emitted by playback EventHooks. */
+    fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch =
+        VesperPipelineEventHookReportBatch()
     fun play()
     fun pause()
     fun stop()

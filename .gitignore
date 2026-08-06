@@ -1,14 +1,22 @@
 /target
 *.mp4
 *.mov
-.gradle/*
+# Accidental repository-root Gradle state. Android projects keep their own caches.
+/.gradle/
 flutter_aliplayer-7.12.0/*
 flutter_tencent/*
 third_party/*
-plugins/*
 
 # Development notes (local only, not committed)
 devnotes/
+
+# Local upstream checkouts used to refresh repository Codex plugins
+/.agents/upstream/
+
+# Rust iOS FFI build lock
+/.vesper-ios-ffi.lock
+/.vesper-ios-kit.lock
+/.vesper-ios-plugin.lock
 
 # macOS / editor junk
 .DS_Store
@@ -116,7 +124,9 @@ lib/flutter/**/pubspec_overrides.yaml
 examples/flutter-host/.dart_tool/
 examples/flutter-host/.idea/
 examples/flutter-host/build/
+examples/flutter-host/android/build/
 examples/flutter-host/pubspec_overrides.yaml
+examples/flutter-host/ios/build/
 examples/flutter-host/ios/Pods/
 examples/flutter-host/ios/.symlinks/
 examples/flutter-host/ios/Flutter/ephemeral/
@@ -126,3 +136,7 @@ examples/flutter-host/android/.gradle/
 examples/flutter-host/android/local.properties
 examples/flutter-host/*.iml
 examples/flutter-host/pubspec.lock
+dist/*
+
+# Vesper plugin build staging
+plugins/*/dist/

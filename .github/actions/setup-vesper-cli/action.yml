@@ -1,0 +1,30 @@
+name: Set up Vesper CLI
+description: Install the workspace Rust toolchain, build the release CLI, and export VESPER_CLI.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust 1.97
+      uses: dtolnay/rust-toolchain@1.97.0
+
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
+
+    - name: Build Vesper CLI
+      shell: bash
+      run: cargo build --locked --release -p player-cli --bin vesper
+
+    - name: Export VESPER_CLI
+      shell: bash
+      run: |
+        if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+          workspace="$(cygpath -m "${GITHUB_WORKSPACE}")"
+          cli="$workspace/target/release/vesper.exe"
+        else
+          cli="${GITHUB_WORKSPACE}/target/release/vesper"
+        fi
+        if [[ ! -x "$cli" ]]; then
+          echo "Built Vesper CLI is not executable: $cli" >&2
+          exit 1
+        fi
+        echo "VESPER_CLI=$cli" >> "$GITHUB_ENV"

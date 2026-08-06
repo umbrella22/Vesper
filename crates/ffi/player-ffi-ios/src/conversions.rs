@@ -46,6 +46,18 @@ pub(crate) fn read_optional_c_string(
     Ok(Some(text.to_owned()))
 }
 
+pub(crate) fn read_required_c_string(
+    value: *const c_char,
+    field_name: &str,
+) -> Result<String, PlayerFfiError> {
+    read_optional_c_string(value, field_name)?.ok_or_else(|| {
+        owned_api_error(
+            PlayerFfiErrorCode::NullPointer,
+            &format!("{field_name} was null"),
+        )
+    })
+}
+
 fn invalid_wire_ordinal(field_name: &str, value: u32) -> PlayerFfiError {
     owned_api_error(
         PlayerFfiErrorCode::InvalidArgument,
@@ -314,17 +326,39 @@ pub(crate) fn read_download_config(
             "download config pointer was null",
         ));
     };
+    let post_download_plugin_references = read_plugin_references_json(
+        config.post_download_plugin_references_json,
+        "config.post_download_plugin_references_json",
+    )?;
+    let event_hook_plugin_references = read_plugin_references_json(
+        config.event_hook_plugin_references_json,
+        "config.event_hook_plugin_references_json",
+    )?;
+
     Ok(ResolvedDownloadConfig {
         auto_start: config.auto_start,
         run_post_processors_on_completion: config.run_post_processors_on_completion,
-        plugin_library_paths: read_string_list(
-            config.plugin_library_paths,
-            config.plugin_library_paths_len,
-            "config.plugin_library_paths",
-        )?
-        .into_iter()
-        .map(PathBuf::from)
-        .collect(),
+        plugin_registry_handle: config.plugin_registry_handle,
+        post_download_plugin_references,
+        event_hook_plugin_references,
+    })
+}
+
+fn read_plugin_references_json(
+    value: *const c_char,
+    field_name: &str,
+) -> Result<Vec<player_plugin::PluginReference>, PlayerFfiError> {
+    let value = read_optional_c_string(value, field_name)?.ok_or_else(|| {
+        owned_api_error(
+            PlayerFfiErrorCode::NullPointer,
+            &format!("{field_name} was null"),
+        )
+    })?;
+    serde_json::from_str(&value).map_err(|error| {
+        owned_api_error(
+            PlayerFfiErrorCode::InvalidArgument,
+            &format!("{field_name} was invalid: {error}"),
+        )
     })
 }
 
@@ -2116,31 +2150,43 @@ impl From<IosPreloadCommand> for PlayerFfiPreloadCommand {
 impl From<IosDownloadCommand> for PlayerFfiDownloadCommand {
     fn from(value: IosDownloadCommand) -> Self {
         match value {
-            IosDownloadCommand::Prepare { task } => Self {
-                kind: PlayerFfiDownloadCommandKind::Prepare,
-                task: download_task_to_ffi(task),
-                task_id: 0,
-            },
-            IosDownloadCommand::Start { task } => Self {
-                kind: PlayerFfiDownloadCommandKind::Start,
-                task: download_task_to_ffi(task),
-                task_id: 0,
-            },
+            IosDownloadCommand::Prepare { task } => {
+                let task_id = task.task_id.get();
+                Self {
+                    kind: PlayerFfiDownloadCommandKind::Prepare,
+                    task: download_task_to_ffi(task),
+                    task_id,
+                }
+            }
+            IosDownloadCommand::Start { task } => {
+                let task_id = task.task_id.get();
+                Self {
+                    kind: PlayerFfiDownloadCommandKind::Start,
+                    task: download_task_to_ffi(task),
+                    task_id,
+                }
+            }
             IosDownloadCommand::Pause { task_id } => Self {
                 kind: PlayerFfiDownloadCommandKind::Pause,
                 task: PlayerFfiDownloadTask::default(),
                 task_id: task_id.get(),
             },
-            IosDownloadCommand::Resume { task } => Self {
-                kind: PlayerFfiDownloadCommandKind::Resume,
-                task: download_task_to_ffi(task),
-                task_id: 0,
-            },
-            IosDownloadCommand::Remove { task_id } => Self {
-                kind: PlayerFfiDownloadCommandKind::Remove,
-                task: PlayerFfiDownloadTask::default(),
-                task_id: task_id.get(),
-            },
+            IosDownloadCommand::Resume { task } => {
+                let task_id = task.task_id.get();
+                Self {
+                    kind: PlayerFfiDownloadCommandKind::Resume,
+                    task: download_task_to_ffi(task),
+                    task_id,
+                }
+            }
+            IosDownloadCommand::Remove { task } => {
+                let task_id = task.task_id.get();
+                Self {
+                    kind: PlayerFfiDownloadCommandKind::Remove,
+                    task: download_task_to_ffi(task),
+                    task_id,
+                }
+            }
         }
     }
 }

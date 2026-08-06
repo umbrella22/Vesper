@@ -3,7 +3,11 @@ package io.github.ikaros.vesper.player.flutter.android
 import android.util.Log
 import io.github.ikaros.vesper.player.android.VesperBenchmarkEvent
 import io.github.ikaros.vesper.player.android.VesperBenchmarkMetricSummary
+import io.github.ikaros.vesper.player.android.VesperBenchmarkSinkReport
 import io.github.ikaros.vesper.player.android.VesperBenchmarkSummary
+import io.github.ikaros.vesper.player.android.VesperBenchmarkThresholdViolation
+import io.github.ikaros.vesper.player.android.VesperPluginDiagnostic
+import io.github.ikaros.vesper.player.android.VesperPluginMeasurement
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -49,6 +53,10 @@ internal fun VesperBenchmarkSummary.toBenchmarkJsonObject(): JSONObject =
                 pluginErrors.forEach { error -> array.put(error) }
             },
         )
+        .put(
+            "pluginFinalReport",
+            pluginFinalReport?.toBenchmarkJsonObject() ?: JSONObject.NULL,
+        )
 
 internal fun VesperBenchmarkMetricSummary.toBenchmarkJsonObject(): JSONObject =
     JSONObject()
@@ -59,6 +67,61 @@ internal fun VesperBenchmarkMetricSummary.toBenchmarkJsonObject(): JSONObject =
         .put("p50Ns", p50Ns)
         .put("p90Ns", p90Ns)
         .put("p95Ns", p95Ns)
+
+internal fun VesperBenchmarkSinkReport.toBenchmarkJsonObject(): JSONObject =
+    JSONObject()
+        .put("acceptedEvents", acceptedEvents)
+        .put("droppedEvents", droppedEvents)
+        .put(
+            "measurements",
+            JSONArray().also { array ->
+                measurements.forEach { measurement ->
+                    array.put(measurement.toBenchmarkJsonObject())
+                }
+            },
+        )
+        .put(
+            "thresholdViolations",
+            JSONArray().also { array ->
+                thresholdViolations.forEach { violation ->
+                    array.put(violation.toBenchmarkJsonObject())
+                }
+            },
+        )
+        .put(
+            "diagnostics",
+            JSONArray().also { array ->
+                diagnostics.forEach { diagnostic ->
+                    array.put(diagnostic.toBenchmarkJsonObject())
+                }
+            },
+        )
+
+private fun VesperPluginMeasurement.toBenchmarkJsonObject(): JSONObject =
+    JSONObject()
+        .put("name", name)
+        .put("value", value)
+        .put("unit", unit)
+        .put("attributes", attributes.toBenchmarkAttributesJsonObject())
+
+private fun VesperBenchmarkThresholdViolation.toBenchmarkJsonObject(): JSONObject =
+    JSONObject()
+        .put("measurement", measurement)
+        .put("actual", actual)
+        .put("threshold", threshold)
+        .put("comparison", comparison)
+
+private fun VesperPluginDiagnostic.toBenchmarkJsonObject(): JSONObject =
+    JSONObject()
+        .put("code", code)
+        .put("severity", severity.rawValue)
+        .put("message", message)
+        .put("attributes", attributes.toBenchmarkAttributesJsonObject())
+
+private fun Map<String, String>.toBenchmarkAttributesJsonObject(): JSONObject =
+    JSONObject().also { payload ->
+        toSortedMap().forEach { (key, value) -> payload.put(key, value) }
+    }
 
 internal fun logBenchmarkJson(json: String) {
     if (json.length <= BENCHMARK_LOG_CHUNK_SIZE) {
@@ -73,4 +136,3 @@ internal fun logBenchmarkJson(json: String) {
         offset = end
     }
 }
-

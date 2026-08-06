@@ -172,6 +172,88 @@ void main() {
     );
   });
 
+  test('download resync decodes an authoritative snapshot', () {
+    final task = _downloadTaskSnapshot(taskId: 11);
+    final event = VesperDownloadManagerEvent.fromMap(<Object?, Object?>{
+      'downloadId': 'downloads',
+      'type': 'downloadResync',
+      'snapshot': <Object?, Object?>{
+        'tasks': <Object?>[task.toMap()],
+      },
+      'droppedEvents': 0,
+    });
+
+    expect(event, isA<VesperDownloadResyncEvent>());
+    final resync = event as VesperDownloadResyncEvent;
+    expect(resync.snapshot.tasks.single.taskId, 11);
+    expect(resync.droppedEvents, 0);
+  });
+
+  test('download resync rejects malformed authoritative payloads', () {
+    final validTask = _downloadTaskSnapshot(taskId: 11).toMap();
+    final malformedPayloads = <Map<Object?, Object?>>[
+      <Object?, Object?>{
+        'downloadId': 'downloads',
+        'type': 'downloadResync',
+        'droppedEvents': 1,
+      },
+      <Object?, Object?>{
+        'downloadId': 'downloads',
+        'type': 'downloadResync',
+        'snapshot': <Object?, Object?>{},
+        'droppedEvents': 1,
+      },
+      <Object?, Object?>{
+        'downloadId': 'downloads',
+        'type': 'downloadResync',
+        'snapshot': <Object?, Object?>{'tasks': 'not-a-list'},
+        'droppedEvents': 1,
+      },
+      <Object?, Object?>{
+        'downloadId': 'downloads',
+        'type': 'downloadResync',
+        'snapshot': <Object?, Object?>{
+          'tasks': <Object?>[validTask, 'not-a-task'],
+        },
+        'droppedEvents': 1,
+      },
+      <Object?, Object?>{
+        'downloadId': 'downloads',
+        'type': 'downloadResync',
+        'snapshot': <Object?, Object?>{
+          'tasks': <Object?>[
+            <Object?, Object?>{'taskId': 12},
+          ],
+        },
+        'droppedEvents': 1,
+      },
+      <Object?, Object?>{
+        'downloadId': 'downloads',
+        'type': 'downloadResync',
+        'snapshot': <Object?, Object?>{
+          'tasks': <Object?>[validTask],
+        },
+        'droppedEvents': -1,
+      },
+      <Object?, Object?>{
+        'downloadId': 'downloads',
+        'type': 'downloadResync',
+        'snapshot': <Object?, Object?>{
+          'tasks': <Object?>[validTask],
+        },
+        'droppedEvents': 1.5,
+      },
+    ];
+
+    for (final payload in malformedPayloads) {
+      expect(
+        () => VesperDownloadManagerEvent.fromMap(payload),
+        throwsFormatException,
+        reason: payload.toString(),
+      );
+    }
+  });
+
   test('download manager event preserves unknown payloads', () {
     final event = VesperDownloadManagerEvent.fromMap(<Object?, Object?>{
       'downloadId': 'downloads',
@@ -930,24 +1012,30 @@ void main() {
   });
 
   test('mobile plugin configurations round-trip through maps', () {
-    const sourceNormalizer = VesperSourceNormalizerConfiguration(
+    final sourceNormalizer = VesperSourceNormalizerConfiguration(
       mode: VesperSourceNormalizerMode.requireNormalized,
-      pluginLibraryPaths: <String>['/tmp/libvesper_source_normalizer.dylib'],
+      pluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.sourceNormalizerFfmpeg,
+      ],
       runtimeProfile: 'generic-fallback',
     );
-    const preferBundled = VesperSourceNormalizerConfiguration.preferBundled();
-    const requireBundled = VesperSourceNormalizerConfiguration.requireBundled(
+    final preferBundled = VesperSourceNormalizerConfiguration.preferBundled();
+    final requireBundled = VesperSourceNormalizerConfiguration.requireBundled(
       runtimeProfile: 'generic-fallback',
     );
-    const frameProcessor = VesperFrameProcessorConfiguration(
+    final frameProcessor = VesperFrameProcessorConfiguration(
       mode: VesperFrameProcessorMode.diagnosticsOnly,
-      pluginLibraryPaths: <String>['/tmp/libvesper_frame_processor.dylib'],
+      pluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.frameProcessorDiagnostic,
+      ],
     );
-    const nativeFramePipeline = VesperNativeFramePipelineConfiguration(
+    final nativeFramePipeline = VesperNativeFramePipelineConfiguration(
       mode: VesperNativeFramePipelineMode.preferNativeFrame,
-      decoderPluginLibraryPaths: <String>['/tmp/libvesper_decoder.dylib'],
-      frameProcessorPluginLibraryPaths: <String>[
-        '/tmp/libvesper_frame_processor.dylib'
+      decoderPluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.decoderVideoToolbox,
+      ],
+      frameProcessorPluginReferences: <VesperPluginReference>[
+        VesperBundledPluginReferences.frameProcessorDiagnostic,
       ],
       maxInFlightFrames: 2,
     );
@@ -959,11 +1047,15 @@ void main() {
     );
     expect(preferBundled.toMap(), <String, Object?>{
       'mode': 'preferNormalized',
-      'pluginLibraryPaths': <String>[],
+      'pluginReferences': <Object?>[
+        VesperBundledPluginReferences.sourceNormalizerFfmpeg.toMap(),
+      ],
     });
     expect(requireBundled.toMap(), <String, Object?>{
       'mode': 'requireNormalized',
-      'pluginLibraryPaths': <String>[],
+      'pluginReferences': <Object?>[
+        VesperBundledPluginReferences.sourceNormalizerFfmpeg.toMap(),
+      ],
       'runtimeProfile': 'generic-fallback',
     });
     expect(
@@ -1052,4 +1144,264 @@ void main() {
     expect(unknown.type, 'futureEvent');
     expect(unknown.payload['value'], 7);
   });
+
+  test('pipeline EventHook report event decodes typed outcomes', () {
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'player-1',
+      'type': 'pipelineEventHookReports',
+      'reports': <Object?, Object?>{
+        'reports': <Object?>[
+          <Object?, Object?>{
+            'pluginId': 'dev.vesper.hook',
+            'capabilityInstanceId': 'dev.vesper.hook.playback',
+            'transport': 'future-transport',
+            'runId': 'run-1',
+            'sessionId': 'session-1',
+            'eventName': 'playback.ready',
+            'result': <Object?, Object?>{
+              'status': 'future-status',
+              'outcome': <Object?, Object?>{
+                'accepted': true,
+                'measurements': <Object?>[
+                  <Object?, Object?>{
+                    'name': 'latency',
+                    'value': 2.5,
+                    'unit': 'ms',
+                    'attributes': <Object?, Object?>{'stage': 'open'},
+                  },
+                ],
+                'diagnostics': <Object?>[
+                  <Object?, Object?>{
+                    'code': 'future.code',
+                    'severity': 'future-severity',
+                    'message': 'ready',
+                    'attributes': <Object?, Object?>{'scope': 'test'},
+                  },
+                ],
+              },
+              'error': null,
+            },
+          },
+        ],
+        'droppedEvents': 3,
+        'droppedReports': 2,
+      },
+    });
+
+    expect(event, isA<VesperPlayerPipelineEventHookReportsEvent>());
+    final reportsEvent = event as VesperPlayerPipelineEventHookReportsEvent;
+    final report = reportsEvent.reports.reports.single;
+    expect(report.transport, VesperPluginTransport.unknown);
+    expect(report.transportRawValue, 'future-transport');
+    expect(report.result.status, VesperPipelineEventHookResultStatus.unknown);
+    expect(report.result.statusRawValue, 'future-status');
+    expect(report.result.outcome?.measurements.single.value, 2.5);
+    expect(
+      report.result.outcome?.diagnostics.single.severity,
+      VesperPipelineEventHookDiagnosticSeverity.unknown,
+    );
+    expect(
+      report.result.outcome?.diagnostics.single.severityRawValue,
+      'future-severity',
+    );
+    expect(reportsEvent.reports.droppedEvents, 3);
+    expect(reportsEvent.reports.droppedReports, 2);
+  });
+
+  test('pipeline EventHook report event accepts absent outcome and error', () {
+    final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'player-1',
+      'type': 'pipelineEventHookReports',
+      'reports': <Object?, Object?>{
+        'reports': <Object?>[
+          <Object?, Object?>{
+            'pluginId': 'dev.vesper.hook',
+            'transport': 'native',
+            'runId': 'run',
+            'sessionId': 'session',
+            'eventName': 'future',
+            'result': <Object?, Object?>{
+              'status': 'error',
+              'error': <Object?, Object?>{
+                'code': 'future-error',
+                'message': 'failed',
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    final report = (event as VesperPlayerPipelineEventHookReportsEvent)
+        .reports
+        .reports
+        .single;
+    expect(report.result.error?.code, VesperPipelineEventHookErrorCode.unknown);
+    expect(report.result.error?.codeRawValue, 'future-error');
+    expect(report.result.outcome, isNull);
+  });
+
+  test('pipeline EventHook report event rejects malformed bounded payloads',
+      () {
+    final baseReport = <Object?, Object?>{
+      'pluginId': 'dev.vesper.hook',
+      'transport': 'native',
+      'runId': 'run',
+      'sessionId': 'session',
+      'eventName': 'event',
+      'result': <Object?, Object?>{
+        'status': 'accepted',
+        'outcome': <Object?, Object?>{
+          'accepted': true,
+          'measurements': <Object?>[
+            <Object?, Object?>{
+              'name': 'latency',
+              'value': 1.0,
+              'unit': 'ms',
+            },
+          ],
+        },
+      },
+    };
+    final malformedReports = <Map<Object?, Object?>>[
+      <Object?, Object?>{
+        ...baseReport,
+        'result': <Object?, Object?>{
+          'status': 'accepted',
+          'outcome': <Object?, Object?>{
+            'accepted': true,
+            'measurements': <Object?>[null],
+          },
+        },
+      },
+      <Object?, Object?>{
+        ...baseReport,
+        'result': <Object?, Object?>{
+          'status': 'accepted',
+          'outcome': <Object?, Object?>{
+            'accepted': true,
+            'measurements': List<Object?>.generate(
+              129,
+              (_) => <Object?, Object?>{
+                'name': 'latency',
+                'value': 1.0,
+                'unit': 'ms',
+              },
+            ),
+          },
+        },
+      },
+      <Object?, Object?>{
+        ...baseReport,
+        'result': <Object?, Object?>{
+          'status': 'accepted',
+          'outcome': <Object?, Object?>{
+            'accepted': true,
+            'diagnostics': List<Object?>.generate(
+              65,
+              (_) => <Object?, Object?>{
+                'code': 'diagnostic',
+                'severity': 'info',
+                'message': 'message',
+              },
+            ),
+          },
+        },
+      },
+      <Object?, Object?>{
+        ...baseReport,
+        'result': <Object?, Object?>{
+          'status': 'accepted',
+          'outcome': <Object?, Object?>{
+            'accepted': true,
+            'measurements': <Object?>[
+              <Object?, Object?>{
+                'name': 'latency',
+                'value': 1.0,
+                'unit': 'ms',
+                'attributes': <Object?, Object?>{
+                  for (var index = 0; index < 33; index++)
+                    'key-$index': 'value',
+                },
+              },
+            ],
+          },
+        },
+      },
+      <Object?, Object?>{
+        ...baseReport,
+        'result': <Object?, Object?>{
+          'status': 'accepted',
+          'outcome': <Object?, Object?>{
+            'accepted': true,
+            'measurements': <Object?>[
+              <Object?, Object?>{
+                'name': 'latency',
+                'value': double.nan,
+                'unit': 'ms',
+              },
+            ],
+          },
+        },
+      },
+      <Object?, Object?>{
+        ...baseReport,
+        'result': <Object?, Object?>{
+          'status': 'error',
+          'error': <Object?, Object?>{
+            'code': 'failed',
+            'message': List<String>.filled(257, 'x').join(),
+          },
+        },
+      },
+    ];
+
+    for (final report in malformedReports) {
+      final event = VesperPlayerEvent.fromMap(<Object?, Object?>{
+        'playerId': 'player-1',
+        'type': 'pipelineEventHookReports',
+        'reports': <Object?, Object?>{
+          'reports': <Object?>[report],
+        },
+      });
+      final batch =
+          (event as VesperPlayerPipelineEventHookReportsEvent).reports;
+      expect(batch.reports, isEmpty);
+      expect(batch.dispatcherError, isNotNull);
+    }
+
+    final negativeCounter = VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': 'player-1',
+      'type': 'pipelineEventHookReports',
+      'reports': <Object?, Object?>{
+        'reports': <Object?>[baseReport],
+        'droppedEvents': -1,
+      },
+    }) as VesperPlayerPipelineEventHookReportsEvent;
+    expect(negativeCounter.reports.reports, isEmpty);
+    expect(negativeCounter.reports.dispatcherError, isNotNull);
+  });
+}
+
+VesperDownloadTaskSnapshot _downloadTaskSnapshot({required int taskId}) {
+  return VesperDownloadTaskSnapshot(
+    taskId: taskId,
+    assetId: 'asset-$taskId',
+    source: VesperDownloadSource.fromSource(
+      source: VesperPlayerSource.remote(
+        uri: 'https://example.com/video-$taskId.mp4',
+        label: 'Video $taskId',
+      ),
+    ),
+    profile: const VesperDownloadProfile(),
+    state: VesperDownloadState.completed,
+    progress: const VesperDownloadProgressSnapshot(
+      receivedBytes: 1024,
+      totalBytes: 1024,
+    ),
+    assetIndex: const VesperDownloadAssetIndex(
+      contentFormat: VesperDownloadContentFormat.singleFile,
+      totalSizeBytes: 1024,
+    ),
+  );
 }

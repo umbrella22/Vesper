@@ -61,6 +61,10 @@ internal class VesperNativeJniBindings(
     internal val benchmarkRecorder: VesperBenchmarkRecorder = VesperBenchmarkRecorder(),
     internal val sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
         VesperSourceNormalizerConfiguration(),
+    internal val resolvedPluginArtifacts: VesperResolvedMobilePluginArtifacts =
+        VesperResolvedMobilePluginArtifacts(),
+    internal val pipelineEventHookRegistryHandle: Long = 0L,
+    internal val pipelineEventHookReferencesJson: String = "[]",
 ) : VesperNativeBindings {
     internal val appContext = context.applicationContext
     internal val i18n = VesperPlayerI18n.fromContext(appContext)
@@ -72,6 +76,8 @@ internal class VesperNativeJniBindings(
     internal var nativeFramePipelineHandle: Long? = null
     @Volatile
     internal var nativeFramePipelineStatus: Map<String, Any?>? = null
+    @Volatile
+    internal var finalizedPipelineEventHookReports: VesperPipelineEventHookReportBatch? = null
     internal val isDisposed = AtomicBoolean(false)
     internal val systemPlaybackCallbackGeneration = AtomicLong(0L)
     internal val subtitleSelectionCommandGenerationState = AtomicLong(0L)
@@ -133,6 +139,7 @@ internal class VesperNativeJniBindings(
 
     companion object {
         private const val MAX_LOCAL_BRIDGE_EVENTS = 256
+        private const val PIPELINE_EVENT_HOOK_FLUSH_TIMEOUT_MS = 2_000L
         internal const val EXO_SNAPSHOT_LOG_INTERVAL_MS = 2_000L
     }
     internal val preloadCoordinator =
@@ -176,10 +183,14 @@ internal class VesperNativeJniBindings(
         val json = VesperNativeJni.probeMobilePlugins(
             source.uri,
             sourceNormalizerConfiguration.modeOrdinal,
-            sourceNormalizerConfiguration.pluginLibraryPaths.toTypedArray(),
+            encodeVesperResolvedMobilePluginArtifacts(
+                resolvedPluginArtifacts.sourceNormalizerArtifacts,
+            ),
             sourceNormalizerConfiguration.runtimeProfile,
             frameProcessorConfiguration.modeOrdinal,
-            frameProcessorConfiguration.pluginLibraryPaths.toTypedArray(),
+            encodeVesperResolvedMobilePluginArtifacts(
+                resolvedPluginArtifacts.frameProcessorArtifacts,
+            ),
         )
         return parsePluginDiagnosticsJson(json)
     }
@@ -228,7 +239,15 @@ internal class VesperNativeJniBindings(
             recordBenchmark("source_load_start")
             VesperNativeLibrary.ensureLoaded()
 
-            val handle = VesperNativeJni.createSession(source.uri)
+            val handle =
+                VesperNativeJni.createSession(
+                    sourceUri = source.uri,
+                    pipelineEventHookConfig =
+                        NativePipelineEventHookConfig(
+                            pluginRegistryHandle = pipelineEventHookRegistryHandle,
+                            pluginReferencesJson = pipelineEventHookReferencesJson,
+                        ),
+                )
             check(handle != 0L) { "native session handle must not be zero" }
             sessionHandle = handle
             val sourceNormalizerOpen =
@@ -377,11 +396,23 @@ internal class VesperNativeJniBindings(
                 VesperNativeJni.openNativeFramePipeline(
                     packetSource.source.uri,
                     sourceNormalizerConfiguration.modeOrdinal,
-                    sourceNormalizerConfiguration.pluginLibraryPaths.toTypedArray(),
+                    encodeVesperResolvedMobilePluginArtifacts(
+                        resolvedPluginArtifacts.sourceNormalizerArtifacts,
+                    ),
                     sourceNormalizerConfiguration.runtimeProfile,
                     nativeFramePipelineConfiguration.modeWireName,
-                    nativeFramePipelineConfiguration.decoderPluginLibraryPaths.toTypedArray(),
-                    nativeFramePipelineConfiguration.frameProcessorPluginLibraryPaths.toTypedArray(),
+                    encodeVesperResolvedMobilePluginArtifacts(
+                        resolvedPluginArtifacts.decoderArtifacts,
+                    ),
+                    VesperHardwareMediaCodecSelector.preferredHardwareDecoderName(
+                        MimeTypes.VIDEO_H264,
+                    ),
+                    VesperHardwareMediaCodecSelector.preferredHardwareDecoderName(
+                        MimeTypes.VIDEO_H265,
+                    ),
+                    encodeVesperResolvedMobilePluginArtifacts(
+                        resolvedPluginArtifacts.nativeFrameProcessorArtifacts,
+                    ),
                     nativeFramePipelineConfiguration.maxInFlightFrames ?: 0,
                     surfaceKind.nativeFramePresenterProfileWireName,
                 ) ?: return null
@@ -671,6 +702,45 @@ internal class VesperNativeJniBindings(
                 // dispatchRustCommand invocations see a null handle and bail
                 // out rather than passing a stale handle to native code.
                 sessionHandle = null
+                runCatching {
+                    VesperNativeJni.flushPipelineEventHooks(
+                        handle,
+                        PIPELINE_EVENT_HOOK_FLUSH_TIMEOUT_MS,
+                    )
+                }.onFailure { error ->
+                    Log.w(
+                        NATIVE_JNI_BINDINGS_TAG,
+                        "failed to flush playback pipeline event hooks",
+                        error,
+                    )
+                }
+                runCatching { VesperNativeJni.closePipelineEventHooks(handle) }
+                    .onFailure { error ->
+                        Log.w(
+                            NATIVE_JNI_BINDINGS_TAG,
+                            "failed to close playback pipeline event hooks",
+                            error,
+                        )
+                    }
+                runCatching {
+                    VesperNativeJni.drainPipelineEventHookReports(handle)
+                        ?.let(::parsePipelineEventHookReportsJson)
+                }.onSuccess { reports ->
+                    if (reports != null &&
+                        (reports.reports.isNotEmpty() ||
+                            reports.droppedEvents != 0L ||
+                            reports.droppedReports != 0L ||
+                            reports.dispatcherError != null)
+                    ) {
+                        finalizedPipelineEventHookReports = reports
+                    }
+                }.onFailure { error ->
+                    Log.w(
+                        NATIVE_JNI_BINDINGS_TAG,
+                        "failed to drain final playback pipeline event-hook reports",
+                        error,
+                    )
+                }
                 runCatching { VesperNativeJni.disposeSession(handle) }
                     .onFailure { error -> Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose native session", error) }
             }
@@ -838,6 +908,19 @@ internal class VesperNativeJniBindings(
             localBridgeEvents.clear()
             localEvents + (sessionHandle?.let { VesperNativeJni.drainEvents(it).toList() } ?: emptyList())
         }
+
+    override fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch {
+        finalizedPipelineEventHookReports?.let { reports ->
+            finalizedPipelineEventHookReports = null
+            return reports
+        }
+        if (isDisposed.get()) {
+            return VesperPipelineEventHookReportBatch()
+        }
+        val json = sessionHandle?.let(VesperNativeJni::drainPipelineEventHookReports)
+            ?: return VesperPipelineEventHookReportBatch()
+        return parsePipelineEventHookReportsJson(json)
+    }
 
     override fun play() {
         Log.i(NATIVE_JNI_BINDINGS_TAG, "play")

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+publish = false
 
 [lib]
 name = "vesper_source_normalizer_ffmpeg"
@@ -13,7 +14,5 @@ crate-type = ["cdylib", "rlib"]
 ffmpeg-next = { workspace = true, features = ["codec", "format"] }
 player-plugin = { path = "../player-plugin" }
 player-source-normalizer = { path = "../../core/player-source-normalizer" }
-serde.workspace = true
-serde_json.workspace = true
 toml.workspace = true
 url.workspace = true

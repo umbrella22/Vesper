@@ -43,6 +43,23 @@ enum VesperDownloadPublicCollection {
   movies,
 }
 
+List<VesperPluginReference> _decodeDownloadPluginReferences(Object? value) {
+  if (value == null) {
+    return const <VesperPluginReference>[];
+  }
+  if (value is! List) {
+    throw const FormatException('plugin references must be a list');
+  }
+  return List<VesperPluginReference>.unmodifiable(
+    value.map((entry) {
+      if (entry is! Map) {
+        throw const FormatException('invalid plugin reference');
+      }
+      return VesperPluginReference.fromMap(Map<Object?, Object?>.from(entry));
+    }),
+  );
+}
+
 final class VesperDownloadConfiguration {
   const VesperDownloadConfiguration({
     this.autoStart = true,
@@ -50,7 +67,8 @@ final class VesperDownloadConfiguration {
     this.resumePartialDownloads = true,
     this.restoreTasksOnStartup = true,
     this.baseDirectory,
-    this.pluginLibraryPaths = const <String>[],
+    this.postDownloadPluginReferences = const <VesperPluginReference>[],
+    this.eventHookPluginReferences = const <VesperPluginReference>[],
     this.rangeChunkBytes,
     this.minProgressBytes = 512 * 1024,
     this.minProgressIntervalMs = 250,
@@ -58,7 +76,6 @@ final class VesperDownloadConfiguration {
 
   factory VesperDownloadConfiguration.fromMap(Map<Object?, Object?> map) {
     final normalized = vesperDecodeMap(map);
-    final rawPluginLibraryPaths = normalized['pluginLibraryPaths'];
     return VesperDownloadConfiguration(
       autoStart: normalized['autoStart'] as bool? ?? true,
       runPostProcessorsOnCompletion:
@@ -73,13 +90,12 @@ final class VesperDownloadConfiguration {
           _decodeInt(normalized['minProgressBytes']) ?? 512 * 1024,
       minProgressIntervalMs:
           _decodeInt(normalized['minProgressIntervalMs']) ?? 250,
-      pluginLibraryPaths: switch (rawPluginLibraryPaths) {
-        final List<dynamic> values => values
-            .map((value) => value?.toString() ?? '')
-            .where((value) => value.isNotEmpty)
-            .toList(growable: false),
-        _ => const <String>[],
-      },
+      postDownloadPluginReferences: _decodeDownloadPluginReferences(
+        normalized['postDownloadPluginReferences'],
+      ),
+      eventHookPluginReferences: _decodeDownloadPluginReferences(
+        normalized['eventHookPluginReferences'],
+      ),
     );
   }
 
@@ -88,7 +104,8 @@ final class VesperDownloadConfiguration {
   final bool resumePartialDownloads;
   final bool restoreTasksOnStartup;
   final String? baseDirectory;
-  final List<String> pluginLibraryPaths;
+  final List<VesperPluginReference> postDownloadPluginReferences;
+  final List<VesperPluginReference> eventHookPluginReferences;
   final int? rangeChunkBytes;
   final int minProgressBytes;
   final int minProgressIntervalMs;
@@ -100,7 +117,12 @@ final class VesperDownloadConfiguration {
       'resumePartialDownloads': resumePartialDownloads,
       'restoreTasksOnStartup': restoreTasksOnStartup,
       'baseDirectory': baseDirectory,
-      'pluginLibraryPaths': pluginLibraryPaths,
+      'postDownloadPluginReferences': postDownloadPluginReferences
+          .map((reference) => reference.toMap())
+          .toList(growable: false),
+      'eventHookPluginReferences': eventHookPluginReferences
+          .map((reference) => reference.toMap())
+          .toList(growable: false),
       'rangeChunkBytes': rangeChunkBytes,
       'minProgressBytes': minProgressBytes,
       'minProgressIntervalMs': minProgressIntervalMs,

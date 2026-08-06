@@ -74,6 +74,7 @@ import io.github.ikaros.vesper.player.android.VesperDownloadTaskSnapshot
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlaylistCoordinator
 import io.github.ikaros.vesper.player.android.VesperPlayerController
+import io.github.ikaros.vesper.player.android.VesperPluginReference
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.ikaros.vesper.player.android.VesperPlayerUnsupportedOperation
@@ -119,9 +120,9 @@ internal fun PlayerHostApp(
     downloadManager: VesperDownloadManager,
     externalPlaybackController: VesperExternalPlaybackController,
     isDownloadExportPluginInstalled: Boolean,
-    sourceNormalizerPluginLibraryPaths: List<String>,
-    decoderMediaCodecPluginLibraryPaths: List<String>,
-    frameProcessorPluginLibraryPaths: List<String>,
+    sourceNormalizerPluginReferences: List<VesperPluginReference>,
+    decoderMediaCodecPluginReferences: List<VesperPluginReference>,
+    frameProcessorPluginReferences: List<VesperPluginReference>,
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
@@ -496,9 +497,9 @@ internal fun PlayerHostApp(
                             networkFailureEvidence = networkFailureEvidence,
                             sourceNormalizerSetting = sourceNormalizerSetting,
                             nativeFramePipelineSetting = nativeFramePipelineSetting,
-                            sourceNormalizerPluginLibraryPaths = sourceNormalizerPluginLibraryPaths,
-                            decoderMediaCodecPluginLibraryPaths = decoderMediaCodecPluginLibraryPaths,
-                            frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths,
+                            sourceNormalizerPluginReferences = sourceNormalizerPluginReferences,
+                            decoderMediaCodecPluginReferences = decoderMediaCodecPluginReferences,
+                            frameProcessorPluginReferences = frameProcessorPluginReferences,
                         ),
                     )
                 }
@@ -1978,10 +1979,10 @@ internal fun PlayerHostApp(
                                         sourceNormalizerSetting = sourceNormalizerSetting,
                                         nativeFramePipelineSetting = nativeFramePipelineSetting,
                                         videoSurfaceSetting = videoSurfaceSetting,
-                                        sourceNormalizerPluginLibraryPaths = sourceNormalizerPluginLibraryPaths,
-                                        decoderMediaCodecPluginLibraryPaths =
-                                            decoderMediaCodecPluginLibraryPaths,
-                                        frameProcessorPluginLibraryPaths = frameProcessorPluginLibraryPaths,
+                                        sourceNormalizerPluginReferences = sourceNormalizerPluginReferences,
+                                        decoderMediaCodecPluginReferences =
+                                            decoderMediaCodecPluginReferences,
+                                        frameProcessorPluginReferences = frameProcessorPluginReferences,
                                         pluginDiagnostics = controller.pluginDiagnostics,
                                         hdrEvidencePresets =
                                             exampleHdrEvidenceP0Presets +

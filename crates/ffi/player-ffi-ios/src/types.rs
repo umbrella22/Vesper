@@ -1,5 +1,4 @@
 use std::ffi::{c_char, c_void};
-use std::path::PathBuf;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -421,15 +420,18 @@ pub struct PlayerFfiPlaylistActiveItem {
 pub struct PlayerFfiDownloadConfig {
     pub auto_start: bool,
     pub run_post_processors_on_completion: bool,
-    pub plugin_library_paths: *mut *mut c_char,
-    pub plugin_library_paths_len: usize,
+    pub plugin_registry_handle: u64,
+    pub post_download_plugin_references_json: *const c_char,
+    pub event_hook_plugin_references_json: *const c_char,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct ResolvedDownloadConfig {
     pub(crate) auto_start: bool,
     pub(crate) run_post_processors_on_completion: bool,
-    pub(crate) plugin_library_paths: Vec<PathBuf>,
+    pub(crate) plugin_registry_handle: u64,
+    pub(crate) post_download_plugin_references: Vec<player_plugin::PluginReference>,
+    pub(crate) event_hook_plugin_references: Vec<player_plugin::PluginReference>,
 }
 
 #[repr(C)]
@@ -668,4 +670,5 @@ pub struct PlayerFfiDownloadEvent {
 pub struct PlayerFfiDownloadEventList {
     pub events: *mut PlayerFfiDownloadEvent,
     pub len: usize,
+    pub dropped_events: u64,
 }

@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vesper-player.dev/schemas/plugin/embedded-registry.schema.json",
+  "title": "Vesper Embedded Plugin Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "target", "architecture", "artifacts"],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "artifacts": { "minItems": 1 }
+        }
+      },
+      "then": { "required": ["minimum_os"] }
+    }
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "target": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "architecture": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "minimum_os": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/artifact" }
+    }
+  },
+  "$defs": {
+    "reverseDns": {
+      "type": "string",
+      "pattern": "^[a-z](?:[a-z0-9-]*[a-z0-9])?\\.[a-z](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z](?:[a-z0-9-]*[a-z0-9])?)*$",
+      "maxLength": 255
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "semanticVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+    },
+    "interfaceId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "locator": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name"],
+          "properties": {
+            "kind": { "const": "android-native-library" },
+            "name": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "name", "bundle_identifier"],
+          "properties": {
+            "kind": { "const": "apple-framework" },
+            "name": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"
+            },
+            "bundle_identifier": { "$ref": "#/$defs/reverseDns" }
+          }
+        }
+      ]
+    },
+    "integrity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "digest"],
+          "properties": {
+            "kind": { "const": "sha256" },
+            "digest": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "validation"],
+          "properties": {
+            "kind": { "const": "apple-code-signature" },
+            "validation": { "const": "same-team-as-host-or-simulator-ad-hoc" }
+          }
+        }
+      ]
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "publisher", "descriptor_sha256"],
+      "properties": {
+        "version": { "$ref": "#/$defs/semanticVersion" },
+        "publisher": { "$ref": "#/$defs/reverseDns" },
+        "descriptor_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interface_id", "instance_id", "interface_major", "interface_minor"],
+      "properties": {
+        "interface_id": { "$ref": "#/$defs/interfaceId" },
+        "instance_id": { "$ref": "#/$defs/reverseDns" },
+        "interface_major": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "interface_minor": { "type": "integer", "minimum": 0, "maximum": 65535 }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plugin_id",
+        "transport",
+        "locator",
+        "integrity",
+        "package",
+        "capabilities"
+      ],
+      "properties": {
+        "plugin_id": { "$ref": "#/$defs/reverseDns" },
+        "transport": { "const": "native" },
+        "locator": { "$ref": "#/$defs/locator" },
+        "integrity": { "$ref": "#/$defs/integrity" },
+        "package": { "$ref": "#/$defs/package" },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/capability" }
+        }
+      }
+    }
+  }
+}

@@ -31,11 +31,10 @@ use player_platform_desktop::{
 use player_plugin::{
     DecoderBitstreamFormat, DecoderMediaKind, DecoderNativeDeviceContext,
     DecoderNativeDeviceContextKind, DecoderNativeHandleKind, DecoderPacket,
-    DecoderReceiveNativeFrameOutput, DecoderSessionConfig, NativeDecoderSession,
+    DecoderReceiveNativeFrameOutput, DecoderSessionConfig, NativeDecoderSession, PluginReference,
 };
 use player_plugin_loader::{
-    DecoderPluginMatchRequest, LoadedDynamicPlugin, PluginCapabilitySummary,
-    PluginDiagnosticStatus, PluginRegistry,
+    DecoderPluginMatchRequest, PluginCapabilitySummary, PluginDiagnosticStatus, PluginRegistry,
 };
 use player_runtime::{
     FrameProcessorMode, PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode,
@@ -95,6 +94,7 @@ struct WindowsRuntimeAdapterInitializer {
 struct WindowsNativeFrameSelection {
     preferred_backend: WindowsNativeFrameBackendKind,
     plugin_path: std::path::PathBuf,
+    plugin_reference: PluginReference,
 }
 
 struct WindowsRuntimeAdapterFallback {
@@ -114,6 +114,7 @@ struct WindowsRuntimeActiveFallback {
 #[derive(Debug)]
 struct WindowsNativeFrameVideoSourceFactory {
     plugin_path: std::path::PathBuf,
+    plugin_reference: PluginReference,
     preferred_backend: WindowsNativeFrameBackendKind,
     video_surface: player_runtime::PlayerVideoSurfaceTarget,
 }
@@ -950,11 +951,15 @@ pub fn open_windows_host_runtime_source_with_options_and_interrupt(
     }
 
     let factory = WindowsSoftwarePlayerRuntimeAdapterFactory;
+    let pipeline_event_dispatcher = options.pipeline_event_dispatcher.clone();
+    let pipeline_event_platform = options.pipeline_event_platform.clone();
     let initializer =
         factory.probe_source_with_options_and_interrupt(source, options, Some(interrupt_flag))?;
-    Ok(PlayerRuntime::from_adapter_bootstrap(
+    Ok(PlayerRuntime::from_adapter_bootstrap_with_pipeline(
         WINDOWS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
         initializer.initialize()?,
+        pipeline_event_dispatcher,
+        pipeline_event_platform,
     ))
 }
 
@@ -1003,6 +1008,7 @@ impl WindowsSoftwarePlayerRuntimeAdapterFactory {
             })?;
             let video_source_factory = Arc::new(WindowsNativeFrameVideoSourceFactory {
                 plugin_path: selection.plugin_path.clone(),
+                plugin_reference: selection.plugin_reference.clone(),
                 preferred_backend: selection.preferred_backend,
                 video_surface,
             });
@@ -1136,15 +1142,16 @@ impl DesktopVideoSourceFactory for WindowsNativeFrameVideoSourceFactory {
             .open_video_packet_source_with_interrupt(source, interrupt_flag)
             .context("failed to open FFmpeg packet source for Windows native-frame decoder")?;
         let stream_info = packet_source.stream_info().clone();
-        let plugin = LoadedDynamicPlugin::load(&self.plugin_path).with_context(|| {
-            format!(
-                "failed to load Windows native-frame decoder plugin {}",
-                self.plugin_path.display()
-            )
-        })?;
-        let factory = plugin.native_decoder_plugin_factory().ok_or_else(|| {
-            anyhow::anyhow!("decoder plugin does not export a v2 native-frame API")
-        })?;
+        let registry =
+            PluginRegistry::load_native_development([&self.plugin_path]).with_context(|| {
+                format!(
+                    "failed to load Windows native-frame decoder plugin {}",
+                    self.plugin_path.display()
+                )
+            })?;
+        let factory = registry
+            .resolve_native_decoder(&self.plugin_reference)?
+            .capability();
         if !factory
             .capabilities()
             .supports_codec(&stream_info.codec, DecoderMediaKind::Video)
@@ -1566,6 +1573,10 @@ impl PlayerRuntimeAdapter for WindowsRuntimeAdapter {
         events
     }
 
+    fn take_dropped_event_count(&mut self) -> u64 {
+        self.inner.take_dropped_event_count()
+    }
+
     fn dispatch(
         &mut self,
         command: player_runtime::PlayerRuntimeCommand,
@@ -1699,6 +1710,7 @@ fn select_windows_native_frame_candidate_from_registry(
     Some(WindowsNativeFrameSelection {
         preferred_backend: windows_native_frame_roadmap().preferred_backend,
         plugin_path: record.path.clone(),
+        plugin_reference: registry.reference_for_record(record)?.clone(),
     })
 }
 
@@ -1803,7 +1815,13 @@ fn windows_decoder_plugin_registry(
     if options.decoder_plugin_library_paths.is_empty() {
         return None;
     }
-    Some(PluginRegistry::inspect_decoder_support(
+    if options
+        .validate_native_plugin_loading_policy("Windows native-frame decoder")
+        .is_err()
+    {
+        return None;
+    }
+    Some(PluginRegistry::inspect_decoder_support_development(
         &options.decoder_plugin_library_paths,
         DecoderPluginMatchRequest::video(best_video.codec.clone()),
     ))
@@ -1817,7 +1835,13 @@ fn windows_frame_processor_plugin_registry(
     {
         return None;
     }
-    Some(PluginRegistry::inspect_frame_processor_support(
+    if options
+        .validate_native_plugin_loading_policy("Windows frame processor")
+        .is_err()
+    {
+        return None;
+    }
+    Some(PluginRegistry::inspect_frame_processor_support_development(
         &options.frame_processor_library_paths,
     ))
 }
@@ -1825,6 +1849,9 @@ fn windows_frame_processor_plugin_registry(
 fn windows_frame_processor_chain_is_configured(options: &PlayerRuntimeOptions) -> bool {
     options.frame_processor_mode != FrameProcessorMode::Disabled
         && !options.frame_processor_library_paths.is_empty()
+        && options
+            .native_plugin_loading_policy
+            .allows_development_raw_paths()
 }
 
 fn windows_frame_processor_chain_unsupported_diagnostic(message: &str) -> PlayerPluginDiagnostic {
@@ -2042,11 +2069,11 @@ mod tests {
     use player_plugin::{
         DecoderMediaKind, DecoderNativeDeviceContext, DecoderNativeFrame,
         DecoderNativeFrameMetadata, DecoderNativeHandleKind, DecoderReceiveNativeFrameOutput,
-        DecoderSessionInfo, NativeDecoderSession, VesperPluginKind,
+        DecoderSessionInfo, NativeDecoderSession, PluginReference, PluginTransport,
     };
     use player_plugin_loader::{
-        DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, PluginCapabilitySummary,
-        PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
+        DecoderPluginCapabilitySummary, DecoderPluginCodecSummary, PluginCapabilityKind,
+        PluginCapabilitySummary, PluginDiagnosticRecord, PluginDiagnosticStatus, PluginRegistry,
     };
     use player_runtime::{
         PlayerDecoderPluginVideoMode, PlayerError, PlayerErrorCode, PlayerPluginDiagnosticStatus,
@@ -2282,6 +2309,7 @@ mod tests {
             .with_decoder_plugin_library_paths([std::path::PathBuf::from(
                 "/tmp/fake-d3d11-decoder",
             )])
+            .with_development_native_plugin_loading()
             .with_video_surface(player_runtime::PlayerVideoSurfaceTarget {
                 kind: player_runtime::PlayerVideoSurfaceKind::Win32Hwnd,
                 handle: 1,
@@ -2382,7 +2410,8 @@ mod tests {
             .with_frame_processor_mode(player_runtime::FrameProcessorMode::RequireProcessed)
             .with_frame_processor_library_paths([std::path::PathBuf::from(
                 "/tmp/fake-frame-processor",
-            )]);
+            )])
+            .with_development_native_plugin_loading();
         let diagnostics = windows_runtime_diagnostics(&media_info, &options, None);
 
         let diagnostic = diagnostics
@@ -2687,6 +2716,7 @@ mod tests {
                     release_tracking: None,
                 },
                 handle: 7,
+                lease_token: None,
             },
         )
         .expect_err("mismatched handle kind should fail");
@@ -2742,6 +2772,7 @@ mod tests {
                     release_tracking: None,
                 },
                 handle: 9,
+                lease_token: None,
             },
         )
         .expect_err("presenter skeleton should still report unimplemented");
@@ -3085,16 +3116,25 @@ mod tests {
             supports_drain: true,
             max_sessions: Some(1),
         };
-        PluginRegistry::from_records(vec![PluginDiagnosticRecord {
-            path: std::path::PathBuf::from("fixture-windows-decoder"),
-            status: PluginDiagnosticStatus::DecoderSupported,
-            plugin_name: Some("fixture-windows-decoder".to_owned()),
-            plugin_kind: Some(VesperPluginKind::Decoder),
-            capability_summary: Some(PluginCapabilitySummary::Decoder(decoder_capabilities)),
-            message: Some(format!(
-                "fixture-windows-decoder advertises Video {codec} support with native-frame output"
-            )),
-        }])
+        let reference = PluginReference::new(
+            "dev.vesper.fixture-windows-decoder",
+            Some("dev.vesper.fixture-windows-decoder.native-decoder".to_owned()),
+            PluginTransport::Native,
+        )
+        .expect("Windows test fixture must use a valid plugin reference");
+        PluginRegistry::from_records_with_references([(
+            PluginDiagnosticRecord {
+                path: std::path::PathBuf::from("fixture-windows-decoder"),
+                status: PluginDiagnosticStatus::DecoderSupported,
+                plugin_name: Some("fixture-windows-decoder".to_owned()),
+                plugin_kind: Some(PluginCapabilityKind::Decoder),
+                capability_summary: Some(PluginCapabilitySummary::Decoder(decoder_capabilities)),
+                message: Some(format!(
+                    "fixture-windows-decoder advertises Video {codec} support with native-frame output"
+                )),
+            },
+            Some(reference),
+        )])
     }
 
     impl PlayerRuntimeAdapter for FakeWindowsRuntime {

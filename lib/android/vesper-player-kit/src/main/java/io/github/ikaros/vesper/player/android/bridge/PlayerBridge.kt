@@ -339,5 +339,7 @@ internal interface PlayerBridge {
     fun pictureInPictureReadiness(): VesperPictureInPictureReadiness
     fun drainRuntimeWarnings(): List<VesperRuntimeWarning>
     fun drainBenchmarkEvents(): List<VesperBenchmarkEvent>
+    fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch
     fun benchmarkSummary(): VesperBenchmarkSummary
+    fun awaitBenchmarkSinkShutdown(timeoutMs: Long): Boolean
 }

@@ -23,6 +23,7 @@ import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeStatu
 import io.github.ikaros.vesper.player.android.VesperPlaybackCodecFamily
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerControllerFactory
+import io.github.ikaros.vesper.player.android.VesperPluginReference
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceProtocol
@@ -115,9 +116,9 @@ internal data class ExampleHdrEvidenceCaptureContext(
     val networkFailureEvidence: ExampleHdrEvidenceNetworkFailureEvidence? = null,
     val sourceNormalizerSetting: ExampleSourceNormalizerSetting,
     val nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
-    val sourceNormalizerPluginLibraryPaths: List<String>,
-    val decoderMediaCodecPluginLibraryPaths: List<String>,
-    val frameProcessorPluginLibraryPaths: List<String>,
+    val sourceNormalizerPluginReferences: List<VesperPluginReference>,
+    val decoderMediaCodecPluginReferences: List<VesperPluginReference>,
+    val frameProcessorPluginReferences: List<VesperPluginReference>,
 )
 
 internal data class ExampleHdrEvidenceNetworkFailureEvidence(
@@ -192,23 +193,23 @@ internal fun captureExampleHdrEvidenceBundle(
                 sourceNormalizerConfiguration =
                     VesperSourceNormalizerConfiguration(
                         mode = captureContext.sourceNormalizerSetting.mode,
-                        pluginLibraryPaths = captureContext.sourceNormalizerPluginLibraryPaths,
+                        pluginReferences = captureContext.sourceNormalizerPluginReferences,
                     ),
                 frameProcessorConfiguration =
                     VesperFrameProcessorConfiguration(
                         mode =
-                            if (captureContext.frameProcessorPluginLibraryPaths.isEmpty()) {
+                            if (captureContext.frameProcessorPluginReferences.isEmpty()) {
                                 VesperFrameProcessorMode.Disabled
                             } else {
                                 VesperFrameProcessorMode.DiagnosticsOnly
                             },
-                        pluginLibraryPaths = captureContext.frameProcessorPluginLibraryPaths,
+                        pluginReferences = captureContext.frameProcessorPluginReferences,
                     ),
                 nativeFramePipelineConfiguration =
                     VesperNativeFramePipelineConfiguration(
                         mode = captureContext.nativeFramePipelineSetting.mode,
-                        decoderPluginLibraryPaths = captureContext.decoderMediaCodecPluginLibraryPaths,
-                        frameProcessorPluginLibraryPaths = captureContext.frameProcessorPluginLibraryPaths,
+                        decoderPluginReferences = captureContext.decoderMediaCodecPluginReferences,
+                        frameProcessorPluginReferences = captureContext.frameProcessorPluginReferences,
                         maxInFlightFrames = 2,
                     ),
             ),

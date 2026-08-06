@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    NativeFrame, NativeFrameColorMetadata, NativeFrameHdrMetadata, NativeFrameMetadata,
-    NativeFramePipelineProfile, NativeFrameReleaseTracking, NativeFrameSyncInfo,
-    NativeFrameTransform, NativeHandleKind, SourceNormalizerPacketMediaKind,
+    NativeFrame, NativeFrameColorMetadata, NativeFrameHdrMetadata, NativeFrameLeaseToken,
+    NativeFrameMetadata, NativeFramePipelineProfile, NativeFrameReleaseTracking,
+    NativeFrameSyncInfo, NativeFrameTransform, NativeHandleKind, SourceNormalizerPacketMediaKind,
     SourceNormalizerPacketTrackInfo, VisibleRect,
 };
 
@@ -72,9 +72,35 @@ pub struct DecoderCapabilities {
 impl DecoderCapabilities {
     /// Returns whether this plugin advertises support for a codec/media pair.
     pub fn supports_codec(&self, codec: &str, media_kind: DecoderMediaKind) -> bool {
+        let codec = normalize_decoder_codec_identifier(codec);
         self.codecs.iter().any(|capability| {
-            capability.media_kind == media_kind && capability.codec.eq_ignore_ascii_case(codec)
+            capability.media_kind == media_kind
+                && normalize_decoder_codec_identifier(&capability.codec) == codec
         })
+    }
+}
+
+/// Normalizes MIME-wrapped and profile-qualified decoder codec identifiers.
+///
+/// Profile suffix removal is intentionally limited to standardized sample
+/// entry identifiers. Custom codec names retain dots so unrelated identities
+/// cannot collapse onto the same capability.
+pub fn normalize_decoder_codec_identifier(codec: &str) -> String {
+    let normalized = codec.trim().to_ascii_lowercase();
+    let normalized = normalized
+        .strip_prefix("video/")
+        .or_else(|| normalized.strip_prefix("audio/"))
+        .unwrap_or(&normalized);
+    let Some((sample_entry, _profile)) = normalized.split_once('.') else {
+        return normalized.to_owned();
+    };
+    if matches!(
+        sample_entry,
+        "avc1" | "avc3" | "hvc1" | "hev1" | "dvh1" | "dvhe" | "vp09" | "av01" | "mp4a"
+    ) {
+        sample_entry.to_owned()
+    } else {
+        normalized.to_owned()
     }
 }
 
@@ -185,6 +211,9 @@ pub struct DecoderSessionConfig {
     #[serde(default)]
     pub seek_preroll_samples: Option<u32>,
     pub prefer_hardware: bool,
+    /// Platform decoder implementation selected by a trusted host capability probe.
+    #[serde(default)]
+    pub required_decoder_implementation_name: Option<String>,
     pub require_cpu_output: bool,
     #[serde(default)]
     pub native_device_context: Option<DecoderNativeDeviceContext>,
@@ -309,7 +338,7 @@ pub enum DecoderReceiveFrameStatus {
     Eof,
 }
 
-/// Native frame handle kinds returned by decoder plugin ABI v2.
+/// Native frame handle kinds returned by the decoder plugin ABI.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DecoderNativeHandleKind {
     CvPixelBuffer,
@@ -419,7 +448,7 @@ impl DecoderNativeDeviceContext {
     }
 }
 
-/// Native-frame decoder requirements advertised through ABI v2.
+/// Native-frame decoder requirements advertised through the plugin ABI.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct DecoderNativeRequirements {
     pub required_device_context_kinds: Vec<DecoderNativeDeviceContextKind>,
@@ -582,6 +611,8 @@ impl From<NativeFrameMetadata> for DecoderNativeFrameMetadata {
 pub struct DecoderNativeFrame {
     pub metadata: DecoderNativeFrameMetadata,
     pub handle: usize,
+    #[doc(hidden)]
+    pub lease_token: Option<NativeFrameLeaseToken>,
 }
 
 impl From<DecoderNativeFrame> for NativeFrame {
@@ -589,6 +620,7 @@ impl From<DecoderNativeFrame> for NativeFrame {
         Self {
             metadata: value.metadata.into(),
             handle: value.handle,
+            lease_token: value.lease_token,
         }
     }
 }
@@ -598,11 +630,12 @@ impl From<NativeFrame> for DecoderNativeFrame {
         Self {
             metadata: value.metadata.into(),
             handle: value.handle,
+            lease_token: value.lease_token,
         }
     }
 }
 
-/// Metadata returned by the dynamic ABI v2 native-frame receive call.
+/// Metadata returned by the dynamic native-frame receive call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecoderReceiveNativeFrameMetadata {
     pub status: DecoderReceiveFrameStatus,
@@ -798,7 +831,7 @@ pub trait NativeDecoderPluginFactory: Send + Sync {
     ) -> Result<Box<dyn NativeDecoderSession>, DecoderError>;
 }
 
-/// Stateful native-frame decoder session created by a v2 decoder plugin factory.
+/// Stateful native-frame decoder session created by a decoder plugin factory.
 pub trait NativeDecoderSession: Send {
     fn session_info(&self) -> DecoderSessionInfo;
 
@@ -836,13 +869,14 @@ pub trait NativeDecoderSession: Send {
 #[cfg(test)]
 mod tests {
     use super::{
-        DecoderBitstreamFormat, DecoderError, DecoderFrameFormat, DecoderMediaKind,
-        DecoderNativeDeviceContext, DecoderNativeDeviceContextKind, DecoderNativeFrame,
-        DecoderNativeFrameMetadata, DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind,
-        DecoderPacket, DecoderPacketResult, DecoderPcmFrame, DecoderPcmFrameMetadata,
-        DecoderPcmSampleLayout, DecoderReceiveFrameStatus, DecoderReceiveNativeFrameOutput,
-        DecoderReceivePcmFrameMetadata, DecoderSessionConfig, DecoderSessionInfo,
-        DecoderVisibleRect, NativeDecoderSession,
+        DecoderBitstreamFormat, DecoderCapabilities, DecoderCodecCapability, DecoderError,
+        DecoderFrameFormat, DecoderMediaKind, DecoderNativeDeviceContext,
+        DecoderNativeDeviceContextKind, DecoderNativeFrame, DecoderNativeFrameMetadata,
+        DecoderNativeFrameReleaseTracking, DecoderNativeHandleKind, DecoderPacket,
+        DecoderPacketResult, DecoderPcmFrame, DecoderPcmFrameMetadata, DecoderPcmSampleLayout,
+        DecoderReceiveFrameStatus, DecoderReceiveNativeFrameOutput, DecoderReceivePcmFrameMetadata,
+        DecoderSessionConfig, DecoderSessionInfo, DecoderVisibleRect, NativeDecoderSession,
+        normalize_decoder_codec_identifier,
     };
     use crate::{
         NativeFrame, NativeFrameColorMetadata, NativeFrameHdrMetadata, NativeFrameMetadata,
@@ -901,6 +935,7 @@ mod tests {
                 }),
             },
             handle: 0xfeed,
+            lease_token: None,
         }
     }
 
@@ -1289,6 +1324,31 @@ mod tests {
             DecoderError::UnsupportedCapability { capability }
                 if capability == "presentation-aware-native-frame-release"
         ));
+    }
+
+    #[test]
+    fn decoder_capabilities_match_mime_wrapped_profile_qualified_sample_entries() {
+        let capabilities = DecoderCapabilities {
+            codecs: vec![DecoderCodecCapability {
+                codec: "AVC1".to_owned(),
+                media_kind: DecoderMediaKind::Video,
+                profiles: Vec::new(),
+                output_formats: Vec::new(),
+            }],
+            ..DecoderCapabilities::default()
+        };
+
+        assert!(capabilities.supports_codec("video/avc1.640028", DecoderMediaKind::Video));
+        assert!(!capabilities.supports_codec("avc1garbage", DecoderMediaKind::Video));
+    }
+
+    #[test]
+    fn codec_normalization_does_not_truncate_custom_dotted_names() {
+        assert_eq!(
+            normalize_decoder_codec_identifier("Fixture.Video.V1"),
+            "fixture.video.v1"
+        );
+        assert_eq!(normalize_decoder_codec_identifier("dvh1.05.06"), "dvh1");
     }
 
     struct PcmUnsupportedDecoderSession;
