@@ -4932,6 +4932,21 @@ mod tests {
     use zip::write::SimpleFileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
+    #[cfg(vesper_source_checkout)]
+    #[test]
+    fn optional_android_nested_asset_targets_preflight_in_clean_checkout() {
+        let root = fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."))
+            .expect("canonical workspace root");
+        for relative in [
+            "lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/assets/vesper-source-normalizer-ffmpeg",
+            "lib/android/vesper-player-kit-ffmpeg-runtime/src/main/assets/vesper-ffmpeg-runtime",
+        ] {
+            GeneratedDirectoryTarget::preflight(&root, root.join(relative)).unwrap_or_else(
+                |error| panic!("preflight optional Android target {relative}: {error}"),
+            );
+        }
+    }
+
     fn write_android_archive(path: &Path, entries: &[(&str, &[u8], Option<u32>)]) {
         let file = File::create(path).expect("create Android archive fixture");
         let mut archive = ZipWriter::new(file);

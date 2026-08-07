@@ -3,6 +3,7 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -421,11 +422,18 @@ fn ios_optional_release_real_fixture_rejects_policy_drift() {
     let altered_source = temporary.path().join("altered-source");
     copy_release_fixture(&source, &altered_source);
     let version = source_version(&altered_source);
+    let source_archive = altered_source.join(format!(
+        "VesperPlayerOptionalPlugins-FFmpeg-{version}-source.tar.xz"
+    ));
+    let mut permissions = fs::metadata(&source_archive)
+        .expect("inspect copied source archive")
+        .permissions();
+    permissions.set_mode(permissions.mode() | 0o200);
+    fs::set_permissions(&source_archive, permissions)
+        .expect("make copied source archive writable for mutation");
     let mut source_file = fs::OpenOptions::new()
         .append(true)
-        .open(altered_source.join(format!(
-            "VesperPlayerOptionalPlugins-FFmpeg-{version}-source.tar.xz"
-        )))
+        .open(&source_archive)
         .expect("open source archive for mutation");
     source_file
         .write_all(b"altered")

@@ -119,7 +119,10 @@ impl PreparedDirectory {
         loop {
             match fs::symlink_metadata(&ancestor) {
                 Ok(metadata) => {
-                    if !metadata.file_type().is_dir() {
+                    let allowed_alias_ancestor = metadata.file_type().is_symlink()
+                        && !missing.is_empty()
+                        && allowed_system_path_alias(&ancestor);
+                    if !metadata.file_type().is_dir() && !allowed_alias_ancestor {
                         return Err(IosError::storage(format!(
                             "{label} '{}' is not a regular non-symlink directory",
                             ancestor.display()
@@ -3584,6 +3587,34 @@ fn sync_directory(_path: &Path) -> io::Result<()> {
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn prepared_directory_resolves_missing_child_below_system_tmp_alias() {
+        let canonical_tmp = fs::canonicalize("/tmp").expect("canonical macOS temporary directory");
+        let reservation = tempfile::Builder::new()
+            .prefix(".vesper-ios-system-alias-")
+            .tempdir_in(&canonical_tmp)
+            .expect("reserve unique temporary output name");
+        let canonical_target = reservation.path().to_path_buf();
+        let name = canonical_target
+            .file_name()
+            .expect("temporary output name")
+            .to_os_string();
+        reservation
+            .close()
+            .expect("release temporary output reservation");
+        let aliased_target = Path::new("/tmp").join(name);
+
+        let prepared = PreparedDirectory::prepare(&aliased_target, "fixture aggregate directory")
+            .expect("prepare output below macOS temporary alias");
+
+        assert_eq!(prepared.path, canonical_target);
+        assert_eq!(prepared.parent, canonical_tmp);
+        assert!(canonical_target.is_dir());
+        drop(prepared);
+        assert!(!canonical_target.exists());
+    }
 
     #[test]
     fn durable_prepared_directory_commit_syncs_leaf_and_created_parents() {

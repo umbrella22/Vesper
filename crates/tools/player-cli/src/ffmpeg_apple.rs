@@ -1551,8 +1551,7 @@ mod implementation {
         if let Some(configured) = env::var_os("PKG_CONFIG").filter(|value| !value.is_empty()) {
             let path = PathBuf::from(&configured);
             if path.components().count() > 1 || path.is_absolute() {
-                require_executable_file(&path, "pkg-config")?;
-                return Ok(path);
+                return resolve_executable_file(&path, "pkg-config");
             }
             return require_path_command(
                 configured
@@ -1570,8 +1569,8 @@ mod implementation {
         })?;
         for directory in env::split_paths(&paths) {
             let candidate = directory.join(name);
-            if is_executable_file(&candidate) {
-                return Ok(candidate);
+            if let Ok(resolved) = resolve_executable_file(&candidate, label) {
+                return Ok(resolved);
             }
         }
         Err(FfmpegError::compatibility(format!(
@@ -1579,10 +1578,15 @@ mod implementation {
         )))
     }
 
-    fn is_executable_file(path: &Path) -> bool {
-        fs::symlink_metadata(path).is_ok_and(|metadata| {
-            metadata.file_type().is_file() && metadata.permissions().mode() & 0o111 != 0
-        })
+    fn resolve_executable_file(path: &Path, label: &str) -> Result<PathBuf, FfmpegError> {
+        let resolved = fs::canonicalize(path).map_err(|error| {
+            FfmpegError::compatibility(format!(
+                "failed to resolve {label} '{}': {error}",
+                path.display()
+            ))
+        })?;
+        require_executable_file(&resolved, label)?;
+        Ok(resolved)
     }
 
     fn require_executable_file(path: &Path, label: &str) -> Result<(), FfmpegError> {
@@ -1875,6 +1879,30 @@ mod implementation {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn executable_file_resolution_accepts_and_freezes_symlink_target() {
+            let temporary = tempfile::tempdir().expect("create temporary command directory");
+            let executable = temporary.path().join("pkgconf");
+            fs::write(&executable, b"#!/bin/sh\nexit 0\n")
+                .expect("write executable command fixture");
+            let mut permissions = fs::metadata(&executable)
+                .expect("inspect executable command fixture")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&executable, permissions).expect("make command fixture executable");
+            let alias = temporary.path().join("pkg-config");
+            std::os::unix::fs::symlink("pkgconf", &alias)
+                .expect("create executable command symlink");
+
+            let resolved =
+                resolve_executable_file(&alias, "pkg-config").expect("resolve command symlink");
+
+            assert_eq!(
+                resolved,
+                fs::canonicalize(executable).expect("canonical executable command fixture")
+            );
+        }
 
         fn profile() -> NativeFfmpegProfile {
             NativeFfmpegProfile {
