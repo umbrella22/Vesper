@@ -298,8 +298,20 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             test
 
-      - name: Upload VesperPlayerKit iOS Simulator results
+      - name: Check VesperPlayerKit iOS Simulator results
         if: always()
+        id: vesper-player-kit-ios-xcresult
+        run: |
+          result_bundle="$RUNNER_TEMP/VesperPlayerKit-ios-simulator.xcresult"
+          if [[ -e "$result_bundle" ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No VesperPlayerKit iOS Simulator result bundle was produced: $result_bundle" >&2
+          fi
+
+      - name: Upload VesperPlayerKit iOS Simulator results
+        if: always() && steps.vesper-player-kit-ios-xcresult.outputs.exists == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: VesperPlayerKit-ios-simulator-xcresult
@@ -320,8 +332,20 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             test
 
-      - name: Upload Vesper iOS host Simulator results
+      - name: Check Vesper iOS host Simulator results
         if: always()
+        id: vesper-ios-host-xcresult
+        run: |
+          result_bundle="$RUNNER_TEMP/VesperPlayerHostDemo-ios-simulator.xcresult"
+          if [[ -e "$result_bundle" ]]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "No Vesper iOS host Simulator result bundle was produced: $result_bundle" >&2
+          fi
+
+      - name: Upload Vesper iOS host Simulator results
+        if: always() && steps.vesper-ios-host-xcresult.outputs.exists == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: VesperPlayerHostDemo-ios-simulator-xcresult

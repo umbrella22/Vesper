@@ -211,9 +211,19 @@ subprojects {
                         inputs.property("minimumOs", "26")
                         inputs.property("locatorName", registryMetadata.libraryName)
                         inputs.property("pluginId", registryMetadata.pluginId)
-                        outputs.file(registryFragment)
+                        outputs.dir(generatedAssets)
+                        outputs.upToDateWhen { false }
 
                         doFirst {
+                            val generatedAssetsDirectory = generatedAssets.get().asFile
+                            if (generatedAssetsDirectory.exists() &&
+                                !generatedAssetsDirectory.deleteRecursively()
+                            ) {
+                                throw GradleException(
+                                    "Failed to clear generated Vesper plugin registry assets: " +
+                                        generatedAssetsDirectory,
+                                )
+                            }
                             registryFragment.get().asFile.parentFile.mkdirs()
                             commandLine(
                                 vesperCli.get().absolutePath,
