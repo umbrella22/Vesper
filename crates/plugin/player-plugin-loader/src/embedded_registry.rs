@@ -31,6 +31,9 @@ pub struct EmbeddedPluginRegistry {
     artifacts: Vec<EmbeddedPluginArtifact>,
 }
 
+type PlatformIntegrityVerifier<'a> =
+    dyn FnMut(&Path, &EmbeddedPluginArtifact) -> Result<(), String> + 'a;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmbeddedPluginArtifact {
@@ -354,9 +357,7 @@ impl EmbeddedPluginRegistry {
         &'a self,
         artifacts: impl IntoIterator<Item = &'a EmbeddedPluginArtifact>,
         resolve: &mut impl FnMut(&EmbeddedPluginLocator) -> Result<PathBuf, String>,
-        mut verify_platform_integrity: Option<
-            &mut dyn FnMut(&Path, &EmbeddedPluginArtifact) -> Result<(), String>,
-        >,
+        mut verify_platform_integrity: Option<&mut PlatformIntegrityVerifier<'_>>,
     ) -> Result<PluginRegistry, EmbeddedPluginRegistryError> {
         let artifacts = artifacts.into_iter().collect::<Vec<_>>();
         let mut native_artifacts = Vec::with_capacity(artifacts.len());
@@ -1049,7 +1050,7 @@ fn verify_sha256(path: &Path, expected: &str) -> Result<(), EmbeddedPluginRegist
         }
         hasher.update(&buffer[..read]);
     }
-    let actual = format!("{:x}", hasher.finalize());
+    let actual = hex::encode(hasher.finalize());
     if actual != expected {
         return Err(EmbeddedPluginRegistryError::ChecksumMismatch {
             path: path.display().to_string(),
@@ -1147,7 +1148,7 @@ fn verify_android_package_entry_sha256(
         }
         hasher.update(&buffer[..read]);
     }
-    let actual = format!("{:x}", hasher.finalize());
+    let actual = hex::encode(hasher.finalize());
     if actual != expected {
         return Err(EmbeddedPluginRegistryError::ChecksumMismatch {
             path: load_path.display().to_string(),
@@ -1194,7 +1195,7 @@ mod tests {
                 .contains("base.apk!/lib/arm64-v8a/")
         );
 
-        let expected = format!("{:x}", Sha256::digest(library_bytes));
+        let expected = hex::encode(Sha256::digest(library_bytes));
         verify_sha256(&load_path, &expected).expect("verify package entry");
         assert!(matches!(
             verify_sha256(&load_path, &"0".repeat(64)),

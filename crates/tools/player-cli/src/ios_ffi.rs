@@ -589,6 +589,10 @@ mod implementation {
         }
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the FFI archive build boundary keeps platform, toolchain, staging, diagnostics, and cancellation state explicit"
+    )]
     fn build_platform_archive(
         root: &Path,
         platform: ApplePlatform,
@@ -1405,15 +1409,19 @@ mod implementation {
         )
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the promotion helper exposes explicit failure-injection hooks for each transaction phase"
+    )]
     fn promote_staged_output_with_hooks(
         staging: tempfile::TempDir,
         source: &Path,
         target: &OutputTarget,
         cancellation: &external_process::InterruptDeferral,
-        mut before_exchange: Option<&mut dyn FnMut(&Path) -> io::Result<()>>,
-        mut after_publish: Option<&mut dyn FnMut(&Path) -> io::Result<()>>,
-        mut after_commit: Option<&mut dyn FnMut(&Path)>,
-        mut cleanup_staging: Option<&mut dyn FnMut(tempfile::TempDir) -> io::Result<()>>,
+        mut before_exchange: Option<crate::PathIoHook<'_>>,
+        mut after_publish: Option<crate::PathIoHook<'_>>,
+        mut after_commit: Option<crate::PathHook<'_>>,
+        mut cleanup_staging: Option<crate::TempDirIoHook<'_>>,
     ) -> Result<Vec<String>, IosError> {
         let source = source.to_path_buf();
         let source_identity = directory_identity(&source, "staged iOS FFI output")?;

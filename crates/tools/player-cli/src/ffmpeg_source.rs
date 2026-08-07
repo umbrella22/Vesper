@@ -1,3 +1,7 @@
+// Apple release commands keep their policy types available on other hosts for
+// compatibility diagnostics even though the release implementation is absent.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -86,7 +90,7 @@ impl FfmpegSourcePolicy {
     }
 
     fn load_from_path(path: &Path) -> Result<Self, FfmpegSourcePolicyError> {
-        let metadata = fs::metadata(&path).map_err(|error| {
+        let metadata = fs::metadata(path).map_err(|error| {
             FfmpegSourcePolicyError::storage(format!(
                 "failed to inspect FFmpeg source policy '{}': {error}",
                 path.display()
@@ -104,13 +108,13 @@ impl FfmpegSourcePolicy {
                 path.display()
             )));
         }
-        let source = fs::read_to_string(&path).map_err(|error| {
+        let source = fs::read_to_string(path).map_err(|error| {
             FfmpegSourcePolicyError::storage(format!(
                 "failed to read FFmpeg source policy '{}': {error}",
                 path.display()
             ))
         })?;
-        Self::parse(&source, &path)
+        Self::parse(&source, path)
     }
 
     fn parse(source: &str, path: &Path) -> Result<Self, FfmpegSourcePolicyError> {

@@ -162,7 +162,7 @@ impl JniDownloadExportCallbackWorker {
                                     )
                                     .is_err()
                                 {
-                                    let _ = env.exception_clear();
+                                    env.exception_clear();
                                 }
                             }
                             JniDownloadExportCallbackRequest::IsCancelled { callback, reply } => {
@@ -175,7 +175,7 @@ impl JniDownloadExportCallbackWorker {
                                     )
                                     .and_then(|value| value.z())
                                     .unwrap_or_else(|_| {
-                                        let _ = env.exception_clear();
+                                        env.exception_clear();
                                         true
                                     });
                                 let _ = reply.send(cancelled);

@@ -85,7 +85,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
@@ -199,7 +199,7 @@ jobs:
 
       - name: Upload Vesper Android release APK
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: VesperPlayerHostDemo-android-${{ matrix.abi }}-release-apk
           path: artifacts/android/*.apk
@@ -210,7 +210,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
@@ -224,7 +224,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install iOS build tools
-        run: brew install xcodegen pkg-config
+        run: |
+          if brew tap | grep -Fxq "aws/tap"; then
+            brew untap aws/tap
+          fi
+          brew install xcodegen pkg-config
 
       - name: Select Xcode
         uses: ./.github/actions/select-xcode
@@ -296,7 +300,7 @@ jobs:
 
       - name: Upload VesperPlayerKit iOS Simulator results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: VesperPlayerKit-ios-simulator-xcresult
           path: ${{ runner.temp }}/VesperPlayerKit-ios-simulator.xcresult
@@ -318,7 +322,7 @@ jobs:
 
       - name: Upload Vesper iOS host Simulator results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: VesperPlayerHostDemo-ios-simulator-xcresult
           path: ${{ runner.temp }}/VesperPlayerHostDemo-ios-simulator.xcresult

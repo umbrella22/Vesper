@@ -2121,7 +2121,7 @@ fn verify_signing_certificate(
             || common_name.starts_with("iPhone Developer:");
         let mut sha1 = sha1::Sha1::new();
         sha1.update(&pem.contents);
-        let sha1 = format!("{:X}", sha1.finalize());
+        let sha1 = hex::encode_upper(sha1.finalize());
         if development_identity
             && organizational_unit == team
             && certificate.validity().is_valid()
@@ -2130,10 +2130,10 @@ fn verify_signing_certificate(
             let mut sha256 = Sha256::new();
             sha256.update(&pem.contents);
             matches.push(format!(
-                "teamId={team}\ncommonName={common_name}\nnotBefore={}\nnotAfter={}\nsha1={sha1}\nsha256={:x}\n",
+                "teamId={team}\ncommonName={common_name}\nnotBefore={}\nnotAfter={}\nsha1={sha1}\nsha256={}\n",
                 certificate.validity().not_before.timestamp(),
                 certificate.validity().not_after.timestamp(),
-                sha256.finalize()
+                hex::encode(sha256.finalize())
             ));
         }
     }
@@ -2462,7 +2462,7 @@ fn sha256_file(path: &Path, maximum_bytes: u64) -> Result<String, SubtitleError>
         }
         hasher.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn write_evidence_checksums(root: &Path) -> Result<(), SubtitleError> {

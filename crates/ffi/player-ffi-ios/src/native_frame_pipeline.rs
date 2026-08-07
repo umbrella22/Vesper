@@ -682,9 +682,7 @@ impl IosNativeFramePipelineSession {
     pub fn store_frame(&mut self, frame: IosNativeFramePipelineFrame) -> Result<u64, String> {
         if self.pending_frames.len() >= MAX_PENDING_FRAMES {
             let cleanup_error = self.release_all_rejected_frames_pending_cleanup().err();
-            if let Err(error) = self.release_rejected_frame(frame) {
-                return Err(error);
-            }
+            self.release_rejected_frame(frame)?;
             if let Some(error) = cleanup_error {
                 return Err(format!(
                     "native-frame pending frame limit reached; previous rejected-frame cleanup is still pending, and the current rejected frame was released: {error}",
@@ -817,7 +815,9 @@ impl IosNativeFramePipelineSession {
         ) {
             Ok(frame) => frame,
             Err((error, frame_for_release)) => {
-                let _ = self.decoder_session.release_native_frame(frame_for_release);
+                let _ = self
+                    .decoder_session
+                    .release_native_frame(*frame_for_release);
                 return Err(error);
             }
         };
@@ -1449,11 +1449,13 @@ fn open_frame_processor_chain(
     }
 }
 
+type IosPipelineFrameError = (String, Box<DecoderNativeFrame>);
+
 fn process_frame(
     chain: Option<&mut IosFrameProcessorChain>,
     counters: &mut IosNativeFramePipelineCounters,
     decoder_frame: DecoderNativeFrame,
-) -> Result<IosPipelineFrame, (String, DecoderNativeFrame)> {
+) -> Result<IosPipelineFrame, IosPipelineFrameError> {
     let Some(chain) = chain else {
         return Ok(IosPipelineFrame {
             decoder_frame: decoder_frame.clone(),
@@ -1469,9 +1471,9 @@ impl IosFrameProcessorChain {
         &mut self,
         counters: &mut IosNativeFramePipelineCounters,
         decoder_frame: DecoderNativeFrame,
-    ) -> Result<IosPipelineFrame, (String, DecoderNativeFrame)> {
+    ) -> Result<IosPipelineFrame, IosPipelineFrameError> {
         self.release_processor_outputs_pending_cleanup()
-            .map_err(|error| (error, decoder_frame.clone()))?;
+            .map_err(|error| (error, Box::new(decoder_frame.clone())))?;
         let mut current_frame = NativeFrame::from(decoder_frame.clone());
         let mut processor_outputs = Vec::new();
         let mut using_processor_output = false;
@@ -1493,7 +1495,7 @@ impl IosFrameProcessorChain {
                 Ok(submit_result) => submit_result,
                 Err(error) => {
                     self.release_outputs_before_error(processor_outputs, &decoder_frame)?;
-                    return Err((error, decoder_frame));
+                    return Err((error, Box::new(decoder_frame)));
                 }
             };
             match submit_result.status {
@@ -1508,7 +1510,7 @@ impl IosFrameProcessorChain {
                         self.release_outputs_before_error(processor_outputs, &decoder_frame)?;
                         return Err((
                             format!("frame processor `{plugin_name}` bypassed in strict mode"),
-                            decoder_frame,
+                            Box::new(decoder_frame),
                         ));
                     }
                     current_frame = NativeFrame::from(decoder_frame.clone());
@@ -1524,7 +1526,7 @@ impl IosFrameProcessorChain {
                             format!(
                                 "frame processor `{plugin_name}` rejected a frame in strict mode"
                             ),
-                            decoder_frame,
+                            Box::new(decoder_frame),
                         ));
                     }
                     current_frame = NativeFrame::from(decoder_frame.clone());
@@ -1543,7 +1545,7 @@ impl IosFrameProcessorChain {
                 Ok(output) => output,
                 Err(error) => {
                     self.release_outputs_before_error(processor_outputs, &decoder_frame)?;
-                    return Err((error, decoder_frame));
+                    return Err((error, Box::new(decoder_frame)));
                 }
             };
             let FrameProcessorReceiveOutput::Frame(output) = output else {
@@ -1555,7 +1557,7 @@ impl IosFrameProcessorChain {
                         format!(
                             "frame processor `{plugin_name}` did not return a ready frame in strict mode"
                         ),
-                        decoder_frame,
+                        Box::new(decoder_frame),
                     ));
                 }
                 current_frame = NativeFrame::from(decoder_frame.clone());
@@ -1608,7 +1610,7 @@ impl IosFrameProcessorChain {
         &mut self,
         mut outputs: Vec<ProcessorOwnedNativeFrame>,
         decoder_frame: &DecoderNativeFrame,
-    ) -> Result<(), (String, DecoderNativeFrame)> {
+    ) -> Result<(), IosPipelineFrameError> {
         match self.release_processor_outputs(&mut outputs) {
             Ok(()) => Ok(()),
             Err(error) => {
@@ -1617,10 +1619,10 @@ impl IosFrameProcessorChain {
                         format!(
                             "{error}; additionally failed to retain processor outputs for cleanup: {retain_error}"
                         ),
-                        decoder_frame.clone(),
+                        Box::new(decoder_frame.clone()),
                     ));
                 }
-                Err((error, decoder_frame.clone()))
+                Err((error, Box::new(decoder_frame.clone())))
             }
         }
     }

@@ -1,4 +1,8 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
+#![allow(
+    clippy::result_large_err,
+    reason = "JNI entrypoints translate the shared player-runtime error contract at one boundary; boxing individual closure results would fragment that mapping"
+)]
 
 mod download_jni;
 mod handles;
@@ -1543,13 +1547,13 @@ fn subtitle_command_error_json(selection: &MediaTrackSelection, error: &PlayerEr
         "domain".to_owned(),
         serde_json::Value::String("subtitle".to_owned()),
     );
-    if !payload.contains_key("trackId") {
-        if let Some(track_id) = selection.track_id.as_ref() {
-            payload.insert(
-                "trackId".to_owned(),
-                serde_json::Value::String(track_id.clone()),
-            );
-        }
+    if !payload.contains_key("trackId")
+        && let Some(track_id) = selection.track_id.as_ref()
+    {
+        payload.insert(
+            "trackId".to_owned(),
+            serde_json::Value::String(track_id.clone()),
+        );
     }
     serde_json::Value::Object(payload).to_string()
 }

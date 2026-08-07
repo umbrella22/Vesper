@@ -96,10 +96,16 @@ mod tests {
         // access Rust synchronization state after fork.
         let fork = unsafe { forkpty(None, None) }.expect("fork PTY controller");
         let (controller, master) = match fork {
-            ForkptyResult::Child => unsafe {
-                libc::execv(env_program.as_ptr(), argv.as_ptr());
-                libc::_exit(127);
-            },
+            ForkptyResult::Child => {
+                // SAFETY: every pointer in argv refers to a live, NUL-terminated
+                // CString created before fork, and argv itself has a trailing null.
+                // execv and _exit are async-signal-safe; _exit runs only when execv
+                // fails and terminates the child without unwinding Rust state.
+                unsafe {
+                    libc::execv(env_program.as_ptr(), argv.as_ptr());
+                    libc::_exit(127);
+                }
+            }
             ForkptyResult::Parent { child, master } => (child, master),
         };
         let output_reader = std::thread::spawn(move || {

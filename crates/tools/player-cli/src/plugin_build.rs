@@ -386,10 +386,7 @@ where
 {
     let mut candidates = Vec::new();
     let mut seen = HashSet::new();
-    loop {
-        let Some(line) = read_bounded_line(&mut reader, MAX_CARGO_JSON_LINE_BYTES)? else {
-            break;
-        };
+    while let Some(line) = read_bounded_line(&mut reader, MAX_CARGO_JSON_LINE_BYTES)? {
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }

@@ -405,15 +405,12 @@ fn parse_byte_range(value: &str) -> DashHlsResult<ByteRange> {
 
 fn parse_iso8601_duration_ms(value: &str) -> Option<u64> {
     let mut rest = value.strip_prefix('P')?;
-    if let Some(date_time_split) = rest.find('T') {
-        let date = &rest[..date_time_split];
-        if !date.is_empty() {
-            return None;
-        }
-        rest = &rest[date_time_split + 1..];
-    } else {
+    let date_time_split = rest.find('T')?;
+    let date = &rest[..date_time_split];
+    if !date.is_empty() {
         return None;
     }
+    rest = &rest[date_time_split + 1..];
 
     let mut number = String::new();
     let mut seconds = 0.0_f64;

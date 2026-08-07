@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+#![allow(
+    clippy::result_large_err,
+    reason = "native-frame pipeline errors preserve public frame ownership state and are not boxed"
+)]
 
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
@@ -209,6 +213,10 @@ impl NativeFrameProcessorChainCore {
         }
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the frame recovery boundary keeps output, pressure, decoder ownership, process state, and observer explicit"
+    )]
     fn handle_over_budget_output(
         &mut self,
         node_index: usize,
@@ -479,20 +487,18 @@ impl NativeFrameProcessorChainCore {
         let node_snapshot = self.node_snapshot(node_index);
         let timing = self.record_output_timing(node_index, &state.current_frame, &output);
         observer.observe_timing(timing.deadline_missed, timing.should_drop_output);
-        if timing.should_drop_output || timing.should_fail_playback {
-            if output_frame_requires_processor_release(&output.frame)
-                && let Err(error) = self.release_processor_outputs_best_effort(vec![
-                    NativeFrameProcessorOwnedFrame {
-                        processor_index: node_snapshot.processor_index,
-                        frame: output.frame.clone(),
-                    },
-                ])
-            {
-                return Err(NativeFrameProcessorProcessError {
-                    error: error.error,
-                    decoder_frame: decoder_frame.clone(),
-                });
-            }
+        if (timing.should_drop_output || timing.should_fail_playback)
+            && output_frame_requires_processor_release(&output.frame)
+            && let Err(error) =
+                self.release_processor_outputs_best_effort(vec![NativeFrameProcessorOwnedFrame {
+                    processor_index: node_snapshot.processor_index,
+                    frame: output.frame.clone(),
+                }])
+        {
+            return Err(NativeFrameProcessorProcessError {
+                error: error.error,
+                decoder_frame: decoder_frame.clone(),
+            });
         }
         if timing.should_fail_playback && self.mode == FrameProcessorMode::RequireProcessed {
             let _ = self.release_processor_outputs_best_effort(std::mem::take(
@@ -1464,9 +1470,8 @@ impl NativeFrameDecoderAdapter for ProtectedNativeFrameDecoderAdapter {
         self.ensure_enabled("sendDecoderPacket")?;
         self.inner
             .send_packet(packet, data)
-            .map(|result| {
+            .inspect(|_| {
                 self.breaker.record_success();
-                result
             })
             .map_err(|error| self.record_failure(error))
     }

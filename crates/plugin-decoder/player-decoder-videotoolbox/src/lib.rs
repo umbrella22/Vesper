@@ -1253,7 +1253,7 @@ mod platform {
     ) -> Option<NativeFrameColorMetadata> {
         if matches!(format, DecoderFrameFormat::P010) {
             color
-                .get_or_insert_with(|| NativeFrameColorMetadata {
+                .get_or_insert(NativeFrameColorMetadata {
                     primaries: None,
                     transfer: None,
                     matrix: None,

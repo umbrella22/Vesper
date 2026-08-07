@@ -315,9 +315,11 @@ struct ExportContext {
     interface: Arc<dyn ExportInterface>,
     instance_id: Box<[u8]>,
     poisoned: AtomicBool,
-    packet_buffers: Mutex<HashMap<(VesperSessionId, VesperLeaseId), Box<[u8]>>>,
+    packet_buffers: Mutex<PacketBuffers>,
     table: RawTable,
 }
+
+type PacketBuffers = HashMap<(VesperSessionId, VesperLeaseId), Box<[u8]>>;
 
 // SAFETY: `table` is immutable after construction, the interface is `Send +
 // Sync`, and poisoning uses an atomic flag. Raw context pointers only point
@@ -329,6 +331,9 @@ unsafe impl Sync for ExportContext {}
 struct ExportOwner {
     plugin_id: Box<[u8]>,
     plugin_name: Box<[u8]>,
+    // Each context is boxed so its address remains stable after `contexts`
+    // grows; ABI tables store raw pointers back to these allocations.
+    #[allow(clippy::vec_box)]
     contexts: Vec<Box<ExportContext>>,
     root: VesperPluginRoot,
 }
@@ -1251,10 +1256,10 @@ unsafe fn prepare_out<'a, T: Default>(out: *mut T) -> Result<&'a mut T, VesperSt
     Ok(unsafe { &mut *out })
 }
 
-unsafe fn input_slice<'a>(
+unsafe fn input_slice(
     bytes: VesperByteSlice,
-    _scope: &'a ExportCallScope,
-) -> Result<&'a [u8], VesperStatus> {
+    _scope: &ExportCallScope,
+) -> Result<&[u8], VesperStatus> {
     let len = usize::try_from(bytes.len).map_err(|_| status::INVALID_ARGUMENT)?;
     if len == 0 {
         return Ok(&[]);
@@ -1558,14 +1563,14 @@ mod tests {
         // SAFETY: export_plugin returned a live root owner.
         let root = unsafe { root_ptr.read() };
         let mut descriptor = VesperInterfaceDescriptor::default();
-        // SAFETY: root callbacks and host output follow the generated contract.
         assert_eq!(
+            // SAFETY: root callbacks and host output follow the generated contract.
             unsafe { root.interface_at.expect("interface_at")(root.owner, 0, &mut descriptor) },
             status::OK
         );
         let mut table = std::ptr::null();
-        // SAFETY: descriptor bytes remain root-owned for this call.
         assert_eq!(
+            // SAFETY: descriptor bytes remain root-owned for this call.
             unsafe {
                 root.query_interface.expect("query")(
                     root.owner,
@@ -1583,8 +1588,8 @@ mod tests {
         let hook = unsafe { table.cast::<VesperPipelineEventHook>().read() };
         let input = b"{\"event\":\"ready\"}";
         let mut out = VesperJsonOut::default();
-        // SAFETY: all callback pointers and borrowed inputs are valid here.
         assert_eq!(
+            // SAFETY: all callback pointers and borrowed inputs are valid here.
             unsafe {
                 hook.on_event_json.expect("on_event")(
                     hook.header.context,
@@ -1634,8 +1639,8 @@ mod tests {
             },
             canary: 0xfeed_beef_dead_cafe,
         };
-        // SAFETY: output prefix is readable but intentionally undersized.
         assert_eq!(
+            // SAFETY: output prefix is readable but intentionally undersized.
             unsafe {
                 hook.on_event_json.expect("on_event")(
                     hook.header.context,
@@ -1666,8 +1671,8 @@ mod tests {
         let root = unsafe { root_ptr.read() };
         let mut table = std::ptr::null();
         let instance = byte_slice(b"dev.vesper.fixture.packet");
-        // SAFETY: root query inputs and output are valid for this call.
         assert_eq!(
+            // SAFETY: root query inputs and output are valid for this call.
             unsafe {
                 root.query_interface.expect("query")(
                     root.owner,
@@ -1683,8 +1688,8 @@ mod tests {
         // SAFETY: fixed interface id identifies the packet table.
         let table = unsafe { table.cast::<VesperSourceNormalizerPacket>().read() };
         let mut open = VesperOpenSessionOut::default();
-        // SAFETY: table callback and host output are valid.
         assert_eq!(
+            // SAFETY: table callback and host output are valid.
             unsafe {
                 table.open_session_json.expect("open")(
                     table.header.context,
@@ -1695,8 +1700,8 @@ mod tests {
             status::OK
         );
         let mut packet = VesperPacketOut::default();
-        // SAFETY: table callback and host output are valid.
         assert_eq!(
+            // SAFETY: table callback and host output are valid.
             unsafe {
                 table.read_packet.expect("read")(table.header.context, open.session_id, &mut packet)
             },
@@ -1708,8 +1713,8 @@ mod tests {
         assert_eq!(packet_bytes, b"owned packet bytes");
 
         let mut release = VesperJsonOut::default();
-        // SAFETY: wrong-session values are deliberately passed to the checked trampoline.
         assert_eq!(
+            // SAFETY: wrong-session values are deliberately passed to the checked trampoline.
             unsafe {
                 table.release_packet.expect("release")(
                     table.header.context,
@@ -1723,8 +1728,8 @@ mod tests {
         assert_eq!(interface.releases.load(Ordering::Relaxed), 0);
 
         let mut seek = VesperJsonOut::default();
-        // SAFETY: fixture intentionally panics inside this valid callback.
         assert_eq!(
+            // SAFETY: fixture intentionally panics inside this valid callback.
             unsafe {
                 table.seek_session_json.expect("seek")(
                     table.header.context,
@@ -1735,8 +1740,8 @@ mod tests {
             },
             status::PANIC
         );
-        // SAFETY: seek invalidates the ABI lease even when the implementation panics.
         assert_eq!(
+            // SAFETY: seek invalidates the ABI lease even when the implementation panics.
             unsafe {
                 table.release_packet.expect("release")(
                     table.header.context,
@@ -1750,8 +1755,8 @@ mod tests {
         assert_eq!(interface.releases.load(Ordering::Relaxed), 0);
 
         let mut close = VesperJsonOut::default();
-        // SAFETY: close is a cleanup operation and the session is still live.
         assert_eq!(
+            // SAFETY: close is a cleanup operation and the session is still live.
             unsafe {
                 table.close_session.expect("close")(
                     table.header.context,
@@ -1780,8 +1785,8 @@ mod tests {
         // SAFETY: export_plugin returned a live root owner.
         let root = unsafe { root_ptr.read() };
         let mut table = std::ptr::null();
-        // SAFETY: root query inputs and output are valid for this call.
         assert_eq!(
+            // SAFETY: root query inputs and output are valid for this call.
             unsafe {
                 root.query_interface.expect("query")(
                     root.owner,
@@ -1797,8 +1802,8 @@ mod tests {
         // SAFETY: fixed interface id identifies the packet table.
         let table = unsafe { table.cast::<VesperSourceNormalizerPacket>().read() };
         let mut open = VesperOpenSessionOut::default();
-        // SAFETY: table callback and host output are valid.
         assert_eq!(
+            // SAFETY: table callback and host output are valid.
             unsafe {
                 table.open_session_json.expect("open")(
                     table.header.context,
@@ -1811,8 +1816,8 @@ mod tests {
 
         for _ in 0..=VESPER_MAX_LEASES_PER_SESSION {
             let mut packet = VesperPacketOut::default();
-            // SAFETY: the previous seek invalidated the prior packet lease.
             assert_eq!(
+                // SAFETY: the previous seek invalidated the prior packet lease.
                 unsafe {
                     table.read_packet.expect("read")(
                         table.header.context,
@@ -1827,8 +1832,8 @@ mod tests {
             let _ = unsafe { packet.metadata.into_vec() };
 
             let mut seek = VesperJsonOut::default();
-            // SAFETY: seek input and output satisfy the callback contract.
             assert_eq!(
+                // SAFETY: seek input and output satisfy the callback contract.
                 unsafe {
                     table.seek_session_json.expect("seek")(
                         table.header.context,
@@ -1844,8 +1849,8 @@ mod tests {
         }
 
         let mut close = VesperJsonOut::default();
-        // SAFETY: close is called once for the live session.
         assert_eq!(
+            // SAFETY: close is called once for the live session.
             unsafe {
                 table.close_session.expect("close")(
                     table.header.context,
@@ -1856,9 +1861,11 @@ mod tests {
             status::OK
         );
         assert!(interface.closed.load(Ordering::Acquire));
-        // SAFETY: outputs and owner allocations are consumed exactly once.
+        // SAFETY: `open.payload` is generated-owner allocated and consumed exactly once.
         let _ = unsafe { open.payload.into_vec() };
+        // SAFETY: `close.payload` is generated-owner allocated and consumed exactly once.
         let _ = unsafe { close.payload.into_vec() };
+        // SAFETY: the root owner remains live and is destroyed exactly once.
         unsafe { root.destroy_owner.expect("destroy")(root.owner) };
     }
 
@@ -1876,8 +1883,8 @@ mod tests {
         // SAFETY: export_plugin returned a live root owner.
         let root = unsafe { root_ptr.read() };
         let mut table = std::ptr::null();
-        // SAFETY: root query inputs and output are valid for this call.
         assert_eq!(
+            // SAFETY: root query inputs and output are valid for this call.
             unsafe {
                 root.query_interface.expect("query")(
                     root.owner,
@@ -1893,8 +1900,8 @@ mod tests {
         // SAFETY: fixed interface id identifies the packet table.
         let table = unsafe { table.cast::<VesperSourceNormalizerPacket>().read() };
         let mut open = VesperOpenSessionOut::default();
-        // SAFETY: table callback and host output are valid for this call.
         assert_eq!(
+            // SAFETY: table callback and host output are valid for this call.
             unsafe {
                 table.open_session_json.expect("open")(
                     table.header.context,
@@ -1906,8 +1913,8 @@ mod tests {
         );
 
         let mut packet = VesperPacketOut::default();
-        // SAFETY: session and host output are valid.
         assert_eq!(
+            // SAFETY: session and host output are valid.
             unsafe {
                 table.read_packet.expect("read")(table.header.context, open.session_id, &mut packet)
             },
@@ -1917,8 +1924,8 @@ mod tests {
         let _ = unsafe { packet.metadata.into_vec() };
 
         let mut malformed_seek = VesperJsonOut::default();
-        // SAFETY: malformed JSON bytes remain readable for this call.
         assert_eq!(
+            // SAFETY: malformed JSON bytes remain readable for this call.
             unsafe {
                 table.seek_session_json.expect("seek")(
                     table.header.context,
@@ -1930,8 +1937,8 @@ mod tests {
             status::INVALID_ARGUMENT
         );
         let mut release = VesperJsonOut::default();
-        // SAFETY: rejected seek did not change author lease state, so release remains valid.
         assert_eq!(
+            // SAFETY: rejected seek did not change author lease state, so release remains valid.
             unsafe {
                 table.release_packet.expect("release")(
                     table.header.context,
@@ -1943,13 +1950,14 @@ mod tests {
             status::OK
         );
         assert_eq!(interface.releases.load(Ordering::Relaxed), 1);
-        // SAFETY: generated outputs are consumed exactly once.
+        // SAFETY: `malformed_seek.payload` is generated-owner allocated and consumed exactly once.
         let _ = unsafe { malformed_seek.payload.into_vec() };
+        // SAFETY: `release.payload` is generated-owner allocated and consumed exactly once.
         let _ = unsafe { release.payload.into_vec() };
 
         let mut next_packet = VesperPacketOut::default();
-        // SAFETY: the prior lease was released and the session remains live.
         assert_eq!(
+            // SAFETY: the prior lease was released and the session remains live.
             unsafe {
                 table.read_packet.expect("read")(
                     table.header.context,
@@ -1962,10 +1970,12 @@ mod tests {
         // SAFETY: metadata is generated-owner allocated and consumed once.
         let _ = unsafe { next_packet.metadata.into_vec() };
 
-        let mut undersized_seek = VesperJsonOut::default();
-        undersized_seek.struct_size = 0;
-        // SAFETY: the deliberately undersized output exposes only its size word.
+        let mut undersized_seek = VesperJsonOut {
+            struct_size: 0,
+            ..VesperJsonOut::default()
+        };
         assert_eq!(
+            // SAFETY: the deliberately undersized output exposes only its size word.
             unsafe {
                 table.seek_session_json.expect("seek")(
                     table.header.context,
@@ -1977,8 +1987,8 @@ mod tests {
             status::ABI_VIOLATION
         );
         let mut next_release = VesperJsonOut::default();
-        // SAFETY: the rejected output prevented the interface call, so release remains valid.
         assert_eq!(
+            // SAFETY: the rejected output prevented the interface call, so release remains valid.
             unsafe {
                 table.release_packet.expect("release")(
                     table.header.context,
@@ -1992,8 +2002,8 @@ mod tests {
         assert_eq!(interface.releases.load(Ordering::Relaxed), 2);
 
         let mut close = VesperJsonOut::default();
-        // SAFETY: close is called once for the live session.
         assert_eq!(
+            // SAFETY: close is called once for the live session.
             unsafe {
                 table.close_session.expect("close")(
                     table.header.context,
@@ -2004,10 +2014,13 @@ mod tests {
             status::OK
         );
         assert!(interface.closed.load(Ordering::Acquire));
-        // SAFETY: generated outputs and owner are consumed exactly once.
+        // SAFETY: `open.payload` is generated-owner allocated and consumed exactly once.
         let _ = unsafe { open.payload.into_vec() };
+        // SAFETY: `next_release.payload` is generated-owner allocated and consumed exactly once.
         let _ = unsafe { next_release.payload.into_vec() };
+        // SAFETY: `close.payload` is generated-owner allocated and consumed exactly once.
         let _ = unsafe { close.payload.into_vec() };
+        // SAFETY: the root owner remains live and is destroyed exactly once.
         unsafe { root.destroy_owner.expect("destroy")(root.owner) };
     }
 
@@ -2017,8 +2030,8 @@ mod tests {
         // SAFETY: export_plugin returned a live root owner.
         let root = unsafe { root_ptr.read() };
         let mut table = std::ptr::null();
-        // SAFETY: root query inputs and output are valid for this call.
         assert_eq!(
+            // SAFETY: root query inputs and output are valid for this call.
             unsafe {
                 root.query_interface.expect("query")(
                     root.owner,
@@ -2034,8 +2047,8 @@ mod tests {
         // SAFETY: fixed interface id identifies the frame processor table.
         let table = unsafe { table.cast::<VesperFrameProcessor>().read() };
         let mut open = VesperOpenSessionOut::default();
-        // SAFETY: callback contract is satisfied.
         assert_eq!(
+            // SAFETY: callback contract is satisfied.
             unsafe {
                 table.open_session_json.expect("open")(
                     table.header.context,
@@ -2046,8 +2059,8 @@ mod tests {
             status::OK
         );
         let mut frame = VesperNativeFrameOut::default();
-        // SAFETY: callback contract is satisfied; the fixture returns an invalid lease shape.
         assert_eq!(
+            // SAFETY: callback contract is satisfied; the fixture returns an invalid lease shape.
             unsafe {
                 table.receive_frame.expect("receive")(
                     table.header.context,
@@ -2058,8 +2071,8 @@ mod tests {
             status::ABI_VIOLATION
         );
         let mut close = VesperJsonOut::default();
-        // SAFETY: cleanup remains valid after the contract violation poisoned the interface.
         assert_eq!(
+            // SAFETY: cleanup remains valid after the contract violation poisoned the interface.
             unsafe {
                 table.close_session.expect("close")(
                     table.header.context,
@@ -2090,8 +2103,8 @@ mod tests {
         // SAFETY: export_plugin returned a live root owner.
         let root = unsafe { root_ptr.read() };
         let mut table = std::ptr::dangling();
-        // SAFETY: root query inputs and output are valid for this call.
         assert_eq!(
+            // SAFETY: root query inputs and output are valid for this call.
             unsafe {
                 root.query_interface.expect("query")(
                     root.owner,

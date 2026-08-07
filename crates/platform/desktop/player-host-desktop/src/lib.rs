@@ -1,3 +1,8 @@
+#![allow(
+    clippy::result_large_err,
+    reason = "desktop preload helpers preserve the shared player-runtime error contract instead of introducing a host-only boxed error"
+)]
+
 //! Desktop host launch, preload, and download helpers.
 //!
 //! This crate is an internal host-facing bridge over the platform runtime

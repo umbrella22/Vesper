@@ -10,9 +10,10 @@ use serde::Deserialize;
 use crate::{SourceNormalizerError, SourceNormalizerResult};
 
 /// Normalization work level supported by a source normalizer profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 pub enum NormalizeLevel {
     /// Remux/copy normalization with optional bitstream filters.
+    #[default]
     #[serde(alias = "remux_only", alias = "RemuxOnly")]
     RemuxOnly = 1,
     /// Experimental packet repair level reserved for future work.
@@ -24,26 +25,15 @@ pub enum NormalizeLevel {
     PacketRepair = 2,
 }
 
-impl Default for NormalizeLevel {
-    fn default() -> Self {
-        Self::RemuxOnly
-    }
-}
-
 /// Standard media output containers supported by the MVP.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SourceNormalizerOutputContainer {
+    #[default]
     Fmp4,
     Hls,
     ResourceUrl,
     LocalStreamEndpoint,
-}
-
-impl Default for SourceNormalizerOutputContainer {
-    fn default() -> Self {
-        Self::Fmp4
-    }
 }
 
 /// Match rules used to select a source normalizer runtime profile.

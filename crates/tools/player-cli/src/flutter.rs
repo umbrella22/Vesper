@@ -807,7 +807,7 @@ fn collect_flutter_stage_tree(
 
 fn flutter_stage_path_is_excluded(relative: &Path, profile: StageCopyProfile) -> bool {
     let file_name = relative.file_name().unwrap_or_else(|| OsStr::new(""));
-    let excluded_directory = match profile {
+    match profile {
         StageCopyProfile::FlutterPackage => {
             matches_os_str(
                 file_name,
@@ -832,8 +832,7 @@ fn flutter_stage_path_is_excluded(relative: &Path, profile: StageCopyProfile) ->
                 )
         }
         StageCopyProfile::OptionalIosPackage => matches_os_str(file_name, &[".build", ".swiftpm"]),
-    };
-    excluded_directory
+    }
 }
 
 fn flutter_stage_path_is_generated_artifact(relative: &Path, is_directory: bool) -> bool {
@@ -1557,7 +1556,7 @@ fn promote_flutter_stage(
 fn promote_flutter_stage_with_hook(
     staging: tempfile::TempDir,
     target: &FlutterStageTarget,
-    mut after_backup: Option<&mut dyn FnMut(&Path) -> io::Result<()>>,
+    mut after_backup: Option<crate::PathIoHook<'_>>,
 ) -> Result<(), FlutterError> {
     target.revalidate_parent()?;
     let existing = target.revalidate_initial_target()?;

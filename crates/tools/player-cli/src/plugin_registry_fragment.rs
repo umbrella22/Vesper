@@ -1,3 +1,8 @@
+#![allow(
+    clippy::result_large_err,
+    reason = "the public fragment error preserves the loader registry error as its source"
+)]
+
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -258,7 +263,7 @@ fn sha256_file(path: &Path) -> Result<String, EmbeddedRegistryFragmentError> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 #[cfg(test)]
@@ -337,7 +342,7 @@ stability = "stable"
         );
         assert_eq!(
             value["artifacts"][0]["integrity"]["digest"],
-            format!("{:x}", Sha256::digest(b"fixture artifact bytes"))
+            hex::encode(Sha256::digest(b"fixture artifact bytes"))
         );
         let _ = fs::remove_file(artifact_path);
     }

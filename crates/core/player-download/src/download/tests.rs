@@ -1608,7 +1608,6 @@ fn manager_fails_multi_stream_completion_when_assembly_processor_skips() {
         post_processors: vec![built_in_processor(Arc::new(SkippingAssemblyProcessor))],
         event_hooks: vec![hook_registration(hook.clone())],
         pipeline_event_platform: "test".to_owned(),
-        ..DownloadManagerConfig::default()
     };
     let store = InMemoryDownloadStore::default();
     let executor = InMemoryDownloadExecutor::default();

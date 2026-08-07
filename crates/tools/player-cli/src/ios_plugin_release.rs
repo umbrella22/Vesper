@@ -125,7 +125,6 @@ mod implementation {
         CanonicalPluginDescriptor, EmbeddedRegistryFragment, EmbeddedRegistryTarget,
         PluginProjectManifest,
     };
-    use rand_core::{OsRng, RngCore};
     use serde::{Deserialize, Serialize};
     use sha2::{Digest, Sha256};
     use zip::ZipArchive;
@@ -1523,7 +1522,11 @@ mod implementation {
     ) -> Result<PreparedOwnersGuard, IosError> {
         let canonical_root = canonical_directory(root, "iOS plugin release repository")?;
         let mut transaction_id = [0_u8; 16];
-        OsRng.fill_bytes(&mut transaction_id);
+        getrandom::fill(&mut transaction_id).map_err(|error| {
+            IosError::storage(format!(
+                "failed to obtain system randomness for iOS plugin release transaction: {error}"
+            ))
+        })?;
         let suffix = encode_transaction_id(transaction_id);
         let build_owner = build_parent.join(format!(".vesper-ios-plugin-release-{suffix}"));
         let asset_owner = output_directory.join(format!(".vesper-ios-plugin-assets-{suffix}"));
@@ -1764,7 +1767,7 @@ mod implementation {
                         "failed to move staged iOS FFmpeg runtime into its promotion owner: {error}"
                     ))
                 })?;
-                sync_directory(&prepared.work_path())?;
+                sync_directory(prepared.work_path())?;
                 runtime_promotion_source = Some(promotion_source);
                 prepared.assets_path().to_path_buf()
             } else {
@@ -1983,6 +1986,10 @@ mod implementation {
         .map_err(map_ffmpeg_error)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "runtime staging coordinates independent release inputs and keeps cancellation and diagnostics explicit"
+    )]
     fn stage_runtime(
         request: &ReleaseRequest,
         ffmpeg: &ReleaseFfmpeg,
@@ -2276,8 +2283,10 @@ mod implementation {
                     digest_domain: b"vesper-ios-plugin-ffmpeg-build-content-v1\0",
                 },
             )?;
-            let input_fingerprint =
-                format!("{:x}-{content_fingerprint}", Sha256::digest(&metadata));
+            let input_fingerprint = format!(
+                "{}-{content_fingerprint}",
+                hex::encode(Sha256::digest(&metadata))
+            );
             snapshot_slices.insert(
                 *slice,
                 FfmpegSnapshotSlice {
@@ -2769,7 +2778,7 @@ mod implementation {
                 source.display()
             ))
         })?;
-        let copied_digest = format!("{:x}", digest.finalize());
+        let copied_digest = hex::encode(digest.finalize());
         if !final_metadata.file_type().is_file()
             || metadata_identity(&final_metadata) != identity
             || final_metadata.len() != initial.len()
@@ -3094,7 +3103,7 @@ mod implementation {
                 "iOS runtime archive entry '{name}' payload size does not match its record"
             )));
         }
-        Ok(format!("{:x}", digest.finalize()))
+        Ok(hex::encode(digest.finalize()))
     }
 
     fn parse_single_record<'a>(bytes: &'a [u8], label: &str) -> Result<&'a str, IosError> {
@@ -4070,6 +4079,10 @@ mod implementation {
         Ok(())
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "XCFramework validation keeps the artifact, descriptor, toolchain, diagnostics, and cancellation inputs explicit"
+    )]
     fn validate_xcframework(
         plugin_id: IosPluginId,
         plugin_descriptor: &CanonicalPluginDescriptor,
@@ -5504,7 +5517,7 @@ mod implementation {
     fn stat_identity(stat: &rustix::fs::Stat) -> FileIdentity {
         FileIdentity {
             device: stat.st_dev as u64,
-            inode: stat.st_ino as u64,
+            inode: stat.st_ino,
         }
     }
 
@@ -5829,7 +5842,7 @@ mod implementation {
                 removal.display()
             ))
         })?;
-        if PathBuf::from(OsString::from_vec(opened_path.into_bytes())) != removal {
+        if OsString::from_vec(opened_path.into_bytes()).as_os_str() != removal.as_os_str() {
             return Err(IosError::storage(format!(
                 "opened quarantined {description} is no longer named '{}'",
                 removal.display()
@@ -5854,6 +5867,7 @@ mod implementation {
                 removal.display()
             ))
         })?;
+        let opened_path = OsString::from_vec(opened_path.into_bytes());
         let named = statat(&parent_fd, name, AtFlags::SYMLINK_NOFOLLOW).map_err(|error| {
             IosError::storage(format!(
                 "failed to re-inspect quarantined {description} '{}': {error}",
@@ -5862,7 +5876,7 @@ mod implementation {
         })?;
         if FileType::from_raw_mode(opened.st_mode as RawMode) != FileType::RegularFile
             || stat_identity(&opened) != expected_identity
-            || PathBuf::from(OsString::from_vec(opened_path.into_bytes())) != removal
+            || opened_path.as_os_str() != removal.as_os_str()
             || FileType::from_raw_mode(named.st_mode as RawMode) != FileType::RegularFile
             || stat_identity(&named) != expected_identity
         {
@@ -6853,7 +6867,7 @@ mod implementation {
         Ok(PromotionNodeSnapshot {
             identity,
             payload_bytes: metadata.len(),
-            snapshot_sha256: format!("{:x}", digest.finalize()),
+            snapshot_sha256: hex::encode(digest.finalize()),
         })
     }
 
@@ -7134,7 +7148,7 @@ mod implementation {
         Ok(BoundedDirectoryDigest {
             identity,
             payload_bytes: total_bytes,
-            sha256: format!("{:x}", digest.finalize()),
+            sha256: hex::encode(digest.finalize()),
         })
     }
 
@@ -7724,16 +7738,27 @@ mod implementation {
             ))
         })?;
         let mut hasher = Sha256::new();
-        let copied =
-            io::copy(&mut (&mut file).take(maximum + 1), &mut hasher).map_err(|error| {
+        let mut input = (&mut file).take(maximum.saturating_add(1));
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut copied = 0_u64;
+        loop {
+            let read = input.read(&mut buffer).map_err(|error| {
                 IosError::storage(format!("failed to hash '{}': {error}", path.display()))
             })?;
+            if read == 0 {
+                break;
+            }
+            copied += u64::try_from(read).map_err(|_| {
+                IosError::storage("iOS plugin checksum read size cannot be represented")
+            })?;
+            hasher.update(&buffer[..read]);
+        }
         if copied > maximum {
             return Err(IosError::conformance(
                 "iOS plugin checksum input grew during hashing",
             ));
         }
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(hex::encode(hasher.finalize()))
     }
 
     fn read_directory_names(
@@ -8114,8 +8139,8 @@ mod implementation {
                     )
                     .expect("write fixture FFmpeg library");
                     checksums.push_str(&format!(
-                        "{library}_sha256={:x}\n",
-                        Sha256::digest(payload.as_bytes())
+                        "{library}_sha256={}\n",
+                        hex::encode(Sha256::digest(payload.as_bytes()))
                     ));
                 }
                 fs::write(root.join("vesper-ffmpeg-library-sha256.txt"), checksums)

@@ -230,20 +230,20 @@ impl SourceNormalizerPacketSessionRequirements {
         {
             missing.push(format!("runtime profile {}", self.runtime_profile));
         }
-        if let Some(media_kind) = self.media_kind {
-            if !capabilities.supports_media_kind(media_kind) {
-                missing.push(format!("packet media kind {media_kind:?}"));
-            }
+        if let Some(media_kind) = self.media_kind
+            && !capabilities.supports_media_kind(media_kind)
+        {
+            missing.push(format!("packet media kind {media_kind:?}"));
         }
-        if let Some(codec) = &self.codec {
-            if !capabilities.supports_codec(codec) {
-                missing.push(format!("packet codec {codec}"));
-            }
+        if let Some(codec) = &self.codec
+            && !capabilities.supports_codec(codec)
+        {
+            missing.push(format!("packet codec {codec}"));
         }
-        if let Some(format) = &self.bitstream_format {
-            if !capabilities.supports_bitstream_format(format) {
-                missing.push(format!("packet bitstream format {format:?}"));
-            }
+        if let Some(format) = &self.bitstream_format
+            && !capabilities.supports_bitstream_format(format)
+        {
+            missing.push(format!("packet bitstream format {format:?}"));
         }
         if self.require_seek && !capabilities.supports_seek {
             missing.push("packet seek support".to_owned());
@@ -399,7 +399,7 @@ pub struct SourceNormalizerPacketTrackInfo {
 }
 
 /// Packet-stream metadata returned after opening a source normalizer session.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SourceNormalizerPacketStreamInfo {
     #[serde(default)]
     pub session_id: Option<String>,
@@ -416,21 +416,6 @@ pub struct SourceNormalizerPacketStreamInfo {
     pub duration_millis: Option<u64>,
     #[serde(default)]
     pub seekable: bool,
-}
-
-impl Default for SourceNormalizerPacketStreamInfo {
-    fn default() -> Self {
-        Self {
-            session_id: None,
-            normalizer_name: None,
-            runtime_profile: None,
-            selected_backend: None,
-            tracks: Vec::new(),
-            selected_track_index: None,
-            duration_millis: None,
-            seekable: false,
-        }
-    }
 }
 
 /// Disk-backed resource produced by a source normalizer session.

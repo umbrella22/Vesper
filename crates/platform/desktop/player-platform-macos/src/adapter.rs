@@ -633,7 +633,7 @@ pub(crate) struct MacosRuntimeAdapterFallback {
 
 pub(crate) struct MacosSourceNormalizationOutcome {
     pub(crate) source: MediaSource,
-    pub(crate) packet_session: Option<Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>>,
+    pub(crate) packet_session: Option<SharedSourceNormalizerPacketSession>,
     pub(crate) packet_stream_info: Option<player_plugin::SourceNormalizerPacketStreamInfo>,
     pub(crate) diagnostics: Vec<PlayerPluginDiagnostic>,
     pub(crate) selected_profile: Option<String>,
@@ -662,8 +662,7 @@ pub(crate) struct MacosRuntimeAdapter {
     pub(crate) runtime_fallback: Option<MacosRuntimeActiveFallback>,
     pub(crate) pending_runtime_fallback_events: VecDeque<PlayerRuntimeEvent>,
     #[allow(dead_code)]
-    pub(crate) source_normalizer_packet_session:
-        Option<Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>>,
+    pub(crate) source_normalizer_packet_session: Option<SharedSourceNormalizerPacketSession>,
 }
 
 impl PlayerRuntimeAdapterFactory for MacosHostPlayerRuntimeAdapterFactory {

@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+#![allow(
+    clippy::result_large_err,
+    reason = "PlayerError is a shared public API; boxing mobile platform errors would change public signatures"
+)]
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
@@ -1034,9 +1038,7 @@ impl PreflightDiagnosticCache {
         key: &PreflightDiagnosticCacheKey,
         now: Instant,
     ) -> Option<PlayerPluginDiagnostic> {
-        let Some(entry) = self.entries.get(key) else {
-            return None;
-        };
+        let entry = self.entries.get(key)?;
         let age = now.saturating_duration_since(entry.inserted_at);
         if age > entry.ttl {
             self.remove(key);
@@ -1184,10 +1186,10 @@ impl PreflightDiagnosticCache {
     }
 
     fn touch(&mut self, key: &PreflightDiagnosticCacheKey) {
-        if let Some(index) = self.lru.iter().position(|candidate| candidate == key) {
-            if let Some(key) = self.lru.remove(index) {
-                self.lru.push_back(key);
-            }
+        if let Some(index) = self.lru.iter().position(|candidate| candidate == key)
+            && let Some(key) = self.lru.remove(index)
+        {
+            self.lru.push_back(key);
         }
     }
 }
@@ -1301,7 +1303,7 @@ fn resolved_mobile_plugin_library_paths(
             .map_err(|error| error.to_string())?;
     }
     let candidates = if artifacts.is_empty() {
-        unbound_paths.iter().cloned().collect::<Vec<_>>()
+        unbound_paths.to_vec()
     } else {
         artifacts
             .iter()
@@ -2247,17 +2249,17 @@ fn cached_preflight_source_normalizer(
 ) -> PlayerPluginDiagnostic {
     let key = PreflightDiagnosticCacheKey::from_source(source, configuration);
     match reserve_preflight_diagnostic_cache(&key) {
-        PreflightDiagnosticCacheReservation::Hit(diagnostic) => return diagnostic,
+        PreflightDiagnosticCacheReservation::Hit(diagnostic) => *diagnostic,
         PreflightDiagnosticCacheReservation::Owner(guard) => {
             let diagnostic = preflight_source_normalizer_with_registry(source, configuration);
             guard.finish(diagnostic.clone());
-            return diagnostic;
+            diagnostic
         }
     }
 }
 
 enum PreflightDiagnosticCacheReservation {
-    Hit(PlayerPluginDiagnostic),
+    Hit(Box<PlayerPluginDiagnostic>),
     Owner(PreflightDiagnosticInFlightGuard),
 }
 
@@ -2314,7 +2316,7 @@ fn reserve_preflight_diagnostic_cache_with_timeout(
     let wait_started = Instant::now();
     loop {
         if let Some(diagnostic) = cache.get(key, Instant::now()) {
-            return PreflightDiagnosticCacheReservation::Hit(diagnostic);
+            return PreflightDiagnosticCacheReservation::Hit(Box::new(diagnostic));
         }
         if let Some(token) = cache.begin_in_flight(key.clone()) {
             drop(cache);
@@ -2423,7 +2425,7 @@ fn cached_preflight_diagnostic_with_global(
     open: impl FnOnce() -> PlayerPluginDiagnostic,
 ) -> PlayerPluginDiagnostic {
     match reserve_preflight_diagnostic_cache(&key) {
-        PreflightDiagnosticCacheReservation::Hit(diagnostic) => diagnostic,
+        PreflightDiagnosticCacheReservation::Hit(diagnostic) => *diagnostic,
         PreflightDiagnosticCacheReservation::Owner(guard) => {
             let diagnostic = open();
             guard.finish(diagnostic.clone());

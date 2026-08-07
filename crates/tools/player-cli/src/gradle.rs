@@ -115,7 +115,7 @@ fn read_wrapper_version(
 fn read_wrapper_version_with_hook(
     containment_root: &Path,
     path: &Path,
-    mut after_validation: Option<&mut dyn FnMut(&Path) -> io::Result<()>>,
+    mut after_validation: Option<crate::PathIoHook<'_>>,
 ) -> Result<Option<String>, GradleError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,

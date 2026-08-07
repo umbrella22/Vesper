@@ -37,6 +37,8 @@ use std::time::Duration;
 
 #[test]
 fn initializer_probe_uri_rejects_null_output_pointer() {
+    // SAFETY: `uri` and `error` remain live for the call, while the null output pointer is the
+    // documented invalid input exercised by this test.
     unsafe {
         let uri = CString::new("https://example.com/master.m3u8").expect("valid uri");
         let mut error = PlayerFfiError::default();
@@ -52,6 +54,8 @@ fn initializer_probe_uri_rejects_null_output_pointer() {
 
 #[test]
 fn resolve_resilience_policy_rejects_invalid_raw_source_kind() {
+    // SAFETY: every input and output pointer refers to an initialized stack value that remains
+    // exclusively accessible for the duration of the call.
     unsafe {
         let buffering = PlayerFfiBufferingPolicy::default();
         let retry = PlayerFfiRetryPolicy::default();
@@ -80,6 +84,7 @@ fn resolve_resilience_policy_rejects_invalid_raw_source_kind() {
 fn inbound_wire_ordinals_are_validated_before_conversion() {
     let mut error = super::to_bridge_command(7, 0).expect_err("unknown command must fail");
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    // SAFETY: the bridge error owns its allocated C fields and has not been freed yet.
     unsafe { super::player_ffi_error_free(&mut error) };
 
     let buffering = PlayerFfiBufferingPolicy {
@@ -88,6 +93,7 @@ fn inbound_wire_ordinals_are_validated_before_conversion() {
     };
     let mut error = super::read_buffering_policy(&buffering).expect_err("unknown preset must fail");
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    // SAFETY: the bridge error owns its allocated C fields and has not been freed yet.
     unsafe { super::player_ffi_error_free(&mut error) };
 
     let retry = PlayerFfiRetryPolicy {
@@ -97,6 +103,7 @@ fn inbound_wire_ordinals_are_validated_before_conversion() {
     };
     let mut error = super::read_retry_policy(&retry).expect_err("unknown backoff must fail");
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    // SAFETY: the bridge error owns its allocated C fields and has not been freed yet.
     unsafe { super::player_ffi_error_free(&mut error) };
 
     let cache = PlayerFfiCachePolicy {
@@ -105,6 +112,7 @@ fn inbound_wire_ordinals_are_validated_before_conversion() {
     };
     let mut error = super::read_cache_policy(&cache).expect_err("unknown cache preset must fail");
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    // SAFETY: the bridge error owns its allocated C fields and has not been freed yet.
     unsafe { super::player_ffi_error_free(&mut error) };
 
     let selection = PlayerFfiTrackSelection {
@@ -114,6 +122,7 @@ fn inbound_wire_ordinals_are_validated_before_conversion() {
     let mut error =
         super::read_track_selection(&selection).expect_err("unknown selection mode must fail");
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    // SAFETY: the bridge error owns its allocated C fields and has not been freed yet.
     unsafe { super::player_ffi_error_free(&mut error) };
 
     let policy = PlayerFfiAbrPolicy {
@@ -122,11 +131,14 @@ fn inbound_wire_ordinals_are_validated_before_conversion() {
     };
     let mut error = super::read_abr_policy(&policy).expect_err("unknown ABR mode must fail");
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
+    // SAFETY: the bridge error owns its allocated C fields and has not been freed yet.
     unsafe { super::player_ffi_error_free(&mut error) };
 }
 
 #[test]
 fn initializer_probe_uri_rejects_null_output_without_error_pointer() {
+    // SAFETY: `uri` remains live for the call, and both null pointers deliberately exercise the
+    // FFI function's null-output handling without being dereferenced by the caller.
     unsafe {
         let uri = CString::new("https://example.com/master.m3u8").expect("valid uri");
 
@@ -139,6 +151,8 @@ fn initializer_probe_uri_rejects_null_output_without_error_pointer() {
 
 #[test]
 fn initializer_initialize_and_dispatch_accept_optional_frame_output() {
+    // SAFETY: handles come from the test registry, all non-null pointers refer to live writable
+    // values, optional outputs are intentionally null, and returned allocations are freed once.
     unsafe {
         let initializer = fake_initializer("https://example.com/master.m3u8");
         let handle = into_initializer_handle(initializer).expect("initializer handle should fit");
@@ -227,6 +241,7 @@ fn ffi_call_converts_panics_into_backend_failure() {
     assert_eq!(error.code, PlayerFfiErrorCode::BackendFailure);
     assert_eq!(error.category, super::PlayerFfiErrorCategory::Platform);
     assert!(copy_c_string(error.message).contains("ffi panic smoke"));
+    // SAFETY: `ffi_call` replaced the stale error with newly owned C allocations that are live.
     unsafe { super::player_ffi_error_free(&mut error) };
 }
 
@@ -277,6 +292,7 @@ fn ffi_subtitle_error_details_json_preserves_canonical_and_unknown_values() {
         assert_eq!(payload["commandId"].as_u64(), command_id);
         assert_eq!(payload["sourceEpoch"].as_u64(), source_epoch);
 
+        // SAFETY: `owned_bridge_error` allocated the C fields and this is their only release.
         unsafe { super::player_ffi_error_free(&mut ffi_error) };
     }
 }
@@ -296,6 +312,7 @@ fn player_ffi_error_free_resets_fields_and_allows_reuse() {
     assert!(!ffi_error.message.is_null());
     assert!(!ffi_error.details_json.is_null());
 
+    // SAFETY: `owned_bridge_error` allocated both C fields and neither has been released yet.
     unsafe { super::player_ffi_error_free(&mut ffi_error) };
 
     assert_eq!(ffi_error.code, PlayerFfiErrorCode::None);
@@ -306,15 +323,19 @@ fn player_ffi_error_free_resets_fields_and_allows_reuse() {
 
     let uri = CString::new("https://example.com/reused-error.m3u8").expect("valid uri");
     let status =
+        // SAFETY: `uri` and `ffi_error` remain live; the null output is the invalid input under
+        // test and is handled before dereference.
         unsafe { player_ffi_initializer_probe_uri(uri.as_ptr(), ptr::null_mut(), &mut ffi_error) };
     assert_eq!(status, PlayerFfiCallStatus::Error);
     assert_eq!(ffi_error.code, PlayerFfiErrorCode::NullPointer);
     assert_eq!(copy_c_string(ffi_error.message), "out_initializer was null");
+    // SAFETY: the preceding FFI call populated a new owned error that has not been released.
     unsafe { super::player_ffi_error_free(&mut ffi_error) };
 }
 
 #[test]
 fn player_ffi_error_free_accepts_null_pointer() {
+    // SAFETY: the free function explicitly accepts null and performs no dereference in that case.
     unsafe { super::player_ffi_error_free(ptr::null_mut()) };
 }
 
@@ -342,10 +363,14 @@ fn player_ffi_event_list_free_releases_nested_error_and_resets_list() {
     let (ptr, len) = super::into_owned_struct_array(vec![event]);
     let mut events = PlayerFfiEventList { ptr, len };
 
+    // SAFETY: the list owns the allocation returned by `into_owned_struct_array`, including its
+    // nested error fields, and has not been freed yet.
     unsafe { player_ffi_event_list_free(&mut events) };
 
     assert!(events.ptr.is_null());
     assert_eq!(events.len, 0);
+    // SAFETY: the first release reset the list to the documented empty representation, for which
+    // a repeated free is a no-op.
     unsafe { player_ffi_event_list_free(&mut events) };
 }
 
@@ -413,6 +438,8 @@ fn bridge_error_code_mapping_preserves_legacy_and_appended_values() {
 
 #[test]
 fn player_drain_events_preserves_order_and_is_one_shot() {
+    // SAFETY: handles are registered by this test, output pointers remain live and writable, raw
+    // event access stays within the returned length, and every owned output is freed exactly once.
     unsafe {
         let initializer = fake_initializer("https://example.com/master.m3u8");
         let handle = into_initializer_handle(initializer).expect("initializer handle should fit");
@@ -487,6 +514,8 @@ fn player_drain_events_preserves_order_and_is_one_shot() {
 
 #[test]
 fn player_drain_events_preserves_runtime_warning_payload() {
+    // SAFETY: the registered handles and writable outputs remain valid, the single returned event
+    // is read within `events.len`, and all FFI-owned values are released exactly once.
     unsafe {
         let initializer = fake_initializer("https://example.com/warning.m3u8");
         let handle = into_initializer_handle(initializer).expect("initializer handle should fit");
@@ -565,6 +594,8 @@ fn player_drain_events_preserves_runtime_warning_payload() {
 
 #[test]
 fn initializer_media_info_and_startup_round_trip_fake_runtime_payload() {
+    // SAFETY: the handle is registered by this test, all output pointers are live, and raw arrays
+    // are read only within their reported lengths before their owning values are freed.
     unsafe {
         let handle = into_initializer_handle(fake_initializer("https://example.com/video.mp4"))
             .expect("initializer handle should fit");
@@ -721,6 +752,8 @@ fn initializer_media_info_and_startup_round_trip_fake_runtime_payload() {
 
 #[test]
 fn initializer_initialize_rejects_invalid_handle() {
+    // SAFETY: the zero handle is the invalid value under test; all output pointers are initialized,
+    // live, and writable for the duration of the call.
     unsafe {
         let mut player_handle = PlayerFfiHandle::default();
         let mut has_initial_frame = false;
@@ -749,6 +782,8 @@ fn initializer_initialize_rejects_invalid_handle() {
 
 #[test]
 fn initializer_handle_becomes_invalid_after_initialize_consumes_it() {
+    // SAFETY: the initial handle comes from the registry, output pointers remain live, subsequent
+    // stale-handle calls are expected to reject before dereference, and outputs are freed once.
     unsafe {
         let handle = into_initializer_handle(fake_initializer("https://example.com/consumed.m3u8"))
             .expect("initializer handle should fit");
@@ -797,6 +832,8 @@ fn initializer_handle_becomes_invalid_after_initialize_consumes_it() {
 
 #[test]
 fn player_destroy_rejects_double_destroy_with_invalid_state() {
+    // SAFETY: the handle starts as a registered test handle, outputs remain live, and the second
+    // destroy is expected to reject the stale handle without dereferencing freed state.
     unsafe {
         let handle =
             into_initializer_handle(fake_initializer("https://example.com/double-destroy.m3u8"))
@@ -834,6 +871,8 @@ fn copy_c_string(value: *mut std::ffi::c_char) -> String {
     if value.is_null() {
         return String::new();
     }
+    // SAFETY: callers pass a live, NUL-terminated string allocated by the bridge and retain its
+    // owning FFI value until this copy completes.
     unsafe { CStr::from_ptr(value).to_string_lossy().into_owned() }
 }
 

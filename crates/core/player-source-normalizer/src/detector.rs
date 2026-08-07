@@ -19,6 +19,10 @@ pub struct RuntimeProfileCandidate {
 }
 
 /// Probe result returned by source detectors.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "boxing Candidate would break the public detector API"
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProbeResult {
     Candidate(RuntimeProfileCandidate),
@@ -133,27 +137,25 @@ fn match_profile(
         reasons.push(format!("URL pattern matched: {pattern}"));
     }
 
-    if let Some(mime) = &context.mime {
-        if !rules.mime.is_empty()
-            && rules
-                .mime
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(mime))
-        {
-            confidence += 0.35;
-            reasons.push("MIME type matched".to_owned());
-        }
+    if let Some(mime) = &context.mime
+        && !rules.mime.is_empty()
+        && rules
+            .mime
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(mime))
+    {
+        confidence += 0.35;
+        reasons.push("MIME type matched".to_owned());
     }
 
-    if let Some(header) = header {
-        if let Some(magic) = rules
+    if let Some(header) = header
+        && let Some(magic) = rules
             .byte_magic
             .iter()
             .find(|magic| byte_magic_matches(magic, header))
-        {
-            confidence += 0.45;
-            reasons.push(format!("byte magic matched: {magic}"));
-        }
+    {
+        confidence += 0.45;
+        reasons.push(format!("byte magic matched: {magic}"));
     }
 
     if confidence >= rules.min_confidence {

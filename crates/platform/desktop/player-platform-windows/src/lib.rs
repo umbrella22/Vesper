@@ -6,6 +6,10 @@
 //! is completed.
 
 #![warn(clippy::undocumented_unsafe_blocks)]
+#![allow(
+    clippy::result_large_err,
+    reason = "PlayerError is a shared public API; boxing Windows platform errors would change public signatures"
+)]
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -1000,7 +1004,7 @@ impl WindowsSoftwarePlayerRuntimeAdapterFactory {
             let fallback_diagnostics = windows_runtime_diagnostics(&media_info, &options, None);
             let fallback_source = source.clone();
             let fallback_options = options.clone();
-            let video_surface = fallback_options.video_surface.clone().ok_or_else(|| {
+            let video_surface = fallback_options.video_surface.ok_or_else(|| {
                 PlayerError::new(
                     PlayerErrorCode::InvalidArgument,
                     "windows native-frame selection requires a video surface",

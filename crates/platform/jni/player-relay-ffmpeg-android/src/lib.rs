@@ -789,7 +789,7 @@ pub unsafe extern "system" fn Java_io_github_ikaros_vesper_player_android_extern
         let mut bytes = vec![0u8; target_length];
         let stream = {
             let streams = lock_or_recover(streams());
-            let Some(stream) = streams.get(&handle) else {
+            let Some(stream) = streams.get(handle) else {
                 output = JNI_READ_INVALID_HANDLE;
                 return Ok(());
             };
@@ -823,7 +823,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
     _class: JClass<'_>,
     handle: jlong,
 ) {
-    lock_or_recover(streams()).remove(&handle);
+    lock_or_recover(streams()).remove(handle);
 }
 
 #[unsafe(no_mangle)]
@@ -1316,7 +1316,7 @@ fn remux_to_file(
         output_context.set_metadata(first_input.context.metadata().to_owned());
     }
     match kind {
-        OutputKind::MpegTs => output_context.write_header(),
+        OutputKind::MpegTs => output_context.write_header().map(|_| ()),
         OutputKind::Hls => {
             let mut options = ffmpeg::Dictionary::new();
             let segment_pattern = output_path
@@ -2577,7 +2577,7 @@ mod tests {
                 NativeStream::Bytes(Cursor::new(vec![handle as u8])),
             );
             handles.push(inserted);
-            let stream = streams.get(&inserted).expect("stream");
+            let stream = streams.get(inserted).expect("stream");
             lock_or_recover(stream).last_access =
                 Instant::now() + Duration::from_millis(u64::try_from(handle).expect("handle"));
         }
@@ -2627,7 +2627,7 @@ mod tests {
         let mut buffer = [0u8; 4];
         let stream = {
             let streams = lock_or_recover(streams());
-            streams.get(&opened.handle).expect("stream").clone()
+            streams.get(opened.handle).expect("stream").clone()
         };
         let outcome = lock_or_recover(&stream)
             .read_outcome_with_timeout(&mut buffer, Duration::from_millis(10));

@@ -1,3 +1,7 @@
+// Public command stubs remain available on every host while their release
+// implementation is compiled only on macOS.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 use std::io::Write;
 use std::path::Path;
 
@@ -1604,7 +1608,7 @@ mod implementation {
                 "{label} contains duplicate central-directory file names"
             )));
         }
-        if archive.len() == 0 || archive.len() > policy.maximum_entries {
+        if archive.is_empty() || archive.len() > policy.maximum_entries {
             return Err(IosError::conformance(format!(
                 "{label} must contain 1 to {} entries, found {}",
                 policy.maximum_entries,
@@ -3073,7 +3077,7 @@ mod implementation {
         let checksum_bytes = read_zip_entry(archive_path, checksum_path, 256)?;
         let checksum = parse_sha256_record(&checksum_bytes, checksum_path)?;
         let binary = read_zip_entry(archive_path, binary_path, MAX_ZIP_ENTRY_BYTES)?;
-        let actual = format!("{:x}", Sha256::digest(&binary));
+        let actual = hex::encode(Sha256::digest(&binary));
         if actual != checksum {
             return Err(IosError::conformance(format!(
                 "FFmpeg-backed framework binary SHA-256 mismatch:\n  binary:   {binary_path}\n  recorded: {checksum}\n  actual:   {actual}"
@@ -3973,7 +3977,7 @@ mod implementation {
                 path.display()
             ))
         })?;
-        Ok(format!("{:x}", hasher.finalize()))
+        Ok(hex::encode(hasher.finalize()))
     }
 
     #[cfg(test)]
@@ -4345,7 +4349,7 @@ mod implementation {
             let temporary = tempfile::tempdir().expect("create temporary directory");
             let valid = temporary.path().join("valid-checksum.zip");
             let payload = b"framework binary";
-            let checksum = format!("{:x}\n", Sha256::digest(payload));
+            let checksum = format!("{}\n", hex::encode(Sha256::digest(payload)));
             write_test_zip_owned(
                 &valid,
                 &[

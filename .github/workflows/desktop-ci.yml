@@ -78,7 +78,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -95,7 +95,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets ${{ env.LINUX_WORKSPACE_EXCLUDES }}
+        run: cargo clippy --workspace --all-targets ${{ env.LINUX_WORKSPACE_EXCLUDES }} -- -D warnings
 
   msrv-check:
     name: Rust MSRV Check
@@ -104,7 +104,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.97
@@ -125,7 +125,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -159,7 +159,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
@@ -177,6 +177,9 @@ jobs:
       - name: Install macOS system dependencies
         if: runner.os == 'macOS'
         run: |
+          if brew tap | grep -Fxq "aws/tap"; then
+            brew untap aws/tap
+          fi
           brew update
           brew install ffmpeg pkg-config
 
@@ -323,7 +326,7 @@ jobs:
 
       - name: Upload Vesper desktop artifact
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vesper-basic-player-${{ matrix.label }}
           path: artifacts/desktop/**

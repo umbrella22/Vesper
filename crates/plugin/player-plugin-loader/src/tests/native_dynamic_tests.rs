@@ -522,8 +522,7 @@ fn native_registry_rejects_duplicate_root_identity_and_transport_fallback() {
     let plugin_path = resolve_plugin_path("vesper_plugin_fixture")
         .unwrap_or_else(|error| panic!("failed to resolve Plugin fixture path: {error}"));
     let duplicate = PluginRegistry::load_native_development([&plugin_path, &plugin_path])
-        .err()
-        .expect("duplicate root identity");
+        .expect_err("duplicate root identity");
     assert!(matches!(
         duplicate,
         PluginRegistryBuildError::DuplicatePluginIdentity {
@@ -539,8 +538,7 @@ fn native_registry_rejects_duplicate_root_identity_and_transport_fallback() {
         .expect("valid fixture reference");
     let error = registry
         .resolve_pipeline_event_hook(&wasm)
-        .err()
-        .expect("transport fallback must be rejected");
+        .expect_err("transport fallback must be rejected");
     assert_eq!(
         error,
         PluginSelectionError::PluginNotFound {
@@ -558,8 +556,7 @@ fn native_registry_rejects_catalog_and_root_identity_mismatch() {
     let artifact = NativePluginArtifact::new("dev.vesper.other-plugin", &plugin_path)
         .expect("valid but intentionally mismatched identity");
     let error = PluginRegistry::load_native_artifacts([artifact])
-        .err()
-        .expect("catalog and Root ABI identity mismatch");
+        .expect_err("catalog and Root ABI identity mismatch");
     assert!(matches!(
         error,
         PluginRegistryBuildError::PluginIdentityMismatch {
@@ -603,7 +600,7 @@ fn embedded_registry_verifies_checksum_identity_and_root_capabilities() {
             plugin_path.display()
         )
     });
-    let checksum = format!("{:x}", Sha256::digest(&bytes));
+    let checksum = hex::encode(Sha256::digest(&bytes));
     let json = fixture_embedded_registry_json(&checksum);
     let embedded =
         EmbeddedPluginRegistry::parse(json.as_bytes(), "aarch64-linux-android", "arm64-v8a")

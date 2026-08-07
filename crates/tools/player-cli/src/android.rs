@@ -1528,14 +1528,14 @@ fn copy_android_abi_files(
                 target_abi.display()
             ))
         })?;
-        let mut entries = fs::read_dir(&source_abi).map_err(|error| {
+        let entries = fs::read_dir(&source_abi).map_err(|error| {
             AndroidError::storage(format!(
                 "failed to enumerate {label} ABI directory '{}': {error}",
                 source_abi.display()
             ))
         })?;
         let mut count = 0_usize;
-        while let Some(entry) = entries.next() {
+        for entry in entries {
             count += 1;
             if count > MAX_ANDROID_PLUGIN_OUTPUT_ENTRIES {
                 return Err(AndroidError::conformance(format!(
@@ -2087,7 +2087,7 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
             window
                 .iter()
                 .zip(needle)
-                .all(|(left, right)| left.to_ascii_lowercase() == right.to_ascii_lowercase())
+                .all(|(left, right)| left.eq_ignore_ascii_case(right))
         })
 }
 
@@ -4436,7 +4436,7 @@ fn promote_generated_directory(
 fn promote_generated_directory_with_hook(
     staging: tempfile::TempDir,
     target: &GeneratedDirectoryTarget,
-    before_exchange: Option<&mut dyn FnMut(&Path) -> io::Result<()>>,
+    before_exchange: Option<crate::PathIoHook<'_>>,
 ) -> Result<(), AndroidError> {
     let source = GeneratedDirectorySource {
         path: staging.path().to_path_buf(),
@@ -4612,7 +4612,7 @@ fn promote_staged_directories(
 fn begin_generated_directory_promotion(
     source: GeneratedDirectorySource,
     target: GeneratedDirectoryTarget,
-    mut before_exchange: Option<&mut dyn FnMut(&Path) -> io::Result<()>>,
+    mut before_exchange: Option<crate::PathIoHook<'_>>,
 ) -> Result<GeneratedDirectoryPromotion, AndroidError> {
     let source_identity = directory_identity(&source.path, "Android staging output")?;
     let had_previous = target.revalidate_target()?;

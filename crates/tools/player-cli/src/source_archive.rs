@@ -1,3 +1,7 @@
+// Deferred archive helpers are used by Apple release flows; other hosts keep
+// the shared module available for explicit compatibility diagnostics.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 use std::collections::HashSet;
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -368,7 +372,7 @@ pub(crate) fn sha256_file(
         }
         digest.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(hex::encode(digest.finalize()))
 }
 
 pub(crate) fn extract_single_root(
@@ -474,7 +478,7 @@ fn extract_tar_reader(
         let path_text = path.to_str().ok_or_else(|| {
             SourceArchiveError::conformance(format!("{label} contains a non-UTF-8 path"))
         })?;
-        if path_text.as_bytes().len() > policy.maximum_path_bytes {
+        if path_text.len() > policy.maximum_path_bytes {
             return Err(SourceArchiveError::conformance(format!(
                 "{label} path exceeds {} bytes",
                 policy.maximum_path_bytes

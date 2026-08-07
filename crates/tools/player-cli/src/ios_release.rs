@@ -1,3 +1,7 @@
+// Release commands retain non-macOS compatibility stubs while their staging
+// helpers are used only by the macOS implementation.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 use std::collections::{BTreeSet, VecDeque};
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -5,9 +9,9 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
-use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -69,11 +73,12 @@ impl ReleaseLock {
                 directory.display()
             ))
         })?;
-        let path = directory.join(format!("ios-release-{digest:x}.lock"));
+        let path = directory.join(format!("ios-release-{}.lock", hex::encode(digest)));
         let file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
+            .truncate(false)
             .open(&path)
             .map_err(|error| {
                 IosError::storage(format!(
@@ -699,6 +704,7 @@ fn stage_optional_release_bundle(
     )
 }
 
+#[cfg(target_os = "macos")]
 fn stage_optional_release_bundle_with_profile(
     root: &Path,
     output_directory: &Path,
@@ -757,6 +763,20 @@ fn stage_optional_release_bundle_with_profile(
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
+fn stage_optional_release_bundle_with_profile(
+    root: &Path,
+    output_directory: &Path,
+    package_artifacts: &Path,
+    profile: &str,
+) -> Result<(), IosError> {
+    let _ = (root, output_directory, package_artifacts, profile);
+    Err(IosError::compatibility(
+        "iOS release staging requires macOS",
+    ))
+}
+
+#[cfg(target_os = "macos")]
 fn wait_for_optional_aggregate_copy_test_gate(
     root: &Path,
     plugin_guard: &crate::ios_plugin::IosPluginBuildGuard,
@@ -1860,7 +1880,7 @@ fn directory_snapshot_with_cancellation(
     }
     Ok(DirectorySnapshot {
         identity,
-        digest: format!("{:x}", hasher.finalize()),
+        digest: hex::encode(hasher.finalize()),
     })
 }
 
@@ -3077,6 +3097,10 @@ fn finish_promotion_record_with_parent_sync(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "release promotion is a single transaction boundary with explicit identity, snapshot, journal, and cancellation inputs"
+)]
 fn promote_release_outputs(
     release_stage: tempfile::TempDir,
     output_directory: &Path,
@@ -3228,7 +3252,11 @@ fn promote_release_outputs(
             )));
         }
         let mut transaction_id = [0_u8; 16];
-        OsRng.fill_bytes(&mut transaction_id);
+        getrandom::fill(&mut transaction_id).map_err(|error| {
+            IosError::storage(format!(
+                "failed to obtain system randomness for iOS release transaction: {error}"
+            ))
+        })?;
         let mut journal = ReleasePromotionJournal {
             version: RELEASE_JOURNAL_VERSION,
             transaction_id,

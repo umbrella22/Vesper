@@ -666,6 +666,10 @@ impl DecoderReceiveNativeFrameMetadata {
 }
 
 /// Rust-side receive result returned by native decoder sessions.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "boxing Frame would break the public decoder session API"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecoderReceiveNativeFrameOutput {
     Frame(DecoderNativeFrame),

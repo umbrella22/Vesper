@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+#![allow(
+    clippy::result_large_err,
+    reason = "PlayerError is a shared public API; boxing preload errors would change public signatures"
+)]
 //! Preload planning primitives for media warmup.
 //!
 //! This crate keeps preload decisions independent from a concrete downloader or

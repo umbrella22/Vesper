@@ -1998,22 +1998,22 @@ fn write_resource_header(
             .to_string_lossy()
             .into_owned();
         options.set("hls_segment_filename", &segment_pattern);
-        if profile.output_options.get("hls_segment_type").is_none() {
+        if !profile.output_options.contains_key("hls_segment_type") {
             options.set("hls_segment_type", "fmp4");
         }
-        if profile.output_options.get("hls_time").is_none() {
+        if !profile.output_options.contains_key("hls_time") {
             options.set("hls_time", "3");
         }
-        if profile.output_options.get("hls_list_size").is_none() {
+        if !profile.output_options.contains_key("hls_list_size") {
             options.set("hls_list_size", "6");
         }
-        if profile.output_options.get("hls_flags").is_none() {
+        if !profile.output_options.contains_key("hls_flags") {
             options.set(
                 "hls_flags",
                 "delete_segments+append_list+omit_endlist+independent_segments",
             );
         }
-        if profile.output_options.get("hls_delete_threshold").is_none() {
+        if !profile.output_options.contains_key("hls_delete_threshold") {
             options.set("hls_delete_threshold", "2");
         }
     }
@@ -2370,20 +2370,20 @@ fn hdr_side_data_summary(stream: &ffmpeg::Stream<'_>) -> HdrSideDataSummary {
         match side_data.kind() {
             ffmpeg::codec::packet::side_data::Type::MasteringDisplayMetadata => {
                 summary.has_mastering_display = true;
-                summary.mastering_display.get_or_insert_with(|| {
-                    NativeFrameMasteringDisplayMetadata {
+                summary
+                    .mastering_display
+                    .get_or_insert(NativeFrameMasteringDisplayMetadata {
                         display_primaries: None,
                         white_point: None,
                         max_luminance_nits: None,
                         min_luminance_nits: None,
-                    }
-                });
+                    });
             }
             ffmpeg::codec::packet::side_data::Type::ContentLightLevel => {
                 summary.has_content_light = true;
                 summary
                     .content_light
-                    .get_or_insert_with(|| NativeFrameContentLightMetadata {
+                    .get_or_insert(NativeFrameContentLightMetadata {
                         max_content_light_level: None,
                         max_frame_average_light_level: None,
                     });

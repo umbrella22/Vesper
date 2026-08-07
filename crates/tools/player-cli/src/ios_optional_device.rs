@@ -1,3 +1,7 @@
+// The CLI parses this request on every host before the macOS compatibility
+// gate rejects unsupported execution.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 

@@ -995,8 +995,8 @@ mod implementation {
         staging: tempfile::TempDir,
         target: &OutputTarget,
         cancellation: &external_process::InterruptDeferral,
-        mut before_exchange: Option<&mut dyn FnMut(&Path) -> io::Result<()>>,
-        mut after_publish: Option<&mut dyn FnMut(&Path) -> io::Result<()>>,
+        mut before_exchange: Option<crate::PathIoHook<'_>>,
+        mut after_publish: Option<crate::PathIoHook<'_>>,
     ) -> Result<Vec<String>, IosError> {
         let source = staging.path().to_path_buf();
         let source_identity = directory_identity(&source, "staged iOS kit output")?;

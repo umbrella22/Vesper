@@ -70,6 +70,10 @@ use worker_protocol::{
 };
 use worker_supervisor::supervise_native_worker;
 
+type PathIoHook<'a> = &'a mut dyn FnMut(&Path) -> io::Result<()>;
+type PathHook<'a> = &'a mut dyn FnMut(&Path);
+type TempDirIoHook<'a> = &'a mut dyn FnMut(tempfile::TempDir) -> io::Result<()>;
+
 const MAX_PLUGIN_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_PLUGIN_KEY_FILE_BYTES: usize = 64 * 1024;
 const MAX_PLUGIN_TRUST_STORE_BYTES: usize = 1024 * 1024;
@@ -2573,10 +2577,10 @@ fn emit_json_result<T: serde::Serialize>(value: &T) -> CliResult<()> {
 
 fn emit_bytes(bytes: &[u8], output: Option<&Path>) -> CliResult<()> {
     let Some(output) = output else {
-        return Ok(io::stdout()
+        return io::stdout()
             .lock()
             .write_all(bytes)
-            .map_err(|error| CliError::manifest_or_package(error.to_string()))?);
+            .map_err(|error| CliError::manifest_or_package(error.to_string()));
     };
     let parent = output
         .parent()

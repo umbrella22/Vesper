@@ -81,7 +81,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
@@ -140,7 +140,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
@@ -285,7 +285,7 @@ jobs:
 
       - name: Upload Flutter Android release APK
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: flutter-host-android-${{ matrix.abi }}-release-apk
           path: artifacts/flutter-android/*.apk
@@ -296,7 +296,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
@@ -310,7 +310,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install iOS build tools
-        run: brew install pkg-config
+        run: |
+          if brew tap | grep -Fxq "aws/tap"; then
+            brew untap aws/tap
+          fi
+          brew install pkg-config
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -497,7 +501,7 @@ jobs:
 
       - name: Upload Flutter iOS subtitle evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: flutter-ios-subtitle-simulator-evidence
           path: |

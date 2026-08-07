@@ -1,3 +1,7 @@
+// Apple release commands remain parseable on other hosts so they can return
+// explicit compatibility errors before entering their platform implementation.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -488,7 +492,7 @@ pub(crate) fn run(
             continue;
         }
         if request.verify_only {
-            verify_existing_artifacts(root, request, *platform, &resolved, &native_profile)?;
+            verify_existing_artifacts(root, request, *platform, resolved, &native_profile)?;
             continue;
         }
         run_platform_worker(root, request, *platform, &native_profile)?;
@@ -1029,7 +1033,7 @@ impl ResolvedAppleRawOptions {
             self.bsfs.join(","),
             join_shell_quoted(&self.extra_configure_args),
         );
-        let digest = format!("{:x}", Sha256::digest(seed.as_bytes()));
+        let digest = hex::encode(Sha256::digest(seed.as_bytes()));
         format!("{}-{}", self.profile, &digest[..12])
     }
 
@@ -1884,7 +1888,7 @@ impl ResolvedProfile {
             self.bsfs.join(","),
             join_shell_quoted(&self.extra_configure_args),
         );
-        let digest = format!("{:x}", Sha256::digest(seed.as_bytes()));
+        let digest = hex::encode(Sha256::digest(seed.as_bytes()));
         format!("custom-{}", &digest[..12])
     }
 

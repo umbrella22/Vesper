@@ -311,14 +311,7 @@ impl PlaybackDebugState {
         self.last_tick_at = Some(now);
 
         let position_delta_ms = match (self.last_position, sample.position) {
-            (Some(previous), Some(current)) => {
-                let delta = if current >= previous {
-                    current - previous
-                } else {
-                    previous - current
-                };
-                Some(delta.as_millis())
-            }
+            (Some(previous), Some(current)) => Some(current.abs_diff(previous).as_millis()),
             _ => None,
         };
         if let Some(delta) = position_delta_ms {

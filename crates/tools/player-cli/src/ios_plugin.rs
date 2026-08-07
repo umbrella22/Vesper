@@ -1,3 +1,7 @@
+// Plugin requests remain parseable on every host while build internals are
+// compiled only on macOS.
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::io::Write;
@@ -611,13 +615,13 @@ mod implementation {
         })?;
         let mut actual_profile_hash = None;
         for line in text.lines() {
-            if let Some(value) = line.strip_prefix("profile_hash=") {
-                if actual_profile_hash.replace(value).is_some() {
-                    return Err(IosError::conformance(format!(
-                        "FFmpeg build metadata '{}' contains duplicate profile_hash records",
-                        path.display()
-                    )));
-                }
+            if let Some(value) = line.strip_prefix("profile_hash=")
+                && actual_profile_hash.replace(value).is_some()
+            {
+                return Err(IosError::conformance(format!(
+                    "FFmpeg build metadata '{}' contains duplicate profile_hash records",
+                    path.display()
+                )));
             }
         }
         let Some(actual_profile_hash) = actual_profile_hash else {
@@ -643,7 +647,7 @@ mod implementation {
         digest.update(b"vesper-apple-ffmpeg-directory-v1\0");
         digest.update(length.to_le_bytes());
         digest.update(bytes);
-        Ok(format!("path-{:x}", digest.finalize()))
+        Ok(format!("path-{}", hex::encode(digest.finalize())))
     }
 
     pub(super) fn ffmpeg_build_input_fingerprint(directory: &Path) -> Result<String, IosError> {
@@ -656,9 +660,9 @@ mod implementation {
             "FFmpeg library checksum record",
         )?;
         Ok(format!(
-            "{:x}-{:x}",
-            Sha256::digest(&metadata),
-            Sha256::digest(&library_checksums)
+            "{}-{}",
+            hex::encode(Sha256::digest(&metadata)),
+            hex::encode(Sha256::digest(&library_checksums))
         ))
     }
 
@@ -926,6 +930,10 @@ mod implementation {
         Ok(target_libdir.is_dir())
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the plugin slice build boundary keeps the selected slice, toolchain, staging, diagnostics, and cancellation state explicit"
+    )]
     fn build_slice(
         root: &Path,
         plugin: &IosPluginSpec,
@@ -2359,9 +2367,9 @@ mod tests {
         assert_eq!(
             fingerprint,
             format!(
-                "{:x}-{:x}",
-                Sha256::digest(metadata),
-                Sha256::digest(checksums)
+                "{}-{}",
+                hex::encode(Sha256::digest(metadata)),
+                hex::encode(Sha256::digest(checksums))
             )
         );
 

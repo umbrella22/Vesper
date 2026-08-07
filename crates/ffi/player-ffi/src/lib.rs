@@ -386,6 +386,10 @@ pub struct FfiPluginSourceNormalizerCapabilitySummary {
 }
 
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the public FFI model preserves direct capability variants; boxing would change its Rust API shape"
+)]
 pub enum FfiPluginCapabilitySummary {
     Decoder(FfiPluginDecoderCapabilitySummary),
     FrameProcessor(FfiPluginFrameProcessorCapabilitySummary),

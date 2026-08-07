@@ -99,6 +99,8 @@ mod tests {
     #[test]
     fn c_string_ptr_replaces_embedded_nul() {
         let mut value = into_c_string_ptr("hello\0world".to_owned());
+        // SAFETY: `into_c_string_ptr` returned a live NUL-terminated allocation that remains
+        // owned by `value` until it is freed below.
         let text = unsafe { CStr::from_ptr(value) }
             .to_str()
             .expect("string should be utf8");
@@ -111,10 +113,17 @@ mod tests {
     fn c_string_output_helpers_write_and_clear_slot() {
         let mut value: *mut c_char = ptr::null_mut();
 
-        assert!(unsafe { clear_c_string_output(&mut value) });
+        assert!(
+            // SAFETY: `value` is a live writable output slot for the duration of the call.
+            unsafe { clear_c_string_output(&mut value) }
+        );
         assert!(value.is_null());
 
-        assert!(unsafe { write_c_string_output(&mut value, "hello\0world".to_owned()) });
+        assert!(
+            // SAFETY: `value` is a live writable output slot for the duration of the call.
+            unsafe { write_c_string_output(&mut value, "hello\0world".to_owned()) }
+        );
+        // SAFETY: the preceding helper returned a live NUL-terminated allocation in `value`.
         let text = unsafe { CStr::from_ptr(value) }
             .to_str()
             .expect("string should be utf8");
@@ -126,8 +135,14 @@ mod tests {
 
     #[test]
     fn c_string_output_helpers_reject_null_slot() {
-        assert!(!unsafe { clear_c_string_output(ptr::null_mut()) });
-        assert!(!unsafe { write_c_string_output(ptr::null_mut(), "ignored".to_owned()) });
+        assert!(
+            // SAFETY: null is explicitly accepted and rejected before dereference by this helper.
+            !unsafe { clear_c_string_output(ptr::null_mut()) }
+        );
+        assert!(
+            // SAFETY: null is explicitly accepted and rejected before dereference by this helper.
+            !unsafe { write_c_string_output(ptr::null_mut(), "ignored".to_owned()) }
+        );
     }
 
     #[test]

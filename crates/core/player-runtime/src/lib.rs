@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+#![allow(
+    clippy::result_large_err,
+    reason = "PlayerError is a shared public API; boxing runtime errors would change public signatures"
+)]
 //! Core runtime facade and shared playback contracts.
 //!
 //! This crate exposes the runtime wrapper used by platform adapters, shared
@@ -1004,6 +1008,10 @@ pub struct PlayerPluginSourceNormalizerCapabilitySummary {
 }
 
 /// Rust-side capability summary emitted by plugin diagnostics.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "boxing capability summaries would break the public diagnostics API"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerPluginCapabilitySummary {
     /// Decoder plugin capabilities.
@@ -1073,7 +1081,7 @@ impl PlayerPluginParticipation {
 ///
 /// All limits are optional; missing fields fall back to the associated
 /// `DEFAULT_PLUGIN_*` constant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PluginBudgetPolicy {
     /// Maximum frames a processor may queue before backpressure is reported.
     pub max_queue_depth: Option<u32>,
@@ -1110,17 +1118,6 @@ impl PluginBudgetPolicy {
     pub fn effective_max_consecutive_failures(self) -> u32 {
         self.max_consecutive_failures
             .unwrap_or(DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES)
-    }
-}
-
-impl Default for PluginBudgetPolicy {
-    fn default() -> Self {
-        Self {
-            max_queue_depth: None,
-            max_in_flight_frames: None,
-            max_process_time_us: None,
-            max_consecutive_failures: None,
-        }
     }
 }
 
@@ -1247,17 +1244,16 @@ impl PluginBreakerState {
         if self.disabled {
             return FrameProcessorPolicyAction::BypassOriginalFrame;
         }
-        if let Some(queue_depth) = queue_depth {
-            if self.evaluate_queue_depth(queue_depth) == FrameProcessorPolicyAction::DropOutput {
-                return FrameProcessorPolicyAction::DropOutput;
-            }
+        if let Some(queue_depth) = queue_depth
+            && self.evaluate_queue_depth(queue_depth) == FrameProcessorPolicyAction::DropOutput
+        {
+            return FrameProcessorPolicyAction::DropOutput;
         }
-        if let Some(in_flight_frames) = in_flight_frames {
-            if self.evaluate_in_flight_frames(in_flight_frames)
+        if let Some(in_flight_frames) = in_flight_frames
+            && self.evaluate_in_flight_frames(in_flight_frames)
                 == FrameProcessorPolicyAction::DropOutput
-            {
-                return FrameProcessorPolicyAction::DropOutput;
-            }
+        {
+            return FrameProcessorPolicyAction::DropOutput;
         }
         FrameProcessorPolicyAction::Continue
     }

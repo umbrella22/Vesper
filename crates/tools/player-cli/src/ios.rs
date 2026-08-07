@@ -206,11 +206,13 @@ impl IosBridgeLock {
                 lock_directory.display()
             ))
         })?;
-        let lock_path = lock_directory.join(format!("ios-bridge-shim-{root_digest:x}.lock"));
+        let lock_path =
+            lock_directory.join(format!("ios-bridge-shim-{}.lock", hex::encode(root_digest)));
         let file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
+            .truncate(false)
             .open(&lock_path)
             .map_err(|error| {
                 IosError::storage(format!(
@@ -1915,7 +1917,7 @@ fn collect_unconditional_rust_exports(items: &[syn::Item], exported: &mut BTreeS
 
 fn is_unconditional_c_export(function: &syn::ItemFn) -> bool {
     matches!(function.vis, syn::Visibility::Public(_))
-        && function.sig.unsafety.is_some()
+        && matches!(&function.sig.safety, syn::Safety::Unsafe(_))
         && function
             .sig
             .abi

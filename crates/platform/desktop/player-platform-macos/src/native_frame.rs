@@ -439,8 +439,8 @@ pub(crate) struct FrameProcessorFrameDebugSample {
 
 #[derive(Debug)]
 pub(crate) enum MacosNativeFramePoll {
-    Frame(MacosFrameProcessorFrame),
-    Decoder(DecoderReceiveNativeFrameOutput),
+    Frame(Box<MacosFrameProcessorFrame>),
+    Decoder(Box<DecoderReceiveNativeFrameOutput>),
 }
 
 #[derive(Debug)]
@@ -453,7 +453,7 @@ pub(crate) enum MacosNativeFrameWorkerCommand {
 pub(crate) enum MacosNativeFrameWorkerEvent {
     Frame {
         generation: u64,
-        frame: MacosFrameProcessorFrame,
+        frame: Box<MacosFrameProcessorFrame>,
     },
     EndOfStream {
         generation: u64,
@@ -514,13 +514,13 @@ impl Drop for MacosNativeFrameVideoSource {
             let _ = worker.join();
         }
         self.release_queued_prefetch_events();
-        if let Ok(mut session) = self.session.lock() {
-            if let Err(error) = session.close() {
-                tracing::warn!(
-                    error = %error,
-                    "failed to close macOS native-frame decoder session during drop"
-                );
-            }
+        if let Ok(mut session) = self.session.lock()
+            && let Err(error) = session.close()
+        {
+            tracing::warn!(
+                error = %error,
+                "failed to close macOS native-frame decoder session during drop"
+            );
         }
         if let Ok(mut shared) = self.shared.lock()
             && let Some(chain) = shared.frame_processor_chain.as_mut()
@@ -1128,7 +1128,7 @@ impl MacosNativeFrameVideoSource {
                     &self.buffered_frame_count,
                     &self.prefetch_wakeup,
                 );
-                self.deferred_desktop_frame(frame).map(Some)
+                self.deferred_desktop_frame(*frame).map(Some)
             }
             MacosNativeFrameWorkerEvent::Frame { generation, frame } => {
                 self.decrement_buffered_count_for_generation(generation);
@@ -1138,7 +1138,7 @@ impl MacosNativeFrameVideoSource {
                         session.as_mut(),
                         &mut shared,
                         self.outstanding_frames.as_ref(),
-                        frame,
+                        *frame,
                     );
                 }
                 Ok(None)
@@ -1168,7 +1168,7 @@ impl MacosNativeFrameVideoSource {
                         session.as_mut(),
                         &mut shared,
                         self.outstanding_frames.as_ref(),
-                        frame,
+                        *frame,
                     );
                 }
             }
@@ -1228,6 +1228,10 @@ impl MacosNativeFrameVideoSource {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the prefetch worker boundary keeps decoder ownership, queue state, wakeups, generation, and shutdown signals explicit"
+)]
 pub(crate) fn spawn_macos_native_frame_prefetch_worker(
     packet_source: Box<dyn MacosNativeFramePacketSource>,
     session: Arc<Mutex<Box<dyn NativeDecoderSession>>>,
@@ -1261,6 +1265,10 @@ pub(crate) fn spawn_macos_native_frame_prefetch_worker(
         .context("failed to spawn macOS native-frame prefetch worker")
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the worker loop mirrors the explicit state transferred by the spawn boundary"
+)]
 pub(crate) fn macos_native_frame_prefetch_worker_loop(
     mut packet_source: Box<dyn MacosNativeFramePacketSource>,
     session: Arc<Mutex<Box<dyn NativeDecoderSession>>>,
@@ -1297,7 +1305,7 @@ pub(crate) fn macos_native_frame_prefetch_worker_loop(
                         session.as_mut(),
                         &mut shared,
                         outstanding_frames.as_ref(),
-                        frame,
+                        *frame,
                     );
                 }
                 generation = new_generation;
@@ -1380,7 +1388,7 @@ pub(crate) fn macos_native_frame_prefetch_worker_loop(
                         session.as_mut(),
                         &mut shared,
                         outstanding_frames.as_ref(),
-                        frame,
+                        *frame,
                     );
                 }
                 break;
@@ -1458,6 +1466,10 @@ pub(crate) fn flush_and_seek_macos_native_frame_source(
     packet_source.seek_to(position)
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "decoding one event coordinates decoder, packet source, queue counters, generation, wakeup, and shutdown state"
+)]
 pub(crate) fn decode_next_macos_native_frame_worker_event(
     shared: &Arc<Mutex<MacosNativeFrameDecoderState>>,
     session: &Arc<Mutex<Box<dyn NativeDecoderSession>>>,
@@ -1481,14 +1493,16 @@ pub(crate) fn decode_next_macos_native_frame_worker_event(
                     frame,
                 }));
             }
-            MacosNativeFramePoll::Decoder(DecoderReceiveNativeFrameOutput::Eof) => {
-                *end_of_stream_received = true;
-                return Ok(Some(MacosNativeFrameWorkerEvent::EndOfStream {
-                    generation,
-                }));
-            }
-            MacosNativeFramePoll::Decoder(DecoderReceiveNativeFrameOutput::NeedMoreInput) => {}
-            MacosNativeFramePoll::Decoder(DecoderReceiveNativeFrameOutput::Frame(_)) => {}
+            MacosNativeFramePoll::Decoder(output) => match *output {
+                DecoderReceiveNativeFrameOutput::Eof => {
+                    *end_of_stream_received = true;
+                    return Ok(Some(MacosNativeFrameWorkerEvent::EndOfStream {
+                        generation,
+                    }));
+                }
+                DecoderReceiveNativeFrameOutput::NeedMoreInput
+                | DecoderReceiveNativeFrameOutput::Frame(_) => {}
+            },
         }
 
         if *end_of_input_sent {
@@ -1555,7 +1569,7 @@ pub(crate) fn receive_macos_native_frame_from_decoder(
         .receive_native_frame()
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let DecoderReceiveNativeFrameOutput::Frame(frame) = result else {
-        return Ok(MacosNativeFramePoll::Decoder(result));
+        return Ok(MacosNativeFramePoll::Decoder(Box::new(result)));
     };
     outstanding_frames.fetch_add(1, Ordering::SeqCst);
     let mut shared = shared
@@ -1572,7 +1586,7 @@ pub(crate) fn receive_macos_native_frame_from_decoder(
             return Err(error);
         }
     };
-    Ok(MacosNativeFramePoll::Frame(frame))
+    Ok(MacosNativeFramePoll::Frame(Box::new(frame)))
 }
 
 pub(crate) fn send_macos_native_frame_packet(

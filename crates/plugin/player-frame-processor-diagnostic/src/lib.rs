@@ -254,11 +254,10 @@ impl DiagnosticCounters {
     }
 
     fn summary(&self) -> String {
-        let average_process_time_us = if self.processed == 0 {
-            0
-        } else {
-            self.total_process_time_us / self.processed
-        };
+        let average_process_time_us = self
+            .total_process_time_us
+            .checked_div(self.processed)
+            .unwrap_or(0);
         format!(
             "processed={} bypassed={} rejected={} backpressure={} lateDropped={} released={} avgProcessUs={} maxProcessUs={}",
             self.processed,

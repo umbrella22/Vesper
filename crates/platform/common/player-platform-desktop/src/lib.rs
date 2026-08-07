@@ -1,3 +1,8 @@
+#![allow(
+    clippy::result_large_err,
+    reason = "PlayerError is a shared public API; boxing desktop platform errors would change public signatures"
+)]
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -2436,14 +2441,13 @@ fn wait_for_audio_buffer_window(
             .map(|flag| flag.load(Ordering::Acquire))
             .unwrap_or(false)
     };
-    match controller.wait_for_buffered_samples_at_or_below(
+    let result = controller.wait_for_buffered_samples_at_or_below(
         generation,
         target_buffer_samples,
         AUDIO_STREAM_BACKPRESSURE_WAIT_TIMEOUT,
         should_cancel,
-    ) {
-        result => audio_buffer_window_wait_result_is_ready(result),
-    }
+    );
+    audio_buffer_window_wait_result_is_ready(result)
 }
 
 fn audio_buffer_window_wait_result_is_ready(result: AudioBufferWindowWaitResult) -> bool {

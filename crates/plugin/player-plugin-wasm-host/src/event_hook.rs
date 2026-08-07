@@ -391,7 +391,7 @@ pub struct WasmPipelineEventHookReportBatch {
 
 #[derive(Debug)]
 enum QueueMessage {
-    Event(PipelineEvent),
+    Event(Box<PipelineEvent>),
     Barrier(SyncSender<()>),
     Close,
 }
@@ -686,7 +686,9 @@ fn enqueue_event(
         return Ok(WasmPipelineEventEnqueueStatus::Dropped);
     }
     state.queued_events += 1;
-    state.messages.push_back(QueueMessage::Event(event));
+    state
+        .messages
+        .push_back(QueueMessage::Event(Box::new(event)));
     shared.message_available.notify_one();
     Ok(WasmPipelineEventEnqueueStatus::Enqueued)
 }

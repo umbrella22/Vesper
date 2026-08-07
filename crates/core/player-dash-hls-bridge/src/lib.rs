@@ -1,4 +1,8 @@
 #![deny(unsafe_code)]
+#![allow(
+    clippy::result_large_err,
+    reason = "DashHlsError is a shared public API; boxing its subtitle payload would be breaking"
+)]
 
 //! Shared DASH-to-HLS bridge primitives.
 //!

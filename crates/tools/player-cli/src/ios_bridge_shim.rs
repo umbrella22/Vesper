@@ -460,7 +460,7 @@ fn generate_source(manifest: &Manifest, manifest_dir: &Path) -> Result<String> {
                     output.push('\n');
                 }
                 output.push_str(fragment_content.trim_end());
-                output.push_str("\n");
+                output.push('\n');
             }
             SourceItem::Wrapper {
                 function,
@@ -492,7 +492,7 @@ fn generate_source(manifest: &Manifest, manifest_dir: &Path) -> Result<String> {
                 );
                 output.push(' ');
                 output.push_str(body.trim());
-                output.push_str("\n");
+                output.push('\n');
             }
         }
         if output.len() > MAX_GENERATED_BRIDGE_SOURCE_BYTES {

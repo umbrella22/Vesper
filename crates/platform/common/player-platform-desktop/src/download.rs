@@ -305,13 +305,13 @@ impl DesktopDownloadController {
         let _ = self.manager.remove_task(task_id, Instant::now())?;
         self.export_state.remove(&task_id);
         self.exported_paths.remove(&task_id);
-        if let Some(target_directory) = target_directory {
-            if let Err(error) = fs::remove_dir_all(&target_directory) {
-                tracing::warn!(
-                    "failed to remove desktop download directory `{}`: {error}",
-                    target_directory.display()
-                );
-            }
+        if let Some(target_directory) = target_directory
+            && let Err(error) = fs::remove_dir_all(&target_directory)
+        {
+            tracing::warn!(
+                "failed to remove desktop download directory `{}`: {error}",
+                target_directory.display()
+            );
         }
         Ok(())
     }
@@ -474,6 +474,12 @@ impl DesktopDownloadController {
 
         let _ = self.manager.drain_events();
         result
+    }
+}
+
+impl Default for DesktopDownloadController {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -850,7 +856,7 @@ fn download_remote_file(
                 transfer.status_code
             )));
         }
-        200..=299 => {}
+        201..=299 => {}
         status => {
             remove_file_warn(&transfer.output_path);
             return Err(network_error(format!(

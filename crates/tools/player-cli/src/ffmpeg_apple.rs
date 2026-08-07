@@ -45,6 +45,10 @@ pub(crate) fn verify_prebuilts(
 }
 
 #[cfg(target_os = "macos")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the Apple FFmpeg build boundary keeps all repository, profile, source, diagnostics, and cancellation inputs together"
+)]
 pub(crate) fn run_holding_repository_lock(
     root: &Path,
     output_directory: &Path,
@@ -69,6 +73,10 @@ pub(crate) fn run_holding_repository_lock(
 }
 
 #[cfg(target_os = "macos")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the canonical-source build boundary mirrors the regular Apple FFmpeg build inputs"
+)]
 pub(crate) fn run_holding_repository_lock_with_canonical_source(
     root: &Path,
     output_directory: &Path,
@@ -1303,7 +1311,7 @@ mod implementation {
             }
             digest.update(&buffer[..count]);
         }
-        Ok(format!("{:x}", digest.finalize()))
+        Ok(hex::encode(digest.finalize()))
     }
 
     fn selected_slices(raw: &[String]) -> Result<Vec<String>, FfmpegError> {
@@ -1904,7 +1912,7 @@ mod implementation {
                 b"fixture metadata",
             )
             .expect("write metadata");
-            let checksum = format!("{:x}", Sha256::digest(b"dynamic"));
+            let checksum = hex::encode(Sha256::digest(b"dynamic"));
             fs::write(
                 slice.join("vesper-ffmpeg-library-sha256.txt"),
                 format!("avutil_sha256={checksum}\n"),
@@ -2029,7 +2037,7 @@ mod implementation {
             let temporary = tempfile::tempdir().expect("create temporary directory");
             let output = temporary.path().join("output");
             let slice = write_valid_prebuilt(&output);
-            let checksum = format!("{:x}", Sha256::digest(b"dynamic"));
+            let checksum = hex::encode(Sha256::digest(b"dynamic"));
             fs::write(
                 slice.join("vesper-ffmpeg-library-sha256.txt"),
                 format!("avutil_sha256={checksum}\navcodec_sha256={checksum}\n"),

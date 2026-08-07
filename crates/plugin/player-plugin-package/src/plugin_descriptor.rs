@@ -153,7 +153,7 @@ impl PluginDescriptor {
             (&left.component, &left.license).cmp(&(&right.component, &right.license))
         });
         let json = serde_json::to_vec(&descriptor)?;
-        let sha256 = format!("{:x}", Sha256::digest(&json));
+        let sha256 = hex::encode(Sha256::digest(&json));
         Ok(CanonicalPluginDescriptor {
             descriptor,
             json,

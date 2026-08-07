@@ -3,6 +3,8 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_float, c_uchar, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -38,6 +40,28 @@ pub fn install_default_macos_system_native_runtime_adapter_factory() -> PlayerRe
     player_runtime::register_default_runtime_adapter_factory(
         macos_system_native_runtime_adapter_factory(),
     )
+}
+
+#[cfg(test)]
+static TEST_FORCE_PRESENTER_FAILURE: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) struct TestPresenterFailureOverride {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl Drop for TestPresenterFailureOverride {
+    fn drop(&mut self) {
+        TEST_FORCE_PRESENTER_FAILURE.store(self.previous, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn force_test_presenter_failure() -> TestPresenterFailureOverride {
+    TestPresenterFailureOverride {
+        previous: TEST_FORCE_PRESENTER_FAILURE.swap(true, Ordering::SeqCst),
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -235,7 +259,9 @@ impl MacosMetalLayerPresenter {
         #[cfg(target_os = "macos")]
         {
             #[cfg(test)]
-            if std::env::var_os("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE").is_some() {
+            if TEST_FORCE_PRESENTER_FAILURE.load(Ordering::SeqCst)
+                || std::env::var_os("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE").is_some()
+            {
                 return Err(PlayerError::new(
                     PlayerErrorCode::BackendFailure,
                     "forced test presenter failure",

@@ -2,8 +2,7 @@ use super::*;
 
 pub(crate) struct MacosSourceNormalizerRuntimeGuard {
     pub(crate) inner: PlayerRuntime,
-    source_normalizer_packet_session:
-        Option<Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>>,
+    source_normalizer_packet_session: Option<SharedSourceNormalizerPacketSession>,
     pub(crate) source_normalizer_diagnostics: Vec<PlayerPluginDiagnostic>,
 }
 

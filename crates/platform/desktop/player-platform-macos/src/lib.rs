@@ -1,4 +1,8 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
+#![allow(
+    clippy::result_large_err,
+    reason = "PlayerError is a shared public API; boxing macOS platform errors would change public signatures"
+)]
 
 use std::collections::VecDeque;
 mod native;
@@ -78,11 +82,16 @@ const DEFAULT_FRAME_PROCESSOR_DEBUG_WINDOW: u64 = 120;
 const SOURCE_NORMALIZER_STARTUP_TIMEOUT: Duration = Duration::from_millis(5_000);
 const SOURCE_NORMALIZER_SESSION_TIMEOUT: Duration = Duration::from_millis(40_000);
 
+pub(crate) type SharedSourceNormalizerPacketSession =
+    Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>;
+
 pub use native::{
     MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MacosAvFoundationBridge,
     MacosAvFoundationBridgeBindings, MacosAvFoundationBridgeContext, MacosNativePlayerBridge,
     MacosNativePlayerProbe, MacosNativePlayerRuntimeAdapterFactory,
 };
+#[cfg(test)]
+pub(crate) use system::force_test_presenter_failure;
 pub use system::{
     MacosMetalLayerPresenter, MacosSystemAvFoundationBridgeBindings, MacosVideoLayerFrame,
     MacosVideoLayerSurface, install_default_macos_system_native_runtime_adapter_factory,

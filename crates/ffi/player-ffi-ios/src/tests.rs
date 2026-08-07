@@ -44,7 +44,7 @@ fn inbound_policy_ordinals_reject_unknown_values() {
         let mut error = run();
         assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument, "{label}");
         assert!(ffi_error_message(&error).contains("99"), "{label}");
-        unsafe { super::player_ffi_error_free(&mut error) };
+        free_ffi_error(&mut error);
     }
 }
 
@@ -58,7 +58,7 @@ fn inbound_track_and_playlist_ordinals_reject_unknown_values() {
         .expect_err("unknown selection mode should be rejected");
     assert_eq!(selection_error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&selection_error).contains("selection.mode"));
-    unsafe { super::player_ffi_error_free(&mut selection_error) };
+    free_ffi_error(&mut selection_error);
 
     let abr = PlayerFfiAbrPolicy {
         mode: 7,
@@ -68,7 +68,7 @@ fn inbound_track_and_playlist_ordinals_reject_unknown_values() {
         super::conversions::read_abr_policy(&abr).expect_err("unknown ABR mode should be rejected");
     assert_eq!(abr_error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&abr_error).contains("policy.mode"));
-    unsafe { super::player_ffi_error_free(&mut abr_error) };
+    free_ffi_error(&mut abr_error);
 
     let config = PlayerFfiPlaylistConfig {
         repeat_mode: 7,
@@ -79,7 +79,7 @@ fn inbound_track_and_playlist_ordinals_reject_unknown_values() {
         .expect_err("unknown playlist repeat mode should be rejected");
     assert_eq!(playlist_error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&playlist_error).contains("config.repeat_mode"));
-    unsafe { super::player_ffi_error_free(&mut playlist_error) };
+    free_ffi_error(&mut playlist_error);
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn download_config_rejects_missing_or_invalid_plugin_reference_json() {
         .expect_err("missing post-download reference JSON should fail");
     assert_eq!(missing_error.code, PlayerFfiErrorCode::NullPointer);
     assert!(ffi_error_message(&missing_error).contains("post_download_plugin_references_json"));
-    unsafe { super::player_ffi_error_free(&mut missing_error) };
+    free_ffi_error(&mut missing_error);
 
     let invalid_references =
         CString::new(r#"[{"pluginId":"not-reverse-dns","transport":"native"}]"#)
@@ -145,7 +145,7 @@ fn download_config_rejects_missing_or_invalid_plugin_reference_json() {
         .expect_err("invalid plugin identity should fail");
     assert_eq!(invalid_error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&invalid_error).contains("reverse-DNS"));
-    unsafe { super::player_ffi_error_free(&mut invalid_error) };
+    free_ffi_error(&mut invalid_error);
 }
 
 #[test]
@@ -168,7 +168,10 @@ fn download_session_create_preserves_plugin_selection_error_and_zeroes_handle() 
     let mut error = PlayerFfiError::default();
 
     let status =
+        // SAFETY: the config's C strings remain live, and both output slots are initialized and
+        // writable for the duration of the call.
         unsafe { player_ffi_download_session_create(&config, &mut out_handle, &mut error) };
+    // SAFETY: the handle came from the test registry and is not used after this disposal.
     unsafe { super::player_ffi_ios_plugin_registry_dispose(plugin_registry_handle) };
 
     assert_eq!(status, PlayerFfiCallStatus::Error);
@@ -184,7 +187,7 @@ fn download_session_create_preserves_plugin_selection_error_and_zeroes_handle() 
         message.contains("plugin `dev.vesper.missing-remux` is not loaded for transport Native"),
         "{message}"
     );
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 }
 
 #[test]
@@ -192,6 +195,8 @@ fn benchmark_session_create_zeroes_handle_before_input_validation() {
     let mut out_handle = u64::MAX;
     let mut error = PlayerFfiError::default();
 
+    // SAFETY: the writable output slots remain live; the null references pointer is the invalid
+    // input under test and is rejected before dereference.
     let status = unsafe {
         super::player_ffi_benchmark_session_create_with_references_json(
             0,
@@ -205,7 +210,7 @@ fn benchmark_session_create_zeroes_handle_before_input_validation() {
     assert_eq!(out_handle, 0);
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&error).contains("references_json was null"));
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 }
 
 #[test]
@@ -233,7 +238,7 @@ fn restored_download_task_rejects_unknown_status_and_error_ordinals() {
             .expect_err("unknown restored task status should be rejected");
     assert_eq!(status_error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&status_error).contains("task.status"));
-    unsafe { super::player_ffi_error_free(&mut status_error) };
+    free_ffi_error(&mut status_error);
 
     let mut invalid_error = make_task();
     invalid_error.status = PlayerFfiDownloadTaskStatus::Failed as u32;
@@ -245,7 +250,7 @@ fn restored_download_task_rejects_unknown_status_and_error_ordinals() {
             .expect_err("unknown restored task error code should be rejected");
     assert_eq!(code_error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&code_error).contains("error code"));
-    unsafe { super::player_ffi_error_free(&mut code_error) };
+    free_ffi_error(&mut code_error);
 }
 
 fn invalid_buffering_policy() -> PlayerFfiError {
@@ -385,6 +390,8 @@ fn download_export_runs_host_progress_callback_without_holding_session_lock() {
     };
     let mut error = PlayerFfiError::default();
 
+    // SAFETY: the session handle is registered, the path and callback context remain live for the
+    // synchronous export, and the error output is writable.
     let status = unsafe {
         player_ffi_download_session_export_task(
             handle,
@@ -395,9 +402,10 @@ fn download_export_runs_host_progress_callback_without_holding_session_lock() {
         )
     };
 
+    // SAFETY: the registered handle is no longer used after disposal.
     unsafe { player_ffi_download_session_dispose(handle) };
     if status != PlayerFfiCallStatus::Ok {
-        unsafe { super::player_ffi_error_free(&mut error) };
+        free_ffi_error(&mut error);
     }
     std::fs::remove_dir_all(temp_dir).expect("remove export test directory");
 
@@ -474,6 +482,8 @@ fn resolve_resilience_policy_rejects_invalid_raw_source_kind() {
     let mut policy = PlayerFfiResolvedResiliencePolicy::default();
     let mut error = PlayerFfiError::default();
 
+    // SAFETY: all policy inputs and writable outputs are initialized stack values that remain live
+    // for the call.
     let status = unsafe {
         player_ffi_resolve_resilience_policy(
             99,
@@ -489,7 +499,7 @@ fn resolve_resilience_policy_rejects_invalid_raw_source_kind() {
     assert_eq!(status, PlayerFfiCallStatus::Error);
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&error).contains("source_kind"));
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 }
 
 #[test]
@@ -497,6 +507,8 @@ fn preload_fail_rejects_invalid_raw_error_code_before_handle_lookup() {
     let message = CString::new("boom").expect("message");
     let mut error = PlayerFfiError::default();
 
+    // SAFETY: `message` and the writable error output remain live; the invalid ordinal and handle
+    // are rejected before any handle-backed state is accessed.
     let status = unsafe {
         player_ffi_preload_session_fail(
             0xDEAD_BEEF,
@@ -512,13 +524,15 @@ fn preload_fail_rejects_invalid_raw_error_code_before_handle_lookup() {
     assert_eq!(status, PlayerFfiCallStatus::Error);
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&error).contains("error code"));
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 }
 
 #[test]
 fn output_c_strings_replace_embedded_nul_with_space() {
     let mut value = super::conversions::into_c_string_ptr("hello\0world".to_owned());
 
+    // SAFETY: `into_c_string_ptr` returned a live NUL-terminated allocation that remains owned by
+    // `value` until it is freed below.
     let text = unsafe { CStr::from_ptr(value) }
         .to_str()
         .expect("sanitized output should be UTF-8");
@@ -539,7 +553,7 @@ fn read_string_list_rejects_null_elements() {
 
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&error).contains("items[1]"));
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 }
 
 #[test]
@@ -626,7 +640,7 @@ fn player_error_mapping_preserves_legacy_and_appended_values() {
         let mut ffi_error = player_error_to_ffi(player_error);
         assert_eq!(ffi_error.code, ffi_code);
         assert_eq!(ffi_error.category, ffi_category);
-        unsafe { super::player_ffi_error_free(&mut ffi_error) };
+        free_ffi_error(&mut ffi_error);
     }
 }
 
@@ -707,7 +721,7 @@ fn player_error_to_ffi_preserves_structured_subtitle_details() {
     assert_eq!(details.phase, "future_phase");
     assert_eq!(details.command_id, Some(42));
     assert_eq!(details.source_epoch, Some(9));
-    unsafe { super::player_ffi_error_free(&mut ffi_error) };
+    free_ffi_error(&mut ffi_error);
 }
 
 #[test]
@@ -723,7 +737,7 @@ fn dash_bridge_error_to_ffi_emits_structured_non_subtitle_envelope() {
     let payload: serde_json::Value = serde_json::from_str(&json).expect("DASH details");
     assert_eq!(payload["domain"], "dash");
     assert_eq!(payload["code"], "dash_manifest_unsupported");
-    unsafe { super::player_ffi_error_free(&mut ffi_error) };
+    free_ffi_error(&mut ffi_error);
 }
 
 #[test]
@@ -732,6 +746,8 @@ fn dash_bridge_parse_sidx_ffi_preserves_structured_error_details() {
     let mut response_json = ptr::null_mut();
     let mut ffi_error = PlayerFfiError::default();
 
+    // SAFETY: the input byte slice remains readable and both output slots remain writable for the
+    // duration of the call.
     let status = unsafe {
         player_ffi_dash_bridge_parse_sidx(
             truncated_sidx.as_ptr(),
@@ -751,7 +767,7 @@ fn dash_bridge_parse_sidx_ffi_preserves_structured_error_details() {
     let payload: serde_json::Value = serde_json::from_str(&details).expect("DASH details");
     assert_eq!(payload["domain"], "dash");
     assert_eq!(payload["code"], "dash_mp4_invalid");
-    unsafe { super::player_ffi_error_free(&mut ffi_error) };
+    free_ffi_error(&mut ffi_error);
 }
 
 #[test]
@@ -759,16 +775,19 @@ fn plugin_abi_summary_reports_root_and_typed_interface_versions() {
     let mut out_json: *mut c_char = ptr::null_mut();
     let mut error = PlayerFfiError::default();
 
+    // SAFETY: both output slots are initialized, writable, and remain live for the call.
     let status = unsafe { player_ffi_ios_plugin_abi_summary_json(&mut out_json, &mut error) };
 
     assert_eq!(status, PlayerFfiCallStatus::Ok);
     assert!(error.message.is_null());
     assert!(!out_json.is_null());
+    // SAFETY: the successful FFI call returned a live owned NUL-terminated string in `out_json`.
     let json = unsafe {
         std::ffi::CStr::from_ptr(out_json)
             .to_string_lossy()
             .into_owned()
     };
+    // SAFETY: `out_json` is the unchanged bridge-owned pointer and this is its only release.
     unsafe { super::player_ffi_mobile_plugin_diagnostics_string_free(out_json) };
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse ABI summary JSON");
     assert_eq!(
@@ -819,6 +838,8 @@ fn source_normalizer_resource_open_can_return_bypass_diagnostics_without_handle(
     let mut out_json: *mut c_char = ptr::null_mut();
     let mut error = PlayerFfiError::default();
 
+    // SAFETY: all C strings and writable output slots remain live; the null optional plugin
+    // reference is permitted by the entry-point contract.
     let status = unsafe {
         player_ffi_source_normalizer_resource_open(
             source.as_ptr(),
@@ -840,11 +861,13 @@ fn source_normalizer_resource_open_can_return_bypass_diagnostics_without_handle(
         !out_json.is_null(),
         "preferNormalized bypass diagnostics should be returned even without a resource handle"
     );
+    // SAFETY: the successful FFI call returned a live owned NUL-terminated diagnostics string.
     let json = unsafe {
         std::ffi::CStr::from_ptr(out_json)
             .to_string_lossy()
             .into_owned()
     };
+    // SAFETY: `out_json` is the unchanged bridge-owned pointer and this is its only release.
     unsafe { super::player_ffi_mobile_plugin_diagnostics_string_free(out_json) };
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse diagnostics JSON");
     let diagnostics = value.as_array().expect("diagnostics should be an array");
@@ -869,6 +892,8 @@ fn ios_native_frame_pipeline_open_requires_source_normalizer_packet_plugin_refer
     let mut out_json: *mut c_char = ptr::null_mut();
     let mut error = PlayerFfiError::default();
 
+    // SAFETY: all CString inputs and writable outputs remain live, and the null optional reference
+    // is allowed by the native-frame open contract.
     let status = unsafe {
         player_ffi_ios_native_frame_pipeline_open(
             source.as_ptr(),
@@ -892,7 +917,7 @@ fn ios_native_frame_pipeline_open_requires_source_normalizer_packet_plugin_refer
     let message = ffi_error_message(&error);
     assert!(message.contains("nativeFrameIssueKind=missingSourceNormalizerPacketPlugin"));
     assert!(message.contains("SourceNormalizer packet-stream plugin path"));
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 }
 
 #[test]
@@ -907,6 +932,8 @@ fn ios_native_frame_pipeline_open_requires_videotoolbox_decoder_plugin_reference
     let mut out_json: *mut c_char = ptr::null_mut();
     let mut error = PlayerFfiError::default();
 
+    // SAFETY: all CString inputs and writable outputs remain live, and the null optional reference
+    // is allowed by the native-frame open contract.
     let status = unsafe {
         player_ffi_ios_native_frame_pipeline_open(
             source.as_ptr(),
@@ -930,7 +957,7 @@ fn ios_native_frame_pipeline_open_requires_videotoolbox_decoder_plugin_reference
     let message = ffi_error_message(&error);
     assert!(message.contains("nativeFrameIssueKind=missingVideoToolboxDecoderPlugin"));
     assert!(message.contains("VideoToolbox decoder plugin path"));
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 }
 
 #[test]
@@ -938,14 +965,18 @@ fn ios_native_frame_pipeline_invalid_handles_fail_and_close_is_idempotent() {
     let mut out_json: *mut c_char = ptr::null_mut();
     let mut error = PlayerFfiError::default();
 
+    // SAFETY: both output slots remain writable; the opaque invalid handle is rejected before any
+    // session state is accessed.
     let advance_status = unsafe {
         player_ffi_ios_native_frame_pipeline_advance(0xDEAD_BEEF, &mut out_json, &mut error)
     };
     assert_eq!(advance_status, PlayerFfiCallStatus::Error);
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&error).contains("invalid native-frame pipeline handle"));
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 
+    // SAFETY: both output slots remain writable; the opaque invalid handle is rejected before any
+    // frame state is accessed.
     let release_status = unsafe {
         player_ffi_ios_native_frame_pipeline_release_frame(
             0xDEAD_BEEF,
@@ -958,16 +989,20 @@ fn ios_native_frame_pipeline_invalid_handles_fail_and_close_is_idempotent() {
     assert_eq!(release_status, PlayerFfiCallStatus::Error);
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&error).contains("invalid native-frame pipeline handle"));
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 
+    // SAFETY: both output slots remain writable; the opaque invalid handle is rejected before any
+    // seek state is accessed.
     let seek_status = unsafe {
         player_ffi_ios_native_frame_pipeline_seek(0xDEAD_BEEF, 1_000, &mut out_json, &mut error)
     };
     assert_eq!(seek_status, PlayerFfiCallStatus::Error);
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&error).contains("invalid native-frame pipeline handle"));
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 
+    // SAFETY: close accepts an opaque scalar handle and treats an unknown or already-closed value
+    // as a no-op without dereferencing caller memory.
     unsafe {
         player_ffi_ios_native_frame_pipeline_close(0xDEAD_BEEF);
         player_ffi_ios_native_frame_pipeline_close(0xDEAD_BEEF);
@@ -978,6 +1013,8 @@ fn ios_native_frame_pipeline_invalid_handles_fail_and_close_is_idempotent() {
 fn ios_native_frame_pipeline_seek_requires_json_output_pointer() {
     let mut error = PlayerFfiError::default();
 
+    // SAFETY: the writable error output remains live; the null JSON output is the invalid input
+    // under test and is checked before dereference.
     let status = unsafe {
         player_ffi_ios_native_frame_pipeline_seek(0xDEAD_BEEF, 1_000, ptr::null_mut(), &mut error)
     };
@@ -985,7 +1022,7 @@ fn ios_native_frame_pipeline_seek_requires_json_output_pointer() {
     assert_eq!(status, PlayerFfiCallStatus::Error);
     assert_eq!(error.code, PlayerFfiErrorCode::NullPointer);
     assert!(ffi_error_message(&error).contains("out_json was null"));
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 }
 
 #[test]
@@ -994,6 +1031,8 @@ fn ios_playback_event_hook_invalid_handles_are_rejected() {
     let event = test_c_string(
         r#"{"runId":"run-1","sessionId":"session-1","platform":"ios","protocol":null,"eventName":"play","timestampNs":1,"thread":"main","resourceIdentity":"playback-session:1","attributes":{},"diagnostic":null}"#,
     );
+    // SAFETY: the event string and writable error output remain live; the invalid handle is
+    // rejected before session state is accessed.
     let status = unsafe {
         player_ffi_ios_playback_event_hook_session_submit_json(
             0xDEAD_BEEF,
@@ -1004,15 +1043,19 @@ fn ios_playback_event_hook_invalid_handles_are_rejected() {
     assert_eq!(status, PlayerFfiCallStatus::Error);
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(ffi_error_message(&error).contains("invalid playback event-hook session handle"));
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 
     let flush_status =
+        // SAFETY: the writable error output remains live and the invalid scalar handle is rejected
+        // before session state is accessed.
         unsafe { player_ffi_ios_playback_event_hook_session_flush(0xDEAD_BEEF, 100, &mut error) };
     assert_eq!(flush_status, PlayerFfiCallStatus::Error);
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 
     let mut report_json = ptr::null_mut();
+    // SAFETY: both output slots remain writable and the invalid scalar handle is rejected before
+    // session state is accessed.
     let drain_status = unsafe {
         player_ffi_ios_playback_event_hook_session_drain_json(
             0xDEAD_BEEF,
@@ -1023,13 +1066,15 @@ fn ios_playback_event_hook_invalid_handles_are_rejected() {
     assert_eq!(drain_status, PlayerFfiCallStatus::Error);
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
     assert!(report_json.is_null());
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 
+    // SAFETY: the writable error output remains live and the invalid scalar handle is rejected
+    // before session state is accessed.
     unsafe {
         player_ffi_ios_playback_event_hook_session_close(0xDEAD_BEEF, &mut error);
     }
     assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
-    unsafe { super::player_ffi_error_free(&mut error) };
+    free_ffi_error(&mut error);
 }
 
 #[test]
@@ -1040,6 +1085,8 @@ fn ios_playback_event_hook_empty_session_has_idempotent_lifecycle() {
             .expect("empty plugin registry should register");
     let mut handle = 0;
     let mut error = PlayerFfiError::default();
+    // SAFETY: the registry handle is live, the references CString remains readable, and both
+    // output slots remain writable for the call.
     let created = unsafe {
         super::player_ffi_ios_playback_event_hook_session_create(
             plugin_registry_handle,
@@ -1048,6 +1095,7 @@ fn ios_playback_event_hook_empty_session_has_idempotent_lifecycle() {
             &mut error,
         )
     };
+    // SAFETY: the registry handle came from the test registry and is not used after disposal.
     unsafe { super::player_ffi_ios_plugin_registry_dispose(plugin_registry_handle) };
     assert_eq!(created, PlayerFfiCallStatus::Ok);
     assert_ne!(handle, 0);
@@ -1055,17 +1103,21 @@ fn ios_playback_event_hook_empty_session_has_idempotent_lifecycle() {
     let event = test_c_string(
         r#"{"runId":"run-1","sessionId":"session-1","platform":"ios","protocol":null,"eventName":"play","timestampNs":1,"thread":"main","resourceIdentity":"playback-session:1","attributes":{},"diagnostic":null}"#,
     );
+    // SAFETY: the event CString and writable error output remain live, and `handle` identifies the
+    // session created above.
     let submitted = unsafe {
         player_ffi_ios_playback_event_hook_session_submit_json(handle, event.as_ptr(), &mut error)
     };
     assert_eq!(submitted, PlayerFfiCallStatus::Ok);
     assert_eq!(
+        // SAFETY: `handle` identifies the live session and the error output remains writable.
         unsafe { player_ffi_ios_playback_event_hook_session_flush(handle, 100, &mut error) },
         PlayerFfiCallStatus::Ok
     );
 
     let mut report_json = ptr::null_mut();
     assert_eq!(
+        // SAFETY: `handle` is live and both output slots remain writable for the call.
         unsafe {
             player_ffi_ios_playback_event_hook_session_drain_json(
                 handle,
@@ -1076,20 +1128,26 @@ fn ios_playback_event_hook_empty_session_has_idempotent_lifecycle() {
         PlayerFfiCallStatus::Ok
     );
     assert!(!report_json.is_null());
+    // SAFETY: the successful drain returned a live owned NUL-terminated string in `report_json`.
     let report_text = unsafe { CStr::from_ptr(report_json) }
         .to_string_lossy()
         .into_owned();
     assert!(report_text.contains("\"reports\":[]"));
+    // SAFETY: `report_json` is the unchanged bridge-owned pointer and this is its only release.
     unsafe { super::player_ffi_ios_playback_event_hook_report_string_free(report_json) };
 
     assert_eq!(
+        // SAFETY: `handle` identifies the live session and the error output remains writable.
         unsafe { player_ffi_ios_playback_event_hook_session_close(handle, &mut error) },
         PlayerFfiCallStatus::Ok
     );
     assert_eq!(
+        // SAFETY: close is idempotent for the same session handle and the error output remains
+        // writable.
         unsafe { player_ffi_ios_playback_event_hook_session_close(handle, &mut error) },
         PlayerFfiCallStatus::Ok
     );
+    // SAFETY: the handle was created and closed above and is not used after this disposal.
     unsafe { super::player_ffi_ios_playback_event_hook_session_dispose(handle) };
 }
 
@@ -1097,11 +1155,19 @@ fn ffi_error_message(error: &PlayerFfiError) -> String {
     if error.message.is_null() {
         return String::new();
     }
+    // SAFETY: non-null error messages are bridge-owned NUL-terminated strings and the owning error
+    // remains live while this helper copies the bytes.
     unsafe {
         std::ffi::CStr::from_ptr(error.message)
             .to_string_lossy()
             .into_owned()
     }
+}
+
+fn free_ffi_error(error: &mut PlayerFfiError) {
+    // SAFETY: all callers pass an error populated by this bridge; its C allocations remain owned
+    // by the error and this helper is their only release before the value is reused or dropped.
+    unsafe { super::player_ffi_error_free(error) };
 }
 
 fn test_c_string(value: &str) -> CString {

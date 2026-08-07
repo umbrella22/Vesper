@@ -35,7 +35,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
@@ -96,7 +96,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
@@ -183,7 +183,7 @@ jobs:
           done
 
       - name: Upload VesperPlayerKit Android release asset
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: VesperPlayerKit-android-${{ matrix.abi }}
           path: release-assets/android/*.aar
@@ -201,7 +201,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
@@ -292,7 +292,7 @@ jobs:
           done
 
       - name: Upload Vesper Android sample APKs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: VesperPlayerKit-android-samples-${{ matrix.abi }}
           path: release-assets/android-samples/*.apk
@@ -305,7 +305,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
@@ -322,7 +322,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install iOS build tools
-        run: brew install xcodegen pkg-config
+        run: |
+          if brew tap | grep -Fxq "aws/tap"; then
+            brew untap aws/tap
+          fi
+          brew install xcodegen pkg-config
 
       - name: Select Xcode
         uses: ./.github/actions/select-xcode
@@ -357,7 +361,7 @@ jobs:
           -- --ignored --exact --nocapture --test-threads=1
 
       - name: Upload VesperPlayerKit iOS release assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: VesperPlayerKit-ios-arm64
           path: release-assets/ios/*
@@ -373,7 +377,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
@@ -394,7 +398,7 @@ jobs:
           fi
 
       - name: Download VesperPlayerKit release bundles
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: release-assets
           merge-multiple: true

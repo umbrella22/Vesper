@@ -196,7 +196,7 @@ fn extract_archive(
             archive_path.display()
         ))
     })?;
-    if archive.len() == 0 || archive.len() > MAX_ARCHIVE_ENTRIES {
+    if archive.is_empty() || archive.len() > MAX_ARCHIVE_ENTRIES {
         return Err(IosError::conformance(format!(
             "{label} must contain 1 to {MAX_ARCHIVE_ENTRIES} entries"
         )));

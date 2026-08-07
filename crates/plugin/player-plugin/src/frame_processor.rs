@@ -239,15 +239,15 @@ impl FrameProcessorSessionRequirements {
                 input_profile
             ));
         }
-        if let Some(handle_kind) = &self.output_handle_kind {
-            if !capabilities.supports_output_handle_kind(handle_kind) {
-                missing.push(format!("output handle kind {handle_kind:?}"));
-            }
+        if let Some(handle_kind) = &self.output_handle_kind
+            && !capabilities.supports_output_handle_kind(handle_kind)
+        {
+            missing.push(format!("output handle kind {handle_kind:?}"));
         }
-        if let Some(profile) = &self.output_pipeline_profile {
-            if !capabilities.supports_output_pipeline_profile(profile) {
-                missing.push(format!("output pipeline profile {profile:?}"));
-            }
+        if let Some(profile) = &self.output_pipeline_profile
+            && !capabilities.supports_output_pipeline_profile(profile)
+        {
+            missing.push(format!("output pipeline profile {profile:?}"));
         }
         if self.require_flush && !capabilities.supports_flush {
             missing.push("flush support".to_owned());
@@ -263,10 +263,9 @@ impl FrameProcessorSessionRequirements {
         }
         if let (Some(required), Some(limit)) =
             (self.max_in_flight_frames, capabilities.max_in_flight_frames)
+            && limit < required
         {
-            if limit < required {
-                missing.push(format!("max in-flight frames >= {required}"));
-            }
+            missing.push(format!("max in-flight frames >= {required}"));
         }
         missing
     }
@@ -399,6 +398,10 @@ pub struct FrameProcessorOutputFrame {
 }
 
 /// Rust-side receive result returned by frame processor sessions.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "boxing Frame would break the public frame processor session API"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FrameProcessorReceiveOutput {
     Frame(FrameProcessorOutputFrame),

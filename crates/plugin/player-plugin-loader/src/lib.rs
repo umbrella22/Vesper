@@ -1,4 +1,8 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
+#![allow(
+    clippy::result_large_err,
+    reason = "loader error enums are public APIs; boxing their source variants would be breaking"
+)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

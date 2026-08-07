@@ -7,8 +7,8 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use quick_xml::Reader;
 use quick_xml::events::Event;
+use quick_xml::{Reader, XmlVersion};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -1105,7 +1105,7 @@ fn instrumentation_case(
             ))
         })?;
         let value = attribute
-            .decode_and_unescape_value(reader.decoder())
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
             .map_err(|error| {
                 SubtitleError::conformance(format!(
                     "invalid instrumentation XML value '{}': {error}",
@@ -1642,7 +1642,7 @@ fn sha256_file(path: &Path, maximum_bytes: u64) -> Result<String, SubtitleError>
         }
         hasher.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn write_evidence_checksums(root: &Path) -> Result<(), SubtitleError> {
@@ -1818,6 +1818,59 @@ fn command_candidates(directory: &Path, name: &str) -> Vec<PathBuf> {
         .map(|extension| directory.join(format!("{name}{extension}")))
         .collect();
     candidates
+}
+
+#[cfg(unix)]
+fn can_execute(path: &Path) -> bool {
+    use nix::unistd::{AccessFlags, access};
+
+    access(path, AccessFlags::X_OK).is_ok()
+}
+
+#[cfg(not(unix))]
+fn can_execute(_path: &Path) -> bool {
+    true
+}
+
+struct UtcTimestamp {
+    iso8601: String,
+    compact: String,
+}
+
+impl UtcTimestamp {
+    fn now() -> Result<Self, SubtitleError> {
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| {
+                SubtitleError::worker(format!("system clock predates Unix epoch: {error}"))
+            })?
+            .as_secs();
+        let days = (seconds / 86_400) as i64;
+        let seconds_of_day = seconds % 86_400;
+        let (year, month, day) = civil_from_days(days);
+        let hour = seconds_of_day / 3_600;
+        let minute = (seconds_of_day % 3_600) / 60;
+        let second = seconds_of_day % 60;
+        Ok(Self {
+            iso8601: format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"),
+            compact: format!("{year:04}{month:02}{day:02}T{hour:02}{minute:02}{second:02}Z"),
+        })
+    }
+}
+
+fn civil_from_days(days_since_unix_epoch: i64) -> (i64, i64, i64) {
+    let shifted = days_since_unix_epoch + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year, month, day)
 }
 
 #[cfg(test)]
@@ -2058,57 +2111,4 @@ mod tests {
             );
         }
     }
-}
-
-#[cfg(unix)]
-fn can_execute(path: &Path) -> bool {
-    use nix::unistd::{AccessFlags, access};
-
-    access(path, AccessFlags::X_OK).is_ok()
-}
-
-#[cfg(not(unix))]
-fn can_execute(_path: &Path) -> bool {
-    true
-}
-
-struct UtcTimestamp {
-    iso8601: String,
-    compact: String,
-}
-
-impl UtcTimestamp {
-    fn now() -> Result<Self, SubtitleError> {
-        let seconds = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| {
-                SubtitleError::worker(format!("system clock predates Unix epoch: {error}"))
-            })?
-            .as_secs();
-        let days = (seconds / 86_400) as i64;
-        let seconds_of_day = seconds % 86_400;
-        let (year, month, day) = civil_from_days(days);
-        let hour = seconds_of_day / 3_600;
-        let minute = (seconds_of_day % 3_600) / 60;
-        let second = seconds_of_day % 60;
-        Ok(Self {
-            iso8601: format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"),
-            compact: format!("{year:04}{month:02}{day:02}T{hour:02}{minute:02}{second:02}Z"),
-        })
-    }
-}
-
-fn civil_from_days(days_since_unix_epoch: i64) -> (i64, i64, i64) {
-    let shifted = days_since_unix_epoch + 719_468;
-    let era = shifted.div_euclid(146_097);
-    let day_of_era = shifted - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let mut year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    year += i64::from(month <= 2);
-    (year, month, day)
 }

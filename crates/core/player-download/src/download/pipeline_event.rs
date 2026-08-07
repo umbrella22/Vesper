@@ -74,7 +74,7 @@ pub struct PipelineEventHookReportBatch {
 
 #[derive(Debug)]
 enum DispatchMessage {
-    Event(PipelineEvent),
+    Event(Box<PipelineEvent>),
     Barrier(mpsc::SyncSender<()>),
 }
 
@@ -247,7 +247,7 @@ impl PipelineEventDispatcher {
             }
             return;
         };
-        match sender.try_send(DispatchMessage::Event(event)) {
+        match sender.try_send(DispatchMessage::Event(Box::new(event))) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
                 self.inner.dropped_events.fetch_add(1, Ordering::Relaxed);

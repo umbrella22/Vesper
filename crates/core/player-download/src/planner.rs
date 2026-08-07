@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use quick_xml::{
-    Reader,
+    Reader, XmlVersion,
     events::{BytesStart, Event},
 };
 
@@ -1286,7 +1286,7 @@ fn dash_event_attribute(
         let attribute = attribute.map_err(|error| dash_xml_error(error.to_string()))?;
         if attribute.key.local_name().as_ref() == name {
             return attribute
-                .decode_and_unescape_value(reader.decoder())
+                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
                 .map(|value| Some(value.into_owned()))
                 .map_err(|error| dash_xml_error(error.to_string()));
         }
@@ -1754,12 +1754,11 @@ fn resolve_uri(base: &str, reference: &str) -> String {
     if reference.contains("://") || reference.starts_with("data:") {
         return reference.to_owned();
     }
-    if reference.starts_with('/') {
-        if let Some((scheme, rest)) = base.split_once("://")
-            && let Some(host_end) = rest.find('/')
-        {
-            return format!("{scheme}://{}{}", &rest[..host_end], reference);
-        }
+    if reference.starts_with('/')
+        && let Some((scheme, rest)) = base.split_once("://")
+        && let Some(host_end) = rest.find('/')
+    {
+        return format!("{scheme}://{}{}", &rest[..host_end], reference);
     }
     let base_without_query = base.split_once('?').map(|(path, _)| path).unwrap_or(base);
     let prefix = base_without_query
@@ -1829,12 +1828,16 @@ fn planning_error(
 
 #[cfg(test)]
 mod tests {
-    use super::{DownloadPlanner, DownloadPlanningClient, parse_iso8601_duration_seconds};
+    use super::{
+        DownloadPlanner, DownloadPlanningClient, dash_event_attribute,
+        parse_iso8601_duration_seconds,
+    };
     use crate::{
         DownloadByteRange, DownloadContentFormat, DownloadProfile, DownloadSource,
         DownloadStreamKind, PlayerError, PlayerErrorCategory, PlayerErrorCode,
     };
     use player_model::MediaSource;
+    use quick_xml::{Reader, events::Event};
     use std::collections::HashMap;
 
     #[derive(Debug, Default)]
@@ -2169,6 +2172,18 @@ mod tests {
             .expect_err("live playlist should fail");
 
         assert_eq!(error.code(), PlayerErrorCode::Unsupported);
+    }
+
+    #[test]
+    fn dash_attribute_values_decode_xml_entities() {
+        let mut reader = Reader::from_str(r#"<Representation id="video&amp;main" />"#);
+        let Event::Empty(start) = reader.read_event().expect("read representation") else {
+            panic!("expected an empty representation element");
+        };
+
+        let value = dash_event_attribute(&reader, &start, b"id").expect("decode id attribute");
+
+        assert_eq!(value.as_deref(), Some("video&main"));
     }
 
     #[test]

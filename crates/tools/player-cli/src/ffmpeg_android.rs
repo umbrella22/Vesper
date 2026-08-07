@@ -868,7 +868,7 @@ pub(crate) fn verify_runtime_aar(
             path.display()
         ))
     })?;
-    if archive.len() == 0 || archive.len() > MAX_RUNTIME_AAR_ENTRIES {
+    if archive.is_empty() || archive.len() > MAX_RUNTIME_AAR_ENTRIES {
         return Err(FfmpegError::conformance(format!(
             "Android FFmpeg runtime AAR must contain 1..={MAX_RUNTIME_AAR_ENTRIES} entries"
         )));
@@ -1081,9 +1081,12 @@ fn android_toolchain(ndk_root: &Path) -> Result<AndroidToolchain, FfmpegError> {
     #[cfg(target_os = "linux")]
     let candidates = ["linux-x86_64", "linux-x86_64"];
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    return Err(FfmpegError::compatibility(
-        "Android FFmpeg source builds are supported only on macOS and Linux hosts",
-    ));
+    {
+        let _ = ndk_root;
+        return Err(FfmpegError::compatibility(
+            "Android FFmpeg source builds are supported only on macOS and Linux hosts",
+        ));
+    }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         for candidate in candidates {

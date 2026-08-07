@@ -336,56 +336,6 @@ fn subtitle_error_details_json(details: &player_model::SubtitleErrorDetails) -> 
     serde_json::Value::Object(payload).to_string()
 }
 
-#[cfg(test)]
-mod subtitle_error_details_tests {
-    use super::subtitle_error_details_json;
-    use player_model::SubtitleErrorDetails;
-
-    #[test]
-    fn encoder_adds_transport_domain_and_preserves_transaction_fields() {
-        let details = SubtitleErrorDetails::new(
-            "subtitle_selection_timeout",
-            "selection",
-            Some("caption-en".to_owned()),
-            true,
-            "selection timed out",
-        )
-        .with_transaction(Some(42), Some(9));
-        let payload: serde_json::Value =
-            serde_json::from_str(&subtitle_error_details_json(&details))
-                .expect("subtitle error details JSON");
-
-        assert_eq!(payload["domain"], "subtitle");
-        assert_eq!(payload["code"], "subtitle_selection_timeout");
-        assert_eq!(payload["phase"], "selection");
-        assert_eq!(payload["trackId"], "caption-en");
-        assert_eq!(payload["retriable"], true);
-        assert_eq!(payload["message"], "selection timed out");
-        assert_eq!(payload["commandId"], 42);
-        assert_eq!(payload["sourceEpoch"], 9);
-    }
-
-    #[test]
-    fn encoder_preserves_unknown_code_and_phase_strings() {
-        let details = SubtitleErrorDetails::new(
-            "future_subtitle_code",
-            "future_phase",
-            None,
-            false,
-            "future failure",
-        );
-        let payload: serde_json::Value =
-            serde_json::from_str(&subtitle_error_details_json(&details))
-                .expect("subtitle error details JSON");
-
-        assert_eq!(payload["code"], "future_subtitle_code");
-        assert_eq!(payload["phase"], "future_phase");
-        assert!(payload.get("trackId").is_none());
-        assert!(payload.get("commandId").is_none());
-        assert!(payload.get("sourceEpoch").is_none());
-    }
-}
-
 pub(crate) fn data_object_instance<'local>(
     env: &mut Env<'local>,
     internal_name: &str,
@@ -689,5 +639,55 @@ pub(crate) fn native_command_object<'local>(
                 &[JValue::Object(&policy)],
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod subtitle_error_details_tests {
+    use super::subtitle_error_details_json;
+    use player_model::SubtitleErrorDetails;
+
+    #[test]
+    fn encoder_adds_transport_domain_and_preserves_transaction_fields() {
+        let details = SubtitleErrorDetails::new(
+            "subtitle_selection_timeout",
+            "selection",
+            Some("caption-en".to_owned()),
+            true,
+            "selection timed out",
+        )
+        .with_transaction(Some(42), Some(9));
+        let payload: serde_json::Value =
+            serde_json::from_str(&subtitle_error_details_json(&details))
+                .expect("subtitle error details JSON");
+
+        assert_eq!(payload["domain"], "subtitle");
+        assert_eq!(payload["code"], "subtitle_selection_timeout");
+        assert_eq!(payload["phase"], "selection");
+        assert_eq!(payload["trackId"], "caption-en");
+        assert_eq!(payload["retriable"], true);
+        assert_eq!(payload["message"], "selection timed out");
+        assert_eq!(payload["commandId"], 42);
+        assert_eq!(payload["sourceEpoch"], 9);
+    }
+
+    #[test]
+    fn encoder_preserves_unknown_code_and_phase_strings() {
+        let details = SubtitleErrorDetails::new(
+            "future_subtitle_code",
+            "future_phase",
+            None,
+            false,
+            "future failure",
+        );
+        let payload: serde_json::Value =
+            serde_json::from_str(&subtitle_error_details_json(&details))
+                .expect("subtitle error details JSON");
+
+        assert_eq!(payload["code"], "future_subtitle_code");
+        assert_eq!(payload["phase"], "future_phase");
+        assert!(payload.get("trackId").is_none());
+        assert!(payload.get("commandId").is_none());
+        assert!(payload.get("sourceEpoch").is_none());
     }
 }

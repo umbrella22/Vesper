@@ -4,6 +4,11 @@
 //! integration tests. Actual runtime initialization is supported only on Linux;
 //! other targets return `Unsupported` before touching platform resources.
 
+#![allow(
+    clippy::result_large_err,
+    reason = "PlayerError is a shared public API; boxing Linux platform errors would change public signatures"
+)]
+
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 

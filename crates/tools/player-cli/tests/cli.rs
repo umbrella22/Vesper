@@ -195,10 +195,9 @@ fn prepare_native_android_ffmpeg_fixture(
     libxml2_encoder
         .finish()
         .expect("finish fake libxml2 xz stream");
-    let source_sha256 = format!(
-        "{:x}",
-        Sha256::digest(fs::read(&archive_path).expect("read fake FFmpeg archive"))
-    );
+    let source_sha256 = hex::encode(Sha256::digest(
+        fs::read(&archive_path).expect("read fake FFmpeg archive"),
+    ));
     fs::write(
         scripts.join("ffmpeg-source-policy.toml"),
         format!(
@@ -1524,8 +1523,8 @@ fn configure_ios_plugin_ffmpeg_fixture(fixture: &IosPluginFixture) {
                 )
                 .expect("create FFmpeg fixture library alias");
                 checksum_records.push_str(&format!(
-                    "{library}_sha256={:x}\n",
-                    Sha256::digest(payload.as_bytes())
+                    "{library}_sha256={}\n",
+                    hex::encode(Sha256::digest(payload.as_bytes()))
                 ));
             }
             fs::write(
@@ -1572,10 +1571,9 @@ printf '%s\n' "$prefix" > .vesper-prefix
         .expect("append Apple FFmpeg configure fixture");
     let encoder = archive.into_inner().expect("finish Apple FFmpeg tar");
     encoder.finish().expect("finish Apple FFmpeg xz stream");
-    let source_sha256 = format!(
-        "{:x}",
-        Sha256::digest(fs::read(&archive_path).expect("read Apple FFmpeg source archive"))
-    );
+    let source_sha256 = hex::encode(Sha256::digest(
+        fs::read(&archive_path).expect("read Apple FFmpeg source archive"),
+    ));
     fs::write(
         fixture.root.join("scripts/ffmpeg-source-policy.toml"),
         format!(
@@ -1750,7 +1748,7 @@ fn seed_ios_ffmpeg_runtime_profiles_root(
             for (name, payload) in [
                 (
                     "binary-sha256.txt",
-                    format!("{:x}\n", Sha256::digest(&binary)).into_bytes(),
+                    format!("{}\n", hex::encode(Sha256::digest(&binary))).into_bytes(),
                 ),
                 ("input-fingerprint.txt", fingerprint.clone().into_bytes()),
                 (metadata_name, metadata.clone()),
@@ -1826,10 +1824,9 @@ fn configure_ios_release_source_fixture(root: &std::path::Path) {
     encoder
         .finish()
         .expect("finish iOS release source xz stream");
-    let source_sha256 = format!(
-        "{:x}",
-        Sha256::digest(fs::read(&archive_path).expect("read iOS release source archive"))
-    );
+    let source_sha256 = hex::encode(Sha256::digest(
+        fs::read(&archive_path).expect("read iOS release source archive"),
+    ));
     fs::write(
         root.join("scripts/ffmpeg-source-policy.toml"),
         format!(
@@ -1905,7 +1902,7 @@ fn ffmpeg_fixture_content_fingerprint(root: &std::path::Path) -> String {
             }
         }
     }
-    format!("{:x}", digest.finalize())
+    hex::encode(digest.finalize())
 }
 
 #[cfg(target_os = "macos")]
@@ -1923,8 +1920,8 @@ fn ios_ffmpeg_input_fingerprint(root: &std::path::Path, slice: &str) -> String {
     let metadata = fs::read(source.join("vesper-ffmpeg-build-metadata.txt"))
         .expect("read FFmpeg fingerprint metadata");
     format!(
-        "{:x}-{}",
-        Sha256::digest(&metadata),
+        "{}-{}",
+        hex::encode(Sha256::digest(&metadata)),
         ffmpeg_fixture_content_fingerprint(&source)
     )
 }

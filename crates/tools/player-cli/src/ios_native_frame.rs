@@ -1127,13 +1127,12 @@ mod implementation {
         let stderr = String::from_utf8_lossy(stderr);
         let stdout = stdout.trim_end_matches('\n');
         let stderr = stderr.trim_end_matches('\n');
-        let detail = match (stdout.is_empty(), stderr.is_empty()) {
+        match (stdout.is_empty(), stderr.is_empty()) {
             (false, false) => format!("{stdout}\n{stderr}"),
             (false, true) => stdout.to_owned(),
             (true, false) => stderr.to_owned(),
             (true, true) => format!("{label} failed with status {}", status.unwrap_or(-1)),
-        };
-        detail
+        }
     }
 
     fn map_external_process_error(error: external_process::ExternalProcessError) -> IosError {

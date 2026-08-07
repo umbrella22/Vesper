@@ -1,11 +1,14 @@
 use std::env;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
+#[cfg(target_os = "macos")]
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
 use crate::{external_process, ffmpeg};
 
 #[cfg(all(target_os = "macos", test))]
@@ -572,7 +575,7 @@ fn publish_desktop_install(source: &Path, target: &Path) -> Result<(), DesktopEr
 fn publish_desktop_install_with_hook(
     source: &Path,
     target: &Path,
-    mut before_publish: Option<&mut dyn FnMut(&Path) -> io::Result<()>>,
+    mut before_publish: Option<crate::PathIoHook<'_>>,
 ) -> Result<(), DesktopError> {
     let previous = match fs::symlink_metadata(target) {
         Ok(metadata) if metadata.file_type().is_dir() => true,
@@ -621,13 +624,13 @@ fn publish_desktop_install_with_hook(
         })?;
     }
     if let Err(error) = fs::rename(source, target) {
-        if let Some(backup) = backup.as_ref() {
-            if let Err(rollback_error) = fs::rename(backup, target) {
-                return Err(DesktopError::storage(format!(
-                    "failed to publish desktop FFmpeg install: {error}; failed to restore the previous install: {rollback_error}; recovery data was preserved at '{}'",
-                    backup.display()
-                )));
-            }
+        if let Some(backup) = backup.as_ref()
+            && let Err(rollback_error) = fs::rename(backup, target)
+        {
+            return Err(DesktopError::storage(format!(
+                "failed to publish desktop FFmpeg install: {error}; failed to restore the previous install: {rollback_error}; recovery data was preserved at '{}'",
+                backup.display()
+            )));
         }
         return Err(DesktopError::storage(format!(
             "failed to publish desktop FFmpeg install: {error}"
@@ -1629,9 +1632,9 @@ fn is_executable_file(path: &Path) -> bool {
     {
         use std::os::unix::fs::PermissionsExt;
 
-        return fs::metadata(path)
+        fs::metadata(path)
             .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false);
+            .unwrap_or(false)
     }
     #[cfg(not(unix))]
     true
@@ -1771,7 +1774,7 @@ fn basic_player_status_is_expected(status: &ExitStatus) -> bool {
     {
         use std::os::unix::process::ExitStatusExt;
 
-        return matches!(status.signal(), Some(signal_hook::consts::SIGINT | 15));
+        matches!(status.signal(), Some(signal_hook::consts::SIGINT | 15))
     }
     #[cfg(not(unix))]
     false
@@ -2341,7 +2344,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("create desktop source fixture");
         let archive = directory.path().join("ffmpeg.tar.xz");
         fs::write(&archive, b"not the locked archive").expect("write source fixture");
-        let expected = format!("{:x}", Sha256::digest(b"locked archive"));
+        let expected = hex::encode(Sha256::digest(b"locked archive"));
         let error = verify_desktop_source_sha256(&archive, Some(&expected))
             .expect_err("reject mismatched source archive");
         assert!(error.to_string().contains("checksum mismatch"));

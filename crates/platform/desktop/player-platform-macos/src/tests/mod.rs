@@ -2,6 +2,8 @@ use std::collections::VecDeque;
 #[cfg(target_os = "macos")]
 use std::os::raw::c_void;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::ptr::NonNull;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -23,9 +25,10 @@ use super::{
     apply_decoder_plugin_diagnostics, apply_decoder_plugin_diagnostics_to_video_decode,
     apply_decoder_plugin_registry_to_video_decode, apply_source_normalizer_open_diagnostics,
     attach_source_normalizer_to_runtime, flush_and_seek_macos_native_frame_source,
-    macos_decoder_bitstream_format, macos_native_frame_decoder_video_decode_info,
-    macos_runtime_diagnostics, macos_video_decode_info,
-    mark_source_normalizer_packet_stream_participated, open_macos_host_runtime_source_with_options,
+    force_test_presenter_failure, macos_decoder_bitstream_format,
+    macos_native_frame_decoder_video_decode_info, macos_runtime_diagnostics,
+    macos_video_decode_info, mark_source_normalizer_packet_stream_participated,
+    open_macos_host_runtime_source_with_options,
     open_macos_software_runtime_source_with_options_and_interrupt,
     prepare_source_normalizer_for_open, present_and_release_native_frame_with_presenter,
     present_if_current_epoch_and_release, probe_macos_host_runtime_initializer_with_factories,
@@ -86,6 +89,32 @@ use player_runtime::{PlayerDecoderPluginVideoMode, PlayerRuntimeInitializer};
 unsafe extern "C" {
     fn player_macos_test_create_player_layer() -> *mut c_void;
     fn player_macos_test_release_object(handle: *mut c_void);
+}
+
+#[cfg(target_os = "macos")]
+struct TestPlayerLayer(NonNull<c_void>);
+
+#[cfg(target_os = "macos")]
+impl TestPlayerLayer {
+    fn new() -> Self {
+        // SAFETY: the test shim takes no inputs and returns a retained Objective-C
+        // object. The non-null check establishes the handle invariant for this owner.
+        let handle = unsafe { player_macos_test_create_player_layer() };
+        Self(NonNull::new(handle).expect("test player layer handle should be created"))
+    }
+
+    fn as_ptr(&self) -> *mut c_void {
+        self.0.as_ptr()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for TestPlayerLayer {
+    fn drop(&mut self) {
+        // SAFETY: this is the retained object returned by the test shim, and the
+        // private RAII owner releases it exactly once without using it afterwards.
+        unsafe { player_macos_test_release_object(self.0.as_ptr()) };
+    }
 }
 
 #[test]
@@ -187,11 +216,8 @@ fn macos_host_factory_with_surface_prefers_native_path() {
         );
         return;
     };
-    let layer_handle = unsafe { player_macos_test_create_player_layer() };
-    assert!(
-        !layer_handle.is_null(),
-        "test player layer handle should be created"
-    );
+    let layer = TestPlayerLayer::new();
+    let layer_handle = layer.as_ptr();
 
     let factory = MacosHostPlayerRuntimeAdapterFactory;
     let options = PlayerRuntimeOptions::default().with_video_surface(PlayerVideoSurfaceTarget {
@@ -219,10 +245,6 @@ fn macos_host_factory_with_surface_prefers_native_path() {
         bootstrap.runtime.capabilities().backend_family,
         PlayerRuntimeAdapterBackendFamily::NativeMacos
     );
-
-    unsafe {
-        player_macos_test_release_object(layer_handle);
-    }
 }
 
 #[test]
@@ -281,9 +303,7 @@ fn macos_host_strategy_routes_explicit_native_frame_request_to_plugin_path() {
         initialize_error: None,
         advance_error: None,
     };
-    unsafe {
-        std::env::set_var("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE", "1");
-    }
+    let _presenter_failure = force_test_presenter_failure();
     let options = PlayerRuntimeOptions::default()
         .with_video_surface(PlayerVideoSurfaceTarget {
             kind: PlayerVideoSurfaceKind::PlayerLayer,
@@ -1978,11 +1998,8 @@ fn macos_native_frame_decoder_plugin_runtime_probes_with_surface() {
         return;
     };
 
-    let layer_handle = unsafe { player_macos_test_create_player_layer() };
-    assert!(
-        !layer_handle.is_null(),
-        "test player layer handle should be created"
-    );
+    let layer = TestPlayerLayer::new();
+    let layer_handle = layer.as_ptr();
 
     let options = PlayerRuntimeOptions::default()
         .with_video_surface(PlayerVideoSurfaceTarget {
@@ -2010,10 +2027,6 @@ fn macos_native_frame_decoder_plugin_runtime_probes_with_surface() {
             .map(|decode| decode.selected_mode),
         Some(PlayerVideoDecodeMode::Hardware)
     );
-
-    unsafe {
-        player_macos_test_release_object(layer_handle);
-    }
 }
 
 #[test]
@@ -2057,11 +2070,8 @@ fn macos_native_frame_runtime_loads_frame_processor_diagnostic_plugin() {
         return;
     };
 
-    let layer_handle = unsafe { player_macos_test_create_player_layer() };
-    assert!(
-        !layer_handle.is_null(),
-        "test player layer handle should be created"
-    );
+    let layer = TestPlayerLayer::new();
+    let layer_handle = layer.as_ptr();
 
     let options = PlayerRuntimeOptions::default()
         .with_video_surface(PlayerVideoSurfaceTarget {
@@ -2075,9 +2085,6 @@ fn macos_native_frame_runtime_loads_frame_processor_diagnostic_plugin() {
         .with_development_native_plugin_loading();
     let bootstrap = open_macos_host_runtime_source_with_options(MediaSource::new(source), options)
         .expect("macOS host runtime should open the native-frame frame processor path");
-    unsafe {
-        std::env::remove_var("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE");
-    }
 
     assert!(
         bootstrap
@@ -2107,10 +2114,6 @@ fn macos_native_frame_runtime_loads_frame_processor_diagnostic_plugin() {
         "expected native-frame decoder selection diagnostic, got {:?}",
         bootstrap.startup.video_decode
     );
-
-    unsafe {
-        player_macos_test_release_object(layer_handle);
-    }
 }
 
 #[test]
@@ -2154,11 +2157,8 @@ fn macos_native_frame_strict_frame_processor_failure_does_not_fallback_to_softwa
         return;
     };
 
-    let layer_handle = unsafe { player_macos_test_create_player_layer() };
-    assert!(
-        !layer_handle.is_null(),
-        "test player layer handle should be created"
-    );
+    let layer = TestPlayerLayer::new();
+    let layer_handle = layer.as_ptr();
 
     let options = PlayerRuntimeOptions::default()
         .with_video_surface(PlayerVideoSurfaceTarget {
@@ -2178,10 +2178,6 @@ fn macos_native_frame_strict_frame_processor_failure_does_not_fallback_to_softwa
         Ok(_) => panic!("strict frame processor initialization should not fall back"),
         Err(error) => error,
     };
-    unsafe {
-        player_macos_test_release_object(layer_handle);
-    }
-
     assert_eq!(error.code(), PlayerErrorCode::BackendFailure);
     assert!(
         error
@@ -2233,11 +2229,8 @@ fn macos_host_strict_frame_processor_failure_forwards_software_error_message() {
         return;
     };
 
-    let layer_handle = unsafe { player_macos_test_create_player_layer() };
-    assert!(
-        !layer_handle.is_null(),
-        "test player layer handle should be created"
-    );
+    let layer = TestPlayerLayer::new();
+    let layer_handle = layer.as_ptr();
 
     let options = PlayerRuntimeOptions::default()
         .with_video_surface(PlayerVideoSurfaceTarget {
@@ -2252,17 +2245,10 @@ fn macos_host_strict_frame_processor_failure_forwards_software_error_message() {
     let error = match open_macos_host_runtime_source_with_options(MediaSource::new(source), options)
     {
         Ok(_) => {
-            unsafe {
-                player_macos_test_release_object(layer_handle);
-            }
             panic!("strict host frame processor initialization should fail");
         }
         Err(error) => error,
     };
-    unsafe {
-        player_macos_test_release_object(layer_handle);
-    }
-
     assert_eq!(error.code(), PlayerErrorCode::BackendFailure);
     assert!(
         error
@@ -2302,11 +2288,8 @@ fn macos_native_frame_runtime_reopens_as_software_after_presenter_failure() {
         return;
     };
 
-    let layer_handle = unsafe { player_macos_test_create_player_layer() };
-    assert!(
-        !layer_handle.is_null(),
-        "test player layer handle should be created"
-    );
+    let layer = TestPlayerLayer::new();
+    let layer_handle = layer.as_ptr();
 
     let options = PlayerRuntimeOptions::default()
         .with_video_surface(PlayerVideoSurfaceTarget {
@@ -2338,17 +2321,12 @@ fn macos_native_frame_runtime_reopens_as_software_after_presenter_failure() {
                 .contains("native-frame decoder plugin initialization failed"),
             "expected initialization fallback diagnostics when native-frame open falls back before presenter failure"
         );
-        unsafe {
-            player_macos_test_release_object(layer_handle);
-        }
         return;
     }
     let mut runtime = bootstrap.runtime;
     let initial_rate = runtime.playback_rate();
 
-    unsafe {
-        std::env::set_var("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE", "1");
-    }
+    let _presenter_failure = force_test_presenter_failure();
     let _ = runtime
         .dispatch(PlayerRuntimeCommand::Play)
         .expect("play should succeed");
@@ -2401,13 +2379,6 @@ fn macos_native_frame_runtime_reopens_as_software_after_presenter_failure() {
         saw_runtime_fallback_error,
         "expected explicit runtime fallback error event after fallback, got {events:?}"
     );
-    unsafe {
-        std::env::remove_var("VESPER_MACOS_TEST_FORCE_PRESENTER_FAILURE");
-    }
-
-    unsafe {
-        player_macos_test_release_object(layer_handle);
-    }
 }
 
 #[test]
@@ -2690,11 +2661,8 @@ fn macos_host_runtime_with_surface_prefers_native() {
         );
         return;
     };
-    let layer_handle = unsafe { player_macos_test_create_player_layer() };
-    assert!(
-        !layer_handle.is_null(),
-        "test player layer handle should be created"
-    );
+    let layer = TestPlayerLayer::new();
+    let layer_handle = layer.as_ptr();
 
     let options = PlayerRuntimeOptions::default().with_video_surface(PlayerVideoSurfaceTarget {
         kind: PlayerVideoSurfaceKind::PlayerLayer,
@@ -2708,10 +2676,6 @@ fn macos_host_runtime_with_surface_prefers_native() {
         bootstrap.runtime.adapter_id(),
         MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID
     );
-
-    unsafe {
-        player_macos_test_release_object(layer_handle);
-    }
 }
 
 #[test]
@@ -3047,7 +3011,7 @@ fn stale_prefetch_frame_release_does_not_decrement_current_generation_buffer_cou
     source
         .handle_prefetch_event(MacosNativeFrameWorkerEvent::Frame {
             generation: 0,
-            frame: macos_frame_processor_frame_for_test(9, Some(100_000)),
+            frame: Box::new(macos_frame_processor_frame_for_test(9, Some(100_000))),
         })
         .expect("stale prefetch event should be released");
 
@@ -3096,11 +3060,11 @@ fn dropping_native_frame_source_releases_queued_processor_output() {
     frame_tx
         .send(MacosNativeFrameWorkerEvent::Frame {
             generation: 0,
-            frame: macos_frame_processor_frame_for_test_with_processor_output(
+            frame: Box::new(macos_frame_processor_frame_for_test_with_processor_output(
                 9,
                 Some(100_000),
                 1_009,
-            ),
+            )),
         })
         .expect("queued frame event should be sent");
     let source = MacosNativeFrameVideoSource {
@@ -3335,11 +3299,11 @@ fn macos_native_frame_source_switch_releases_old_source_and_decodes_new_source()
     old_frame_tx
         .send(MacosNativeFrameWorkerEvent::Frame {
             generation: 0,
-            frame: macos_frame_processor_frame_for_test_with_processor_output(
+            frame: Box::new(macos_frame_processor_frame_for_test_with_processor_output(
                 9,
                 Some(100_000),
                 1_009,
-            ),
+            )),
         })
         .expect("queued old-source frame event should be sent");
     let old_source = MacosNativeFrameVideoSource {

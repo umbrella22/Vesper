@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use player_plugin::{PluginReference, PluginTransport};
-use rand_core::OsRng;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -610,8 +609,14 @@ impl PluginSigningKey {
     pub fn generate(publisher: impl Into<String>) -> Result<Self, PluginPackageError> {
         let publisher = publisher.into();
         validate_reverse_dns_identifier(&publisher)
-            .map_err(|message| PluginPackageError::InvalidSigningKey(message))?;
-        let key = SigningKey::generate(&mut OsRng);
+            .map_err(PluginPackageError::InvalidSigningKey)?;
+        let mut secret_key = [0_u8; 32];
+        getrandom::fill(&mut secret_key).map_err(|error| {
+            PluginPackageError::InvalidSigningKey(format!(
+                "failed to obtain system randomness for signing key: {error}"
+            ))
+        })?;
+        let key = SigningKey::from_bytes(&secret_key);
         let key_id = key_id(&key.verifying_key().to_bytes());
         Ok(Self {
             publisher,
@@ -1271,7 +1276,7 @@ fn prepare_file_entry(
         })?;
     Ok(PreparedEntry {
         path: package_path.to_owned(),
-        sha256: format!("{:x}", hasher.finalize()),
+        sha256: hex::encode(hasher.finalize()),
         size,
         data: PreparedEntryData::Snapshot {
             file: snapshot,
@@ -1296,7 +1301,7 @@ fn prepared_bytes_entry(
     }
     Ok(PreparedEntry {
         path: path.to_owned(),
-        sha256: format!("{:x}", Sha256::digest(&bytes)),
+        sha256: hex::encode(Sha256::digest(&bytes)),
         size,
         data: PreparedEntryData::Bytes(bytes),
         mode,
@@ -1478,7 +1483,7 @@ fn sha256_open_file(file: &File, path: &Path) -> Result<String, PluginPackageErr
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn validate_sha256(value: &str) -> Result<(), PluginPackageError> {
@@ -2432,7 +2437,7 @@ fn collect_installed_file_layout(
                 )));
             }
             crate::plugin_project::insert_archive_file_path(&mut normalized_paths, &relative_path)?;
-            if files.len() >= MAX_PLUGIN_PACKAGE_ENTRIES + 1 {
+            if files.len() > MAX_PLUGIN_PACKAGE_ENTRIES {
                 return Err(PluginPackageError::InvalidPackage(format!(
                     "installed plugin exceeds {} files",
                     MAX_PLUGIN_PACKAGE_ENTRIES + 1
@@ -2632,7 +2637,7 @@ fn hash_and_snapshot_installed_file(
                 source,
             })?;
     }
-    Ok((format!("{:x}", hasher.finalize()), snapshot))
+    Ok((hex::encode(hasher.finalize()), snapshot))
 }
 
 const fn artifact_transport(transport: PluginTransport) -> PluginArtifactTransport {
@@ -2768,7 +2773,7 @@ fn extract_verified_entries(
                 metadata.path
             )));
         }
-        let extracted_sha256 = format!("{:x}", hasher.finalize());
+        let extracted_sha256 = hex::encode(hasher.finalize());
         if extracted_sha256 != metadata.sha256 {
             return Err(PluginPackageError::InvalidPackage(format!(
                 "archive entry '{}' changed after verification",
@@ -3052,7 +3057,7 @@ fn sha256_zip_entry<R: Read + Seek>(
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn validate_reverse_dns_identifier(value: &str) -> Result<(), String> {
@@ -3062,7 +3067,7 @@ fn validate_reverse_dns_identifier(value: &str) -> Result<(), String> {
 }
 
 fn key_id(public_key: &[u8; 32]) -> String {
-    format!("{:x}", Sha256::digest(public_key))
+    hex::encode(Sha256::digest(public_key))
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -3195,7 +3200,7 @@ kind = "notice"
         let entries = [PreparedEntry {
             path: "artifacts/oversized.bin".to_owned(),
             data: PreparedEntryData::Bytes(Vec::new()),
-            sha256: format!("{:x}", Sha256::digest([])),
+            sha256: hex::encode(Sha256::digest([])),
             size: MAX_PLUGIN_PACKAGE_BYTES + 1,
             mode: ARTIFACT_FILE_MODE,
         }];

@@ -51,9 +51,7 @@ impl AndroidNativeWindowPresenterSink {
         #[cfg(not(target_os = "android"))]
         {
             let _ = global_surface;
-            return Err(
-                "Android native-frame presenter requires an Android runtime Surface".to_owned(),
-            );
+            Err("Android native-frame presenter requires an Android runtime Surface".to_owned())
         }
         #[cfg(target_os = "android")]
         {

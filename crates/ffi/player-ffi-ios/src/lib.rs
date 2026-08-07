@@ -127,12 +127,24 @@ pub unsafe extern "C" fn player_ffi_ios_plugin_registry_load(
     }
 }
 
+/// Disposes an iOS plugin plan handle.
+///
+/// # Safety
+///
+/// `handle` must originate from `player_ffi_ios_plugin_plan_create`. The caller must not use the
+/// handle concurrently with or after this disposal call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_ios_plugin_plan_dispose(handle: u64) {
     // SAFETY: opaque handles carry no Rust pointer provenance across FFI.
     unsafe { plugin_registry::player_ffi_ios_plugin_plan_dispose_impl(handle) };
 }
 
+/// Disposes an iOS plugin registry handle.
+///
+/// # Safety
+///
+/// `handle` must originate from `player_ffi_ios_plugin_registry_load`. The caller must not use the
+/// handle concurrently with or after this disposal call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_ios_plugin_registry_dispose(handle: u64) {
     // SAFETY: opaque handles carry no Rust pointer provenance across FFI.
@@ -201,6 +213,12 @@ pub unsafe extern "C" fn player_ffi_ios_plugin_abi_summary_json(
     })
 }
 
+/// Resolves the shared resilience policy for an iOS media source.
+///
+/// # Safety
+///
+/// Policy input pointers must be null or point to initialized values that remain readable for the
+/// duration of the call. `out_policy` and `out_error` must be null or point to writable storage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_resolve_resilience_policy(
     source_kind: u32,
@@ -1028,6 +1046,10 @@ fn with_download_session_task_mutation(
 /// the parameter is documented as optional or point to valid objects allocated by the
 /// matching Vesper FFI API for the duration of the call. Callers must serialize shared
 /// handle access according to the host binding contract.
+#[allow(
+    clippy::result_large_err,
+    reason = "the iOS download bridge preserves player-runtime's shared PlayerError until the FFI boundary maps it"
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_download_session_start_task(
     handle: u64,
@@ -1047,6 +1069,10 @@ pub unsafe extern "C" fn player_ffi_download_session_start_task(
 /// the parameter is documented as optional or point to valid objects allocated by the
 /// matching Vesper FFI API for the duration of the call. Callers must serialize shared
 /// handle access according to the host binding contract.
+#[allow(
+    clippy::result_large_err,
+    reason = "the iOS download bridge preserves player-runtime's shared PlayerError until the FFI boundary maps it"
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_download_session_pause_task(
     handle: u64,
@@ -1066,6 +1092,10 @@ pub unsafe extern "C" fn player_ffi_download_session_pause_task(
 /// the parameter is documented as optional or point to valid objects allocated by the
 /// matching Vesper FFI API for the duration of the call. Callers must serialize shared
 /// handle access according to the host binding contract.
+#[allow(
+    clippy::result_large_err,
+    reason = "the iOS download bridge preserves player-runtime's shared PlayerError until the FFI boundary maps it"
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_download_session_resume_task(
     handle: u64,
@@ -1534,6 +1564,10 @@ pub unsafe extern "C" fn player_ffi_download_session_fail_task(
 /// the parameter is documented as optional or point to valid objects allocated by the
 /// matching Vesper FFI API for the duration of the call. Callers must serialize shared
 /// handle access according to the host binding contract.
+#[allow(
+    clippy::result_large_err,
+    reason = "the iOS download bridge preserves player-runtime's shared PlayerError until the FFI boundary maps it"
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_download_session_remove_task(
     handle: u64,
@@ -2867,6 +2901,10 @@ pub unsafe extern "C" fn player_ffi_benchmark_report_string_free(value: *mut c_c
 /// `references_json` must be valid for the duration of this call.
 /// `plugin_registry_handle` must identify a live embedded registry. Output
 /// pointers must point to writable caller-owned storage.
+#[allow(
+    clippy::result_large_err,
+    reason = "plugin resolution errors retain the shared loader error contract until this FFI entry point serializes them"
+)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn player_ffi_ios_playback_event_hook_session_create(
     plugin_registry_handle: u64,
