@@ -4934,12 +4934,18 @@ mod tests {
 
     #[cfg(vesper_source_checkout)]
     #[test]
-    fn optional_android_nested_asset_targets_preflight_in_clean_checkout() {
+    fn optional_android_generated_targets_preflight_in_clean_checkout() {
         let root = fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."))
             .expect("canonical workspace root");
         for relative in [
+            "lib/android/vesper-player-kit-decoder-mediacodec/src/main/jniLibs",
+            "lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/jniLibs",
             "lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/assets/vesper-source-normalizer-ffmpeg",
+            "lib/android/vesper-player-kit-frame-processor-diagnostic/src/main/jniLibs",
+            "lib/android/vesper-player-kit-ffmpeg-runtime/src/main/jniLibs",
             "lib/android/vesper-player-kit-ffmpeg-runtime/src/main/assets/vesper-ffmpeg-runtime",
+            "lib/android/vesper-player-kit-external-playback/src/main/jniLibs",
+            "lib/android/vesper-player-kit-external-playback/src/main/assets/vesper-relay-ffmpeg",
         ] {
             GeneratedDirectoryTarget::preflight(&root, root.join(relative)).unwrap_or_else(
                 |error| panic!("preflight optional Android target {relative}: {error}"),

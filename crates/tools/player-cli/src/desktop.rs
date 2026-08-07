@@ -225,9 +225,9 @@ pub fn ensure_ffmpeg(root: &Path) -> Result<(), DesktopError> {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = root;
-        return Err(DesktopError::compatibility(
+        Err(DesktopError::compatibility(
             "The repository-local desktop FFmpeg fallback is only supported on macOS.",
-        ));
+        ))
     }
 
     #[cfg(target_os = "macos")]

@@ -905,6 +905,17 @@ fn run_ios_ffi_fixture(
     command.output().expect("run iOS FFI fixture command")
 }
 
+#[test]
+fn ios_ffi_checkout_keeps_its_artifacts_parent() {
+    let artifacts = workspace_root().join("lib/ios/VesperPlayerKit/Artifacts");
+    let metadata = fs::symlink_metadata(&artifacts).expect("inspect iOS FFI artifacts parent");
+    assert!(metadata.file_type().is_dir());
+
+    let anchor = artifacts.join(".gitkeep");
+    let metadata = fs::symlink_metadata(&anchor).expect("inspect iOS FFI artifacts anchor");
+    assert!(metadata.file_type().is_file());
+}
+
 #[cfg(target_os = "macos")]
 struct IosPluginFixture {
     directory: tempfile::TempDir,

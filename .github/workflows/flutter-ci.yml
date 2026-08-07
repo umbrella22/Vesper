@@ -311,9 +311,7 @@ jobs:
 
       - name: Install iOS build tools
         run: |
-          if brew tap | grep -Fxq "aws/tap"; then
-            brew untap aws/tap
-          fi
+          brew untap aws/tap >/dev/null 2>&1 || true
           brew install pkg-config
 
       - name: Set up Flutter

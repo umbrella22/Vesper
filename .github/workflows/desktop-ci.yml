@@ -177,9 +177,7 @@ jobs:
       - name: Install macOS system dependencies
         if: runner.os == 'macOS'
         run: |
-          if brew tap | grep -Fxq "aws/tap"; then
-            brew untap aws/tap
-          fi
+          brew untap aws/tap >/dev/null 2>&1 || true
           brew update
           brew install ffmpeg pkg-config
 

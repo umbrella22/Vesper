@@ -71,7 +71,9 @@ use worker_protocol::{
 use worker_supervisor::supervise_native_worker;
 
 type PathIoHook<'a> = &'a mut dyn FnMut(&Path) -> io::Result<()>;
+#[cfg(target_os = "macos")]
 type PathHook<'a> = &'a mut dyn FnMut(&Path);
+#[cfg(target_os = "macos")]
 type TempDirIoHook<'a> = &'a mut dyn FnMut(tempfile::TempDir) -> io::Result<()>;
 
 const MAX_PLUGIN_MANIFEST_BYTES: usize = 1024 * 1024;
