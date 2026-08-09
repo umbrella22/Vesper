@@ -411,6 +411,8 @@ internal interface VesperNativeBindings {
     fun invalidateSystemPlaybackCallbacks() = Unit
     fun dispose()
     fun refreshSnapshot()
+    /** Refreshes the track catalog without sampling the playback timeline. */
+    fun refreshTrackCatalog() = Unit
     fun currentTrackCatalog(): VesperTrackCatalog
     fun currentTrackSelection(): VesperTrackSelectionSnapshot
     /**
@@ -419,6 +421,9 @@ internal interface VesperNativeBindings {
      * subtitle value represents only a renderer-active track.
      */
     fun currentAppliedSubtitleSelection(): VesperTrackSelection = currentTrackSelection().subtitle
+    /** Whether the current Media3 Tracks snapshot has one selectable TEXT target for this stable id. */
+    fun isSubtitleTrackSelectable(trackId: String): Boolean =
+        currentTrackCatalog().subtitleTracks.any { it.id == trackId }
     fun currentAdvertisedSubtitleTrackCount(): Int = currentTrackCatalog().subtitleTracks.size
     /**
      * Increments only when Media3 reports a track or track-parameter change.
@@ -464,7 +469,10 @@ internal interface VesperNativeBindings {
     fun setVideoTrackSelection(selection: VesperTrackSelection)
     fun setAudioTrackSelection(selection: VesperTrackSelection)
     fun setSubtitleTrackSelection(selection: VesperTrackSelection)
-    fun setAbrPolicy(policy: VesperAbrPolicy)
+    fun setAbrPolicy(
+        policy: VesperAbrPolicy,
+        expectedCatalogRevision: Long? = null,
+    )
     fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration)
     fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata)
     fun clearSystemPlayback()
@@ -531,6 +539,7 @@ internal class MissingVesperNativeBindings : VesperNativeBindings {
 
     override fun dispose() = Unit
     override fun refreshSnapshot() = Unit
+    override fun refreshTrackCatalog() = Unit
     override fun currentTrackCatalog(): VesperTrackCatalog = VesperTrackCatalog.Empty
     override fun currentTrackSelection(): VesperTrackSelectionSnapshot =
         VesperTrackSelectionSnapshot()
@@ -552,7 +561,10 @@ internal class MissingVesperNativeBindings : VesperNativeBindings {
     override fun setVideoTrackSelection(selection: VesperTrackSelection) = Unit
     override fun setAudioTrackSelection(selection: VesperTrackSelection) = Unit
     override fun setSubtitleTrackSelection(selection: VesperTrackSelection) = Unit
-    override fun setAbrPolicy(policy: VesperAbrPolicy) = Unit
+    override fun setAbrPolicy(
+        policy: VesperAbrPolicy,
+        expectedCatalogRevision: Long?,
+    ) = Unit
     override fun configureSystemPlayback(configuration: VesperSystemPlaybackConfiguration) = Unit
     override fun updateSystemPlaybackMetadata(metadata: VesperSystemPlaybackMetadata) = Unit
     override fun clearSystemPlayback() = Unit

@@ -136,6 +136,51 @@ internal fun subtitleNativeErrorFromJson(errorJson: String): VesperPlayerUnsuppo
     )
 }
 
+internal fun fixedTrackNativeErrorFromJson(errorJson: String): VesperFixedTrackSelectionException {
+    val payload = JSONObject(errorJson)
+    val details = jsonObjectToMap(payload)
+    val message =
+        (payload.opt("message") as? String)
+            ?: "native fixed-track selection failed"
+    return VesperFixedTrackSelectionException(
+        code = (payload.opt("code") as? String) ?: "trackUnsupported",
+        trackId = payload.opt("trackId") as? String,
+        expectedCatalogRevision = payload.longOrNull("expectedCatalogRevision"),
+        actualCatalogRevision = payload.longOrNull("actualCatalogRevision"),
+        message = message,
+        extraDetails = details - FIXED_TRACK_BASE_DETAIL_KEYS,
+    )
+}
+
+internal fun abrPolicyNativeErrorFromJson(errorJson: String): RuntimeException {
+    val payload = JSONObject(errorJson)
+    if ((payload.opt("domain") as? String) == "fixedTrack") {
+        return fixedTrackNativeErrorFromJson(errorJson)
+    }
+    val message =
+        (payload.opt("message") as? String)
+            ?: "native ABR policy command failed"
+    return VesperPlayerCommandException(
+        VesperPlayerErrorState(
+            message = message,
+            code = VesperPlayerErrorCode.fromWireName(payload.opt("code") as? String),
+            category = VesperPlayerErrorCategory.fromWireName(payload.opt("category") as? String),
+            retriable = payload.optBoolean("retriable", false),
+            details = jsonObjectToMap(payload),
+        )
+    )
+}
+
+private val FIXED_TRACK_BASE_DETAIL_KEYS =
+    setOf(
+        "domain",
+        "code",
+        "trackId",
+        "expectedCatalogRevision",
+        "actualCatalogRevision",
+        "message",
+    )
+
 internal fun subtitleNativeError(
     code: String,
     phase: String,
@@ -352,6 +397,8 @@ internal enum class AndroidCapabilityFailureCause {
     DecoderInit,
     DecoderQuery,
     DecodeFailed,
+    FormatUnsupported,
+    FormatExceedsCapabilities,
 }
 
 internal val AndroidCapabilityFailureCause.wireName: String
@@ -362,6 +409,8 @@ internal val AndroidCapabilityFailureCause.wireName: String
             AndroidCapabilityFailureCause.DecoderInit -> "decoderInit"
             AndroidCapabilityFailureCause.DecoderQuery -> "decoderQuery"
             AndroidCapabilityFailureCause.DecodeFailed -> "decodeFailed"
+            AndroidCapabilityFailureCause.FormatUnsupported -> "formatUnsupported"
+            AndroidCapabilityFailureCause.FormatExceedsCapabilities -> "formatExceedsCapabilities"
         }
 
 internal enum class AndroidCapabilityFailureAxis {
@@ -504,6 +553,26 @@ internal fun classifyPlaybackException(error: PlaybackException): NativePlayback
                 retriable = false,
                 likelyCapabilityIssue = true,
                 capabilityFailureCause = AndroidCapabilityFailureCause.DecoderQuery,
+                capabilityFailureAxis = AndroidCapabilityFailureAxis.Decoder,
+            )
+
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            -> NativePlaybackError(
+                codeOrdinal = UNSUPPORTED_ORDINAL,
+                categoryOrdinal = CAPABILITY_CATEGORY_ORDINAL,
+                retriable = false,
+                likelyCapabilityIssue = true,
+                capabilityFailureCause = AndroidCapabilityFailureCause.FormatUnsupported,
+                capabilityFailureAxis = AndroidCapabilityFailureAxis.Decoder,
+            )
+
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+            -> NativePlaybackError(
+                codeOrdinal = UNSUPPORTED_ORDINAL,
+                categoryOrdinal = CAPABILITY_CATEGORY_ORDINAL,
+                retriable = false,
+                likelyCapabilityIssue = true,
+                capabilityFailureCause = AndroidCapabilityFailureCause.FormatExceedsCapabilities,
                 capabilityFailureAxis = AndroidCapabilityFailureAxis.Decoder,
             )
 

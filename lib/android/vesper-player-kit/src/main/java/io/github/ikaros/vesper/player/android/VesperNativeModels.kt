@@ -149,6 +149,53 @@ internal class NativeTrackInfo(
     @JvmField val sampleRate: Int,
     @JvmField val isDefault: Boolean,
     @JvmField val isForced: Boolean,
+    @JvmField val support: NativeTrackSupport = NativeTrackSupport(),
+)
+
+internal enum class NativeTrackSupportStatus {
+    Supported,
+    ExceedsCapabilities,
+    Unsupported,
+    Unknown,
+}
+
+internal enum class NativeTrackSupportReason {
+    None,
+    FormatExceedsCapabilities,
+    UnsupportedType,
+    UnsupportedSubtype,
+    UnsupportedDrm,
+    RouteUnavailable,
+    PresentationUnavailable,
+    RuntimeFailure,
+    PlatformUnknown,
+    Unknown,
+}
+
+internal enum class NativeTrackSupportSource {
+    RuntimeTrackCatalog,
+    CapabilityProbe,
+    RuntimeFailure,
+    Unavailable,
+    Unknown,
+}
+
+internal class NativeTrackSupport(
+    @JvmField val statusOrdinal: Int = NativeTrackSupportStatus.Unknown.ordinal,
+    @JvmField val reasonOrdinal: Int = NativeTrackSupportReason.PlatformUnknown.ordinal,
+    @JvmField val sourceOrdinal: Int = NativeTrackSupportSource.Unavailable.ordinal,
+    @JvmField val statusRawValue: String? = null,
+    @JvmField val reasonRawValue: String? = null,
+    @JvmField val sourceRawValue: String? = null,
+    @JvmField val playbackPath: String? = null,
+    @JvmField val formatSupportRawValue: String? = null,
+    @JvmField val decoderName: String? = null,
+    @JvmField val surfaceKind: String? = null,
+    @JvmField val hdrType: String? = null,
+    @JvmField val hasSecureDecoderRequired: Boolean = false,
+    @JvmField val secureDecoderRequired: Boolean = false,
+    @JvmField val hasSecureOutputRequired: Boolean = false,
+    @JvmField val secureOutputRequired: Boolean = false,
 )
 
 internal class NativeTrackCatalog(
@@ -157,6 +204,8 @@ internal class NativeTrackCatalog(
     @JvmField val adaptiveAudio: Boolean,
     @JvmField val subtitleIdentityFailure: NativeTrackSelectionFailure? = null,
     @JvmField val advertisedSubtitleTrackCount: Int = 0,
+    @JvmField val catalogRevision: Long = 0L,
+    @JvmField val playbackPath: String? = null,
 )
 
 internal class NativeTrackSelectionPayload(
@@ -358,6 +407,20 @@ internal data class NativeVideoLayoutInfo(
     val pixelWidthHeightRatio: Float = 1.0f,
 )
 
+internal data class NativeFixedTrackCommandRecord(
+    val sourceEpoch: Long,
+    val catalogRevision: Long,
+    val trackId: String,
+)
+
+internal data class NativeRuntimeTrackRejection(
+    val sourceEpoch: Long,
+    val catalogRevision: Long,
+    val trackId: String,
+    val code: String,
+    val details: Map<String, Any?>,
+)
+
 internal sealed interface NativeBridgeEvent {
     data class PlaybackStateChanged(val state: PlaybackStateUi) : NativeBridgeEvent
     data class PlaybackRateChanged(val rate: Float) : NativeBridgeEvent
@@ -435,7 +498,10 @@ internal sealed interface NativePlayerCommand {
     data class SetVideoTrackSelection(val selection: NativeTrackSelectionPayload) : NativePlayerCommand
     data class SetAudioTrackSelection(val selection: NativeTrackSelectionPayload) : NativePlayerCommand
     data class SetSubtitleTrackSelection(val selection: NativeTrackSelectionPayload) : NativePlayerCommand
-    data class SetAbrPolicy(val policy: NativeAbrPolicyPayload) : NativePlayerCommand
+    data class SetAbrPolicy(
+        val policy: NativeAbrPolicyPayload,
+        val expectedCatalogRevision: Long?,
+    ) : NativePlayerCommand
 }
 
 internal sealed interface NativePreloadCommand {

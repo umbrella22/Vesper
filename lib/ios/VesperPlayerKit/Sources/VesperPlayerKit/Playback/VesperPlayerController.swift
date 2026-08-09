@@ -170,7 +170,7 @@ public final class VesperPlayerController: ObservableObject {
     private let setSubtitleTrackSelectionImpl: (VesperTrackSelection) async throws -> Void
     private let subtitleBridgeSnapshotImpl: () -> VesperSubtitleBridgeSnapshot
     private let setSubtitleStyleImpl: (VesperSubtitleStyle) -> Void
-    private let setAbrPolicyImpl: (VesperAbrPolicy) -> Void
+    private let setAbrPolicyImpl: (VesperAbrPolicy, Int64?) throws -> Void
     private let setResiliencePolicyImpl: (VesperPlaybackResiliencePolicy) -> Void
     private let setAudioSessionInterruptedImpl: (Bool) -> Void
     private let drainBenchmarkEventsImpl: () -> [VesperBenchmarkEvent]
@@ -257,7 +257,12 @@ public final class VesperPlayerController: ObservableObject {
             )
         }
         setSubtitleStyleImpl = bridge.setSubtitleStyle
-        setAbrPolicyImpl = bridge.setAbrPolicy
+        setAbrPolicyImpl = { policy, expectedCatalogRevision in
+            try bridge.setAbrPolicy(
+                policy,
+                expectedCatalogRevision: expectedCatalogRevision
+            )
+        }
         setResiliencePolicyImpl = bridge.setResiliencePolicy
         setAudioSessionInterruptedImpl = bridge.setAudioSessionInterrupted
         drainBenchmarkEventsImpl = bridge.drainBenchmarkEvents
@@ -440,7 +445,17 @@ public final class VesperPlayerController: ObservableObject {
     /// constrained resolution requests also wait for the current HLS variant
     /// catalog before the missing dimension can be inferred.
     public func setAbrPolicy(_ policy: VesperAbrPolicy) {
-        setAbrPolicyImpl(policy)
+        try? setAbrPolicy(policy, expectedCatalogRevision: nil)
+    }
+
+    /// Applies an ABR policy with an optional catalog revision precondition.
+    /// A fixed-track rejection is thrown before AVPlayer selection state is
+    /// modified.
+    public func setAbrPolicy(
+        _ policy: VesperAbrPolicy,
+        expectedCatalogRevision: Int64?
+    ) throws {
+        try setAbrPolicyImpl(policy, expectedCatalogRevision)
     }
 
     public func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {

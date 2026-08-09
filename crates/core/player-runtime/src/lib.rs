@@ -46,10 +46,12 @@ pub use player_download::{
     PipelineEventHookReport, PipelineEventHookReportBatch, PostDownloadProcessorRegistration,
 };
 pub use player_model::{
-    DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
-    MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
-    MediaTrackSelectionSnapshot, PlaybackProgress, PlayerError, PlayerErrorCategory,
-    PlayerErrorCode, PlayerResult, PresentationState, SubtitleErrorDetails, VideoPixelFormat,
+    DecodedVideoFrame, FixedTrackSelectionErrorDetails, MediaAbrMode, MediaAbrPolicy,
+    MediaSourceKind, MediaSourceProtocol, MediaTrack, MediaTrackCatalog, MediaTrackKind,
+    MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, MediaTrackSupport,
+    MediaTrackSupportDiagnostics, MediaTrackSupportReason, MediaTrackSupportSource,
+    MediaTrackSupportStatus, PlaybackProgress, PlayerError, PlayerErrorCategory, PlayerErrorCode,
+    PlayerResult, PresentationState, SubtitleErrorDetails, VideoPixelFormat,
 };
 pub use player_playlist::{
     MAX_PENDING_PLAYLIST_EVENTS, PlaylistActivationReason, PlaylistActiveItem,
@@ -1331,8 +1333,11 @@ pub enum PlayerRuntimeCommand {
     SetAudioTrackSelection { selection: MediaTrackSelection },
     /// Set subtitle track selection.
     SetSubtitleTrackSelection { selection: MediaTrackSelection },
-    /// Set adaptive bitrate policy.
-    SetAbrPolicy { policy: MediaAbrPolicy },
+    /// Set adaptive bitrate policy with an optional catalog revision precondition.
+    SetAbrPolicy {
+        policy: MediaAbrPolicy,
+        expected_catalog_revision: Option<u64>,
+    },
     /// Stop playback when the adapter supports it.
     Stop,
 }
@@ -2885,7 +2890,19 @@ impl PlayerRuntime {
         &mut self,
         policy: MediaAbrPolicy,
     ) -> PlayerResult<PlayerRuntimeCommandResult> {
-        self.dispatch(PlayerRuntimeCommand::SetAbrPolicy { policy })
+        self.set_abr_policy_with_catalog_revision(policy, None)
+    }
+
+    /// Sets ABR policy with a revision from the catalog consumed by the caller.
+    pub fn set_abr_policy_with_catalog_revision(
+        &mut self,
+        policy: MediaAbrPolicy,
+        expected_catalog_revision: Option<u64>,
+    ) -> PlayerResult<PlayerRuntimeCommandResult> {
+        self.dispatch(PlayerRuntimeCommand::SetAbrPolicy {
+            policy,
+            expected_catalog_revision,
+        })
     }
 
     /// Replaces the host-owned video surface.

@@ -206,6 +206,160 @@ int? _strictOptionalTimelineInt(Object? raw, String field) {
   return _strictTimelineInt(raw, field);
 }
 
+enum VesperTrackSupportStatus {
+  supported,
+  exceedsCapabilities,
+  unsupported,
+  unknown,
+}
+
+enum VesperTrackSupportReason {
+  none,
+  formatExceedsCapabilities,
+  unsupportedType,
+  unsupportedSubtype,
+  unsupportedDrm,
+  routeUnavailable,
+  presentationUnavailable,
+  runtimeFailure,
+  platformUnknown,
+  unknown,
+}
+
+enum VesperTrackSupportSource {
+  runtimeTrackCatalog,
+  capabilityProbe,
+  runtimeFailure,
+  unavailable,
+  unknown,
+}
+
+final class VesperTrackSupport {
+  const VesperTrackSupport({
+    this.status = VesperTrackSupportStatus.unknown,
+    this.reason = VesperTrackSupportReason.platformUnknown,
+    this.source = VesperTrackSupportSource.unavailable,
+    this.statusRawValue,
+    this.reasonRawValue,
+    this.sourceRawValue,
+    this.playbackPath,
+    this.formatSupportRawValue,
+    this.diagnostics = const <String, Object?>{},
+  });
+
+  factory VesperTrackSupport.fromMap(Map<Object?, Object?> map) {
+    final rawStatus = map['status'];
+    final rawReason = map['reason'];
+    final rawSource = map['source'];
+    final status = _trackSupportStatusFromWire(rawStatus);
+    final reason = _trackSupportReasonFromWire(rawReason);
+    final source = _trackSupportSourceFromWire(rawSource);
+    return VesperTrackSupport(
+      status: status,
+      reason: reason,
+      source: source,
+      statusRawValue: _trackSupportRawValue(
+        map['statusRawValue'],
+        rawStatus,
+        status == VesperTrackSupportStatus.unknown,
+      ),
+      reasonRawValue: _trackSupportRawValue(
+        map['reasonRawValue'],
+        rawReason,
+        reason == VesperTrackSupportReason.unknown,
+      ),
+      sourceRawValue: _trackSupportRawValue(
+        map['sourceRawValue'],
+        rawSource,
+        source == VesperTrackSupportSource.unknown,
+      ),
+      playbackPath: map['playbackPath'] as String?,
+      formatSupportRawValue: map['formatSupportRawValue'] as String?,
+      diagnostics: _decodeObjectMap(map['diagnostics']),
+    );
+  }
+
+  final VesperTrackSupportStatus status;
+  final VesperTrackSupportReason reason;
+  final VesperTrackSupportSource source;
+  final String? statusRawValue;
+  final String? reasonRawValue;
+  final String? sourceRawValue;
+  final String? playbackPath;
+  final String? formatSupportRawValue;
+  final Map<String, Object?> diagnostics;
+
+  bool get canAttemptExplicitSelection {
+    return status == VesperTrackSupportStatus.supported ||
+        status == VesperTrackSupportStatus.unknown;
+  }
+
+  Map<String, Object?> toMap() {
+    return <String, Object?>{
+      'status': status.name,
+      'reason': reason.name,
+      'source': source.name,
+      'statusRawValue': statusRawValue,
+      'reasonRawValue': reasonRawValue,
+      'sourceRawValue': sourceRawValue,
+      'playbackPath': playbackPath,
+      'formatSupportRawValue': formatSupportRawValue,
+      'diagnostics': diagnostics,
+    };
+  }
+}
+
+VesperTrackSupportStatus _trackSupportStatusFromWire(Object? raw) {
+  if (raw is String) {
+    for (final value in VesperTrackSupportStatus.values) {
+      if (value.name == raw) {
+        return value;
+      }
+    }
+  }
+  return VesperTrackSupportStatus.unknown;
+}
+
+VesperTrackSupportReason _trackSupportReasonFromWire(Object? raw) {
+  if (raw == null) {
+    return VesperTrackSupportReason.platformUnknown;
+  }
+  if (raw is String) {
+    for (final value in VesperTrackSupportReason.values) {
+      if (value.name == raw) {
+        return value;
+      }
+    }
+    return VesperTrackSupportReason.unknown;
+  }
+  return VesperTrackSupportReason.platformUnknown;
+}
+
+VesperTrackSupportSource _trackSupportSourceFromWire(Object? raw) {
+  if (raw == null) {
+    return VesperTrackSupportSource.unavailable;
+  }
+  if (raw is String) {
+    for (final value in VesperTrackSupportSource.values) {
+      if (value.name == raw) {
+        return value;
+      }
+    }
+    return VesperTrackSupportSource.unknown;
+  }
+  return VesperTrackSupportSource.unavailable;
+}
+
+String? _trackSupportRawValue(Object? explicit, Object? wire, bool unknown) {
+  if (explicit is String && explicit.isNotEmpty) {
+    return explicit;
+  }
+  if (unknown && wire is String && wire.isNotEmpty) {
+    return wire;
+  }
+  return null;
+}
+
 final class VesperMediaTrack {
   const VesperMediaTrack({
     required this.id,
@@ -221,6 +375,7 @@ final class VesperMediaTrack {
     this.sampleRate,
     this.isDefault = false,
     this.isForced = false,
+    this.support = const VesperTrackSupport(),
   });
 
   factory VesperMediaTrack.fromMap(Map<Object?, Object?> map) {
@@ -242,6 +397,9 @@ final class VesperMediaTrack {
       sampleRate: _decodeInt(map, 'sampleRate'),
       isDefault: _decodeBool(map, 'isDefault'),
       isForced: _decodeBool(map, 'isForced'),
+      support: _rawMap(map['support']) != null
+          ? VesperTrackSupport.fromMap(_rawMap(map['support'])!)
+          : const VesperTrackSupport(),
     );
   }
 
@@ -258,6 +416,7 @@ final class VesperMediaTrack {
   final int? sampleRate;
   final bool isDefault;
   final bool isForced;
+  final VesperTrackSupport support;
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
@@ -274,6 +433,7 @@ final class VesperMediaTrack {
       'sampleRate': sampleRate,
       'isDefault': isDefault,
       'isForced': isForced,
+      'support': support.toMap(),
     };
   }
 }
@@ -283,6 +443,8 @@ final class VesperTrackCatalog {
     this.tracks = const <VesperMediaTrack>[],
     this.adaptiveVideo = false,
     this.adaptiveAudio = false,
+    this.catalogRevision = 0,
+    this.playbackPath,
   });
 
   factory VesperTrackCatalog.fromMap(Map<Object?, Object?> map) {
@@ -296,12 +458,16 @@ final class VesperTrackCatalog {
           : const <VesperMediaTrack>[],
       adaptiveVideo: _decodeBool(map, 'adaptiveVideo'),
       adaptiveAudio: _decodeBool(map, 'adaptiveAudio'),
+      catalogRevision: _decodeInt(map, 'catalogRevision') ?? 0,
+      playbackPath: map['playbackPath'] as String?,
     );
   }
 
   final List<VesperMediaTrack> tracks;
   final bool adaptiveVideo;
   final bool adaptiveAudio;
+  final int catalogRevision;
+  final String? playbackPath;
 
   List<VesperMediaTrack> get videoTracks {
     return tracks
@@ -326,6 +492,8 @@ final class VesperTrackCatalog {
       'tracks': tracks.map((track) => track.toMap()).toList(growable: false),
       'adaptiveVideo': adaptiveVideo,
       'adaptiveAudio': adaptiveAudio,
+      'catalogRevision': catalogRevision,
+      'playbackPath': playbackPath,
     };
   }
 }

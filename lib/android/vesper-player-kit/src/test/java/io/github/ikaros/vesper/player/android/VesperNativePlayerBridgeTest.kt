@@ -300,6 +300,195 @@ class VesperNativePlayerBridgeTest {
 
     @Test
     @OptIn(ExperimentalCoroutinesApi::class)
+    fun subtitleSelectionAcceptsExactParametersReadbackWithoutGenerationCallback() = runTest {
+        val trackId = "subtitle:dash:sub-en"
+        val bindings =
+            FakeBindings(trackCatalog = subtitleCatalog(trackId)).apply {
+                acceptSubtitleSelectionWithoutGenerationCallback = true
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
+
+        assertEquals(1, bindings.subtitleTrackSelectionCount)
+        assertEquals(VesperTrackSelection.track(trackId), bridge.confirmedSubtitleSelection.value)
+        assertEquals(VesperSubtitleSelectionState.Confirmed, bridge.subtitleState.value.selectionState)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun subtitleSelectionWaitsForExactTargetReadinessBeforeApplying() = runTest {
+        val trackId = "subtitle:external:en"
+        val bindings =
+            FakeBindings(trackCatalog = subtitleCatalog(trackId)).apply {
+                subtitleTrackSelectable = false
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+        val request = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
+        }
+
+        runCurrent()
+        assertEquals(0, bindings.subtitleTrackSelectionCount)
+
+        bindings.subtitleTrackSelectable = true
+        advanceTimeBy(25L)
+        runCurrent()
+        request.await()
+
+        assertEquals(1, bindings.subtitleTrackSelectionCount)
+        assertEquals(VesperTrackSelection.track(trackId), bridge.confirmedSubtitleSelection.value)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun subtitleSelectionWaitsWhenCatalogIsReadyBeforeTextTargetAppears() = runTest {
+        val trackId = "subtitle:external:late"
+        val bindings = FakeBindings(trackCatalog = VesperTrackCatalog.Empty)
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+        val request = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
+        }
+
+        runCurrent()
+        assertEquals(0, bindings.subtitleTrackSelectionCount)
+        assertFalse(request.isCompleted)
+
+        bindings.trackCatalog = subtitleCatalog(trackId)
+        advanceTimeBy(25L)
+        runCurrent()
+        request.await()
+
+        assertEquals(1, bindings.subtitleTrackSelectionCount)
+        assertEquals(VesperTrackSelection.track(trackId), bridge.confirmedSubtitleSelection.value)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun subtitleSelectionFailsImmediatelyForCatalogIdentityFailure() = runTest {
+        val trackId = "subtitle:external:ambiguous"
+        val bindings =
+            FakeBindings(trackCatalog = subtitleCatalog(trackId)).apply {
+                subtitleCatalogFailure =
+                    NativeTrackSelectionFailure(
+                        kind = NativeTrackKind.Subtitle,
+                        trackId = trackId,
+                        code = "subtitle_track_identity_ambiguous",
+                        phase = "identity",
+                        message = "subtitle track identities are not unique",
+                    )
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        val request = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
+        }
+        runCurrent()
+
+        val failure =
+            try {
+                request.await()
+                throw AssertionError("Expected the identity failure.")
+            } catch (error: VesperPlayerUnsupportedOperation) {
+                error
+            }
+        assertEquals("subtitle_track_identity_ambiguous", failure.details["code"])
+        assertEquals("identity", failure.details["phase"])
+        assertEquals(0, bindings.subtitleTrackSelectionCount)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun subtitleSelectionPreservesMatchingResourceFailureWithoutWaitingForTimeout() = runTest {
+        val trackId = "subtitle:external:failed"
+        val bindings =
+            FakeBindings(trackCatalog = VesperTrackCatalog.Empty).apply {
+                subtitleCatalogFailure =
+                    NativeTrackSelectionFailure(
+                        kind = NativeTrackKind.Subtitle,
+                        trackId = trackId,
+                        code = "subtitle_resource_failed",
+                        phase = "resource",
+                        message = "external subtitle resource failed to load",
+                    )
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        val request = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
+        }
+        runCurrent()
+
+        val failure =
+            try {
+                request.await()
+                throw AssertionError("Expected the resource failure.")
+            } catch (error: VesperPlayerUnsupportedOperation) {
+                error
+            }
+        assertEquals("subtitle_resource_failed", failure.details["code"])
+        assertEquals("resource", failure.details["phase"])
+        assertEquals(trackId, failure.details["trackId"])
+        assertEquals(0, bindings.subtitleTrackSelectionCount)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun unrelatedSubtitleResourceFailureDoesNotBlockSelectableTarget() = runTest {
+        val failedId = "subtitle:external:failed"
+        val targetId = "subtitle:external:ready"
+        val bindings =
+            FakeBindings(trackCatalog = subtitleCatalog(targetId)).apply {
+                subtitleCatalogFailure =
+                    NativeTrackSelectionFailure(
+                        kind = NativeTrackKind.Subtitle,
+                        trackId = failedId,
+                        code = "subtitle_resource_failed",
+                        phase = "resource",
+                        message = "another subtitle resource failed to load",
+                    )
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        bridge.setSubtitleTrackSelection(VesperTrackSelection.track(targetId))
+
+        assertEquals(1, bindings.subtitleTrackSelectionCount)
+        assertEquals(VesperTrackSelection.track(targetId), bridge.confirmedSubtitleSelection.value)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun subtitleTargetReadinessDeadlineReturnsNotFoundWithoutApplying() = runTest {
+        val trackId = "subtitle:external:slow"
+        val bindings =
+            FakeBindings(trackCatalog = subtitleCatalog(trackId)).apply {
+                subtitleTrackSelectable = false
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+        val request = async(kotlinx.coroutines.SupervisorJob()) {
+            bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
+        }
+
+        runCurrent()
+        advanceTimeBy(3_001L)
+        runCurrent()
+        val failure =
+            try {
+                request.await()
+                throw AssertionError("Expected subtitle target readiness to expire.")
+            } catch (error: VesperPlayerUnsupportedOperation) {
+                error
+            }
+
+        assertEquals("subtitle_track_not_found", failure.details["code"])
+        assertEquals(trackId, failure.details["trackId"])
+        assertEquals(0, bindings.subtitleTrackSelectionCount)
+        assertEquals(VesperSubtitleSelectionState.Failed, bridge.subtitleState.value.selectionState)
+        assertEquals("subtitle_track_not_found", bridge.subtitleState.value.selectionError?.code)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun subtitleSelectionTimeoutUsesBoundedVirtualClockAndRetainsConfirmedState() = runTest {
         val confirmedId = "subtitle:dash:sub-en"
         val timedOutId = "subtitle:dash:sub-zh"
@@ -5358,6 +5547,8 @@ private class FakeBindings(
     var subtitleSelectionFailure: NativeTrackSelectionFailure? = null
     var deferSubtitleSelectionConfirmation = false
     var confirmAppliedSubtitleSelectionWithoutRenderer = false
+    var acceptSubtitleSelectionWithoutGenerationCallback = false
+    var subtitleTrackSelectable: Boolean? = null
     var abrPolicyCount = 0
     var configureSystemPlaybackCount = 0
     var updateSystemPlaybackMetadataCount = 0
@@ -5599,6 +5790,10 @@ private class FakeBindings(
     override fun currentAppliedSubtitleSelection(): VesperTrackSelection =
         appliedSubtitleSelection ?: trackSelection.subtitle
 
+    override fun isSubtitleTrackSelectable(trackId: String): Boolean =
+        subtitleTrackSelectable
+            ?: trackCatalog.subtitleTracks.any { it.id == trackId }
+
     override fun currentAdvertisedSubtitleTrackCount(): Int =
         advertisedSubtitleTrackCount ?: trackCatalog.subtitleTracks.size
 
@@ -5687,6 +5882,10 @@ private class FakeBindings(
             updateListener?.invoke()
             return
         }
+        if (acceptSubtitleSelectionWithoutGenerationCallback) {
+            appliedSubtitleSelection = selection
+            return
+        }
         confirmSubtitleSelection(selection)
     }
 
@@ -5716,7 +5915,10 @@ private class FakeBindings(
         updateListener?.invoke()
     }
 
-    override fun setAbrPolicy(policy: VesperAbrPolicy) {
+    override fun setAbrPolicy(
+        policy: VesperAbrPolicy,
+        expectedCatalogRevision: Long?,
+    ) {
         abrPolicyCount += 1
     }
 

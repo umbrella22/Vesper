@@ -207,6 +207,10 @@ internal fun collectTrackCatalog(
     advertisedExternalDefaultCount: Int? = null,
     declaredExternalSubtitleIds: List<String> = externalSubtitleIds,
     manifestInfo: NativeSubtitleManifestInfo? = null,
+    playbackPath: String? = null,
+    surfaceKind: String? = null,
+    decoderName: String? = null,
+    hdrType: String? = null,
 ): NativeTrackCatalog {
     val trackInfos = mutableListOf<NativeTrackInfo>()
     val advertisedSubtitleIds = mutableSetOf<String>()
@@ -283,7 +287,12 @@ internal fun collectTrackCatalog(
         }
 
         for (trackIndex in 0 until group.length) {
-            if (!group.isTrackSupported(trackIndex, true)) {
+            // Video tracks remain visible even when Media3 says they exceed
+            // the current capabilities or are unsupported. The public
+            // support record explains why an explicit fixed-track request
+            // will be rejected. Audio/text retain their existing selectable
+            // filtering and subtitle identity rules.
+            if (kind != NativeTrackKind.Video && !group.isTrackSupported(trackIndex, true)) {
                 continue
             }
             val format = group.getTrackFormat(trackIndex)
@@ -328,6 +337,14 @@ internal fun collectTrackCatalog(
                         ?: ((format.selectionFlags and C.SELECTION_FLAG_DEFAULT) != 0),
                     isForced = manifestDeclarations?.get(trackId)?.isForced
                         ?: ((format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0),
+                    support =
+                        trackSupportForFormatSupport(
+                            formatSupport = group.trackSupportOrNull(trackIndex),
+                            playbackPath = playbackPath,
+                            surfaceKind = surfaceKind,
+                            decoderName = decoderName,
+                            hdrType = hdrType,
+                        ),
                 )
         }
     }
@@ -393,7 +410,114 @@ internal fun collectTrackCatalog(
         adaptiveAudio = adaptiveAudio,
         subtitleIdentityFailure = catalogFailure?.copy(advertisedTrackCount = advertisedSubtitleTrackCount),
         advertisedSubtitleTrackCount = advertisedSubtitleTrackCount,
+        playbackPath = playbackPath,
     )
+}
+
+internal fun Tracks.Group.trackSupportOrNull(trackIndex: Int): Int? =
+    try {
+        getTrackSupport(trackIndex)
+    } catch (_: RuntimeException) {
+        // A platform track query can fail while a renderer is being rebuilt.
+        // Preserve the track with an explicit unknown result rather than
+        // turning a transient query failure into an unsupported claim.
+        null
+    }
+
+internal fun trackSupportForFormatSupport(
+    formatSupport: Int?,
+    playbackPath: String? = null,
+    surfaceKind: String? = null,
+    decoderName: String? = null,
+    hdrType: String? = null,
+): NativeTrackSupport {
+    val (status, reason) =
+        when (formatSupport) {
+            C.FORMAT_HANDLED ->
+                NativeTrackSupportStatus.Supported to NativeTrackSupportReason.None
+            C.FORMAT_EXCEEDS_CAPABILITIES ->
+                NativeTrackSupportStatus.ExceedsCapabilities to
+                    NativeTrackSupportReason.FormatExceedsCapabilities
+            C.FORMAT_UNSUPPORTED_DRM ->
+                NativeTrackSupportStatus.Unsupported to NativeTrackSupportReason.UnsupportedDrm
+            C.FORMAT_UNSUPPORTED_SUBTYPE ->
+                NativeTrackSupportStatus.Unsupported to NativeTrackSupportReason.UnsupportedSubtype
+            C.FORMAT_UNSUPPORTED_TYPE ->
+                NativeTrackSupportStatus.Unsupported to NativeTrackSupportReason.UnsupportedType
+            else -> NativeTrackSupportStatus.Unknown to NativeTrackSupportReason.PlatformUnknown
+        }
+    return NativeTrackSupport(
+        statusOrdinal = status.ordinal,
+        reasonOrdinal = reason.ordinal,
+        sourceOrdinal = NativeTrackSupportSource.RuntimeTrackCatalog.ordinal,
+        playbackPath = playbackPath,
+        formatSupportRawValue = formatSupport?.formatSupportName(),
+        decoderName = decoderName,
+        surfaceKind = surfaceKind,
+        hdrType = hdrType,
+    )
+}
+
+internal fun NativeTrackCatalog.withCatalogRevision(revision: Long): NativeTrackCatalog =
+    NativeTrackCatalog(
+        tracks = tracks,
+        adaptiveVideo = adaptiveVideo,
+        adaptiveAudio = adaptiveAudio,
+        subtitleIdentityFailure = subtitleIdentityFailure,
+        advertisedSubtitleTrackCount = advertisedSubtitleTrackCount,
+        catalogRevision = revision.coerceAtLeast(0L),
+        playbackPath = playbackPath,
+    )
+
+private fun StringBuilder.appendFingerprintField(value: String?) {
+    if (value == null) {
+        append("-1:")
+    } else {
+        append(value.length).append(':').append(value)
+    }
+    append('|')
+}
+
+/**
+ * Builds a session-local catalog identity without exposing manifest URLs or
+ * other source secrets. Track order is normalized because Media3 may reorder
+ * groups while retaining the same stable ids.
+ */
+internal fun NativeTrackCatalog.catalogFingerprint(
+    sourceProtocol: VesperPlayerSourceProtocol?,
+    surfaceKind: String?,
+    route: String?,
+    drmKeySystem: String?,
+    catalogReady: Boolean,
+    runtimeTrackRejectionKey: String? = null,
+): String {
+    val builder = StringBuilder()
+    builder.appendFingerprintField(playbackPath)
+    builder.appendFingerprintField(sourceProtocol?.name)
+    builder.appendFingerprintField(surfaceKind)
+    builder.appendFingerprintField(route)
+    builder.appendFingerprintField(drmKeySystem)
+    builder.appendFingerprintField(catalogReady.toString())
+    builder.appendFingerprintField(runtimeTrackRejectionKey)
+    builder.appendFingerprintField(adaptiveVideo.toString())
+    builder.appendFingerprintField(adaptiveAudio.toString())
+    builder.appendFingerprintField(advertisedSubtitleTrackCount.toString())
+    tracks
+        .sortedWith(compareBy<NativeTrackInfo> { it.kindOrdinal }.thenBy { it.id })
+        .forEach { track ->
+            builder.appendFingerprintField(track.id)
+            builder.appendFingerprintField(track.kindOrdinal.toString())
+            builder.appendFingerprintField(track.codec)
+            builder.appendFingerprintField(track.width.takeIf { track.hasWidth }?.toString())
+            builder.appendFingerprintField(track.height.takeIf { track.hasHeight }?.toString())
+            builder.appendFingerprintField(track.bitRate.takeIf { track.hasBitRate }?.toString())
+            builder.appendFingerprintField(track.support.statusOrdinal.toString())
+            builder.appendFingerprintField(track.support.reasonOrdinal.toString())
+            builder.appendFingerprintField(track.support.sourceOrdinal.toString())
+            builder.appendFingerprintField(track.support.formatSupportRawValue)
+            builder.appendFingerprintField(track.support.playbackPath)
+        }
+    return builder.toString()
 }
 
 internal fun collectTrackSelection(

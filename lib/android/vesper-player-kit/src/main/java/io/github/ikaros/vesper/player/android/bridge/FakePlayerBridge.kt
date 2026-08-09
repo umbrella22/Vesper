@@ -303,7 +303,10 @@ internal class FakePlayerBridge(
 
     override fun setSubtitleStyle(style: VesperSubtitleStyle) = Unit
 
-    override fun setAbrPolicy(policy: VesperAbrPolicy) = Unit
+    override fun setAbrPolicy(
+        policy: VesperAbrPolicy,
+        expectedCatalogRevision: Long?,
+    ) = Unit
 
     override fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) {
         if (isDisposed.get()) {

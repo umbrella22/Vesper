@@ -1,6 +1,11 @@
 package io.github.ikaros.vesper.player.flutter.android
 
 import io.github.ikaros.vesper.player.android.VesperExternalSubtitleSource
+import io.github.ikaros.vesper.player.android.VesperFixedTrackSelectionException
+import io.github.ikaros.vesper.player.android.VesperPlayerCommandException
+import io.github.ikaros.vesper.player.android.VesperPlayerErrorCategory
+import io.github.ikaros.vesper.player.android.VesperPlayerErrorCode
+import io.github.ikaros.vesper.player.android.VesperPlayerErrorState
 import io.github.ikaros.vesper.player.android.VesperPlayerDrmConfiguration
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerUnsupportedOperation
@@ -78,5 +83,55 @@ class VesperPlayerAndroidOutputMappingTest {
         assertEquals("external-en", details["trackId"])
         assertEquals(42L, details["commandId"])
         assertEquals(9L, details["sourceEpoch"])
+    }
+
+    @Test
+    fun fixedTrackErrorPreservesCapabilityEvidence() {
+        val error =
+            VesperFixedTrackSelectionException(
+                code = "trackExceedsCapabilities",
+                trackId = "video:4k",
+                expectedCatalogRevision = 4L,
+                actualCatalogRevision = 5L,
+                message = "track rejected",
+                extraDetails =
+                    mapOf(
+                        "reason" to "formatExceedsCapabilities",
+                        "formatSupportRawValue" to "exceedsCapabilities",
+                        "futureEvidence" to mapOf("renderer" to "video"),
+                    ),
+            ).toErrorMap()
+
+        assertEquals("fixedTrack", error["domain"])
+        assertEquals("trackExceedsCapabilities", error["code"])
+        assertEquals("formatExceedsCapabilities", error["reason"])
+        assertEquals("exceedsCapabilities", error["formatSupportRawValue"])
+        val futureEvidence = error["futureEvidence"] as Map<*, *>
+        assertEquals("video", futureEvidence["renderer"])
+    }
+
+    @Test
+    fun genericAbrPolicyCommandErrorKeepsItsOwnTaxonomy() {
+        val error =
+            VesperPlayerCommandException(
+                VesperPlayerErrorState(
+                    message = "constraints are required",
+                    code = VesperPlayerErrorCode.InvalidArgument,
+                    category = VesperPlayerErrorCategory.Input,
+                    retriable = false,
+                    details =
+                        mapOf(
+                            "domain" to "abrPolicy",
+                            "operation" to "setAbrPolicy",
+                        ),
+                )
+            ).toErrorMap()
+
+        assertEquals("invalidArgument", error["code"])
+        assertEquals("input", error["category"])
+        assertEquals(false, error["retriable"])
+        val details = error["details"] as Map<*, *>
+        assertEquals("abrPolicy", details["domain"])
+        assertEquals("setAbrPolicy", details["operation"])
     }
 }

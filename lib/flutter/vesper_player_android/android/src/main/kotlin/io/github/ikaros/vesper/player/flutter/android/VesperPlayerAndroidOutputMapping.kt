@@ -31,11 +31,13 @@ import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeStatu
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeResult
 import io.github.ikaros.vesper.player.android.VesperPlaybackCodecFamily
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
+import io.github.ikaros.vesper.player.android.VesperPlayerCommandException
 import io.github.ikaros.vesper.player.android.VesperPlayerUnsupportedOperation
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperRecommendedPlaybackPath
 import io.github.ikaros.vesper.player.android.VesperRetryPolicy
 import io.github.ikaros.vesper.player.android.VesperTrackCatalog
+import io.github.ikaros.vesper.player.android.VesperTrackSupport
 import io.github.ikaros.vesper.player.android.VesperTrackSelection
 import io.github.ikaros.vesper.player.android.VesperTrackSelectionSnapshot
 
@@ -59,6 +61,8 @@ internal fun VesperTrackCatalog.toMap(): Map<String, Any?> =
         "tracks" to tracks.map(VesperMediaTrack::toMap),
         "adaptiveVideo" to adaptiveVideo,
         "adaptiveAudio" to adaptiveAudio,
+        "catalogRevision" to catalogRevision,
+        "playbackPath" to playbackPath,
     )
 
 internal fun VesperMediaTrack.toMap(): Map<String, Any?> =
@@ -76,6 +80,27 @@ internal fun VesperMediaTrack.toMap(): Map<String, Any?> =
         "sampleRate" to sampleRate,
         "isDefault" to isDefault,
         "isForced" to isForced,
+        "support" to support.toMap(),
+    )
+
+internal fun VesperTrackSupport.toMap(): Map<String, Any?> =
+    mapOf(
+        "status" to status.toWireName(),
+        "reason" to reason.toWireName(),
+        "source" to source.toWireName(),
+        "statusRawValue" to statusRawValue,
+        "reasonRawValue" to reasonRawValue,
+        "sourceRawValue" to sourceRawValue,
+        "playbackPath" to playbackPath,
+        "formatSupportRawValue" to formatSupportRawValue,
+        "diagnostics" to
+            mapOf(
+                "decoderName" to diagnostics.decoderName,
+                "surfaceKind" to diagnostics.surfaceKind,
+                "hdrType" to diagnostics.hdrType,
+                "secureDecoderRequired" to diagnostics.secureDecoderRequired,
+                "secureOutputRequired" to diagnostics.secureOutputRequired,
+            ),
     )
 
 internal fun VesperTrackSelectionSnapshot.toMap(): Map<String, Any?> =
@@ -135,8 +160,21 @@ internal fun VesperCachePolicy.toMap(): Map<String, Any?> =
     )
 
 internal fun Throwable.toErrorMap(): Map<String, Any?> {
+    if (this is VesperPlayerCommandException) {
+        return errorState.toMap()
+    }
     if (this is VesperPlayerUnsupportedOperation) {
-        val subtitleCode = details["code"] as? String
+        val domain = details["domain"] as? String
+        val fixedTrackCode = details["code"] as? String
+        if (domain == "fixedTrack" && fixedTrackCode != null) {
+            return buildMap {
+                putAll(details)
+                put("domain", "fixedTrack")
+                put("code", fixedTrackCode)
+                put("message", details["message"] as? String ?: message)
+            }
+        }
+        val subtitleCode = fixedTrackCode
         val isSubtitleError = details["domain"] == "subtitle"
         if (subtitleCode != null && isSubtitleError) {
             val phase =

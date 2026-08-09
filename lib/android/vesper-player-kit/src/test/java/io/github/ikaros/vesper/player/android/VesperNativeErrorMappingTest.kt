@@ -9,6 +9,7 @@ import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -77,6 +78,51 @@ class VesperNativeErrorMappingTest {
         assertEquals(true, error.details["retriable"])
         assertEquals(42L, (error.details["commandId"] as Number).toLong())
         assertEquals(9L, (error.details["sourceEpoch"] as Number).toLong())
+    }
+
+    @Test
+    fun nativeFixedTrackErrorPreservesCapabilityEvidence() {
+        val error =
+            fixedTrackNativeErrorFromJson(
+                """{"domain":"fixedTrack","code":"trackExceedsCapabilities","trackId":"video:4k","expectedCatalogRevision":4,"actualCatalogRevision":5,"message":"track rejected","reason":"formatExceedsCapabilities","formatSupportRawValue":"exceedsCapabilities","futureEvidence":{"renderer":"video"}}"""
+            )
+
+        assertEquals("trackExceedsCapabilities", error.code)
+        assertEquals("video:4k", error.trackId)
+        assertEquals(4L, error.expectedCatalogRevision)
+        assertEquals(5L, error.actualCatalogRevision)
+        assertEquals("formatExceedsCapabilities", error.details["reason"])
+        assertEquals("exceedsCapabilities", error.details["formatSupportRawValue"])
+        val futureEvidence = error.details["futureEvidence"] as Map<*, *>
+        assertEquals("video", futureEvidence["renderer"])
+    }
+
+    @Test
+    fun nativeAbrPolicyInputErrorDoesNotBecomeFixedTrackException() {
+        val error =
+            abrPolicyNativeErrorFromJson(
+                """{"domain":"abrPolicy","code":"invalidArgument","category":"input","retriable":false,"operation":"setAbrPolicy","message":"constraints are required"}"""
+            )
+
+        assertTrue(error is VesperPlayerCommandException)
+        assertFalse(error is VesperFixedTrackSelectionException)
+        val commandError = error as VesperPlayerCommandException
+        assertEquals(VesperPlayerErrorCode.InvalidArgument, commandError.errorState.code)
+        assertEquals(VesperPlayerErrorCategory.Input, commandError.errorState.category)
+        assertEquals("abrPolicy", commandError.errorState.details["domain"])
+        assertEquals("setAbrPolicy", commandError.errorState.details["operation"])
+    }
+
+    @Test
+    fun nativeAbrPolicyCancellationPreservesGenericPlaybackTaxonomy() {
+        val error =
+            abrPolicyNativeErrorFromJson(
+                """{"domain":"abrPolicy","code":"cancelled","category":"playback","retriable":false,"message":"session closed"}"""
+            ) as VesperPlayerCommandException
+
+        assertEquals(VesperPlayerErrorCode.Cancelled, error.errorState.code)
+        assertEquals(VesperPlayerErrorCategory.Playback, error.errorState.category)
+        assertEquals("session closed", error.message)
     }
 
     @Test
@@ -253,6 +299,58 @@ class VesperNativeErrorMappingTest {
         assertFalse(error.retriable)
         assertTrue(error.likelyCapabilityIssue)
         assertEquals(AndroidCapabilityFailureCause.DecodeFailed, error.capabilityFailureCause)
+    }
+
+    @Test
+    fun runtimeFixedTrackCapabilityRejectionRequiresMatchingSourceTrackAndCapabilityFailure() {
+        val command =
+            NativeFixedTrackCommandRecord(
+                sourceEpoch = 5L,
+                catalogRevision = 9L,
+                trackId = "video:4k",
+            )
+        val decodeFailure =
+            classifyPlaybackException(
+                playbackException(PlaybackException.ERROR_CODE_DECODING_FAILED)
+            )
+
+        assertEquals(
+            "5:9:video:4k",
+            runtimeFixedTrackCapabilityRejectionKey(
+                command = command,
+                callbackGeneration = 5L,
+                activeTrackId = "video:4k",
+                classified = decodeFailure,
+            ),
+        )
+        assertNull(
+            runtimeFixedTrackCapabilityRejectionKey(
+                command = command,
+                callbackGeneration = 6L,
+                activeTrackId = "video:4k",
+                classified = decodeFailure,
+            )
+        )
+        assertNull(
+            runtimeFixedTrackCapabilityRejectionKey(
+                command = command,
+                callbackGeneration = 5L,
+                activeTrackId = "video:1080p",
+                classified = decodeFailure,
+            )
+        )
+        val networkFailure =
+            classifyPlaybackException(
+                playbackException(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT)
+            )
+        assertNull(
+            runtimeFixedTrackCapabilityRejectionKey(
+                command = command,
+                callbackGeneration = 5L,
+                activeTrackId = "video:4k",
+                classified = networkFailure,
+            )
+        )
     }
 
     @Test

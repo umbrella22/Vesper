@@ -38,7 +38,7 @@ extension VesperNativePlayerBridge {
             self.videoVariantPinsByTrackId = trackState.videoVariantPinsByTrackId
             self.audioOptionsByTrackId = trackState.audioOptionsByTrackId
             self.subtitleOptionsByTrackId = trackState.subtitleOptionsByTrackId
-            self.publishedTrackCatalog = trackState.catalog
+            self.publishTrackCatalog(trackState.catalog)
             self.publishedSubtitleState = self.publishedSubtitleState.replacingCatalog(
                 with: trackState.subtitleState
             )

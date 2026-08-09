@@ -62,4 +62,58 @@ void main() {
       expect(calls.first.arguments, <String, Object?>{'playerId': 'player-1'});
     },
   );
+
+  test(
+    'waits through a transient unavailable overlay before returning visible evidence',
+    () async {
+      var attempts = 0;
+      final snapshot = await waitForVisibleExampleSubtitleOverlay(
+        snapshot: () async {
+          attempts += 1;
+          if (attempts == 1) {
+            throw PlatformException(code: 'subtitle_overlay_unavailable');
+          }
+          return const ExampleSubtitleOverlaySnapshot(
+            text: 'Subtitle B',
+            hidden: false,
+            alpha: 1,
+            windowAttached: true,
+            frame: ExampleSubtitleOverlayFrame(
+              x: 0,
+              y: 0,
+              width: 320,
+              height: 32,
+            ),
+            visible: true,
+          );
+        },
+        expectedText: 'Subtitle B',
+        timeout: const Duration(milliseconds: 100),
+        retryDelay: const Duration(milliseconds: 1),
+      );
+
+      expect(snapshot.text, 'Subtitle B');
+      expect(attempts, 2);
+    },
+  );
+
+  test('propagates non-transient native errors', () async {
+    expect(
+      () => waitForVisibleExampleSubtitleOverlay(
+        snapshot: () async {
+          throw PlatformException(code: 'other_error');
+        },
+        expectedText: 'Subtitle B',
+        timeout: const Duration(milliseconds: 100),
+        retryDelay: const Duration(milliseconds: 1),
+      ),
+      throwsA(
+        isA<PlatformException>().having(
+          (PlatformException error) => error.code,
+          'code',
+          'other_error',
+        ),
+      ),
+    );
+  });
 }

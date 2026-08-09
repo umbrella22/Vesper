@@ -1,9 +1,35 @@
 package io.github.ikaros.vesper.player.android
 
-class VesperPlayerUnsupportedOperation(
+open class VesperPlayerUnsupportedOperation(
     message: String,
     val details: Map<String, Any?> = emptyMap(),
 ) : UnsupportedOperationException(message)
+
+/** Structured failure returned by a player command outside a specialized domain. */
+class VesperPlayerCommandException(
+    val errorState: VesperPlayerErrorState,
+) : RuntimeException(errorState.message)
+
+/** Structured rejection for an explicit fixed-video-track command. */
+class VesperFixedTrackSelectionException(
+    val code: String,
+    val trackId: String?,
+    val expectedCatalogRevision: Long?,
+    val actualCatalogRevision: Long?,
+    message: String,
+    extraDetails: Map<String, Any?> = emptyMap(),
+) : VesperPlayerUnsupportedOperation(
+    message,
+    buildMap {
+        put("domain", "fixedTrack")
+        put("code", code)
+        put("trackId", trackId)
+        put("expectedCatalogRevision", expectedCatalogRevision)
+        put("actualCatalogRevision", actualCatalogRevision)
+        put("message", message)
+        putAll(extraDetails)
+    },
+)
 
 fun VesperPlayerUnsupportedOperation.toPlayerErrorState(): VesperPlayerErrorState =
     VesperPlayerErrorState(

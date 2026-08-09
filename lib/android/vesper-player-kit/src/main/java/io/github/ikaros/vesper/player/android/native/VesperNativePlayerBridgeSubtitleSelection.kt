@@ -17,9 +17,7 @@ internal data class PendingSubtitleSelection(
     val commandId: Long,
     val sourceEpoch: Long,
     val selection: VesperTrackSelection,
-    val beforeAppliedSelection: VesperTrackSelection,
     val itemEpoch: Long,
-    val startingGeneration: Long,
     val sourceCallbackGeneration: Long,
     val commandGeneration: Long,
     val completion: CompletableDeferred<Unit>,
@@ -77,9 +75,7 @@ internal suspend fun VesperNativePlayerBridge.applySubtitleSelectionTransaction(
             commandId = commandId,
             sourceEpoch = sourceEpoch,
             selection = selection,
-            beforeAppliedSelection = bindings.currentAppliedSubtitleSelection(),
             itemEpoch = itemEpoch,
-            startingGeneration = bindings.trackSelectionChangeGeneration,
             sourceCallbackGeneration = bindings.sourceCallbackGeneration,
             commandGeneration = bindings.subtitleSelectionCommandGeneration + 1L,
             completion = completion,
@@ -94,35 +90,37 @@ internal suspend fun VesperNativePlayerBridge.applySubtitleSelectionTransaction(
         selectionError = null,
     )
 
+    var selectionApplied = false
     try {
         try {
             withTimeout(SUBTITLE_SELECTION_CONFIRMATION_TIMEOUT_MS) {
                 awaitSubtitleCatalogReadiness(pending)
-                if (selection.mode == VesperTrackSelectionMode.Track &&
-                    (selection.trackId.isNullOrBlank() ||
-                        selection.trackId !in bindings.currentTrackCatalog().subtitleTracks.map { it.id })
-                ) {
-                    throw subtitleSelectionFailure(
-                        code = "subtitle_track_not_found",
-                        trackId = selection.trackId,
-                        message =
-                            "the requested subtitle track ${selection.trackId ?: "<null>"} is not in the current catalog",
-                        commandId = commandId,
-                        sourceEpoch = sourceEpoch,
-                    )
-                }
+                awaitExactSubtitleTargetReadiness(pending)
+                throwIfTerminalSubtitleCatalogFailure(pending)
                 bindings.setSubtitleTrackSelection(selection)
+                selectionApplied = true
                 // Some Media3 fakes and no-op player implementations do not
                 // dispatch when the request is already effective.
                 refreshFromNative()
                 completion.await()
             }
         } catch (_: TimeoutCancellationException) {
+            val targetNeverBecameSelectable =
+                selection.mode == VesperTrackSelectionMode.Track && !selectionApplied
             throw subtitleSelectionFailure(
-                code = "subtitle_selection_timeout",
+                code =
+                    if (targetNeverBecameSelectable) {
+                        "subtitle_track_not_found"
+                    } else {
+                        "subtitle_selection_timeout"
+                    },
                 trackId = selection.trackId,
                 message =
-                    "Media3 did not confirm the subtitle selection before the 3 second deadline",
+                    if (targetNeverBecameSelectable) {
+                        "the requested subtitle track did not become selectable before the 3 second deadline"
+                    } else {
+                        "Media3 did not confirm the subtitle selection before the 3 second deadline"
+                    },
                 retriable = true,
                 commandId = commandId,
                 sourceEpoch = sourceEpoch,
@@ -206,11 +204,39 @@ internal suspend fun VesperNativePlayerBridge.applySubtitleSelectionTransaction(
     }
 }
 
+private suspend fun VesperNativePlayerBridge.awaitExactSubtitleTargetReadiness(
+    pending: PendingSubtitleSelection,
+) {
+    if (pending.selection.mode != VesperTrackSelectionMode.Track) return
+    val trackId = pending.selection.trackId ?: return
+    while (true) {
+        throwIfTerminalSubtitleCatalogFailure(pending)
+        if (bindings.isSubtitleTrackSelectable(trackId)) return
+        if (pending.completion.isCompleted) {
+            pending.completion.await()
+            return
+        }
+        if (!isCurrentSubtitleSelection(pending)) {
+            throw subtitleSelectionFailure(
+                code = "subtitle_source_changed",
+                trackId = trackId,
+                message = "the source or player item changed while waiting for the subtitle track",
+                retriable = true,
+                commandId = pending.commandId,
+                sourceEpoch = pending.sourceEpoch,
+            )
+        }
+        delay(25L)
+    }
+}
+
 private suspend fun VesperNativePlayerBridge.awaitSubtitleCatalogReadiness(
     pending: PendingSubtitleSelection,
 ) {
     if (pending.selection.mode == VesperTrackSelectionMode.Disabled) return
-    while (!bindings.isTrackCatalogReady()) {
+    while (true) {
+        throwIfTerminalSubtitleCatalogFailure(pending)
+        if (bindings.isTrackCatalogReady()) return
         if (pending.completion.isCompleted) {
             pending.completion.await()
             return
@@ -227,6 +253,34 @@ private suspend fun VesperNativePlayerBridge.awaitSubtitleCatalogReadiness(
         }
         delay(25L)
     }
+}
+
+/**
+ * Catalog identity failures are global because the subtitle catalog has no
+ * trustworthy stable-id contract. Resource failures are terminal only when
+ * they are global or identify the track requested by this command; another
+ * failed external subtitle must not block a selectable target.
+ */
+private fun VesperNativePlayerBridge.throwIfTerminalSubtitleCatalogFailure(
+    pending: PendingSubtitleSelection,
+) {
+    val failure = bindings.currentSubtitleCatalogFailure() ?: return
+    if (!failure.blocks(pending.selection)) return
+    throw subtitleSelectionFailure(
+        code = failure.code,
+        phase = failure.phase,
+        trackId = failure.trackId ?: pending.selection.trackId,
+        message = failure.message,
+        retriable = failure.retriable,
+        commandId = pending.commandId,
+        sourceEpoch = pending.sourceEpoch,
+    )
+}
+
+private fun NativeTrackSelectionFailure.blocks(selection: VesperTrackSelection): Boolean {
+    if (phase.equals("identity", ignoreCase = true)) return true
+    if (trackId == null) return true
+    return selection.mode == VesperTrackSelectionMode.Track && selection.trackId == trackId
 }
 
 private fun VesperNativePlayerBridge.publishSubtitleSelectionFailure(
@@ -253,10 +307,11 @@ private fun VesperNativePlayerBridge.publishSubtitleSelectionFailure(
 }
 
 /**
- * Called after every native snapshot refresh. Only a Media3 parameter change,
- * or an already-applied request, may complete a pending command. The command
- * and source epochs reject stale callbacks. Renderer-active state remains
- * separate and drives the effective subtitle id.
+ * Called after every native snapshot refresh. Exact Media3 selection-parameter
+ * readback completes a pending command; track generations only trigger another
+ * refresh and are not success evidence. The command and source epochs reject
+ * stale callbacks. Renderer-active state remains separate and drives the
+ * effective subtitle id.
  */
 internal fun VesperNativePlayerBridge.observeSubtitleSelectionConfirmation(
     appliedSelection: VesperTrackSelection,
@@ -280,11 +335,7 @@ internal fun VesperNativePlayerBridge.observeSubtitleSelectionConfirmation(
         return
     }
 
-    val generationChanged = bindings.trackSelectionChangeGeneration > pending.startingGeneration
-    val alreadyApplied = appliedSelection == pending.beforeAppliedSelection
-    if (generationChanged || alreadyApplied) {
-        pending.completion.complete(Unit)
-    }
+    pending.completion.complete(Unit)
 }
 
 internal fun VesperNativePlayerBridge.failPendingSubtitleSelection(

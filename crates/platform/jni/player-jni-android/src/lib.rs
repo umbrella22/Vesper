@@ -39,7 +39,8 @@ use player_platform_mobile::{
 use player_runtime::NativeFramePipelineMode;
 use player_runtime::{
     FrameProcessorMode, MediaTrackSelection, PipelineEventHookReportBatch, PlayerError,
-    PlayerErrorCode, PlayerRuntimeCommand, SourceNormalizerMode, SubtitleErrorDetails,
+    PlayerErrorCategory, PlayerErrorCode, PlayerRuntimeCommand, SourceNormalizerMode,
+    SubtitleErrorDetails,
 };
 
 pub(crate) const PKG: &str = "io/github/ikaros/vesper/player/android";
@@ -53,14 +54,14 @@ use object_builders::{
     host_event_object, host_snapshot_object, native_command_object,
     resolved_resilience_policy_object, timeline_object, track_preferences_object,
 };
-pub(crate) use parsers::{error_category_from_jni_ordinal, error_code_from_jni_ordinal};
 use parsers::{
-    exo_state_from_ordinal, long_field, parse_native_abr_policy, parse_native_buffering_policy,
-    parse_native_cache_policy, parse_native_retry_policy, parse_native_track_catalog,
-    parse_native_track_preferences, parse_native_track_selection,
+    boxed_long_value, exo_state_from_ordinal, long_field, parse_native_abr_policy,
+    parse_native_buffering_policy, parse_native_cache_policy, parse_native_retry_policy,
+    parse_native_track_catalog, parse_native_track_preferences, parse_native_track_selection,
     parse_native_track_selection_snapshot, source_kind_from_ordinal, source_protocol_from_ordinal,
     string_field, string_from_java_object,
 };
+pub(crate) use parsers::{error_category_from_jni_ordinal, error_code_from_jni_ordinal};
 use plugin_registry_jni::{clone_android_plugin_registry, parse_plugin_references};
 pub(crate) use sessions::resolve_preload_budget_with_runtime;
 use sessions::{
@@ -1592,38 +1593,141 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
     _class: JClass<'_>,
     session_handle: jlong,
     policy: JObject<'_>,
-) {
+    expected_catalog_revision: JObject<'_>,
+) -> jstring {
     run_jni_entry(&mut unowned_env, |unowned_env| {
         unowned_env
-            .with_env(|env| -> JniResult<()> {
+            .with_env(|env| -> JniResult<jstring> {
                 if policy.is_null() {
-                    return Ok(());
+                    return Ok(std::ptr::null_mut());
                 }
 
                 let policy = parse_native_abr_policy(env, policy)?;
-                let _ = with_session_mut(env, session_handle, |session| {
-                    let _ = session.dispatch_command(PlayerRuntimeCommand::SetAbrPolicy { policy });
+                let expected_catalog_revision = boxed_long_value(env, expected_catalog_revision)?;
+                let request = policy.clone();
+                let result = with_session_mut_checked(session_handle, |session| {
+                    session.dispatch_command(PlayerRuntimeCommand::SetAbrPolicy {
+                        policy,
+                        expected_catalog_revision,
+                    })
                 });
-                Ok(())
+                match result {
+                    Ok(Ok(_)) => Ok(std::ptr::null_mut()),
+                    Ok(Err(error)) => {
+                        let json = abr_policy_command_error_json(&request, &error);
+                        Ok(env.new_string(json)?.into_raw())
+                    }
+                    Err(message) => {
+                        let error = stale_abr_policy_session_error(message);
+                        let json = abr_policy_command_error_json(&request, &error);
+                        Ok(env.new_string(json)?.into_raw())
+                    }
+                }
             })
             .resolve::<ThrowRuntimeExAndDefault>()
-    });
+    })
+}
+
+fn stale_abr_policy_session_error(message: &'static str) -> PlayerError {
+    PlayerError::new(PlayerErrorCode::Cancelled, message)
+}
+
+fn abr_policy_command_error_json(
+    policy: &player_runtime::MediaAbrPolicy,
+    error: &PlayerError,
+) -> String {
+    let fixed_track_details = error.fixed_track_selection_details();
+    let mut payload = match fixed_track_details {
+        Some(details) => serde_json::to_value(details)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default(),
+        None => serde_json::Map::new(),
+    };
+    if fixed_track_details.is_some() {
+        payload.insert(
+            "domain".to_owned(),
+            serde_json::Value::String("fixedTrack".to_owned()),
+        );
+        if let Some(track_id) = policy.track_id.as_ref() {
+            payload
+                .entry("trackId".to_owned())
+                .or_insert_with(|| serde_json::Value::String(track_id.clone()));
+        }
+    } else {
+        payload.insert(
+            "domain".to_owned(),
+            serde_json::Value::String("abrPolicy".to_owned()),
+        );
+        payload.insert(
+            "code".to_owned(),
+            serde_json::Value::String(player_error_code_wire_name(error.code()).to_owned()),
+        );
+        payload.insert(
+            "category".to_owned(),
+            serde_json::Value::String(player_error_category_wire_name(error.category()).to_owned()),
+        );
+        payload.insert(
+            "retriable".to_owned(),
+            serde_json::Value::Bool(error.is_retriable()),
+        );
+    }
+    payload.insert(
+        "operation".to_owned(),
+        serde_json::Value::String("setAbrPolicy".to_owned()),
+    );
+    payload.insert(
+        "message".to_owned(),
+        serde_json::Value::String(error.message().to_owned()),
+    );
+    serde_json::Value::Object(payload).to_string()
+}
+
+fn player_error_code_wire_name(code: PlayerErrorCode) -> &'static str {
+    match code {
+        PlayerErrorCode::InvalidArgument => "invalidArgument",
+        PlayerErrorCode::InvalidState => "invalidState",
+        PlayerErrorCode::InvalidSource => "invalidSource",
+        PlayerErrorCode::BackendFailure => "backendFailure",
+        PlayerErrorCode::AudioOutputUnavailable => "audioOutputUnavailable",
+        PlayerErrorCode::DecodeFailure => "decodeFailure",
+        PlayerErrorCode::SeekFailure => "seekFailure",
+        PlayerErrorCode::Unsupported => "unsupported",
+        PlayerErrorCode::CommandChannelClosed => "commandChannelClosed",
+        PlayerErrorCode::EventChannelClosed => "eventChannelClosed",
+        PlayerErrorCode::Cancelled => "cancelled",
+        PlayerErrorCode::Timeout => "timeout",
+    }
+}
+
+fn player_error_category_wire_name(category: PlayerErrorCategory) -> &'static str {
+    match category {
+        PlayerErrorCategory::Input => "input",
+        PlayerErrorCategory::Source => "source",
+        PlayerErrorCategory::Network => "network",
+        PlayerErrorCategory::Decode => "decode",
+        PlayerErrorCategory::AudioOutput => "audioOutput",
+        PlayerErrorCategory::Playback => "playback",
+        PlayerErrorCategory::Capability => "capability",
+        PlayerErrorCategory::Platform => "platform",
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::handles::next_generation;
     use super::{
-        HandleRegistry, error_category_from_jni_ordinal, error_code_from_jni_ordinal,
-        resolve_resilience_policy_with_runtime, resolve_track_preferences_with_runtime,
+        HandleRegistry, abr_policy_command_error_json, error_category_from_jni_ordinal,
+        error_code_from_jni_ordinal, resolve_resilience_policy_with_runtime,
+        resolve_track_preferences_with_runtime, stale_abr_policy_session_error,
         stale_subtitle_session_error, subtitle_command_error_json, u64_to_jlong_saturating,
         u128_to_jlong_saturating, with_session_mut_checked,
     };
     use player_runtime::{
-        MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrackSelection,
-        PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
-        PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerRetryBackoff, PlayerRetryPolicy,
-        PlayerTrackPreferencePolicy, SubtitleErrorDetails,
+        FixedTrackSelectionErrorDetails, MediaAbrMode, MediaAbrPolicy, MediaSourceKind,
+        MediaSourceProtocol, MediaTrackSelection, PlayerBufferingPolicy, PlayerBufferingPreset,
+        PlayerCachePolicy, PlayerCachePreset, PlayerError, PlayerErrorCategory, PlayerErrorCode,
+        PlayerRetryBackoff, PlayerRetryPolicy, PlayerTrackPreferencePolicy, SubtitleErrorDetails,
     };
     use std::time::Duration;
 
@@ -1779,6 +1883,74 @@ mod tests {
                 .expect("subtitle error JSON");
         assert_eq!(payload["code"], "subtitle_selection_timeout");
         assert_eq!(payload["phase"], "selection");
+    }
+
+    #[test]
+    fn abr_policy_json_keeps_non_fixed_command_errors_out_of_fixed_track_domain() {
+        let policy = MediaAbrPolicy {
+            mode: MediaAbrMode::Constrained,
+            track_id: None,
+            max_bit_rate: None,
+            max_width: None,
+            max_height: None,
+        };
+        let error = PlayerError::new(
+            PlayerErrorCode::InvalidArgument,
+            "constrained ABR requires at least one bitrate or size constraint",
+        );
+        let payload: serde_json::Value =
+            serde_json::from_str(&abr_policy_command_error_json(&policy, &error))
+                .expect("ABR policy error JSON");
+
+        assert_eq!(payload["domain"], "abrPolicy");
+        assert_eq!(payload["code"], "invalidArgument");
+        assert_eq!(payload["category"], "input");
+        assert_eq!(payload["retriable"], false);
+        assert_eq!(payload["operation"], "setAbrPolicy");
+        assert!(payload.get("trackId").is_none());
+    }
+
+    #[test]
+    fn abr_policy_json_keeps_fixed_track_rejection_details_typed() {
+        let policy = MediaAbrPolicy {
+            mode: MediaAbrMode::FixedTrack,
+            track_id: Some("video:4k".to_owned()),
+            max_bit_rate: None,
+            max_width: None,
+            max_height: None,
+        };
+        let error = PlayerError::new(PlayerErrorCode::Unsupported, "track exceeds capabilities")
+            .with_fixed_track_selection_details(FixedTrackSelectionErrorDetails::new(
+                "trackExceedsCapabilities",
+                Some("video:4k".to_owned()),
+                Some(4),
+                Some(5),
+                "track exceeds capabilities",
+            ));
+        let payload: serde_json::Value =
+            serde_json::from_str(&abr_policy_command_error_json(&policy, &error))
+                .expect("fixed-track error JSON");
+
+        assert_eq!(payload["domain"], "fixedTrack");
+        assert_eq!(payload["code"], "trackExceedsCapabilities");
+        assert_eq!(payload["trackId"], "video:4k");
+        assert_eq!(payload["expectedCatalogRevision"], 4);
+        assert_eq!(payload["actualCatalogRevision"], 5);
+        assert_eq!(payload["operation"], "setAbrPolicy");
+    }
+
+    #[test]
+    fn stale_abr_policy_session_error_remains_a_generic_command_failure() {
+        let policy = MediaAbrPolicy::default();
+        let error = stale_abr_policy_session_error("invalid android JNI session handle");
+        let payload: serde_json::Value =
+            serde_json::from_str(&abr_policy_command_error_json(&policy, &error))
+                .expect("stale-session ABR error JSON");
+
+        assert!(error.fixed_track_selection_details().is_none());
+        assert_eq!(payload["domain"], "abrPolicy");
+        assert_eq!(payload["code"], "cancelled");
+        assert_eq!(payload["category"], "playback");
     }
 
     #[test]

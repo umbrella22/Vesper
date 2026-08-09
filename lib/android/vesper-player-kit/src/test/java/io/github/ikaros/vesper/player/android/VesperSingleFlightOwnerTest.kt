@@ -179,6 +179,7 @@ class VesperSingleFlightOwnerTest {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val blockedFinished = CountDownLatch(1)
+        val firstFinished = CountDownLatch(1)
         val blockedResource = Any()
         val barrierResource = Any()
         val owner =
@@ -191,14 +192,23 @@ class VesperSingleFlightOwnerTest {
         val executor = Executors.newSingleThreadExecutor()
         try {
             val first = executor.submit<Any> {
-                owner.get("blocked") {
-                    entered.countDown()
-                    release.await()
-                    blockedFinished.countDown()
-                    blockedResource
+                try {
+                    owner.get("blocked") {
+                        entered.countDown()
+                        release.await()
+                        blockedFinished.countDown()
+                        blockedResource
+                    }
+                } finally {
+                    firstFinished.countDown()
                 }
             }
             assertTrue(entered.await(1, TimeUnit.SECONDS))
+            assertTrue(firstFinished.await(1, TimeUnit.SECONDS))
+            val firstError = assertThrows(ExecutionException::class.java) {
+                first.get(1, TimeUnit.SECONDS)
+            }
+            assertTrue(firstError.cause is TimeoutException)
 
             assertThrows(TimeoutException::class.java) {
                 owner.get("queued") {
@@ -218,11 +228,6 @@ class VesperSingleFlightOwnerTest {
                 owner.get("barrier") { barrierResource },
             )
             assertEquals(0, queuedConstructions.get())
-
-            val firstError = assertThrows(ExecutionException::class.java) {
-                first.get(1, TimeUnit.SECONDS)
-            }
-            assertTrue(firstError.cause is TimeoutException)
             owner.close()
             assertEquals(2, closes.get())
         } finally {

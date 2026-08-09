@@ -350,7 +350,10 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     func setSubtitleStyle(_ style: VesperSubtitleStyle) {}
 
-    func setAbrPolicy(_ policy: VesperAbrPolicy) {}
+    func setAbrPolicy(
+        _ policy: VesperAbrPolicy,
+        expectedCatalogRevision: Int64?
+    ) throws {}
 
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {
         publishedResiliencePolicy = policy

@@ -36,6 +36,88 @@ pub enum MediaTrackKind {
     Subtitle,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MediaTrackSupportStatus {
+    Supported,
+    ExceedsCapabilities,
+    Unsupported,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MediaTrackSupportReason {
+    None,
+    FormatExceedsCapabilities,
+    UnsupportedType,
+    UnsupportedSubtype,
+    UnsupportedDrm,
+    RouteUnavailable,
+    PresentationUnavailable,
+    RuntimeFailure,
+    #[default]
+    PlatformUnknown,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MediaTrackSupportSource {
+    RuntimeTrackCatalog,
+    CapabilityProbe,
+    RuntimeFailure,
+    #[default]
+    Unavailable,
+    Unknown,
+}
+
+/// Bounded platform evidence associated with one track support result.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MediaTrackSupportDiagnostics {
+    pub decoder_name: Option<String>,
+    pub surface_kind: Option<String>,
+    pub hdr_type: Option<String>,
+    pub secure_decoder_required: Option<bool>,
+    pub secure_output_required: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaTrackSupport {
+    pub status: MediaTrackSupportStatus,
+    pub reason: MediaTrackSupportReason,
+    pub source: MediaTrackSupportSource,
+    pub status_raw_value: Option<String>,
+    pub reason_raw_value: Option<String>,
+    pub source_raw_value: Option<String>,
+    pub playback_path: Option<String>,
+    pub format_support_raw_value: Option<String>,
+    pub diagnostics: MediaTrackSupportDiagnostics,
+}
+
+impl MediaTrackSupport {
+    pub fn can_attempt_explicit_selection(&self) -> bool {
+        matches!(
+            self.status,
+            MediaTrackSupportStatus::Supported | MediaTrackSupportStatus::Unknown
+        )
+    }
+}
+
+impl Default for MediaTrackSupport {
+    fn default() -> Self {
+        Self {
+            status: MediaTrackSupportStatus::Unknown,
+            reason: MediaTrackSupportReason::PlatformUnknown,
+            source: MediaTrackSupportSource::Unavailable,
+            status_raw_value: None,
+            reason_raw_value: None,
+            source_raw_value: None,
+            playback_path: None,
+            format_support_raw_value: None,
+            diagnostics: MediaTrackSupportDiagnostics::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaTrack {
     pub id: String,
@@ -51,6 +133,7 @@ pub struct MediaTrack {
     pub sample_rate: Option<u32>,
     pub is_default: bool,
     pub is_forced: bool,
+    pub support: MediaTrackSupport,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -58,6 +141,10 @@ pub struct MediaTrackCatalog {
     pub tracks: Vec<MediaTrack>,
     pub adaptive_video: bool,
     pub adaptive_audio: bool,
+    /// Monotonic within the active playback session. Zero means unavailable.
+    pub catalog_revision: u64,
+    /// Stable identifier for the active playback implementation.
+    pub playback_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

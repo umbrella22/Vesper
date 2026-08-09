@@ -5,7 +5,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use quick_xml::events::Event;
 use quick_xml::{Reader, XmlVersion};
@@ -27,6 +27,8 @@ const MAX_EVIDENCE_FILES: usize = 4096;
 const MAX_EVIDENCE_DIRECTORY_ENTRIES: usize = 16384;
 const MAX_EVIDENCE_DEPTH: usize = 32;
 const MAX_EVIDENCE_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+const FLUTTER_DRIVER_TIMEOUT_SECONDS: u64 = 10 * 60;
+const FLUTTER_DRIVE_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
 #[derive(Debug)]
 pub(crate) struct SubtitleRequest {
@@ -254,6 +256,34 @@ impl EvidenceRun {
         command: &mut Command,
         diagnostics: &mut dyn Write,
     ) -> Result<Vec<u8>, SubtitleError> {
+        self.run_step_with_optional_timeout(name, working_directory, command, None, diagnostics)
+    }
+
+    fn run_step_with_timeout(
+        &mut self,
+        name: &str,
+        working_directory: &Path,
+        command: &mut Command,
+        timeout: Duration,
+        diagnostics: &mut dyn Write,
+    ) -> Result<Vec<u8>, SubtitleError> {
+        self.run_step_with_optional_timeout(
+            name,
+            working_directory,
+            command,
+            Some(timeout),
+            diagnostics,
+        )
+    }
+
+    fn run_step_with_optional_timeout(
+        &mut self,
+        name: &str,
+        working_directory: &Path,
+        command: &mut Command,
+        timeout: Option<Duration>,
+        diagnostics: &mut dyn Write,
+    ) -> Result<Vec<u8>, SubtitleError> {
         let started = Instant::now();
         let log_path = self.logs.join(format!("{name}.log"));
         let relative_log = format!("logs/{name}.log");
@@ -261,17 +291,30 @@ impl EvidenceRun {
         writeln!(diagnostics, "Running subtitle verification step: {name}")
             .map_err(diagnostic_error)?;
         diagnostics.flush().map_err(diagnostic_error)?;
+        let timeout_header = timeout
+            .map(|value| format!("Timeout seconds: {}\n", value.as_secs()))
+            .unwrap_or_default();
         let header = format!(
-            "Working directory: {}\nCommand: {}\n\n",
+            "Working directory: {}\nCommand: {}\n{timeout_header}\n",
             working_directory.display(),
             display_command(command)
         );
-        let result = external_process::run_interruptible_capture(
-            command,
-            &format!("subtitle verification step {name}"),
-            MAX_STEP_STDOUT_BYTES,
-            MAX_STEP_STDERR_BYTES,
-        );
+        let label = format!("subtitle verification step {name}");
+        let result = match timeout {
+            Some(timeout) => external_process::run_interruptible_capture_with_timeout(
+                command,
+                &label,
+                MAX_STEP_STDOUT_BYTES,
+                MAX_STEP_STDERR_BYTES,
+                timeout,
+            ),
+            None => external_process::run_interruptible_capture(
+                command,
+                &label,
+                MAX_STEP_STDOUT_BYTES,
+                MAX_STEP_STDERR_BYTES,
+            ),
+        };
         let duration_seconds = started.elapsed().as_secs();
         match result {
             Ok(captured) => {
@@ -946,6 +989,7 @@ fn verify_instrumentation_results(
             "io.github.ikaros.vesper.player.android.VesperSubtitleMedia3InstrumentationTest",
             BTreeSet::from([
                 "localDashWebVttIsDiscoveredSelectedAndProducesCue",
+                "localExternalWebVttUsesStableTargetReadinessAndExactReadback",
                 "nativeBindingsPreserveBridgeListenersAcrossReinitialize",
             ]),
         ),
@@ -1167,27 +1211,13 @@ fn run_flutter_device_positive(
         "flutter-device-subtitle-positive-forwards-before",
     )?;
 
-    let mut drive = Command::new(flutter);
-    drive
-        .args([
-            "drive",
-            "--no-keep-app-running",
-            "--no-dds",
-            "--driver=test_driver/subtitle_integration_test.dart",
-            "--target=integration_test/subtitle_contract_test.dart",
-            "--device-id",
-            device_id,
-        ])
-        .env(
-            "GRADLE_USER_HOME",
-            project.join("android/.gradle/gradle-user-home"),
-        )
-        .env("VESPER_SUBTITLE_EVIDENCE_DIR", &output_directory)
-        .env("VESPER_SUBTITLE_EVIDENCE_NAME", "subtitle-positive");
-    let drive_result = evidence.run_step(
+    let mut drive =
+        flutter_device_positive_command(flutter, &project, &output_directory, device_id);
+    let drive_result = evidence.run_step_with_timeout(
         "flutter-device-subtitle-positive",
         &project,
         &mut drive,
+        FLUTTER_DRIVE_TIMEOUT,
         diagnostics,
     );
 
@@ -1224,6 +1254,31 @@ fn run_flutter_device_positive(
         started,
     )?;
     Ok(())
+}
+
+fn flutter_device_positive_command(
+    flutter: &Path,
+    project: &Path,
+    output_directory: &Path,
+    device_id: &str,
+) -> Command {
+    let mut drive = Command::new(flutter);
+    drive
+        .args(["drive", "--no-keep-app-running", "--no-dds", "--no-pub"])
+        .arg(format!("--timeout={FLUTTER_DRIVER_TIMEOUT_SECONDS}"))
+        .args([
+            "--driver=test_driver/subtitle_integration_test.dart",
+            "--target=integration_test/subtitle_contract_test.dart",
+            "--device-id",
+            device_id,
+        ])
+        .env(
+            "GRADLE_USER_HOME",
+            project.join("android/.gradle/gradle-user-home"),
+        )
+        .env("VESPER_SUBTITLE_EVIDENCE_DIR", output_directory)
+        .env("VESPER_SUBTITLE_EVIDENCE_NAME", "subtitle-positive");
+    drive
 }
 
 fn force_stop_flutter_host(
@@ -1918,6 +1973,32 @@ mod tests {
 
         assert_eq!(error.kind(), SubtitleErrorKind::Conformance);
         assert_eq!(error.exit_code(), 5);
+    }
+
+    #[test]
+    fn flutter_device_positive_command_has_bounded_execution() {
+        let command = flutter_device_positive_command(
+            Path::new("/fixture/flutter"),
+            Path::new("/fixture/project"),
+            Path::new("/fixture/evidence"),
+            "physical-device",
+        );
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(arguments.contains(&"--no-pub".to_owned()));
+        assert!(arguments.contains(&"--timeout=600".to_owned()));
+        assert!(
+            arguments.windows(2).any(|values| {
+                values == ["--device-id".to_owned(), "physical-device".to_owned()]
+            })
+        );
+        assert!(
+            FLUTTER_DRIVE_TIMEOUT > Duration::from_secs(FLUTTER_DRIVER_TIMEOUT_SECONDS),
+            "the process supervisor must outlive Flutter's own test timeout"
+        );
     }
 
     #[test]

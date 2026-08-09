@@ -99,6 +99,43 @@ pub enum PlayerFfiTrackKind {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiTrackSupportStatus {
+    Supported = 0,
+    ExceedsCapabilities = 1,
+    Unsupported = 2,
+    #[default]
+    Unknown = 3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiTrackSupportReason {
+    #[default]
+    None = 0,
+    FormatExceedsCapabilities = 1,
+    UnsupportedType = 2,
+    UnsupportedSubtype = 3,
+    UnsupportedDrm = 4,
+    RouteUnavailable = 5,
+    PresentationUnavailable = 6,
+    RuntimeFailure = 7,
+    PlatformUnknown = 8,
+    Unknown = 9,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayerFfiTrackSupportSource {
+    RuntimeTrackCatalog = 0,
+    CapabilityProbe = 1,
+    RuntimeFailure = 2,
+    #[default]
+    Unavailable = 3,
+    Unknown = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlayerFfiTrackSelectionMode {
     #[default]
     Auto = 0,
@@ -355,6 +392,21 @@ pub struct PlayerFfiTrack {
     pub sample_rate: u32,
     pub is_default: bool,
     pub is_forced: bool,
+    pub support_status: PlayerFfiTrackSupportStatus,
+    pub support_reason: PlayerFfiTrackSupportReason,
+    pub support_source: PlayerFfiTrackSupportSource,
+    pub support_status_raw_value: *mut c_char,
+    pub support_reason_raw_value: *mut c_char,
+    pub support_source_raw_value: *mut c_char,
+    pub support_playback_path: *mut c_char,
+    pub format_support_raw_value: *mut c_char,
+    pub decoder_name: *mut c_char,
+    pub surface_kind: *mut c_char,
+    pub hdr_type: *mut c_char,
+    pub has_secure_decoder_required: bool,
+    pub secure_decoder_required: bool,
+    pub has_secure_output_required: bool,
+    pub secure_output_required: bool,
 }
 
 #[repr(C)]
@@ -364,6 +416,8 @@ pub struct PlayerFfiTrackCatalog {
     pub len: usize,
     pub adaptive_video: bool,
     pub adaptive_audio: bool,
+    pub catalog_revision: u64,
+    pub playback_path: *mut c_char,
 }
 
 #[repr(C)]

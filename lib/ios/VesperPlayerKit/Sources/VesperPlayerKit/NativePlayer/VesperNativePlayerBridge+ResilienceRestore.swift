@@ -59,7 +59,7 @@ extension VesperNativePlayerBridge {
         }
 
         if !abrPolicyRequiresLoadedVideoVariantCatalog(state.abrPolicy) {
-            applyAbrPolicy(
+            try? applyAbrPolicy(
                 state.abrPolicy,
                 origin: .resilienceRestore,
                 clearLastReportedError: false
@@ -124,7 +124,7 @@ extension VesperNativePlayerBridge {
         }
 
         if abrPolicyRequiresLoadedVideoVariantCatalog(state.abrPolicy) {
-            applyAbrPolicy(
+            try? applyAbrPolicy(
                 state.abrPolicy,
                 origin: .resilienceRestore,
                 clearLastReportedError: false
@@ -312,7 +312,7 @@ extension VesperNativePlayerBridge {
                 requestedTrackId: requestedTrackId,
                 tracks: publishedTrackCatalog.videoTracks
             )
-            applyAbrPolicy(
+            try? applyAbrPolicy(
                 recoveryPolicy,
                 origin: .recoveredFallback,
                 clearLastReportedError: false

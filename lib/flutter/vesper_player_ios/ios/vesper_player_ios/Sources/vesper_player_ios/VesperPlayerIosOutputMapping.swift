@@ -26,6 +26,8 @@ extension VesperTrackCatalog {
             "tracks": tracks.map(\.toMap),
             "adaptiveVideo": adaptiveVideo,
             "adaptiveAudio": adaptiveAudio,
+            "catalogRevision": catalogRevision,
+            "playbackPath": flutterValue(playbackPath),
         ]
     }
 }
@@ -46,6 +48,29 @@ extension VesperMediaTrack {
             "sampleRate": flutterValue(sampleRate),
             "isDefault": isDefault,
             "isForced": isForced,
+            "support": support.toMap(),
+        ]
+    }
+}
+
+extension VesperTrackSupport {
+    func toMap() -> [String: Any] {
+        [
+            "status": status.rawValue,
+            "reason": reason.rawValue,
+            "source": source.rawValue,
+            "statusRawValue": flutterValue(statusRawValue),
+            "reasonRawValue": flutterValue(reasonRawValue),
+            "sourceRawValue": flutterValue(sourceRawValue),
+            "playbackPath": flutterValue(playbackPath),
+            "formatSupportRawValue": flutterValue(formatSupportRawValue),
+            "diagnostics": [
+                "decoderName": flutterValue(diagnostics.decoderName),
+                "surfaceKind": flutterValue(diagnostics.surfaceKind),
+                "hdrType": flutterValue(diagnostics.hdrType),
+                "secureDecoderRequired": flutterValue(diagnostics.secureDecoderRequired),
+                "secureOutputRequired": flutterValue(diagnostics.secureOutputRequired),
+            ],
         ]
     }
 }
@@ -808,6 +833,22 @@ func errorMap(from error: Error) -> [String: Any] {
             ) { current, _ in current },
         ]
     }
+    if let fixedTrackError = error as? VesperFixedTrackSelectionError {
+        var output = fixedTrackError.details.reduce(into: [String: Any]()) { result, entry in
+            result[entry.key] = entry.value
+        }
+        output["domain"] = "fixedTrack"
+        output["code"] = fixedTrackError.code
+        output["trackId"] = flutterValue(fixedTrackError.trackId)
+        output["expectedCatalogRevision"] = flutterValue(
+            fixedTrackError.expectedCatalogRevision
+        )
+        output["actualCatalogRevision"] = flutterValue(
+            fixedTrackError.actualCatalogRevision
+        )
+        output["message"] = fixedTrackError.message
+        return output
+    }
     if let subtitleError = error as? PluginSubtitleError {
         return subtitleErrorMap(
             code: subtitleError.code,
@@ -1005,9 +1046,15 @@ func downloadErrorMap(from error: Error) -> [String: Any] {
 
 func asFlutterError(_ error: Error, code: String) -> FlutterError {
     let details = errorMap(from: error)
-    let flutterCode = details["domain"] as? String == "subtitle"
-        ? "vesper_subtitle_error"
-        : code
+    let flutterCode: String
+    switch details["domain"] as? String {
+    case "subtitle":
+        flutterCode = "vesper_subtitle_error"
+    case "fixedTrack":
+        flutterCode = "vesper_fixed_track_error"
+    default:
+        flutterCode = code
+    }
     return FlutterError(
         code: flutterCode,
         message: error.localizedDescription,

@@ -268,5 +268,9 @@ internal object VesperNativeJni {
         sessionHandle: Long,
         selection: NativeTrackSelectionPayload,
     ): String?
-    external fun setAbrPolicy(sessionHandle: Long, policy: NativeAbrPolicyPayload)
+    external fun setAbrPolicy(
+        sessionHandle: Long,
+        policy: NativeAbrPolicyPayload,
+        expectedCatalogRevision: Long?,
+    ): String?
 }

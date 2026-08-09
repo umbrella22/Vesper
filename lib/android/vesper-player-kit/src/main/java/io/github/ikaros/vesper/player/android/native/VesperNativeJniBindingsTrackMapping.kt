@@ -18,6 +18,58 @@ internal fun NativeTrackKind.toPublicKind(): VesperMediaTrackKind =
         NativeTrackKind.Subtitle -> VesperMediaTrackKind.Subtitle
     }
 
+internal fun NativeTrackSupport.toPublicSupport(): VesperTrackSupport {
+    val rawStatusFallback = statusOrdinal.toString()
+    val rawReasonFallback = reasonOrdinal.toString()
+    val rawSourceFallback = sourceOrdinal.toString()
+    val status = NativeTrackSupportStatus.entries.getOrNull(statusOrdinal)
+    val reason = NativeTrackSupportReason.entries.getOrNull(reasonOrdinal)
+    val source = NativeTrackSupportSource.entries.getOrNull(sourceOrdinal)
+    return VesperTrackSupport(
+        status =
+            when (status) {
+                NativeTrackSupportStatus.Supported -> VesperTrackSupportStatus.Supported
+                NativeTrackSupportStatus.ExceedsCapabilities -> VesperTrackSupportStatus.ExceedsCapabilities
+                NativeTrackSupportStatus.Unsupported -> VesperTrackSupportStatus.Unsupported
+                NativeTrackSupportStatus.Unknown, null -> VesperTrackSupportStatus.Unknown
+            },
+        reason =
+            when (reason) {
+                NativeTrackSupportReason.None -> VesperTrackSupportReason.None
+                NativeTrackSupportReason.FormatExceedsCapabilities -> VesperTrackSupportReason.FormatExceedsCapabilities
+                NativeTrackSupportReason.UnsupportedType -> VesperTrackSupportReason.UnsupportedType
+                NativeTrackSupportReason.UnsupportedSubtype -> VesperTrackSupportReason.UnsupportedSubtype
+                NativeTrackSupportReason.UnsupportedDrm -> VesperTrackSupportReason.UnsupportedDrm
+                NativeTrackSupportReason.RouteUnavailable -> VesperTrackSupportReason.RouteUnavailable
+                NativeTrackSupportReason.PresentationUnavailable -> VesperTrackSupportReason.PresentationUnavailable
+                NativeTrackSupportReason.RuntimeFailure -> VesperTrackSupportReason.RuntimeFailure
+                NativeTrackSupportReason.PlatformUnknown, null -> VesperTrackSupportReason.PlatformUnknown
+                NativeTrackSupportReason.Unknown -> VesperTrackSupportReason.Unknown
+            },
+        source =
+            when (source) {
+                NativeTrackSupportSource.RuntimeTrackCatalog -> VesperTrackSupportSource.RuntimeTrackCatalog
+                NativeTrackSupportSource.CapabilityProbe -> VesperTrackSupportSource.CapabilityProbe
+                NativeTrackSupportSource.RuntimeFailure -> VesperTrackSupportSource.RuntimeFailure
+                NativeTrackSupportSource.Unavailable, null -> VesperTrackSupportSource.Unavailable
+                NativeTrackSupportSource.Unknown -> VesperTrackSupportSource.Unknown
+            },
+        statusRawValue = statusRawValue ?: if (status == null) rawStatusFallback else null,
+        reasonRawValue = reasonRawValue ?: if (reason == null) rawReasonFallback else null,
+        sourceRawValue = sourceRawValue ?: if (source == null) rawSourceFallback else null,
+        playbackPath = playbackPath,
+        formatSupportRawValue = formatSupportRawValue,
+        diagnostics =
+            VesperTrackSupportDiagnostics(
+                decoderName = decoderName,
+                surfaceKind = surfaceKind,
+                hdrType = hdrType,
+                secureDecoderRequired = secureDecoderRequired.takeIf { hasSecureDecoderRequired },
+                secureOutputRequired = secureOutputRequired.takeIf { hasSecureOutputRequired },
+            ),
+    )
+}
+
 internal fun NativeTrackInfo.toPublicTrack(): VesperMediaTrack? {
     val kind = NativeTrackKind.entries.getOrNull(kindOrdinal)?.toPublicKind() ?: return null
     return VesperMediaTrack(
@@ -34,6 +86,7 @@ internal fun NativeTrackInfo.toPublicTrack(): VesperMediaTrack? {
         sampleRate = sampleRate.takeIf { hasSampleRate },
         isDefault = isDefault,
         isForced = isForced,
+        support = support.toPublicSupport(),
     )
 }
 
@@ -42,6 +95,8 @@ internal fun NativeTrackCatalog.toPublicTrackCatalog(): VesperTrackCatalog =
         tracks = tracks.mapNotNull { it.toPublicTrack() },
         adaptiveVideo = adaptiveVideo,
         adaptiveAudio = adaptiveAudio,
+        catalogRevision = catalogRevision.coerceAtLeast(0L),
+        playbackPath = playbackPath,
     )
 
 internal fun NativeTrackSelectionPayload.toPublicTrackSelection(): VesperTrackSelection {

@@ -59,8 +59,7 @@ final class VesperSubtitleException implements Exception {
   ) {
     final root = _subtitleExceptionMap(error.details);
     final nested = _subtitleExceptionMap(root['details']);
-    final isSubtitle =
-        error.code == 'vesper_subtitle_error' ||
+    final isSubtitle = error.code == 'vesper_subtitle_error' ||
         root['domain'] == 'subtitle' ||
         nested['domain'] == 'subtitle';
     return isSubtitle

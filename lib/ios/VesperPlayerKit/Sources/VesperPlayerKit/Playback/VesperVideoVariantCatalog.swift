@@ -14,6 +14,15 @@ struct LoadedTrackCatalogState {
     let subtitleState: VesperSubtitleState
 }
 
+struct TrackCatalogFingerprint: Equatable {
+    let sourceEpoch: UInt64
+    let playbackPath: String?
+    let drmKeySystem: String?
+    let tracks: [VesperMediaTrack]
+    let adaptiveVideo: Bool
+    let adaptiveAudio: Bool
+}
+
 struct LoadedVideoVariantState {
     let tracks: [VesperMediaTrack]
     let pinsByTrackId: [String: LoadedVideoVariantPin]

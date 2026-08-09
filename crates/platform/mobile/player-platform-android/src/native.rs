@@ -37,14 +37,15 @@ use player_plugin_loader::{
     DecoderPluginMatchRequest, NativePluginArtifact, PluginCapabilitySummary, PluginRegistry,
 };
 use player_runtime::{
-    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FirstFrameReady, FrameProcessorMode,
-    FrameProcessorPolicy, MAX_PENDING_RUNTIME_EVENTS, MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE,
-    MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrackCatalog,
-    MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot,
-    NativeFramePipelineMode, PipelineEventContext, PipelineEventDispatcher,
-    PipelineEventHookRegistration, PipelineEventHookReportBatch, PlaybackProgress, PlayerError,
-    PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo, PlayerPlaybackRoute,
-    PlayerResilienceMetrics, PlayerResilienceMetricsTracker, PlayerResult, PlayerRuntimeAdapter,
+    DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FirstFrameReady, FixedTrackSelectionErrorDetails,
+    FrameProcessorMode, FrameProcessorPolicy, MAX_PENDING_RUNTIME_EVENTS, MAX_PLAYBACK_RATE,
+    MIN_PLAYBACK_RATE, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
+    MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
+    MediaTrackSelectionSnapshot, MediaTrackSupportStatus, NativeFramePipelineMode,
+    PipelineEventContext, PipelineEventDispatcher, PipelineEventHookRegistration,
+    PipelineEventHookReportBatch, PlaybackProgress, PlayerError, PlayerErrorCategory,
+    PlayerErrorCode, PlayerMediaInfo, PlayerPlaybackRoute, PlayerResilienceMetrics,
+    PlayerResilienceMetricsTracker, PlayerResult, PlayerRuntimeAdapter,
     PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
     PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeOptions,
@@ -193,13 +194,26 @@ pub enum AndroidHostEvent {
 pub enum AndroidHostCommand {
     Play,
     Pause,
-    SeekTo { position_ms: u64 },
+    SeekTo {
+        position_ms: u64,
+    },
     Stop,
-    SetPlaybackRate { rate: f32 },
-    SetVideoTrackSelection { selection: MediaTrackSelection },
-    SetAudioTrackSelection { selection: MediaTrackSelection },
-    SetSubtitleTrackSelection { selection: MediaTrackSelection },
-    SetAbrPolicy { policy: MediaAbrPolicy },
+    SetPlaybackRate {
+        rate: f32,
+    },
+    SetVideoTrackSelection {
+        selection: MediaTrackSelection,
+    },
+    SetAudioTrackSelection {
+        selection: MediaTrackSelection,
+    },
+    SetSubtitleTrackSelection {
+        selection: MediaTrackSelection,
+    },
+    SetAbrPolicy {
+        policy: MediaAbrPolicy,
+        expected_catalog_revision: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,13 +287,26 @@ pub struct AndroidExoStateTracker {
 pub enum AndroidNativePlayerCommand {
     Play,
     Pause,
-    SeekTo { position: Duration },
+    SeekTo {
+        position: Duration,
+    },
     Stop,
-    SetPlaybackRate { rate: f32 },
-    SetVideoTrackSelection { selection: MediaTrackSelection },
-    SetAudioTrackSelection { selection: MediaTrackSelection },
-    SetSubtitleTrackSelection { selection: MediaTrackSelection },
-    SetAbrPolicy { policy: MediaAbrPolicy },
+    SetPlaybackRate {
+        rate: f32,
+    },
+    SetVideoTrackSelection {
+        selection: MediaTrackSelection,
+    },
+    SetAudioTrackSelection {
+        selection: MediaTrackSelection,
+    },
+    SetSubtitleTrackSelection {
+        selection: MediaTrackSelection,
+    },
+    SetAbrPolicy {
+        policy: MediaAbrPolicy,
+        expected_catalog_revision: Option<u64>,
+    },
 }
 
 pub trait AndroidNativeCommandSink: Send {
@@ -852,8 +879,12 @@ impl AndroidHostCommand {
                     selection: selection.clone(),
                 }
             }
-            AndroidNativePlayerCommand::SetAbrPolicy { policy } => Self::SetAbrPolicy {
+            AndroidNativePlayerCommand::SetAbrPolicy {
+                policy,
+                expected_catalog_revision,
+            } => Self::SetAbrPolicy {
                 policy: policy.clone(),
+                expected_catalog_revision: *expected_catalog_revision,
             },
         }
     }
@@ -3233,7 +3264,11 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
         }
     }
 
-    fn validate_abr_policy_request(&self, policy: &MediaAbrPolicy) -> PlayerResult<MediaAbrPolicy> {
+    fn validate_abr_policy_request(
+        &self,
+        policy: &MediaAbrPolicy,
+        expected_catalog_revision: Option<u64>,
+    ) -> PlayerResult<MediaAbrPolicy> {
         match policy.mode {
             MediaAbrMode::Auto => Ok(MediaAbrPolicy::default()),
             MediaAbrMode::Constrained => {
@@ -3257,11 +3292,28 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
             }
             MediaAbrMode::FixedTrack => {
                 let Some(track_id) = policy.track_id.as_deref() else {
-                    return Err(PlayerError::new(
+                    return Err(Self::fixed_track_selection_error(
                         PlayerErrorCode::InvalidArgument,
+                        "trackUnavailable",
+                        None,
+                        expected_catalog_revision,
+                        Some(self.media_info.track_catalog.catalog_revision),
                         "fixed-track ABR requires a video track id",
                     ));
                 };
+
+                if let Some(expected_catalog_revision) = expected_catalog_revision
+                    && expected_catalog_revision != self.media_info.track_catalog.catalog_revision
+                {
+                    return Err(Self::fixed_track_selection_error(
+                        PlayerErrorCode::InvalidState,
+                        "staleCatalog",
+                        Some(track_id),
+                        Some(expected_catalog_revision),
+                        Some(self.media_info.track_catalog.catalog_revision),
+                        "the track catalog changed before the fixed-track command was applied",
+                    ));
+                }
 
                 let track = self
                     .media_info
@@ -3270,8 +3322,12 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                     .iter()
                     .find(|track| track.id == track_id)
                     .ok_or_else(|| {
-                        PlayerError::new(
+                        Self::fixed_track_selection_error(
                             PlayerErrorCode::InvalidArgument,
+                            "trackUnavailable",
+                            Some(track_id),
+                            expected_catalog_revision,
+                            Some(self.media_info.track_catalog.catalog_revision),
                             format!(
                                 "track '{track_id}' is not present in the current track catalog"
                             ),
@@ -3279,9 +3335,39 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                     })?;
 
                 if track.kind != MediaTrackKind::Video {
-                    return Err(PlayerError::new(
+                    return Err(Self::fixed_track_selection_error(
                         PlayerErrorCode::InvalidArgument,
+                        "trackUnavailable",
+                        Some(track_id),
+                        expected_catalog_revision,
+                        Some(self.media_info.track_catalog.catalog_revision),
                         format!("track '{track_id}' is not a video track"),
+                    ));
+                }
+
+                let (code, error_code, message) = match track.support.status {
+                    MediaTrackSupportStatus::ExceedsCapabilities => (
+                        "trackExceedsCapabilities",
+                        PlayerErrorCode::Unsupported,
+                        "the requested track exceeds current playback capabilities",
+                    ),
+                    MediaTrackSupportStatus::Unsupported => (
+                        "trackUnsupported",
+                        PlayerErrorCode::Unsupported,
+                        "the requested track is unsupported by the active playback path",
+                    ),
+                    MediaTrackSupportStatus::Supported | MediaTrackSupportStatus::Unknown => {
+                        ("", PlayerErrorCode::InvalidArgument, "")
+                    }
+                };
+                if !code.is_empty() {
+                    return Err(Self::fixed_track_selection_error(
+                        error_code,
+                        code,
+                        Some(track_id),
+                        expected_catalog_revision,
+                        Some(self.media_info.track_catalog.catalog_revision),
+                        message,
                     ));
                 }
 
@@ -3294,6 +3380,30 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                 })
             }
         }
+    }
+
+    fn fixed_track_selection_error(
+        error_code: PlayerErrorCode,
+        code: &str,
+        track_id: Option<&str>,
+        expected_catalog_revision: Option<u64>,
+        actual_catalog_revision: Option<u64>,
+        message: impl Into<String>,
+    ) -> PlayerError {
+        let message = message.into();
+        PlayerError::with_taxonomy(
+            error_code,
+            PlayerErrorCategory::Capability,
+            false,
+            message.clone(),
+        )
+        .with_fixed_track_selection_details(FixedTrackSelectionErrorDetails::new(
+            code,
+            track_id.map(str::to_owned),
+            expected_catalog_revision,
+            actual_catalog_revision,
+            message,
+        ))
     }
 
     fn translate_command(
@@ -3388,14 +3498,21 @@ impl<C: AndroidNativeCommandSink> AndroidManagedNativeSession<C> {
                     vec![AndroidNativePlayerCommand::SetSubtitleTrackSelection { selection }],
                 ))
             }
-            PlayerRuntimeCommand::SetAbrPolicy { policy } => {
-                let policy = self.validate_abr_policy_request(policy)?;
+            PlayerRuntimeCommand::SetAbrPolicy {
+                policy,
+                expected_catalog_revision,
+            } => {
+                let policy =
+                    self.validate_abr_policy_request(policy, *expected_catalog_revision)?;
                 if self.media_info.track_selection.abr_policy == policy {
                     return Ok((false, Vec::new()));
                 }
                 Ok((
                     true,
-                    vec![AndroidNativePlayerCommand::SetAbrPolicy { policy }],
+                    vec![AndroidNativePlayerCommand::SetAbrPolicy {
+                        policy,
+                        expected_catalog_revision: *expected_catalog_revision,
+                    }],
                 ))
             }
             PlayerRuntimeCommand::Stop => {
@@ -3563,7 +3680,7 @@ impl<C: AndroidNativeCommandSink> AndroidNativePlayerSession for AndroidManagedN
                 PlayerRuntimeCommand::SetSubtitleTrackSelection { selection } => {
                     self.media_info.track_selection.subtitle = selection;
                 }
-                PlayerRuntimeCommand::SetAbrPolicy { policy } => {
+                PlayerRuntimeCommand::SetAbrPolicy { policy, .. } => {
                     let policy_mode = policy.mode;
                     let policy_track_id = policy.track_id.clone();
                     self.media_info.track_selection.abr_policy = policy;

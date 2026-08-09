@@ -289,7 +289,10 @@ internal class VesperNativePlayerBridge(
         surfaceHost.updateSubtitleStyle(style)
     }
 
-    override fun setAbrPolicy(policy: VesperAbrPolicy) = setNativeAbrPolicy(policy)
+    override fun setAbrPolicy(
+        policy: VesperAbrPolicy,
+        expectedCatalogRevision: Long?,
+    ) = setNativeAbrPolicy(policy, expectedCatalogRevision)
 
     override fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) =
         setNativeResiliencePolicy(policy)

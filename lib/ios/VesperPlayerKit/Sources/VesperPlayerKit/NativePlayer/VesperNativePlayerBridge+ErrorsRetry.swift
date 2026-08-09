@@ -68,7 +68,8 @@ extension VesperNativePlayerBridge {
     func reportCommandError(
         code: VesperPlayerErrorCode,
         category: VesperPlayerErrorCategory,
-        message: String
+        message: String,
+        details: [String: String] = [:]
     ) {
         iosHostLog("commandError category=\(category.rawValue) message=\(message)")
         fixedTrackIssueActive = false
@@ -76,7 +77,8 @@ extension VesperNativePlayerBridge {
             message: message,
             code: code,
             category: category,
-            retriable: false
+            retriable: false,
+            details: details
         )
     }
 

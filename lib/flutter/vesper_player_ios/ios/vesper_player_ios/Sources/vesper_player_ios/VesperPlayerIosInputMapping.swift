@@ -218,6 +218,28 @@ extension Dictionary where Key == String, Value == Any {
         }
     }
 
+    func toExpectedCatalogRevision() throws -> Int64? {
+        guard let rawValue = self["expectedCatalogRevision"], !(rawValue is NSNull) else {
+            return nil
+        }
+        guard !(rawValue is Bool), let number = rawValue as? NSNumber else {
+            throw PluginError.invalidAbrPolicy(
+                "expectedCatalogRevision must be a non-negative integer."
+            )
+        }
+        let doubleValue = number.doubleValue
+        let revision = number.int64Value
+        guard doubleValue.isFinite,
+              doubleValue.rounded() == doubleValue,
+              revision >= 0
+        else {
+            throw PluginError.invalidAbrPolicy(
+                "expectedCatalogRevision must be a non-negative integer."
+            )
+        }
+        return revision
+    }
+
     func toResiliencePolicy() throws -> VesperPlaybackResiliencePolicy {
         let buffering = try (nestedMap(self["buffering"])?.toBufferingPolicy()) ?? VesperBufferingPolicy()
         let retry = try (nestedMap(self["retry"])?.toRetryPolicy()) ?? VesperRetryPolicy()

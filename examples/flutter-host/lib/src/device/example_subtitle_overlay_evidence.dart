@@ -1,4 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
+
+typedef ExampleSubtitleOverlaySnapshotLoader =
+    Future<ExampleSubtitleOverlaySnapshot> Function();
 
 class ExampleSubtitleOverlayFrame {
   const ExampleSubtitleOverlayFrame({
@@ -141,4 +146,34 @@ abstract final class ExampleSubtitleOverlayEvidenceChannel {
     }
     throw FormatException('Native subtitle overlay field $key is not numeric.');
   }
+}
+
+Future<ExampleSubtitleOverlaySnapshot> waitForVisibleExampleSubtitleOverlay({
+  required ExampleSubtitleOverlaySnapshotLoader snapshot,
+  required String expectedText,
+  Duration timeout = const Duration(seconds: 5),
+  Duration retryDelay = const Duration(milliseconds: 50),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  ExampleSubtitleOverlaySnapshot? latest;
+  while (DateTime.now().isBefore(deadline)) {
+    try {
+      latest = await snapshot();
+    } on PlatformException catch (error) {
+      if (error.code != 'subtitle_overlay_unavailable') {
+        rethrow;
+      }
+    }
+    if (latest?.visible == true && latest?.text == expectedText) {
+      return latest!;
+    }
+    await Future<void>.delayed(retryDelay);
+  }
+  throw TimeoutException(
+    'subtitle overlay did not become visible: '
+    'text=${latest?.text} visible=${latest?.visible} '
+    'windowAttached=${latest?.windowAttached} '
+    'frame=${latest?.frame.toJson()}',
+    timeout,
+  );
 }

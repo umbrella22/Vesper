@@ -15,6 +15,14 @@ pub(crate) fn free_track(track: &mut PlayerFfiTrack) {
     free_c_string(&mut track.label);
     free_c_string(&mut track.language);
     free_c_string(&mut track.codec);
+    free_c_string(&mut track.support_status_raw_value);
+    free_c_string(&mut track.support_reason_raw_value);
+    free_c_string(&mut track.support_source_raw_value);
+    free_c_string(&mut track.support_playback_path);
+    free_c_string(&mut track.format_support_raw_value);
+    free_c_string(&mut track.decoder_name);
+    free_c_string(&mut track.surface_kind);
+    free_c_string(&mut track.hdr_type);
     *track = PlayerFfiTrack::default();
 }
 
@@ -34,6 +42,7 @@ pub(crate) fn free_track_catalog(track_catalog: &mut PlayerFfiTrackCatalog) {
             }
         }
     }
+    free_c_string(&mut track_catalog.playback_path);
     *track_catalog = PlayerFfiTrackCatalog::default();
 }
 

@@ -348,6 +348,46 @@ impl From<BridgeTrackKind> for PlayerFfiTrackKind {
     }
 }
 
+impl From<BridgeTrackSupportStatus> for PlayerFfiTrackSupportStatus {
+    fn from(value: BridgeTrackSupportStatus) -> Self {
+        match value {
+            BridgeTrackSupportStatus::Supported => Self::Supported,
+            BridgeTrackSupportStatus::ExceedsCapabilities => Self::ExceedsCapabilities,
+            BridgeTrackSupportStatus::Unsupported => Self::Unsupported,
+            BridgeTrackSupportStatus::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<BridgeTrackSupportReason> for PlayerFfiTrackSupportReason {
+    fn from(value: BridgeTrackSupportReason) -> Self {
+        match value {
+            BridgeTrackSupportReason::None => Self::None,
+            BridgeTrackSupportReason::FormatExceedsCapabilities => Self::FormatExceedsCapabilities,
+            BridgeTrackSupportReason::UnsupportedType => Self::UnsupportedType,
+            BridgeTrackSupportReason::UnsupportedSubtype => Self::UnsupportedSubtype,
+            BridgeTrackSupportReason::UnsupportedDrm => Self::UnsupportedDrm,
+            BridgeTrackSupportReason::RouteUnavailable => Self::RouteUnavailable,
+            BridgeTrackSupportReason::PresentationUnavailable => Self::PresentationUnavailable,
+            BridgeTrackSupportReason::RuntimeFailure => Self::RuntimeFailure,
+            BridgeTrackSupportReason::PlatformUnknown => Self::PlatformUnknown,
+            BridgeTrackSupportReason::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<BridgeTrackSupportSource> for PlayerFfiTrackSupportSource {
+    fn from(value: BridgeTrackSupportSource) -> Self {
+        match value {
+            BridgeTrackSupportSource::RuntimeTrackCatalog => Self::RuntimeTrackCatalog,
+            BridgeTrackSupportSource::CapabilityProbe => Self::CapabilityProbe,
+            BridgeTrackSupportSource::RuntimeFailure => Self::RuntimeFailure,
+            BridgeTrackSupportSource::Unavailable => Self::Unavailable,
+            BridgeTrackSupportSource::Unknown => Self::Unknown,
+        }
+    }
+}
+
 impl From<BridgeTrackSelectionMode> for PlayerFfiTrackSelectionMode {
     fn from(value: BridgeTrackSelectionMode) -> Self {
         match value {
@@ -455,6 +495,68 @@ impl From<BridgeTrack> for PlayerFfiTrack {
             sample_rate: value.sample_rate.unwrap_or_default(),
             is_default: value.is_default,
             is_forced: value.is_forced,
+            support_status: value.support.status.into(),
+            support_reason: value.support.reason.into(),
+            support_source: value.support.source.into(),
+            support_status_raw_value: value
+                .support
+                .status_raw_value
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            support_reason_raw_value: value
+                .support
+                .reason_raw_value
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            support_source_raw_value: value
+                .support
+                .source_raw_value
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            support_playback_path: value
+                .support
+                .playback_path
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            format_support_raw_value: value
+                .support
+                .format_support_raw_value
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            decoder_name: value
+                .support
+                .diagnostics
+                .decoder_name
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            surface_kind: value
+                .support
+                .diagnostics
+                .surface_kind
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            hdr_type: value
+                .support
+                .diagnostics
+                .hdr_type
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
+            has_secure_decoder_required: value
+                .support
+                .diagnostics
+                .secure_decoder_required
+                .is_some(),
+            secure_decoder_required: value
+                .support
+                .diagnostics
+                .secure_decoder_required
+                .unwrap_or_default(),
+            has_secure_output_required: value.support.diagnostics.secure_output_required.is_some(),
+            secure_output_required: value
+                .support
+                .diagnostics
+                .secure_output_required
+                .unwrap_or_default(),
         }
     }
 }
@@ -473,6 +575,11 @@ impl From<BridgeTrackCatalog> for PlayerFfiTrackCatalog {
             len,
             adaptive_video: value.adaptive_video,
             adaptive_audio: value.adaptive_audio,
+            catalog_revision: value.catalog_revision,
+            playback_path: value
+                .playback_path
+                .map(into_c_string_ptr)
+                .unwrap_or(ptr::null_mut()),
         }
     }
 }

@@ -2254,6 +2254,7 @@ fn android_managed_session_controller_delivers_media_info_updates() {
                 sample_rate: None,
                 is_default: true,
                 is_forced: false,
+                support: Default::default(),
             },
             MediaTrack {
                 id: "audio-en".to_owned(),
@@ -2269,10 +2270,13 @@ fn android_managed_session_controller_delivers_media_info_updates() {
                 sample_rate: Some(48_000),
                 is_default: true,
                 is_forced: false,
+                support: Default::default(),
             },
         ],
         adaptive_video: true,
         adaptive_audio: false,
+        catalog_revision: 0,
+        playback_path: None,
     };
     let track_selection = MediaTrackSelectionSnapshot {
         video: MediaTrackSelection::track("video-720p"),
@@ -2366,6 +2370,7 @@ fn android_managed_session_dispatches_constrained_abr_policy() {
     let result = session
         .dispatch(PlayerRuntimeCommand::SetAbrPolicy {
             policy: policy.clone(),
+            expected_catalog_revision: None,
         })
         .expect("constrained ABR should dispatch");
 
@@ -2375,6 +2380,7 @@ fn android_managed_session_dispatches_constrained_abr_policy() {
         *commands.lock().expect("commands lock"),
         vec![AndroidNativePlayerCommand::SetAbrPolicy {
             policy: policy.clone(),
+            expected_catalog_revision: None,
         }],
     );
     let events = session.drain_events();
@@ -2383,6 +2389,40 @@ fn android_managed_session_dispatches_constrained_abr_policy() {
         PlayerRuntimeEvent::MetadataReady(media_info)
         if media_info.track_selection.abr_policy == policy
     )));
+}
+
+#[test]
+fn android_managed_session_reports_missing_fixed_track_id_as_typed_rejection() {
+    let commands = Arc::new(Mutex::new(Vec::new()));
+    let sink = RecordingAndroidCommandSink::new(commands.clone());
+    let mut session = AndroidManagedNativeSession::new(
+        "https://example.com/master.m3u8",
+        test_media_info_with_tracks(),
+        sink,
+    );
+
+    let error = session
+        .dispatch(PlayerRuntimeCommand::SetAbrPolicy {
+            policy: MediaAbrPolicy {
+                mode: MediaAbrMode::FixedTrack,
+                track_id: None,
+                max_bit_rate: None,
+                max_width: None,
+                max_height: None,
+            },
+            expected_catalog_revision: Some(0),
+        })
+        .expect_err("a fixed-track policy without an id must fail");
+
+    assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
+    let details = error
+        .fixed_track_selection_details()
+        .expect("fixed-track rejection details");
+    assert_eq!(details.code, "trackUnavailable");
+    assert_eq!(details.track_id, None);
+    assert_eq!(details.expected_catalog_revision, Some(0));
+    assert_eq!(details.actual_catalog_revision, Some(0));
+    assert!(commands.lock().expect("commands lock").is_empty());
 }
 
 #[test]
@@ -3735,6 +3775,7 @@ fn test_media_info_with_tracks() -> PlayerMediaInfo {
                     sample_rate: None,
                     is_default: true,
                     is_forced: false,
+                    support: Default::default(),
                 },
                 MediaTrack {
                     id: "audio-en".to_owned(),
@@ -3750,6 +3791,7 @@ fn test_media_info_with_tracks() -> PlayerMediaInfo {
                     sample_rate: Some(48_000),
                     is_default: true,
                     is_forced: false,
+                    support: Default::default(),
                 },
                 MediaTrack {
                     id: "text-en".to_owned(),
@@ -3765,10 +3807,13 @@ fn test_media_info_with_tracks() -> PlayerMediaInfo {
                     sample_rate: None,
                     is_default: true,
                     is_forced: false,
+                    support: Default::default(),
                 },
             ],
             adaptive_video: true,
             adaptive_audio: false,
+            catalog_revision: 0,
+            playback_path: None,
         },
         track_selection: Default::default(),
     }

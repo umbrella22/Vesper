@@ -2,14 +2,16 @@ use std::time::Duration;
 
 use jni::Env;
 use jni::errors::Result as JniResult;
-use jni::objects::{JObject, JObjectArray, JString};
+use jni::objects::{JObject, JObjectArray, JString, JValue};
 use jni::sys::{jfloat, jint, jlong, jobjectArray};
 use player_platform_android::AndroidExoPlaybackState;
 use player_runtime::{
     MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol, MediaTrack,
     MediaTrackCatalog, MediaTrackKind, MediaTrackSelection, MediaTrackSelectionMode,
-    MediaTrackSelectionSnapshot, PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy,
-    PlayerCachePreset, PlayerErrorCategory, PlayerErrorCode, PlayerRetryBackoff, PlayerRetryPolicy,
+    MediaTrackSelectionSnapshot, MediaTrackSupport, MediaTrackSupportDiagnostics,
+    MediaTrackSupportReason, MediaTrackSupportSource, MediaTrackSupportStatus,
+    PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
+    PlayerErrorCategory, PlayerErrorCode, PlayerRetryBackoff, PlayerRetryPolicy,
     PlayerTrackPreferencePolicy,
 };
 
@@ -61,6 +63,43 @@ fn track_kind_from_ordinal(ordinal: jint) -> MediaTrackKind {
         1 => MediaTrackKind::Audio,
         2 => MediaTrackKind::Subtitle,
         _ => MediaTrackKind::Video,
+    }
+}
+
+fn track_support_status_from_ordinal(ordinal: jint) -> (MediaTrackSupportStatus, Option<String>) {
+    match ordinal {
+        0 => (MediaTrackSupportStatus::Supported, None),
+        1 => (MediaTrackSupportStatus::ExceedsCapabilities, None),
+        2 => (MediaTrackSupportStatus::Unsupported, None),
+        3 => (MediaTrackSupportStatus::Unknown, None),
+        _ => (MediaTrackSupportStatus::Unknown, Some(ordinal.to_string())),
+    }
+}
+
+fn track_support_reason_from_ordinal(ordinal: jint) -> (MediaTrackSupportReason, Option<String>) {
+    match ordinal {
+        0 => (MediaTrackSupportReason::None, None),
+        1 => (MediaTrackSupportReason::FormatExceedsCapabilities, None),
+        2 => (MediaTrackSupportReason::UnsupportedType, None),
+        3 => (MediaTrackSupportReason::UnsupportedSubtype, None),
+        4 => (MediaTrackSupportReason::UnsupportedDrm, None),
+        5 => (MediaTrackSupportReason::RouteUnavailable, None),
+        6 => (MediaTrackSupportReason::PresentationUnavailable, None),
+        7 => (MediaTrackSupportReason::RuntimeFailure, None),
+        8 => (MediaTrackSupportReason::PlatformUnknown, None),
+        9 => (MediaTrackSupportReason::Unknown, None),
+        _ => (MediaTrackSupportReason::Unknown, Some(ordinal.to_string())),
+    }
+}
+
+fn track_support_source_from_ordinal(ordinal: jint) -> (MediaTrackSupportSource, Option<String>) {
+    match ordinal {
+        0 => (MediaTrackSupportSource::RuntimeTrackCatalog, None),
+        1 => (MediaTrackSupportSource::CapabilityProbe, None),
+        2 => (MediaTrackSupportSource::RuntimeFailure, None),
+        3 => (MediaTrackSupportSource::Unavailable, None),
+        4 => (MediaTrackSupportSource::Unknown, None),
+        _ => (MediaTrackSupportSource::Unknown, Some(ordinal.to_string())),
     }
 }
 
@@ -214,6 +253,34 @@ pub(crate) fn long_field(
     .j()
 }
 
+/// Reads an optional boxed Java `Long` used by command envelopes.
+///
+/// The nullable wrapper is deliberate: an absent revision represents a
+/// legacy command and must not be rewritten into a synthetic stale-token
+/// check.
+pub(crate) fn boxed_long_value(env: &mut Env<'_>, object: JObject<'_>) -> JniResult<Option<u64>> {
+    if object.is_null() {
+        return Ok(None);
+    }
+    let value = env
+        .call_method(
+            &object,
+            jni_name("longValue"),
+            crate::method_sig("()J").method_signature(),
+            &[] as &[JValue<'_>],
+        )?
+        .j()?;
+    non_negative_revision(value).map(Some)
+}
+
+fn non_negative_revision(value: jlong) -> JniResult<u64> {
+    u64::try_from(value).map_err(|_| {
+        jni::errors::Error::ParseFailed(format!(
+            "catalog revision must be non-negative, received {value}"
+        ))
+    })
+}
+
 pub(crate) fn float_field(
     env: &mut Env<'_>,
     object: &JObject<'_>,
@@ -235,6 +302,14 @@ pub(crate) fn parse_native_track(env: &mut Env<'_>, track: JObject<'_>) -> JniRe
     let has_channels = bool_field(env, &track, "hasChannels")?;
     let has_sample_rate = bool_field(env, &track, "hasSampleRate")?;
 
+    let support_object = env
+        .get_field(
+            &track,
+            jni_name("support"),
+            field_sig(format!("L{PKG}/NativeTrackSupport;")).field_signature(),
+        )?
+        .l()?;
+
     Ok(MediaTrack {
         id: string_field(env, &track, "id")?.unwrap_or_default(),
         kind: track_kind_from_ordinal(int_field(env, &track, "kindOrdinal")?),
@@ -249,6 +324,49 @@ pub(crate) fn parse_native_track(env: &mut Env<'_>, track: JObject<'_>) -> JniRe
         sample_rate: has_sample_rate.then_some(int_field(env, &track, "sampleRate")? as u32),
         is_default: bool_field(env, &track, "isDefault")?,
         is_forced: bool_field(env, &track, "isForced")?,
+        support: parse_native_track_support(env, support_object)?,
+    })
+}
+
+fn parse_native_track_support(
+    env: &mut Env<'_>,
+    support: JObject<'_>,
+) -> JniResult<MediaTrackSupport> {
+    if support.is_null() {
+        return Ok(MediaTrackSupport::default());
+    }
+
+    let (status, unknown_status_raw_value) =
+        track_support_status_from_ordinal(int_field(env, &support, "statusOrdinal")?);
+    let (reason, unknown_reason_raw_value) =
+        track_support_reason_from_ordinal(int_field(env, &support, "reasonOrdinal")?);
+    let (source, unknown_source_raw_value) =
+        track_support_source_from_ordinal(int_field(env, &support, "sourceOrdinal")?);
+    let status_raw_value =
+        string_field(env, &support, "statusRawValue")?.or(unknown_status_raw_value);
+    let reason_raw_value =
+        string_field(env, &support, "reasonRawValue")?.or(unknown_reason_raw_value);
+    let source_raw_value =
+        string_field(env, &support, "sourceRawValue")?.or(unknown_source_raw_value);
+
+    Ok(MediaTrackSupport {
+        status,
+        reason,
+        source,
+        status_raw_value,
+        reason_raw_value,
+        source_raw_value,
+        playback_path: string_field(env, &support, "playbackPath")?,
+        format_support_raw_value: string_field(env, &support, "formatSupportRawValue")?,
+        diagnostics: MediaTrackSupportDiagnostics {
+            decoder_name: string_field(env, &support, "decoderName")?,
+            surface_kind: string_field(env, &support, "surfaceKind")?,
+            hdr_type: string_field(env, &support, "hdrType")?,
+            secure_decoder_required: bool_field(env, &support, "hasSecureDecoderRequired")?
+                .then_some(bool_field(env, &support, "secureDecoderRequired")?),
+            secure_output_required: bool_field(env, &support, "hasSecureOutputRequired")?
+                .then_some(bool_field(env, &support, "secureOutputRequired")?),
+        },
     })
 }
 
@@ -287,6 +405,8 @@ pub(crate) fn parse_native_track_catalog(
         tracks,
         adaptive_video: bool_field(env, &track_catalog, "adaptiveVideo")?,
         adaptive_audio: bool_field(env, &track_catalog, "adaptiveAudio")?,
+        catalog_revision: long_field(env, &track_catalog, "catalogRevision")? as u64,
+        playback_path: string_field(env, &track_catalog, "playbackPath")?,
     })
 }
 
@@ -481,4 +601,23 @@ pub(crate) fn parse_native_cache_policy(
         max_disk_bytes: has_max_disk_bytes
             .then_some(long_field(env, &policy, "maxDiskBytes")? as u64),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::non_negative_revision;
+
+    #[test]
+    fn catalog_revision_accepts_non_negative_values() {
+        assert_eq!(non_negative_revision(0).unwrap(), 0);
+        assert_eq!(non_negative_revision(i64::MAX).unwrap(), i64::MAX as u64);
+    }
+
+    #[test]
+    fn catalog_revision_rejects_negative_values() {
+        let error = non_negative_revision(-1).unwrap_err();
+
+        assert!(matches!(error, jni::errors::Error::ParseFailed(_)));
+        assert!(error.to_string().contains("must be non-negative"));
+    }
 }

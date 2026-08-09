@@ -7,6 +7,8 @@
 - Added MethodChannel mapping for external subtitle configurations and
   `setSubtitleStyle`, backed by the Android host-kit cue overlay.
 - Added complete RTMP, RTSP, and HTTP-FLV protocol wire mapping.
+- Added track support, catalog revision, playback-path, and structured
+  fixed-track error mapping for the Android wire contract.
 
 ### Breaking Changes
 
@@ -21,6 +23,9 @@
 
 - Picture in Picture failures now emit PiP-specific events and method errors
   without publishing generic player errors.
+- `setAbrPolicy` now forwards the optional expected catalog revision and keeps
+  native fixed-track capability details in the returned platform error without
+  misclassifying generic ABR command failures as fixed-track rejections.
 - Android PiP state now follows Activity mode-change callbacks, with
   best-effort foreground restore for `exitPictureInPicture`.
 - Subtitle snapshots now carry canonical catalog/selection state and

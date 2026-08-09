@@ -89,6 +89,13 @@ internal class VesperNativeJniBindings(
     internal var analyticsListener: AnalyticsListener? = null
     @Volatile
     internal var attachedSurface: Surface? = null
+    @Volatile
+    internal var currentSurfaceKindState: NativeVideoSurfaceKind? = null
+    internal var currentTrackCatalogRevisionState = 0L
+    internal var currentTrackCatalogFingerprintState: String? = null
+    internal var currentRuntimeTrackRejectionKeyState: String? = null
+    internal var currentRuntimeTrackRejectionState: NativeRuntimeTrackRejection? = null
+    internal var currentFixedTrackCommandState: NativeFixedTrackCommandRecord? = null
     internal val nativeFramePipelineOwnsSurface = AtomicBoolean(false)
     private val nativeFrameLeaseRegistry = VesperNativeFrameLeaseRegistry()
     internal var updateListener: (() -> Unit)? = null
@@ -231,6 +238,9 @@ internal class VesperNativeJniBindings(
             currentSourceProtocol = source.protocol
             hasObservedTrackCatalog = false
             currentSubtitleCatalogFailure = null
+            currentRuntimeTrackRejectionKeyState = null
+            currentRuntimeTrackRejectionState = null
+            currentFixedTrackCommandState = null
             terminalErrorReportedForCurrentSource = false
             currentDrmRuntimeErrorCount = 0
             cancelFirstFrameWatchdog()
@@ -749,7 +759,19 @@ internal class VesperNativeJniBindings(
                 sourceNormalizerLoopbackServer.stop()
             }
         }
-        currentTrackCatalogState = VesperTrackCatalog.Empty
+        // Keep the revision monotonic for the lifetime of this bridge. The
+        // empty catalog marks a source boundary; it must not make an older
+        // revision token valid again on the next source.
+        currentTrackCatalogState =
+            VesperTrackCatalog(
+                catalogRevision = currentTrackCatalogRevisionState,
+                playbackPath = null,
+            )
+        currentTrackCatalogFingerprintState = null
+        currentRuntimeTrackRejectionKeyState = null
+        currentRuntimeTrackRejectionState = null
+        currentFixedTrackCommandState = null
+        currentSurfaceKindState = null
         currentTrackSelectionState = VesperTrackSelectionSnapshot()
         currentAppliedSubtitleSelectionState = VesperTrackSelection.disabled()
         currentAdvertisedSubtitleTrackCountState = 0
@@ -790,6 +812,13 @@ internal class VesperNativeJniBindings(
         }
     }
 
+    override fun refreshTrackCatalog() {
+        if (isDisposed.get()) {
+            return
+        }
+        pushTrackStateToRust()
+    }
+
     override fun sampleTimeline(): TimelineUiState? {
         if (isDisposed.get()) {
             return null
@@ -815,6 +844,17 @@ internal class VesperNativeJniBindings(
 
     override fun currentAppliedSubtitleSelection(): VesperTrackSelection =
         currentAppliedSubtitleSelectionState
+
+    override fun isSubtitleTrackSelectable(trackId: String): Boolean =
+        player?.currentTracks?.let { tracks ->
+            isSubtitleTrackSelectable(
+                tracks = tracks,
+                trackId = trackId,
+                sourceProtocol = currentSourceProtocol,
+                externalSubtitleIds = currentExternalSubtitleIds,
+                unavailableExternalSubtitleIds = failedExternalSubtitleIds,
+            )
+        } ?: false
 
     override fun currentAdvertisedSubtitleTrackCount(): Int =
         currentAdvertisedSubtitleTrackCountState
@@ -868,10 +908,12 @@ internal class VesperNativeJniBindings(
             }
         }
         attachedSurface = surface
+        currentSurfaceKindState = surfaceKind
         sessionHandle?.let { handle ->
             VesperNativeJni.attachSurface(handle, surface, surfaceKind.ordinal)
         }
         attachNativeFramePipelineSurface(surface, surfaceKind)
+        pushTrackStateToRust()
         pushSnapshotToRust()
         notifyNativeUpdate()
     }
@@ -888,8 +930,10 @@ internal class VesperNativeJniBindings(
             }
         }
         attachedSurface = null
+        currentSurfaceKindState = null
         sessionHandle?.let(VesperNativeJni::detachSurface)
         detachNativeFramePipelineSurface()
+        pushTrackStateToRust()
         notifyNativeUpdate()
     }
 
@@ -985,14 +1029,25 @@ internal class VesperNativeJniBindings(
         }
     }
 
-    override fun setAbrPolicy(policy: VesperAbrPolicy) {
+    override fun setAbrPolicy(
+        policy: VesperAbrPolicy,
+        expectedCatalogRevision: Long?,
+    ) {
         Log.i(
             NATIVE_JNI_BINDINGS_TAG,
-            "setAbrPolicy mode=${policy.mode} trackId=${policy.trackId} maxBitRate=${policy.maxBitRate} maxWidth=${policy.maxWidth} maxHeight=${policy.maxHeight}",
+            "setAbrPolicy mode=${policy.mode} trackId=${policy.trackId} maxBitRate=${policy.maxBitRate} maxWidth=${policy.maxWidth} maxHeight=${policy.maxHeight} expectedCatalogRevision=$expectedCatalogRevision",
         )
         recordBenchmark("native_set_abr_policy_command", mapOf("mode" to policy.mode.name))
         dispatchRustCommand { handle ->
-            VesperNativeJni.setAbrPolicy(handle, policy.toNativePayload())
+            val errorJson =
+                VesperNativeJni.setAbrPolicy(
+                    handle,
+                    policy.toNativePayload(),
+                    expectedCatalogRevision,
+            )
+            if (!errorJson.isNullOrBlank()) {
+                throw abrPolicyNativeErrorFromJson(errorJson)
+            }
         }
     }
 

@@ -160,6 +160,154 @@ class VesperSubtitleMedia3InstrumentationTest {
     }
 
     @Test
+    fun localExternalWebVttUsesStableTargetReadinessAndExactReadback() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val root = fixtureDirectory(context, "vesper-external-subtitle-instrumentation")
+        val mediaFile = File(root, "video.m4v")
+        val subtitleFile = File(root, "external.vtt")
+        copyMediaFixture(context, mediaFile)
+        subtitleFile.writeText(
+            """WEBVTT
+
+00:00:00.500 --> 00:00:01.500
+external subtitle proof
+""".trimIndent() + "\n",
+        )
+
+        val trackId = "subtitle:fixture:external-en"
+        val targetReady = CountDownLatch(1)
+        val exactReadback = CountDownLatch(1)
+        val cueReady = CountDownLatch(1)
+        val selectionRequested = AtomicBoolean(false)
+        val playbackEvents = Collections.synchronizedList(mutableListOf<String>())
+        val source =
+            VesperPlayerSource.local(
+                uri = android.net.Uri.fromFile(mediaFile).toString(),
+                label = "External WebVTT fixture",
+                externalSubtitles =
+                    listOf(
+                        VesperExternalSubtitleSource(
+                            id = trackId,
+                            uri = android.net.Uri.fromFile(subtitleFile).toString(),
+                            mimeType = VesperExternalSubtitleSource.MIME_WEBVTT,
+                            language = "en",
+                        )
+                    ),
+            )
+
+        androidx.test.platform.app.InstrumentationRegistry
+            .getInstrumentation()
+            .runOnMainSync {
+                val exoPlayer =
+                    ExoPlayer.Builder(context, VesperExternalSubtitleRenderersFactory(context))
+                        .build()
+                        .also { player = it }
+                exoPlayer.addListener(
+                    object : Player.Listener {
+                        override fun onPlayerError(error: PlaybackException) {
+                            playbackEvents += "playerError=${error.errorCodeName}:${error.message}"
+                        }
+
+                        override fun onTracksChanged(tracks: Tracks) {
+                            val catalog =
+                                collectTrackCatalog(
+                                    tracks = tracks,
+                                    sourceProtocol = source.protocol,
+                                    externalSubtitleIds = listOf(trackId),
+                                    advertisedExternalSubtitleCount = 1,
+                                    declaredExternalSubtitleIds = listOf(trackId),
+                                )
+                            if (catalog.subtitleIdentityFailure != null ||
+                                catalog.tracks.none { it.id == trackId }
+                            ) {
+                                return
+                            }
+                            val selectable =
+                                isSubtitleTrackSelectable(
+                                    tracks = tracks,
+                                    trackId = trackId,
+                                    sourceProtocol = source.protocol,
+                                    externalSubtitleIds = listOf(trackId),
+                                )
+                            playbackEvents += "targetSelectable=$selectable"
+                            if (!selectable) return
+                            targetReady.countDown()
+
+                            if (selectionRequested.compareAndSet(false, true)) {
+                                val override =
+                                    findTrackOverride(
+                                        tracks = tracks,
+                                        trackType = C.TRACK_TYPE_TEXT,
+                                        trackId = trackId,
+                                        sourceProtocol = source.protocol,
+                                        externalSubtitleIds = listOf(trackId),
+                                    ) ?: return
+                                exoPlayer.trackSelectionParameters =
+                                    exoPlayer.trackSelectionParameters
+                                        .buildUpon()
+                                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                        .setOverrideForType(override)
+                                        .build()
+                                val applied =
+                                    collectAppliedSubtitleSelection(
+                                        tracks = exoPlayer.currentTracks,
+                                        parameters = exoPlayer.trackSelectionParameters,
+                                        sourceProtocol = source.protocol,
+                                        externalSubtitleIds = listOf(trackId),
+                                        requestedModeOrdinal = NativeTrackSelectionMode.Track.ordinal,
+                                    )
+                                playbackEvents +=
+                                    "appliedMode=${applied.mode.name},appliedTrackId=${applied.trackId}"
+                                if (applied.trackId == trackId) {
+                                    exactReadback.countDown()
+                                }
+                                exoPlayer.seekTo(0L)
+                                exoPlayer.playWhenReady = true
+                            }
+                        }
+
+                        override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
+                            playbackEvents += "cueCount=${cueGroup.cues.size}"
+                            if (cueGroup.cues.isNotEmpty()) {
+                                cueReady.countDown()
+                            }
+                        }
+                    },
+                )
+                exoPlayer.setMediaItem(buildMediaItem(source))
+                exoPlayer.trackSelectionParameters =
+                    exoPlayer.trackSelectionParameters
+                        .buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)
+                        .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                        .build()
+                exoPlayer.prepare()
+            }
+
+        assertTrue(
+            "Media3 did not expose the caller-provided external subtitle id; " +
+                "events=${playbackEvents.joinToString()}",
+            targetReady.await(15, TimeUnit.SECONDS),
+        )
+        assertTrue(
+            "Media3 did not expose exact subtitle selection-parameter readback; " +
+                "events=${playbackEvents.joinToString()}",
+            exactReadback.await(15, TimeUnit.SECONDS),
+        )
+        assertTrue(
+            "Media3 did not deliver the external WebVTT cue; ${currentPlayerState()}; " +
+                "events=${playbackEvents.joinToString()}",
+            cueReady.await(15, TimeUnit.SECONDS),
+        )
+        assertTrue(
+            "Media3 reported a playback error while using external WebVTT; " +
+                "events=${playbackEvents.joinToString()}",
+            playbackEvents.none { it.startsWith("playerError=") },
+        )
+    }
+
+    @Test
     fun nativeBindingsPreserveBridgeListenersAcrossReinitialize() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val root = fixtureDirectory(context, "vesper-listener-retention-instrumentation")

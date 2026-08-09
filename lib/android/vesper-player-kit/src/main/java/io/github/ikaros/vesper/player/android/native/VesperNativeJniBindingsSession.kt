@@ -267,12 +267,40 @@ internal fun VesperNativeJniBindings.drainAndApplyNativeCommands(
             is NativePlayerCommand.SetAbrPolicy -> {
                 Log.d(
                     NATIVE_JNI_BINDINGS_TAG,
-                    "apply native command: SetAbrPolicy mode=${command.policy.modeOrdinal} trackId=${command.policy.trackId}",
+                    "apply native command: SetAbrPolicy mode=${command.policy.modeOrdinal} trackId=${command.policy.trackId} expectedCatalogRevision=${command.expectedCatalogRevision}",
                 )
                 if (nativeFramePipelineOwnsSurface.get()) {
                     return@forEach
                 }
-                applyAbrPolicyCommand(exoPlayer, command.policy)
+                if (command.policy.modeOrdinal == NativeAbrMode.FixedTrack.ordinal) {
+                    // Clear a previous command before validation so a failed
+                    // replacement cannot be associated with an old track.
+                    currentFixedTrackCommandState = null
+                }
+                applyAbrPolicyCommand(
+                    exoPlayer = exoPlayer,
+                    policy = command.policy,
+                    expectedCatalogRevision = command.expectedCatalogRevision,
+                    actualCatalogRevision = currentTrackCatalogState.catalogRevision,
+                    sourceEpoch = systemPlaybackCallbackGeneration.get(),
+                    runtimeTrackRejection = currentRuntimeTrackRejectionState,
+                    playbackPath = currentTrackCatalogState.playbackPath,
+                    surfaceKind = currentSurfaceKindState?.name,
+                    decoderName = currentVideoDecoderName,
+                    hdrType = currentRuntimeHdrEvidence?.hdrKind,
+                )
+                currentFixedTrackCommandState =
+                    if (command.policy.modeOrdinal == NativeAbrMode.FixedTrack.ordinal) {
+                        command.policy.trackId?.takeIf(String::isNotBlank)?.let { trackId ->
+                            NativeFixedTrackCommandRecord(
+                                sourceEpoch = systemPlaybackCallbackGeneration.get(),
+                                catalogRevision = currentTrackCatalogState.catalogRevision,
+                                trackId = trackId,
+                            )
+                        }
+                    } else {
+                        null
+                    }
             }
         }
     }
@@ -426,6 +454,11 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
                 ),
             )
             val classified = classifyPlaybackException(error)
+            if (handleRuntimeFixedTrackCapabilityFailure(error, classified, callbackGeneration)) {
+                pushSnapshotToRust()
+                notifyNativeUpdate()
+                return
+            }
             enqueueHdrFailureHintIfNeeded(error, classified)
             sessionHandle?.let { handle ->
                 VesperNativeJni.reportError(
@@ -447,6 +480,114 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
             notifyNativeUpdate()
         }
     }
+
+internal fun VesperNativeJniBindings.handleRuntimeFixedTrackCapabilityFailure(
+    error: PlaybackException,
+    classified: NativePlaybackError,
+    callbackGeneration: Long,
+): Boolean {
+    val command = currentFixedTrackCommandState ?: return false
+    val activeTrackId =
+        currentEffectiveVideoTrackIdState
+            ?: resolveEffectiveVideoTrackId(currentTrackCatalogState.videoTracks, player?.videoFormat)
+            ?: return false
+    val rejectionKey =
+        runtimeFixedTrackCapabilityRejectionKey(
+            command = command,
+            callbackGeneration = callbackGeneration,
+            activeTrackId = activeTrackId,
+            classified = classified,
+        ) ?: return false
+
+    val details =
+        linkedMapOf<String, Any?>(
+            "domain" to "capability",
+            "code" to "runtimeTrackRejected",
+            "trackId" to command.trackId,
+            "sourceEpoch" to command.sourceEpoch,
+            "catalogRevision" to command.catalogRevision,
+            "playbackPath" to currentTrackCatalogState.playbackPath,
+            "errorCodeName" to error.errorCodeName,
+            "capabilityFailureCause" to classified.capabilityFailureCause?.wireName,
+            "capabilityFailureAxis" to classified.capabilityFailureAxis?.wireName,
+        )
+    currentRuntimeTrackRejectionKeyState = rejectionKey
+    currentRuntimeTrackRejectionState =
+        NativeRuntimeTrackRejection(
+            sourceEpoch = command.sourceEpoch,
+            catalogRevision = command.catalogRevision,
+            trackId = command.trackId,
+            code = "runtimeTrackRejected",
+            details = details,
+        )
+    currentFixedTrackCommandState = null
+    addLocalBridgeEvent(
+        NativeBridgeEvent.Warning(
+            VesperRuntimeWarning(
+                domain = "capability",
+                payload = details,
+            )
+        )
+    )
+
+    val exoPlayer = player ?: return true
+    val playWhenReady = exoPlayer.playWhenReady
+    runCatching {
+        applyAbrPolicyCommand(
+            exoPlayer = exoPlayer,
+            policy = NativeAbrPolicyPayload(
+                modeOrdinal = NativeAbrMode.Auto.ordinal,
+                trackId = null,
+                hasMaxBitRate = false,
+                maxBitRate = 0L,
+                hasMaxWidth = false,
+                maxWidth = 0,
+                hasMaxHeight = false,
+                maxHeight = 0,
+            ),
+            actualCatalogRevision = currentTrackCatalogState.catalogRevision,
+            playbackPath = currentTrackCatalogState.playbackPath,
+            surfaceKind = currentSurfaceKindState?.name,
+            decoderName = currentVideoDecoderName,
+            hdrType = currentRuntimeHdrEvidence?.hdrKind,
+        )
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = playWhenReady
+    }.onFailure { retryError ->
+        Log.w(
+            NATIVE_JNI_BINDINGS_TAG,
+            "failed to recover from fixed-track capability failure; keeping auto policy",
+            retryError,
+        )
+    }
+    pushTrackStateToRust()
+    return true
+}
+
+internal fun runtimeFixedTrackCapabilityRejectionKey(
+    command: NativeFixedTrackCommandRecord,
+    callbackGeneration: Long,
+    activeTrackId: String,
+    classified: NativePlaybackError,
+): String? {
+    if (command.sourceEpoch != callbackGeneration || command.trackId != activeTrackId) {
+        return null
+    }
+    if (!classified.isTrackCapabilityFailure()) {
+        return null
+    }
+    return "${command.sourceEpoch}:${command.catalogRevision}:${command.trackId}"
+}
+
+internal fun NativePlaybackError.isTrackCapabilityFailure(): Boolean =
+    capabilityFailureCause in
+        setOf(
+            AndroidCapabilityFailureCause.DecoderInit,
+            AndroidCapabilityFailureCause.DecoderQuery,
+            AndroidCapabilityFailureCause.DecodeFailed,
+            AndroidCapabilityFailureCause.FormatUnsupported,
+            AndroidCapabilityFailureCause.FormatExceedsCapabilities,
+        )
 
 internal fun VesperNativeJniBindings.buildAnalyticsListener(
     callbackGeneration: Long,
@@ -1105,6 +1246,15 @@ internal fun VesperNativeJniBindings.pushTrackStateToRust() {
             currentDeclaredExternalSubtitleDefaultCount,
             currentDeclaredExternalSubtitleIds,
             catalogManifestInfo,
+            playbackPath =
+                if (nativeFramePipelineOwnsSurface.get()) {
+                    "sdkManagedNativeFrame"
+                } else {
+                    "systemPlayer"
+                },
+            surfaceKind = currentSurfaceKindState?.name,
+            decoderName = currentVideoDecoderName,
+            hdrType = currentRuntimeHdrEvidence?.hdrKind,
         )
     val trackSelection =
         collectTrackSelection(
@@ -1124,7 +1274,32 @@ internal fun VesperNativeJniBindings.pushTrackStateToRust() {
             failedExternalSubtitleIds,
             currentSubtitleSelectionModeOrdinal,
         )
-    val publicTrackCatalog = trackCatalog.toPublicTrackCatalog()
+    val catalogFingerprint =
+        trackCatalog.catalogFingerprint(
+            sourceProtocol = currentSourceProtocol,
+            surfaceKind = currentSurfaceKindState?.name,
+            route =
+                if (nativeFramePipelineOwnsSurface.get()) {
+                    "sdkManagedNativeFrame"
+                } else {
+                    "systemPlayer"
+                },
+            drmKeySystem = currentDrmDiagnosticsSource?.drmConfiguration?.keySystem,
+            catalogReady = hasObservedTrackCatalog,
+            runtimeTrackRejectionKey = currentRuntimeTrackRejectionKeyState,
+        )
+    if (catalogFingerprint != currentTrackCatalogFingerprintState) {
+        if (currentTrackCatalogFingerprintState != null) {
+            currentTrackCatalogRevisionState =
+                currentTrackCatalogRevisionState.saturatingIncrement()
+        } else if (catalogFingerprint.isNotEmpty()) {
+            currentTrackCatalogRevisionState = 1L
+        }
+        currentTrackCatalogFingerprintState = catalogFingerprint
+    }
+    val revisionedTrackCatalog =
+        trackCatalog.withCatalogRevision(currentTrackCatalogRevisionState)
+    val publicTrackCatalog = revisionedTrackCatalog.toPublicTrackCatalog()
     currentSubtitleCatalogFailure =
         trackCatalog.subtitleIdentityFailure.takeUnless {
             requiresManifestInspection && manifestInfo == null
@@ -1150,10 +1325,13 @@ internal fun VesperNativeJniBindings.pushTrackStateToRust() {
     currentVideoVariantObservationState = videoVariantObservation
     Log.d(
         NATIVE_JNI_BINDINGS_TAG,
-        "pushTrackStateToRust tracks=${trackCatalog.tracks.size} adaptiveVideo=${trackCatalog.adaptiveVideo} adaptiveAudio=${trackCatalog.adaptiveAudio} videoMode=${trackSelection.video.modeOrdinal} audioMode=${trackSelection.audio.modeOrdinal} subtitleMode=${trackSelection.subtitle.modeOrdinal} abrMode=${trackSelection.abrPolicy.modeOrdinal} effectiveVideoTrackId=$effectiveVideoTrackId observation=$videoVariantObservation",
+        "pushTrackStateToRust tracks=${revisionedTrackCatalog.tracks.size} revision=${revisionedTrackCatalog.catalogRevision} adaptiveVideo=${revisionedTrackCatalog.adaptiveVideo} adaptiveAudio=${revisionedTrackCatalog.adaptiveAudio} videoMode=${trackSelection.video.modeOrdinal} audioMode=${trackSelection.audio.modeOrdinal} subtitleMode=${trackSelection.subtitle.modeOrdinal} abrMode=${trackSelection.abrPolicy.modeOrdinal} effectiveVideoTrackId=$effectiveVideoTrackId observation=$videoVariantObservation",
     )
-    VesperNativeJni.applyTrackState(handle, trackCatalog, trackSelection)
+    VesperNativeJni.applyTrackState(handle, revisionedTrackCatalog, trackSelection)
 }
+
+private fun Long.saturatingIncrement(): Long =
+    if (this == Long.MAX_VALUE) Long.MAX_VALUE else this + 1L
 
 internal fun resolveTrackCatalogReadiness(
     observedTrackCatalog: Boolean,

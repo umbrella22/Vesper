@@ -4,6 +4,7 @@ import Flutter
 import MediaPlayer
 import Photos
 import UIKit
+import VesperPlayerKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, UIDocumentPickerDelegate {
@@ -123,6 +124,16 @@ import UIKit
   }
 
   private func handleDeviceControl(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    Task { @MainActor [weak self] in
+      self?.handleDeviceControlOnMain(call: call, result: result)
+    }
+  }
+
+  @MainActor
+  private func handleDeviceControlOnMain(
+    call: FlutterMethodCall,
+    result: @escaping FlutterResult
+  ) {
     switch call.method {
     case "getBrightness":
       result(Double(UIScreen.main.brightness).clampedToUnit())
@@ -193,8 +204,12 @@ import UIKit
       self.descendantView(in: window, accessibilityIdentifier: surfaceMarkerIdentifier)?
         .superview
     }).first
+    let fallbackSurfaces = windows.flatMap { window in
+      self.descendantViews(in: window) { $0 is PlayerSurfaceView }
+    }
+    let uniqueFallbackSurface = fallbackSurfaces.count == 1 ? fallbackSurfaces[0] : nil
     guard
-      let surface = directSurface ?? markedSurface,
+      let surface = directSurface ?? markedSurface ?? uniqueFallbackSurface,
       let subtitleLabel = descendantView(
         in: surface,
         accessibilityIdentifier: "io.github.ikaros.vesper.player.subtitle-overlay"
@@ -295,6 +310,20 @@ import UIKit
       )
     }
     return identifiers
+  }
+
+  private func descendantViews(
+    in view: UIView,
+    matching predicate: (UIView) -> Bool
+  ) -> [UIView] {
+    var matches: [UIView] = []
+    if predicate(view) {
+      matches.append(view)
+    }
+    for subview in view.subviews {
+      matches.append(contentsOf: descendantViews(in: subview, matching: predicate))
+    }
+    return matches
   }
 
   private func applicationWindows() -> [UIWindow] {

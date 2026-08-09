@@ -234,6 +234,9 @@ private class DeviceDeferredSubtitleBindings(
 
     override fun currentTrackCatalog(): VesperTrackCatalog = catalog
 
+    override fun isSubtitleTrackSelectable(trackId: String): Boolean =
+        catalog.subtitleTracks.any { it.id == trackId }
+
     override fun currentTrackSelection(): VesperTrackSelectionSnapshot = currentSelection
 
     override fun currentAppliedSubtitleSelection(): VesperTrackSelection = currentAppliedSelection

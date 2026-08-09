@@ -210,8 +210,17 @@ class VesperPlayerController {
         () => _platform.setSubtitleStyle(playerId, style),
       );
 
-  Future<void> setAbrPolicy(VesperAbrPolicy policy) =>
-      _runVoidOperation(() => _platform.setAbrPolicy(playerId, policy));
+  Future<void> setAbrPolicy(
+    VesperAbrPolicy policy, {
+    int? expectedCatalogRevision,
+  }) =>
+      _runVoidOperation(
+        () => _platform.setAbrPolicy(
+          playerId,
+          policy,
+          expectedCatalogRevision: expectedCatalogRevision,
+        ),
+      );
 
   Future<void> setPlaybackResiliencePolicy(
     VesperPlaybackResiliencePolicy policy,
@@ -309,6 +318,8 @@ class VesperPlayerController {
           case VesperPlayerErrorEvent():
             _applyPlatformError(event);
           case VesperPlayerWarningEvent():
+            _eventsController.add(event);
+          case VesperPlayerPipelineEventHookReportsEvent():
             _eventsController.add(event);
           case VesperPlayerPictureInPictureEvent():
             _pictureInPictureController.add(event);

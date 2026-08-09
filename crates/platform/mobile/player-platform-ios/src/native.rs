@@ -94,12 +94,23 @@ pub struct IosAvPlayerStateTracker {
 pub enum IosNativePlayerCommand {
     Play,
     Pause,
-    SeekTo { position: Duration },
+    SeekTo {
+        position: Duration,
+    },
     Stop,
-    SetPlaybackRate { rate: f32 },
-    SetAudioTrackSelection { selection: MediaTrackSelection },
-    SetSubtitleTrackSelection { selection: MediaTrackSelection },
-    SetAbrPolicy { policy: MediaAbrPolicy },
+    SetPlaybackRate {
+        rate: f32,
+    },
+    SetAudioTrackSelection {
+        selection: MediaTrackSelection,
+    },
+    SetSubtitleTrackSelection {
+        selection: MediaTrackSelection,
+    },
+    SetAbrPolicy {
+        policy: MediaAbrPolicy,
+        expected_catalog_revision: Option<u64>,
+    },
 }
 
 pub trait IosNativeCommandSink: Send {
@@ -333,12 +344,23 @@ pub enum IosHostEvent {
 pub enum IosHostCommand {
     Play,
     Pause,
-    SeekTo { position_ms: u64 },
+    SeekTo {
+        position_ms: u64,
+    },
     Stop,
-    SetPlaybackRate { rate: f32 },
-    SetAudioTrackSelection { selection: MediaTrackSelection },
-    SetSubtitleTrackSelection { selection: MediaTrackSelection },
-    SetAbrPolicy { policy: MediaAbrPolicy },
+    SetPlaybackRate {
+        rate: f32,
+    },
+    SetAudioTrackSelection {
+        selection: MediaTrackSelection,
+    },
+    SetSubtitleTrackSelection {
+        selection: MediaTrackSelection,
+    },
+    SetAbrPolicy {
+        policy: MediaAbrPolicy,
+        expected_catalog_revision: Option<u64>,
+    },
 }
 
 pub struct IosHostBridgeSession {
@@ -557,8 +579,12 @@ impl IosHostCommand {
                     selection: selection.clone(),
                 }
             }
-            IosNativePlayerCommand::SetAbrPolicy { policy } => Self::SetAbrPolicy {
+            IosNativePlayerCommand::SetAbrPolicy {
+                policy,
+                expected_catalog_revision,
+            } => Self::SetAbrPolicy {
                 policy: policy.clone(),
+                expected_catalog_revision: *expected_catalog_revision,
             },
         }
     }
@@ -1535,12 +1561,21 @@ impl<C: IosNativeCommandSink> IosManagedNativeSession<C> {
                     vec![IosNativePlayerCommand::SetSubtitleTrackSelection { selection }],
                 ))
             }
-            PlayerRuntimeCommand::SetAbrPolicy { policy } => {
+            PlayerRuntimeCommand::SetAbrPolicy {
+                policy,
+                expected_catalog_revision,
+            } => {
                 let policy = self.validate_abr_policy_request(policy)?;
                 if self.media_info.track_selection.abr_policy == policy {
                     return Ok((false, Vec::new()));
                 }
-                Ok((true, vec![IosNativePlayerCommand::SetAbrPolicy { policy }]))
+                Ok((
+                    true,
+                    vec![IosNativePlayerCommand::SetAbrPolicy {
+                        policy,
+                        expected_catalog_revision: *expected_catalog_revision,
+                    }],
+                ))
             }
             PlayerRuntimeCommand::Stop => {
                 if self.presentation_state == PresentationState::Ready
@@ -1717,7 +1752,7 @@ impl<C: IosNativeCommandSink> IosNativePlayerSession for IosManagedNativeSession
                 PlayerRuntimeCommand::SetSubtitleTrackSelection { selection } => {
                     self.media_info.track_selection.subtitle = selection;
                 }
-                PlayerRuntimeCommand::SetAbrPolicy { policy } => {
+                PlayerRuntimeCommand::SetAbrPolicy { policy, .. } => {
                     self.media_info.track_selection.abr_policy = policy;
                 }
                 PlayerRuntimeCommand::Stop => {

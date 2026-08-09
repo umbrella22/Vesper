@@ -55,6 +55,47 @@ impl Display for SubtitleErrorDetails {
     }
 }
 
+/// Structured failure details for an explicit fixed-video-track command.
+///
+/// The code is intentionally a string so newer host values can cross an older
+/// binding without being silently rewritten to a different selection outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixedTrackSelectionErrorDetails {
+    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_catalog_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_catalog_revision: Option<u64>,
+    pub message: String,
+}
+
+impl FixedTrackSelectionErrorDetails {
+    pub fn new(
+        code: impl Into<String>,
+        track_id: Option<String>,
+        expected_catalog_revision: Option<u64>,
+        actual_catalog_revision: Option<u64>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            track_id,
+            expected_catalog_revision,
+            actual_catalog_revision,
+            message: message.into(),
+        }
+    }
+}
+
+impl Display for FixedTrackSelectionErrorDetails {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.code, self.message)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerErrorCode {
     InvalidArgument,
@@ -90,6 +131,7 @@ pub struct PlayerError {
     retriable: bool,
     message: String,
     subtitle_details: Option<SubtitleErrorDetails>,
+    fixed_track_selection_details: Option<FixedTrackSelectionErrorDetails>,
 }
 
 pub type PlayerResult<T> = Result<T, PlayerError>;
@@ -103,6 +145,7 @@ impl PlayerError {
             retriable,
             message: message.into(),
             subtitle_details: None,
+            fixed_track_selection_details: None,
         }
     }
 
@@ -117,6 +160,7 @@ impl PlayerError {
             retriable: default_retriable_for_category(category),
             message: message.into(),
             subtitle_details: None,
+            fixed_track_selection_details: None,
         }
     }
 
@@ -132,6 +176,7 @@ impl PlayerError {
             retriable,
             message: message.into(),
             subtitle_details: None,
+            fixed_track_selection_details: None,
         }
     }
 
@@ -146,6 +191,21 @@ impl PlayerError {
     /// Returns structured subtitle details when this error crossed a subtitle boundary.
     pub fn subtitle_details(&self) -> Option<&SubtitleErrorDetails> {
         self.subtitle_details.as_ref()
+    }
+
+    /// Attaches a structured fixed-track selection failure to this runtime error.
+    pub fn with_fixed_track_selection_details(
+        mut self,
+        details: FixedTrackSelectionErrorDetails,
+    ) -> Self {
+        self.message = details.message.clone();
+        self.fixed_track_selection_details = Some(details);
+        self
+    }
+
+    /// Returns structured fixed-track selection details when present.
+    pub fn fixed_track_selection_details(&self) -> Option<&FixedTrackSelectionErrorDetails> {
+        self.fixed_track_selection_details.as_ref()
     }
 
     pub fn command_channel_closed() -> Self {
@@ -215,7 +275,10 @@ fn default_retriable_for_category(category: PlayerErrorCategory) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{PlayerError, PlayerErrorCategory, PlayerErrorCode, SubtitleErrorDetails};
+    use super::{
+        FixedTrackSelectionErrorDetails, PlayerError, PlayerErrorCategory, PlayerErrorCode,
+        SubtitleErrorDetails,
+    };
 
     #[test]
     fn player_error_defaults_to_legacy_code_taxonomy() {
@@ -336,6 +399,29 @@ mod tests {
                 .subtitle_details()
                 .map(|details| details.code.as_str()),
             Some("subtitle_selection_timeout")
+        );
+    }
+
+    #[test]
+    fn attaching_fixed_track_selection_details_keeps_message_and_revisions() {
+        let error = PlayerError::new(PlayerErrorCode::Unsupported, "outer")
+            .with_fixed_track_selection_details(FixedTrackSelectionErrorDetails::new(
+                "trackExceedsCapabilities",
+                Some("video:4k".to_owned()),
+                Some(7),
+                Some(8),
+                "the requested track exceeds current capabilities",
+            ));
+
+        let details = error
+            .fixed_track_selection_details()
+            .expect("fixed-track details should be attached");
+        assert_eq!(details.code, "trackExceedsCapabilities");
+        assert_eq!(details.expected_catalog_revision, Some(7));
+        assert_eq!(details.actual_catalog_revision, Some(8));
+        assert_eq!(
+            error.message(),
+            "the requested track exceeds current capabilities"
         );
     }
 }

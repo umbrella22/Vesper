@@ -320,9 +320,14 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             }
         case "setAbrPolicy":
             handleSessionCommand(call, result: result) { session in
-                let policyMap = try requireNestedMap(arguments: arguments(of: call), key: "policy")
+                let callArguments = arguments(of: call)
+                let policyMap = try requireNestedMap(arguments: callArguments, key: "policy")
+                let expectedCatalogRevision = try callArguments.toExpectedCatalogRevision()
                 session.lastError = nil
-                session.controller.setAbrPolicy(try policyMap.toAbrPolicy())
+                try session.controller.setAbrPolicy(
+                    try policyMap.toAbrPolicy(),
+                    expectedCatalogRevision: expectedCatalogRevision
+                )
                 emitSnapshot(for: session)
                 return nil
             }

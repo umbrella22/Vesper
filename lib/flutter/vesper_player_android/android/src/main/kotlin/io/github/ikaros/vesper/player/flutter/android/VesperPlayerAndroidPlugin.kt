@@ -389,8 +389,13 @@ class VesperPlayerAndroidPlugin :
             }
             "setAbrPolicy" -> handleSessionCommand(call, result) { session ->
                 val policyMap = requireNestedMap(call.argumentMap(), "policy")
+                val expectedCatalogRevision =
+                    (call.argumentMap()["expectedCatalogRevision"] as? Number)?.toLong()
                 session.lastError = null
-                session.controller.setAbrPolicy(policyMap.toAbrPolicy())
+                session.controller.setAbrPolicy(
+                    policyMap.toAbrPolicy(),
+                    expectedCatalogRevision,
+                )
                 emitSnapshot(session)
                 null
             }

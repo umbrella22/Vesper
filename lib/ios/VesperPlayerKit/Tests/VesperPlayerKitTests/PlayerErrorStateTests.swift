@@ -264,7 +264,11 @@ final class PlayerErrorStateTests: XCTestCase {
         )
 
         XCTAssertFalse(surface.isNativeFramePresentationActive)
-        XCTAssertEqual(bridge.trackCatalog, .empty)
+        XCTAssertTrue(bridge.trackCatalog.tracks.isEmpty)
+        XCTAssertFalse(bridge.trackCatalog.adaptiveVideo)
+        XCTAssertFalse(bridge.trackCatalog.adaptiveAudio)
+        XCTAssertGreaterThan(bridge.trackCatalog.catalogRevision, 0)
+        XCTAssertEqual(bridge.trackCatalog.playbackPath, "systemPlayer")
         XCTAssertEqual(bridge.trackSelection, VesperTrackSelectionSnapshot())
         XCTAssertNil(bridge.effectiveVideoTrackId)
         XCTAssertNil(bridge.videoVariantObservation)

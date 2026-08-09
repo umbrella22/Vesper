@@ -273,7 +273,36 @@ internal fun applyTrackSelectionCommand(
 internal fun applyAbrPolicyCommand(
     exoPlayer: ExoPlayer,
     policy: NativeAbrPolicyPayload,
+    expectedCatalogRevision: Long? = null,
+    actualCatalogRevision: Long? = null,
+    sourceEpoch: Long? = null,
+    runtimeTrackRejection: NativeRuntimeTrackRejection? = null,
+    playbackPath: String? = "systemPlayer",
+    surfaceKind: String? = null,
+    decoderName: String? = null,
+    hdrType: String? = null,
 ) {
+    val fixedTrackLocation =
+        if (policy.modeOrdinal == NativeAbrMode.FixedTrack.ordinal) {
+            validateFixedTrackSelection(
+                tracks = exoPlayer.currentTracks,
+                trackId = policy.trackId,
+                expectedCatalogRevision = expectedCatalogRevision,
+                actualCatalogRevision = actualCatalogRevision,
+                sourceEpoch = sourceEpoch,
+                runtimeTrackRejection = runtimeTrackRejection,
+                playbackPath = playbackPath,
+                surfaceKind = surfaceKind,
+                decoderName = decoderName,
+                hdrType = hdrType,
+            )
+        } else {
+            null
+        }
+
+    // Do not build or mutate selection parameters until fixed-track
+    // validation above has passed. This preserves the effective player state
+    // on every structured rejection.
     val builder = exoPlayer.trackSelectionParameters.buildUpon()
     builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
     builder.setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
@@ -293,20 +322,143 @@ internal fun applyAbrPolicyCommand(
             }
         }
         NativeAbrMode.FixedTrack.ordinal -> {
-            val trackId = policy.trackId
-            val override =
-                trackId?.let { findTrackOverride(exoPlayer.currentTracks, C.TRACK_TYPE_VIDEO, it) }
-            if (override == null) {
-                Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to find fixed ABR video track for id=${policy.trackId}")
-                return
-            }
-            builder.setOverrideForType(override)
+            val location =
+                fixedTrackLocation
+                    ?: throw IllegalStateException("validated fixed-track location is missing")
+            builder.setOverrideForType(
+                TrackSelectionOverride(
+                    location.group.mediaTrackGroup,
+                    location.trackIndex,
+                )
+            )
         }
         else -> return
     }
 
     exoPlayer.setTrackSelectionParameters(builder.build())
 }
+
+internal fun validateFixedTrackSelection(
+    tracks: Tracks,
+    trackId: String?,
+    expectedCatalogRevision: Long?,
+    actualCatalogRevision: Long?,
+    sourceEpoch: Long? = null,
+    runtimeTrackRejection: NativeRuntimeTrackRejection? = null,
+    playbackPath: String? = "systemPlayer",
+    surfaceKind: String? = null,
+    decoderName: String? = null,
+    hdrType: String? = null,
+): NativeTrackLocation {
+    if (expectedCatalogRevision != null &&
+        actualCatalogRevision != null &&
+        expectedCatalogRevision != actualCatalogRevision
+    ) {
+        throw VesperFixedTrackSelectionException(
+            code = "staleCatalog",
+            trackId = trackId,
+            expectedCatalogRevision = expectedCatalogRevision,
+            actualCatalogRevision = actualCatalogRevision,
+            message = "the track catalog changed before the fixed-track command was applied",
+        )
+    }
+    val location =
+        trackId?.let {
+            findTrackLocation(
+                tracks,
+                C.TRACK_TYPE_VIDEO,
+                it,
+            )
+        }
+            ?: throw VesperFixedTrackSelectionException(
+                code = "trackUnavailable",
+                trackId = trackId,
+                expectedCatalogRevision = expectedCatalogRevision,
+                actualCatalogRevision = actualCatalogRevision,
+                message = "the requested video track is not in the current catalog",
+            )
+    val support =
+        trackSupportForFormatSupport(
+            formatSupport = location.group.trackSupportOrNull(location.trackIndex),
+            playbackPath = playbackPath,
+            surfaceKind = surfaceKind,
+            decoderName = decoderName,
+            hdrType = hdrType,
+        )
+    val status = NativeTrackSupportStatus.entries.getOrNull(support.statusOrdinal)
+    val rejectionCode =
+        when (status) {
+            NativeTrackSupportStatus.ExceedsCapabilities -> "trackExceedsCapabilities"
+            NativeTrackSupportStatus.Unsupported -> "trackUnsupported"
+            NativeTrackSupportStatus.Supported,
+            NativeTrackSupportStatus.Unknown,
+            null,
+            -> null
+        }
+    if (rejectionCode != null) {
+        val statusMessage =
+            if (rejectionCode == "trackExceedsCapabilities") {
+                "the requested video track exceeds current playback capabilities"
+            } else {
+                "the requested video track is unsupported by the active playback path"
+            }
+        throw VesperFixedTrackSelectionException(
+            code = rejectionCode,
+            trackId = trackId,
+            expectedCatalogRevision = expectedCatalogRevision,
+            actualCatalogRevision = actualCatalogRevision,
+            message = statusMessage,
+            extraDetails =
+                mapOf(
+                    "reason" to
+                        (support.reasonRawValue
+                            ?: NativeTrackSupportReason.entries
+                                .getOrNull(support.reasonOrdinal)
+                                ?.toWireName()
+                            ?: support.reasonOrdinal.toString()),
+                    "formatSupportRawValue" to support.formatSupportRawValue,
+                ),
+        )
+    }
+    if (runtimeTrackRejection != null &&
+        sourceEpoch != null &&
+        runtimeTrackRejection.sourceEpoch == sourceEpoch &&
+        runtimeTrackRejection.trackId == trackId
+    ) {
+        throw VesperFixedTrackSelectionException(
+            code = runtimeTrackRejection.code,
+            trackId = trackId,
+            expectedCatalogRevision = expectedCatalogRevision,
+            actualCatalogRevision = actualCatalogRevision,
+            message = "the requested video track was rejected by the active playback session",
+            extraDetails =
+                runtimeTrackRejection.details -
+                    setOf(
+                        "domain",
+                        "code",
+                        "trackId",
+                        "expectedCatalogRevision",
+                        "actualCatalogRevision",
+                        "message",
+                    ),
+        )
+    }
+    return location
+}
+
+private fun NativeTrackSupportReason.toWireName(): String =
+    when (this) {
+        NativeTrackSupportReason.None -> "none"
+        NativeTrackSupportReason.FormatExceedsCapabilities -> "formatExceedsCapabilities"
+        NativeTrackSupportReason.UnsupportedType -> "unsupportedType"
+        NativeTrackSupportReason.UnsupportedSubtype -> "unsupportedSubtype"
+        NativeTrackSupportReason.UnsupportedDrm -> "unsupportedDrm"
+        NativeTrackSupportReason.RouteUnavailable -> "routeUnavailable"
+        NativeTrackSupportReason.PresentationUnavailable -> "presentationUnavailable"
+        NativeTrackSupportReason.RuntimeFailure -> "runtimeFailure"
+        NativeTrackSupportReason.PlatformUnknown -> "platformUnknown"
+        NativeTrackSupportReason.Unknown -> "unknown"
+    }
 
 internal fun resetAbrConstraints(builder: TrackSelectionParameters.Builder) {
     builder.setForceLowestBitrate(false)
@@ -323,8 +475,52 @@ internal fun findTrackOverride(
     externalSubtitleIds: List<String> = emptyList(),
     unavailableExternalSubtitleIds: Set<String> = emptySet(),
 ): TrackSelectionOverride? {
+    return findTrackLocation(
+        tracks,
+        trackType,
+        trackId,
+        sourceProtocol,
+        externalSubtitleIds,
+        unavailableExternalSubtitleIds,
+    )?.let { location ->
+        TrackSelectionOverride(location.group.mediaTrackGroup, location.trackIndex)
+    }
+}
+
+internal fun isSubtitleTrackSelectable(
+    tracks: Tracks,
+    trackId: String,
+    sourceProtocol: VesperPlayerSourceProtocol? = null,
+    externalSubtitleIds: List<String> = emptyList(),
+    unavailableExternalSubtitleIds: Set<String> = emptySet(),
+): Boolean {
+    val location =
+        findTrackLocation(
+            tracks = tracks,
+            trackType = C.TRACK_TYPE_TEXT,
+            trackId = trackId,
+            sourceProtocol = sourceProtocol,
+            externalSubtitleIds = externalSubtitleIds,
+            unavailableExternalSubtitleIds = unavailableExternalSubtitleIds,
+        ) ?: return false
+    return location.group.isTrackSupported(location.trackIndex, true)
+}
+
+internal data class NativeTrackLocation(
+    val group: Tracks.Group,
+    val trackIndex: Int,
+)
+
+internal fun findTrackLocation(
+    tracks: Tracks,
+    trackType: Int,
+    trackId: String,
+    sourceProtocol: VesperPlayerSourceProtocol? = null,
+    externalSubtitleIds: List<String> = emptyList(),
+    unavailableExternalSubtitleIds: Set<String> = emptySet(),
+): NativeTrackLocation? {
     val isDashSource = sourceProtocol == VesperPlayerSourceProtocol.Dash
-    var match: TrackSelectionOverride? = null
+    var match: NativeTrackLocation? = null
     var matchCount = 0
     for (group in tracks.groups) {
         if (group.type != trackType) continue
@@ -336,11 +532,11 @@ internal fun findTrackOverride(
                     stableId !in unavailableExternalSubtitleIds &&
                     stableId == trackId
                 ) {
-                    match = TrackSelectionOverride(group.mediaTrackGroup, trackIndex)
+                    match = NativeTrackLocation(group, trackIndex)
                     matchCount += 1
                 }
             } else if (nativeTrackId(group.mediaTrackGroup, trackIndex, format) == trackId) {
-                match = TrackSelectionOverride(group.mediaTrackGroup, trackIndex)
+                match = NativeTrackLocation(group, trackIndex)
                 matchCount += 1
             }
         }

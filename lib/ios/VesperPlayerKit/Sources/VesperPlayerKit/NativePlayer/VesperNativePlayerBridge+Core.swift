@@ -82,6 +82,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var subtitleSelectionTask: Task<Void, Error>?
     let subtitleSelectionWaitPolicy: VesperSubtitleSelectionWaitPolicy
     var trackCatalogLoadGeneration: UInt64 = 0
+    /// Monotonic for the lifetime of this bridge/session. Source resets clear
+    /// the public catalog but intentionally do not reset this counter.
+    var trackCatalogRevisionState: Int64 = 0
+    var trackCatalogFingerprintState: TrackCatalogFingerprint?
     var confirmedSubtitleSelection: VesperTrackSelection = .disabled()
     var explicitSubtitleIntentSourceEpoch: UInt64?
     var latestConfirmedExplicitSubtitleSelection: (

@@ -751,7 +751,11 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
   }
 
   @override
-  Future<void> setAbrPolicy(String playerId, VesperAbrPolicy policy) async =>
+  Future<void> setAbrPolicy(
+    String playerId,
+    VesperAbrPolicy policy, {
+    int? expectedCatalogRevision,
+  }) async =>
       throw UnimplementedError();
 
   @override

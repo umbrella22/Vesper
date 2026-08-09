@@ -185,12 +185,20 @@ internal fun VesperNativePlayerBridge.clearPreviousSubtitleSelectionFailure() {
     )
 }
 
-internal fun VesperNativePlayerBridge.setNativeAbrPolicy(policy: VesperAbrPolicy) {
+internal fun VesperNativePlayerBridge.setNativeAbrPolicy(
+    policy: VesperAbrPolicy,
+    expectedCatalogRevision: Long?,
+) {
     recordBenchmark("set_abr_policy_command", mapOf("mode" to policy.mode.name))
     if (isRequiredNativeFramePipelineFailureActive()) {
         return
     }
-    bindings.setAbrPolicy(policy)
+    // Resolve the latest Media3 group/index and catalog revision before the
+    // Rust command is validated. This keeps a command envelope and the host
+    // execution guard on the same snapshot without adding a hot-path timeline
+    // refresh.
+    bindings.refreshTrackCatalog()
+    bindings.setAbrPolicy(policy, expectedCatalogRevision)
     refreshFromNative()
 }
 

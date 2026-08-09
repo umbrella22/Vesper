@@ -7,6 +7,8 @@
 - Added controller-level subtitle styling through `setSubtitleStyle`.
 - Added external subtitle source configurations and explicit RTMP, RTSP, and
   HTTP-FLV source factories from the shared platform interface.
+- Added track support metadata, catalog revisions, and playback-path state to
+  the public Flutter snapshot models.
 
 ### Breaking Changes
 
@@ -25,6 +27,8 @@
   package split where SDK UI widgets use Material components.
 - Picture in Picture request and exit failures are surfaced through PiP events
   and thrown platform errors without mutating the player snapshot error state.
+- `setAbrPolicy` accepts an optional expected catalog revision and surfaces
+  fixed-track capability failures as typed platform exceptions.
 - `setSubtitleTrackSelection` now awaits native confirmation and throws
   `VesperSubtitleException` for structured subtitle failures. Snapshots expose
   requested, confirmed, and effective subtitle selection separately.

@@ -17,15 +17,15 @@ use super::{
 };
 use crate::{FfiErrorCode, FfiPluginParticipation};
 use player_runtime::{
-    DecodedVideoFrame, FrameProcessorPolicyAction, FrameProcessorWarning,
-    FrameProcessorWarningKind, MediaAbrMode, MediaAbrPolicy, MediaSourceKind, MediaSourceProtocol,
-    MediaTrack, MediaTrackCatalog, MediaTrackKind, MediaTrackSelection,
-    MediaTrackSelectionSnapshot, PlaybackProgress, PlayerAudioInfo, PlayerError,
-    PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo, PlayerPluginCapabilitySummary,
-    PlayerPluginCodecCapability, PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic,
-    PlayerPluginDiagnosticStatus, PlayerPluginFrameProcessorCapabilitySummary,
-    PlayerPluginParticipation, PlayerResult, PlayerRuntimeAdapter,
-    PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
+    DecodedVideoFrame, FixedTrackSelectionErrorDetails, FrameProcessorPolicyAction,
+    FrameProcessorWarning, FrameProcessorWarningKind, MediaAbrMode, MediaAbrPolicy,
+    MediaSourceKind, MediaSourceProtocol, MediaTrack, MediaTrackCatalog, MediaTrackKind,
+    MediaTrackSelection, MediaTrackSelectionSnapshot, PlaybackProgress, PlayerAudioInfo,
+    PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo,
+    PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
+    PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
+    PlayerPluginFrameProcessorCapabilitySummary, PlayerPluginParticipation, PlayerResult,
+    PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
     PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory, PlayerRuntimeAdapterInitializer,
     PlayerRuntimeCommand, PlayerRuntimeCommandResult, PlayerRuntimeEvent, PlayerRuntimeInitializer,
     PlayerRuntimeOptions, PlayerRuntimeStartup, PlayerRuntimeWarning, PlayerVideoInfo,
@@ -295,6 +295,40 @@ fn ffi_subtitle_error_details_json_preserves_canonical_and_unknown_values() {
         // SAFETY: `owned_bridge_error` allocated the C fields and this is their only release.
         unsafe { super::player_ffi_error_free(&mut ffi_error) };
     }
+}
+
+#[test]
+fn ffi_fixed_track_error_details_json_preserves_catalog_contract() {
+    let details = FixedTrackSelectionErrorDetails::new(
+        "track_exceeds_capabilities",
+        Some("video:1080p".to_owned()),
+        Some(7),
+        Some(9),
+        "the requested video track exceeds current decoder capabilities",
+    );
+    let error = PlayerError::with_taxonomy(
+        PlayerErrorCode::Unsupported,
+        PlayerErrorCategory::Capability,
+        false,
+        details.message.clone(),
+    )
+    .with_fixed_track_selection_details(details);
+    let mut ffi_error = super::owned_bridge_error(error.into());
+    let payload: serde_json::Value = serde_json::from_str(&copy_c_string(ffi_error.details_json))
+        .expect("fixed-track details JSON");
+
+    assert_eq!(payload["domain"], "fixedTrack");
+    assert_eq!(payload["code"], "track_exceeds_capabilities");
+    assert_eq!(payload["trackId"], "video:1080p");
+    assert_eq!(payload["expectedCatalogRevision"].as_u64(), Some(7));
+    assert_eq!(payload["actualCatalogRevision"].as_u64(), Some(9));
+    assert_eq!(
+        payload["message"],
+        "the requested video track exceeds current decoder capabilities"
+    );
+
+    // SAFETY: `owned_bridge_error` allocated the C fields and this is their only release.
+    unsafe { super::player_ffi_error_free(&mut ffi_error) };
 }
 
 #[test]
@@ -954,9 +988,12 @@ impl FakeRuntimeAdapterInitializer {
                     sample_rate: None,
                     is_default: true,
                     is_forced: false,
+                    support: Default::default(),
                 }],
                 adaptive_video: true,
                 adaptive_audio: false,
+                catalog_revision: 0,
+                playback_path: None,
             },
             track_selection: MediaTrackSelectionSnapshot {
                 video: MediaTrackSelection::auto(),

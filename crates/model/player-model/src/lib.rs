@@ -5,12 +5,14 @@ mod model;
 mod session;
 
 pub use error::{
-    PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerResult, SubtitleErrorDetails,
+    FixedTrackSelectionErrorDetails, PlayerError, PlayerErrorCategory, PlayerErrorCode,
+    PlayerResult, SubtitleErrorDetails,
 };
 pub use model::{
     DecodedVideoFrame, MediaAbrMode, MediaAbrPolicy, MediaSource, MediaSourceKind,
     MediaSourceProtocol, MediaSubtitleStyle, MediaTrack, MediaTrackCatalog, MediaTrackKind,
-    MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackState,
-    VideoPixelFormat,
+    MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, MediaTrackSupport,
+    MediaTrackSupportDiagnostics, MediaTrackSupportReason, MediaTrackSupportSource,
+    MediaTrackSupportStatus, PlaybackState, VideoPixelFormat,
 };
 pub use session::{PlaybackProgress, PlaybackSessionModel, PresentationState};

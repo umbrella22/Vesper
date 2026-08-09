@@ -114,6 +114,34 @@ typedef enum PlayerFfiTrackKind {
   PLAYER_FFI_TRACK_KIND_SUBTITLE = 2,
 } PlayerFfiTrackKind;
 
+typedef enum PlayerFfiTrackSupportStatus {
+  PLAYER_FFI_TRACK_SUPPORT_STATUS_SUPPORTED = 0,
+  PLAYER_FFI_TRACK_SUPPORT_STATUS_EXCEEDS_CAPABILITIES = 1,
+  PLAYER_FFI_TRACK_SUPPORT_STATUS_UNSUPPORTED = 2,
+  PLAYER_FFI_TRACK_SUPPORT_STATUS_UNKNOWN = 3,
+} PlayerFfiTrackSupportStatus;
+
+typedef enum PlayerFfiTrackSupportReason {
+  PLAYER_FFI_TRACK_SUPPORT_REASON_NONE = 0,
+  PLAYER_FFI_TRACK_SUPPORT_REASON_FORMAT_EXCEEDS_CAPABILITIES = 1,
+  PLAYER_FFI_TRACK_SUPPORT_REASON_UNSUPPORTED_TYPE = 2,
+  PLAYER_FFI_TRACK_SUPPORT_REASON_UNSUPPORTED_SUBTYPE = 3,
+  PLAYER_FFI_TRACK_SUPPORT_REASON_UNSUPPORTED_DRM = 4,
+  PLAYER_FFI_TRACK_SUPPORT_REASON_ROUTE_UNAVAILABLE = 5,
+  PLAYER_FFI_TRACK_SUPPORT_REASON_PRESENTATION_UNAVAILABLE = 6,
+  PLAYER_FFI_TRACK_SUPPORT_REASON_RUNTIME_FAILURE = 7,
+  PLAYER_FFI_TRACK_SUPPORT_REASON_PLATFORM_UNKNOWN = 8,
+  PLAYER_FFI_TRACK_SUPPORT_REASON_UNKNOWN = 9,
+} PlayerFfiTrackSupportReason;
+
+typedef enum PlayerFfiTrackSupportSource {
+  PLAYER_FFI_TRACK_SUPPORT_SOURCE_RUNTIME_TRACK_CATALOG = 0,
+  PLAYER_FFI_TRACK_SUPPORT_SOURCE_CAPABILITY_PROBE = 1,
+  PLAYER_FFI_TRACK_SUPPORT_SOURCE_RUNTIME_FAILURE = 2,
+  PLAYER_FFI_TRACK_SUPPORT_SOURCE_UNAVAILABLE = 3,
+  PLAYER_FFI_TRACK_SUPPORT_SOURCE_UNKNOWN = 4,
+} PlayerFfiTrackSupportSource;
+
 typedef enum PlayerFfiPlaybackState {
   PLAYER_FFI_PLAYBACK_STATE_READY = 0,
   PLAYER_FFI_PLAYBACK_STATE_PLAYING = 1,
@@ -393,6 +421,21 @@ typedef struct PlayerFfiTrack {
   uint32_t sample_rate;
   bool is_default;
   bool is_forced;
+  enum PlayerFfiTrackSupportStatus support_status;
+  enum PlayerFfiTrackSupportReason support_reason;
+  enum PlayerFfiTrackSupportSource support_source;
+  char *support_status_raw_value;
+  char *support_reason_raw_value;
+  char *support_source_raw_value;
+  char *support_playback_path;
+  char *format_support_raw_value;
+  char *decoder_name;
+  char *surface_kind;
+  char *hdr_type;
+  bool has_secure_decoder_required;
+  bool secure_decoder_required;
+  bool has_secure_output_required;
+  bool secure_output_required;
 } PlayerFfiTrack;
 
 typedef struct PlayerFfiTrackCatalog {
@@ -400,6 +443,8 @@ typedef struct PlayerFfiTrackCatalog {
   size_t len;
   bool adaptive_video;
   bool adaptive_audio;
+  uint64_t catalog_revision;
+  char *playback_path;
 } PlayerFfiTrackCatalog;
 
 typedef struct PlayerFfiTrackSelection {

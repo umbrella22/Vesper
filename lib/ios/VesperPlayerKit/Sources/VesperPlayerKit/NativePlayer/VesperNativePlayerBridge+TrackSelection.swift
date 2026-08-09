@@ -473,19 +473,24 @@ extension VesperNativePlayerBridge {
         )
     }
 
-    func setAbrPolicy(_ policy: VesperAbrPolicy) {
-        applyAbrPolicy(
+    func setAbrPolicy(
+        _ policy: VesperAbrPolicy,
+        expectedCatalogRevision: Int64?
+    ) throws {
+        try applyAbrPolicy(
             policy,
             origin: .manual,
-            clearLastReportedError: true
+            clearLastReportedError: true,
+            expectedCatalogRevision: expectedCatalogRevision
         )
     }
 
     func applyAbrPolicy(
         _ policy: VesperAbrPolicy,
         origin: AbrPolicyOrigin,
-        clearLastReportedError: Bool
-    ) {
+        clearLastReportedError: Bool,
+        expectedCatalogRevision: Int64? = nil
+    ) throws {
         if clearLastReportedError {
             clearLastError()
         }
@@ -539,26 +544,22 @@ extension VesperNativePlayerBridge {
                 )
                 return
             }
-            guard let resolvedFixedTrack = resolvedFixedVideoVariantTrack(for: trackId) else {
+            do {
+                let resolvedFixedTrack = try validateFixedVideoVariantTrack(
+                    requestedTrackId: trackId,
+                    expectedCatalogRevision: expectedCatalogRevision
+                )
+                resolvedFixedTrackId = resolvedFixedTrack.track.id
+                resolvedVideoVariantPin = resolvedFixedTrack.pin
+            } catch let error as VesperFixedTrackSelectionError {
                 reportCommandError(
                     code: .unsupported,
                     category: .capability,
-                    message:
-                        "setAbrPolicy fixedTrack requires a video variant from the current iOS track catalog (trackId=\(trackId))"
+                    message: error.message,
+                    details: error.playerErrorDetails
                 )
-                return
+                throw error
             }
-            guard resolvedFixedTrack.pin.hasAnyLimit else {
-                reportCommandError(
-                    code: .unsupported,
-                    category: .capability,
-                    message:
-                        "setAbrPolicy fixedTrack could not derive bitrate or resolution limits for trackId=\(resolvedFixedTrack.track.id) on iOS"
-                )
-                return
-            }
-            resolvedFixedTrackId = resolvedFixedTrack.track.id
-            resolvedVideoVariantPin = resolvedFixedTrack.pin
         case .auto:
             resolvedVideoVariantPin = nil
             break

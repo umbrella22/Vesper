@@ -7,6 +7,8 @@
 - Added `VesperSubtitleStyle`, `VesperExternalSubtitleSource`, canonical
   subtitle catalog/selection state, requested/confirmed/effective selection,
   `VesperSubtitleException`, and the `setSubtitleStyle` platform contract.
+- Added `VesperTrackSupport`, catalog revision and playback-path fields, raw
+  unknown-value preservation, and `VesperFixedTrackSelectionException`.
 - Added RTMP, RTSP, and HTTP-FLV source protocol values. HTTP `.flv` inference
   remains progressive; explicit live sources use `VesperPlayerSource.flvLive`.
 
@@ -26,6 +28,12 @@
 
 - Added shared Picture in Picture configuration, availability, error, and event
   DTOs for system-player PiP integrations.
+
+### Changed
+
+- `setAbrPolicy` carries an optional expected catalog revision; fixed-track
+  capability failures decode to a stable typed exception without treating
+  missing support evidence as confirmed unsupported.
 
 ## 0.3.0 - 2026-05-18
 

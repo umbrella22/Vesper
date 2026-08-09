@@ -629,14 +629,24 @@ pub(crate) fn native_command_object<'local>(
                 &[JValue::Object(&selection)],
             )
         }
-        AndroidHostCommand::SetAbrPolicy { policy } => {
+        AndroidHostCommand::SetAbrPolicy {
+            policy,
+            expected_catalog_revision,
+        } => {
             let class =
                 env.find_class(jni_name(format!("{PKG}/NativePlayerCommand$SetAbrPolicy")))?;
             let policy = abr_policy_payload_object(env, policy)?;
+            let expected_catalog_revision = boxed_long(env, *expected_catalog_revision)?;
             env.new_object(
                 class,
-                method_sig(&format!("(L{PKG}/NativeAbrPolicyPayload;)V")).method_signature(),
-                &[JValue::Object(&policy)],
+                method_sig(&format!(
+                    "(L{PKG}/NativeAbrPolicyPayload;Ljava/lang/Long;)V"
+                ))
+                .method_signature(),
+                &[
+                    JValue::Object(&policy),
+                    JValue::Object(&expected_catalog_revision),
+                ],
             )
         }
     }

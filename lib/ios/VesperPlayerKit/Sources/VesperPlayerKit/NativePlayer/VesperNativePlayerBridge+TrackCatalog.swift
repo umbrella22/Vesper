@@ -4,6 +4,53 @@ import UIKit
 internal import VesperPlayerKitBridgeShim
 
 extension VesperNativePlayerBridge {
+    var activeTrackCatalogPlaybackPath: String? {
+        guard currentSource != nil else { return nil }
+        return nativeFramePipelineCoordinator.activeSession == nil
+            ? "systemPlayer"
+            : "sdkManagedNativeFrame"
+    }
+
+    /// Publishes all track catalogs through one identity/revision boundary.
+    /// The revision is session-local and changes only when source identity,
+    /// playback path, DRM context, track identity/support, or adaptivity
+    /// changes.
+    func publishTrackCatalog(
+        _ catalog: VesperTrackCatalog,
+        playbackPath: String? = nil
+    ) {
+        let resolvedPlaybackPath = playbackPath ?? catalog.playbackPath ?? activeTrackCatalogPlaybackPath
+        let normalizedTracks = resolvedPlaybackPath.map { path in
+            catalog.tracks.map { $0.catalogEntry(forPlaybackPath: path) }
+        } ?? catalog.tracks
+        let fingerprint = TrackCatalogFingerprint(
+            sourceEpoch: subtitleSourceEpoch,
+            playbackPath: resolvedPlaybackPath,
+            drmKeySystem: currentSource?.drmConfiguration?.keySystem,
+            tracks: normalizedTracks.sorted {
+                if $0.kind.rawValue != $1.kind.rawValue {
+                    return $0.kind.rawValue < $1.kind.rawValue
+                }
+                return $0.id < $1.id
+            },
+            adaptiveVideo: catalog.adaptiveVideo,
+            adaptiveAudio: catalog.adaptiveAudio
+        )
+        if trackCatalogFingerprintState != fingerprint {
+            if trackCatalogRevisionState < Int64.max {
+                trackCatalogRevisionState += 1
+            }
+            trackCatalogFingerprintState = fingerprint
+        }
+        publishedTrackCatalog = VesperTrackCatalog(
+            tracks: normalizedTracks,
+            adaptiveVideo: catalog.adaptiveVideo,
+            adaptiveAudio: catalog.adaptiveAudio,
+            catalogRevision: trackCatalogRevisionState,
+            playbackPath: resolvedPlaybackPath
+        )
+    }
+
     func resetTrackState() {
         let preserveConfirmedSelection = pendingResilienceRestore != nil
         let preservedConfirmedSelection = publishedConfirmedSubtitleSelection
@@ -19,7 +66,7 @@ extension VesperNativePlayerBridge {
         subtitleOverlayRenderer.reset()
         hasAppliedDefaultTrackPreferences = false
         fixedTrackConvergenceState = nil
-        publishedTrackCatalog = .empty
+        publishTrackCatalog(.empty)
         publishedTrackSelection = VesperTrackSelectionSnapshot(
             subtitle: .disabled(),
             confirmedSubtitle: preserveConfirmedSelection ? preservedConfirmedSelection : .disabled(),
@@ -70,6 +117,108 @@ extension VesperNativePlayerBridge {
             maxWidth: resolvedResolution?.width,
             maxHeight: resolvedResolution?.height
         )
+    }
+
+    func validateFixedVideoVariantTrack(
+        requestedTrackId: String,
+        expectedCatalogRevision: Int64?
+    ) throws -> (track: VesperMediaTrack, pin: LoadedVideoVariantPin) {
+        let actualCatalogRevision = publishedTrackCatalog.catalogRevision
+        if let expectedCatalogRevision,
+           expectedCatalogRevision != actualCatalogRevision {
+            throw VesperFixedTrackSelectionError(
+                code: "staleCatalog",
+                trackId: requestedTrackId,
+                expectedCatalogRevision: expectedCatalogRevision,
+                actualCatalogRevision: actualCatalogRevision,
+                message: "the track catalog changed before the fixed-track command was applied",
+                details: [
+                    "playbackPath": publishedTrackCatalog.playbackPath ?? "systemPlayer"
+                ]
+            )
+        }
+
+        let videoTracks = publishedTrackCatalog.videoTracks
+        let resolvedTrackId: String?
+        if videoTracks.contains(where: { $0.id == requestedTrackId }) {
+            resolvedTrackId = requestedTrackId
+        } else {
+            resolvedTrackId = resolveRequestedVideoVariantTrackId(
+                requestedTrackId,
+                tracks: videoTracks
+            )
+        }
+        guard let resolvedTrackId,
+              let track = videoTracks.first(where: { $0.id == resolvedTrackId })
+        else {
+            throw VesperFixedTrackSelectionError(
+                code: "trackUnavailable",
+                trackId: requestedTrackId,
+                expectedCatalogRevision: expectedCatalogRevision,
+                actualCatalogRevision: actualCatalogRevision,
+                message: "setAbrPolicy fixedTrack requires a video variant from the current iOS track catalog (trackId=\(requestedTrackId))"
+            )
+        }
+
+        let support = track.support
+        let rejectionCode: String?
+        switch support.status {
+        case .exceedsCapabilities:
+            rejectionCode = "trackExceedsCapabilities"
+        case .unsupported:
+            rejectionCode = "trackUnsupported"
+        case .supported, .unknown:
+            rejectionCode = nil
+        }
+        if let rejectionCode {
+            var details = fixedTrackSupportDetails(support)
+            details["resolvedTrackId"] = resolvedTrackId
+            let message = rejectionCode == "trackExceedsCapabilities"
+                ? "the requested video track exceeds current playback capabilities"
+                : "the requested video track is unsupported by the active playback path"
+            throw VesperFixedTrackSelectionError(
+                code: rejectionCode,
+                trackId: requestedTrackId,
+                expectedCatalogRevision: expectedCatalogRevision,
+                actualCatalogRevision: actualCatalogRevision,
+                message: message,
+                details: details
+            )
+        }
+
+        guard let pin = videoVariantPinsByTrackId[resolvedTrackId], pin.hasAnyLimit else {
+            throw VesperFixedTrackSelectionError(
+                code: "trackUnsupported",
+                trackId: requestedTrackId,
+                expectedCatalogRevision: expectedCatalogRevision,
+                actualCatalogRevision: actualCatalogRevision,
+                message: "setAbrPolicy fixedTrack could not derive bitrate or resolution limits for trackId=\(resolvedTrackId) on iOS",
+                details: [
+                    "reason": VesperTrackSupportReason.presentationUnavailable.rawValue,
+                    "resolvedTrackId": resolvedTrackId,
+                    "playbackPath": publishedTrackCatalog.playbackPath ?? "systemPlayer"
+                ]
+            )
+        }
+        return (track: track, pin: pin)
+    }
+
+    private func fixedTrackSupportDetails(
+        _ support: VesperTrackSupport
+    ) -> [String: String] {
+        var details: [String: String] = [
+            "reason": support.reasonRawValue ?? support.reason.rawValue,
+            "playbackPath": support.playbackPath
+                ?? publishedTrackCatalog.playbackPath
+                ?? "systemPlayer"
+        ]
+        if let raw = support.statusRawValue {
+            details["statusRawValue"] = raw
+        }
+        if let raw = support.formatSupportRawValue {
+            details["formatSupportRawValue"] = raw
+        }
+        return details
     }
 
     func resolvedFixedVideoVariantTrack(

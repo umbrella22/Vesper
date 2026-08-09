@@ -8,6 +8,8 @@
   `setSubtitleStyle`, backed by the iOS host-kit subtitle overlay.
 - Added complete RTMP, RTSP, and HTTP-FLV protocol wire mapping with explicit
   iOS unsupported playback errors.
+- Added track support, catalog revision, playback-path, and structured
+  fixed-track error mapping for the iOS wire contract.
 
 ### Breaking Changes
 
@@ -19,6 +21,8 @@
 
 - Picture in Picture failures now emit PiP-specific events and method errors
   without publishing generic player errors.
+- `setAbrPolicy` now forwards the optional expected catalog revision and keeps
+  native fixed-track capability details in the returned platform error.
 - `exitPictureInPicture` now lets `AVPictureInPictureControllerDelegate`
   callbacks publish the final inactive state.
 - Subtitle snapshots now carry canonical catalog/selection state and

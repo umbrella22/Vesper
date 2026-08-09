@@ -53,7 +53,10 @@ protocol PlayerBridge: AnyObject {
     /// Applies a subtitle selection and waits for AVPlayer to confirm it.
     func setSubtitleTrackSelection(_ selection: VesperTrackSelection) async throws
     func setSubtitleStyle(_ style: VesperSubtitleStyle)
-    func setAbrPolicy(_ policy: VesperAbrPolicy)
+    func setAbrPolicy(
+        _ policy: VesperAbrPolicy,
+        expectedCatalogRevision: Int64?
+    ) throws
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy)
     func setAudioSessionInterrupted(_ interrupted: Bool)
     func drainBenchmarkEvents() -> [VesperBenchmarkEvent]
@@ -79,6 +82,12 @@ protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
 }
 
 extension PlayerBridge {
+    /// Backward-compatible envelope for callers that do not carry a catalog
+    /// revision. The throwing overload is used by the native command bridge.
+    func setAbrPolicy(_ policy: VesperAbrPolicy) {
+        try? setAbrPolicy(policy, expectedCatalogRevision: nil)
+    }
+
     func drainPipelineEventHookReports() -> VesperPipelineEventHookReportBatch {
         VesperPipelineEventHookReportBatch()
     }

@@ -136,7 +136,10 @@ class VesperPlayerController internal constructor(
         _subtitleStyle.value = style
     }
 
-    fun setAbrPolicy(policy: VesperAbrPolicy) = bridge.setAbrPolicy(policy)
+    fun setAbrPolicy(
+        policy: VesperAbrPolicy,
+        expectedCatalogRevision: Long? = null,
+    ) = bridge.setAbrPolicy(policy, expectedCatalogRevision)
 
     fun setResiliencePolicy(policy: VesperPlaybackResiliencePolicy) =
         bridge.setResiliencePolicy(policy)

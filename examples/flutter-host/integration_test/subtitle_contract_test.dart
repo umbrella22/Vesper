@@ -131,8 +131,10 @@ void main() {
         try {
           await activeController.play().timeout(const Duration(seconds: 10));
           if (Platform.isIOS || Platform.isAndroid) {
-            final visibleOverlay = await _waitForVisibleSubtitleOverlay(
-              activeController.playerId,
+            final visibleOverlay = await waitForVisibleExampleSubtitleOverlay(
+              snapshot: () => ExampleSubtitleOverlayEvidenceChannel.snapshot(
+                activeController.playerId,
+              ),
               expectedText: 'Subtitle B',
             );
             expect(visibleOverlay.visible, isTrue);
@@ -329,29 +331,6 @@ void main() {
       });
     }
   });
-}
-
-Future<ExampleSubtitleOverlaySnapshot> _waitForVisibleSubtitleOverlay(
-  String playerId, {
-  required String expectedText,
-  Duration timeout = const Duration(seconds: 5),
-}) async {
-  final deadline = DateTime.now().add(timeout);
-  ExampleSubtitleOverlaySnapshot? latest;
-  while (DateTime.now().isBefore(deadline)) {
-    latest = await ExampleSubtitleOverlayEvidenceChannel.snapshot(playerId);
-    if (latest.visible && latest.text == expectedText) {
-      return latest;
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-  }
-  throw TimeoutException(
-    'subtitle overlay did not become visible: '
-    'text=${latest?.text} visible=${latest?.visible} '
-    'windowAttached=${latest?.windowAttached} '
-    'frame=${latest?.frame.toJson()}',
-    timeout,
-  );
 }
 
 Future<File> _writeWebVtt(

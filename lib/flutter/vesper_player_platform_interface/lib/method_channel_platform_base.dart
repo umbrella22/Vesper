@@ -265,10 +265,15 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
   }
 
   @override
-  Future<void> setAbrPolicy(String playerId, VesperAbrPolicy policy) {
+  Future<void> setAbrPolicy(
+    String playerId,
+    VesperAbrPolicy policy, {
+    int? expectedCatalogRevision,
+  }) {
     return _invokeVoid('setAbrPolicy', <String, Object?>{
       'playerId': playerId,
       'policy': policy.toMap(),
+      'expectedCatalogRevision': expectedCatalogRevision,
     });
   }
 

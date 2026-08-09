@@ -117,6 +117,167 @@ class VesperNativeJniBindingsTrackCatalogIdTest {
     }
 
     @Test
+    fun trackSupportMapping_preservesMedia3CapabilityAxes() {
+        val handled = trackSupportForFormatSupport(C.FORMAT_HANDLED, playbackPath = "systemPlayer")
+        assertEquals(NativeTrackSupportStatus.Supported.ordinal, handled.statusOrdinal)
+        assertEquals(NativeTrackSupportReason.None.ordinal, handled.reasonOrdinal)
+        assertEquals("handled", handled.formatSupportRawValue)
+
+        val exceeds = trackSupportForFormatSupport(C.FORMAT_EXCEEDS_CAPABILITIES)
+        assertEquals(NativeTrackSupportStatus.ExceedsCapabilities.ordinal, exceeds.statusOrdinal)
+        assertEquals(NativeTrackSupportReason.FormatExceedsCapabilities.ordinal, exceeds.reasonOrdinal)
+        assertEquals("exceedsCapabilities", exceeds.formatSupportRawValue)
+
+        val drm = trackSupportForFormatSupport(C.FORMAT_UNSUPPORTED_DRM)
+        assertEquals(NativeTrackSupportStatus.Unsupported.ordinal, drm.statusOrdinal)
+        assertEquals(NativeTrackSupportReason.UnsupportedDrm.ordinal, drm.reasonOrdinal)
+
+        val unknown = trackSupportForFormatSupport(99)
+        assertEquals(NativeTrackSupportStatus.Unknown.ordinal, unknown.statusOrdinal)
+        assertEquals(NativeTrackSupportReason.PlatformUnknown.ordinal, unknown.reasonOrdinal)
+        assertEquals("99", unknown.formatSupportRawValue)
+    }
+
+    @Test
+    fun collectTrackCatalog_keepsUnsupportedVideoTracksWithSupportEvidence() {
+        val formats =
+            listOf(
+                Format.Builder()
+                    .setId("v720")
+                    .setSampleMimeType(MimeTypes.VIDEO_H264)
+                    .setWidth(1280)
+                    .setHeight(720)
+                    .build(),
+                Format.Builder()
+                    .setId("v4k")
+                    .setSampleMimeType(MimeTypes.VIDEO_H265)
+                    .setWidth(3840)
+                    .setHeight(2160)
+                    .build(),
+            )
+        val group = TrackGroup("video", *formats.toTypedArray())
+        val tracks =
+            Tracks(
+                listOf(
+                    Tracks.Group(
+                        group,
+                        true,
+                        intArrayOf(C.FORMAT_HANDLED, C.FORMAT_EXCEEDS_CAPABILITIES),
+                        booleanArrayOf(true, false),
+                    ),
+                ),
+            )
+
+        val catalog = collectTrackCatalog(tracks, playbackPath = "systemPlayer")
+
+        assertEquals(listOf("video:v720:0", "video:v4k:1"), catalog.tracks.map { it.id })
+        val exceeds = catalog.tracks.last().support
+        assertEquals(NativeTrackSupportStatus.ExceedsCapabilities.ordinal, exceeds.statusOrdinal)
+        assertEquals(NativeTrackSupportReason.FormatExceedsCapabilities.ordinal, exceeds.reasonOrdinal)
+        assertEquals("systemPlayer", exceeds.playbackPath)
+    }
+
+    @Test
+    fun validateFixedTrackSelection_rejectsCapabilityBeforeOverrideCreation() {
+        val tracks = videoTracksWithSupport(C.FORMAT_UNSUPPORTED_SUBTYPE)
+        val error =
+            org.junit.Assert.assertThrows(VesperFixedTrackSelectionException::class.java) {
+                validateFixedTrackSelection(
+                    tracks = tracks,
+                    trackId = "video:v0:0",
+                    expectedCatalogRevision = null,
+                    actualCatalogRevision = 7L,
+                )
+            }
+
+        assertEquals("trackUnsupported", error.code)
+        assertEquals("video:v0:0", error.trackId)
+        assertNull(error.expectedCatalogRevision)
+        assertEquals(7L, error.actualCatalogRevision)
+        assertEquals("unsupportedSubtype", error.details["reason"])
+    }
+
+    @Test
+    fun validateFixedTrackSelection_onlyReportsStaleWhenRequestCarriesRevision() {
+        val tracks = videoTracksWithSupport(C.FORMAT_HANDLED)
+        val error =
+            org.junit.Assert.assertThrows(VesperFixedTrackSelectionException::class.java) {
+                validateFixedTrackSelection(
+                    tracks = tracks,
+                    trackId = "video:v0:0",
+                    expectedCatalogRevision = 6L,
+                    actualCatalogRevision = 7L,
+                )
+            }
+
+        assertEquals("staleCatalog", error.code)
+        assertEquals(6L, error.expectedCatalogRevision)
+        assertEquals(7L, error.actualCatalogRevision)
+
+        // The same mismatch is not a stale-token error for a legacy command
+        // that did not carry an expected revision.
+        val missing =
+            org.junit.Assert.assertThrows(VesperFixedTrackSelectionException::class.java) {
+                validateFixedTrackSelection(
+                    tracks = Tracks.EMPTY,
+                    trackId = "video:missing",
+                    expectedCatalogRevision = null,
+                    actualCatalogRevision = 7L,
+                )
+            }
+        assertEquals("trackUnavailable", missing.code)
+    }
+
+    @Test
+    fun validateFixedTrackSelection_rejectsSameSourceRuntimeFailureWithoutChangingStaticSupport() {
+        val tracks = videoTracksWithSupport(C.FORMAT_HANDLED)
+        val rejection =
+            NativeRuntimeTrackRejection(
+                sourceEpoch = 11L,
+                catalogRevision = 7L,
+                trackId = "video:v0:0",
+                code = "runtimeTrackRejected",
+                details =
+                    mapOf(
+                        "reason" to "runtimeFailure",
+                        "errorCodeName" to "ERROR_CODE_DECODING_FAILED",
+                    ),
+            )
+
+        val error =
+            org.junit.Assert.assertThrows(VesperFixedTrackSelectionException::class.java) {
+                validateFixedTrackSelection(
+                    tracks = tracks,
+                    trackId = "video:v0:0",
+                    expectedCatalogRevision = 8L,
+                    actualCatalogRevision = 8L,
+                    sourceEpoch = 11L,
+                    runtimeTrackRejection = rejection,
+                )
+            }
+
+        assertEquals("runtimeTrackRejected", error.code)
+        assertEquals("fixedTrack", error.details["domain"])
+        assertEquals("runtimeFailure", error.details["reason"])
+        assertEquals(8L, error.actualCatalogRevision)
+        assertEquals(
+            NativeTrackSupportStatus.Supported.ordinal,
+            trackSupportForFormatSupport(C.FORMAT_HANDLED).statusOrdinal,
+        )
+
+        val nextSourceLocation =
+            validateFixedTrackSelection(
+                tracks = tracks,
+                trackId = "video:v0:0",
+                expectedCatalogRevision = null,
+                actualCatalogRevision = 9L,
+                sourceEpoch = 12L,
+                runtimeTrackRejection = rejection,
+            )
+        assertEquals(0, nextSourceLocation.trackIndex)
+    }
+
+    @Test
     fun collectTrackCatalog_rejectsMissingDashSubtitleIdentity() {
         val catalog = collectTrackCatalog(textTracks(null to false), VesperPlayerSourceProtocol.Dash)
 
@@ -184,6 +345,42 @@ class VesperNativeJniBindingsTrackCatalogIdTest {
             )
 
         assertEquals(listOf(externalId), catalog.tracks.map { it.id })
+    }
+
+    @Test
+    fun subtitleTargetReadinessUsesStableExternalIdentityAndRequiresSupport() {
+        val externalId = "caller-sub-en"
+        val format =
+            Format.Builder()
+                .setId("1:$externalId")
+                .setSampleMimeType(MimeTypes.TEXT_VTT)
+                .setLanguage("en")
+                .build()
+
+        assertTrue(
+            isSubtitleTrackSelectable(
+                tracks = textTracks(listOf(format), intArrayOf(C.FORMAT_HANDLED)),
+                trackId = externalId,
+                sourceProtocol = VesperPlayerSourceProtocol.Hls,
+                externalSubtitleIds = listOf(externalId),
+            )
+        )
+        assertFalse(
+            isSubtitleTrackSelectable(
+                tracks = textTracks(listOf(format), intArrayOf(C.FORMAT_UNSUPPORTED_TYPE)),
+                trackId = externalId,
+                sourceProtocol = VesperPlayerSourceProtocol.Hls,
+                externalSubtitleIds = listOf(externalId),
+            )
+        )
+        assertFalse(
+            isSubtitleTrackSelectable(
+                tracks = textTracks(listOf(format, format), intArrayOf(C.FORMAT_HANDLED, C.FORMAT_HANDLED)),
+                trackId = externalId,
+                sourceProtocol = VesperPlayerSourceProtocol.Hls,
+                externalSubtitleIds = listOf(externalId),
+            )
+        )
     }
 
     @Test
@@ -505,6 +702,27 @@ class VesperNativeJniBindingsTrackCatalogIdTest {
                     false,
                     support,
                     BooleanArray(formats.size),
+                ),
+            ),
+        )
+    }
+
+    private fun videoTracksWithSupport(support: Int): Tracks {
+        val format =
+            Format.Builder()
+                .setId("v0")
+                .setSampleMimeType(MimeTypes.VIDEO_H264)
+                .setWidth(1280)
+                .setHeight(720)
+                .build()
+        val group = TrackGroup("video", format)
+        return Tracks(
+            listOf(
+                Tracks.Group(
+                    group,
+                    false,
+                    intArrayOf(support),
+                    booleanArrayOf(false),
                 ),
             ),
         )

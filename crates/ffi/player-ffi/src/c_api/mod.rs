@@ -35,9 +35,11 @@ use crate::{
     FfiTrackKind as BridgeTrackKind, FfiTrackPreferences as BridgeTrackPreferences,
     FfiTrackSelection as BridgeTrackSelection, FfiTrackSelectionMode as BridgeTrackSelectionMode,
     FfiTrackSelectionSnapshot as BridgeTrackSelectionSnapshot,
-    FfiVideoDecodeInfo as BridgeVideoDecodeInfo, FfiVideoDecodeMode as BridgeVideoDecodeMode,
-    FfiVideoFrame as BridgeVideoFrame, FfiVideoInfo, resolve_preload_budget,
-    resolve_resilience_policy, resolve_track_preferences,
+    FfiTrackSupportReason as BridgeTrackSupportReason,
+    FfiTrackSupportSource as BridgeTrackSupportSource,
+    FfiTrackSupportStatus as BridgeTrackSupportStatus, FfiVideoDecodeInfo as BridgeVideoDecodeInfo,
+    FfiVideoDecodeMode as BridgeVideoDecodeMode, FfiVideoFrame as BridgeVideoFrame, FfiVideoInfo,
+    resolve_preload_budget, resolve_resilience_policy, resolve_track_preferences,
 };
 
 mod types;

@@ -8,10 +8,12 @@ use player_runtime::{
     DecodedAudioSummary, DecodedVideoFrame, FirstFrameReady, FrameProcessorPolicyAction,
     FrameProcessorWarning, FrameProcessorWarningKind, MediaAbrMode, MediaAbrPolicy,
     MediaSourceKind, MediaSourceProtocol, MediaTrack, MediaTrackCatalog, MediaTrackKind,
-    MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, PlaybackProgress,
-    PlayerAudioInfo, PlayerAudioOutputInfo, PlayerBufferingPolicy, PlayerBufferingPreset,
-    PlayerCachePolicy, PlayerCachePreset, PlayerError, PlayerErrorCategory, PlayerErrorCode,
-    PlayerMediaInfo, PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
+    MediaTrackSelection, MediaTrackSelectionMode, MediaTrackSelectionSnapshot, MediaTrackSupport,
+    MediaTrackSupportDiagnostics, MediaTrackSupportReason, MediaTrackSupportSource,
+    MediaTrackSupportStatus, PlaybackProgress, PlayerAudioInfo, PlayerAudioOutputInfo,
+    PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
+    PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerMediaInfo,
+    PlayerPluginCapabilitySummary, PlayerPluginCodecCapability,
     PlayerPluginDecoderCapabilitySummary, PlayerPluginDiagnostic, PlayerPluginDiagnosticStatus,
     PlayerPluginFrameProcessorCapabilitySummary, PlayerPluginParticipation,
     PlayerPluginSourceNormalizerCapabilitySummary, PlayerPreloadBudgetPolicy,
@@ -201,6 +203,78 @@ pub enum FfiTrackKind {
     Subtitle,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FfiTrackSupportStatus {
+    Supported,
+    ExceedsCapabilities,
+    Unsupported,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FfiTrackSupportReason {
+    None,
+    FormatExceedsCapabilities,
+    UnsupportedType,
+    UnsupportedSubtype,
+    UnsupportedDrm,
+    RouteUnavailable,
+    PresentationUnavailable,
+    RuntimeFailure,
+    #[default]
+    PlatformUnknown,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FfiTrackSupportSource {
+    RuntimeTrackCatalog,
+    CapabilityProbe,
+    RuntimeFailure,
+    #[default]
+    Unavailable,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FfiTrackSupportDiagnostics {
+    pub decoder_name: Option<String>,
+    pub surface_kind: Option<String>,
+    pub hdr_type: Option<String>,
+    pub secure_decoder_required: Option<bool>,
+    pub secure_output_required: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FfiTrackSupport {
+    pub status: FfiTrackSupportStatus,
+    pub reason: FfiTrackSupportReason,
+    pub source: FfiTrackSupportSource,
+    pub status_raw_value: Option<String>,
+    pub reason_raw_value: Option<String>,
+    pub source_raw_value: Option<String>,
+    pub playback_path: Option<String>,
+    pub format_support_raw_value: Option<String>,
+    pub diagnostics: FfiTrackSupportDiagnostics,
+}
+
+impl Default for FfiTrackSupport {
+    fn default() -> Self {
+        Self {
+            status: FfiTrackSupportStatus::Unknown,
+            reason: FfiTrackSupportReason::PlatformUnknown,
+            source: FfiTrackSupportSource::Unavailable,
+            status_raw_value: None,
+            reason_raw_value: None,
+            source_raw_value: None,
+            playback_path: None,
+            format_support_raw_value: None,
+            diagnostics: FfiTrackSupportDiagnostics::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FfiTrack {
     pub id: String,
@@ -216,6 +290,7 @@ pub struct FfiTrack {
     pub sample_rate: Option<u32>,
     pub is_default: bool,
     pub is_forced: bool,
+    pub support: FfiTrackSupport,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -223,6 +298,8 @@ pub struct FfiTrackCatalog {
     pub tracks: Vec<FfiTrack>,
     pub adaptive_video: bool,
     pub adaptive_audio: bool,
+    pub catalog_revision: u64,
+    pub playback_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -721,17 +798,32 @@ impl From<PlayerErrorCategory> for FfiErrorCategory {
 
 impl From<PlayerError> for FfiError {
     fn from(value: PlayerError) -> Self {
-        let details_json = value.subtitle_details().map(|details| {
-            let mut payload = match serde_json::to_value(details) {
-                Ok(serde_json::Value::Object(payload)) => payload,
-                _ => serde_json::Map::new(),
-            };
-            payload.insert(
-                "domain".to_owned(),
-                serde_json::Value::String("subtitle".to_owned()),
-            );
-            serde_json::Value::Object(payload).to_string()
-        });
+        let details_json = value
+            .fixed_track_selection_details()
+            .map(|details| {
+                let mut payload = match serde_json::to_value(details) {
+                    Ok(serde_json::Value::Object(payload)) => payload,
+                    _ => serde_json::Map::new(),
+                };
+                payload.insert(
+                    "domain".to_owned(),
+                    serde_json::Value::String("fixedTrack".to_owned()),
+                );
+                serde_json::Value::Object(payload).to_string()
+            })
+            .or_else(|| {
+                value.subtitle_details().map(|details| {
+                    let mut payload = match serde_json::to_value(details) {
+                        Ok(serde_json::Value::Object(payload)) => payload,
+                        _ => serde_json::Map::new(),
+                    };
+                    payload.insert(
+                        "domain".to_owned(),
+                        serde_json::Value::String("subtitle".to_owned()),
+                    );
+                    serde_json::Value::Object(payload).to_string()
+                })
+            });
         Self {
             code: value.code().into(),
             category: value.category().into(),
@@ -1038,6 +1130,74 @@ impl From<MediaTrackKind> for FfiTrackKind {
     }
 }
 
+impl From<MediaTrackSupportStatus> for FfiTrackSupportStatus {
+    fn from(value: MediaTrackSupportStatus) -> Self {
+        match value {
+            MediaTrackSupportStatus::Supported => Self::Supported,
+            MediaTrackSupportStatus::ExceedsCapabilities => Self::ExceedsCapabilities,
+            MediaTrackSupportStatus::Unsupported => Self::Unsupported,
+            MediaTrackSupportStatus::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<MediaTrackSupportReason> for FfiTrackSupportReason {
+    fn from(value: MediaTrackSupportReason) -> Self {
+        match value {
+            MediaTrackSupportReason::None => Self::None,
+            MediaTrackSupportReason::FormatExceedsCapabilities => Self::FormatExceedsCapabilities,
+            MediaTrackSupportReason::UnsupportedType => Self::UnsupportedType,
+            MediaTrackSupportReason::UnsupportedSubtype => Self::UnsupportedSubtype,
+            MediaTrackSupportReason::UnsupportedDrm => Self::UnsupportedDrm,
+            MediaTrackSupportReason::RouteUnavailable => Self::RouteUnavailable,
+            MediaTrackSupportReason::PresentationUnavailable => Self::PresentationUnavailable,
+            MediaTrackSupportReason::RuntimeFailure => Self::RuntimeFailure,
+            MediaTrackSupportReason::PlatformUnknown => Self::PlatformUnknown,
+            MediaTrackSupportReason::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<MediaTrackSupportSource> for FfiTrackSupportSource {
+    fn from(value: MediaTrackSupportSource) -> Self {
+        match value {
+            MediaTrackSupportSource::RuntimeTrackCatalog => Self::RuntimeTrackCatalog,
+            MediaTrackSupportSource::CapabilityProbe => Self::CapabilityProbe,
+            MediaTrackSupportSource::RuntimeFailure => Self::RuntimeFailure,
+            MediaTrackSupportSource::Unavailable => Self::Unavailable,
+            MediaTrackSupportSource::Unknown => Self::Unknown,
+        }
+    }
+}
+
+impl From<MediaTrackSupportDiagnostics> for FfiTrackSupportDiagnostics {
+    fn from(value: MediaTrackSupportDiagnostics) -> Self {
+        Self {
+            decoder_name: value.decoder_name,
+            surface_kind: value.surface_kind,
+            hdr_type: value.hdr_type,
+            secure_decoder_required: value.secure_decoder_required,
+            secure_output_required: value.secure_output_required,
+        }
+    }
+}
+
+impl From<MediaTrackSupport> for FfiTrackSupport {
+    fn from(value: MediaTrackSupport) -> Self {
+        Self {
+            status: value.status.into(),
+            reason: value.reason.into(),
+            source: value.source.into(),
+            status_raw_value: value.status_raw_value,
+            reason_raw_value: value.reason_raw_value,
+            source_raw_value: value.source_raw_value,
+            playback_path: value.playback_path,
+            format_support_raw_value: value.format_support_raw_value,
+            diagnostics: value.diagnostics.into(),
+        }
+    }
+}
+
 impl From<MediaTrack> for FfiTrack {
     fn from(value: MediaTrack) -> Self {
         Self {
@@ -1054,6 +1214,7 @@ impl From<MediaTrack> for FfiTrack {
             sample_rate: value.sample_rate,
             is_default: value.is_default,
             is_forced: value.is_forced,
+            support: value.support.into(),
         }
     }
 }
@@ -1070,6 +1231,8 @@ impl From<MediaTrackCatalog> for FfiTrackCatalog {
             tracks: value.tracks.into_iter().map(FfiTrack::from).collect(),
             adaptive_video: value.adaptive_video,
             adaptive_audio: value.adaptive_audio,
+            catalog_revision: value.catalog_revision,
+            playback_path: value.playback_path,
         }
     }
 }
@@ -1907,6 +2070,7 @@ mod tests {
                         sample_rate: None,
                         is_default: true,
                         is_forced: false,
+                        support: Default::default(),
                     },
                     MediaTrack {
                         id: "audio-en".to_owned(),
@@ -1922,10 +2086,13 @@ mod tests {
                         sample_rate: Some(48_000),
                         is_default: true,
                         is_forced: false,
+                        support: Default::default(),
                     },
                 ],
                 adaptive_video: true,
                 adaptive_audio: false,
+                catalog_revision: 0,
+                playback_path: None,
             },
             track_selection: MediaTrackSelectionSnapshot {
                 video: MediaTrackSelection::track("video-1080p"),

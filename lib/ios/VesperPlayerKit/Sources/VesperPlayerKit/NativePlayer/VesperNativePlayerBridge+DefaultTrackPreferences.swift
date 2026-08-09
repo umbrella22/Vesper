@@ -12,7 +12,7 @@ extension VesperNativePlayerBridge {
         hasAppliedDefaultTrackPreferences = true
         applyDefaultAudioTrackPreferenceIfPossible(item: item)
         await applyDefaultSubtitleTrackPreferenceIfPossible(item: item)
-        applyAbrPolicy(
+        try? applyAbrPolicy(
             resolvedTrackPreferencePolicy.abrPolicy,
             origin: .defaultPolicy,
             clearLastReportedError: false

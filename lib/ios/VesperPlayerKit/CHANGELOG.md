@@ -19,6 +19,10 @@
   embedded AVPlayer subtitles.
 - Added canonical catalog/selection subtitle state, requested/confirmed/effective
   selection, structured command errors, and source/item epoch fencing.
+- Added per-track support status, bounded diagnostics, catalog revisions, and
+  playback-path identifiers to the AVPlayer track catalog.
+- Added structured fixed-track selection errors with optional expected catalog
+  revision evidence.
 - Added tagged-release staging for the seven optional sibling XCFrameworks.
   FFmpeg-backed artifacts are now gated on a compliance archive and the exact
   corresponding versioned FFmpeg source archive in the same release, matched to
@@ -28,6 +32,10 @@
 
 - RTMP, RTSP, and HTTP-FLV direct playback fail with explicit capability errors.
 - HTTP `.flv` URLs remain progressive unless the protocol is set explicitly.
+- Fixed-track requests accept an expected catalog revision and retain
+  best-effort variant pinning when AVPlayer cannot prove exact support.
+- Subtitle selection uses stable track identities and bounded source/item epoch
+  coordination for native confirmation.
 - Bundled SourceNormalizer discovery now resolves its signed sibling framework
   executable. The flat-dylib compatibility path was removed.
 

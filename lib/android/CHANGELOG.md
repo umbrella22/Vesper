@@ -20,11 +20,29 @@
 - Added canonical catalog/selection subtitle state, requested/confirmed/effective
   selection, structured errors, source/command generation fencing, and isolated
   per-subtitle request headers.
+- Added per-track support status and bounded diagnostics, catalog revisions, and
+  playback-path identifiers to the native track catalog.
+- Added structured fixed-track rejection errors with optional expected catalog
+  revision evidence.
 
 ### Changed
 
 - HTTP `.flv` URLs infer progressive playback; use `VesperPlayerSource.flvLive`
   when the source is explicitly an HTTP-FLV live stream.
+- Fixed-track requests revalidate the current Media3 track support before
+  creating an override and leave playback state unchanged when rejected.
+- Only fixed-track rejections use `VesperFixedTrackSelectionException`;
+  generic ABR command failures retain their runtime error taxonomy.
+- Subtitle selection waits for the exact stable-id TEXT track and confirms the
+  applied selection within one bounded deadline.
+
+### Fixed
+
+- Delayed Media3 TEXT-track visibility no longer produces an early
+  `subtitle_track_not_found` result when the target becomes selectable within
+  the command deadline.
+- Fixed-track capability details are retained when native errors cross the
+  JNI and host-kit boundaries.
 
 ## 0.3.0 - 2026-05-18
 

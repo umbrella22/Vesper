@@ -136,11 +136,11 @@ extension VesperNativePlayerBridge {
             didRecordFailure = failedSubtitleTrackIds.insert(catalogTrackId).inserted
             subtitleOptionsByTrackId.removeValue(forKey: catalogTrackId)
             if didRecordFailure {
-                publishedTrackCatalog = VesperTrackCatalog(
+                publishTrackCatalog(VesperTrackCatalog(
                     tracks: publishedTrackCatalog.tracks.filter { $0.id != catalogTrackId },
                     adaptiveVideo: publishedTrackCatalog.adaptiveVideo,
                     adaptiveAudio: publishedTrackCatalog.adaptiveAudio
-                )
+                ))
             }
             if publishedEffectiveSubtitleTrackId == catalogTrackId {
                 if let item = player?.currentItem, let subtitleGroup {

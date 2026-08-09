@@ -357,6 +357,7 @@ fn ios_managed_session_dispatches_constrained_abr_by_bitrate() {
     let result = session
         .dispatch(PlayerRuntimeCommand::SetAbrPolicy {
             policy: policy.clone(),
+            expected_catalog_revision: None,
         })
         .expect("constrained abr should dispatch");
 
@@ -365,6 +366,7 @@ fn ios_managed_session_dispatches_constrained_abr_by_bitrate() {
         *commands.lock().expect("commands lock"),
         vec![IosNativePlayerCommand::SetAbrPolicy {
             policy: policy.clone(),
+            expected_catalog_revision: None,
         }]
     );
     assert_eq!(
@@ -389,6 +391,7 @@ fn ios_managed_session_dispatches_constrained_abr_by_resolution() {
     let result = session
         .dispatch(PlayerRuntimeCommand::SetAbrPolicy {
             policy: policy.clone(),
+            expected_catalog_revision: None,
         })
         .expect("resolution-constrained abr should dispatch");
 
@@ -397,6 +400,7 @@ fn ios_managed_session_dispatches_constrained_abr_by_resolution() {
         *commands.lock().expect("commands lock"),
         vec![IosNativePlayerCommand::SetAbrPolicy {
             policy: policy.clone(),
+            expected_catalog_revision: None,
         }]
     );
     assert_eq!(
@@ -420,6 +424,7 @@ fn ios_managed_session_rejects_partial_resolution_abr_limit() {
                 max_width: Some(1280),
                 max_height: None,
             },
+            expected_catalog_revision: None,
         })
         .expect_err("partial resolution abr limit should be rejected");
 
@@ -1080,6 +1085,7 @@ fn test_track_catalog() -> MediaTrackCatalog {
                 sample_rate: None,
                 is_default: true,
                 is_forced: false,
+                support: Default::default(),
             },
             MediaTrack {
                 id: "audio-en".to_owned(),
@@ -1095,6 +1101,7 @@ fn test_track_catalog() -> MediaTrackCatalog {
                 sample_rate: Some(48_000),
                 is_default: true,
                 is_forced: false,
+                support: Default::default(),
             },
             MediaTrack {
                 id: "subtitle-en".to_owned(),
@@ -1110,10 +1117,13 @@ fn test_track_catalog() -> MediaTrackCatalog {
                 sample_rate: None,
                 is_default: false,
                 is_forced: false,
+                support: Default::default(),
             },
         ],
         adaptive_video: true,
         adaptive_audio: true,
+        catalog_revision: 0,
+        playback_path: None,
     }
 }
 

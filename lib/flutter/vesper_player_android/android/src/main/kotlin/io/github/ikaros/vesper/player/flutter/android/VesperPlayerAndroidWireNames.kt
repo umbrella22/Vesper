@@ -3,6 +3,9 @@ package io.github.ikaros.vesper.player.flutter.android
 import io.github.ikaros.vesper.player.android.PlaybackStateUi
 import io.github.ikaros.vesper.player.android.TimelineKind
 import io.github.ikaros.vesper.player.android.VesperAbrMode
+import io.github.ikaros.vesper.player.android.VesperTrackSupportReason
+import io.github.ikaros.vesper.player.android.VesperTrackSupportSource
+import io.github.ikaros.vesper.player.android.VesperTrackSupportStatus
 import io.github.ikaros.vesper.player.android.VesperBufferingPreset
 import io.github.ikaros.vesper.player.android.VesperCachePreset
 import io.github.ikaros.vesper.player.android.VesperDownloadAssetIndex
@@ -112,6 +115,37 @@ internal fun VesperAbrMode.toWireName(): String =
         VesperAbrMode.Auto -> "auto"
         VesperAbrMode.Constrained -> "constrained"
         VesperAbrMode.FixedTrack -> "fixedTrack"
+    }
+
+internal fun VesperTrackSupportStatus.toWireName(): String =
+    when (this) {
+        VesperTrackSupportStatus.Supported -> "supported"
+        VesperTrackSupportStatus.ExceedsCapabilities -> "exceedsCapabilities"
+        VesperTrackSupportStatus.Unsupported -> "unsupported"
+        VesperTrackSupportStatus.Unknown -> "unknown"
+    }
+
+internal fun VesperTrackSupportReason.toWireName(): String =
+    when (this) {
+        VesperTrackSupportReason.None -> "none"
+        VesperTrackSupportReason.FormatExceedsCapabilities -> "formatExceedsCapabilities"
+        VesperTrackSupportReason.UnsupportedType -> "unsupportedType"
+        VesperTrackSupportReason.UnsupportedSubtype -> "unsupportedSubtype"
+        VesperTrackSupportReason.UnsupportedDrm -> "unsupportedDrm"
+        VesperTrackSupportReason.RouteUnavailable -> "routeUnavailable"
+        VesperTrackSupportReason.PresentationUnavailable -> "presentationUnavailable"
+        VesperTrackSupportReason.RuntimeFailure -> "runtimeFailure"
+        VesperTrackSupportReason.PlatformUnknown -> "platformUnknown"
+        VesperTrackSupportReason.Unknown -> "unknown"
+    }
+
+internal fun VesperTrackSupportSource.toWireName(): String =
+    when (this) {
+        VesperTrackSupportSource.RuntimeTrackCatalog -> "runtimeTrackCatalog"
+        VesperTrackSupportSource.CapabilityProbe -> "capabilityProbe"
+        VesperTrackSupportSource.RuntimeFailure -> "runtimeFailure"
+        VesperTrackSupportSource.Unavailable -> "unavailable"
+        VesperTrackSupportSource.Unknown -> "unknown"
     }
 
 internal fun VesperPlayerSource.toMap(): Map<String, Any?> =

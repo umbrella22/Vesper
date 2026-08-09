@@ -183,7 +183,11 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
   ) async =>
       throw VesperUnsupportedError('Subtitle styling is not supported.');
 
-  Future<void> setAbrPolicy(String playerId, VesperAbrPolicy policy);
+  Future<void> setAbrPolicy(
+    String playerId,
+    VesperAbrPolicy policy, {
+    int? expectedCatalogRevision,
+  });
 
   Future<void> setResiliencePolicy(
     String playerId,
@@ -428,7 +432,11 @@ final class _UnsupportedVesperPlayerPlatform extends VesperPlayerPlatform {
       throw VesperUnsupportedError();
 
   @override
-  Future<void> setAbrPolicy(String playerId, VesperAbrPolicy policy) async =>
+  Future<void> setAbrPolicy(
+    String playerId,
+    VesperAbrPolicy policy, {
+    int? expectedCatalogRevision,
+  }) async =>
       throw VesperUnsupportedError();
 
   @override

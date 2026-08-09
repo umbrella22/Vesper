@@ -2,6 +2,12 @@
 
 ## 0.4.0 - Unreleased
 
+### Migration
+
+0.4 requires a coordinated host, FFI binding, and plugin upgrade. Follow the
+[0.3 to 0.4 migration guide](lib/MIGRATION-0.3-TO-0.4.md) before replacing any
+runtime artifact.
+
 ### Breaking Changes
 
 - Raised the Rust workspace MSRV and dedicated CI check from 1.94 to 1.97.
@@ -16,8 +22,12 @@
   and `externalSubtitles`. The old type and source property remain deprecated
   aliases.
 - C and iOS FFI consumers must regenerate and recompile bindings for the
-  expanded `PlayerFfiError.details_json` field; replacing only the static
-  library is not ABI-compatible.
+  expanded `PlayerFfiError.details_json` field. C consumers must also rebuild
+  for the expanded `PlayerFfiTrack` and `PlayerFfiTrackCatalog` layouts;
+  replacing only the static library is not ABI-compatible.
+- Removed public raw `pluginLibraryPaths` configuration from Android, iOS, and
+  Flutter download and benchmark APIs. Mobile hosts now select build-time
+  embedded plugins through explicit `VesperPluginReference` values.
 
 ### Added
 
@@ -40,6 +50,11 @@
 - Added canonical subtitle catalog/selection state, requested/confirmed/effective
   selection snapshots, structured cross-platform subtitle errors, DASH/HLS
   metadata propagation, and source-local external subtitle ids.
+- Added per-track support status, bounded support diagnostics, catalog revisions,
+  and playback-path identifiers across the Rust, FFI, native host, and Flutter
+  contracts.
+- Added expected catalog revision checks and structured fixed-track rejection
+  details for explicit ABR selection.
 - Added tagged iOS release artifacts for the three FFmpeg component frameworks
   and four optional plugin frameworks. The release workflow requires a generated
   FFmpeg compliance bundle and exactly one corresponding source archive before
@@ -67,6 +82,11 @@
   reset consecutive failure counters after every successful adapter call.
 - Subtitle selection restore, source refresh, and stale callback handling now
   pass through bounded source-epoch and command-id coordination.
+- Fixed-track commands now revalidate the current catalog and platform support
+  before changing ABR state; iOS retains best-effort variant pinning when exact
+  support cannot be established.
+- Subtitle selection now resolves stable track identities and confirms the
+  applied selection within one bounded readiness/readback deadline.
 - Native and Flutter iOS hosts now consume seven direct products from the
   `VesperPlayerOptionalPlugins` Swift package, one for each FFmpeg component or
   plugin framework, and embed and sign them as top-level siblings.
@@ -86,6 +106,9 @@
 - Preserved structured subtitle error details across Rust, C FFI, Android
   JNI/Kotlin, and Flutter boundaries, including malformed JSON payloads and
   unknown enum values.
+- Preserved structured fixed-track rejection details, including catalog
+  revisions and capability evidence, across the C FFI, Android, iOS, and
+  Flutter boundaries.
 - Isolated obsolete iOS subtitle selection transactions so source changes,
   disposal, and superseding commands cannot restore stale backend state,
   overwrite newer selection state, or publish stale player errors.
