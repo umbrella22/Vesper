@@ -3,6 +3,11 @@ import Combine
 import Foundation
 import UIKit
 
+@MainActor
+internal protocol VesperPlaybackSequenceAttachment: AnyObject {
+    func onControllerDisposed(_ controller: VesperPlayerController)
+}
+
 private struct VesperSubtitleBridgeSnapshot {
     let trackSelection: VesperTrackSelectionSnapshot
     let requestedSelection: VesperTrackSelection
@@ -183,6 +188,7 @@ public final class VesperPlayerController: ObservableObject {
     private var pendingTimelineOnlyUpdate = false
     private var systemPlaybackCoordinatorStorage: VesperSystemPlaybackCoordinator?
     private var isDisposed = false
+    private weak var sequenceAttachment: VesperPlaybackSequenceAttachment?
 
     private var systemPlaybackCoordinator: VesperSystemPlaybackCoordinator {
         if let coordinator = systemPlaybackCoordinatorStorage {
@@ -325,6 +331,9 @@ public final class VesperPlayerController: ObservableObject {
     public func dispose() {
         guard !isDisposed else { return }
         isDisposed = true
+        let attachment = sequenceAttachment
+        sequenceAttachment = nil
+        attachment?.onControllerDisposed(self)
         bridgeObservation?.cancel()
         bridgeObservation = nil
         VesperScreenSleepCoordinator.release(screenSleepToken)
@@ -349,12 +358,90 @@ public final class VesperPlayerController: ObservableObject {
     }
 
     public func selectSource(_ source: VesperPlayerSource) {
+        guard sequenceAttachment == nil else {
+            publishedLastError = VesperPlayerError(
+                message: "direct source selection is blocked while a playback sequence is attached",
+                code: .invalidState,
+                category: .playback,
+                retriable: false,
+                details: ["code": "sequence_attached_conflict"]
+            )
+            return
+        }
+        selectSourceImpl(source)
+    }
+
+    /// Checked source-selection entry point for hosts that need typed conflict handling.
+    public func selectSourceChecked(_ source: VesperPlayerSource) throws {
+        guard sequenceAttachment == nil else {
+            throw VesperPlayerError(
+                message: "direct source selection is blocked while a playback sequence is attached",
+                code: .invalidState,
+                category: .playback,
+                retriable: false,
+                details: ["code": "sequence_attached_conflict"]
+            )
+        }
         selectSourceImpl(source)
     }
 
     @_spi(VesperFlutter)
     public func selectSourceAsync(_ source: VesperPlayerSource) async {
+        guard sequenceAttachment == nil else {
+            publishedLastError = VesperPlayerError(
+                message: "direct source selection is blocked while a playback sequence is attached",
+                code: .invalidState,
+                category: .playback,
+                retriable: false,
+                details: ["code": "sequence_attached_conflict"]
+            )
+            return
+        }
         await selectSourceAsyncImpl(source)
+    }
+
+    internal func attachPlaybackSequence(_ attachment: VesperPlaybackSequenceAttachment) throws {
+        guard !isDisposed else {
+            throw VesperPlayerError(
+                message: "player controller has been disposed",
+                code: .invalidState,
+                category: .playback,
+                retriable: false,
+                details: ["code": "controller_disposed"]
+            )
+        }
+        guard sequenceAttachment == nil else {
+            throw VesperPlayerError(
+                message: "player controller already has a playback sequence",
+                code: .invalidState,
+                category: .playback,
+                retriable: false,
+                details: ["code": "already_attached"]
+            )
+        }
+        sequenceAttachment = attachment
+    }
+
+    internal func detachPlaybackSequence(_ attachment: VesperPlaybackSequenceAttachment) {
+        if sequenceAttachment === attachment {
+            sequenceAttachment = nil
+        }
+    }
+
+    internal func activateSequenceSource(
+        _ attachment: VesperPlaybackSequenceAttachment,
+        source: VesperPlayerSource
+    ) throws {
+        guard sequenceAttachment === attachment else {
+            throw VesperPlayerError(
+                message: "sequence no longer owns the player controller",
+                code: .invalidState,
+                category: .playback,
+                retriable: false,
+                details: ["code": "sequence_attached_conflict"]
+            )
+        }
+        selectSourceImpl(source)
     }
 
     public func attachSurfaceHost(_ host: UIView) {

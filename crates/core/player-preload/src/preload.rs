@@ -248,6 +248,10 @@ impl Default for PreloadConfig {
 pub struct PreloadCandidate {
     /// Media source to warm up.
     pub source: MediaSource,
+    /// Caller-supplied normalized source identity.
+    pub source_identity: PreloadSourceIdentity,
+    /// Caller-supplied stable cache identity.
+    pub cache_key: PreloadCacheKey,
     /// Budget scope charged by this candidate.
     pub scope: PreloadBudgetScope,
     /// Semantic candidate kind used for ordering.
@@ -256,6 +260,40 @@ pub struct PreloadCandidate {
     pub selection_hint: PreloadSelectionHint,
     /// Cost and scheduling configuration.
     pub config: PreloadConfig,
+}
+
+impl PreloadCandidate {
+    /// Creates a candidate using the legacy URI-derived identity.
+    pub fn from_media_source(
+        source: MediaSource,
+        scope: PreloadBudgetScope,
+        kind: PreloadCandidateKind,
+        selection_hint: PreloadSelectionHint,
+        config: PreloadConfig,
+    ) -> Self {
+        let source_identity = PreloadSourceIdentity::from_media_source(&source);
+        let cache_key = PreloadCacheKey::from_media_source(&source);
+        Self {
+            source,
+            source_identity,
+            cache_key,
+            scope,
+            kind,
+            selection_hint,
+            config,
+        }
+    }
+
+    /// Replaces the source and cache identities with caller-supplied values.
+    pub fn with_identity(
+        mut self,
+        source_identity: PreloadSourceIdentity,
+        cache_key: PreloadCacheKey,
+    ) -> Self {
+        self.source_identity = source_identity;
+        self.cache_key = cache_key;
+        self
+    }
 }
 
 /// Lifecycle status of a preload task.
@@ -655,7 +693,7 @@ where
         let mut planned = Vec::new();
 
         for candidate in candidates {
-            let cache_key = PreloadCacheKey::from_media_source(&candidate.source);
+            let cache_key = candidate.cache_key.clone();
             if self.has_live_task_for_cache_key(&cache_key) {
                 continue;
             }
@@ -672,9 +710,7 @@ where
                     let failed_record = PreloadTaskRecord {
                         task_id,
                         created_at: now,
-                        source_identity: PreloadSourceIdentity::from_media_source(
-                            &candidate.source,
-                        ),
+                        source_identity: candidate.source_identity.clone(),
                         cache_key,
                         source: candidate.source,
                         scope: candidate.scope,
@@ -701,7 +737,7 @@ where
             let record = PreloadTaskRecord {
                 task_id,
                 created_at: now,
-                source_identity: PreloadSourceIdentity::from_media_source(&candidate.source),
+                source_identity: candidate.source_identity,
                 cache_key,
                 source: candidate.source,
                 scope: candidate.scope,
@@ -1273,24 +1309,24 @@ mod tests {
         priority: PreloadPriority,
         memory_bytes: u64,
     ) -> PreloadCandidate {
-        PreloadCandidate {
-            source: MediaSource::new(uri),
+        PreloadCandidate::from_media_source(
+            MediaSource::new(uri),
             scope,
             kind,
-            selection_hint: match kind {
+            match kind {
                 PreloadCandidateKind::Current => PreloadSelectionHint::CurrentItem,
                 PreloadCandidateKind::Neighbor => PreloadSelectionHint::NeighborItem,
                 PreloadCandidateKind::Recommended => PreloadSelectionHint::RecommendedItem,
                 PreloadCandidateKind::Background => PreloadSelectionHint::BackgroundFill,
             },
-            config: PreloadConfig {
+            PreloadConfig {
                 priority,
                 ttl: None,
                 expected_memory_bytes: memory_bytes,
                 expected_disk_bytes: 0,
                 warmup_window: None,
             },
-        }
+        )
     }
 
     #[derive(Clone, Default)]
@@ -1640,19 +1676,19 @@ mod tests {
 
         let task_id = planner
             .plan(
-                [PreloadCandidate {
-                    source: MediaSource::new("https://example.com/current.m3u8"),
-                    scope: PreloadBudgetScope::App,
-                    kind: PreloadCandidateKind::Current,
-                    selection_hint: PreloadSelectionHint::CurrentItem,
-                    config: PreloadConfig {
+                [PreloadCandidate::from_media_source(
+                    MediaSource::new("https://example.com/current.m3u8"),
+                    PreloadBudgetScope::App,
+                    PreloadCandidateKind::Current,
+                    PreloadSelectionHint::CurrentItem,
+                    PreloadConfig {
                         priority: PreloadPriority::Critical,
                         ttl: Some(Duration::from_secs(2)),
                         expected_memory_bytes: 1,
                         expected_disk_bytes: 0,
                         warmup_window: None,
                     },
-                }],
+                )],
                 now,
             )
             .into_iter()

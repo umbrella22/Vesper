@@ -18,6 +18,7 @@ internal class FakePlayerBridge(
     private var keepScreenOnDuringPlayback: Boolean = true,
     appContext: Context? = null,
 ) : PlayerBridge {
+    private val providedAppContext: Context? = appContext
     private var currentSource: VesperPlayerSource? = initialSource
     private var attachedHost: ViewGroup? = null
     private val i18n = VesperPlayerI18n.fromContext(appContext)
@@ -58,6 +59,8 @@ internal class FakePlayerBridge(
     private val _resiliencePolicy = MutableStateFlow(resiliencePolicy)
 
     override val backend: PlayerBridgeBackend = PlayerBridgeBackend.FakeDemo
+    override val appContext: Context?
+        get() = providedAppContext
     override val uiState: StateFlow<PlayerHostUiState> = _uiState.asStateFlow()
     override val trackCatalog: StateFlow<VesperTrackCatalog> = _trackCatalog.asStateFlow()
     override val trackSelection: StateFlow<VesperTrackSelectionSnapshot> =

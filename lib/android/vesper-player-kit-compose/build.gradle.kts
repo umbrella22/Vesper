@@ -51,4 +51,5 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.media3:media3-ui-compose:$media3Version")
+    testImplementation("junit:junit:4.13.2")
 }

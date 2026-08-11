@@ -122,7 +122,12 @@ internal class VesperNativeJniBindings(
     internal var currentSubtitleCatalogFailure: NativeTrackSelectionFailure? = null
     internal var currentEffectiveVideoTrackIdState: String? = null
     internal var currentVideoVariantObservationState: VesperVideoVariantObservation? = null
-    internal var currentVideoLayoutState: NativeVideoLayoutInfo? = null
+    internal val videoLayoutRelay = NativeVideoLayoutRelay()
+    internal var currentVideoLayoutState: NativeVideoLayoutInfo?
+        get() = videoLayoutRelay.current
+        set(value) {
+            videoLayoutRelay.update(value)
+        }
     internal var currentVideoDecoderName: String? = null
     internal var currentRuntimeHdrEvidence: AndroidRuntimeHdrEvidence? = null
     internal var currentRuntimeSessionProbe: AndroidRuntimeSessionProbeSnapshot? = null
@@ -890,6 +895,10 @@ internal class VesperNativeJniBindings(
 
     override fun setOnNativeUpdateListener(listener: (() -> Unit)?) {
         updateListener = listener
+    }
+
+    override fun setOnVideoLayoutInfoListener(listener: ((NativeVideoLayoutInfo?) -> Unit)?) {
+        videoLayoutRelay.setListener(listener)
     }
 
     override fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind) {

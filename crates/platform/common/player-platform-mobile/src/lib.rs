@@ -4,6 +4,13 @@
     reason = "PlayerError is a shared public API; boxing mobile platform errors would change public signatures"
 )]
 
+mod sequence;
+
+pub use sequence::{
+    MAX_MOBILE_SEQUENCE_BATCH_ITEMS, MAX_MOBILE_SEQUENCE_JSON_BYTES, MobileSequenceBridgeError,
+    MobileSequenceBridgeSession,
+};
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::Read;

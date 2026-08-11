@@ -10,5 +10,9 @@ mod preload;
 
 pub use download::{IosDownloadBridgeSession, IosDownloadCommand};
 pub use native::*;
+pub use player_platform_mobile::{
+    MAX_MOBILE_SEQUENCE_BATCH_ITEMS, MAX_MOBILE_SEQUENCE_JSON_BYTES, MobileSequenceBridgeError,
+    MobileSequenceBridgeSession as IosSequenceBridgeSession,
+};
 pub use playlist::IosPlaylistBridgeSession;
 pub use preload::{IosPreloadBridgeSession, IosPreloadCommand};

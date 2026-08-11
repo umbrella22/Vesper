@@ -239,6 +239,32 @@ internal class VesperSimpleCacheResource private constructor(
     }
 }
 
+/**
+ * Process-wide owner for the sequence cache directory.
+ *
+ * Media3 permits only one [SimpleCache] instance for a directory. Keeping the
+ * owner alive for the process lifetime also means a sequence executor can be
+ * disposed while another executor is still reading the shared cache.
+ */
+internal object VesperSequenceCacheOwner {
+    private const val MAX_CACHE_OWNERS = 4
+
+    private val owner =
+        VesperSingleFlightOwner<String, VesperSimpleCacheResource>(
+            maxEntries = MAX_CACHE_OWNERS,
+            closeResource = VesperSimpleCacheResource::close,
+        )
+
+    fun acquire(
+        appContext: Context,
+        cacheDir: File,
+        maxDiskBytes: Long,
+    ): VesperSimpleCacheResource =
+        owner.get(cacheDir.absolutePath) {
+            VesperSimpleCacheResource.create(appContext, cacheDir, maxDiskBytes)
+        }
+}
+
 private const val DEFAULT_SINGLE_FLIGHT_WAIT_MILLIS = 10_000L
 
 // Cache budgets should be stable within a process. This ceiling tolerates

@@ -567,6 +567,33 @@ extern PlayerFfiCallStatus player_ffi_playlist_session_fail_preload_task(
 
 extern void player_ffi_playlist_session_dispose(uint64_t handle);
 
+extern PlayerFfiCallStatus player_ffi_sequence_session_create_json(
+    const char *config_json,
+    uint64_t *out_handle,
+    PlayerFfiError *out_error);
+extern void player_ffi_sequence_session_dispose(uint64_t handle);
+extern PlayerFfiCallStatus player_ffi_sequence_session_execute_json(
+    uint64_t handle,
+    const char *command_json,
+    uint64_t wall_epoch_ms,
+    char **out_json,
+    PlayerFfiError *out_error);
+extern PlayerFfiCallStatus player_ffi_sequence_session_snapshot_json(
+    uint64_t handle,
+    char **out_json,
+    PlayerFfiError *out_error);
+extern PlayerFfiCallStatus player_ffi_sequence_session_drain_events_json(
+    uint64_t handle,
+    uintptr_t max_count,
+    char **out_json,
+    PlayerFfiError *out_error);
+extern PlayerFfiCallStatus player_ffi_sequence_session_preload_intents_json(
+    uint64_t handle,
+    uint64_t wall_epoch_ms,
+    char **out_json,
+    PlayerFfiError *out_error);
+extern void player_ffi_sequence_string_free(char *value);
+
 extern PlayerFfiCallStatus player_ffi_download_session_create(
     const PlayerFfiDownloadConfig *config,
     uint64_t *out_handle,
@@ -2483,6 +2510,120 @@ void vesper_runtime_playlist_active_item_free(VesperRuntimePlaylistActiveItem *i
 
 void vesper_runtime_playlist_session_dispose(uint64_t handle) {
   player_ffi_playlist_session_dispose(handle);
+}
+
+static bool call_runtime_sequence_json(
+    PlayerFfiCallStatus status,
+    PlayerFfiError *ffi_error,
+    char **out_json) {
+  if (status == PlayerFfiCallStatusOk) {
+    return true;
+  }
+  if (out_json != NULL && *out_json != NULL) {
+    player_ffi_sequence_string_free(*out_json);
+    *out_json = NULL;
+  }
+  player_ffi_error_free(ffi_error);
+  return false;
+}
+
+bool vesper_runtime_sequence_session_create(
+    const char *config_json,
+    uint64_t *out_handle) {
+  if (config_json == NULL || out_handle == NULL) {
+    return false;
+  }
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+  PlayerFfiCallStatus status = player_ffi_sequence_session_create_json(
+      config_json,
+      out_handle,
+      &ffi_error);
+  if (status != PlayerFfiCallStatusOk) {
+    player_ffi_error_free(&ffi_error);
+    return false;
+  }
+  return true;
+}
+
+bool vesper_runtime_sequence_session_execute(
+    uint64_t handle,
+    const char *command_json,
+    uint64_t wall_epoch_ms,
+    char **out_json) {
+  if (command_json == NULL || out_json == NULL) {
+    return false;
+  }
+  *out_json = NULL;
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+  PlayerFfiCallStatus status = player_ffi_sequence_session_execute_json(
+      handle,
+      command_json,
+      wall_epoch_ms,
+      out_json,
+      &ffi_error);
+  return call_runtime_sequence_json(status, &ffi_error, out_json);
+}
+
+bool vesper_runtime_sequence_session_snapshot(
+    uint64_t handle,
+    char **out_json) {
+  if (out_json == NULL) {
+    return false;
+  }
+  *out_json = NULL;
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+  PlayerFfiCallStatus status = player_ffi_sequence_session_snapshot_json(
+      handle,
+      out_json,
+      &ffi_error);
+  return call_runtime_sequence_json(status, &ffi_error, out_json);
+}
+
+bool vesper_runtime_sequence_session_drain_events(
+    uint64_t handle,
+    uintptr_t max_count,
+    char **out_json) {
+  if (out_json == NULL) {
+    return false;
+  }
+  *out_json = NULL;
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+  PlayerFfiCallStatus status = player_ffi_sequence_session_drain_events_json(
+      handle,
+      max_count,
+      out_json,
+      &ffi_error);
+  return call_runtime_sequence_json(status, &ffi_error, out_json);
+}
+
+bool vesper_runtime_sequence_session_preload_intents(
+    uint64_t handle,
+    uint64_t wall_epoch_ms,
+    char **out_json) {
+  if (out_json == NULL) {
+    return false;
+  }
+  *out_json = NULL;
+  PlayerFfiError ffi_error;
+  memset(&ffi_error, 0, sizeof(ffi_error));
+  PlayerFfiCallStatus status = player_ffi_sequence_session_preload_intents_json(
+      handle,
+      wall_epoch_ms,
+      out_json,
+      &ffi_error);
+  return call_runtime_sequence_json(status, &ffi_error, out_json);
+}
+
+void vesper_runtime_sequence_session_dispose(uint64_t handle) {
+  player_ffi_sequence_session_dispose(handle);
+}
+
+void vesper_runtime_sequence_string_free(char *value) {
+  player_ffi_sequence_string_free(value);
 }
 
 bool vesper_runtime_download_session_create(

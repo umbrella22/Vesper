@@ -160,12 +160,16 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
   }
 
   Widget _buildLayeredContent(Widget baseLayer) {
-    return Stack(
-      fit: StackFit.expand,
-      children: <Widget>[
-        Positioned.fill(child: baseLayer),
-        if (widget.overlay != null) Positioned.fill(child: widget.overlay!),
-      ],
+    // Platform-view textures can retain a previous compositor buffer while a
+    // scroll moves them. Keep that buffer inside the current player bounds.
+    return ClipRect(
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          Positioned.fill(child: baseLayer),
+          if (widget.overlay != null) Positioned.fill(child: widget.overlay!),
+        ],
+      ),
     );
   }
 

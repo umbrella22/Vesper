@@ -164,12 +164,12 @@ fn preload_candidate_from_java(
     let has_warmup_window = bool_field(env, &candidate, "hasWarmupWindowMs")?;
     let warmup_window_ms = long_field(env, &candidate, "warmupWindowMs")?.max(0) as u64;
 
-    Ok(PreloadCandidate {
-        source: MediaSource::new(source_uri),
+    Ok(PreloadCandidate::from_media_source(
+        MediaSource::new(source_uri),
         scope,
         kind,
         selection_hint,
-        config: PreloadConfig {
+        PreloadConfig {
             priority,
             ttl: has_ttl.then_some(Duration::from_millis(ttl_ms)),
             expected_memory_bytes: long_field(env, &candidate, "expectedMemoryBytes")?.max(0)
@@ -177,7 +177,7 @@ fn preload_candidate_from_java(
             expected_disk_bytes: long_field(env, &candidate, "expectedDiskBytes")?.max(0) as u64,
             warmup_window: has_warmup_window.then_some(Duration::from_millis(warmup_window_ms)),
         },
-    })
+    ))
 }
 
 fn preload_task_object<'local>(

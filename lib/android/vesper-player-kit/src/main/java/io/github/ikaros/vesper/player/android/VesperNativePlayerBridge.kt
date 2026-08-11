@@ -41,6 +41,7 @@ internal class VesperNativePlayerBridge(
     internal val nativeFramePipelinePumpScheduler: NativeFramePipelinePumpScheduler =
         HandlerNativeFramePipelinePumpScheduler(),
 ) : PlayerBridge {
+    override val appContext: Context? = appContext
     internal var currentSource: VesperPlayerSource? = initialSource
     internal var hasInitializedSource = false
     internal val isDisposed = AtomicBoolean(false)
@@ -172,6 +173,7 @@ internal class VesperNativePlayerBridge(
             activeNativeItemEpoch = nativeUpdateEpoch
         }
         installNativeUpdateListener()
+        bindings.setOnVideoLayoutInfoListener(surfaceHost::updateVideoLayout)
         bindings.setOnSubtitleCuesListener(surfaceHost::updateSubtitleCues)
         // Structured JNI track-selection failures (e.g. a stale subtitle id
         // arriving after a source refresh) surface as runtime warnings so

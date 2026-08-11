@@ -74,6 +74,8 @@ import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeResul
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerControllerFactory
+import io.github.ikaros.vesper.player.android.VesperPlaybackSequence
+import io.github.ikaros.vesper.player.android.VesperPlaybackSequenceException
 import io.github.ikaros.vesper.player.android.VesperPlayerBackendFamily
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperPlayerSourceKind
@@ -128,10 +130,12 @@ class VesperPlayerAndroidPlugin :
     private lateinit var methodChannel: MethodChannel
     private lateinit var eventChannel: EventChannel
     private lateinit var downloadEventChannel: EventChannel
+    private lateinit var sequenceEventChannel: EventChannel
     private lateinit var applicationContext: Context
 
     private var eventSink: EventChannel.EventSink? = null
     private var downloadEventSink: EventChannel.EventSink? = null
+    private var sequenceEventSink: EventChannel.EventSink? = null
     private var activityBinding: ActivityPluginBinding? = null
     private var activity: Activity? = null
     private var pictureInPictureModeChangedListener:
@@ -145,6 +149,7 @@ class VesperPlayerAndroidPlugin :
         CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val sessions = linkedMapOf<String, PlayerSession>()
     private val downloadSessions = linkedMapOf<String, DownloadSession>()
+    private val sequenceSessions = linkedMapOf<String, PlaybackSequenceSession>()
     private val surfaceHostLifecycle =
         SurfaceHostLifecycleCoordinator<PlayerSession, FrameLayout>(
             findSession = { playerId -> sessions[playerId] },
@@ -172,6 +177,8 @@ class VesperPlayerAndroidPlugin :
         eventChannel = EventChannel(binding.binaryMessenger, EVENT_CHANNEL_NAME)
         downloadEventChannel =
             EventChannel(binding.binaryMessenger, DOWNLOAD_EVENT_CHANNEL_NAME)
+        sequenceEventChannel =
+            EventChannel(binding.binaryMessenger, SEQUENCE_EVENT_CHANNEL_NAME)
         methodChannel.setMethodCallHandler(this)
         eventChannel.setStreamHandler(this)
         downloadEventChannel.setStreamHandler(
@@ -189,16 +196,31 @@ class VesperPlayerAndroidPlugin :
                 }
             },
         )
+        sequenceEventChannel.setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                    sequenceEventSink = events
+                    sequenceSessions.values.forEach(::emitPlaybackSequenceSnapshot)
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    sequenceEventSink = null
+                }
+            },
+        )
         binding.platformViewRegistry.registerViewFactory(PLAYER_VIEW_TYPE, this)
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         disposeAllSessions()
         disposeAllDownloadSessions()
+        disposeAllPlaybackSequences()
         eventSink = null
         downloadEventSink = null
         eventChannel.setStreamHandler(null)
         downloadEventChannel.setStreamHandler(null)
+        sequenceEventChannel.setStreamHandler(null)
+        sequenceEventSink = null
         methodChannel.setMethodCallHandler(null)
         scope.cancel()
     }
@@ -266,6 +288,10 @@ class VesperPlayerAndroidPlugin :
             "createPlayer" -> handleCreatePlayer(call, result)
             "probePlaybackCapability" -> handleProbePlaybackCapability(call, result)
             "createDownloadManager" -> handleCreateDownloadManager(call, result)
+            "createPlaybackSequence" -> handleCreatePlaybackSequence(call, result)
+            "executePlaybackSequenceCommand" -> handlePlaybackSequenceCommand(call, result)
+            "playbackSequenceSnapshot" -> handlePlaybackSequenceSnapshot(call, result)
+            "disposePlaybackSequence" -> handleDisposePlaybackSequence(call, result)
             "disposePlayer" -> handleSessionCommand(call, result) { session ->
                 disposeSession(session)
                 null
@@ -522,9 +548,11 @@ class VesperPlayerAndroidPlugin :
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
             )
-            setBackgroundColor(Color.TRANSPARENT)
-            clipChildren = false
-            clipToPadding = false
+            // Keep the platform-view buffer from leaking outside its Flutter
+            // bounds while the surrounding scroll view is moving.
+            setBackgroundColor(Color.BLACK)
+            clipChildren = true
+            clipToPadding = true
         }
 
         if (!playerId.isNullOrBlank()) {
@@ -1113,6 +1141,164 @@ class VesperPlayerAndroidPlugin :
                     )
                 }
             }
+    }
+
+    private fun handleCreatePlaybackSequence(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val arguments = call.argumentMap()
+        val playerId = arguments["playerId"] as? String
+        if (playerId.isNullOrBlank()) {
+            result.error("vesper_missing_player_id", "Missing playerId.", null)
+            return
+        }
+        val player = sessions[playerId]
+        if (player == null) {
+            result.error("vesper_unknown_player", "Unknown playerId: $playerId", null)
+            return
+        }
+        runCatching {
+            val configuration = requireNestedMap(arguments, "configuration")
+                .toPlaybackSequenceConfiguration()
+            check(sequenceSessions[configuration.sequenceId] == null) {
+                "sequence id is already attached"
+            }
+            val sequence = VesperPlaybackSequence(configuration)
+            sequence.attach(player.controller)
+            val session = PlaybackSequenceSession(configuration.sequenceId, playerId, sequence)
+            session.observerJob = scope.launch {
+                sequence.events.collect { event ->
+                    sequenceEventSink?.success(
+                        mapOf(
+                            "type" to "event",
+                            "sequenceId" to session.id,
+                            "sessionGeneration" to event.sessionGeneration,
+                            "eventSequence" to event.eventSequence,
+                            "event" to event.event,
+                        ),
+                    )
+                }
+            }
+            sequenceSessions[session.id] = session
+            emitPlaybackSequenceSnapshot(session)
+            sequence.snapshot.value.toWireMap()
+        }.onSuccess(result::success)
+            .onFailure { error ->
+                result.error(
+                    "vesper_sequence_create_failed",
+                    error.message,
+                    mapOf("code" to (error as? VesperPlaybackSequenceException)?.code),
+                )
+            }
+    }
+
+    private fun handlePlaybackSequenceCommand(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val arguments = call.argumentMap()
+        val sequenceId = arguments["sequenceId"] as? String
+        val session = sequenceId?.let(sequenceSessions::get)
+        if (session == null) {
+            result.error("vesper_unknown_sequence", "Unknown sequenceId.", null)
+            return
+        }
+        runCatching {
+            val command = requireNestedMap(arguments, "command")
+            when (command["type"] as? String) {
+                "replace" -> {
+                    val items = command.sequenceItems()
+                    session.sequence.replace(items, command["activeItemId"] as? String)
+                }
+                "append", "prepend" -> {
+                    val items = command.sequenceItems()
+                    val generation = (command["sessionGeneration"] as? Number)?.toLong() ?: 0
+                    val requestId = (command["requestId"] as? Number)?.toLong() ?: 0
+                    val anchor = command["anchorItemId"] as? String
+                    val endReached = command["endReached"] as? Boolean ?: false
+                    if (command["type"] == "append") {
+                        session.sequence.append(generation, requestId, anchor, items, endReached)
+                    } else {
+                        session.sequence.prepend(generation, requestId, anchor, items, endReached)
+                    }
+                }
+                "remove" -> session.sequence.remove(command["itemId"] as? String ?: "")
+                "setActive" -> session.sequence.setActive(command["itemId"] as? String ?: "")
+                "next" -> session.sequence.next()
+                "previous" -> session.sequence.previous()
+                "submitResolvedSource" -> session.sequence.submitResolvedSource(
+                    requireNestedMap(command, "source").toPlaybackSequenceResolvedSource(),
+                )
+                "markSourceExpired" -> session.sequence.markSourceExpired(
+                    command["itemId"] as? String ?: "",
+                    (command["sourceRevision"] as? Number)?.toLong() ?: 0,
+                )
+                "failRequest" -> session.sequence.failRequest(
+                    (command["sessionGeneration"] as? Number)?.toLong() ?: 0,
+                    (command["requestId"] as? Number)?.toLong() ?: 0,
+                    command["reasonCode"] as? String ?: "provider_failed",
+                )
+                "tick" -> session.sequence.tick()
+                "resyncPendingRequests" -> session.sequence.resyncPendingRequests()
+                "validateActivationCallback" -> check(
+                    session.sequence.validateActivationCallback(
+                        command["itemId"] as? String ?: "",
+                        (command["activationEpoch"] as? Number)?.toLong() ?: 0,
+                        (command["sourceRevision"] as? Number)?.toLong() ?: 0,
+                    ),
+                ) { "stale_activation_callback" }
+                else -> throw IllegalArgumentException("Unknown sequence command.")
+            }
+            emitPlaybackSequenceSnapshot(session)
+            session.sequence.snapshot.value.toWireMap()
+        }.onSuccess(result::success)
+            .onFailure { error ->
+                result.error(
+                    "vesper_sequence_command_failed",
+                    error.message,
+                    mapOf("code" to (error as? VesperPlaybackSequenceException)?.code),
+                )
+            }
+    }
+
+    private fun handlePlaybackSequenceSnapshot(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val sequenceId = call.argumentMap()["sequenceId"] as? String
+        val session = sequenceId?.let(sequenceSessions::get)
+        if (session == null) {
+            result.error("vesper_unknown_sequence", "Unknown sequenceId.", null)
+            return
+        }
+        emitPlaybackSequenceSnapshot(session)
+        result.success(session.sequence.snapshot.value.toWireMap())
+    }
+
+    private fun handleDisposePlaybackSequence(
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val sequenceId = call.argumentMap()["sequenceId"] as? String
+        val session = sequenceId?.let(sequenceSessions::get)
+        if (session == null) {
+            result.success(null)
+            return
+        }
+        disposePlaybackSequence(session)
+        result.success(null)
+    }
+
+    private fun emitPlaybackSequenceSnapshot(session: PlaybackSequenceSession) {
+        sequenceEventSink?.success(
+            mapOf(
+                "type" to "snapshot",
+                "sequenceId" to session.id,
+                "sessionGeneration" to session.sequence.snapshot.value.sessionGeneration,
+                "snapshot" to session.sequence.snapshot.value.toWireMap(),
+            ),
+        )
     }
 
     private fun handleSessionCommandAsync(
@@ -1957,10 +2143,16 @@ class VesperPlayerAndroidPlugin :
     }
 
     private fun disposeSession(session: PlayerSession) {
+        sequenceSessions.values.filter { it.playerId == session.id }.toList()
+            .forEach(::disposePlaybackSequence)
         session.observerJob?.cancel()
         session.warningDrainJob?.cancel()
         surfaceHostLifecycle.detachSession(session)
         session.controller.dispose()
+        emitPipelineEventHookReports(
+            session,
+            session.controller.drainPipelineEventHookReports(),
+        )
         sessions.remove(session.id)
         emitEvent(
             mapOf(
@@ -1998,6 +2190,28 @@ class VesperPlayerAndroidPlugin :
     private fun disposeAllDownloadSessions() {
         downloadSessions.values.toList().forEach(::disposeDownloadSession)
         downloadSessions.clear()
+    }
+
+    private fun disposePlaybackSequence(session: PlaybackSequenceSession) {
+        session.observerJob?.cancel()
+        runCatching { session.sequence.dispose() }
+        sequenceSessions.remove(session.id)
+        sequenceEventSink?.success(
+            mapOf("type" to "disposed", "sequenceId" to session.id),
+        )
+    }
+
+    private fun disposeAllPlaybackSequences() {
+        sequenceSessions.values.toList().forEach(::disposePlaybackSequence)
+        sequenceSessions.clear()
+    }
+}
+
+private fun Map<String, Any?>.sequenceItems(): List<io.github.ikaros.vesper.player.android.VesperPlaybackSequenceItem> {
+    val raw = this["items"] as? List<*> ?: emptyList<Any?>()
+    return raw.map { value ->
+        require(value is Map<*, *>) { "sequence item must be a map" }
+        value.stringMap().toPlaybackSequenceItem()
     }
 }
 

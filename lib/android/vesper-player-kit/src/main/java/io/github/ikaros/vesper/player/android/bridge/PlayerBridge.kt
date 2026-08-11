@@ -278,6 +278,8 @@ data class VesperRuntimeWarning(
 
 internal interface PlayerBridge {
     val backend: PlayerBridgeBackend
+    /** Application context retained only for host-owned sequence warmup/cache work. */
+    val appContext: android.content.Context?
     val uiState: StateFlow<PlayerHostUiState>
     val trackCatalog: StateFlow<VesperTrackCatalog>
     val trackSelection: StateFlow<VesperTrackSelectionSnapshot>

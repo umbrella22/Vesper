@@ -8,6 +8,7 @@ class MethodChannelVesperPlayerIos extends VesperMethodChannelPlatformBase {
           methodChannel: _methodChannel,
           eventChannel: _eventChannel,
           downloadEventChannel: _downloadEventChannel,
+          sequenceEventChannel: _sequenceEventChannel,
         ) {
     VesperPlayerPlatform.instance = this;
   }
@@ -20,5 +21,8 @@ class MethodChannelVesperPlayerIos extends VesperMethodChannelPlatformBase {
   );
   static const EventChannel _downloadEventChannel = EventChannel(
     'io.github.ikaros.vesper_player/download_events',
+  );
+  static const EventChannel _sequenceEventChannel = EventChannel(
+    'io.github.ikaros.vesper_player/sequence_events',
   );
 }

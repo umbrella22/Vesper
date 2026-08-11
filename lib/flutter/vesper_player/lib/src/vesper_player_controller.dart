@@ -100,6 +100,10 @@ class VesperPlayerController {
 
   VesperPlayerSnapshot get snapshot => snapshotListenable.value;
 
+  /// The platform contract used by the sequence facade. It is intentionally
+  /// limited to the public platform-interface methods.
+  VesperPlayerPlatform get platformForSequence => _platform;
+
   List<VesperPluginDiagnostic> get pluginDiagnostics => _pluginDiagnostics;
 
   VesperPlayerCapabilities get capabilities => snapshot.capabilities;

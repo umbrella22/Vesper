@@ -13,6 +13,31 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class VesperBenchmarkRecorderTest {
     @Test
+    fun disabledRecorderRejectsEvents() {
+        val recorder = VesperBenchmarkRecorder()
+
+        recorder.record("dropped_video_frames", null, mapOf("count" to "1"))
+
+        assertTrue(recorder.drainEvents().isEmpty())
+        assertEquals(0L, recorder.summary().acceptedEvents)
+    }
+
+    @Test
+    fun disposedRecorderRejectsLaterEvents() {
+        val recorder =
+            VesperBenchmarkRecorder(
+                VesperBenchmarkConfiguration(enabled = true),
+            )
+        recorder.record("first_frame_rendered", null)
+
+        recorder.dispose()
+        recorder.record("dropped_video_frames", null, mapOf("count" to "1"))
+
+        assertEquals(listOf("first_frame_rendered"), recorder.drainEvents().map { it.eventName })
+        assertEquals(1L, recorder.summary().acceptedEvents)
+    }
+
+    @Test
     fun disposeFlushesSessionThenClosesRegistryExactlyOnce() {
         val operations = mutableListOf<String>()
         val runtime = RecordingBenchmarkSinkRuntime(operations)

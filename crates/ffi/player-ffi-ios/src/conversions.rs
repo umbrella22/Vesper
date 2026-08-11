@@ -297,12 +297,12 @@ pub(crate) fn read_preload_candidate(
         value => return Err(invalid_wire_ordinal("candidate.scope_kind", value)),
     };
 
-    Ok(PreloadCandidate {
-        source: MediaSource::new(source_uri),
+    Ok(PreloadCandidate::from_media_source(
+        MediaSource::new(source_uri),
         scope,
-        kind: preload_candidate_kind_from_u32(candidate.candidate_kind)?,
-        selection_hint: preload_selection_hint_from_u32(candidate.selection_hint)?,
-        config: PreloadConfig {
+        preload_candidate_kind_from_u32(candidate.candidate_kind)?,
+        preload_selection_hint_from_u32(candidate.selection_hint)?,
+        PreloadConfig {
             priority: preload_priority_from_u32(candidate.priority)?,
             ttl: candidate
                 .has_ttl_ms
@@ -313,7 +313,7 @@ pub(crate) fn read_preload_candidate(
                 .has_warmup_window_ms
                 .then_some(Duration::from_millis(candidate.warmup_window_ms)),
         },
-    })
+    ))
 }
 
 pub(crate) fn read_download_config(

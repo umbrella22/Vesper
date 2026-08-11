@@ -10,5 +10,9 @@ mod preload;
 
 pub use download::{AndroidDownloadBridgeSession, AndroidDownloadCommand};
 pub use native::*;
+pub use player_platform_mobile::{
+    MAX_MOBILE_SEQUENCE_BATCH_ITEMS, MAX_MOBILE_SEQUENCE_JSON_BYTES, MobileSequenceBridgeError,
+    MobileSequenceBridgeSession as AndroidSequenceBridgeSession,
+};
 pub use playlist::AndroidPlaylistBridgeSession;
 pub use preload::{AndroidPreloadBridgeSession, AndroidPreloadCommand};

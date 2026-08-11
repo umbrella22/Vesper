@@ -61,6 +61,21 @@ void main() {
     expect(reportsDuringScroll, lessThanOrEqualTo(3));
     expect(platform.viewportUpdates.last.top, lessThan(120));
   });
+
+  testWidgets('clips the player surface to its widget bounds', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 320,
+          height: 180,
+          child: VesperPlayerView(controller: controller),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(ClipRect), findsOneWidget);
+  });
 }
 
 final class _FakeVesperPlatform extends VesperPlayerPlatform {

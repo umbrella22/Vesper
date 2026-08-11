@@ -10,6 +10,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -18,16 +19,19 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.ikaros.vesper.player.android.PlaybackStateUi
 import io.github.ikaros.vesper.player.android.PlayerHostUiState
+import io.github.ikaros.vesper.player.android.TimelineUiState
 import io.github.ikaros.vesper.player.android.VesperDecoderBackend
 import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.ikaros.vesper.player.android.VesperPlayerController
 import io.github.ikaros.vesper.player.android.VesperPlayerControllerFactory
 import io.github.ikaros.vesper.player.android.VesperPlayerSource
 import io.github.ikaros.vesper.player.android.VesperVideoSurfaceKind
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 private const val DEFAULT_PROGRESS_REFRESH_INTERVAL_MS = 1_000L
+private const val MAX_PROGRESS_REFRESH_BACKOFF_MS = 8_000L
 
 @Composable
 fun rememberVesperPlayerController(
@@ -77,6 +81,10 @@ fun rememberVesperPlayerUiState(
     progressRefreshIntervalMs: Long = DEFAULT_PROGRESS_REFRESH_INTERVAL_MS,
 ): PlayerHostUiState {
     val uiState by controller.uiState.collectAsStateWithLifecycle()
+    val latestUiState by rememberUpdatedState(uiState)
+    var timelineSample by remember(controller) {
+        mutableStateOf<PresentedTimelineSample?>(null)
+    }
 
     LaunchedEffect(
         controller,
@@ -88,16 +96,38 @@ fun rememberVesperPlayerUiState(
             return@LaunchedEffect
         }
 
+        val baseDelayMs = progressRefreshIntervalMs.coerceAtLeast(1L)
+        val maxDelayMs = maxOf(baseDelayMs, MAX_PROGRESS_REFRESH_BACKOFF_MS)
+        var refreshDelayMs = baseDelayMs
         while (isActive) {
-            delay(progressRefreshIntervalMs)
-            controller.refresh()
-            if (!shouldRefreshProgress(controller.uiState.value)) {
+            delay(refreshDelayMs)
+            val authoritativeState = latestUiState
+            if (!shouldRefreshProgress(authoritativeState)) {
                 break
+            }
+            try {
+                val sampledTimeline = controller.sampleTimeline()
+                if (
+                    sampledTimeline != null &&
+                    controller.uiState.value == authoritativeState &&
+                    shouldRefreshProgress(latestUiState)
+                ) {
+                    timelineSample =
+                        PresentedTimelineSample(
+                            authoritativeState = authoritativeState,
+                            timeline = sampledTimeline,
+                        )
+                }
+                refreshDelayMs = baseDelayMs
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (_: Exception) {
+                refreshDelayMs = nextProgressRefreshDelay(refreshDelayMs, maxDelayMs)
             }
         }
     }
 
-    return uiState
+    return uiState.withTimelineSample(timelineSample)
 }
 
 @Composable
@@ -175,6 +205,22 @@ fun VesperPlayerSurface(
 
 private fun shouldRefreshProgress(uiState: PlayerHostUiState): Boolean =
     uiState.playbackState == PlaybackStateUi.Playing || uiState.isBuffering
+
+internal data class PresentedTimelineSample(
+    val authoritativeState: PlayerHostUiState,
+    val timeline: TimelineUiState,
+)
+
+internal fun PlayerHostUiState.withTimelineSample(
+    sample: PresentedTimelineSample?,
+): PlayerHostUiState =
+    if (sample?.authoritativeState == this) copy(timeline = sample.timeline) else this
+
+internal fun nextProgressRefreshDelay(currentDelayMs: Long, maxDelayMs: Long): Long {
+    require(currentDelayMs > 0L)
+    require(maxDelayMs >= currentDelayMs)
+    return if (currentDelayMs >= maxDelayMs / 2L) maxDelayMs else currentDelayMs * 2L
+}
 
 private fun VesperPlayerController.identity(): String =
     Integer.toHexString(System.identityHashCode(this))

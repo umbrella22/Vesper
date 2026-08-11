@@ -12,6 +12,7 @@ mod parsers;
 mod playlist_jni;
 mod plugin_registry_jni;
 mod preload_jni;
+mod sequence_jni;
 mod sessions;
 
 use std::time::Duration;

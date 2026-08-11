@@ -73,10 +73,13 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     private var methodChannel: FlutterMethodChannel?
     private var eventChannel: FlutterEventChannel?
     private var downloadEventChannel: FlutterEventChannel?
+    private var sequenceEventChannel: FlutterEventChannel?
     @MainActor var eventSink: FlutterEventSink?
     @MainActor var downloadEventSink: FlutterEventSink?
+    @MainActor var sequenceEventSink: FlutterEventSink?
     @MainActor var sessions: [String: PlayerSession] = [:]
     @MainActor var downloadSessions: [String: DownloadSession] = [:]
+    @MainActor var sequenceSessions: [String: PlaybackSequenceSession] = [:]
 
     public static func register(with registrar: FlutterPluginRegistrar) {
         let instance = VesperPlayerIosPlugin()
@@ -92,10 +95,15 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             name: downloadEventChannelName,
             binaryMessenger: registrar.messenger()
         )
+        let sequenceEventChannel = FlutterEventChannel(
+            name: sequenceEventChannelName,
+            binaryMessenger: registrar.messenger()
+        )
 
         instance.methodChannel = methodChannel
         instance.eventChannel = eventChannel
         instance.downloadEventChannel = downloadEventChannel
+        instance.sequenceEventChannel = sequenceEventChannel
 
         methodChannel.setMethodCallHandler { [weak instance] call, result in
             guard let instance else {
@@ -106,6 +114,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         }
         eventChannel.setStreamHandler(instance)
         downloadEventChannel.setStreamHandler(DownloadEventStreamHandler(plugin: instance))
+        sequenceEventChannel.setStreamHandler(SequenceEventStreamHandler(plugin: instance))
         registrar.register(PlayerViewFactory(plugin: instance), withId: playerViewType)
         registrar.register(
             AirPlayRouteButtonFactory(plugin: instance), withId: airPlayRouteButtonViewType)
@@ -138,13 +147,19 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             for session in downloadSessions.values {
                 disposeDownloadSession(session)
             }
+            for session in sequenceSessions.values {
+                disposePlaybackSequence(session)
+            }
             sessions.removeAll()
             downloadSessions.removeAll()
+            sequenceSessions.removeAll()
             eventSink = nil
             downloadEventSink = nil
+            sequenceEventSink = nil
             methodChannel?.setMethodCallHandler(nil)
             eventChannel?.setStreamHandler(nil)
             downloadEventChannel?.setStreamHandler(nil)
+            sequenceEventChannel?.setStreamHandler(nil)
         }
     }
 
@@ -163,6 +178,14 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             handleProbePlaybackCapability(call, result: result)
         case "createDownloadManager":
             handleCreateDownloadManager(call, result: result)
+        case "createPlaybackSequence":
+            handleCreatePlaybackSequence(call, result: result)
+        case "executePlaybackSequenceCommand":
+            handlePlaybackSequenceCommand(call, result: result)
+        case "playbackSequenceSnapshot":
+            handlePlaybackSequenceSnapshot(call, result: result)
+        case "disposePlaybackSequence":
+            handleDisposePlaybackSequence(call, result: result)
         case "disposePlayer":
             handleSessionCommand(call, result: result) { session in
                 disposeSession(session)
@@ -530,6 +553,179 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             self.emitSnapshot(for: session)
         }
         emitSnapshot(for: session)
+    }
+
+    @MainActor
+    private func handleCreatePlaybackSequence(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) {
+        do {
+            let arguments = arguments(of: call)
+            guard let playerId = arguments["playerId"] as? String,
+                  let player = sessions[playerId]
+            else { throw PluginError.operationFailed("Unknown playerId.") }
+            let configuration = try requireNestedMap(
+                arguments: arguments, key: "configuration"
+            ).toPlaybackSequenceConfiguration()
+            guard sequenceSessions[configuration.sequenceId] == nil else {
+                throw PluginError.operationFailed("Sequence id is already attached.")
+            }
+            let sequence = try VesperPlaybackSequence(configuration: configuration)
+            try sequence.attach(to: player.controller)
+            let session = PlaybackSequenceSession(
+                id: configuration.sequenceId,
+                playerId: playerId,
+                sequence: sequence
+            )
+            session.observation = sequence.events.sink { [weak self, weak session] event in
+                guard let self, let session else { return }
+                Task { @MainActor in
+                    self.sequenceEventSink?([
+                        "type": "event",
+                        "sequenceId": session.id,
+                        "sessionGeneration": event.sessionGeneration,
+                        "eventSequence": event.eventSequence,
+                        "event": event.event,
+                    ])
+                }
+            }
+            sequenceSessions[session.id] = session
+            emitPlaybackSequenceSnapshot(for: session)
+            result(sequence.snapshot.wire)
+        } catch {
+            result(FlutterError(
+                code: "vesper_sequence_create_failed",
+                message: error.localizedDescription,
+                details: nil
+            ))
+        }
+    }
+
+    @MainActor
+    private func handlePlaybackSequenceCommand(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) {
+        do {
+            let arguments = arguments(of: call)
+            guard let sequenceId = arguments["sequenceId"] as? String,
+                  let session = sequenceSessions[sequenceId]
+            else { throw PluginError.operationFailed("Unknown sequenceId.") }
+            let command = try requireNestedMap(arguments: arguments, key: "command")
+            switch command["type"] as? String {
+            case "replace":
+                try session.sequence.replace(
+                    try command.sequenceItems(),
+                    activeItemId: command["activeItemId"] as? String
+                )
+            case "append", "prepend":
+                let generation = (command["sessionGeneration"] as? NSNumber)?.uint64Value ?? 0
+                let requestId = (command["requestId"] as? NSNumber)?.uint64Value ?? 0
+                let anchor = command["anchorItemId"] as? String
+                let items = try command.sequenceItems()
+                let endReached = command["endReached"] as? Bool ?? false
+                if command["type"] as? String == "append" {
+                    _ = try session.sequence.append(
+                        sessionGeneration: generation,
+                        requestId: requestId,
+                        anchorItemId: anchor,
+                        items: items,
+                        endReached: endReached
+                    )
+                } else {
+                    _ = try session.sequence.prepend(
+                        sessionGeneration: generation,
+                        requestId: requestId,
+                        anchorItemId: anchor,
+                        items: items,
+                        endReached: endReached
+                    )
+                }
+            case "remove":
+                _ = try session.sequence.remove(itemId: command["itemId"] as? String ?? "")
+            case "setActive":
+                try session.sequence.setActive(command["itemId"] as? String ?? "")
+            case "next":
+                try session.sequence.next()
+            case "previous":
+                try session.sequence.previous()
+            case "submitResolvedSource":
+                try session.sequence.submitResolvedSource(
+                    try requireNestedMap(arguments: command, key: "source")
+                        .toPlaybackSequenceResolvedSource()
+                )
+            case "markSourceExpired":
+                try session.sequence.markSourceExpired(
+                    itemId: command["itemId"] as? String ?? "",
+                    sourceRevision: (command["sourceRevision"] as? NSNumber)?.uint64Value ?? 0
+                )
+            case "failRequest":
+                try session.sequence.failRequest(
+                    sessionGeneration: (command["sessionGeneration"] as? NSNumber)?.uint64Value ?? 0,
+                    requestId: (command["requestId"] as? NSNumber)?.uint64Value ?? 0,
+                    reasonCode: command["reasonCode"] as? String ?? "provider_failed"
+                )
+            case "tick":
+                try session.sequence.tick()
+            case "resyncPendingRequests":
+                try session.sequence.resyncPendingRequests()
+            case "validateActivationCallback":
+                guard session.sequence.validateActivationCallback(
+                    itemId: command["itemId"] as? String ?? "",
+                    activationEpoch: (command["activationEpoch"] as? NSNumber)?.uint64Value ?? 0,
+                    sourceRevision: (command["sourceRevision"] as? NSNumber)?.uint64Value ?? 0
+                ) else { throw PluginError.operationFailed("stale_activation_callback") }
+            default:
+                throw PluginError.operationFailed("Unknown sequence command.")
+            }
+            emitPlaybackSequenceSnapshot(for: session)
+            result(session.sequence.snapshot.wire)
+        } catch {
+            result(FlutterError(
+                code: "vesper_sequence_command_failed",
+                message: error.localizedDescription,
+                details: nil
+            ))
+        }
+    }
+
+    @MainActor
+    private func handlePlaybackSequenceSnapshot(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) {
+        let arguments = arguments(of: call)
+        guard let sequenceId = arguments["sequenceId"] as? String,
+              let session = sequenceSessions[sequenceId]
+        else {
+            result(FlutterError(code: "vesper_unknown_sequence", message: "Unknown sequenceId.", details: nil))
+            return
+        }
+        emitPlaybackSequenceSnapshot(for: session)
+        result(session.sequence.snapshot.wire)
+    }
+
+    @MainActor
+    private func handleDisposePlaybackSequence(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) {
+        let sequenceId = arguments(of: call)["sequenceId"] as? String
+        if let sequenceId, let session = sequenceSessions[sequenceId] {
+            disposePlaybackSequence(session)
+        }
+        result(nil)
+    }
+
+    @MainActor
+    func emitPlaybackSequenceSnapshot(for session: PlaybackSequenceSession) {
+        sequenceEventSink?([
+            "type": "snapshot",
+            "sequenceId": session.id,
+            "sessionGeneration": session.sequence.snapshot.sessionGeneration,
+            "snapshot": session.sequence.snapshot.wire,
+        ])
     }
 
     @MainActor
@@ -1956,6 +2152,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
 
     @MainActor
     private func disposeSession(_ session: PlayerSession) {
+        sequenceSessions.values.filter { $0.playerId == session.id }.forEach(disposePlaybackSequence)
         session.cancelPendingHostDetach()
         _ = session.advanceHostDetachGeneration()
         session.observation?.cancel()
@@ -1991,6 +2188,43 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "downloadId": session.id,
             "type": "disposed",
         ])
+    }
+
+    @MainActor
+    private func disposePlaybackSequence(_ session: PlaybackSequenceSession) {
+        session.observation?.cancel()
+        session.sequence.dispose()
+        sequenceSessions.removeValue(forKey: session.id)
+        sequenceEventSink?(["type": "disposed", "sequenceId": session.id])
+    }
+}
+
+private final class SequenceEventStreamHandler: NSObject, FlutterStreamHandler {
+    weak var plugin: VesperPlayerIosPlugin?
+
+    init(plugin: VesperPlayerIosPlugin) {
+        self.plugin = plugin
+    }
+
+    func onListen(
+        withArguments arguments: Any?,
+        eventSink events: @escaping FlutterEventSink
+    ) -> FlutterError? {
+        Task { @MainActor [weak plugin] in
+            guard let plugin else { return }
+            plugin.sequenceEventSink = events
+            plugin.sequenceSessions.values.forEach {
+                plugin.emitPlaybackSequenceSnapshot(for: $0)
+            }
+        }
+        return nil
+    }
+
+    func onCancel(withArguments arguments: Any?) -> FlutterError? {
+        Task { @MainActor [weak plugin] in
+            plugin?.sequenceEventSink = nil
+        }
+        return nil
     }
 }
 

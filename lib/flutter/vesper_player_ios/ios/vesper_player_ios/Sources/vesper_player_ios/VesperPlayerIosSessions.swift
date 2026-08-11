@@ -131,3 +131,17 @@ struct FlutterViewportHint {
         ]
     }
 }
+
+@MainActor
+final class PlaybackSequenceSession {
+    let id: String
+    let playerId: String
+    let sequence: VesperPlaybackSequence
+    var observation: AnyCancellable?
+
+    init(id: String, playerId: String, sequence: VesperPlaybackSequence) {
+        self.id = id
+        self.playerId = playerId
+        self.sequence = sequence
+    }
+}

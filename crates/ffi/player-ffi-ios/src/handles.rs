@@ -3,6 +3,7 @@ use std::sync::{Arc, LockResult, Mutex, MutexGuard, OnceLock};
 
 use player_platform_ios::{
     IosDownloadBridgeSession, IosPlaylistBridgeSession, IosPreloadBridgeSession,
+    IosSequenceBridgeSession,
 };
 use player_platform_mobile::MobileSourceNormalizerResourceOpen;
 use player_plugin_loader::BenchmarkSinkPluginSession;
@@ -49,6 +50,7 @@ pub(crate) type IosNativeFramePipelineSessionHandle = Arc<Mutex<IosNativeFramePi
 /// caller closures. This keeps blocking plugin post-processing off the global
 /// registry mutex, mirroring the JNI `with_download_session_mut` pattern.
 pub(crate) type IosDownloadBridgeSessionHandle = Arc<Mutex<IosDownloadBridgeSession>>;
+pub(crate) type IosSequenceBridgeSessionHandle = Arc<Mutex<IosSequenceBridgeSession>>;
 
 #[derive(Debug)]
 pub(crate) struct HandleRegistry<T> {
@@ -149,6 +151,8 @@ static DOWNLOAD_SESSIONS: OnceLock<Mutex<HandleRegistry<IosDownloadBridgeSession
     OnceLock::new();
 static PLAYLIST_SESSIONS: OnceLock<Mutex<HandleRegistry<IosPlaylistBridgeSession>>> =
     OnceLock::new();
+static SEQUENCE_SESSIONS: OnceLock<Mutex<HandleRegistry<IosSequenceBridgeSessionHandle>>> =
+    OnceLock::new();
 static BENCHMARK_SESSIONS: OnceLock<Mutex<HandleRegistry<IosBenchmarkSinkSession>>> =
     OnceLock::new();
 static PLAYBACK_EVENT_HOOK_SESSIONS: OnceLock<Mutex<HandleRegistry<IosPlaybackEventHookSession>>> =
@@ -178,6 +182,11 @@ pub(crate) fn download_sessions() -> &'static Mutex<HandleRegistry<IosDownloadBr
 
 pub(crate) fn playlist_sessions() -> &'static Mutex<HandleRegistry<IosPlaylistBridgeSession>> {
     PLAYLIST_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
+}
+
+pub(crate) fn sequence_sessions() -> &'static Mutex<HandleRegistry<IosSequenceBridgeSessionHandle>>
+{
+    SEQUENCE_SESSIONS.get_or_init(|| Mutex::new(HandleRegistry::default()))
 }
 
 pub(crate) fn benchmark_sessions() -> &'static Mutex<HandleRegistry<IosBenchmarkSinkSession>> {

@@ -75,6 +75,7 @@ internal object VesperNativeJni {
         config: NativePlaylistConfig,
         preloadBudget: NativeResolvedPreloadBudgetPolicy,
     ): Long
+    external fun createSequenceSession(configJson: String): Long
     external fun resolveResiliencePolicy(
         sourceKindOrdinal: Int,
         sourceProtocolOrdinal: Int,
@@ -91,6 +92,15 @@ internal object VesperNativeJni {
     external fun disposeDownloadSession(sessionHandle: Long)
     external fun disposeBenchmarkSinkSession(sessionHandle: Long)
     external fun disposePlaylistSession(sessionHandle: Long)
+    external fun disposeSequenceSession(sessionHandle: Long)
+    external fun executeSequenceCommand(
+        sessionHandle: Long,
+        commandJson: String,
+        wallEpochMs: Long,
+    ): String
+    external fun sequenceSnapshot(sessionHandle: Long): String
+    external fun drainSequenceEvents(sessionHandle: Long, maxCount: Int): String
+    external fun sequencePreloadIntents(sessionHandle: Long, wallEpochMs: Long): String
     external fun submitBenchmarkSinkEvents(sessionHandle: Long, batchJson: String): String
     external fun flushBenchmarkSinkSession(sessionHandle: Long): String
     external fun attachSurface(

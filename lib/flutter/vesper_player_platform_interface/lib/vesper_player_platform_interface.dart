@@ -3,6 +3,7 @@ export 'src/download_models.dart';
 export 'src/events.dart';
 export 'src/fixed_track_exception.dart';
 export 'src/models.dart';
+export 'src/sequence_models.dart';
 export 'src/platform_error_mapping.dart';
 export 'src/subtitle_exception.dart';
 export 'src/vesper_player_platform.dart';

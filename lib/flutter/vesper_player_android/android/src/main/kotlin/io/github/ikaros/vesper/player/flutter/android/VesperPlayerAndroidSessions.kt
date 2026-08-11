@@ -4,6 +4,7 @@ import android.view.View
 import android.widget.FrameLayout
 import io.flutter.plugin.platform.PlatformView
 import io.github.ikaros.vesper.player.android.VesperDownloadManager
+import io.github.ikaros.vesper.player.android.VesperPlaybackSequence
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeRequest
 import io.github.ikaros.vesper.player.android.VesperPlaybackCapabilityProbeResult
 import io.github.ikaros.vesper.player.android.VesperPlayerController
@@ -63,6 +64,13 @@ internal data class DownloadSession(
     val manager: VesperDownloadManager,
     var observerJob: Job? = null,
     var lastError: Map<String, Any?>? = null,
+)
+
+internal data class PlaybackSequenceSession(
+    val id: String,
+    val playerId: String,
+    val sequence: VesperPlaybackSequence,
+    var observerJob: Job? = null,
 )
 
 internal data class FlutterViewport(

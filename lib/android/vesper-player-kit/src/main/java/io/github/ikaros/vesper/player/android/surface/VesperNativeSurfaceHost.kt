@@ -49,6 +49,7 @@ internal class VesperNativeSurfaceHost(
         host.setBackgroundColor(Color.BLACK)
         if (hostView === host && renderView != null) {
             applyVideoTransform()
+            postVideoTransform()
             reattachIfAvailable()
             postSurfaceViewAttachCheck("same-host")
             return
@@ -64,6 +65,7 @@ internal class VesperNativeSurfaceHost(
             hostView = host
             host.addOnLayoutChangeListener(hostLayoutListener)
             applyVideoTransform()
+            postVideoTransform()
             reattachIfAvailable()
             postSurfaceViewAttachCheck("move-host")
             return
@@ -80,6 +82,7 @@ internal class VesperNativeSurfaceHost(
         applyKeepScreenOn()
         host.addOnLayoutChangeListener(hostLayoutListener)
         applyVideoTransform()
+        postVideoTransform()
         postSurfaceViewAttachCheck("attach-created")
     }
 
@@ -105,6 +108,7 @@ internal class VesperNativeSurfaceHost(
     fun updateVideoLayout(layoutInfo: NativeVideoLayoutInfo?) {
         videoLayoutInfo = layoutInfo
         applyVideoTransform()
+        postVideoTransform()
     }
 
     fun setKeepScreenOn(active: Boolean) {
@@ -128,6 +132,7 @@ internal class VesperNativeSurfaceHost(
     }
 
     fun close() {
+        bindings.setOnVideoLayoutInfoListener(null)
         bindings.setOnSubtitleCuesListener(null)
         subtitleText = ""
         subtitleView?.text = ""
@@ -388,6 +393,15 @@ internal class VesperNativeSurfaceHost(
         }
     }
 
+    private fun postVideoTransform() {
+        val view = renderView ?: return
+        view.post {
+            if (renderView === view && hostView != null) {
+                applyVideoTransform()
+            }
+        }
+    }
+
     private fun applyTextureViewTransform() {
         val view = renderView as? TextureView ?: return
         val layout = videoLayoutInfo
@@ -395,6 +409,7 @@ internal class VesperNativeSurfaceHost(
         val viewHeight = view.height.toFloat()
 
         if (layout == null || viewWidth <= 0f || viewHeight <= 0f || layout.width <= 0 || layout.height <= 0) {
+            view.isOpaque = false
             view.setTransform(Matrix())
             return
         }
@@ -406,9 +421,16 @@ internal class VesperNativeSurfaceHost(
             videoHeight = layout.height,
             pixelWidthHeightRatio = layout.pixelWidthHeightRatio,
         ) ?: run {
+            view.isOpaque = false
             view.setTransform(Matrix())
             return
         }
+
+        // A scaled TextureView does not cover its full host bounds. Let the
+        // host's black background fill the letterbox area instead of treating
+        // an old SurfaceTexture buffer as an opaque replacement.
+        view.isOpaque =
+            transform.scaleX >= 0.999f && transform.scaleY >= 0.999f
 
         val matrix =
             Matrix().apply {
@@ -448,11 +470,35 @@ internal class VesperNativeSurfaceHost(
 
         val lp = view.layoutParams
         if (lp is FrameLayout.LayoutParams) {
-            if (lp.width != targetWidth || lp.height != targetHeight || lp.gravity != Gravity.CENTER) {
+            val layoutParamsChanged =
+                lp.width != targetWidth || lp.height != targetHeight || lp.gravity != Gravity.CENTER
+            if (layoutParamsChanged) {
+                Log.d(
+                    TAG,
+                    "surfaceHost apply SurfaceView layout host=${hostWidth}x$hostHeight " +
+                        "video=${layout.width}x${layout.height} target=${targetWidth}x$targetHeight " +
+                        "current=${lp.width}x${lp.height}",
+                )
                 lp.width = targetWidth
                 lp.height = targetHeight
                 lp.gravity = Gravity.CENTER
                 view.layoutParams = lp
+            }
+            if (
+                !layoutParamsChanged &&
+                (view.width != targetWidth || view.height != targetHeight)
+            ) {
+                val viewNeedsLayoutRequest = !view.isLayoutRequested
+                val hostNeedsLayoutRequest = !host.isLayoutRequested
+                if (viewNeedsLayoutRequest || hostNeedsLayoutRequest) {
+                    Log.d(
+                        TAG,
+                        "surfaceHost request stale SurfaceView layout target=${targetWidth}x$targetHeight " +
+                            "actual=${view.width}x${view.height} host=${hostWidth}x$hostHeight",
+                    )
+                    if (viewNeedsLayoutRequest) view.requestLayout()
+                    if (hostNeedsLayoutRequest) host.requestLayout()
+                }
             }
         }
     }

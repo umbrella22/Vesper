@@ -589,6 +589,21 @@ internal fun NativePlaybackError.isTrackCapabilityFailure(): Boolean =
             AndroidCapabilityFailureCause.FormatExceedsCapabilities,
         )
 
+internal fun media3DroppedVideoFramesBenchmarkAttributes(
+    callbackIsCurrent: Boolean,
+    benchmarkIsEnabled: Boolean,
+    droppedFrames: Int,
+    elapsedMs: Long,
+): Map<String, String>? {
+    if (!callbackIsCurrent || !benchmarkIsEnabled || droppedFrames <= 0) {
+        return null
+    }
+    return mapOf(
+        "count" to droppedFrames.toString(),
+        "elapsedMs" to elapsedMs.coerceAtLeast(0L).toString(),
+    )
+}
+
 internal fun VesperNativeJniBindings.buildAnalyticsListener(
     callbackGeneration: Long,
 ): AnalyticsListener =
@@ -692,6 +707,21 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(
                     "isFirstForEpoch" to firstFrameMark.isFirstForEpoch.toString(),
                 ),
             )
+        }
+
+        override fun onDroppedVideoFrames(
+            eventTime: AnalyticsListener.EventTime,
+            droppedFrames: Int,
+            elapsedMs: Long,
+        ) {
+            val attributes =
+                media3DroppedVideoFramesBenchmarkAttributes(
+                    callbackIsCurrent = isCurrentSystemPlaybackCallback(callbackGeneration),
+                    benchmarkIsEnabled = benchmarkRecorder.isEnabled,
+                    droppedFrames = droppedFrames,
+                    elapsedMs = elapsedMs,
+                ) ?: return
+            recordBenchmark("dropped_video_frames", attributes)
         }
 
         @Suppress("DEPRECATION")

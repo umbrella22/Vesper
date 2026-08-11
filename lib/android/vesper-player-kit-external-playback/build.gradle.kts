@@ -1,4 +1,5 @@
 import com.android.Version
+import java.io.File
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -8,6 +9,12 @@ plugins {
 
 val workspaceRootDir = layout.projectDirectory.dir("../../..")
 val vesperCli = workspaceRootDir.file("scripts/vesper")
+
+fun resolveWorkspaceFile(path: String): File {
+    val configuredFile = File(path)
+    return if (configuredFile.isAbsolute) configuredFile else workspaceRootDir.asFile.resolve(path)
+}
+
 val configuredAndroidAbis =
     sequenceOf(
         "vesper.player.android.external.abis",
@@ -57,6 +64,19 @@ val skipFfmpegRuntime =
     providers.environmentVariable("VESPER_ANDROID_SKIP_FFMPEG_RUNTIME_BUILD")
         .map { it == "1" || it.equals("true", ignoreCase = true) }
         .orElse(false)
+val androidFfmpegRuntimeDir =
+    providers.environmentVariable("VESPER_ANDROID_FFMPEG_OUTPUT_DIR")
+        .orElse(providers.environmentVariable("VESPER_FFMPEG_OUTPUT_DIR"))
+        .map(::resolveWorkspaceFile)
+        .orElse(workspaceRootDir.dir("third_party/ffmpeg/android").asFile)
+val ffmpegProfileConfigFile =
+    providers.environmentVariable("VESPER_FFMPEG_PROFILE_CONFIG_PATH")
+        .map(::resolveWorkspaceFile)
+        .orElse(workspaceRootDir.file("scripts/ffmpeg-profiles.toml").asFile)
+val ffmpegSourcePolicyFile =
+    providers.environmentVariable("VESPER_FFMPEG_SOURCE_POLICY_FILE")
+        .map(::resolveWorkspaceFile)
+        .orElse(workspaceRootDir.file("scripts/ffmpeg-source-policy.toml").asFile)
 
 if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
     apply(plugin = "org.jetbrains.kotlin.android")
@@ -142,10 +162,17 @@ val buildRelayFfmpegAndroidJni = tasks.register<Exec>("buildRelayFfmpegAndroidJn
     inputs.file(workspaceRootDir.file("Cargo.toml"))
     inputs.file(workspaceRootDir.file("Cargo.lock"))
     inputs.dir(workspaceRootDir.dir("crates/platform/jni/player-relay-ffmpeg-android"))
-    inputs.dir(workspaceRootDir.dir("third_party/ffmpeg/android"))
+    inputs.file(ffmpegProfileConfigFile)
     inputs.property("abis", configuredAndroidAbis)
     inputs.property("buildProfile", relayFfmpegBuildProfile)
     inputs.property("ffmpegProfile", relayFfmpegProfile)
+    inputs.property("skipFfmpegRuntime", skipFfmpegRuntime)
+    if (skipFfmpegRuntime.get()) {
+        inputs.dir(androidFfmpegRuntimeDir)
+    } else {
+        inputs.file(ffmpegSourcePolicyFile)
+        localState.register(androidFfmpegRuntimeDir)
+    }
     outputs.dir(relayFfmpegJniLibsDir)
     outputs.dir(relayFfmpegAssetsDir)
 

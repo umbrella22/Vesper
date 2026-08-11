@@ -957,22 +957,20 @@ where
         selection_hint: PreloadSelectionHint,
         priority: PreloadPriority,
     ) {
-        let candidate = PreloadCandidate {
-            source: item.source.clone(),
+        let candidate = PreloadCandidate::from_media_source(
+            item.source.clone(),
             scope,
             kind,
             selection_hint,
-            config: PreloadConfig {
+            PreloadConfig {
                 priority,
                 ttl: item.preload_profile.ttl,
                 expected_memory_bytes: item.preload_profile.expected_memory_bytes,
                 expected_disk_bytes: item.preload_profile.expected_disk_bytes,
                 warmup_window: item.preload_profile.warmup_window,
             },
-        };
-        let key = PreloadSourceIdentity::from_media_source(&item.source)
-            .as_str()
-            .to_owned();
+        );
+        let key = candidate.source_identity.as_str().to_owned();
 
         match desired.get(&key) {
             Some(existing) if candidate_precedes(existing, &candidate) => {}

@@ -20,6 +20,12 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
           : <VesperPluginReference>[
               VesperBundledPluginReferences.frameProcessorDiagnostic,
             ];
+      // Scrolling list stages are composed by Flutter, where TextureView keeps
+      // native video geometry inside the platform view. Direct-native sources
+      // retain SurfaceView for HDR and high-fidelity playback.
+      final renderSurfaceKind = directNativePlaybackRequired
+          ? VesperPlayerRenderSurfaceKind.surfaceView
+          : VesperPlayerRenderSurfaceKind.textureView;
       if (mounted) {
         _updateState(() {
           _sourceNormalizerPluginReferences =
@@ -34,7 +40,7 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
 
       nextController = await VesperPlayerController.create(
         initialSource: selectedSource,
-        renderSurfaceKind: VesperPlayerRenderSurfaceKind.surfaceView,
+        renderSurfaceKind: renderSurfaceKind,
         resiliencePolicy: _selectedResilienceProfile.policy,
         sourceNormalizerConfiguration: sourceNormalizerConfiguration,
         frameProcessorConfiguration: VesperFrameProcessorConfiguration(

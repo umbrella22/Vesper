@@ -54,12 +54,24 @@ pub use player_model::{
     PlayerResult, PresentationState, SubtitleErrorDetails, VideoPixelFormat,
 };
 pub use player_playlist::{
+    DEFAULT_SEQUENCE_MAX_EVENTS, DEFAULT_SEQUENCE_MAX_ITEMS, DEFAULT_SEQUENCE_MAX_PENDING_REQUESTS,
     MAX_PENDING_PLAYLIST_EVENTS, PlaylistActivationReason, PlaylistActiveItem,
     PlaylistAdvanceDecision, PlaylistAdvanceOutcome, PlaylistAdvanceTrigger, PlaylistCoordinator,
     PlaylistCoordinatorConfig, PlaylistEvent, PlaylistFailureStrategy, PlaylistId,
     PlaylistItemPreloadProfile, PlaylistNeighborWindow, PlaylistPreloadWindow, PlaylistQueueItem,
     PlaylistQueueItemId, PlaylistQueueItemSnapshot, PlaylistRepeatMode, PlaylistSnapshot,
-    PlaylistSwitchPolicy, PlaylistViewportHint, PlaylistViewportHintKind,
+    PlaylistSwitchPolicy, PlaylistViewportHint, PlaylistViewportHintKind, SequenceActivationEpoch,
+    SequenceActivationReason, SequenceCacheIdentity, SequenceClockSnapshot, SequenceConfig,
+    SequenceContentIdentity, SequenceCoordinator, SequenceDirection, SequenceError,
+    SequenceErrorCode, SequenceEvent, SequenceEventKind, SequenceId, SequenceItem, SequenceItemId,
+    SequenceItemSnapshot, SequenceItemsRequest, SequenceItemsResponse, SequenceMediaKind,
+    SequenceMode, SequenceNavigationOutcome, SequencePendingRequest, SequencePreloadIntent,
+    SequencePreloadPriority, SequencePreloadProfile, SequenceRequestDeliveryState,
+    SequenceRequestFailure, SequenceRequestId, SequenceRequestKind, SequenceResolutionAttemptId,
+    SequenceResolvedSource, SequenceResult, SequenceSessionGeneration, SequenceSnapshot,
+    SequenceSourceReference, SequenceSourceRequest, SequenceSourceResolutionReason,
+    SequenceSourceRevision, SequenceSourceState, SequenceWarmupGoal, SequenceWarmupReport,
+    SequenceWarmupStats, SequenceWarmupStatus, SequenceWarmupTaskId, SequenceWarmupTaskSnapshot,
 };
 pub use player_plugin::{PipelineEventHook, PipelineEventHookError};
 pub use player_preload::{
@@ -120,6 +132,26 @@ pub mod playlist {
         PlaylistId, PlaylistItemPreloadProfile, PlaylistNeighborWindow, PlaylistPreloadWindow,
         PlaylistQueueItem, PlaylistQueueItemId, PlaylistQueueItemSnapshot, PlaylistRepeatMode,
         PlaylistSnapshot, PlaylistSwitchPolicy, PlaylistViewportHint, PlaylistViewportHintKind,
+    };
+}
+
+/// Playback sequence API re-exports.
+pub mod sequence {
+    pub use player_playlist::{
+        DEFAULT_SEQUENCE_MAX_EVENTS, DEFAULT_SEQUENCE_MAX_ITEMS,
+        DEFAULT_SEQUENCE_MAX_PENDING_REQUESTS, SequenceActivationEpoch, SequenceActivationReason,
+        SequenceCacheIdentity, SequenceClockSnapshot, SequenceConfig, SequenceContentIdentity,
+        SequenceCoordinator, SequenceDirection, SequenceError, SequenceErrorCode, SequenceEvent,
+        SequenceEventKind, SequenceId, SequenceItem, SequenceItemId, SequenceItemSnapshot,
+        SequenceItemsRequest, SequenceItemsResponse, SequenceMediaKind, SequenceMode,
+        SequenceNavigationOutcome, SequencePendingRequest, SequencePreloadIntent,
+        SequencePreloadPriority, SequencePreloadProfile, SequenceRequestDeliveryState,
+        SequenceRequestFailure, SequenceRequestId, SequenceRequestKind,
+        SequenceResolutionAttemptId, SequenceResolvedSource, SequenceResult,
+        SequenceSessionGeneration, SequenceSnapshot, SequenceSourceReference,
+        SequenceSourceRequest, SequenceSourceResolutionReason, SequenceSourceRevision,
+        SequenceSourceState, SequenceWarmupGoal, SequenceWarmupReport, SequenceWarmupStats,
+        SequenceWarmupStatus, SequenceWarmupTaskId, SequenceWarmupTaskSnapshot,
     };
 }
 

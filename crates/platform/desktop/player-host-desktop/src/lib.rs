@@ -740,18 +740,18 @@ mod tests {
     }
 
     fn sample_preload_candidate(uri: &str) -> PreloadCandidate {
-        PreloadCandidate {
-            source: MediaSource::new(uri),
-            scope: PreloadBudgetScope::App,
-            kind: PreloadCandidateKind::Current,
-            selection_hint: PreloadSelectionHint::CurrentItem,
-            config: PreloadConfig {
+        PreloadCandidate::from_media_source(
+            MediaSource::new(uri),
+            PreloadBudgetScope::App,
+            PreloadCandidateKind::Current,
+            PreloadSelectionHint::CurrentItem,
+            PreloadConfig {
                 priority: PreloadPriority::Critical,
                 ttl: None,
                 expected_memory_bytes: 1,
                 expected_disk_bytes: 1,
                 warmup_window: None,
             },
-        }
+        )
     }
 }

@@ -7,10 +7,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
+
+internal interface VesperPlaybackSequenceAttachment {
+    fun onControllerDisposed(controller: VesperPlayerController)
+}
 
 class VesperPlayerController internal constructor(
     private val bridge: PlayerBridge,
 ) {
+    private val isDisposed = AtomicBoolean(false)
+    private val sequenceAttachmentLock = Any()
+    private var sequenceAttachment: VesperPlaybackSequenceAttachment? = null
     /**
      * Public backend family for diagnostics and federated wrapper snapshots.
      */
@@ -78,7 +86,16 @@ class VesperPlayerController internal constructor(
      */
     suspend fun initializeAsync() = bridge.initializeAsync()
 
-    fun dispose() = bridge.dispose()
+    fun dispose() {
+        if (!isDisposed.compareAndSet(false, true)) {
+            return
+        }
+        val attachment = synchronized(sequenceAttachmentLock) {
+            sequenceAttachment.also { sequenceAttachment = null }
+        }
+        attachment?.onControllerDisposed(this)
+        bridge.dispose()
+    }
 
     fun refresh() = bridge.refresh()
 
@@ -88,12 +105,65 @@ class VesperPlayerController internal constructor(
      * Enqueues source selection and returns after the request is accepted.
      * Use [selectSourceAsync] when the caller needs to wait for source startup.
      */
-    fun selectSource(source: VesperPlayerSource) = bridge.selectSource(source)
+    fun selectSource(source: VesperPlayerSource) {
+        checkDirectSourceSelectionAllowed()
+        bridge.selectSource(source)
+    }
 
     /**
      * Selects a source and resumes only after startup work has completed or failed.
      */
-    suspend fun selectSourceAsync(source: VesperPlayerSource) = bridge.selectSourceAsync(source)
+    suspend fun selectSourceAsync(source: VesperPlayerSource) {
+        checkDirectSourceSelectionAllowed()
+        bridge.selectSourceAsync(source)
+    }
+
+    internal fun attachPlaybackSequence(attachment: VesperPlaybackSequenceAttachment) {
+        if (isDisposed.get()) {
+            throw VesperPlaybackSequenceException("controller_disposed")
+        }
+        synchronized(sequenceAttachmentLock) {
+            if (sequenceAttachment != null) {
+                throw VesperPlaybackSequenceException("already_attached")
+            }
+            sequenceAttachment = attachment
+        }
+    }
+
+    internal fun detachPlaybackSequence(attachment: VesperPlaybackSequenceAttachment) {
+        synchronized(sequenceAttachmentLock) {
+            if (sequenceAttachment === attachment) {
+                sequenceAttachment = null
+            }
+        }
+    }
+
+    internal fun activateSequenceSource(
+        attachment: VesperPlaybackSequenceAttachment,
+        source: VesperPlayerSource,
+    ) {
+        synchronized(sequenceAttachmentLock) {
+            if (sequenceAttachment !== attachment) {
+                throw VesperPlaybackSequenceException("sequence_attached_conflict")
+            }
+        }
+        bridge.selectSource(source)
+    }
+
+    /** Returns the host-only context needed by sequence cache execution. */
+    internal fun sequencePreloadContext(): Context? = bridge.appContext
+
+    /** Returns the current host resilience policy without exposing bridge details. */
+    internal fun sequenceResiliencePolicy(): VesperPlaybackResiliencePolicy =
+        bridge.resiliencePolicy.value
+
+    private fun checkDirectSourceSelectionAllowed() {
+        synchronized(sequenceAttachmentLock) {
+            if (sequenceAttachment != null) {
+                throw VesperPlaybackSequenceException("sequence_attached_conflict")
+            }
+        }
+    }
 
     fun attachSurfaceHost(host: ViewGroup) = bridge.attachSurfaceHost(host)
 

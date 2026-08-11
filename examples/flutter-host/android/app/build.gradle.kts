@@ -129,6 +129,8 @@ android {
         val releaseBuildType = getByName("release")
         maybeCreate("profile").apply {
             initWith(releaseBuildType)
+            isMinifyEnabled = false
+            isShrinkResources = false
             matchingFallbacks.clear()
             matchingFallbacks.add("release")
         }

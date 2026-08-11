@@ -2,6 +2,7 @@ import 'events.dart';
 import 'download_events.dart';
 import 'download_models.dart';
 import 'models.dart';
+import 'sequence_models.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 final class VesperPlatformCreateResult {
@@ -141,6 +142,49 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
   }
 
   Future<void> selectSource(String playerId, VesperPlayerSource source);
+
+  /// Creates the bounded native sequence session attached to one controller.
+  /// Platform implementations must keep source bytes and headers on the host.
+  Future<VesperPlaybackSequenceSnapshot> createPlaybackSequence(
+    String playerId,
+    VesperPlaybackSequenceConfiguration configuration,
+  ) async {
+    throw VesperUnsupportedError(
+      'Playback sequences are not supported by this platform.',
+      'sequenceUnsupported',
+    );
+  }
+
+  Stream<VesperPlaybackSequenceEvent> playbackSequenceEventsFor(
+    String sequenceId,
+  ) =>
+      const Stream<VesperPlaybackSequenceEvent>.empty();
+
+  Future<Map<String, Object?>> executePlaybackSequenceCommand(
+    String sequenceId,
+    Map<String, Object?> command,
+  ) async {
+    throw VesperUnsupportedError(
+      'Playback sequences are not supported by this platform.',
+      'sequenceUnsupported',
+    );
+  }
+
+  Future<VesperPlaybackSequenceSnapshot> playbackSequenceSnapshot(
+    String sequenceId,
+  ) async {
+    throw VesperUnsupportedError(
+      'Playback sequences are not supported by this platform.',
+      'sequenceUnsupported',
+    );
+  }
+
+  Future<void> disposePlaybackSequence(String sequenceId) async {
+    throw VesperUnsupportedError(
+      'Playback sequences are not supported by this platform.',
+      'sequenceUnsupported',
+    );
+  }
 
   Future<void> play(String playerId);
 

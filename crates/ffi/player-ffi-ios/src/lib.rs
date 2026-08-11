@@ -41,6 +41,7 @@ mod conversions;
 mod handles;
 mod native_frame_pipeline;
 mod plugin_registry;
+mod sequence_ffi;
 mod types;
 
 use conversions::*;
@@ -55,6 +56,136 @@ pub use types::*;
 
 #[cfg(test)]
 mod tests;
+
+/// Creates an iOS playback-sequence session.
+///
+/// # Safety
+///
+/// `config_json` must be a valid null-terminated UTF-8 string. Output pointers
+/// must be writable when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_sequence_session_create_json(
+    config_json: *const c_char,
+    out_handle: *mut u64,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    // SAFETY: this export forwards the caller's documented pointer contract.
+    unsafe {
+        sequence_ffi::player_ffi_sequence_session_create_json_impl(
+            config_json,
+            out_handle,
+            out_error,
+        )
+    }
+}
+
+/// Disposes an iOS playback-sequence session. Repeated disposal is a no-op.
+///
+/// # Safety
+///
+/// The caller must not concurrently use the same handle during disposal.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_sequence_session_dispose(handle: u64) {
+    // SAFETY: opaque handles carry no Rust pointer provenance across FFI.
+    unsafe { sequence_ffi::player_ffi_sequence_session_dispose_impl(handle) };
+}
+
+/// Executes one bounded sequence command and returns a Rust-owned JSON string.
+///
+/// # Safety
+///
+/// `command_json` must be a valid null-terminated UTF-8 string. Output pointers
+/// must be writable when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_sequence_session_execute_json(
+    handle: u64,
+    command_json: *const c_char,
+    wall_epoch_ms: u64,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    // SAFETY: this export forwards the caller's documented pointer contract.
+    unsafe {
+        sequence_ffi::player_ffi_sequence_session_execute_json_impl(
+            handle,
+            command_json,
+            wall_epoch_ms,
+            out_json,
+            out_error,
+        )
+    }
+}
+
+/// Returns the authoritative sequence snapshot as a Rust-owned JSON string.
+///
+/// # Safety
+///
+/// Output pointers must be writable when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_sequence_session_snapshot_json(
+    handle: u64,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    // SAFETY: this export forwards the caller's documented pointer contract.
+    unsafe {
+        sequence_ffi::player_ffi_sequence_session_snapshot_json_impl(handle, out_json, out_error)
+    }
+}
+
+/// Drains at most `max_count` sequence events into a Rust-owned JSON string.
+///
+/// # Safety
+///
+/// Output pointers must be writable when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_sequence_session_drain_events_json(
+    handle: u64,
+    max_count: usize,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    // SAFETY: this export forwards the caller's documented pointer contract.
+    unsafe {
+        sequence_ffi::player_ffi_sequence_session_drain_events_json_impl(
+            handle, max_count, out_json, out_error,
+        )
+    }
+}
+
+/// Returns safe sequence preload intents as a Rust-owned JSON string.
+///
+/// # Safety
+///
+/// Output pointers must be writable when non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_sequence_session_preload_intents_json(
+    handle: u64,
+    wall_epoch_ms: u64,
+    out_json: *mut *mut c_char,
+    out_error: *mut PlayerFfiError,
+) -> PlayerFfiCallStatus {
+    // SAFETY: this export forwards the caller's documented pointer contract.
+    unsafe {
+        sequence_ffi::player_ffi_sequence_session_preload_intents_json_impl(
+            handle,
+            wall_epoch_ms,
+            out_json,
+            out_error,
+        )
+    }
+}
+
+/// Releases a string returned by a sequence JSON API.
+///
+/// # Safety
+///
+/// `value` must be null or originate from a sequence JSON API in this library.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn player_ffi_sequence_string_free(value: *mut c_char) {
+    // SAFETY: this export forwards the caller's allocator-pairing contract.
+    unsafe { sequence_ffi::player_ffi_sequence_string_free_impl(value) };
+}
 
 /// # Safety
 ///

@@ -7,6 +7,7 @@ import 'src/download_models.dart';
 import 'src/events.dart';
 import 'src/models.dart';
 import 'src/platform_error_mapping.dart';
+import 'src/sequence_models.dart';
 import 'src/vesper_player_platform.dart';
 
 const Duration _vesperDownloadRecoveryTimeout = Duration(seconds: 30);
@@ -16,11 +17,13 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
     required this.methodChannel,
     required this.eventChannel,
     required this.downloadEventChannel,
+    required this.sequenceEventChannel,
   });
 
   final MethodChannel methodChannel;
   final EventChannel eventChannel;
   final EventChannel downloadEventChannel;
+  final EventChannel sequenceEventChannel;
 
   late final Stream<VesperPlayerEvent> _events = eventChannel
       .receiveBroadcastStream()
@@ -35,6 +38,14 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
           .where((dynamic event) => event is Map)
           .map((dynamic event) => Map<Object?, Object?>.from(event as Map))
           .map(VesperDownloadManagerEvent.fromMap)
+          .asBroadcastStream();
+
+  late final Stream<VesperPlaybackSequenceEvent> _sequenceEvents =
+      sequenceEventChannel
+          .receiveBroadcastStream()
+          .where((dynamic event) => event is Map)
+          .map((dynamic event) => Map<Object?, Object?>.from(event as Map))
+          .map(VesperPlaybackSequenceEvent.fromMap)
           .asBroadcastStream();
 
   final Map<String, VesperDownloadStaleResourcePlanRecoveryCallback>
@@ -166,6 +177,60 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
     return _invokeVoid('selectSource', <String, Object?>{
       'playerId': playerId,
       'source': source.toMap(),
+    });
+  }
+
+  @override
+  Future<VesperPlaybackSequenceSnapshot> createPlaybackSequence(
+    String playerId,
+    VesperPlaybackSequenceConfiguration configuration,
+  ) async {
+    final result = await _invokeMethod<Object?>(
+      'createPlaybackSequence',
+      <String, Object?>{
+        'playerId': playerId,
+        'configuration': configuration.toMap(),
+      },
+    );
+    return VesperPlaybackSequenceSnapshot.fromMap(vesperDecodeMap(result));
+  }
+
+  @override
+  Stream<VesperPlaybackSequenceEvent> playbackSequenceEventsFor(
+    String sequenceId,
+  ) =>
+      _sequenceEvents.where((event) => event.sequenceId == sequenceId);
+
+  @override
+  Future<Map<String, Object?>> executePlaybackSequenceCommand(
+    String sequenceId,
+    Map<String, Object?> command,
+  ) async {
+    final result = await _invokeMethod<Object?>(
+      'executePlaybackSequenceCommand',
+      <String, Object?>{
+        'sequenceId': sequenceId,
+        'command': command,
+      },
+    );
+    return vesperDecodeMap(result);
+  }
+
+  @override
+  Future<VesperPlaybackSequenceSnapshot> playbackSequenceSnapshot(
+    String sequenceId,
+  ) async {
+    final result = await _invokeMethod<Object?>(
+      'playbackSequenceSnapshot',
+      <String, Object?>{'sequenceId': sequenceId},
+    );
+    return VesperPlaybackSequenceSnapshot.fromMap(vesperDecodeMap(result));
+  }
+
+  @override
+  Future<void> disposePlaybackSequence(String sequenceId) {
+    return _invokeVoid('disposePlaybackSequence', <String, Object?>{
+      'sequenceId': sequenceId,
     });
   }
 
