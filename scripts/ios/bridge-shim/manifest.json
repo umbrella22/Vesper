@@ -1953,6 +1953,126 @@
     {
       "kind": "function",
       "return_type": "bool",
+      "name": "vesper_runtime_sequence_session_create",
+      "parameters": [
+        {
+          "ty": "const char *",
+          "name": "config_json"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_sequence_session_execute",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const char *",
+          "name": "command_json"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "wall_epoch_ms"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_sequence_session_snapshot",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_sequence_session_drain_events",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "max_count"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
+      "name": "vesper_runtime_sequence_session_preload_intents",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "wall_epoch_ms"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_sequence_session_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "vesper_runtime_sequence_string_free",
+      "parameters": [
+        {
+          "ty": "char *",
+          "name": "value"
+        }
+      ],
+      "storage": "public"
+    },
+    {
+      "kind": "function",
+      "return_type": "bool",
       "name": "vesper_runtime_download_session_create",
       "parameters": [
         {
@@ -5041,6 +5161,146 @@
     {
       "kind": "function",
       "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_sequence_session_create_json",
+      "parameters": [
+        {
+          "ty": "const char *",
+          "name": "config_json"
+        },
+        {
+          "ty": "uint64_t *",
+          "name": "out_handle"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_sequence_session_dispose",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_sequence_session_execute_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "const char *",
+          "name": "command_json"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "wall_epoch_ms"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_sequence_session_snapshot_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_sequence_session_drain_events_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uintptr_t",
+          "name": "max_count"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
+      "name": "player_ffi_sequence_session_preload_intents_json",
+      "parameters": [
+        {
+          "ty": "uint64_t",
+          "name": "handle"
+        },
+        {
+          "ty": "uint64_t",
+          "name": "wall_epoch_ms"
+        },
+        {
+          "ty": "char **",
+          "name": "out_json"
+        },
+        {
+          "ty": "PlayerFfiError *",
+          "name": "out_error"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "void",
+      "name": "player_ffi_sequence_string_free",
+      "parameters": [
+        {
+          "ty": "char *",
+          "name": "value"
+        }
+      ],
+      "storage": "extern"
+    },
+    {
+      "kind": "function",
+      "return_type": "PlayerFfiCallStatus",
       "name": "player_ffi_download_session_create",
       "parameters": [
         {
@@ -6528,6 +6788,79 @@
       "body_fragment": "fragments/wrappers/vesper_runtime_playlist_session_dispose.c.inc"
     },
     {
+      "kind": "static_fragment",
+      "path": "fragments/static/static-helpers-05.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_sequence_session_create",
+      "ffi_symbols": [
+        "player_ffi_error_free",
+        "player_ffi_sequence_session_create_json"
+      ],
+      "ownership": [
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_sequence_session_create.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_sequence_session_execute",
+      "ffi_symbols": [
+        "player_ffi_sequence_session_execute_json"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_sequence_session_execute.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_sequence_session_snapshot",
+      "ffi_symbols": [
+        "player_ffi_sequence_session_snapshot_json"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_sequence_session_snapshot.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_sequence_session_drain_events",
+      "ffi_symbols": [
+        "player_ffi_sequence_session_drain_events_json"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_sequence_session_drain_events.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_sequence_session_preload_intents",
+      "ffi_symbols": [
+        "player_ffi_sequence_session_preload_intents_json"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_sequence_session_preload_intents.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_sequence_session_dispose",
+      "ffi_symbols": [
+        "player_ffi_sequence_session_dispose"
+      ],
+      "ownership": [],
+      "body_fragment": "fragments/wrappers/vesper_runtime_sequence_session_dispose.c.inc"
+    },
+    {
+      "kind": "wrapper",
+      "function": "vesper_runtime_sequence_string_free",
+      "ffi_symbols": [
+        "player_ffi_sequence_string_free"
+      ],
+      "ownership": [
+        "Releases C-owned bridge allocations with free."
+      ],
+      "body_fragment": "fragments/wrappers/vesper_runtime_sequence_string_free.c.inc"
+    },
+    {
       "kind": "wrapper",
       "function": "vesper_runtime_download_session_create",
       "ffi_symbols": [
@@ -6535,7 +6868,8 @@
         "player_ffi_error_free"
       ],
       "ownership": [
-        "Transfers Rust-owned error messages to the caller and frees remaining error fields with player_ffi_error_free."
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_download_session_create.c.inc"
     },
@@ -6546,7 +6880,8 @@
         "player_ffi_error_free"
       ],
       "ownership": [
-        "Returns transferred Rust-owned error messages to player_ffi_error_free."
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_download_error_string_free.c.inc"
     },
@@ -6698,7 +7033,8 @@
         "player_ffi_error_free"
       ],
       "ownership": [
-        "Frees Rust-owned error messages with player_ffi_error_free."
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_download_session_acknowledge_commands.c.inc"
     },
@@ -6767,11 +7103,12 @@
       "kind": "wrapper",
       "function": "vesper_runtime_ios_plugin_plan_create",
       "ffi_symbols": [
-        "player_ffi_ios_plugin_plan_create",
-        "player_ffi_error_free"
+        "player_ffi_error_free",
+        "player_ffi_ios_plugin_plan_create"
       ],
       "ownership": [
-        "Transfers Rust-owned error messages to the caller and frees remaining error fields with player_ffi_error_free."
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_ios_plugin_plan_create.c.inc"
     },
@@ -6779,11 +7116,12 @@
       "kind": "wrapper",
       "function": "vesper_runtime_ios_plugin_plan_resolutions_json",
       "ffi_symbols": [
-        "player_ffi_ios_plugin_plan_resolutions_json",
-        "player_ffi_error_free"
+        "player_ffi_error_free",
+        "player_ffi_ios_plugin_plan_resolutions_json"
       ],
       "ownership": [
-        "Transfers Rust-owned resolution JSON and error messages to the caller."
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_ios_plugin_plan_resolutions_json.c.inc"
     },
@@ -6800,11 +7138,12 @@
       "kind": "wrapper",
       "function": "vesper_runtime_ios_plugin_registry_load",
       "ffi_symbols": [
-        "player_ffi_ios_plugin_registry_load",
-        "player_ffi_error_free"
+        "player_ffi_error_free",
+        "player_ffi_ios_plugin_registry_load"
       ],
       "ownership": [
-        "Transfers Rust-owned error messages to the caller and frees remaining error fields with player_ffi_error_free."
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_ios_plugin_registry_load.c.inc"
     },
@@ -6824,7 +7163,7 @@
         "player_ffi_ios_plugin_string_free"
       ],
       "ownership": [
-        "Returns Rust-owned iOS plugin plan strings to their matching allocator."
+        "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_ios_plugin_string_free.c.inc"
     },
@@ -6880,8 +7219,8 @@
       "kind": "wrapper",
       "function": "vesper_runtime_playback_event_hook_session_create",
       "ffi_symbols": [
-        "player_ffi_ios_playback_event_hook_session_create",
-        "player_ffi_error_free"
+        "player_ffi_error_free",
+        "player_ffi_ios_playback_event_hook_session_create"
       ],
       "ownership": [
         "Frees Rust-owned error messages with player_ffi_error_free.",
@@ -6893,11 +7232,12 @@
       "kind": "wrapper",
       "function": "vesper_runtime_playback_event_hook_session_submit_json",
       "ffi_symbols": [
-        "player_ffi_ios_playback_event_hook_session_submit_json",
-        "player_ffi_error_free"
+        "player_ffi_error_free",
+        "player_ffi_ios_playback_event_hook_session_submit_json"
       ],
       "ownership": [
-        "Frees Rust-owned error messages with player_ffi_error_free."
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_playback_event_hook_session_submit_json.c.inc"
     },
@@ -6905,11 +7245,12 @@
       "kind": "wrapper",
       "function": "vesper_runtime_playback_event_hook_session_flush",
       "ffi_symbols": [
-        "player_ffi_ios_playback_event_hook_session_flush",
-        "player_ffi_error_free"
+        "player_ffi_error_free",
+        "player_ffi_ios_playback_event_hook_session_flush"
       ],
       "ownership": [
-        "Frees Rust-owned error messages with player_ffi_error_free."
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_playback_event_hook_session_flush.c.inc"
     },
@@ -6917,11 +7258,12 @@
       "kind": "wrapper",
       "function": "vesper_runtime_playback_event_hook_session_drain_json",
       "ffi_symbols": [
-        "player_ffi_ios_playback_event_hook_session_drain_json",
-        "player_ffi_error_free"
+        "player_ffi_error_free",
+        "player_ffi_ios_playback_event_hook_session_drain_json"
       ],
       "ownership": [
-        "Frees Rust-owned error messages with player_ffi_error_free."
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_playback_event_hook_session_drain_json.c.inc"
     },
@@ -6929,11 +7271,12 @@
       "kind": "wrapper",
       "function": "vesper_runtime_playback_event_hook_session_close",
       "ffi_symbols": [
-        "player_ffi_ios_playback_event_hook_session_close",
-        "player_ffi_error_free"
+        "player_ffi_error_free",
+        "player_ffi_ios_playback_event_hook_session_close"
       ],
       "ownership": [
-        "Frees Rust-owned error messages with player_ffi_error_free."
+        "Frees Rust-owned error messages with player_ffi_error_free.",
+        "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_playback_event_hook_session_close.c.inc"
     },
@@ -6953,7 +7296,6 @@
         "player_ffi_ios_playback_event_hook_report_string_free"
       ],
       "ownership": [
-        "Forwards playback EventHook report string release to the Rust FFI free function.",
         "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_runtime_playback_event_hook_report_string_free.c.inc"
@@ -6974,8 +7316,8 @@
       "kind": "wrapper",
       "function": "vesper_ios_plugin_abi_summary_json",
       "ffi_symbols": [
-        "player_ffi_ios_plugin_abi_summary_json",
-        "player_ffi_error_free"
+        "player_ffi_error_free",
+        "player_ffi_ios_plugin_abi_summary_json"
       ],
       "ownership": [
         "Frees Rust-owned error messages with player_ffi_error_free.",
@@ -6987,8 +7329,8 @@
       "kind": "wrapper",
       "function": "vesper_mobile_plugin_diagnostics_json",
       "ffi_symbols": [
-        "player_ffi_mobile_plugin_diagnostics_json",
-        "player_ffi_error_free"
+        "player_ffi_error_free",
+        "player_ffi_mobile_plugin_diagnostics_json"
       ],
       "ownership": [
         "Frees Rust-owned error messages with player_ffi_error_free.",
@@ -7003,7 +7345,6 @@
         "player_ffi_mobile_plugin_diagnostics_string_free"
       ],
       "ownership": [
-        "Forwards mobile plugin diagnostics string release to the Rust FFI free function.",
         "Releases C-owned bridge allocations with free."
       ],
       "body_fragment": "fragments/wrappers/vesper_mobile_plugin_diagnostics_string_free.c.inc"
