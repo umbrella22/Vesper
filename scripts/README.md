@@ -34,6 +34,7 @@ VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper android stage-release
 ./scripts/vesper android sample-apks /tmp/vesper-android-samples arm64-v8a
 
 ./scripts/vesper ios ffi release
+./scripts/vesper ios bootstrap-bridge-shim
 ./scripts/vesper ios sync-bridge-shim
 ./scripts/vesper ios verify-bridge-shim
 ./scripts/vesper ios stage-optional-plugins-release /tmp/vesper-ios-release --profile source-normalizer ios-arm64 ios-simulator-arm64
@@ -69,6 +70,14 @@ VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper flutter pub-dry-run /
 ./scripts/vesper release verify-current
 ./scripts/vesper release notes <tag> [output-path]
 ```
+
+`ios bootstrap-bridge-shim` is an explicit migration/import command. It
+reconstructs the checked-in bridge manifest and C fragments from the current
+`VesperPlayerKitBridgeShim.c/.h`; it does not regenerate the final C/H output.
+Run it when an API was added to the generated bridge before its manifest and
+fragments were recorded, then run `ios sync-bridge-shim` and
+`ios verify-bridge-shim`. Ordinary sync refuses to remove public bridge
+functions unless `--allow-public-api-removal` is passed explicitly.
 
 `desktop ensure-ffmpeg` is an explicit macOS provisioning step. It installs the
 repository-local FFmpeg fallback before Cargo builds that need FFmpeg; Cargo no

@@ -7947,6 +7947,7 @@ fn ios_commands_are_exposed_by_clap() {
     assert!(output.stderr.is_empty());
     let stdout = String::from_utf8(output.stdout).expect("UTF-8 iOS CLI help");
     assert!(stdout.contains("sync-bridge-shim"));
+    assert!(stdout.contains("bootstrap-bridge-shim"));
     assert!(stdout.contains("verify-bridge-shim"));
     assert!(stdout.contains("verify-app-store-layout"));
     assert!(stdout.contains("verify-native-frame"));
@@ -12706,6 +12707,120 @@ printf 'fixture host\n' > "$VESPER_ANDROID_HOST_JNI_LIBS/arm64-v8a/libvesper_pla
     );
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
+}
+
+#[cfg(unix)]
+fn write_empty_ios_bridge_manifest(root: &std::path::Path) {
+    fs::write(
+        root.join("scripts/ios/bridge-shim/manifest.json"),
+        r#"{
+  "header_guard": "VESPER_PLAYER_KIT_BRIDGE_SHIM_H",
+  "header_includes": ["<stdbool.h>"],
+  "c_includes": ["\"include/VesperPlayerKitBridgeShim.h\""],
+  "public_declarations": [],
+  "private_declarations": [],
+  "source_items": []
+}
+"#,
+    )
+    .expect("write empty iOS bridge manifest");
+}
+
+#[cfg(unix)]
+#[test]
+fn ios_bridge_bootstrap_imports_manifest_and_fragments_from_checked_in_c_and_h() {
+    let (_directory, root, tools) = ios_bridge_cli_fixture();
+    sync_ios_bridge_fixture(&root, &tools);
+    let shim = root.join("lib/ios/VesperPlayerKit/Sources/VesperPlayerKitBridgeShim");
+    let header_before = fs::read(shim.join("include/VesperPlayerKitBridgeShim.h"))
+        .expect("read bridge header before bootstrap");
+    let source_before = fs::read(shim.join("VesperPlayerKitBridgeShim.c"))
+        .expect("read bridge source before bootstrap");
+    write_empty_ios_bridge_manifest(&root);
+    fs::remove_file(root.join("scripts/ios/bridge-shim/fragments/fixture.c.inc"))
+        .expect("remove stale bridge fragment");
+
+    let output = ios_bridge_command(&root, &tools)
+        .arg("bootstrap-bridge-shim")
+        .output()
+        .expect("bootstrap iOS bridge shim");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        output.stdout,
+        b"VesperPlayerKit bridge shim bootstrapped from checked-in C/H.\n"
+    );
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        fs::read(shim.join("include/VesperPlayerKitBridgeShim.h"))
+            .expect("read bridge header after bootstrap"),
+        header_before
+    );
+    assert_eq!(
+        fs::read(shim.join("VesperPlayerKitBridgeShim.c"))
+            .expect("read bridge source after bootstrap"),
+        source_before
+    );
+    let manifest = fs::read_to_string(root.join("scripts/ios/bridge-shim/manifest.json"))
+        .expect("read bootstrapped bridge manifest");
+    assert!(manifest.contains("vesper_runtime_fixture"));
+    assert!(
+        root.join("scripts/ios/bridge-shim/fragments/wrappers/vesper_runtime_fixture.c.inc")
+            .is_file()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ios_bridge_sync_rejects_unacknowledged_public_api_removal() {
+    let (_directory, root, tools) = ios_bridge_cli_fixture();
+    sync_ios_bridge_fixture(&root, &tools);
+    write_empty_ios_bridge_manifest(&root);
+
+    let rejected = ios_bridge_command(&root, &tools)
+        .arg("sync-bridge-shim")
+        .output()
+        .expect("reject lossy iOS bridge synchronization");
+    assert_eq!(rejected.status.code(), Some(5));
+    assert!(rejected.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("sync would remove public bridge functions")
+    );
+    let shim = root.join("lib/ios/VesperPlayerKit/Sources/VesperPlayerKitBridgeShim");
+    assert!(
+        String::from_utf8_lossy(
+            &fs::read(shim.join("include/VesperPlayerKitBridgeShim.h"))
+                .expect("read preserved bridge header")
+        )
+        .contains("vesper_runtime_fixture")
+    );
+
+    let allowed = ios_bridge_command(&root, &tools)
+        .args(["sync-bridge-shim", "--allow-public-api-removal"])
+        .output()
+        .expect("allow intentional iOS bridge API removal");
+    assert_eq!(
+        allowed.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+    assert_eq!(
+        allowed.stdout,
+        b"VesperPlayerKit bridge shim synchronized.\n"
+    );
+    assert!(
+        !String::from_utf8_lossy(
+            &fs::read(shim.join("include/VesperPlayerKitBridgeShim.h"))
+                .expect("read removed bridge header")
+        )
+        .contains("vesper_runtime_fixture")
+    );
 }
 
 #[cfg(unix)]

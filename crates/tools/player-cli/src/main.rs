@@ -171,8 +171,11 @@ enum IosCommand {
     StageDecoderVideoToolboxPluginRelease(IosPluginReleaseArgs),
     /// Builds the complete VesperPlayerKit device and Simulator XCFramework output.
     KitXcframework,
+    /// Rebuilds manifest and C fragments from the checked-in bridge C/H sources.
+    #[command(name = "bootstrap-bridge-shim")]
+    BootstrapBridgeShim,
     /// Regenerates the checked-in Swift-to-Rust bridge shim as one transaction.
-    SyncBridgeShim,
+    SyncBridgeShim(IosSyncBridgeShimArgs),
     /// Verifies generated sources, C syntax, and available Rust archive exports.
     VerifyBridgeShim(IosVerifyBridgeShimArgs),
     /// Verifies the optional-plugin layout embedded in an App Store app bundle.
@@ -252,6 +255,13 @@ impl From<IosFfiProfileArg> for ios_ffi::IosFfiProfile {
             IosFfiProfileArg::Release => Self::Release,
         }
     }
+}
+
+#[derive(Debug, Args)]
+struct IosSyncBridgeShimArgs {
+    /// Allows an intentional removal of public bridge functions from generated C/H.
+    #[arg(long)]
+    allow_public_api_removal: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1459,10 +1469,16 @@ fn run_ios(arguments: IosArgs) -> CliResult<()> {
             let mut diagnostics = stderr.lock();
             ios_kit::build(&root, &mut output, &mut diagnostics).map_err(map_ios_error)
         }
-        IosCommand::SyncBridgeShim => {
+        IosCommand::BootstrapBridgeShim => {
             let root = contract::resolve_repository_root(requested_root.as_deref())
                 .map_err(|error| CliError::manifest_or_package(error.to_string()))?;
-            ios::sync_bridge_shim(&root, &mut output).map_err(map_ios_error)
+            ios::bootstrap_bridge_shim(&root, &mut output).map_err(map_ios_error)
+        }
+        IosCommand::SyncBridgeShim(arguments) => {
+            let root = contract::resolve_repository_root(requested_root.as_deref())
+                .map_err(|error| CliError::manifest_or_package(error.to_string()))?;
+            ios::sync_bridge_shim(&root, arguments.allow_public_api_removal, &mut output)
+                .map_err(map_ios_error)
         }
         IosCommand::VerifyBridgeShim(arguments) => {
             let root = contract::resolve_repository_root(requested_root.as_deref())

@@ -140,7 +140,7 @@ pub fn run_cli(args: impl IntoIterator<Item = String>) -> Result<()> {
                 .source_c_path
                 .as_deref()
                 .context("bootstrap requires --source-c")?;
-            bootstrap(&cli.manifest_path, &cli.output_dir, header_path, c_path)?;
+            bootstrap_from_sources(&cli.manifest_path, &cli.output_dir, header_path, c_path)?;
         }
     }
     Ok(())
@@ -687,7 +687,7 @@ fn push_typed_name(output: &mut String, ty: &str, name: &str) {
     }
 }
 
-fn bootstrap(
+pub fn bootstrap_from_sources(
     manifest_path: &Path,
     fragment_dir: &Path,
     header_path: &Path,
@@ -1049,6 +1049,17 @@ fn parse_header_declarations(header: &str) -> Result<Vec<Declaration>> {
         }
     }
     Ok(declarations)
+}
+
+/// Returns the public function names declared by a bridge shim header.
+pub fn public_function_names(header: &str) -> Result<BTreeSet<String>> {
+    Ok(parse_header_declarations(header)?
+        .into_iter()
+        .filter_map(|declaration| match declaration {
+            Declaration::Function { name, .. } => Some(name),
+            Declaration::Enum { .. } | Declaration::Struct { .. } => None,
+        })
+        .collect())
 }
 
 fn parse_source_sections(source: &str) -> Result<(Vec<String>, Vec<Declaration>, String)> {

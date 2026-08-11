@@ -163,6 +163,7 @@ impl IosError {
 
 struct BridgePaths {
     root: PathBuf,
+    manifest_directory: PathBuf,
     manifest: PathBuf,
     shim_directory: PathBuf,
     header: PathBuf,
@@ -173,10 +174,12 @@ struct BridgePaths {
 
 impl BridgePaths {
     fn new(root: &Path) -> Self {
+        let manifest_directory = root.join("scripts/ios/bridge-shim");
         let shim_directory = root.join("lib/ios/VesperPlayerKit/Sources/VesperPlayerKitBridgeShim");
         Self {
             root: root.to_path_buf(),
-            manifest: root.join("scripts/ios/bridge-shim/manifest.json"),
+            manifest: manifest_directory.join("manifest.json"),
+            manifest_directory,
             header: shim_directory.join(BRIDGE_SHIM_HEADER_FILE),
             source: shim_directory.join(BRIDGE_SHIM_SOURCE_FILE),
             shim_directory,
@@ -234,7 +237,64 @@ impl IosBridgeLock {
     }
 }
 
-pub(crate) fn sync_bridge_shim(root: &Path, output: &mut dyn Write) -> Result<(), IosError> {
+pub(crate) fn bootstrap_bridge_shim(root: &Path, output: &mut dyn Write) -> Result<(), IosError> {
+    let _lock = IosBridgeLock::acquire(root)?;
+    let paths = BridgePaths::new(root);
+    validate_repository_path(
+        root,
+        &paths.manifest_directory,
+        RepositoryPathKind::Directory,
+        false,
+        "bridge manifest directory",
+    )?;
+    validate_repository_path(
+        root,
+        &paths.header,
+        RepositoryPathKind::File,
+        false,
+        "checked-in bridge header",
+    )?;
+    validate_repository_path(
+        root,
+        &paths.source,
+        RepositoryPathKind::File,
+        false,
+        "checked-in bridge source",
+    )?;
+
+    let parent = require_regular_directory_parent(root, &paths.manifest_directory)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".vesper-ios-bridge-bootstrap-")
+        .tempdir_in(&parent)
+        .map_err(|error| {
+            IosError::storage(format!(
+                "failed to create iOS bridge bootstrap staging directory in '{}': {error}",
+                parent.display()
+            ))
+        })?;
+    let staged_manifest = staging.path().join("manifest.json");
+    ios_bridge_shim::bootstrap_from_sources(
+        &staged_manifest,
+        staging.path(),
+        &paths.header,
+        &paths.source,
+    )
+    .map_err(|error| IosError::storage(error.to_string()))?;
+    promote_generated_directory(staging, &paths.manifest_directory)?;
+
+    writeln!(
+        output,
+        "VesperPlayerKit bridge shim bootstrapped from checked-in C/H."
+    )
+    .map_err(output_error)?;
+    output.flush().map_err(output_error)
+}
+
+pub(crate) fn sync_bridge_shim(
+    root: &Path,
+    allow_public_api_removal: bool,
+    output: &mut dyn Write,
+) -> Result<(), IosError> {
     let _lock = IosBridgeLock::acquire(root)?;
     let paths = BridgePaths::new(root);
     validate_repository_path(
@@ -278,6 +338,9 @@ pub(crate) fn sync_bridge_shim(root: &Path, output: &mut dyn Write) -> Result<()
         MAX_BRIDGE_FILE_BYTES,
         "checked-in bridge source",
     )?;
+    if !allow_public_api_removal {
+        reject_public_api_removal(current_header.as_deref(), generated.header())?;
+    }
     if current_header.as_deref() == Some(generated.header().as_bytes())
         && current_source.as_deref() == Some(generated.source().as_bytes())
     {
@@ -1846,6 +1909,43 @@ fn parse_tool_utf8<'a>(output: &'a [u8], label: &str) -> Result<&'a str, IosErro
 fn generate_bridge(paths: &BridgePaths) -> Result<GeneratedShim, IosError> {
     ios_bridge_shim::generate_from_manifest(&paths.manifest)
         .map_err(|error| IosError::storage(error.to_string()))
+}
+
+fn reject_public_api_removal(
+    current_header: Option<&[u8]>,
+    generated_header: &str,
+) -> Result<(), IosError> {
+    let Some(current_header) = current_header else {
+        return Ok(());
+    };
+    let current_header = std::str::from_utf8(current_header).map_err(|error| {
+        IosError::conformance(format!(
+            "checked-in bridge header is not valid UTF-8 while checking public API removal: {error}"
+        ))
+    })?;
+    let current_names = ios_bridge_shim::public_function_names(current_header).map_err(|error| {
+        IosError::conformance(format!(
+            "failed to parse checked-in bridge header while checking public API removal: {error}"
+        ))
+    })?;
+    let generated_names =
+        ios_bridge_shim::public_function_names(generated_header).map_err(|error| {
+            IosError::conformance(format!(
+                "failed to parse generated bridge header while checking public API removal: {error}"
+            ))
+        })?;
+    let removed = current_names
+        .difference(&generated_names)
+        .cloned()
+        .collect::<Vec<_>>();
+    if removed.is_empty() {
+        return Ok(());
+    }
+
+    Err(IosError::conformance(format!(
+        "sync would remove public bridge functions: {}. Run ./scripts/vesper ios bootstrap-bridge-shim to import the checked-in C/H first, or pass --allow-public-api-removal for an intentional API removal.",
+        removed.join(", ")
+    )))
 }
 
 fn validate_forbidden_download_casts(source: &str) -> Result<(), IosError> {
