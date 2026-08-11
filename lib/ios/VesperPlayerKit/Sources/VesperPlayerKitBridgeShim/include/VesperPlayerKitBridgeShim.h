@@ -556,28 +556,6 @@ void vesper_runtime_playlist_active_item_free(VesperRuntimePlaylistActiveItem *i
 
 void vesper_runtime_playlist_session_dispose(uint64_t handle);
 
-bool vesper_runtime_sequence_session_create(
-    const char *config_json,
-    uint64_t *out_handle);
-bool vesper_runtime_sequence_session_execute(
-    uint64_t handle,
-    const char *command_json,
-    uint64_t wall_epoch_ms,
-    char **out_json);
-bool vesper_runtime_sequence_session_snapshot(
-    uint64_t handle,
-    char **out_json);
-bool vesper_runtime_sequence_session_drain_events(
-    uint64_t handle,
-    uintptr_t max_count,
-    char **out_json);
-bool vesper_runtime_sequence_session_preload_intents(
-    uint64_t handle,
-    uint64_t wall_epoch_ms,
-    char **out_json);
-void vesper_runtime_sequence_session_dispose(uint64_t handle);
-void vesper_runtime_sequence_string_free(char *value);
-
 bool vesper_runtime_download_session_create(
     const VesperRuntimeDownloadConfig *config,
     uint64_t *out_handle,
