@@ -10,11 +10,11 @@ pub use muxer::FfmpegRemuxProcessor;
 #[player_plugin::export]
 fn ffmpeg_remux_plugin() -> Result<Plugin, PluginBuildError> {
     Plugin::builder(
-        "io.github.ikaros.vesper.remux-ffmpeg",
+        "io.github.umbrella22.vesper.remux-ffmpeg",
         "player-remux-ffmpeg",
     )?
     .with_post_download_processor(
-        "io.github.ikaros.vesper.remux-ffmpeg.post-download",
+        "io.github.umbrella22.vesper.remux-ffmpeg.post-download",
         FfmpegRemuxProcessor::new(),
     )?
     .build()

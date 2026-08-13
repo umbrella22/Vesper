@@ -3,7 +3,7 @@ name: VesperPlayerKit Release
 on:
   push:
     tags:
-      - "*"
+      - "v*"
   workflow_dispatch:
     inputs:
       tag_name:
@@ -12,10 +12,10 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: mobile-lib-release-${{ github.ref }}
+  group: mobile-lib-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -32,28 +32,35 @@ jobs:
   release-checks:
     name: Release Metadata and Lightweight Checks
     runs-on: ubuntu-latest
+    outputs:
+      stable: ${{ steps.release-channel.outputs.stable }}
+      prerelease: ${{ steps.release-channel.outputs.prerelease }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ env.RELEASE_TAG }}
-
-      - name: Set up Vesper CLI
-        uses: ./.github/actions/setup-vesper-cli
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Verify release tag is on main
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin main:refs/remotes/origin/main
-          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
           main_commit="$(git rev-parse origin/main)"
           if ! git merge-base --is-ancestor "$tag_commit" "$main_commit"; then
             echo "Release tag ${RELEASE_TAG} is not reachable from origin/main." >&2
             exit 1
           fi
+
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
+
+      - name: Classify release tag
+        id: release-channel
+        run: ./scripts/vesper release tag-channel "${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -99,7 +106,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ env.RELEASE_TAG }}
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
@@ -204,7 +211,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ env.RELEASE_TAG }}
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
@@ -308,7 +315,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ env.RELEASE_TAG }}
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
@@ -368,7 +375,10 @@ jobs:
   publish-release:
     name: Publish VesperPlayerKit Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     needs:
+      - release-checks
       - android-lib
       - android-samples
       - ios-lib
@@ -378,22 +388,22 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ env.RELEASE_TAG }}
-
-      - name: Set up Vesper CLI
-        uses: ./.github/actions/setup-vesper-cli
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - name: Verify release tag is on main
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin main:refs/remotes/origin/main
-          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
           main_commit="$(git rev-parse origin/main)"
           if ! git merge-base --is-ancestor "$tag_commit" "$main_commit"; then
             echo "Release tag ${RELEASE_TAG} is not reachable from origin/main." >&2
             exit 1
           fi
+
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
 
       - name: Download VesperPlayerKit release bundles
         uses: actions/download-artifact@v7
@@ -409,30 +419,176 @@ jobs:
       - name: Generate VesperPlayerKit release notes
         run: ./scripts/vesper release notes "${RELEASE_TAG}" release-assets/RELEASE_NOTES.md
 
-      - name: Resolve release channel
-        id: release-meta
+      - name: Generate VesperPlayerKit package checksums
         shell: bash
         run: |
-          tag="${RELEASE_TAG}"
-          prerelease=true
-          if [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            prerelease=false
-          fi
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-
-      - name: Generate VesperPlayerKit package checksums
-        run: |
+          set -euo pipefail
           cd release-assets
           shopt -s nullglob
-          shasum -a 256 *.aar *.zip *.apk *.tar.xz > SHA256SUMS.txt
+          release_payloads=( *.aar *.zip *.apk *.tar.xz )
+          if (( ${#release_payloads[@]} == 0 )); then
+            echo "No GitHub Release payloads were staged." >&2
+            exit 1
+          fi
+          LC_ALL=C shasum -a 256 "${release_payloads[@]}" > SHA256SUMS.txt
 
-      - name: Publish VesperPlayerKit GitHub release
+      - name: Reconcile and publish immutable stable GitHub release
+        if: needs.release-checks.outputs.stable == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+          release_json="$temp_dir/release.json"
+          release_error="$temp_dir/release-error.txt"
+          expected_assets="$temp_dir/expected-assets.txt"
+          expected_payloads="$temp_dir/expected-payloads.txt"
+
+          shopt -s nullglob
+          release_asset_paths=(
+            release-assets/*.aar
+            release-assets/*.zip
+            release-assets/*.apk
+            release-assets/*.tar.xz
+            release-assets/SHA256SUMS.txt
+          )
+          shopt -u nullglob
+          printf '%s\n' "${release_asset_paths[@]##*/}" | LC_ALL=C sort -u > "$expected_assets"
+          grep -Fvx 'SHA256SUMS.txt' "$expected_assets" > "$expected_payloads"
+
+          verify_remote_release() {
+            local compare_local_hashes="$1"
+            local remote_dir="$temp_dir/remote-assets"
+            local actual_assets="$temp_dir/actual-assets.txt"
+            local manifest_assets="$temp_dir/manifest-assets.txt"
+            local local_hashes="$temp_dir/local-hashes.txt"
+            local remote_hashes="$temp_dir/remote-hashes.txt"
+
+            rm -rf "$remote_dir"
+            mkdir -p "$remote_dir"
+            gh release download "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --dir "$remote_dir"
+            find "$remote_dir" -maxdepth 1 -type f -printf '%f\n' \
+              | LC_ALL=C sort -u > "$actual_assets"
+            if ! diff -u "$expected_assets" "$actual_assets"; then
+              echo "GitHub Release assets do not match the verified release set." >&2
+              exit 1
+            fi
+
+            awk '
+              NF == 2 && length($1) == 64 && $1 ~ /^[0-9a-fA-F]+$/ &&
+                $2 ~ /^[A-Za-z0-9][A-Za-z0-9._+-]*$/ { print $2; next }
+              { exit 1 }
+            ' "$remote_dir/SHA256SUMS.txt" | LC_ALL=C sort -u > "$manifest_assets"
+            if ! diff -u "$expected_payloads" "$manifest_assets"; then
+              echo "Published SHA256SUMS.txt does not cover the exact release payload set." >&2
+              exit 1
+            fi
+            (
+              cd "$remote_dir"
+              shasum -a 256 --check SHA256SUMS.txt
+            )
+
+            if [[ "$compare_local_hashes" == "true" ]]; then
+              for path in "${release_asset_paths[@]}"; do
+                hash="$(shasum -a 256 "$path" | awk '{print $1}')"
+                printf '%s  %s\n' "$hash" "${path##*/}"
+              done | LC_ALL=C sort -k2 > "$local_hashes"
+              for path in "$remote_dir"/*; do
+                hash="$(shasum -a 256 "$path" | awk '{print $1}')"
+                printf '%s  %s\n' "$hash" "${path##*/}"
+              done | LC_ALL=C sort -k2 > "$remote_hashes"
+              if ! diff -u "$local_hashes" "$remote_hashes"; then
+                echo "Draft release assets differ from the locally verified build." >&2
+                exit 1
+              fi
+            fi
+          }
+
+          if ! gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease,assets \
+            > "$release_json" 2> "$release_error"; then
+            if ! rg -Fxq 'release not found' "$release_error"; then
+              cat "$release_error" >&2
+              exit 1
+            fi
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --draft \
+              --title "VesperPlayerKit ${RELEASE_TAG}" \
+              --notes-file release-assets/RELEASE_NOTES.md
+            gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json tagName,isDraft,isPrerelease,assets \
+              > "$release_json"
+          fi
+
+          if [[ "$(jq -r '.tagName' "$release_json")" != "$RELEASE_TAG" ]]; then
+            echo "GitHub returned a release for an unexpected tag." >&2
+            exit 1
+          fi
+          if [[ "$(jq -r '.isPrerelease' "$release_json")" != "false" ]]; then
+            echo "Existing stable release ${RELEASE_TAG} is marked as a prerelease." >&2
+            exit 1
+          fi
+
+          if [[ "$(jq -r '.isDraft' "$release_json")" == "false" ]]; then
+            verify_remote_release false
+            echo "Existing published stable release is complete and immutable."
+            exit 0
+          fi
+
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "VesperPlayerKit ${RELEASE_TAG}" \
+            --notes-file release-assets/RELEASE_NOTES.md
+
+          while IFS= read -r asset_name; do
+            [[ -n "$asset_name" ]] || continue
+            if ! grep -Fqx -- "$asset_name" "$expected_assets"; then
+              gh release delete-asset "$RELEASE_TAG" "$asset_name" \
+                --repo "$GITHUB_REPOSITORY" \
+                --yes
+            fi
+          done < <(jq -r '.assets[].name' "$release_json")
+
+          gh release upload "$RELEASE_TAG" \
+            "${release_asset_paths[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          verify_remote_release true
+
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft=false \
+            --prerelease=false
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease,assets \
+            > "$release_json"
+          if [[ "$(jq -r '.isDraft' "$release_json")" != "false" || \
+                "$(jq -r '.isPrerelease' "$release_json")" != "false" ]]; then
+            echo "Stable release did not become a published non-prerelease." >&2
+            exit 1
+          fi
+
+      - name: Publish VesperPlayerKit GitHub prerelease
+        if: needs.release-checks.outputs.stable != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: VesperPlayerKit ${{ env.RELEASE_TAG }}
           body_path: release-assets/RELEASE_NOTES.md
-          prerelease: ${{ steps.release-meta.outputs.prerelease }}
+          prerelease: true
           overwrite_files: true
           files: |
             release-assets/*.aar
@@ -441,7 +597,8 @@ jobs:
             release-assets/*.tar.xz
             release-assets/SHA256SUMS.txt
 
-      - name: Reconcile VesperPlayerKit GitHub release assets
+      - name: Reconcile VesperPlayerKit GitHub prerelease assets
+        if: needs.release-checks.outputs.stable != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -479,3 +636,119 @@ jobs:
             echo "GitHub Release assets do not match the locally verified release set." >&2
             exit 1
           fi
+
+  publish-maven-central:
+    name: Publish VesperPlayerKit to Maven Central
+    runs-on: ubuntu-latest
+    needs:
+      - release-checks
+      - publish-release
+    if: needs.release-checks.outputs.stable == 'true'
+    environment: maven-central
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
+
+      - name: Add Android Rust target
+        run: rustup target add aarch64-linux-android
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Resolve Android SDK root
+        run: |
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> "$GITHUB_ENV"
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;29.0.14206865"
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.0"
+
+      - name: Prepare release version metadata
+        run: |
+          ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
+          cargo build --locked --release -p player-cli --bin vesper
+
+      - name: Publish signed Maven Central deployment
+        env:
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PRIVATE_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+          MAVEN_NAMESPACE: ${{ vars.MAVEN_NAMESPACE }}
+        run: |
+          namespace="${MAVEN_NAMESPACE:-io.github.umbrella22}"
+          ./scripts/vesper android publish-maven-central \
+            "${RELEASE_TAG}" \
+            --namespace "$namespace"
+
+  publish-swift-package:
+    name: Publish VesperPlayerKit Swift Package
+    runs-on: macos-latest
+    needs:
+      - release-checks
+      - publish-release
+    if: needs.release-checks.outputs.stable == 'true'
+    environment: swift-package
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - name: Set up Vesper CLI
+        uses: ./.github/actions/setup-vesper-cli
+
+      - name: Download released XCFramework
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release download "${RELEASE_TAG}"
+          --repo "${GITHUB_REPOSITORY}"
+          --pattern VesperPlayerKit.xcframework.zip
+          --dir release-assets/ios
+
+      - name: Publish remote Swift package index
+        env:
+          SPM_PUBLISH_TOKEN: ${{ secrets.SPM_PUBLISH_TOKEN }}
+          SPM_REPOSITORY: ${{ vars.SPM_REPOSITORY }}
+        run: >-
+          ./scripts/vesper ios publish-spm-index
+          "${RELEASE_TAG}"
+          release-assets/ios/VesperPlayerKit.xcframework.zip
+          --source-repository "${GITHUB_REPOSITORY}"
+
+      - name: Verify remote Swift package tag
+        env:
+          SPM_REPOSITORY: ${{ vars.SPM_REPOSITORY }}
+        run: |
+          repository="${SPM_REPOSITORY:-umbrella22/VesperPlayerKit}"
+          git ls-remote --exit-code \
+            "https://github.com/$repository.git" \
+            "refs/tags/${RELEASE_TAG}"

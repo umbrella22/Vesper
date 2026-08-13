@@ -58,13 +58,13 @@ val vesperAppPluginRegistries =
             taskSegment = "RemuxFfmpeg",
             manifestPath = "plugins/remux-ffmpeg/vesper-plugin.toml",
             libraryName = "vesper_remux_ffmpeg",
-            pluginId = "io.github.ikaros.vesper.remux-ffmpeg",
+            pluginId = "io.github.umbrella22.vesper.remux-ffmpeg",
         ),
         VesperAppPluginRegistryMetadata(
             taskSegment = "SourceNormalizerFfmpeg",
             manifestPath = "plugins/source-normalizer-ffmpeg/vesper-plugin.toml",
             libraryName = "vesper_source_normalizer_ffmpeg",
-            pluginId = "io.github.ikaros.vesper.source-normalizer-ffmpeg",
+            pluginId = "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
         ),
         VesperAppPluginRegistryMetadata(
             taskSegment = "FrameProcessorDiagnostic",
@@ -97,7 +97,7 @@ val buildVesperPluginCli =
     }
 
 android {
-    namespace = "io.github.ikaros.vesper.example.flutterhost"
+    namespace = "io.github.umbrella22.vesper.example.flutterhost"
     compileSdk = 36
     ndkVersion = "29.0.14206865"
 
@@ -107,7 +107,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "io.github.ikaros.vesper.example.flutterhost"
+        applicationId = "io.github.umbrella22.vesper.example.flutterhost"
         minSdk = 26
         targetSdk = 36
         versionCode = flutter.versionCode

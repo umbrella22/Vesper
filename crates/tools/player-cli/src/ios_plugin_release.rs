@@ -7990,14 +7990,14 @@ mod implementation {
 
     fn ffmpeg_bundle_identifier(library: &str) -> Result<&'static str, IosError> {
         match library {
-            "avcodec" => Ok("io.github.ikaros.vesper.ffmpeg.avcodec"),
-            "avdevice" => Ok("io.github.ikaros.vesper.ffmpeg.avdevice"),
-            "avfilter" => Ok("io.github.ikaros.vesper.ffmpeg.avfilter"),
-            "avformat" => Ok("io.github.ikaros.vesper.ffmpeg.avformat"),
-            "avutil" => Ok("io.github.ikaros.vesper.ffmpeg.avutil"),
-            "postproc" => Ok("io.github.ikaros.vesper.ffmpeg.postproc"),
-            "swresample" => Ok("io.github.ikaros.vesper.ffmpeg.swresample"),
-            "swscale" => Ok("io.github.ikaros.vesper.ffmpeg.swscale"),
+            "avcodec" => Ok("io.github.umbrella22.vesper.ffmpeg.avcodec"),
+            "avdevice" => Ok("io.github.umbrella22.vesper.ffmpeg.avdevice"),
+            "avfilter" => Ok("io.github.umbrella22.vesper.ffmpeg.avfilter"),
+            "avformat" => Ok("io.github.umbrella22.vesper.ffmpeg.avformat"),
+            "avutil" => Ok("io.github.umbrella22.vesper.ffmpeg.avutil"),
+            "postproc" => Ok("io.github.umbrella22.vesper.ffmpeg.postproc"),
+            "swresample" => Ok("io.github.umbrella22.vesper.ffmpeg.swresample"),
+            "swscale" => Ok("io.github.umbrella22.vesper.ffmpeg.swscale"),
             value => Err(IosError::conformance(format!(
                 "unsupported iOS FFmpeg runtime library: {value}"
             ))),
@@ -8673,7 +8673,7 @@ stability = "stable"
                 );
                 assert_eq!(
                     value["artifacts"][0]["locator"]["bundle_identifier"],
-                    "io.github.ikaros.vesper.player.remux-ffmpeg-plugin"
+                    "io.github.umbrella22.vesper.player.remux-ffmpeg-plugin"
                 );
             }
         }
@@ -8694,7 +8694,7 @@ name = "Vesper Diagnostic Frame Processor"
 version = "0.4.0"
 description = "Diagnostic FrameProcessor fixture"
 license = "Apache-2.0"
-publisher = "io.github.ikaros"
+publisher = "io.github.umbrella22"
 
 [compatibility]
 host_sdk = ">=0.4.0, <0.5.0"

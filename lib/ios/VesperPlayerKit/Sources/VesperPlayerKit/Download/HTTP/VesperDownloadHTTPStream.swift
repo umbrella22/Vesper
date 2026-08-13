@@ -27,7 +27,7 @@ final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate
         let (timeoutNs, overflow) = stalledTransferTimeoutMs.multipliedReportingOverflow(by: 1_000_000)
         stalledTransferTimeoutNs = overflow ? UInt64.max : timeoutNs
         watchdogQueue = DispatchQueue(
-            label: "io.github.ikaros.vesper.player.download.http-watchdog.\(UUID().uuidString)"
+            label: "io.github.umbrella22.vesper.player.download.http-watchdog.\(UUID().uuidString)"
         )
         lastActivityNs = DispatchTime.now().uptimeNanoseconds
 

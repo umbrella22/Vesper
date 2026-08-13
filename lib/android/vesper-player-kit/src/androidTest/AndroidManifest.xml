@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
         <activity
-            android:name="io.github.ikaros.vesper.player.android.VesperSurfaceLayoutTestActivity"
+            android:name="io.github.umbrella22.vesper.player.android.VesperSurfaceLayoutTestActivity"
             android:exported="false"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
     </application>

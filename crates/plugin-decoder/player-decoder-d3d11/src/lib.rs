@@ -15,8 +15,8 @@ use player_plugin::{
     NativeFramePipelineProfile, Plugin, PluginBuildError,
 };
 
-const PLUGIN_ID: &str = "io.github.ikaros.vesper.decoder-d3d11";
-const INSTANCE_ID: &str = "io.github.ikaros.vesper.decoder-d3d11.native";
+const PLUGIN_ID: &str = "io.github.umbrella22.vesper.decoder-d3d11";
+const INSTANCE_ID: &str = "io.github.umbrella22.vesper.decoder-d3d11.native";
 const PLUGIN_NAME: &str = "player-decoder-d3d11";
 #[cfg(target_os = "windows")]
 const DEFAULT_WIDTH: u32 = 16;

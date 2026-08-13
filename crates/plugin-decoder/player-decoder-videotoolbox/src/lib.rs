@@ -12,8 +12,8 @@ use player_plugin::{
     normalize_decoder_codec_identifier,
 };
 
-const PLUGIN_ID: &str = "io.github.ikaros.vesper.decoder-videotoolbox";
-const INSTANCE_ID: &str = "io.github.ikaros.vesper.decoder-videotoolbox.native";
+const PLUGIN_ID: &str = "io.github.umbrella22.vesper.decoder-videotoolbox";
+const INSTANCE_ID: &str = "io.github.umbrella22.vesper.decoder-videotoolbox.native";
 const PLUGIN_NAME: &str = "player-decoder-videotoolbox";
 const VIDEO_TOOLBOX_NATIVE_FRAMES_SUPPORTED: bool =
     cfg!(any(target_os = "macos", target_os = "ios"));

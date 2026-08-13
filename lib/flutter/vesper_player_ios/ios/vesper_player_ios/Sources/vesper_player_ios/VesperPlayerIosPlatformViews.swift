@@ -26,12 +26,12 @@ final class PlayerViewFactory: NSObject, FlutterPlatformViewFactory {
 
         if let playerId {
             hostView.accessibilityIdentifier =
-                "io.github.ikaros.vesper.player.surface.\(playerId)"
+                "io.github.umbrella22.vesper.player.surface.\(playerId)"
             let evidenceMarker = UIView(frame: .zero)
             evidenceMarker.isHidden = true
             evidenceMarker.isAccessibilityElement = false
             evidenceMarker.accessibilityIdentifier =
-                "io.github.ikaros.vesper.player.surface-marker.\(playerId)"
+                "io.github.umbrella22.vesper.player.surface-marker.\(playerId)"
             hostView.addSubview(evidenceMarker)
             Task { @MainActor [weak plugin, weak hostView] in
                 guard let plugin, let hostView else { return }

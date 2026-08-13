@@ -3,6 +3,11 @@
 iOS-native host kit for the Vesper Player SDK. Distributed as a Swift Package
 or a prebuilt `XCFramework`, and consumable from any UIKit / SwiftUI app.
 
+The distribution keeps `VesperPlayerKit` as its Swift package, product, and
+module name. First-party bundle and plugin identities use the
+`io.github.umbrella22.vesper` root; identifiers from the unreleased
+`io.github.ikaros` source line are not accepted as compatibility aliases.
+
 ## Delivery
 
 - `Package.swift` — local Swift Package consumed by app projects
@@ -58,6 +63,25 @@ separate product-direction change.
 
 ## Installation
 
+### Swift Package (remote)
+
+Stable releases are available from the dedicated package repository:
+
+```text
+https://github.com/umbrella22/VesperPlayerKit.git
+```
+
+Add that URL in Xcode's package dependency editor and select a released
+`MAJOR.MINOR.PATCH` version. Link the `VesperPlayerKit` product for the binary
+host kit. Link `VesperPlayerKitUI` as well when the app uses the version-matched
+SwiftUI stage and controls.
+
+The package repository contains the manifest, license, and
+`VesperPlayerKitUI` sources. Its `VesperPlayerKit` binary target references the
+matching `VesperPlayerKit.xcframework.zip` GitHub Release asset and pins the
+archive checksum. Prerelease tags remain GitHub prereleases and are not pushed
+to the package repository.
+
 ### Swift Package (local)
 
 For app projects in this repository, depend on `lib/ios/VesperPlayerKit` as a
@@ -107,6 +131,30 @@ The build script:
 The iOS Rust build scripts resolve the Cargo workspace through the SDK root
 manifest. They are safe to call from Xcode build phases, CI jobs, Flutter plugin
 builds, or any other working directory.
+
+### Swift Package Publishing
+
+The `publish-swift-package` release job runs after the GitHub Release. It
+downloads the released XCFramework, computes the SwiftPM checksum, validates the
+generated manifest, and atomically pushes the package branch and matching tag.
+Publishing requires:
+
+- a public `umbrella22/VesperPlayerKit` repository, or another repository named
+  by the `SPM_REPOSITORY` GitHub variable;
+- an `SPM_PUBLISH_TOKEN` GitHub secret with Contents write access to that
+  repository.
+
+An existing matching tag is treated as a successful retry. A tag whose managed
+package files differ is rejected. Local generation and manifest validation do
+not require a token or write to GitHub:
+
+```sh
+./scripts/vesper ios publish-spm-index \
+  v0.4.0 \
+  dist/release/ios/VesperPlayerKit.xcframework.zip \
+  --source-repository umbrella22/Vesper \
+  --dry-run
+```
 
 ## Public API
 

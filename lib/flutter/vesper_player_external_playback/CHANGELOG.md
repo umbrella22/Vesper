@@ -4,6 +4,9 @@
 
 ### Breaking Changes
 
+- The Android plugin package and all external-playback channels now use the
+  `io.github.umbrella22` reverse-DNS root. No old channel aliases are
+  registered.
 - The external playback Flutter package now requires Flutter 3.44.0 or newer.
 
 ### Changed

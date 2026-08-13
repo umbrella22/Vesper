@@ -17,7 +17,7 @@ use crate::subtitle::{SubtitleError, SubtitleScope};
 use crate::{android, contract, external_process, gradle};
 
 const ANDROID_ABI: &str = "arm64-v8a";
-const ANDROID_APPLICATION_ID: &str = "io.github.ikaros.vesper.example.flutterhost";
+const ANDROID_APPLICATION_ID: &str = "io.github.umbrella22.vesper.example.flutterhost";
 const MAX_STEP_STDOUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_STEP_STDERR_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PREFLIGHT_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
@@ -690,7 +690,7 @@ fn run_device(
         .arg("-p")
         .arg(&android_project)
         .arg("-Pvesper.player.android.abis=arm64-v8a")
-        .arg("-Pandroid.testInstrumentationRunnerArguments.class=io.github.ikaros.vesper.player.android.VesperSubtitleMedia3InstrumentationTest,io.github.ikaros.vesper.player.android.VesperSubtitleSelectionLifecycleInstrumentationTest")
+        .arg("-Pandroid.testInstrumentationRunnerArguments.class=io.github.umbrella22.vesper.player.android.VesperSubtitleMedia3InstrumentationTest,io.github.umbrella22.vesper.player.android.VesperSubtitleSelectionLifecycleInstrumentationTest")
         .arg(":vesper-player-kit:connectedDebugAndroidTest")
         .env("ANDROID_SERIAL", device_id)
         .env(
@@ -986,7 +986,7 @@ fn verify_instrumentation_results(
     }
     let expected: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::from([
         (
-            "io.github.ikaros.vesper.player.android.VesperSubtitleMedia3InstrumentationTest",
+            "io.github.umbrella22.vesper.player.android.VesperSubtitleMedia3InstrumentationTest",
             BTreeSet::from([
                 "localDashWebVttIsDiscoveredSelectedAndProducesCue",
                 "localExternalWebVttUsesStableTargetReadinessAndExactReadback",
@@ -994,7 +994,7 @@ fn verify_instrumentation_results(
             ]),
         ),
         (
-            "io.github.ikaros.vesper.player.android.VesperSubtitleSelectionLifecycleInstrumentationTest",
+            "io.github.umbrella22.vesper.player.android.VesperSubtitleSelectionLifecycleInstrumentationTest",
             BTreeSet::from([
                 "newerSubtitleSelectionSupersedesPendingCommandOnTheDevice",
                 "pendingSubtitleSelectionTimesOutAgainstTheDeviceClock",
@@ -2152,7 +2152,7 @@ mod tests {
         let results = directory.path().join("results");
         let evidence = directory.path().join("evidence");
         fs::create_dir(&results).expect("create instrumentation results");
-        let xml = b"<testsuite><testcase name=\"localDashWebVttIsDiscoveredSelectedAndProducesCue\" classname=\"io.github.ikaros.vesper.player.android.VesperSubtitleMedia3InstrumentationTest\"/></testsuite>";
+        let xml = b"<testsuite><testcase name=\"localDashWebVttIsDiscoveredSelectedAndProducesCue\" classname=\"io.github.umbrella22.vesper.player.android.VesperSubtitleMedia3InstrumentationTest\"/></testsuite>";
         let path = results.join("TEST-suite.xml");
         fs::write(&path, xml).expect("write instrumentation XML");
         let before = snapshot_instrumentation_files(&results).expect("snapshot results");

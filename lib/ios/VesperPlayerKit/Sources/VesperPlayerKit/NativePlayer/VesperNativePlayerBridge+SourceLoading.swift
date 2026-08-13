@@ -10,7 +10,7 @@ extension VesperNativePlayerBridge {
     ) async throws {
         guard currentSource == source else {
             throw NSError(
-                domain: "io.github.ikaros.vesper.host.ios",
+                domain: "io.github.umbrella22.vesper.host.ios",
                 code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "Selected source changed before loading started."]
             )
@@ -32,7 +32,7 @@ extension VesperNativePlayerBridge {
             pendingAutoPlay = pendingAutoPlay || player == nil
             currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
             throw NSError(
-                domain: "io.github.ikaros.vesper.host.ios",
+                domain: "io.github.umbrella22.vesper.host.ios",
                 code: -5,
                 userInfo: [NSLocalizedDescriptionKey: issue.message]
             )
@@ -47,7 +47,7 @@ extension VesperNativePlayerBridge {
                 guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else {
                     nativeFramePipelineCoordinator.closeSession(session)
                     throw NSError(
-                        domain: "io.github.ikaros.vesper.host.ios",
+                        domain: "io.github.umbrella22.vesper.host.ios",
                         code: -1,
                         userInfo: [NSLocalizedDescriptionKey: "Selected source changed before native-frame startup completed."]
                     )
@@ -62,7 +62,7 @@ extension VesperNativePlayerBridge {
                 guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else {
                     nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
                     throw NSError(
-                        domain: "io.github.ikaros.vesper.host.ios",
+                        domain: "io.github.umbrella22.vesper.host.ios",
                         code: -1,
                         userInfo: [NSLocalizedDescriptionKey: "Selected source changed before native-frame startup completed."]
                     )
@@ -77,14 +77,14 @@ extension VesperNativePlayerBridge {
                 currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
                 nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
                 throw NSError(
-                    domain: "io.github.ikaros.vesper.host.ios",
+                    domain: "io.github.umbrella22.vesper.host.ios",
                     code: -3,
                     userInfo: [NSLocalizedDescriptionKey: error.localizedDescription]
                 )
             }
         case .fail(let issue):
             throw NSError(
-                domain: "io.github.ikaros.vesper.host.ios",
+                domain: "io.github.umbrella22.vesper.host.ios",
                 code: -4,
                 userInfo: [NSLocalizedDescriptionKey: issue.message]
             )
@@ -95,7 +95,7 @@ extension VesperNativePlayerBridge {
         )
         if normalizedResource == nil && sourceNormalizerConfiguration.mode == .requireNormalized {
             throw NSError(
-                domain: "io.github.ikaros.vesper.host.ios",
+                domain: "io.github.umbrella22.vesper.host.ios",
                 code: -2,
                 userInfo: [
                     NSLocalizedDescriptionKey:
@@ -113,7 +113,7 @@ extension VesperNativePlayerBridge {
             url = normalizedURL
         } else if normalizedResource != nil && sourceNormalizerConfiguration.mode == .requireNormalized {
             throw NSError(
-                domain: "io.github.ikaros.vesper.host.ios",
+                domain: "io.github.umbrella22.vesper.host.ios",
                 code: -2,
                 userInfo: [
                     NSLocalizedDescriptionKey:
@@ -131,7 +131,7 @@ extension VesperNativePlayerBridge {
         guard currentSource == source else {
             closeCurrentSourceNormalizerResource()
             throw NSError(
-                domain: "io.github.ikaros.vesper.host.ios",
+                domain: "io.github.umbrella22.vesper.host.ios",
                 code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "Selected source changed before player item configuration."]
             )

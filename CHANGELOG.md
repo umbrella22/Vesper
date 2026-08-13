@@ -10,6 +10,12 @@ runtime artifact.
 
 ### Breaking Changes
 
+- Replaced the unreleased `io.github.ikaros` reverse-DNS root with
+  `io.github.umbrella22` across Android packages and JNI entry points, Flutter
+  plugin packages and channels, Apple bundle identifiers, and first-party
+  plugin identities. No compatibility aliases are retained; update imports,
+  manifest entries, custom channel names, and `VesperPluginReference` values,
+  then rebuild native artifacts as one coordinated upgrade.
 - Raised the Rust workspace MSRV and dedicated CI check from 1.94 to 1.97.
 - Consolidated the native plugin ABI under the `vesper_plugin_entry` root and
   typed interface query contract. The loader accepts only this contract.

@@ -236,9 +236,9 @@ extension UIColor {
     }
 }
 
-let methodChannelName = "io.github.ikaros.vesper_player"
-let eventChannelName = "io.github.ikaros.vesper_player/events"
-let downloadEventChannelName = "io.github.ikaros.vesper_player/download_events"
-let sequenceEventChannelName = "io.github.ikaros.vesper_player/sequence_events"
-let playerViewType = "io.github.ikaros.vesper_player/platform_view"
-let airPlayRouteButtonViewType = "io.github.ikaros.vesper_player/airplay_route_button"
+let methodChannelName = "io.github.umbrella22.vesper_player"
+let eventChannelName = "io.github.umbrella22.vesper_player/events"
+let downloadEventChannelName = "io.github.umbrella22.vesper_player/download_events"
+let sequenceEventChannelName = "io.github.umbrella22.vesper_player/sequence_events"
+let playerViewType = "io.github.umbrella22.vesper_player/platform_view"
+let airPlayRouteButtonViewType = "io.github.umbrella22.vesper_player/airplay_route_button"

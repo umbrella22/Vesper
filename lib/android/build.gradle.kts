@@ -1,5 +1,6 @@
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
+import org.gradle.api.tasks.bundling.Jar
 import org.gradle.api.tasks.Exec
 import org.gradle.plugins.signing.SigningExtension
 import com.android.build.api.dsl.LibraryExtension
@@ -9,8 +10,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose") version "2.3.10" apply false
 }
 
+val vesperMavenGroupId =
+    providers.gradleProperty("vesper.maven.groupId").orElse("io.github.umbrella22.vesper")
+
 allprojects {
-    group = "io.github.ikaros.vesper"
+    group = vesperMavenGroupId.get()
     version = "0.4.0"
 }
 
@@ -50,6 +54,18 @@ val vesperAndroidCorePublications =
                 description = "Android host kit for Vesper Player applications.",
                 licenses = listOf(apacheLicense),
             ),
+        "vesper-player-kit-compose" to
+            AndroidPublicationMetadata(
+                pomName = "Vesper Player Android Compose Adapter",
+                description = "Jetpack Compose lifecycle and surface adapter for Vesper Player.",
+                licenses = listOf(apacheLicense),
+            ),
+        "vesper-player-kit-compose-ui" to
+            AndroidPublicationMetadata(
+                pomName = "Vesper Player Android Compose UI",
+                description = "Optional Jetpack Compose controls and player UI for Vesper Player.",
+                licenses = listOf(apacheLicense),
+            ),
     )
 
 val vesperAndroidOptionalPluginPublications =
@@ -86,14 +102,14 @@ val vesperAndroidPluginRegistries =
             AndroidPluginRegistryMetadata(
                 manifestPath = "plugins/decoder-mediacodec/vesper-plugin.toml",
                 libraryName = "vesper_decoder_mediacodec",
-                pluginId = "io.github.ikaros.vesper.decoder-mediacodec",
+                pluginId = "io.github.umbrella22.vesper.decoder-mediacodec",
                 variants = setOf("release"),
             ),
         "vesper-player-kit-source-normalizer-ffmpeg" to
             AndroidPluginRegistryMetadata(
                 manifestPath = "plugins/source-normalizer-ffmpeg/vesper-plugin.toml",
                 libraryName = "vesper_source_normalizer_ffmpeg",
-                pluginId = "io.github.ikaros.vesper.source-normalizer-ffmpeg",
+                pluginId = "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
                 variants = setOf("profile", "release"),
             ),
         "vesper-player-kit-frame-processor-diagnostic" to
@@ -261,7 +277,22 @@ subprojects {
     pluginManager.apply("maven-publish")
     pluginManager.apply("signing")
 
+    val javadocJar =
+        tasks.register<Jar>("javadocJar") {
+            archiveClassifier.set("javadoc")
+            from(rootProject.file("../../README.md"))
+        }
+
     val publishing = extensions.getByType(PublishingExtension::class.java)
+    publishing.repositories.maven {
+        name = "centralStaging"
+        val configuredDirectory =
+            providers
+                .gradleProperty("vesper.maven.repositoryDirectory")
+                .orElse(rootProject.layout.buildDirectory.dir("central-staging").map { it.asFile.path })
+                .get()
+        url = uri(configuredDirectory)
+    }
     components.configureEach {
         if (name != "release") {
             return@configureEach
@@ -269,6 +300,7 @@ subprojects {
         publishing.publications.register<MavenPublication>("release") {
             from(this@configureEach)
             artifactId = project.name
+            artifact(javadocJar)
             pom {
                 name.set(metadata.pomName)
                 description.set(metadata.description)
@@ -283,8 +315,9 @@ subprojects {
                 }
                 developers {
                     developer {
-                        id.set("ikaros")
-                        name.set("Ikaros")
+                        id.set("umbrella22")
+                        name.set("umbrella22")
+                        url.set("https://github.com/umbrella22")
                     }
                 }
                 scm {
@@ -296,12 +329,19 @@ subprojects {
         }
     }
 
-    val signingKey = providers.gradleProperty("signingInMemoryKey").orNull
+    val signingKey =
+        providers
+            .gradleProperty("signingInMemoryKey")
+            .orElse(providers.environmentVariable("MAVEN_GPG_PRIVATE_KEY"))
+            .orNull
     if (!signingKey.isNullOrBlank()) {
         extensions.configure<SigningExtension>("signing") {
             useInMemoryPgpKeys(
                 signingKey,
-                providers.gradleProperty("signingInMemoryKeyPassword").orNull,
+                providers
+                    .gradleProperty("signingInMemoryKeyPassword")
+                    .orElse(providers.environmentVariable("MAVEN_GPG_PASSPHRASE"))
+                    .orNull,
             )
             sign(publishing.publications)
         }

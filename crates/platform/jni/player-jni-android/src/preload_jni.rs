@@ -289,7 +289,7 @@ pub(crate) fn preload_command_object<'local>(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_createPreloadSession(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_createPreloadSession(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     preload_budget: JObject<'_>,
@@ -314,7 +314,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_resolvePreloadBudget(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_resolvePreloadBudget(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     preload_budget: JObject<'_>,
@@ -332,7 +332,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_disposePreloadSession(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_disposePreloadSession(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -349,7 +349,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_planPreloadCandidates(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_planPreloadCandidates(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -407,7 +407,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_drainPreloadCommands(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_drainPreloadCommands(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -440,7 +440,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_completePreloadTask(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_completePreloadTask(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -461,7 +461,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_failPreloadTask(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_failPreloadTask(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,

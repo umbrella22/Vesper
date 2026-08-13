@@ -48,6 +48,11 @@ log; it does not read Logcat, native logs, or system diagnostic streams.
 - Xcode 16+ and an arm64 Simulator or device (for iOS target)
 - Rust toolchain with the corresponding mobile targets installed
 
+The Android and iOS example targets share the base application identifier
+`io.github.umbrella22.vesper.example.flutterhost`. Native Flutter channels use
+`io.github.umbrella22.vesper_player`; application code normally receives those
+through plugin auto-registration.
+
 ## Run
 
 ```sh

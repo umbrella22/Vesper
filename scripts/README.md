@@ -32,6 +32,7 @@ scripts/
 ./scripts/vesper android stage-release
 VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper android stage-release
 ./scripts/vesper android sample-apks /tmp/vesper-android-samples arm64-v8a
+./scripts/vesper android publish-maven-central vMAJOR.MINOR.PATCH --dry-run
 
 ./scripts/vesper ios ffi release
 ./scripts/vesper ios bootstrap-bridge-shim
@@ -54,6 +55,11 @@ VESPER_IOS_OPTIONAL_RELEASE_FIXTURE=/tmp/vesper-ios-release \
 ./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope core
 ./scripts/vesper ios stage-release /tmp/vesper-ios-release --include-optional-plugins
 ./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope complete
+./scripts/vesper ios publish-spm-index \
+  vMAJOR.MINOR.PATCH \
+  /tmp/vesper-ios-release/VesperPlayerKit.xcframework.zip \
+  --source-repository umbrella22/Vesper \
+  --dry-run
 
 ./scripts/vesper desktop ensure-ffmpeg
 ./scripts/vesper desktop verify-decoder-diagnostics
@@ -67,6 +73,7 @@ VESPER_IOS_OPTIONAL_RELEASE_FIXTURE=/tmp/vesper-ios-release \
 ./scripts/vesper flutter pub-dry-run /tmp/vesper-flutter-pub
 VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper flutter pub-dry-run /tmp/vesper-flutter-pub
 ./scripts/vesper release prepare-from-tag vMAJOR.MINOR.PATCH
+./scripts/vesper release tag-channel vMAJOR.MINOR.PATCH
 ./scripts/vesper release verify-current
 ./scripts/vesper release notes <tag> [output-path]
 ```
@@ -115,8 +122,10 @@ The workflow split is intentional:
   its iOS job verifies archives and Simulator behavior without claiming a
   signed physical-device result.
 - `flutter-ci.yml` analyzes, tests, and packages the federated Flutter hosts.
-- `mobile-lib-release.yml` stages, verifies, and publishes tagged Android/iOS
-  release assets.
+- `mobile-lib-release.yml` stages and verifies tagged Android/iOS release
+  assets, publishes the GitHub Release, then publishes stable Android
+  coordinates to Maven Central and the stable iOS binary package through its
+  SwiftPM index repository.
 - `flutter-pub-release.yml` publishes stable-tag Flutter packages after applying
   tag-derived version metadata.
 
@@ -124,6 +133,12 @@ The signed iOS physical-device acceptance command remains a release-owner gate
 because it requires a connected device, a current Apple Development identity,
 and device trust. Its current execution status is tracked in
 `CURRENT-CHECKLIST.md`, not inferred from a successful archive-only CI job.
+
+Stable GitHub Releases are assembled as drafts. The workflow reconciles and
+hash-verifies every draft asset before making the release public. A published
+stable release is immutable: reruns validate its remote asset names and its
+published `SHA256SUMS.txt`, then continue any interrupted Maven Central or
+SwiftPM publication without replacing release files.
 
 ## Flutter Pub Publishing
 

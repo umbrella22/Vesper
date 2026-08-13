@@ -12,6 +12,10 @@
 
 ### Breaking Changes
 
+- The Android plugin package moved to
+  `io.github.umbrella22.vesper.player.flutter.android`; its channels moved to
+  `io.github.umbrella22.vesper_player` and related suffixes. No old package or
+  channel aliases are registered.
 - The Android Flutter implementation now requires Flutter 3.44.0 or newer.
 - Subtitle MethodChannel calls now wait for the suspending Android host API and
   return `vesper_subtitle_error` details on failure.

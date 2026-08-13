@@ -18,7 +18,7 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
         self.session = session
         self.subtitleResourceFailureHandler = subtitleResourceFailureHandler
         resourceLoadingQueue = DispatchQueue(
-            label: "io.github.ikaros.vesper.player.dash.resource-loader.\(session.id)"
+            label: "io.github.umbrella22.vesper.player.dash.resource-loader.\(session.id)"
         )
         super.init()
     }

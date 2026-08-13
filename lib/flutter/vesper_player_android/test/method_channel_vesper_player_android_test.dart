@@ -6,7 +6,7 @@ import 'package:vesper_player_platform_interface/vesper_player_platform_interfac
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const channel = MethodChannel('io.github.ikaros.vesper_player');
+  const channel = MethodChannel('io.github.umbrella22.vesper_player');
   final calls = <MethodCall>[];
 
   setUp(() {
@@ -324,7 +324,7 @@ void main() {
   });
 
   test('snapshot decodes native HDR failure evidence details', () async {
-    const eventChannel = EventChannel('io.github.ikaros.vesper_player/events');
+    const eventChannel = EventChannel('io.github.umbrella22.vesper_player/events');
     final platform = MethodChannelVesperPlayerAndroid();
     final events = <VesperPlayerEvent>[];
 
@@ -410,7 +410,7 @@ void main() {
 
   test('error event carries terminal Widevine snapshot lastError details',
       () async {
-    const eventChannel = EventChannel('io.github.ikaros.vesper_player/events');
+    const eventChannel = EventChannel('io.github.umbrella22.vesper_player/events');
     final platform = MethodChannelVesperPlayerAndroid();
     final events = <VesperPlayerEvent>[];
 

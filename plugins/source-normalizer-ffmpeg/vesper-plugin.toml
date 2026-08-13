@@ -1,12 +1,12 @@
 schema_version = 1
 
 [plugin]
-id = "io.github.ikaros.vesper.source-normalizer-ffmpeg"
+id = "io.github.umbrella22.vesper.source-normalizer-ffmpeg"
 name = "Vesper FFmpeg Source Normalizer"
 version = "0.4.0"
 description = "Experimental FFmpeg-backed packet and resource SourceNormalizer plugin."
 license = "Apache-2.0"
-publisher = "io.github.ikaros"
+publisher = "io.github.umbrella22"
 
 [compatibility]
 host_sdk = ">=0.4.0, <0.5.0"
@@ -16,14 +16,14 @@ abi_minor_max = 0
 
 [[capabilities]]
 interface_id = "a2d653fa-d6ce-5f14-93b8-a818a7a77fdf"
-instance_id = "io.github.ikaros.vesper.source-normalizer-ffmpeg.packet"
+instance_id = "io.github.umbrella22.vesper.source-normalizer-ffmpeg.packet"
 interface_major = 1
 interface_minor = 0
 stability = "experimental"
 
 [[capabilities]]
 interface_id = "b76d1f06-62d7-5d71-aa06-2780e4b4fd0d"
-instance_id = "io.github.ikaros.vesper.source-normalizer-ffmpeg.resource"
+instance_id = "io.github.umbrella22.vesper.source-normalizer-ffmpeg.resource"
 interface_major = 1
 interface_minor = 0
 stability = "experimental"

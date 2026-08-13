@@ -1,6 +1,6 @@
 name: VesperPlayerKit
 options:
-  bundleIdPrefix: io.github.ikaros.vesper.lib
+  bundleIdPrefix: io.github.umbrella22.vesper.lib
 targets:
   VesperPlayerKitBridgeShim:
     type: library.static
@@ -59,7 +59,7 @@ targets:
     settings:
       base:
         CURRENT_PROJECT_VERSION: "400"
-        PRODUCT_BUNDLE_IDENTIFIER: io.github.ikaros.vesper.lib.ioshost
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.umbrella22.vesper.lib.ioshost
         DEFINES_MODULE: true
         SKIP_INSTALL: false
         BUILD_LIBRARY_FOR_DISTRIBUTION: true

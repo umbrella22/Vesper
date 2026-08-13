@@ -95,13 +95,13 @@ public struct VesperPluginReference: Equatable, Sendable {
 /// Canonical references for plugins distributed with Vesper iOS host kits.
 public enum VesperBundledPluginReferences {
     public static let sourceNormalizerFfmpeg = VesperPluginReference(
-        knownValidPluginId: "io.github.ikaros.vesper.source-normalizer-ffmpeg"
+        knownValidPluginId: "io.github.umbrella22.vesper.source-normalizer-ffmpeg"
     )
     public static let remuxFfmpeg = VesperPluginReference(
-        knownValidPluginId: "io.github.ikaros.vesper.remux-ffmpeg"
+        knownValidPluginId: "io.github.umbrella22.vesper.remux-ffmpeg"
     )
     public static let decoderVideoToolbox = VesperPluginReference(
-        knownValidPluginId: "io.github.ikaros.vesper.decoder-videotoolbox"
+        knownValidPluginId: "io.github.umbrella22.vesper.decoder-videotoolbox"
     )
     public static let frameProcessorDiagnostic = VesperPluginReference(
         knownValidPluginId: "dev.vesper.frame-processor-diagnostic"

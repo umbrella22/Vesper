@@ -65,7 +65,7 @@ class ExampleSubtitleOverlayEvidence {
 
 abstract final class ExampleSubtitleOverlayEvidenceChannel {
   static const MethodChannel _channel = MethodChannel(
-    'io.github.ikaros.vesper.example.flutter_host/device_controls',
+    'io.github.umbrella22.vesper.example.flutter_host/device_controls',
   );
 
   static Future<ExampleSubtitleOverlaySnapshot> snapshot(

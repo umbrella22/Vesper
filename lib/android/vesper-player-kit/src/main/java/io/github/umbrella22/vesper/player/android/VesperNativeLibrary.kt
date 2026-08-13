@@ -1,0 +1,15 @@
+package io.github.umbrella22.vesper.player.android
+
+internal object VesperNativeLibrary {
+    private const val LIB_NAME = "vesper_player_android"
+
+    private val loadAttempt: Result<Unit> by lazy {
+        runCatching { System.loadLibrary(LIB_NAME) }
+    }
+
+    fun ensureLoaded() {
+        loadAttempt.getOrThrow()
+    }
+
+    fun failureMessage(): String? = loadAttempt.exceptionOrNull()?.message
+}

@@ -8,6 +8,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
+use semver::Version;
 
 const MAX_RELEASE_FILE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_RELEASE_SCAN_FILES: usize = 100_000;
@@ -156,6 +157,21 @@ pub struct ReleaseMetadata {
     release_date: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseChannel {
+    version: String,
+    stable: bool,
+}
+
+impl ReleaseChannel {
+    pub fn output(&self) -> String {
+        format!(
+            "version={}\nstable={}\nprerelease={}\n",
+            self.version, self.stable, !self.stable
+        )
+    }
+}
+
 impl ReleaseMetadata {
     pub fn output(&self) -> String {
         format!(
@@ -290,6 +306,40 @@ impl ReleaseContext {
 
     pub fn default_notes_tag(&self) -> Option<&str> {
         self.environment.github_ref_name.as_deref()
+    }
+
+    pub fn stable_version_from_tag(tag: &str) -> ReleaseResult<String> {
+        let channel = Self::channel_from_tag(tag)?;
+        if !channel.stable {
+            return Err(ReleaseError::input(format!(
+                "Stable publication requires an exact vMAJOR.MINOR.PATCH tag: {tag}"
+            )));
+        }
+        Ok(channel.version)
+    }
+
+    pub fn channel_from_tag(tag: &str) -> ReleaseResult<ReleaseChannel> {
+        let value = tag.strip_prefix('v').ok_or_else(|| {
+            ReleaseError::input(format!(
+                "Release tag must use a v prefix and valid SemVer: {tag}"
+            ))
+        })?;
+        let parsed = Version::parse(value).map_err(|error| {
+            ReleaseError::input(format!("Release tag is not valid SemVer: {tag}: {error}"))
+        })?;
+        if !parsed.build.is_empty() {
+            return Err(ReleaseError::input(format!(
+                "Release tags must not contain build metadata: {tag}"
+            )));
+        }
+        let version = ReleaseVersion::parse(&format!(
+            "{}.{}.{}",
+            parsed.major, parsed.minor, parsed.patch
+        ))?;
+        Ok(ReleaseChannel {
+            version: version.value,
+            stable: parsed.pre.is_empty(),
+        })
     }
 
     pub fn metadata_for_version(
@@ -1954,6 +2004,39 @@ mod tests {
             "0.4.0"
         );
         assert!(ReleaseVersion::from_tag("release-0.4.0").is_err());
+    }
+
+    #[test]
+    fn stable_release_tags_reject_prerelease_and_ambiguous_forms() {
+        assert_eq!(
+            ReleaseContext::stable_version_from_tag("v0.4.0")
+                .expect("stable tag")
+                .as_str(),
+            "0.4.0"
+        );
+        assert!(ReleaseContext::stable_version_from_tag("0.4.0").is_err());
+        assert!(ReleaseContext::stable_version_from_tag("v0.4.0-rc.1").is_err());
+        assert!(ReleaseContext::stable_version_from_tag("refs/tags/v0.4.0").is_err());
+        assert!(ReleaseContext::stable_version_from_tag("v00.4.0").is_err());
+    }
+
+    #[test]
+    fn release_channels_classify_only_v_prefixed_semver() {
+        assert_eq!(
+            ReleaseContext::channel_from_tag("v0.4.0")
+                .expect("stable channel")
+                .output(),
+            "version=0.4.0\nstable=true\nprerelease=false\n"
+        );
+        assert_eq!(
+            ReleaseContext::channel_from_tag("v0.4.0-rc.2")
+                .expect("prerelease channel")
+                .output(),
+            "version=0.4.0\nstable=false\nprerelease=true\n"
+        );
+        assert!(ReleaseContext::channel_from_tag("0.4.0").is_err());
+        assert!(ReleaseContext::channel_from_tag("v0.4.0+build.1").is_err());
+        assert!(ReleaseContext::channel_from_tag("v0.100.0").is_err());
     }
 
     #[test]

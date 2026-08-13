@@ -23,6 +23,6 @@ flutter:
     implements: vesper_player
     platforms:
       android:
-        package: io.github.ikaros.vesper.player.flutter.android
+        package: io.github.umbrella22.vesper.player.flutter.android
         pluginClass: VesperPlayerAndroidPlugin
         dartPluginClass: VesperPlayerAndroid

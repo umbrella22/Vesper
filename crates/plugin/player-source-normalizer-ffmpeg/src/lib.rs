@@ -36,9 +36,9 @@ use player_source_normalizer::{
 use std::os::raw::c_int;
 use url::Url;
 
-const PLUGIN_ID: &str = "io.github.ikaros.vesper.source-normalizer-ffmpeg";
-const PACKET_INSTANCE_ID: &str = "io.github.ikaros.vesper.source-normalizer-ffmpeg.packet";
-const RESOURCE_INSTANCE_ID: &str = "io.github.ikaros.vesper.source-normalizer-ffmpeg.resource";
+const PLUGIN_ID: &str = "io.github.umbrella22.vesper.source-normalizer-ffmpeg";
+const PACKET_INSTANCE_ID: &str = "io.github.umbrella22.vesper.source-normalizer-ffmpeg.packet";
+const RESOURCE_INSTANCE_ID: &str = "io.github.umbrella22.vesper.source-normalizer-ffmpeg.resource";
 const PLUGIN_NAME: &str = "player-source-normalizer-ffmpeg";
 const DEFAULT_PROFILE_TOML: &str =
     include_str!("../../../../scripts/source-normalizer-profiles.toml");

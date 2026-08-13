@@ -112,22 +112,22 @@ final class VesperPluginReference {
 /// Canonical references for plugins distributed with Vesper mobile host kits.
 abstract final class VesperBundledPluginReferences {
   static final sourceNormalizerFfmpeg = VesperPluginReference(
-    pluginId: 'io.github.ikaros.vesper.source-normalizer-ffmpeg',
+    pluginId: 'io.github.umbrella22.vesper.source-normalizer-ffmpeg',
     transport: VesperPluginTransport.native,
   );
 
   static final remuxFfmpeg = VesperPluginReference(
-    pluginId: 'io.github.ikaros.vesper.remux-ffmpeg',
+    pluginId: 'io.github.umbrella22.vesper.remux-ffmpeg',
     transport: VesperPluginTransport.native,
   );
 
   static final decoderMediaCodec = VesperPluginReference(
-    pluginId: 'io.github.ikaros.vesper.decoder-mediacodec',
+    pluginId: 'io.github.umbrella22.vesper.decoder-mediacodec',
     transport: VesperPluginTransport.native,
   );
 
   static final decoderVideoToolbox = VesperPluginReference(
-    pluginId: 'io.github.ikaros.vesper.decoder-videotoolbox',
+    pluginId: 'io.github.umbrella22.vesper.decoder-videotoolbox',
     transport: VesperPluginTransport.native,
   );
 

@@ -6,7 +6,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   const channel = MethodChannel(
-    'io.github.ikaros.vesper.example.flutter_host/media_picker',
+    'io.github.umbrella22.vesper.example.flutter_host/media_picker',
   );
 
   tearDown(() {

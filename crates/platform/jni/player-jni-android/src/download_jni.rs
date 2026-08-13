@@ -1351,7 +1351,7 @@ fn download_event_batch_object<'local>(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_createDownloadSession(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_createDownloadSession(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     config: JObject<'_>,
@@ -1377,7 +1377,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_disposeDownloadSession(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_disposeDownloadSession(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1403,7 +1403,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_createDownloadTask(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_createDownloadTask(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1434,7 +1434,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_restoreDownloadTasks(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_restoreDownloadTasks(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1493,7 +1493,7 @@ fn mutate_download_task(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_startDownloadTask(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_startDownloadTask(
     unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1509,7 +1509,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_pauseDownloadTask(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_pauseDownloadTask(
     unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1525,7 +1525,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_resumeDownloadTask(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_resumeDownloadTask(
     unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1541,7 +1541,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_updateDownloadTaskProgress(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_updateDownloadTaskProgress(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1570,7 +1570,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_completeDownloadPreparation(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_completeDownloadPreparation(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1598,7 +1598,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_replaceDownloadTaskPlan(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_replaceDownloadTaskPlan(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1632,7 +1632,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_completeDownloadTask(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_completeDownloadTask(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1662,7 +1662,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_exportDownloadTask(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_exportDownloadTask(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1711,7 +1711,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_failDownloadTask(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_failDownloadTask(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1748,7 +1748,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_removeDownloadTask(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_removeDownloadTask(
     unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1764,7 +1764,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_pollDownloadSnapshot(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_pollDownloadSnapshot(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1799,7 +1799,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_drainDownloadCommands(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_drainDownloadCommands(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -1832,7 +1832,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_drainDownloadEvents(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_drainDownloadEvents(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,

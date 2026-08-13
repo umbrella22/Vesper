@@ -1,12 +1,12 @@
 schema_version = 1
 
 [plugin]
-id = "io.github.ikaros.vesper.decoder-videotoolbox"
+id = "io.github.umbrella22.vesper.decoder-videotoolbox"
 name = "Vesper VideoToolbox Decoder"
 version = "0.4.0"
 description = "Experimental Apple VideoToolbox native-frame decoder plugin."
 license = "Apache-2.0"
-publisher = "io.github.ikaros"
+publisher = "io.github.umbrella22"
 
 [compatibility]
 host_sdk = ">=0.4.0, <0.5.0"
@@ -16,7 +16,7 @@ abi_minor_max = 0
 
 [[capabilities]]
 interface_id = "d68be0ed-1958-5922-8b7a-bc6778a26b43"
-instance_id = "io.github.ikaros.vesper.decoder-videotoolbox.native"
+instance_id = "io.github.umbrella22.vesper.decoder-videotoolbox.native"
 interface_major = 1
 interface_minor = 0
 stability = "experimental"

@@ -26,7 +26,7 @@ final class VesperSourceNormalizerResourceSession {
         let lastPathComponent = resource.outputRoute == "hlsShortWindow" ? "index.m3u8" : "primary"
         guard let url = URL(string: "vesper-normalized://session/\(id)/\(lastPathComponent)") else {
             throw NSError(
-                domain: "io.github.ikaros.vesper.player.source-normalizer",
+                domain: "io.github.umbrella22.vesper.player.source-normalizer",
                 code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "Failed to create normalized playback URL."]
             )
@@ -114,7 +114,7 @@ final class VesperSourceNormalizerResourceLoaderDelegate:
     init(session: VesperSourceNormalizerResourceSession) {
         self.session = session
         resourceLoadingQueue = DispatchQueue(
-            label: "io.github.ikaros.vesper.player.source-normalizer.resource-loader.\(session.id)"
+            label: "io.github.umbrella22.vesper.player.source-normalizer.resource-loader.\(session.id)"
         )
         super.init()
     }

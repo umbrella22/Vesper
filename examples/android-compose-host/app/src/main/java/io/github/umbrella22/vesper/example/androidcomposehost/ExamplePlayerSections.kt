@@ -1,0 +1,1933 @@
+package io.github.umbrella22.vesper.example.androidcomposehost
+
+import android.view.View
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.BrightnessAuto
+import androidx.compose.material.icons.rounded.Cast
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.mediarouter.app.MediaRouteButton
+import io.github.umbrella22.vesper.player.android.VesperPlaylistQueueItemState
+import io.github.umbrella22.vesper.player.android.VesperPluginReference
+import io.github.umbrella22.vesper.player.android.external.VesperExternalPlaybackRoute
+import io.github.umbrella22.vesper.player.android.external.VesperExternalRouteButton
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlin.math.max
+
+@Composable
+internal fun ExamplePlayerHeader(
+    sourceLabel: String,
+    subtitle: String,
+    palette: ExampleHostPalette,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "Vesper",
+            style = MaterialTheme.typography.headlineLarge.copy(
+                color = palette.title,
+                fontWeight = FontWeight.Black,
+                letterSpacing = (-1.2).sp,
+            ),
+        )
+        Text(
+            text = sourceLabel,
+            style = MaterialTheme.typography.titleSmall.copy(
+                color = palette.title,
+                fontWeight = FontWeight.SemiBold,
+            ),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodyMedium.copy(color = palette.body),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+internal fun ExampleSourceSection(
+    palette: ExampleHostPalette,
+    themeMode: ExampleThemeMode,
+    remoteStreamUrl: String,
+    onThemeModeChange: (ExampleThemeMode) -> Unit,
+    onRemoteStreamUrlChange: (String) -> Unit,
+    onPickVideo: () -> Unit,
+    onUseHlsDemo: () -> Unit,
+    onUseDashDemo: () -> Unit,
+    onUseLiveDvrAcceptance: () -> Unit,
+    onOpenRemote: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(palette.sectionBackground, RoundedCornerShape(24.dp))
+            .border(1.dp, palette.sectionStroke, RoundedCornerShape(24.dp))
+            .padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Text(
+            text = stringResource(R.string.example_sources_title),
+            style = MaterialTheme.typography.titleMedium.copy(
+                color = palette.title,
+                fontWeight = FontWeight.Bold,
+            ),
+        )
+        Text(
+            text = stringResource(R.string.example_sources_subtitle),
+            style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+        )
+
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            OutlinedButton(onClick = onPickVideo) {
+                Text(stringResource(R.string.example_sources_pick_video))
+            }
+            OutlinedButton(onClick = onUseHlsDemo) {
+                Text(stringResource(R.string.example_sources_hls_demo))
+            }
+            OutlinedButton(onClick = onUseLiveDvrAcceptance) {
+                Text(stringResource(R.string.example_sources_live_dvr_acceptance))
+            }
+            OutlinedButton(onClick = onUseDashDemo) {
+                Text(stringResource(R.string.example_sources_dash_demo))
+            }
+        }
+
+        OutlinedTextField(
+            value = remoteStreamUrl,
+            onValueChange = onRemoteStreamUrlChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.example_sources_remote_stream_url)) },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            singleLine = true,
+        )
+
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                text = stringResource(R.string.example_sources_theme),
+                style = MaterialTheme.typography.labelLarge.copy(
+                    color = palette.title,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                ThemeModeChip(
+                    icon = Icons.Rounded.BrightnessAuto,
+                    label = stringResource(ExampleThemeMode.System.titleRes),
+                    selected = themeMode == ExampleThemeMode.System,
+                    onClick = { onThemeModeChange(ExampleThemeMode.System) },
+                )
+                ThemeModeChip(
+                    icon = Icons.Rounded.LightMode,
+                    label = stringResource(ExampleThemeMode.Light.titleRes),
+                    selected = themeMode == ExampleThemeMode.Light,
+                    onClick = { onThemeModeChange(ExampleThemeMode.Light) },
+                )
+                ThemeModeChip(
+                    icon = Icons.Rounded.DarkMode,
+                    label = stringResource(ExampleThemeMode.Dark.titleRes),
+                    selected = themeMode == ExampleThemeMode.Dark,
+                    onClick = { onThemeModeChange(ExampleThemeMode.Dark) },
+                )
+            }
+        }
+
+        Button(
+            onClick = onOpenRemote,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = palette.primaryAction,
+                contentColor = Color.White,
+            ),
+        ) {
+            Text(stringResource(R.string.example_sources_open_remote_url))
+        }
+    }
+}
+
+@Composable
+internal fun ExampleThemeModeSelector(
+    themeMode: ExampleThemeMode,
+    onThemeModeChange: (ExampleThemeMode) -> Unit,
+) {
+    Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        ThemeModeChip(
+            icon = Icons.Rounded.BrightnessAuto,
+            label = stringResource(ExampleThemeMode.System.titleRes),
+            selected = themeMode == ExampleThemeMode.System,
+            onClick = { onThemeModeChange(ExampleThemeMode.System) },
+        )
+        ThemeModeChip(
+            icon = Icons.Rounded.LightMode,
+            label = stringResource(ExampleThemeMode.Light.titleRes),
+            selected = themeMode == ExampleThemeMode.Light,
+            onClick = { onThemeModeChange(ExampleThemeMode.Light) },
+        )
+        ThemeModeChip(
+            icon = Icons.Rounded.DarkMode,
+            label = stringResource(ExampleThemeMode.Dark.titleRes),
+            selected = themeMode == ExampleThemeMode.Dark,
+            onClick = { onThemeModeChange(ExampleThemeMode.Dark) },
+        )
+    }
+}
+
+@Composable
+internal fun ExampleQuickSourcePanel(
+    palette: ExampleHostPalette,
+    remoteStreamUrl: String,
+    onRemoteStreamUrlChange: (String) -> Unit,
+    onPickVideo: () -> Unit,
+    onUseHlsDemo: () -> Unit,
+    onUseDashDemo: () -> Unit,
+    onUseLiveDvrAcceptance: () -> Unit,
+    onOpenRemote: () -> Unit,
+) {
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_sources_title),
+        subtitle = stringResource(R.string.example_sources_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(onClick = onPickVideo) {
+                    Text(stringResource(R.string.example_sources_pick_video))
+                }
+                OutlinedButton(onClick = onUseHlsDemo) {
+                    Text(stringResource(R.string.example_sources_hls_demo))
+                }
+                OutlinedButton(onClick = onUseDashDemo) {
+                    Text(stringResource(R.string.example_sources_dash_demo))
+                }
+                OutlinedButton(onClick = onUseLiveDvrAcceptance) {
+                    Text(stringResource(R.string.example_sources_live_dvr_acceptance))
+                }
+            }
+
+            OutlinedTextField(
+                value = remoteStreamUrl,
+                onValueChange = onRemoteStreamUrlChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.example_sources_remote_stream_url)) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                singleLine = true,
+            )
+
+            Button(
+                onClick = onOpenRemote,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = palette.primaryAction,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(stringResource(R.string.example_sources_open_remote_url))
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ExampleExternalPlaybackSection(
+    palette: ExampleHostPalette,
+    routes: List<VesperExternalPlaybackRoute>,
+    session: ExampleExternalPlaybackSession?,
+    isDiscovering: Boolean,
+    isCastRoutePickerOpening: Boolean,
+    castRoutePickerRequestId: Long,
+    hasDlnaPermission: Boolean,
+    onOpenCastRoutes: () -> Unit,
+    onRequestDlnaPermission: () -> Unit,
+    onStartDiscovery: () -> Unit,
+    onStopDiscovery: () -> Unit,
+    onConnectRoute: (VesperExternalPlaybackRoute) -> Unit,
+    onLoadCurrent: () -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_external_title),
+        subtitle = stringResource(R.string.example_external_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            CastRoutePickerRow(
+                palette = palette,
+                requestId = castRoutePickerRequestId,
+                opening = isCastRoutePickerOpening,
+                onOpen = onOpenCastRoutes,
+            )
+
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        if (hasDlnaPermission) {
+                            if (isDiscovering) onStopDiscovery() else onStartDiscovery()
+                        } else {
+                            onRequestDlnaPermission()
+                        }
+                    },
+                ) {
+                    Text(
+                        if (isDiscovering) {
+                            stringResource(R.string.example_external_stop_scan)
+                        } else {
+                            stringResource(R.string.example_external_start_scan)
+                        },
+                    )
+                }
+                Button(
+                    onClick = onLoadCurrent,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = palette.primaryAction,
+                        contentColor = Color.White,
+                    ),
+                ) {
+                    Text(stringResource(R.string.example_external_load_current))
+                }
+                if (session != null) {
+                    OutlinedButton(onClick = onDisconnect) {
+                        Text(stringResource(R.string.example_external_disconnect))
+                    }
+                }
+            }
+
+            if (!hasDlnaPermission) {
+                Text(
+                    text = stringResource(R.string.example_external_permission_required),
+                    style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                )
+            }
+
+            if (session != null) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = stringResource(R.string.example_external_connected_route, session.routeName),
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = palette.title,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.example_external_state,
+                            session.message ?: exampleExternalStatusLabel(session.status),
+                        ),
+                        style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                    )
+                    if (session.relayEnabled) {
+                        ExampleStatusPill(
+                            label = stringResource(R.string.example_external_relay_enabled),
+                            palette = palette,
+                        )
+                    }
+                }
+            }
+
+            if (routes.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.example_external_no_routes),
+                    style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    routes.forEach { route ->
+                        ExternalRouteRow(
+                            route = route,
+                            active = route.active || route.routeId == session?.routeId,
+                            palette = palette,
+                            onConnect = { onConnectRoute(route) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ExampleDolbyCatalogPanel(
+    palette: ExampleHostPalette,
+    presets: List<ExampleDolbyAcceptancePreset>,
+    selectedDrmKind: ExampleDolbyAcceptanceDrmKind,
+    selectedProfile: ExampleDolbyAcceptanceProfile?,
+    selectedFps: Int?,
+    onDrmKindChange: (ExampleDolbyAcceptanceDrmKind) -> Unit,
+    onProfileChange: (ExampleDolbyAcceptanceProfile?) -> Unit,
+    onFpsChange: (Int?) -> Unit,
+    onPresetPlayNow: (ExampleDolbyAcceptancePreset) -> Unit,
+    onPresetAddToQueue: (ExampleDolbyAcceptancePreset) -> Unit,
+) {
+    val filteredPresets by remember(presets, selectedDrmKind, selectedProfile, selectedFps) {
+        derivedStateOf {
+            filterDolbyAcceptancePresets(
+                presets = presets,
+                drmKind = selectedDrmKind,
+                profile = selectedProfile,
+                fps = selectedFps,
+            )
+        }
+    }
+
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_dolby_acceptance_title),
+        subtitle = stringResource(R.string.example_dolby_acceptance_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                ExampleDolbyAcceptanceDrmKind.values().forEach { drmKind ->
+                    SelectionChip(
+                        label = drmKind.title,
+                        selected = drmKind == selectedDrmKind,
+                        onClick = { onDrmKindChange(drmKind) },
+                    )
+                }
+            }
+
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                SelectionChip(
+                    label = stringResource(R.string.example_dolby_acceptance_all_profiles),
+                    selected = selectedProfile == null,
+                    onClick = { onProfileChange(null) },
+                )
+                ExampleDolbyAcceptanceProfile.values().forEach { profile ->
+                    SelectionChip(
+                        label = profile.title,
+                        selected = profile == selectedProfile,
+                        onClick = { onProfileChange(profile) },
+                    )
+                }
+            }
+
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                SelectionChip(
+                    label = stringResource(R.string.example_dolby_acceptance_all_fps),
+                    selected = selectedFps == null,
+                    onClick = { onFpsChange(null) },
+                )
+                exampleDolbyAcceptanceFpsValues.forEach { fps ->
+                    SelectionChip(
+                        label = "${fps}fps",
+                        selected = fps == selectedFps,
+                        onClick = { onFpsChange(fps) },
+                    )
+                }
+            }
+
+            if (selectedDrmKind == ExampleDolbyAcceptanceDrmKind.FairPlayPending) {
+                Text(
+                    text = stringResource(R.string.example_dolby_acceptance_fairplay_pending),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = palette.body,
+                        lineHeight = 20.sp,
+                    ),
+                )
+            }
+
+            if (filteredPresets.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.example_dolby_acceptance_empty),
+                    style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 460.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(
+                        items = filteredPresets,
+                        key = { preset -> preset.id },
+                        contentType = { "dolbyPreset" },
+                    ) { preset ->
+                        DolbyAcceptancePresetRow(
+                            preset = preset,
+                            palette = palette,
+                            onPresetPlayNow = onPresetPlayNow,
+                            onPresetAddToQueue = onPresetAddToQueue,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DolbyAcceptancePresetRow(
+    preset: ExampleDolbyAcceptancePreset,
+    palette: ExampleHostPalette,
+    onPresetPlayNow: (ExampleDolbyAcceptancePreset) -> Unit,
+    onPresetAddToQueue: (ExampleDolbyAcceptancePreset) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(palette.fieldBackground, RoundedCornerShape(18.dp))
+            .border(1.dp, palette.sectionStroke, RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(
+                text = preset.label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    color = if (preset.isPlayable) palette.title else palette.body,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            Text(
+                text =
+                    listOf(
+                        preset.profile.title,
+                        "${preset.fps}fps",
+                        preset.protocolLabel,
+                        preset.drmKind.title,
+                        preset.manualGate,
+                    ).joinToString(" · "),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+            preset.notes.firstOrNull()?.let { note ->
+                Text(
+                    text = note,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelSmall.copy(color = palette.body),
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Button(
+                onClick = { onPresetPlayNow(preset) },
+                enabled = preset.isPlayable,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = palette.primaryAction,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(stringResource(R.string.example_dolby_acceptance_play_now))
+            }
+            OutlinedButton(
+                onClick = { onPresetAddToQueue(preset) },
+                enabled = canQueueDolbyPreset(preset),
+            ) {
+                Text(stringResource(R.string.example_dolby_acceptance_add_to_queue))
+            }
+        }
+    }
+}
+
+@Composable
+private fun CastRoutePickerRow(
+    palette: ExampleHostPalette,
+    requestId: Long,
+    opening: Boolean,
+    onOpen: () -> Unit,
+) {
+    val routeButton = remember { mutableStateOf<MediaRouteButton?>(null) }
+    LaunchedEffect(requestId) {
+        if (requestId <= 0) {
+            return@LaunchedEffect
+        }
+        routeButton.value?.post {
+            runCatching { routeButton.value?.showDialog() }
+        }
+    }
+
+    Box {
+        AndroidView(
+            factory = { context ->
+                VesperExternalRouteButton.create(context = context).apply {
+                    alpha = 0f
+                    isFocusable = false
+                    isClickable = false
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                    routeButton.value = this
+                }
+            },
+            update = { button -> routeButton.value = button },
+            modifier = Modifier.size(1.dp),
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            Button(
+                enabled = !opening,
+                onClick = onOpen,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = palette.primaryAction,
+                    contentColor = Color.White,
+                ),
+            ) {
+                if (opening) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.example_external_cast_searching))
+                } else {
+                    Icon(
+                        imageVector = Icons.Rounded.Cast,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.example_external_cast_button))
+                }
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.example_external_cast_search_label),
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        color = palette.title,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+                Text(
+                    text = stringResource(R.string.example_external_cast_search_subtitle),
+                    style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExternalRouteRow(
+    route: VesperExternalPlaybackRoute,
+    active: Boolean,
+    palette: ExampleHostPalette,
+    onConnect: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (active) palette.primaryAction else palette.fieldBackground,
+                RoundedCornerShape(18.dp),
+            )
+            .border(
+                width = 1.dp,
+                color = if (active) Color.Transparent else palette.sectionStroke,
+                shape = RoundedCornerShape(18.dp),
+            )
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = route.name,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    color = if (active) Color.White else palette.title,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            Text(
+                text = exampleExternalRouteLabel(route),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    color = if (active) Color.White.copy(alpha = 0.82f) else palette.body,
+                ),
+            )
+        }
+        TextButton(
+            onClick = onConnect,
+            colors = ButtonDefaults.textButtonColors(
+                contentColor = if (active) Color.White else palette.primaryAction,
+            ),
+        ) {
+            Text(stringResource(R.string.example_external_connect))
+        }
+    }
+}
+
+@Composable
+internal fun ExamplePictureInPictureSection(
+    palette: ExampleHostPalette,
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    onRequestPictureInPicture: () -> Unit,
+) {
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_pip_title),
+        subtitle = stringResource(R.string.example_pip_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.example_pip_enable),
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = palette.title,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
+                    Text(
+                        text = stringResource(R.string.example_pip_enable_subtitle),
+                        style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                    )
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = onEnabledChange,
+                )
+            }
+
+            Button(
+                onClick = onRequestPictureInPicture,
+                enabled = enabled,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = palette.primaryAction,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(
+                    if (enabled) {
+                        stringResource(R.string.example_pip_enter)
+                    } else {
+                        stringResource(R.string.example_pip_disabled)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ExamplePlaylistSection(
+    palette: ExampleHostPalette,
+    playlistQueue: List<VesperPlaylistQueueItemState>,
+    onFocusPlaylistItem: (String) -> Unit,
+) {
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_playlist_title),
+        subtitle = stringResource(R.string.example_playlist_subtitle),
+    ) {
+        if (playlistQueue.isEmpty()) {
+            Text(
+                text = stringResource(R.string.example_playlist_empty),
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                playlistQueue.forEach { item ->
+                    PlaylistQueueRow(
+                        label = item.item.source.label,
+                        hint =
+                            if (item.isActive) {
+                                stringResource(R.string.example_playlist_status_current)
+                            } else {
+                                playlistHintLabel(item.viewportHint)
+                            },
+                        active = item.isActive,
+                        palette = palette,
+                        onClick = { onFocusPlaylistItem(item.item.itemId) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ExampleFrameMetricsSection(
+    palette: ExampleHostPalette,
+    enabled: Boolean,
+    snapshot: ExampleFrameMetricsSnapshot?,
+    onEnabledChange: (Boolean) -> Unit,
+) {
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_frame_metrics_title),
+        subtitle = stringResource(R.string.example_frame_metrics_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.example_frame_metrics_collect),
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            color = palette.title,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
+                    Text(
+                        text = stringResource(R.string.example_frame_metrics_collect_subtitle),
+                        style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                    )
+                }
+                Switch(checked = enabled, onCheckedChange = onEnabledChange)
+            }
+            if (snapshot == null) {
+                Text(
+                    text =
+                        if (enabled) {
+                            stringResource(R.string.example_frame_metrics_waiting)
+                        } else {
+                            stringResource(R.string.example_frame_metrics_disabled)
+                        },
+                    style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text =
+                            stringResource(
+                                R.string.example_frame_metrics_summary,
+                                snapshot.sampleCount,
+                                snapshot.jankyFrameCount,
+                                snapshot.slowUiFrameCount,
+                                snapshot.slowDrawFrameCount,
+                                snapshot.slowGpuFrameCount,
+                            ),
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            color = palette.title,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
+                    Text(
+                        text =
+                            stringResource(
+                                R.string.example_frame_metrics_total,
+                                snapshot.totalP50Ms.formatFrameMetric(),
+                                snapshot.totalP95Ms.formatFrameMetric(),
+                                snapshot.totalMaxMs.formatFrameMetric(),
+                            ),
+                        style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                    )
+                    Text(
+                        text =
+                            stringResource(
+                                R.string.example_frame_metrics_breakdown,
+                                snapshot.inputP95Ms.formatFrameMetric(),
+                                snapshot.layoutP95Ms.formatFrameMetric(),
+                                snapshot.drawP95Ms.formatFrameMetric(),
+                                snapshot.syncP95Ms.formatFrameMetric(),
+                                snapshot.gpuP95Ms.formatFrameMetric(),
+                            ),
+                        style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun Double.formatFrameMetric(): String =
+    String.format(Locale.US, "%.2fms", this)
+
+@Composable
+internal fun ExampleQueuePanel(
+    palette: ExampleHostPalette,
+    playlistQueue: List<VesperPlaylistQueueItemState>,
+    onFocusPlaylistItem: (String) -> Unit,
+) {
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    val visibleQueue =
+        remember(playlistQueue, showAll) {
+            if (showAll) playlistQueue else compactPlaylistQueueItems(playlistQueue)
+        }
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_queue_title),
+        subtitle = stringResource(R.string.example_queue_subtitle),
+    ) {
+        if (playlistQueue.isEmpty()) {
+            Text(
+                text = stringResource(R.string.example_playlist_empty),
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = if (showAll) 360.dp else 260.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(
+                        items = visibleQueue,
+                        key = { item -> item.item.itemId },
+                        contentType = { "queueItem" },
+                    ) { item ->
+                        PlaylistQueueRow(
+                            label = item.item.source.label,
+                            hint =
+                                if (item.isActive) {
+                                    stringResource(R.string.example_playlist_status_current)
+                                } else {
+                                    playlistHintLabel(item.viewportHint)
+                                },
+                            active = item.isActive,
+                            palette = palette,
+                            onClick = { onFocusPlaylistItem(item.item.itemId) },
+                        )
+                    }
+                }
+                if (playlistQueue.size > visibleQueue.size || showAll) {
+                    TextButton(onClick = { showAll = !showAll }) {
+                        Text(
+                            if (showAll) {
+                                stringResource(R.string.example_queue_show_less)
+                            } else {
+                                stringResource(R.string.example_queue_manage)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+internal fun compactPlaylistQueueItems(
+    playlistQueue: List<VesperPlaylistQueueItemState>,
+    maxVisibleItems: Int = 5,
+): List<VesperPlaylistQueueItemState> {
+    if (playlistQueue.size <= maxVisibleItems || maxVisibleItems <= 0) {
+        return playlistQueue
+    }
+    val activeIndex = playlistQueue.indexOfFirst { item -> item.isActive }.takeIf { it >= 0 } ?: 0
+    return playlistQueue
+        .sortedWith(
+            compareBy<VesperPlaylistQueueItemState> { item ->
+                kotlin.math.abs(item.index - activeIndex)
+            }.thenBy { item -> item.index },
+        )
+        .take(maxVisibleItems)
+        .sortedBy { item -> item.index }
+}
+
+@Composable
+private fun PlaylistQueueRow(
+    label: String,
+    hint: String,
+    active: Boolean,
+    palette: ExampleHostPalette,
+    onClick: () -> Unit,
+) {
+    TextButton(
+        onClick = onClick,
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = if (active) Color.White else palette.title,
+        ),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (active) {
+                    palette.primaryAction
+                } else {
+                    palette.fieldBackground
+                },
+                RoundedCornerShape(18.dp),
+            )
+            .border(
+                width = 1.dp,
+                color = if (active) Color.Transparent else palette.sectionStroke,
+                shape = RoundedCornerShape(18.dp),
+            ),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = label,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            Text(
+                text = hint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    color = if (active) Color.White.copy(alpha = 0.88f) else palette.body,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+internal fun ExampleResilienceSection(
+    palette: ExampleHostPalette,
+    selectedProfile: ExampleResilienceProfile,
+    isApplyingProfile: Boolean,
+    onApplyProfile: (ExampleResilienceProfile) -> Unit,
+) {
+    val policy = selectedProfile.policy
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_resilience_title),
+        subtitle = stringResource(R.string.example_resilience_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                ExampleResilienceProfile.values().forEach { profile ->
+                    SelectionChip(
+                        label = stringResource(profile.titleRes),
+                        selected = profile == selectedProfile,
+                        onClick = { onApplyProfile(profile) },
+                    )
+                }
+            }
+
+            Text(
+                text = stringResource(selectedProfile.subtitleRes),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = palette.body,
+                    lineHeight = 22.sp,
+                ),
+            )
+
+            if (isApplyingProfile) {
+                ExampleStatusPill(
+                    label = stringResource(R.string.example_resilience_applying),
+                    palette = palette,
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                ExampleFactRow(
+                    label = stringResource(R.string.example_resilience_fact_buffering),
+                    value = resilienceBufferingValue(policy.buffering),
+                    palette = palette,
+                )
+                ExampleFactRow(
+                    label = stringResource(R.string.example_resilience_fact_retry),
+                    value = resilienceRetryValue(policy.retry),
+                    palette = palette,
+                )
+                ExampleFactRow(
+                    label = stringResource(R.string.example_resilience_fact_cache),
+                    value = resilienceCacheValue(policy.cache),
+                    palette = palette,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ExamplePluginDiagnosticsSection(
+    palette: ExampleHostPalette,
+    sourceNormalizerSetting: ExampleSourceNormalizerSetting,
+    nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
+    videoSurfaceSetting: ExampleVideoSurfaceSetting,
+    sourceNormalizerPluginReferences: List<VesperPluginReference>,
+    decoderMediaCodecPluginReferences: List<VesperPluginReference>,
+    frameProcessorPluginReferences: List<VesperPluginReference>,
+    pluginDiagnostics: List<Map<String, Any?>>,
+    hdrEvidencePresets: List<ExampleHdrEvidenceSamplePreset>,
+    selectedHdrEvidencePreset: ExampleHdrEvidenceSamplePreset,
+    isCapturingHdrEvidence: Boolean,
+    hdrEvidenceActiveSourceAvailable: Boolean,
+    onSourceNormalizerSettingChange: (ExampleSourceNormalizerSetting) -> Unit,
+    onNativeFramePipelineSettingChange: (ExampleNativeFramePipelineSetting) -> Unit,
+    onVideoSurfaceSettingChange: (ExampleVideoSurfaceSetting) -> Unit,
+    onHdrEvidencePresetChange: (ExampleHdrEvidenceSamplePreset) -> Unit,
+    onCaptureHdrEvidence: () -> Unit,
+) {
+    val sourceNormalizerDiagnostics = exampleSourceNormalizerDiagnostics(pluginDiagnostics)
+    val frameProcessorDiagnostics = exampleFrameProcessorDiagnostics(pluginDiagnostics)
+    val nativeFramePipelineDiagnostics = exampleNativeFramePipelineDiagnostics(pluginDiagnostics)
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_plugins_title),
+        subtitle = stringResource(R.string.example_plugins_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                ExampleSourceNormalizerSetting.values().forEach { setting ->
+                    SelectionChip(
+                        label = stringResource(setting.titleRes),
+                        selected = setting == sourceNormalizerSetting,
+                        onClick = { onSourceNormalizerSettingChange(setting) },
+                    )
+                }
+            }
+
+            Text(
+                text = stringResource(sourceNormalizerSetting.subtitleRes),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = palette.body,
+                    lineHeight = 22.sp,
+                ),
+            )
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                ExampleNativeFramePipelineSetting.values().forEach { setting ->
+                    SelectionChip(
+                        label = stringResource(setting.titleRes),
+                        selected = setting == nativeFramePipelineSetting,
+                        onClick = { onNativeFramePipelineSettingChange(setting) },
+                    )
+                }
+            }
+
+            Text(
+                text = stringResource(nativeFramePipelineSetting.subtitleRes),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = palette.body,
+                    lineHeight = 22.sp,
+                ),
+            )
+            AdaptiveChipWrap(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalSpacing = 10.dp,
+                verticalSpacing = 10.dp,
+            ) {
+                ExampleVideoSurfaceSetting.values().forEach { setting ->
+                    SelectionChip(
+                        label = stringResource(setting.titleRes),
+                        selected = setting == videoSurfaceSetting,
+                        onClick = { onVideoSurfaceSettingChange(setting) },
+                    )
+                }
+            }
+
+            Text(
+                text = stringResource(videoSurfaceSetting.subtitleRes),
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = palette.body,
+                    lineHeight = 22.sp,
+                ),
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = stringResource(R.string.example_plugins_hdr_evidence_title),
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        color = palette.title,
+                        fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+                AdaptiveChipWrap(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalSpacing = 10.dp,
+                    verticalSpacing = 10.dp,
+                ) {
+                    hdrEvidencePresets.forEach { preset ->
+                        SelectionChip(
+                            label = preset.label,
+                            selected = preset == selectedHdrEvidencePreset,
+                            onClick = { onHdrEvidencePresetChange(preset) },
+                        )
+                    }
+                }
+                Text(
+                    text =
+                        hdrEvidenceStatusText(
+                            selectedHdrEvidencePreset = selectedHdrEvidencePreset,
+                            activeSourceAvailable = hdrEvidenceActiveSourceAvailable,
+                        ),
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        color = palette.body,
+                        lineHeight = 22.sp,
+                    ),
+                )
+                Button(
+                    onClick = onCaptureHdrEvidence,
+                    enabled = !isCapturingHdrEvidence,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = palette.primaryAction,
+                        contentColor = Color.White,
+                    ),
+                ) {
+                    Text(
+                        text =
+                            if (isCapturingHdrEvidence) {
+                                stringResource(R.string.example_plugins_hdr_evidence_capturing)
+                            } else {
+                                stringResource(R.string.example_plugins_hdr_evidence_capture)
+                            },
+                    )
+                }
+            }
+
+            ExampleFactRow(
+                label = stringResource(R.string.example_plugins_source_normalizer_path),
+                value = sourceNormalizerPluginReferences.joinToString { it.pluginId }.ifBlank {
+                    stringResource(R.string.example_plugins_missing)
+                },
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_plugins_decoder_mediacodec_path),
+                value = decoderMediaCodecPluginReferences.joinToString { it.pluginId }.ifBlank {
+                    stringResource(R.string.example_plugins_missing)
+                },
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_plugins_frame_processor_path),
+                value = frameProcessorPluginReferences.joinToString { it.pluginId }.ifBlank {
+                    stringResource(R.string.example_plugins_missing)
+                },
+                palette = palette,
+            )
+
+            PluginDiagnosticGroup(
+                title = stringResource(R.string.example_plugins_source_normalizer_group),
+                emptyLabel = stringResource(R.string.example_plugins_no_source_normalizer_diagnostics),
+                diagnostics = sourceNormalizerDiagnostics,
+                palette = palette,
+            )
+            PluginDiagnosticGroup(
+                title = stringResource(R.string.example_plugins_frame_processor_group),
+                emptyLabel = stringResource(R.string.example_plugins_no_frame_processor_diagnostics),
+                diagnostics = frameProcessorDiagnostics,
+                palette = palette,
+            )
+            PluginDiagnosticGroup(
+                title = stringResource(R.string.example_plugins_native_frame_group),
+                emptyLabel = stringResource(R.string.example_plugins_no_native_frame_diagnostics),
+                diagnostics = nativeFramePipelineDiagnostics,
+                palette = palette,
+            )
+        }
+    }
+}
+
+@Composable
+internal fun ExampleDiagnosticsSummarySection(
+    palette: ExampleHostPalette,
+    sourceLabel: String,
+    sourceProtocol: String,
+    routeLabel: String,
+    playbackOrigin: ExamplePlaybackOrigin?,
+    sourceNormalizerSetting: ExampleSourceNormalizerSetting,
+    nativeFramePipelineSetting: ExampleNativeFramePipelineSetting,
+    videoSurfaceSetting: ExampleVideoSurfaceSetting,
+) {
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_diagnostics_summary_title),
+        subtitle = stringResource(R.string.example_diagnostics_summary_subtitle),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_source),
+                value = sourceLabel,
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_protocol),
+                value = sourceProtocol,
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_route),
+                value = routeLabel,
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_origin),
+                value = playbackOriginLabel(playbackOrigin),
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_source_normalizer),
+                value = stringResource(sourceNormalizerSetting.titleRes),
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_native_frame),
+                value = stringResource(nativeFramePipelineSetting.titleRes),
+                palette = palette,
+            )
+            ExampleFactRow(
+                label = stringResource(R.string.example_diagnostics_video_surface),
+                value = stringResource(videoSurfaceSetting.titleRes),
+                palette = palette,
+            )
+        }
+    }
+}
+
+@Composable
+private fun playbackOriginLabel(origin: ExamplePlaybackOrigin?): String =
+    when (origin) {
+        is ExamplePlaybackOrigin.DolbyAdHoc ->
+            stringResource(R.string.example_diagnostics_origin_dolby, origin.presetId)
+        is ExamplePlaybackOrigin.Queue ->
+            stringResource(R.string.example_diagnostics_origin_queue, origin.itemId)
+        null -> stringResource(R.string.example_diagnostics_origin_none)
+    }
+
+@Composable
+internal fun ExampleEventLogSection(
+    palette: ExampleHostPalette,
+    entries: List<ExampleHostLogEntry>,
+) {
+    val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.US) }
+    ExampleSectionShell(
+        palette = palette,
+        title = stringResource(R.string.example_event_log_title),
+        subtitle = stringResource(R.string.example_event_log_subtitle),
+    ) {
+        if (entries.isEmpty()) {
+            Text(
+                text = stringResource(R.string.example_event_log_empty),
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(
+                    items = entries,
+                    key = { entry -> entry.id },
+                    contentType = { "eventLogEntry" },
+                ) { entry ->
+                    EventLogRow(
+                        entry = entry,
+                        timeLabel = timeFormat.format(Date(entry.atMillis)),
+                        palette = palette,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EventLogRow(
+    entry: ExampleHostLogEntry,
+    timeLabel: String,
+    palette: ExampleHostPalette,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(palette.fieldBackground, RoundedCornerShape(16.dp))
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = timeLabel,
+                modifier = Modifier.width(72.dp),
+                style = MaterialTheme.typography.labelMedium.copy(
+                    color = palette.body,
+                    fontFeatureSettings = "tnum",
+                ),
+            )
+            Text(
+                text = eventSeverityLabel(entry.severity),
+                style = MaterialTheme.typography.labelMedium.copy(
+                    color = eventSeverityColor(entry.severity, palette),
+                    fontWeight = FontWeight.Bold,
+                ),
+            )
+        }
+        Text(
+            text = entry.title,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                color = palette.title,
+                fontWeight = FontWeight.SemiBold,
+            ),
+        )
+        entry.detail?.takeIf(String::isNotBlank)?.let { detail ->
+            Text(
+                text = detail,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+    }
+}
+
+@Composable
+private fun eventSeverityLabel(severity: ExampleHostLogSeverity): String =
+    when (severity) {
+        ExampleHostLogSeverity.Info -> stringResource(R.string.example_event_log_info)
+        ExampleHostLogSeverity.Warning -> stringResource(R.string.example_event_log_warning)
+        ExampleHostLogSeverity.Error -> stringResource(R.string.example_event_log_error)
+    }
+
+private fun eventSeverityColor(
+    severity: ExampleHostLogSeverity,
+    palette: ExampleHostPalette,
+): Color =
+    when (severity) {
+        ExampleHostLogSeverity.Info -> palette.primaryAction
+        ExampleHostLogSeverity.Warning -> Color(0xFFC77B00)
+        ExampleHostLogSeverity.Error -> Color(0xFFD64242)
+    }
+
+@Composable
+private fun hdrEvidenceStatusText(
+    selectedHdrEvidencePreset: ExampleHdrEvidenceSamplePreset,
+    activeSourceAvailable: Boolean,
+): String =
+    when {
+        selectedHdrEvidencePreset.sampleId == "NETWORK-FAILURE-CONTROL" ->
+            stringResource(R.string.example_plugins_hdr_evidence_network_control)
+        activeSourceAvailable ->
+            stringResource(R.string.example_plugins_hdr_evidence_current_source)
+        else ->
+            stringResource(R.string.example_plugins_hdr_evidence_select_source)
+    }
+
+@Composable
+private fun PluginDiagnosticGroup(
+    title: String,
+    emptyLabel: String,
+    diagnostics: List<Map<String, Any?>>,
+    palette: ExampleHostPalette,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge.copy(
+                color = palette.title,
+                fontWeight = FontWeight.SemiBold,
+            ),
+        )
+        if (diagnostics.isEmpty()) {
+            Text(
+                text = emptyLabel,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        } else {
+            diagnostics.forEach { diagnostic ->
+                PluginDiagnosticRow(diagnostic = diagnostic, palette = palette)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginDiagnosticRow(
+    diagnostic: Map<String, Any?>,
+    palette: ExampleHostPalette,
+) {
+    val status = diagnostic["status"]?.toString().orEmpty()
+    val participation = diagnostic["participation"]?.toString().orEmpty()
+    val pluginName = diagnostic["pluginName"]?.toString().orEmpty()
+    val path = exampleDiagnosticCompactPath(diagnostic["path"]?.toString().orEmpty())
+    val message = exampleDiagnosticCompactMessage(diagnostic["message"]?.toString().orEmpty())
+    val outputRoute =
+        diagnostic["route"]?.toString()?.takeIf(String::isNotBlank)
+            ?: diagnostic["outputRoute"]?.toString().orEmpty()
+    val selectedProfile = diagnostic["selectedProfile"]?.toString().orEmpty()
+    val primaryResource = diagnostic["primaryResource"]?.toString().orEmpty()
+    val diskBytesUsed = (diagnostic["diskBytesUsed"] as? Number)?.toLong()
+    val fallbackReason = diagnostic["fallbackReason"]?.toString().orEmpty()
+    val nativeFrameStatus = exampleNativeFramePipelineStatusLine(diagnostic)
+    val cachePolicy = diagnostic["cachePolicy"] as? Map<*, *>
+    val cacheLimit =
+        (diagnostic["cacheQuota"] as? Number)?.toLong()
+            ?: (cachePolicy?.get("sessionDiskSoftCapBytes") as? Number)?.toLong()
+    val capability = diagnostic["capability"] as? Map<*, *>
+    val sourceNormalizer = capability?.get("sourceNormalizer") as? Map<*, *>
+    val profiles = (sourceNormalizer?.get("supportedRuntimeProfiles") as? List<*>)
+        ?.joinToString { value -> value.toString() }
+        .orEmpty()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(palette.fieldBackground, RoundedCornerShape(18.dp))
+            .border(1.dp, palette.sectionStroke, RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Text(
+            text = listOf(pluginName, status)
+                .filter(String::isNotBlank)
+                .joinToString(" · ")
+                .ifBlank { stringResource(R.string.example_plugins_unknown_record) },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                color = palette.title,
+                fontWeight = FontWeight.SemiBold,
+            ),
+        )
+        Text(
+            text = stringResource(
+                R.string.example_plugins_participation,
+                participation.ifBlank { "unknown" },
+            ),
+            style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+        )
+        if (outputRoute.isNotBlank() || selectedProfile.isNotBlank()) {
+            Text(
+                text = stringResource(
+                    R.string.example_plugins_route,
+                    listOf(outputRoute, selectedProfile)
+                        .filter(String::isNotBlank)
+                        .joinToString(" · "),
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+        if (diskBytesUsed != null || cacheLimit != null) {
+            Text(
+                text = stringResource(
+                    R.string.example_plugins_cache,
+                    "${diskBytesUsed?.let(::formatBytes) ?: "-"} / ${cacheLimit?.let(::formatBytes) ?: "-"}",
+                ),
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+        if (profiles.isNotBlank()) {
+            Text(
+                text = stringResource(R.string.example_plugins_profiles, profiles),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+        if (message.isNotBlank()) {
+            Text(
+                text = message,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+        if (fallbackReason.isNotBlank()) {
+            Text(
+                text = fallbackReason,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+        if (nativeFrameStatus.isNotBlank()) {
+            Text(
+                text = nativeFrameStatus,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall.copy(color = palette.body),
+            )
+        }
+        if (primaryResource.isNotBlank()) {
+            Text(
+                text = stringResource(R.string.example_plugins_resource, primaryResource),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelSmall.copy(color = palette.body),
+            )
+        }
+        if (path.isNotBlank()) {
+            Text(
+                text = path,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelSmall.copy(color = palette.body),
+            )
+        }
+    }
+}
+
+internal fun exampleDiagnosticCompactMessage(message: String): String {
+    if (message.isBlank()) {
+        return ""
+    }
+    val normalized = message.replace('\n', ' ').replace(Regex("\\s+"), " ").trim()
+    return if (normalized.length <= 220) {
+        normalized
+    } else {
+        "${normalized.take(217)}..."
+    }
+}
+
+internal fun exampleDiagnosticCompactPath(path: String): String {
+    if (path.isBlank()) {
+        return ""
+    }
+    return path
+        .split(java.io.File.pathSeparatorChar)
+        .map { entry -> entry.substringAfterLast('/') }
+        .filter(String::isNotBlank)
+        .joinToString(separator = java.io.File.pathSeparator)
+        .ifBlank { path.substringAfterLast('/') }
+}
+
+internal fun exampleNativeFramePipelineStatusLine(
+    diagnostic: Map<String, Any?>,
+): String {
+    if (diagnostic["pluginKind"] != "native_frame_pipeline") {
+        return ""
+    }
+    val lifecycle = diagnostic["lifecycle"]?.toString().orEmpty()
+    val presenterState = diagnostic["presenterState"]?.toString().orEmpty()
+    val surfaceProfile = diagnostic["surfaceProfile"]?.toString().orEmpty()
+    val processedFrames = (diagnostic["processedFrames"] as? Number)?.toLong()
+    val presentedFrames = (diagnostic["presentedFrames"] as? Number)?.toLong()
+    val deadlineMisses = (diagnostic["deadlineMisses"] as? Number)?.toLong()
+    val backpressureCount = (diagnostic["backpressureCount"] as? Number)?.toLong()
+
+    val statusParts =
+        listOfNotNull(
+            lifecycle.takeIf(String::isNotBlank)?.let { "lifecycle=$it" },
+            presenterState.takeIf(String::isNotBlank)?.let { "presenter=$it" },
+            surfaceProfile.takeIf(String::isNotBlank)?.let { "surface=$it" },
+        )
+    val counterParts =
+        listOfNotNull(
+            processedFrames?.let { "processed=$it" },
+            presentedFrames?.let { "presented=$it" },
+            deadlineMisses?.let { "deadlineMisses=$it" },
+            backpressureCount?.let { "backpressure=$it" },
+        )
+    return (statusParts + counterParts).joinToString(separator = " · ")
+}
+
+@Composable
+internal fun ThemeModeChip(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    TextButton(
+        onClick = onClick,
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+        ),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        modifier = Modifier
+            .heightIn(min = 38.dp)
+            .background(
+                if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+                },
+                RoundedCornerShape(999.dp),
+            ),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(label, maxLines = 1)
+    }
+}
+
+@Composable
+private fun SelectionChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    TextButton(
+        onClick = onClick,
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+        ),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+        modifier = Modifier
+            .heightIn(min = 38.dp)
+            .background(
+                if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+                },
+                RoundedCornerShape(999.dp),
+            ),
+    ) {
+        Text(label, maxLines = 1)
+    }
+}
+
+@Composable
+private fun AdaptiveChipWrap(
+    modifier: Modifier = Modifier,
+    horizontalSpacing: androidx.compose.ui.unit.Dp,
+    verticalSpacing: androidx.compose.ui.unit.Dp,
+    content: @Composable () -> Unit,
+) {
+    Layout(
+        modifier = modifier,
+        content = content,
+    ) { measurables, constraints ->
+        val horizontalSpacingPx = horizontalSpacing.roundToPx()
+        val verticalSpacingPx = verticalSpacing.roundToPx()
+        val maxWidth = constraints.maxWidth.takeIf { it < Int.MAX_VALUE } ?: Int.MAX_VALUE
+        val placeables = measurables.map { measurable ->
+            measurable.measure(constraints.copy(minWidth = 0, minHeight = 0))
+        }
+
+        data class PositionedPlaceable(
+            val placeable: androidx.compose.ui.layout.Placeable,
+            val x: Int,
+            val y: Int,
+        )
+
+        val positionedPlaceables = mutableListOf<PositionedPlaceable>()
+        var currentX = 0
+        var currentY = 0
+        var currentRowHeight = 0
+        var contentWidth = 0
+
+        placeables.forEach { placeable ->
+            val shouldWrap =
+                currentX > 0 &&
+                    currentX + placeable.width > maxWidth
+            if (shouldWrap) {
+                currentX = 0
+                currentY += currentRowHeight + verticalSpacingPx
+                currentRowHeight = 0
+            }
+
+            positionedPlaceables +=
+                PositionedPlaceable(
+                    placeable = placeable,
+                    x = currentX,
+                    y = currentY,
+                )
+            currentX += placeable.width + horizontalSpacingPx
+            currentRowHeight = max(currentRowHeight, placeable.height)
+            contentWidth = max(contentWidth, currentX - horizontalSpacingPx)
+        }
+
+        val widthCandidate =
+            if (constraints.maxWidth < Int.MAX_VALUE) {
+                constraints.maxWidth
+            } else {
+                contentWidth
+            }
+        val heightCandidate =
+            if (positionedPlaceables.isEmpty()) {
+                0
+            } else {
+                currentY + currentRowHeight
+            }
+        val layoutWidth = widthCandidate.coerceIn(constraints.minWidth, constraints.maxWidth)
+        val layoutHeight = heightCandidate.coerceIn(constraints.minHeight, constraints.maxHeight)
+
+        layout(layoutWidth, layoutHeight) {
+            positionedPlaceables.forEach { positioned ->
+                positioned.placeable.placeRelative(positioned.x, positioned.y)
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ExampleSectionShell(
+    palette: ExampleHostPalette,
+    title: String,
+    subtitle: String,
+    content: @Composable () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(palette.sectionBackground, RoundedCornerShape(24.dp))
+            .border(1.dp, palette.sectionStroke, RoundedCornerShape(24.dp))
+            .padding(18.dp),
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium.copy(
+                color = palette.title,
+                fontWeight = FontWeight.Bold,
+            ),
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodySmall.copy(
+                color = palette.body,
+                lineHeight = 20.sp,
+            ),
+        )
+        Spacer(modifier = Modifier.size(14.dp))
+        Box(
+            modifier = Modifier
+                .width(42.dp)
+                .height(4.dp)
+                .background(Color(0xFF172033), RoundedCornerShape(999.dp)),
+        )
+        Spacer(modifier = Modifier.size(16.dp))
+        content()
+    }
+}
+
+@Composable
+private fun ExampleFactRow(
+    label: String,
+    value: String,
+    palette: ExampleHostPalette,
+) {
+    Row(modifier = Modifier.padding(vertical = 6.dp)) {
+        Text(
+            text = label,
+            modifier = Modifier.width(92.dp),
+            style = MaterialTheme.typography.bodyMedium.copy(color = palette.body),
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = value,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium.copy(
+                color = palette.title,
+                fontWeight = FontWeight.SemiBold,
+            ),
+        )
+    }
+}
+
+@Composable
+private fun ExampleStatusPill(
+    label: String,
+    palette: ExampleHostPalette,
+) {
+    Text(
+        text = label,
+        modifier = Modifier
+            .background(
+                palette.primaryAction.copy(alpha = 0.12f),
+                RoundedCornerShape(999.dp),
+            )
+            .padding(horizontal = 12.dp, vertical = 7.dp),
+        style = MaterialTheme.typography.labelMedium.copy(
+            color = palette.primaryAction,
+            fontWeight = FontWeight.SemiBold,
+        ),
+    )
+}

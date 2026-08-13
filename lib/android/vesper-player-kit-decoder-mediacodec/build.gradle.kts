@@ -14,7 +14,7 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
 }
 
 android {
-    namespace = "io.github.ikaros.vesper.player.android.decoder.mediacodec"
+    namespace = "io.github.umbrella22.vesper.player.android.decoder.mediacodec"
     compileSdk = 36
 
     defaultConfig {

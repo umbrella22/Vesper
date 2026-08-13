@@ -23,7 +23,7 @@ import VesperPlayerKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     let channel = FlutterMethodChannel(
-      name: "io.github.ikaros.vesper.example.flutter_host/media_picker",
+      name: "io.github.umbrella22.vesper.example.flutter_host/media_picker",
       binaryMessenger: engineBridge.applicationRegistrar.messenger()
     )
     channel.setMethodCallHandler { [weak self] call, result in
@@ -42,7 +42,7 @@ import VesperPlayerKit
     }
     mediaPickerChannel = channel
     let deviceChannel = FlutterMethodChannel(
-      name: "io.github.ikaros.vesper.example.flutter_host/device_controls",
+      name: "io.github.umbrella22.vesper.example.flutter_host/device_controls",
       binaryMessenger: engineBridge.applicationRegistrar.messenger()
     )
     deviceChannel.setMethodCallHandler { [weak self] call, result in
@@ -194,9 +194,9 @@ import VesperPlayerKit
       return
     }
     let windows = applicationWindows()
-    let surfaceIdentifier = "io.github.ikaros.vesper.player.surface.\(playerId)"
+    let surfaceIdentifier = "io.github.umbrella22.vesper.player.surface.\(playerId)"
     let surfaceMarkerIdentifier =
-      "io.github.ikaros.vesper.player.surface-marker.\(playerId)"
+      "io.github.umbrella22.vesper.player.surface-marker.\(playerId)"
     let directSurface = windows.lazy.compactMap({ window in
       self.descendantView(in: window, accessibilityIdentifier: surfaceIdentifier)
     }).first
@@ -212,7 +212,7 @@ import VesperPlayerKit
       let surface = directSurface ?? markedSurface ?? uniqueFallbackSurface,
       let subtitleLabel = descendantView(
         in: surface,
-        accessibilityIdentifier: "io.github.ikaros.vesper.player.subtitle-overlay"
+        accessibilityIdentifier: "io.github.umbrella22.vesper.player.subtitle-overlay"
       ) as? UILabel
     else {
       result(

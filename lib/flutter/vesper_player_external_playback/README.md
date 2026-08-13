@@ -15,7 +15,13 @@ The Android implementation provides:
 Cast route selection still uses the system Cast route button. DLNA devices are
 reported through `VesperExternalPlaybackController.routes`, which delegates to
 the Kotlin facade at
-`io.github.ikaros.vesper.player.android.external.VesperExternalPlaybackController`.
+`io.github.umbrella22.vesper.player.android.external.VesperExternalPlaybackController`.
+
+The Flutter plugin registers
+`io.github.umbrella22.vesper_player_external_playback` plus `/routes` and
+`/events` EventChannel suffixes. These names and the Android plugin package are
+a breaking pre-release rename from `io.github.ikaros`; no old handlers are
+registered.
 
 Use `VesperExternalRouteIconButton` inside a player-stage action slot on Android
 to surface the system Cast route picker through a Flutter icon button. The

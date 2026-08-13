@@ -309,7 +309,7 @@ fn ios_core_release_real_fixture_rejects_policy_drift() {
                 Command::new("/usr/libexec/PlistBuddy")
                     .args([
                         "-c",
-                        "Set :CFBundleIdentifier io.github.ikaros.vesper.invalid",
+                        "Set :CFBundleIdentifier io.github.umbrella22.vesper.invalid",
                     ])
                     .arg(framework.join("Info.plist")),
                 "core framework identity mutation",

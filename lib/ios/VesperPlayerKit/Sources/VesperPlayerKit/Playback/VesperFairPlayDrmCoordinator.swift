@@ -200,7 +200,7 @@ final class VesperFairPlayDrmCoordinator:
         self.licenseRequester = licenseRequester
         self.onError = onError
         resourceLoadingQueue = DispatchQueue(
-            label: "io.github.ikaros.vesper.player.fairplay.\(UUID().uuidString)"
+            label: "io.github.umbrella22.vesper.player.fairplay.\(UUID().uuidString)"
         )
         contentKeySession = AVContentKeySession(keySystem: .fairPlayStreaming)
         super.init()

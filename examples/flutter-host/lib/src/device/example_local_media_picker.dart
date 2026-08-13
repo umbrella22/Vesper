@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 
 const String _mediaPickerChannelName =
-    'io.github.ikaros.vesper.example.flutter_host/media_picker';
+    'io.github.umbrella22.vesper.example.flutter_host/media_picker';
 
 final class ExamplePickedVideo {
   const ExamplePickedVideo({required this.uri, required this.label});

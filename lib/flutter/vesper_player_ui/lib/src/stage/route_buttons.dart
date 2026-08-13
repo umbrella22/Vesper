@@ -76,4 +76,4 @@ class VesperAirPlayRouteIconButton extends StatelessWidget {
 }
 
 const String _airPlayRouteButtonViewType =
-    'io.github.ikaros.vesper_player/airplay_route_button';
+    'io.github.umbrella22.vesper_player/airplay_route_button';

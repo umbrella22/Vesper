@@ -162,7 +162,7 @@ pub fn verify(root: &Path) -> Result<ContractVerification, ContractError> {
     require_flutter_models_text(&repository, "unsupported")?;
     require_text(
         &repository,
-        "lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/VesperPlayerError.kt",
+        "lib/android/vesper-player-kit/src/main/java/io/github/umbrella22/vesper/player/android/VesperPlayerError.kt",
         "unsupported",
     )?;
     require_text(
@@ -219,7 +219,7 @@ pub fn verify(root: &Path) -> Result<ContractVerification, ContractError> {
     )?;
     require_text(
         &repository,
-        "lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/download/manager/VesperDownloadTypes.kt",
+        "lib/android/vesper-player-kit/src/main/java/io/github/umbrella22/vesper/player/android/VesperDownloadTypes.kt",
         "DashSegments",
     )?;
     require_text(
@@ -231,7 +231,7 @@ pub fn verify(root: &Path) -> Result<ContractVerification, ContractError> {
     require_flutter_models_text(&repository, "continueAudio")?;
     require_text(
         &repository,
-        "lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/bridge/PlayerBridge.kt",
+        "lib/android/vesper-player-kit/src/main/java/io/github/umbrella22/vesper/player/android/PlayerBridge.kt",
         "ContinueAudio",
     )?;
     require_text(
@@ -306,7 +306,7 @@ fn verify_dto_drift(
             },
             WireExpectation {
                 target: SearchTarget::File(
-                    "lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/VesperPlayerError.kt",
+                    "lib/android/vesper-player-kit/src/main/java/io/github/umbrella22/vesper/player/android/VesperPlayerError.kt",
                 ),
                 needle: quoted,
             },
@@ -436,7 +436,7 @@ fn verify_dto_drift(
             },
             WireExpectation {
                 target: SearchTarget::Tree(
-                    "lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android",
+                    "lib/android/vesper-player-kit/src/main/java/io/github/umbrella22/vesper/player/android",
                 ),
                 needle: kotlin_variant,
             },
@@ -477,7 +477,7 @@ fn verify_dto_drift(
             },
             WireExpectation {
                 target: SearchTarget::Tree(
-                    "lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android",
+                    "lib/android/vesper-player-kit/src/main/java/io/github/umbrella22/vesper/player/android",
                 ),
                 needle: kotlin_variant,
             },
@@ -536,7 +536,7 @@ fn verify_dto_drift(
             },
             WireExpectation {
                 target: SearchTarget::File(
-                    "lib/android/vesper-player-kit/src/main/java/io/github/ikaros/vesper/player/android/bridge/PlayerBridge.kt",
+                    "lib/android/vesper-player-kit/src/main/java/io/github/umbrella22/vesper/player/android/PlayerBridge.kt",
                 ),
                 needle: kotlin_variant,
             },
@@ -577,13 +577,13 @@ fn verify_dto_drift(
             },
             WireExpectation {
                 target: SearchTarget::File(
-                    "lib/android/vesper-player-kit-external-playback/src/main/java/io/github/ikaros/vesper/player/android/external/VesperExternalPlaybackModels.kt",
+                    "lib/android/vesper-player-kit-external-playback/src/main/java/io/github/umbrella22/vesper/player/android/external/VesperExternalPlaybackModels.kt",
                 ),
                 needle: kotlin_variant,
             },
             WireExpectation {
                 target: SearchTarget::File(
-                    "lib/flutter/vesper_player_external_playback/android/src/main/kotlin/io/github/ikaros/vesper/player/flutter/externalplayback/VesperPlayerExternalPlaybackPlugin.kt",
+                    "lib/flutter/vesper_player_external_playback/android/src/main/kotlin/io/github/umbrella22/vesper/player/flutter/externalplayback/VesperPlayerExternalPlaybackPlugin.kt",
                 ),
                 needle: identity,
             },
@@ -601,7 +601,7 @@ fn verify_dto_drift(
             },
             WireExpectation {
                 target: SearchTarget::File(
-                    "lib/android/vesper-player-kit-external-playback/src/main/java/io/github/ikaros/vesper/player/android/external/VesperExternalPlaybackModels.kt",
+                    "lib/android/vesper-player-kit-external-playback/src/main/java/io/github/umbrella22/vesper/player/android/external/VesperExternalPlaybackModels.kt",
                 ),
                 needle: kotlin_variant,
             },
@@ -619,13 +619,13 @@ fn verify_dto_drift(
             },
             WireExpectation {
                 target: SearchTarget::File(
-                    "lib/flutter/vesper_player_external_playback/android/src/main/kotlin/io/github/ikaros/vesper/player/flutter/externalplayback/VesperPlayerExternalPlaybackPlugin.kt",
+                    "lib/flutter/vesper_player_external_playback/android/src/main/kotlin/io/github/umbrella22/vesper/player/flutter/externalplayback/VesperPlayerExternalPlaybackPlugin.kt",
                 ),
                 needle: identity,
             },
             WireExpectation {
                 target: SearchTarget::File(
-                    "lib/android/vesper-player-kit-external-playback/src/main/java/io/github/ikaros/vesper/player/android/external/VesperExternalPlaybackModels.kt",
+                    "lib/android/vesper-player-kit-external-playback/src/main/java/io/github/umbrella22/vesper/player/android/external/VesperExternalPlaybackModels.kt",
                 ),
                 needle: kotlin_variant,
             },

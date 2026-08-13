@@ -3389,9 +3389,9 @@ mod implementation {
 
     fn expected_framework_bundle_identifier(framework: &str) -> Option<&'static str> {
         match framework {
-            "VesperFFmpegAVCodec" => Some("io.github.ikaros.vesper.ffmpeg.avcodec"),
-            "VesperFFmpegAVFormat" => Some("io.github.ikaros.vesper.ffmpeg.avformat"),
-            "VesperFFmpegAVUtil" => Some("io.github.ikaros.vesper.ffmpeg.avutil"),
+            "VesperFFmpegAVCodec" => Some("io.github.umbrella22.vesper.ffmpeg.avcodec"),
+            "VesperFFmpegAVFormat" => Some("io.github.umbrella22.vesper.ffmpeg.avformat"),
+            "VesperFFmpegAVUtil" => Some("io.github.umbrella22.vesper.ffmpeg.avutil"),
             _ => crate::ios_plugin::IOS_PLUGIN_SPECS
                 .iter()
                 .find(|plugin| plugin.framework_name == framework)

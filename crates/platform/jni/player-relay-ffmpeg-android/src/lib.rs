@@ -22,7 +22,7 @@ use jni::sys::{jint, jlong, jobject, jstring};
 use jni::{Env, EnvUnowned};
 use serde::Deserialize;
 
-const PKG: &str = "io/github/ikaros/vesper/player/android/external/internal/relay/ffmpeg";
+const PKG: &str = "io/github/umbrella22/vesper/player/android/external/internal/relay/ffmpeg";
 const HOST_PREPARED_DASH_INPUT_MODE: &str = "host_prepared_dash_fmp4_tracks";
 const DEFAULT_REMUX_TIMEOUT: Duration = Duration::from_secs(90);
 const MPEG_TS_RANGE_WAIT: Duration = Duration::from_secs(5);
@@ -585,7 +585,7 @@ fn read_growing_file_with_timeout(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_runtimeMetadata(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_runtimeMetadata(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
 ) -> jstring {
@@ -607,7 +607,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_open(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_open(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     request_json: JString<'_>,
@@ -672,7 +672,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_prewarm(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_prewarm(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     request_json: JString<'_>,
@@ -741,7 +741,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
 ///
 /// This function is called by the JVM through JNI. The JVM must pass a valid
 /// `jbyteArray` that belongs to the current JNI frame when `buffer` is non-null.
-pub unsafe extern "system" fn Java_io_github_ikaros_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_read(
+pub unsafe extern "system" fn Java_io_github_umbrella22_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_read(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     handle: jlong,
@@ -818,7 +818,7 @@ pub unsafe extern "system" fn Java_io_github_ikaros_vesper_player_android_extern
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_close(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_close(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
     handle: jlong,
@@ -827,7 +827,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_invalidate(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_invalidate(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_id: JString<'_>,
@@ -847,7 +847,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_inte
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayDashBridgeNative_nativeExecuteJson(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayDashBridgeNative_nativeExecuteJson(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     request_json: JString<'_>,

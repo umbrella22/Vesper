@@ -14,8 +14,8 @@ use player_plugin::{
     SourceNormalizerReadPacketMetadata, SourceNormalizerRequiredCapabilities,
 };
 
-const PLUGIN_ID: &str = "io.github.ikaros.vesper.source-normalizer-diagnostic";
-const INSTANCE_ID: &str = "io.github.ikaros.vesper.source-normalizer-diagnostic.packet";
+const PLUGIN_ID: &str = "io.github.umbrella22.vesper.source-normalizer-diagnostic";
+const INSTANCE_ID: &str = "io.github.umbrella22.vesper.source-normalizer-diagnostic.packet";
 const PLUGIN_NAME: &str = "player-source-normalizer-diagnostic";
 const DIAGNOSTIC_PACKET_BYTES: &[u8] = b"vesper-diagnostic-source-normalizer-packet";
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);

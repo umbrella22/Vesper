@@ -64,7 +64,7 @@ void main() {
 
   test('bundled remux reference has the canonical native identity', () {
     expect(VesperBundledPluginReferences.remuxFfmpeg.toMap(), <String, Object?>{
-      'pluginId': 'io.github.ikaros.vesper.remux-ffmpeg',
+      'pluginId': 'io.github.umbrella22.vesper.remux-ffmpeg',
       'transport': 'native',
     });
   });

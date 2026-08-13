@@ -12,8 +12,8 @@ use player_plugin::{
     PluginBuildError, normalize_decoder_codec_identifier,
 };
 
-const PLUGIN_ID: &str = "io.github.ikaros.vesper.decoder-mediacodec";
-const INSTANCE_ID: &str = "io.github.ikaros.vesper.decoder-mediacodec.native";
+const PLUGIN_ID: &str = "io.github.umbrella22.vesper.decoder-mediacodec";
+const INSTANCE_ID: &str = "io.github.umbrella22.vesper.decoder-mediacodec.native";
 const PLUGIN_NAME: &str = "player-decoder-mediacodec";
 const MEDIACODEC_SUPPORTED: bool = cfg!(target_os = "android");
 const MEDIACODEC_SURFACE_TEXTURE_FORMAT: &str = "mediacodec_surface_texture";

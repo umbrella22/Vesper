@@ -4,7 +4,7 @@ import os
 
 enum VesperPlaybackTrace {
     private static let signposter = OSSignposter(
-        subsystem: "io.github.ikaros.vesper.player.ios",
+        subsystem: "io.github.umbrella22.vesper.player.ios",
         category: "Playback"
     )
 

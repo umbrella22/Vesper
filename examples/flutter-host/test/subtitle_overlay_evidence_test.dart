@@ -6,7 +6,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   const channel = MethodChannel(
-    'io.github.ikaros.vesper.example.flutter_host/device_controls',
+    'io.github.umbrella22.vesper.example.flutter_host/device_controls',
   );
 
   tearDown(() {

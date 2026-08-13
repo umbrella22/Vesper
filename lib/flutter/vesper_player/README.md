@@ -70,6 +70,22 @@ Add each other optional Vesper package as a direct path or Git dependency when
 the host enables that feature. Once the family is published, normal hosted
 constraints replace these source-checkout overrides.
 
+### Native identifier baseline
+
+The Flutter package names remain `vesper_player_*`. Native registration uses
+the `io.github.umbrella22` reverse-DNS root:
+
+- player MethodChannel: `io.github.umbrella22.vesper_player`
+- player EventChannel: `io.github.umbrella22.vesper_player/events`
+- Android plugin package:
+  `io.github.umbrella22.vesper.player.flutter.android`
+- iOS Swift package and module: `VesperPlayerKit`
+
+These identifiers replaced the unreleased `io.github.ikaros` names without
+aliases. Apps that only use Flutter plugin auto-registration need no manual
+registration code; custom channels, native imports, manifest entries, and
+serialized first-party plugin references must use the new identifiers.
+
 ## Quick Start
 
 ### Minimal playback
@@ -621,9 +637,9 @@ runtime components and plugin, then selects the packaged plugin with a native
 
 ```dart
 final remuxPlugin = VesperPluginReference(
-  pluginId: 'io.github.ikaros.vesper.remux-ffmpeg',
+  pluginId: 'io.github.umbrella22.vesper.remux-ffmpeg',
   capabilityInstanceId:
-      'io.github.ikaros.vesper.remux-ffmpeg.post-download',
+      'io.github.umbrella22.vesper.remux-ffmpeg.post-download',
   transport: VesperPluginTransport.native,
 );
 

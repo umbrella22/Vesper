@@ -1,4 +1,4 @@
-group = "io.github.ikaros.vesper.player.flutter.android"
+group = "io.github.umbrella22.vesper.player.flutter.android"
 version = "0.4.0"
 
 ext.vesperPlayerKitVersion = providers
@@ -29,7 +29,7 @@ allprojects {
 apply plugin: "com.android.library"
 
 android {
-    namespace = "io.github.ikaros.vesper.player.flutter.android"
+    namespace = "io.github.umbrella22.vesper.player.flutter.android"
     compileSdk = 36
 
     defaultConfig {
@@ -63,7 +63,7 @@ dependencies {
     if (hostKitProject != null) {
         implementation project(":vesper-player-kit")
     } else {
-        implementation "io.github.ikaros.vesper:vesper-player-kit:$vesperPlayerKitVersion"
+        implementation "io.github.umbrella22.vesper:vesper-player-kit:$vesperPlayerKitVersion"
     }
 
     implementation "androidx.activity:activity:1.8.2"

@@ -4,6 +4,10 @@
 
 ### Breaking Changes
 
+- First-party bundle, dispatch-label, and plugin identities now use the
+  `io.github.umbrella22` reverse-DNS root instead of `io.github.ikaros`. The
+  Swift package, products, and `VesperPlayerKit` module name are unchanged, but
+  persisted `VesperPluginReference` values must be recreated.
 - `VesperPlayerController.setSubtitleTrackSelection` is now `async throws` and
   completes only after AVPlayer or the external overlay confirms convergence.
 - External subtitle declarations now use `VesperExternalSubtitleSource` and

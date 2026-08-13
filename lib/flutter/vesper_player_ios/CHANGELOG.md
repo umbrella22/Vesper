@@ -13,6 +13,9 @@
 
 ### Breaking Changes
 
+- MethodChannel, EventChannel, and platform-view identifiers now use the
+  `io.github.umbrella22` reverse-DNS root. The Swift package and module remain
+  named `VesperPlayerKit`; custom channel integrations must use the new names.
 - The iOS Flutter implementation now requires Flutter 3.44.0 or newer.
 - Subtitle MethodChannel calls now await the iOS host API and return canonical
   `vesper_subtitle_error` details for validation and convergence failures.

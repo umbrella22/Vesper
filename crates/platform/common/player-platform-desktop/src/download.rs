@@ -1681,7 +1681,7 @@ mod tests {
                     )
                 });
         let reference = PluginReference::new(
-            "io.github.ikaros.vesper.remux-ffmpeg",
+            "io.github.umbrella22.vesper.remux-ffmpeg",
             None,
             PluginTransport::Native,
         )

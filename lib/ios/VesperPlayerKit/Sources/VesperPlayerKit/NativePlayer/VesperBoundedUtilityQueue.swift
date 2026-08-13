@@ -18,7 +18,7 @@ final class VesperBoundedUtilityQueue: @unchecked Sendable {
         self.maxPendingOperations = max(maxPendingOperations, maxConcurrentOperations)
         self.maxRequiredWaiters = max(maxRequiredWaiters ?? maxPendingOperations, 0)
         queue = OperationQueue()
-        queue.name = "io.github.ikaros.vesper.player.utility"
+        queue.name = "io.github.umbrella22.vesper.player.utility"
         queue.qualityOfService = .utility
         queue.maxConcurrentOperationCount = max(maxConcurrentOperations, 1)
     }

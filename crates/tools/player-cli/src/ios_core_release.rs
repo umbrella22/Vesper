@@ -18,7 +18,7 @@ use crate::ios::{self, IosError};
 const FRAMEWORK_NAME: &str = "VesperPlayerKit";
 const FRAMEWORK_ROOT: &str = "VesperPlayerKit.framework";
 const XCFRAMEWORK_ROOT: &str = "VesperPlayerKit.xcframework";
-const BUNDLE_IDENTIFIER: &str = "io.github.ikaros.vesper.lib.ioshost";
+const BUNDLE_IDENTIFIER: &str = "io.github.umbrella22.vesper.lib.ioshost";
 const DEVICE_ARCHIVE: &str = "VesperPlayerKit-ios-arm64.framework.zip";
 const SIMULATOR_ARCHIVE: &str = "VesperPlayerKit-ios-simulator-arm64.framework.zip";
 const XCFRAMEWORK_ARCHIVE: &str = "VesperPlayerKit.xcframework.zip";

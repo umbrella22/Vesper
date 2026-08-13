@@ -85,7 +85,7 @@ fn inbound_track_and_playlist_ordinals_reject_unknown_values() {
 #[test]
 fn download_config_decodes_capability_specific_plugin_references() {
     let post_download = CString::new(
-        r#"[{"pluginId":"io.github.ikaros.vesper.remux-ffmpeg","capabilityInstanceId":"io.github.ikaros.vesper.remux-ffmpeg.default","transport":"native"}]"#,
+        r#"[{"pluginId":"io.github.umbrella22.vesper.remux-ffmpeg","capabilityInstanceId":"io.github.umbrella22.vesper.remux-ffmpeg.default","transport":"native"}]"#,
     )
     .expect("post-download references CString");
     let event_hooks =
@@ -103,11 +103,11 @@ fn download_config_decodes_capability_specific_plugin_references() {
     assert_eq!(resolved.post_download_plugin_references.len(), 1);
     assert_eq!(
         resolved.post_download_plugin_references[0].plugin_id(),
-        "io.github.ikaros.vesper.remux-ffmpeg"
+        "io.github.umbrella22.vesper.remux-ffmpeg"
     );
     assert_eq!(
         resolved.post_download_plugin_references[0].capability_instance_id(),
-        Some("io.github.ikaros.vesper.remux-ffmpeg.default")
+        Some("io.github.umbrella22.vesper.remux-ffmpeg.default")
     );
     assert_eq!(
         resolved.post_download_plugin_references[0].transport(),
@@ -885,7 +885,7 @@ fn ios_native_frame_pipeline_open_requires_source_normalizer_packet_plugin_refer
     let source = test_c_string("file:///tmp/video.mp4");
     let source_artifacts = test_c_string("[]");
     let decoder_artifacts = test_c_string(
-        r#"[{"reference":{"pluginId":"io.github.ikaros.vesper.decoder-videotoolbox","capabilityInstanceId":"io.github.ikaros.vesper.decoder-videotoolbox.video","transport":"native"},"libraryPath":"/tmp/libdecoder.dylib"}]"#,
+        r#"[{"reference":{"pluginId":"io.github.umbrella22.vesper.decoder-videotoolbox","capabilityInstanceId":"io.github.umbrella22.vesper.decoder-videotoolbox.video","transport":"native"},"libraryPath":"/tmp/libdecoder.dylib"}]"#,
     );
     let frame_artifacts = test_c_string("[]");
     let mut out_handle = 99_u64;
@@ -924,7 +924,7 @@ fn ios_native_frame_pipeline_open_requires_source_normalizer_packet_plugin_refer
 fn ios_native_frame_pipeline_open_requires_videotoolbox_decoder_plugin_reference() {
     let source = test_c_string("file:///tmp/video.mp4");
     let source_artifacts = test_c_string(
-        r#"[{"reference":{"pluginId":"io.github.ikaros.vesper.source-normalizer-ffmpeg","capabilityInstanceId":"io.github.ikaros.vesper.source-normalizer-ffmpeg.packet","transport":"native"},"libraryPath":"/tmp/libsource_normalizer.dylib"}]"#,
+        r#"[{"reference":{"pluginId":"io.github.umbrella22.vesper.source-normalizer-ffmpeg","capabilityInstanceId":"io.github.umbrella22.vesper.source-normalizer-ffmpeg.packet","transport":"native"},"libraryPath":"/tmp/libsource_normalizer.dylib"}]"#,
     );
     let decoder_artifacts = test_c_string("[]");
     let frame_artifacts = test_c_string("[]");

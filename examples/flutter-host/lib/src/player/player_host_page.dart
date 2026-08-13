@@ -103,7 +103,7 @@ class _PlayerHostPageState extends State<PlayerHostPage>
   VesperPictureInPictureStatus _pictureInPictureStatus =
       VesperPictureInPictureStatus.inactive;
   static const MethodChannel _pictureInPictureHostChannel = MethodChannel(
-    'io.github.ikaros.vesper.example.flutter_host/picture_in_picture',
+    'io.github.umbrella22.vesper.example.flutter_host/picture_in_picture',
   );
   VesperPlayerSource? _queuedRemoteSource;
   VesperPlayerSource? _queuedLocalSource;

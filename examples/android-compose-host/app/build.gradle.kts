@@ -50,19 +50,19 @@ val vesperAppPluginRegistries =
             taskSegment = "RemuxFfmpeg",
             manifestPath = "plugins/remux-ffmpeg/vesper-plugin.toml",
             libraryName = "vesper_remux_ffmpeg",
-            pluginId = "io.github.ikaros.vesper.remux-ffmpeg",
+            pluginId = "io.github.umbrella22.vesper.remux-ffmpeg",
         ),
         VesperAppPluginRegistryMetadata(
             taskSegment = "DecoderMediaCodec",
             manifestPath = "plugins/decoder-mediacodec/vesper-plugin.toml",
             libraryName = "vesper_decoder_mediacodec",
-            pluginId = "io.github.ikaros.vesper.decoder-mediacodec",
+            pluginId = "io.github.umbrella22.vesper.decoder-mediacodec",
         ),
         VesperAppPluginRegistryMetadata(
             taskSegment = "SourceNormalizerFfmpeg",
             manifestPath = "plugins/source-normalizer-ffmpeg/vesper-plugin.toml",
             libraryName = "vesper_source_normalizer_ffmpeg",
-            pluginId = "io.github.ikaros.vesper.source-normalizer-ffmpeg",
+            pluginId = "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
         ),
         VesperAppPluginRegistryMetadata(
             taskSegment = "FrameProcessorDiagnostic",
@@ -95,12 +95,12 @@ val buildVesperPluginCli =
     }
 
 android {
-    namespace = "io.github.ikaros.vesper.example.androidcomposehost"
+    namespace = "io.github.umbrella22.vesper.example.androidcomposehost"
     compileSdk = 36
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
-        applicationId = "io.github.ikaros.vesper.example.androidcomposehost"
+        applicationId = "io.github.umbrella22.vesper.example.androidcomposehost"
         minSdk = 26
         targetSdk = 36
         versionCode = 400

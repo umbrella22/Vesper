@@ -14,7 +14,7 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
 }
 
 android {
-    namespace = "io.github.ikaros.vesper.player.android.frame.processor.diagnostic"
+    namespace = "io.github.umbrella22.vesper.player.android.frame.processor.diagnostic"
     compileSdk = 36
 
     defaultConfig {

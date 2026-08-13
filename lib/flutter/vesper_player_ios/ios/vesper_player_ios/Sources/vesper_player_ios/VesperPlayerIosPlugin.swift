@@ -9,7 +9,7 @@ import VesperPlayerKit
 
 private enum VesperFlutterPlaybackTrace {
     private static let signposter = OSSignposter(
-        subsystem: "io.github.ikaros.vesper.player.flutter.ios",
+        subsystem: "io.github.umbrella22.vesper.player.flutter.ios",
         category: "Playback"
     )
 

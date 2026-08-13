@@ -14,7 +14,7 @@ void main() {
     WidgetTester tester,
   ) async {
     const channel = MethodChannel(
-      'io.github.ikaros.vesper.example.flutter_host/media_picker',
+      'io.github.umbrella22.vesper.example.flutter_host/media_picker',
     );
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (_) async => null);

@@ -72,13 +72,13 @@ final class VesperBundledPluginResolverTests: XCTestCase {
             in: root
         )
         let postDownload = try VesperPluginReference(
-            pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
-            capabilityInstanceId: "io.github.ikaros.vesper.remux-ffmpeg.post-download",
+            pluginId: "io.github.umbrella22.vesper.remux-ffmpeg",
+            capabilityInstanceId: "io.github.umbrella22.vesper.remux-ffmpeg.post-download",
             transport: .native
         )
         let eventHook = try VesperPluginReference(
-            pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
-            capabilityInstanceId: "io.github.ikaros.vesper.remux-ffmpeg.event-hook",
+            pluginId: "io.github.umbrella22.vesper.remux-ffmpeg",
+            capabilityInstanceId: "io.github.umbrella22.vesper.remux-ffmpeg.event-hook",
             transport: .native
         )
 
@@ -104,22 +104,22 @@ final class VesperBundledPluginResolverTests: XCTestCase {
         XCTAssertEqual(
             capabilityInstanceIds,
             [
-                "io.github.ikaros.vesper.remux-ffmpeg.post-download",
-                "io.github.ikaros.vesper.remux-ffmpeg.event-hook",
+                "io.github.umbrella22.vesper.remux-ffmpeg.post-download",
+                "io.github.umbrella22.vesper.remux-ffmpeg.event-hook",
             ]
         )
     }
 
     func testDiagnosticSanitizationUsesCanonicalInstanceForSharedArtifact() throws {
-        let pluginId = "io.github.ikaros.vesper.remux-ffmpeg"
+        let pluginId = "io.github.umbrella22.vesper.remux-ffmpeg"
         let first = try VesperPluginReference(
             pluginId: pluginId,
-            capabilityInstanceId: "io.github.ikaros.vesper.remux-ffmpeg.first",
+            capabilityInstanceId: "io.github.umbrella22.vesper.remux-ffmpeg.first",
             transport: .native
         )
         let second = try VesperPluginReference(
             pluginId: pluginId,
-            capabilityInstanceId: "io.github.ikaros.vesper.remux-ffmpeg.second",
+            capabilityInstanceId: "io.github.umbrella22.vesper.remux-ffmpeg.second",
             transport: .native
         )
         let secondInstanceId = try XCTUnwrap(second.capabilityInstanceId)
@@ -175,7 +175,7 @@ final class VesperBundledPluginResolverTests: XCTestCase {
 
     func testPluginReferenceResolutionRejectsUnsupportedTransportAndMissingArtifact() throws {
         let wasm = try VesperPluginReference(
-            pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
+            pluginId: "io.github.umbrella22.vesper.remux-ffmpeg",
             transport: .wasm
         )
         XCTAssertThrowsError(
@@ -191,7 +191,7 @@ final class VesperBundledPluginResolverTests: XCTestCase {
         }
 
         let missing = try VesperPluginReference(
-            pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
+            pluginId: "io.github.umbrella22.vesper.remux-ffmpeg",
             transport: .native
         )
         XCTAssertThrowsError(
@@ -202,7 +202,7 @@ final class VesperBundledPluginResolverTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 error as? VesperBundledPluginResolutionError,
-                .missingArtifact("io.github.ikaros.vesper.remux-ffmpeg")
+                .missingArtifact("io.github.umbrella22.vesper.remux-ffmpeg")
             )
         }
     }
@@ -210,8 +210,8 @@ final class VesperBundledPluginResolverTests: XCTestCase {
     func testPluginReferenceResolutionCapsUniqueReferences() throws {
         let references = try (0...256).map { index in
             try VesperPluginReference(
-                pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
-                capabilityInstanceId: "io.github.ikaros.vesper.remux-ffmpeg.capability-\(index)",
+                pluginId: "io.github.umbrella22.vesper.remux-ffmpeg",
+                capabilityInstanceId: "io.github.umbrella22.vesper.remux-ffmpeg.capability-\(index)",
                 transport: .native
             )
         }

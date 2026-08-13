@@ -73,7 +73,7 @@ val provisionAndroidTestNativeLibraries = tasks.register<Exec>("provisionAndroid
 }
 
 android {
-    namespace = "io.github.ikaros.vesper.player.android"
+    namespace = "io.github.umbrella22.vesper.player.android"
     compileSdk = 36
     ndkVersion = "29.0.14206865"
 

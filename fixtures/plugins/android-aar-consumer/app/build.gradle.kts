@@ -30,11 +30,11 @@ if (missingVesperAars.isNotEmpty()) {
 }
 
 android {
-    namespace = "io.github.ikaros.vesper.fixture.androidaarconsumer"
+    namespace = "io.github.umbrella22.vesper.fixture.androidaarconsumer"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "io.github.ikaros.vesper.fixture.androidaarconsumer"
+        applicationId = "io.github.umbrella22.vesper.fixture.androidaarconsumer"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

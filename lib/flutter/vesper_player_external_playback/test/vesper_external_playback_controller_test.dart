@@ -11,13 +11,13 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   const channel = MethodChannel(
-    'io.github.ikaros.vesper_player_external_playback_test',
+    'io.github.umbrella22.vesper_player_external_playback_test',
   );
   const routesChannel = EventChannel(
-    'io.github.ikaros.vesper_player_external_playback/routes',
+    'io.github.umbrella22.vesper_player_external_playback/routes',
   );
   const eventsChannel = EventChannel(
-    'io.github.ikaros.vesper_player_external_playback/events',
+    'io.github.umbrella22.vesper_player_external_playback/events',
   );
   final calls = <MethodCall>[];
 
@@ -379,7 +379,7 @@ void main() {
 
   test('dispose clears cached routes and rejects later operations', () async {
     const customRoutesChannel = EventChannel(
-      'io.github.ikaros.vesper_player_external_playback_test/routes',
+      'io.github.umbrella22.vesper_player_external_playback_test/routes',
     );
     var routeListenCount = 0;
     var routeCancelCount = 0;

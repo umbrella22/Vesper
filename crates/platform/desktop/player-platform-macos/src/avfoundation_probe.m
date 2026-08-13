@@ -383,7 +383,7 @@ static const void *PlayerMacosCallbackQueueKey = &PlayerMacosCallbackQueueKey;
     self.callbacks = callbacks;
     self.callbacksEnabled = YES;
     self.callbackQueue =
-        dispatch_queue_create("io.github.ikaros.vesper.player.macos.callbacks",
+        dispatch_queue_create("io.github.umbrella22.vesper.player.macos.callbacks",
                               DISPATCH_QUEUE_SERIAL);
     dispatch_queue_set_specific(self.callbackQueue,
                                 PlayerMacosCallbackQueueKey,

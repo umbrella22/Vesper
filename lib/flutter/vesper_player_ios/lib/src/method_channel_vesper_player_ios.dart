@@ -14,15 +14,15 @@ class MethodChannelVesperPlayerIos extends VesperMethodChannelPlatformBase {
   }
 
   static const MethodChannel _methodChannel = MethodChannel(
-    'io.github.ikaros.vesper_player',
+    'io.github.umbrella22.vesper_player',
   );
   static const EventChannel _eventChannel = EventChannel(
-    'io.github.ikaros.vesper_player/events',
+    'io.github.umbrella22.vesper_player/events',
   );
   static const EventChannel _downloadEventChannel = EventChannel(
-    'io.github.ikaros.vesper_player/download_events',
+    'io.github.umbrella22.vesper_player/download_events',
   );
   static const EventChannel _sequenceEventChannel = EventChannel(
-    'io.github.ikaros.vesper_player/sequence_events',
+    'io.github.umbrella22.vesper_player/sequence_events',
   );
 }

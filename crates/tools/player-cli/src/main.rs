@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 
 mod android;
+mod android_publish;
 mod android_subtitle;
 mod boundary;
 mod cli_error;
@@ -24,6 +25,7 @@ mod ios_optional_release;
 mod ios_plugin;
 mod ios_plugin_release;
 mod ios_release;
+mod ios_spm_publish;
 mod ios_subtitle;
 mod media;
 mod mobile;
@@ -196,6 +198,9 @@ enum IosCommand {
     /// Stages the complete optional-plugin release bundle.
     #[command(name = "stage-optional-plugins-release")]
     StageOptionalPluginsRelease(IosWorkerArgs),
+    /// Publishes the core XCFramework and SwiftUI sources through a remote Swift package.
+    #[command(name = "publish-spm-index")]
+    PublishSpmIndex(IosPublishSpmIndexArgs),
     /// Verifies iOS subtitle behavior.
     #[command(name = "verify-subtitles")]
     VerifySubtitles(IosVerifySubtitlesArgs),
@@ -361,6 +366,26 @@ struct IosStageReleaseArgs {
 }
 
 #[derive(Debug, Args)]
+struct IosPublishSpmIndexArgs {
+    /// Stable release tag in vMAJOR.MINOR.PATCH form.
+    tag: String,
+    /// Released VesperPlayerKit XCFramework archive.
+    archive: PathBuf,
+    /// GitHub repository that owns the release asset, for example umbrella22/Vesper.
+    #[arg(long)]
+    source_repository: Option<String>,
+    /// GitHub repository used as the Swift package index.
+    #[arg(long)]
+    repository: Option<String>,
+    /// Generates and validates the package in a local directory without network writes.
+    #[arg(long)]
+    dry_run: bool,
+    /// Output directory used by --dry-run.
+    #[arg(long, requires = "dry_run")]
+    output_directory: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
 struct IosWorkerArgs {
     /// Arguments forwarded to the platform worker.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -436,6 +461,9 @@ enum AndroidCommand {
     /// Stages Android sample APKs.
     #[command(name = "sample-apks")]
     SampleApks(AndroidSampleApksArgs),
+    /// Publishes the stable Android host-kit coordinates to Maven Central.
+    #[command(name = "publish-maven-central")]
+    PublishMavenCentral(AndroidPublishMavenCentralArgs),
     /// Provisions the Android instrumentation JNI fixture through Rust.
     #[command(name = "provision-test-jni", hide = true)]
     ProvisionTestJni(AndroidProvisionTestJniArgs),
@@ -498,6 +526,18 @@ struct AndroidSampleApksArgs {
     output_directory: Option<PathBuf>,
     /// Android ABIs. Defaults to RUST_ANDROID_ABIS, then arm64-v8a.
     abis: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct AndroidPublishMavenCentralArgs {
+    /// Stable release tag in vMAJOR.MINOR.PATCH form.
+    tag: String,
+    /// Approved Central Portal namespace that authorizes io.github.umbrella22.vesper.
+    #[arg(long, default_value = "io.github.umbrella22")]
+    namespace: String,
+    /// Stages and verifies the signed repository without uploading it.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -903,6 +943,8 @@ enum ReleaseCommand {
     PrepareFromTag(ReleaseTagArgs),
     /// Resolves a tag and emits CI values without changing repository files.
     MetadataFromTag(ReleaseTagArgs),
+    /// Classifies a v-prefixed SemVer tag for CI release routing.
+    TagChannel(ReleaseChannelArgs),
     /// Verifies all product metadata against one numeric version.
     VerifyVersion(ReleaseVerifyVersionArgs),
     /// Verifies product metadata against the current workspace version.
@@ -931,6 +973,12 @@ struct ReleaseTagArgs {
     tag: String,
     #[command(flatten)]
     metadata: ReleaseMetadataArgs,
+}
+
+#[derive(Debug, Args)]
+struct ReleaseChannelArgs {
+    /// Release tag in vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE form.
+    tag: String,
 }
 
 #[derive(Debug, Args)]
@@ -1599,6 +1647,23 @@ fn run_ios(arguments: IosArgs) -> CliResult<()> {
             ios_release::stage_optional_plugins_release(&root, arguments.arguments, &mut output)
                 .map_err(map_ios_error)
         }
+        IosCommand::PublishSpmIndex(arguments) => {
+            let root = contract::resolve_repository_root(requested_root.as_deref())
+                .map_err(|error| CliError::manifest_or_package(error.to_string()))?;
+            ios_spm_publish::publish(
+                &root,
+                ios_spm_publish::SpmPublishRequest {
+                    tag: &arguments.tag,
+                    archive: &arguments.archive,
+                    source_repository: arguments.source_repository.as_deref(),
+                    repository: arguments.repository.as_deref(),
+                    dry_run: arguments.dry_run,
+                    output_directory: arguments.output_directory.as_deref(),
+                },
+                &mut output,
+            )
+            .map_err(map_ios_error)
+        }
         IosCommand::VerifySubtitles(arguments) => {
             let root = root_for_worker(requested_root.as_deref())?;
             let development_team = match arguments.development_team {
@@ -1772,6 +1837,20 @@ fn run_android(arguments: AndroidArgs) -> CliResult<()> {
                 &root,
                 arguments.output_directory.as_deref(),
                 &arguments.abis,
+                &mut output,
+            )
+            .map_err(map_android_error)
+        }
+        AndroidCommand::PublishMavenCentral(arguments) => {
+            let stdout = io::stdout();
+            let mut output = stdout.lock();
+            android_publish::publish(
+                &root,
+                android_publish::MavenPublishRequest {
+                    tag: &arguments.tag,
+                    portal_namespace: &arguments.namespace,
+                    dry_run: arguments.dry_run,
+                },
                 &mut output,
             )
             .map_err(map_android_error)
@@ -2169,6 +2248,11 @@ fn run_release(arguments: ReleaseArgs) -> CliResult<()> {
                 .append_ci_metadata(&metadata)
                 .map_err(map_release_error)?;
             emit_bytes(metadata.output().as_bytes(), None)
+        }
+        ReleaseCommand::TagChannel(arguments) => {
+            let channel = release::ReleaseContext::channel_from_tag(&arguments.tag)
+                .map_err(map_release_error)?;
+            emit_bytes(channel.output().as_bytes(), None)
         }
         ReleaseCommand::VerifyVersion(arguments) => {
             context

@@ -13,7 +13,7 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
 apply(plugin = "org.jetbrains.kotlin.plugin.compose")
 
 android {
-    namespace = "io.github.ikaros.vesper.player.android.compose"
+    namespace = "io.github.umbrella22.vesper.player.android.compose"
     compileSdk = 36
 
     defaultConfig {
@@ -30,6 +30,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
+    }
 }
 
 extensions.configure<KotlinAndroidProjectExtension>("kotlin") {

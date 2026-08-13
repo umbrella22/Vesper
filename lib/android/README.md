@@ -25,16 +25,43 @@ FFmpeg, native-frame plugins, plugin diagnostics, Compose, or Material3.
 
 Kotlin namespaces:
 
-- `io.github.ikaros.vesper.player.android`
-- `io.github.ikaros.vesper.player.android.external`
-- `io.github.ikaros.vesper.player.android.compose`
-- `io.github.ikaros.vesper.player.android.compose.ui`
+- `io.github.umbrella22.vesper.player.android`
+- `io.github.umbrella22.vesper.player.android.external`
+- `io.github.umbrella22.vesper.player.android.compose`
+- `io.github.umbrella22.vesper.player.android.compose.ui`
 
 Native library: `libvesper_player_android.so`.
 
+### Identifier baseline
+
+All current Android coordinates and packages are rooted at
+`io.github.umbrella22`. This is a breaking pre-release rename from
+`io.github.ikaros`; the SDK does not ship package aliases. Consumers moving an
+older source checkout must update Kotlin imports, fully qualified manifest
+class names, ProGuard/R8 rules, and first-party `VesperPluginReference` values.
+Rebuild the Android JNI library at the same revision because exported JNI
+symbols include `io.github.umbrella22.vesper.player.android`.
+
 ## Distribution
 
-GitHub Releases publish the following artifacts via
+Stable `vMAJOR.MINOR.PATCH` releases publish these coordinates to Maven Central:
+
+```kotlin
+dependencies {
+    implementation("io.github.umbrella22.vesper:vesper-player-kit:<version>")
+
+    // Optional Compose integration.
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose:<version>")
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-compose-ui:<version>")
+}
+```
+
+Use `mavenCentral()` in the consuming project's dependency repositories. The
+core coordinate contains the Android host kit and arm64 JNI library. The
+Compose coordinates preserve the module order: UI depends on the Compose
+adapter, and the adapter depends on the core kit.
+
+GitHub Releases also publish the following standalone artifacts via
 `.github/workflows/mobile-lib-release.yml`:
 
 - `VesperPlayerKit-android-arm64-v8a.aar`
@@ -52,6 +79,37 @@ Decoder, FrameProcessor, or external-playback extension artifacts.
 
 The optional `vesper-player-kit-compose-ui` module remains available both as a
 source module and as a release AAR.
+
+Prerelease tags such as `v0.4.0-rc.1` produce GitHub prerelease assets only.
+Maven Central publication accepts exact stable tags so immutable coordinates
+cannot be consumed by an RC build.
+
+### Maven Central Publishing
+
+The `publish-maven-central` release job builds, signs, validates, and uploads one
+Central Portal bundle containing all three public coordinates. The Maven
+`groupId` remains `io.github.umbrella22.vesper`; the Portal namespace controls
+publishing permission and may be that value or one of its parent prefixes. The
+job requires:
+
+- an approved Central namespace, defaulting to `io.github.umbrella22`;
+- a Central Portal user token stored as `MAVEN_CENTRAL_USERNAME` and
+  `MAVEN_CENTRAL_PASSWORD` GitHub secrets;
+- an ASCII-armored signing key in `MAVEN_GPG_PRIVATE_KEY` and its passphrase in
+  `MAVEN_GPG_PASSPHRASE`;
+- the matching public signing key published to a public OpenPGP keyserver.
+
+Set the `MAVEN_NAMESPACE` GitHub variable when the approved Portal namespace
+differs from the default. Changing it does not change the published coordinates.
+The job uses automatic Central publication only after the GitHub Release has
+completed. Local verification stages the signed repository and bundle without
+contacting Central:
+
+```sh
+MAVEN_GPG_PRIVATE_KEY="$(path-to-secret-provider)" \
+MAVEN_GPG_PASSPHRASE="$(path-to-passphrase-provider)" \
+./scripts/vesper android publish-maven-central v0.4.0 --dry-run
+```
 
 ## Minimum Requirements
 
@@ -152,7 +210,7 @@ External playback (`vesper-player-kit-external-playback`):
 - `events: SharedFlow<VesperExternalPlaybackEvent>` — route, playback, and diagnostic events
 - `VesperExternalPlaybackMediaItem`, route/media/result/event DTOs, proxy policy, and format adaptation config
 - `VesperExternalRouteButton` — Cast route button view backed by the Cast framework
-- `VesperExternalCastOptionsProvider` — default Cast options provider using Google's Default Media Receiver unless the host overrides `io.github.ikaros.vesper.player.android.external.RECEIVER_APPLICATION_ID`
+- `VesperExternalCastOptionsProvider` — default Cast options provider using Google's Default Media Receiver unless the host overrides `io.github.umbrella22.vesper.player.android.external.RECEIVER_APPLICATION_ID`
 
 Compose adapter (`vesper-player-kit-compose`):
 
@@ -295,11 +353,11 @@ local assets back into the SDK.
 
 ```kotlin
 import androidx.compose.runtime.Composable
-import io.github.ikaros.vesper.player.android.VesperPlaybackResiliencePolicy
-import io.github.ikaros.vesper.player.android.VesperDecoderBackend
-import io.github.ikaros.vesper.player.android.compose.VesperPlayerSurface
-import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerController
-import io.github.ikaros.vesper.player.android.compose.rememberVesperPlayerUiState
+import io.github.umbrella22.vesper.player.android.VesperPlaybackResiliencePolicy
+import io.github.umbrella22.vesper.player.android.VesperDecoderBackend
+import io.github.umbrella22.vesper.player.android.compose.VesperPlayerSurface
+import io.github.umbrella22.vesper.player.android.compose.rememberVesperPlayerController
+import io.github.umbrella22.vesper.player.android.compose.rememberVesperPlayerUiState
 
 @Composable
 fun PlayerScreen() {

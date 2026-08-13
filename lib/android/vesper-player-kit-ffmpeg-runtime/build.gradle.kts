@@ -20,7 +20,7 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
 }
 
 android {
-    namespace = "io.github.ikaros.vesper.player.android.ffmpeg.runtime"
+    namespace = "io.github.umbrella22.vesper.player.android.ffmpeg.runtime"
     compileSdk = 36
 
     defaultConfig {

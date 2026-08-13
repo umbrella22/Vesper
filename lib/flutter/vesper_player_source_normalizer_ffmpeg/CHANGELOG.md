@@ -2,6 +2,9 @@
 
 ## 0.4.0 - Unreleased
 
+- The Android plugin package and bundled SourceNormalizer plugin identity now
+  use the `io.github.umbrella22` reverse-DNS root. Existing serialized plugin
+  references using `io.github.ikaros` must be recreated.
 - Aligned package and Android plugin metadata with the Vesper 0.4 package
   family.
 - Changed the iOS SPM package to depend on the canonical

@@ -109,7 +109,7 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
 
 public final class PlayerSurfaceView: UIView {
     static let subtitleOverlayAccessibilityIdentifier =
-        "io.github.ikaros.vesper.player.subtitle-overlay"
+        "io.github.umbrella22.vesper.player.subtitle-overlay"
 
     private weak var attachedPlayer: AVPlayer?
     private var readyForDisplayObservation: NSKeyValueObservation?

@@ -6,6 +6,11 @@ It is built on AVPlayer and the Vesper iOS host kit in `lib/ios/VesperPlayerKit`
 The package is registered automatically by `vesper_player`, so most app code
 does not need to depend on it directly.
 
+Native registration uses `io.github.umbrella22.vesper_player` for the player
+MethodChannel and related EventChannel suffixes. This is a breaking pre-release
+rename from `io.github.ikaros`; no old channel handlers are registered. The
+Swift package, products, and `VesperPlayerKit` module name are unchanged.
+
 ## Platform Capabilities
 
 | Format / feature                    | Status                                                                                             |
@@ -125,8 +130,8 @@ empty header names or blank values.
 ## Technical Notes
 
 - Playback backend: AVPlayer behind the `VesperPlayerController` Swift facade
-- Flutter integration: `MethodChannel` and `EventChannel` using `io.github.ikaros.vesper_player`
-- View embedding: `UiKitView` with view type `io.github.ikaros.vesper_player/platform_view`
+- Flutter integration: `MethodChannel` and `EventChannel` using `io.github.umbrella22.vesper_player`
+- View embedding: `UiKitView` with view type `io.github.umbrella22.vesper_player/platform_view`
 - System playback: `configureSystemPlayback` writes `MPNowPlayingInfoCenter`, registers `MPRemoteCommandCenter` with default 10-second skip back / play-pause / skip forward actions, and activates an `AVAudioSession` playback category with long-form video route sharing when background audio is enabled
 - Screen awake: `createPlayer(keepScreenOnDuringPlayback: ...)` and `setKeepScreenOnDuringPlayback(...)` control the SDK idle-timer policy while playback is active
 - Rust runtime: bridged through the `player-ffi-ios` XCFramework so defaults, timeline, resilience, and playlist behavior stay aligned with the shared runtime
@@ -169,8 +174,8 @@ Typical setup:
    when the host enables those capabilities.
 3. Let Xcode place the selected FFmpeg component and plugin
    frameworks as top-level siblings under `Runner.app/Frameworks`.
-4. Configure plugin ID `io.github.ikaros.vesper.remux-ffmpeg`, capability
-   instance `io.github.ikaros.vesper.remux-ffmpeg.post-download`, and native
+4. Configure plugin ID `io.github.umbrella22.vesper.remux-ffmpeg`, capability
+   instance `io.github.umbrella22.vesper.remux-ffmpeg.post-download`, and native
    transport. The host kit resolves the embedded signed framework.
 
 Apple FFmpeg prebuilts are built on demand through the root profile CLI:

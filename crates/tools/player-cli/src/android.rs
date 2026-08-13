@@ -79,36 +79,43 @@ pub(crate) struct AndroidError {
     message: String,
 }
 
+struct MavenStagingOptions<'a> {
+    repository_directory: &'a Path,
+    group_id: &'a str,
+    signing_key: &'a str,
+    signing_passphrase: Option<&'a str>,
+}
+
 impl AndroidError {
-    fn usage(message: impl Into<String>) -> Self {
+    pub(crate) fn usage(message: impl Into<String>) -> Self {
         Self {
             kind: AndroidErrorKind::Usage,
             message: message.into(),
         }
     }
 
-    fn storage(message: impl Into<String>) -> Self {
+    pub(crate) fn storage(message: impl Into<String>) -> Self {
         Self {
             kind: AndroidErrorKind::Storage,
             message: message.into(),
         }
     }
 
-    fn compatibility(message: impl Into<String>) -> Self {
+    pub(crate) fn compatibility(message: impl Into<String>) -> Self {
         Self {
             kind: AndroidErrorKind::Compatibility,
             message: message.into(),
         }
     }
 
-    fn conformance(message: impl Into<String>) -> Self {
+    pub(crate) fn conformance(message: impl Into<String>) -> Self {
         Self {
             kind: AndroidErrorKind::Conformance,
             message: message.into(),
         }
     }
 
-    fn worker(message: impl Into<String>) -> Self {
+    pub(crate) fn worker(message: impl Into<String>) -> Self {
         Self {
             kind: AndroidErrorKind::Worker,
             message: message.into(),
@@ -1112,6 +1119,27 @@ pub(crate) fn build_aar(
     include_optional: bool,
 ) -> Result<(), AndroidError> {
     build_aar_for_abis(root, module_task, include_optional, &[])
+}
+
+pub(crate) fn stage_maven_publications(
+    root: &Path,
+    repository_directory: &Path,
+    group_id: &str,
+    signing_key: &str,
+    signing_passphrase: Option<&str>,
+) -> Result<(), AndroidError> {
+    let options = MavenStagingOptions {
+        repository_directory,
+        group_id,
+        signing_key,
+        signing_passphrase,
+    };
+    build_aar_for_abis_with_maven(
+        root,
+        "publishReleasePublicationToCentralStagingRepository",
+        &[DEFAULT_ANDROID_ABI.to_owned()],
+        &options,
+    )
 }
 
 pub(crate) fn stage_release(
@@ -2277,6 +2305,7 @@ fn stage_release_transaction(
         include_optional,
         selected_abis,
         ffmpeg_release_lock,
+        None,
         cancellation,
     )?;
     let artifacts = android_release_artifacts(root, &selected_abis[0], include_optional);
@@ -2380,7 +2409,7 @@ fn android_release_artifacts(
                 ),
                 file_name: format!("VesperPlayerKitDecoderMediaCodec-android-{abi}.aar"),
                 kind: AndroidReleaseArtifactKind::Plugin {
-                    plugin_id: "io.github.ikaros.vesper.decoder-mediacodec",
+                    plugin_id: "io.github.umbrella22.vesper.decoder-mediacodec",
                     library_name: "vesper_decoder_mediacodec",
                     manifest: "plugins/decoder-mediacodec/vesper-plugin.toml",
                     profile_receipt: None,
@@ -2392,7 +2421,7 @@ fn android_release_artifacts(
                 ),
                 file_name: format!("VesperPlayerKitSourceNormalizerFfmpeg-android-{abi}.aar"),
                 kind: AndroidReleaseArtifactKind::Plugin {
-                    plugin_id: "io.github.ikaros.vesper.source-normalizer-ffmpeg",
+                    plugin_id: "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
                     library_name: "vesper_source_normalizer_ffmpeg",
                     manifest: "plugins/source-normalizer-ffmpeg/vesper-plugin.toml",
                     profile_receipt: Some(
@@ -3163,6 +3192,25 @@ fn build_aar_for_abis(
     include_optional: bool,
     requested_abis: &[String],
 ) -> Result<(), AndroidError> {
+    build_aar_for_abis_with_options(root, module_task, include_optional, requested_abis, None)
+}
+
+fn build_aar_for_abis_with_maven(
+    root: &Path,
+    module_task: &str,
+    requested_abis: &[String],
+    options: &MavenStagingOptions<'_>,
+) -> Result<(), AndroidError> {
+    build_aar_for_abis_with_options(root, module_task, false, requested_abis, Some(options))
+}
+
+fn build_aar_for_abis_with_options(
+    root: &Path,
+    module_task: &str,
+    include_optional: bool,
+    requested_abis: &[String],
+    maven: Option<&MavenStagingOptions<'_>>,
+) -> Result<(), AndroidError> {
     let cancellation = external_process::InterruptDeferral::start("Android AAR build")
         .map_err(|error| AndroidError::worker(error.to_string()))?;
     let result = build_aar_transaction(
@@ -3170,6 +3218,7 @@ fn build_aar_for_abis(
         module_task,
         include_optional,
         requested_abis,
+        maven,
         &cancellation,
     );
     let cancelled = cancellation.finish();
@@ -3189,6 +3238,7 @@ fn build_aar_transaction(
     module_task: &str,
     include_optional: bool,
     requested_abis: &[String],
+    maven: Option<&MavenStagingOptions<'_>>,
     cancellation: &external_process::InterruptDeferral,
 ) -> Result<(), AndroidError> {
     let _aar_build_lock = AndroidBuildLock::acquire(root, "aar")?;
@@ -3199,6 +3249,7 @@ fn build_aar_transaction(
         include_optional,
         requested_abis,
         None,
+        maven,
         cancellation,
     )?;
     promote_staged_directories(stages, cancellation)
@@ -3210,6 +3261,7 @@ fn build_aar_stages(
     include_optional: bool,
     requested_abis: &[String],
     ffmpeg_release_lock: Option<&AndroidFfmpegReleaseLock>,
+    maven: Option<&MavenStagingOptions<'_>>,
     cancellation: &external_process::InterruptDeferral,
 ) -> Result<Vec<StagedGeneratedDirectory>, AndroidError> {
     let selected_abis = resolve_selected_abis(requested_abis)?;
@@ -3273,10 +3325,23 @@ fn build_aar_stages(
         .arg("-p")
         .arg(&project)
         .arg(format!("-Pvesper.player.android.abis={selected_abis_csv}"))
-        .args(tasks)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
+    if let Some(maven) = maven {
+        command
+            .arg(format!(
+                "-Pvesper.maven.repositoryDirectory={}",
+                maven.repository_directory.display()
+            ))
+            .arg(format!("-Pvesper.maven.groupId={}", maven.group_id))
+            .env("MAVEN_GPG_PRIVATE_KEY", maven.signing_key)
+            .env_remove("MAVEN_GPG_PASSPHRASE");
+        if let Some(passphrase) = maven.signing_passphrase {
+            command.env("MAVEN_GPG_PASSPHRASE", passphrase);
+        }
+    }
+    command.args(tasks);
     if let Some(build) = optional_build.as_ref() {
         command
             .env(DECODER_JNI_STAGING_ENV, build.decoder.path())
@@ -3748,8 +3813,15 @@ fn validate_required_staged_file(
 }
 
 pub(crate) fn resolve_selected_abis(requested: &[String]) -> Result<Vec<String>, AndroidError> {
+    resolve_selected_abis_from(requested, env::var_os("RUST_ANDROID_ABIS").as_deref())
+}
+
+fn resolve_selected_abis_from(
+    requested: &[String],
+    environment: Option<&OsStr>,
+) -> Result<Vec<String>, AndroidError> {
     let selected = if requested.is_empty() {
-        env::var_os("RUST_ANDROID_ABIS")
+        environment
             .filter(|value| !value.is_empty())
             .map(|value| {
                 value
@@ -5481,14 +5553,24 @@ mod tests {
     #[test]
     fn abi_selection_is_cli_then_environment_then_arm64_default() {
         assert_eq!(
-            resolve_selected_abis(&["arm64-v8a".to_owned()]).expect("CLI ABI"),
+            resolve_selected_abis_from(&["arm64-v8a".to_owned()], Some(OsStr::new("x86_64")),)
+                .expect("CLI ABI"),
             ["arm64-v8a"]
         );
         assert!(
-            resolve_selected_abis(&["x86_64".to_owned()])
+            resolve_selected_abis_from(&["x86_64".to_owned()], Some(OsStr::new("arm64-v8a")))
                 .expect_err("reject unsupported ABI")
                 .to_string()
                 .contains("Supported ABIs: arm64-v8a")
+        );
+        assert_eq!(
+            resolve_selected_abis_from(&[], Some(OsStr::new("arm64-v8a")))
+                .expect("environment ABI"),
+            ["arm64-v8a"]
+        );
+        assert_eq!(
+            resolve_selected_abis_from(&[], None).expect("default ABI"),
+            ["arm64-v8a"]
         );
     }
 

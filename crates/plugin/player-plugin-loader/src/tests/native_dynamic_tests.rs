@@ -146,7 +146,7 @@ fn signed_installed_native_catalog_loads_and_resolves_the_official_frame_process
     let project =
         PluginProjectManifest::from_toml(&manifest_source).expect("valid official plugin manifest");
     let temporary = tempfile::tempdir().expect("temporary native catalog");
-    let signing_key = PluginSigningKey::generate("io.github.ikaros").expect("publisher key");
+    let signing_key = PluginSigningKey::generate("io.github.umbrella22").expect("publisher key");
     let package_path = temporary.path().join("frame-processor.vesper-plugin");
     build_signed_plugin_package(&project, &plugin_directory, &signing_key, &package_path)
         .expect("signed Native plugin package");
@@ -239,8 +239,8 @@ fn native_dynamic_loader_opens_videotoolbox_decoder() {
     assert_native_decoder_plugin(
         "VESPER_DECODER_VIDEOTOOLBOX_PLUGIN_PATH",
         "vesper_decoder_videotoolbox",
-        "io.github.ikaros.vesper.decoder-videotoolbox",
-        "io.github.ikaros.vesper.decoder-videotoolbox.native",
+        "io.github.umbrella22.vesper.decoder-videotoolbox",
+        "io.github.umbrella22.vesper.decoder-videotoolbox.native",
         "player-decoder-videotoolbox",
     );
 }
@@ -251,8 +251,8 @@ fn native_dynamic_loader_opens_d3d11_decoder() {
     assert_native_decoder_plugin(
         "VESPER_DECODER_D3D11_PLUGIN_PATH",
         "vesper_decoder_d3d11",
-        "io.github.ikaros.vesper.decoder-d3d11",
-        "io.github.ikaros.vesper.decoder-d3d11.native",
+        "io.github.umbrella22.vesper.decoder-d3d11",
+        "io.github.umbrella22.vesper.decoder-d3d11.native",
         "player-decoder-d3d11",
     );
 }
@@ -272,12 +272,15 @@ fn native_dynamic_loader_opens_ffmpeg_post_download_processor() {
         )
     });
 
-    assert_eq!(plugin.plugin_id(), "io.github.ikaros.vesper.remux-ffmpeg");
+    assert_eq!(
+        plugin.plugin_id(),
+        "io.github.umbrella22.vesper.remux-ffmpeg"
+    );
     assert_eq!(plugin.plugin_name(), "player-remux-ffmpeg");
     assert!(plugin.diagnostics().is_empty());
     let reference = PluginReference::new(
-        "io.github.ikaros.vesper.remux-ffmpeg",
-        Some("io.github.ikaros.vesper.remux-ffmpeg.post-download".to_owned()),
+        "io.github.umbrella22.vesper.remux-ffmpeg",
+        Some("io.github.umbrella22.vesper.remux-ffmpeg.post-download".to_owned()),
         PluginTransport::Native,
     )
     .expect("static remux reference should be valid");
@@ -301,7 +304,7 @@ fn native_dynamic_loader_opens_ffmpeg_packet_and_resource_interfaces() {
 
     assert_eq!(
         plugin.plugin_id(),
-        "io.github.ikaros.vesper.source-normalizer-ffmpeg"
+        "io.github.umbrella22.vesper.source-normalizer-ffmpeg"
     );
     assert_eq!(plugin.plugin_name(), "player-source-normalizer-ffmpeg");
     assert!(plugin.diagnostics().is_empty());
@@ -317,11 +320,13 @@ fn native_dynamic_loader_opens_ffmpeg_packet_and_resource_interfaces() {
         .iter()
         .map(|interface| interface.metadata.instance_id.as_str())
         .collect::<Vec<_>>();
-    assert!(instance_ids.contains(&"io.github.ikaros.vesper.source-normalizer-ffmpeg.packet"));
-    assert!(instance_ids.contains(&"io.github.ikaros.vesper.source-normalizer-ffmpeg.resource"));
+    assert!(instance_ids.contains(&"io.github.umbrella22.vesper.source-normalizer-ffmpeg.packet"));
+    assert!(
+        instance_ids.contains(&"io.github.umbrella22.vesper.source-normalizer-ffmpeg.resource")
+    );
 
     let reference = PluginReference::new(
-        "io.github.ikaros.vesper.source-normalizer-ffmpeg",
+        "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
         None,
         PluginTransport::Native,
     )
@@ -491,7 +496,7 @@ fn native_inspection_resolves_experimental_capabilities_from_canonical_records()
     let source_path = resolve_plugin_path("vesper_source_normalizer_diagnostic")
         .unwrap_or_else(|error| panic!("failed to resolve source normalizer fixture: {error}"));
     let source_artifact = NativePluginArtifact::new(
-        "io.github.ikaros.vesper.source-normalizer-diagnostic",
+        "io.github.umbrella22.vesper.source-normalizer-diagnostic",
         &source_path,
     )
     .expect("valid source normalizer artifact");

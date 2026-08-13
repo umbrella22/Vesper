@@ -4,6 +4,11 @@
 
 ### Breaking Changes
 
+- Maven coordinates now use `io.github.umbrella22.vesper`, and all Kotlin,
+  manifest, and JNI package identities moved from `io.github.ikaros` to
+  `io.github.umbrella22`. There are no package aliases; update imports and
+  manifest class names and rebuild `libvesper_player_android.so` with the host
+  kit because JNI entry points encode the Kotlin package name.
 - `VesperPlayerController.setSubtitleTrackSelection` is now suspending and
   completes only after Media3 confirms the requested selection.
 - External subtitle declarations now use `VesperExternalSubtitleSource` and

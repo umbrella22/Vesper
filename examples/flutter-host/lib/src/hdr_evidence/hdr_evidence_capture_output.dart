@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 const String _mediaPickerChannelName =
-    'io.github.ikaros.vesper.example.flutter_host/media_picker';
+    'io.github.umbrella22.vesper.example.flutter_host/media_picker';
 
 abstract final class ExampleHdrEvidenceCaptureOutput {
   static const MethodChannel _channel = MethodChannel(_mediaPickerChannelName);

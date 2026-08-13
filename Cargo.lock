@@ -269,6 +269,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "basic-player"
 version = "0.4.0"
 dependencies = [
@@ -1806,6 +1812,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
+dependencies = [
+ "cfg-if",
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2511,12 +2527,14 @@ name = "player-cli"
 version = "0.4.0"
 dependencies = [
  "anyhow",
+ "base64",
  "clap",
  "ed25519-dalek",
  "flate2",
  "getrandom 0.4.3",
  "hex",
  "indexmap",
+ "md-5",
  "nix",
  "player-platform-process",
  "player-plugin",
@@ -2540,6 +2558,7 @@ dependencies = [
  "toml",
  "unicode-casefold",
  "unicode-normalization",
+ "url",
  "uuid",
  "winapi-util",
  "x509-parser",

@@ -13,12 +13,14 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+base64 = "0.22.1"
 clap.workspace = true
 ed25519-dalek.workspace = true
 flate2.workspace = true
 getrandom.workspace = true
 hex.workspace = true
 indexmap.workspace = true
+md-5 = "0.11.0"
 player-plugin = { version = "0.4.0", path = "../../plugin/player-plugin" }
 player-plugin-abi = { version = "0.4.0", path = "../../plugin/player-plugin-abi" }
 player-plugin-loader = { version = "0.4.0", path = "../../plugin/player-plugin-loader" }
@@ -36,6 +38,7 @@ syn.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+url.workspace = true
 tar.workspace = true
 unicode-casefold.workspace = true
 unicode-normalization.workspace = true

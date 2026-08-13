@@ -309,7 +309,7 @@ extension VesperNativePlayerBridge {
         }
 
         let nsError = error as NSError
-        if nsError.domain == "io.github.ikaros.vesper.host.ios",
+        if nsError.domain == "io.github.umbrella22.vesper.host.ios",
            nsError.code == -3 || nsError.code == -4 {
             return ResolvedBridgeError(
                 code: .unsupported,

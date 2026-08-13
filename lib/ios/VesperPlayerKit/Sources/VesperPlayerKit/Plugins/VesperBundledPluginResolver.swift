@@ -46,10 +46,10 @@ struct VesperResolvedPluginArtifacts: Equatable {
 
 enum VesperBundledPluginResolver {
     private static let knownFrameworkNames: [String: String] = [
-        "io.github.ikaros.vesper.source-normalizer-ffmpeg":
+        "io.github.umbrella22.vesper.source-normalizer-ffmpeg":
             "VesperPlayerSourceNormalizerFfmpegPlugin",
-        "io.github.ikaros.vesper.remux-ffmpeg": "VesperPlayerRemuxFfmpegPlugin",
-        "io.github.ikaros.vesper.decoder-videotoolbox":
+        "io.github.umbrella22.vesper.remux-ffmpeg": "VesperPlayerRemuxFfmpegPlugin",
+        "io.github.umbrella22.vesper.decoder-videotoolbox":
             "VesperPlayerDecoderVideoToolboxPlugin",
         "dev.vesper.frame-processor-diagnostic":
             "VesperPlayerFrameProcessorDiagnosticPlugin",

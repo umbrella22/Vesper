@@ -1,6 +1,6 @@
 name: VesperPlayerHostDemo
 options:
-  bundleIdPrefix: io.github.ikaros.vesper.example
+  bundleIdPrefix: io.github.umbrella22.vesper.example
 packages:
   VesperPlayerKit:
     path: ../../lib/ios/VesperPlayerKit
@@ -47,7 +47,7 @@ targets:
     settings:
       base:
         CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
-        PRODUCT_BUNDLE_IDENTIFIER: io.github.ikaros.vesper.example.ioshost
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.umbrella22.vesper.example.ioshost
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true

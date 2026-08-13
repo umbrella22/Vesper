@@ -230,12 +230,12 @@ private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
     private let pluginReferences: [VesperPluginReference]
     private let sessionFactory: VesperBenchmarkSinkSessionFactory
     private let workerQueue = DispatchQueue(
-        label: "io.github.ikaros.vesper.benchmark-sink",
+        label: "io.github.umbrella22.vesper.benchmark-sink",
         qos: .utility
     )
     private let shutdownGroup = DispatchGroup()
     private static let shutdownNotificationQueue = DispatchQueue(
-        label: "io.github.ikaros.vesper.benchmark-sink.shutdown",
+        label: "io.github.umbrella22.vesper.benchmark-sink.shutdown",
         qos: .utility,
         attributes: .concurrent
     )

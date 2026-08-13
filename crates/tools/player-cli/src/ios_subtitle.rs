@@ -1350,7 +1350,7 @@ fn cleanup_ios_flutter_host(
     temporary: &Path,
     evidence_name: &str,
 ) -> Result<Vec<u8>, SubtitleError> {
-    const BUNDLE_ID: &str = "io.github.ikaros.flutterHost";
+    const BUNDLE_ID: &str = "io.github.umbrella22.vesper.example.flutterhost";
     let xcrun = require_command("xcrun", "xcrun is required for iOS process cleanup")?;
     let apps_path = temporary.join(format!("ios-flutter-apps-{evidence_name}.json"));
     let processes_path = temporary.join(format!("ios-flutter-processes-{evidence_name}.json"));
@@ -2992,16 +2992,20 @@ mod tests {
         let app_url = "file:///private/var/containers/Bundle/Application/UUID/Runner.app/";
         let executable = format!("{app_url}Runner");
         let apps = serde_json::to_vec(&json!({
-            "result":{"apps":[{"bundleIdentifier":"io.github.ikaros.flutterHost","url":app_url}]}
+            "result":{"apps":[{"bundleIdentifier":"io.github.umbrella22.vesper.example.flutterhost","url":app_url}]}
         }))
         .expect("serialize app inventory");
         let processes = serde_json::to_vec(&json!({
             "result":{"runningProcesses":[{"processIdentifier":42,"executable":executable}]}
         }))
         .expect("serialize process inventory");
-        let selected = flutter_host_processes(&apps, &processes, "io.github.ikaros.flutterHost")
-            .expect("match Flutter host process")
-            .expect("installed Flutter host");
+        let selected = flutter_host_processes(
+            &apps,
+            &processes,
+            "io.github.umbrella22.vesper.example.flutterhost",
+        )
+        .expect("match Flutter host process")
+        .expect("installed Flutter host");
         assert_eq!(selected.1, vec![42]);
 
         let reused = serde_json::to_vec(&json!({

@@ -202,7 +202,7 @@ fn playlist_active_item_object<'local>(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_createPlaylistSession(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_createPlaylistSession(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     config: JObject<'_>,
@@ -220,7 +220,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_disposePlaylistSession(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_disposePlaylistSession(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -237,7 +237,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_replacePlaylistQueue(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_replacePlaylistQueue(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -276,7 +276,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_updatePlaylistViewportHints(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_updatePlaylistViewportHints(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -315,7 +315,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_clearPlaylistViewportHints(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_clearPlaylistViewportHints(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -356,7 +356,7 @@ fn advance_playlist(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_advancePlaylistToNext(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_advancePlaylistToNext(
     unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -368,7 +368,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_advancePlaylistToPrevious(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_advancePlaylistToPrevious(
     unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -380,7 +380,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_handlePlaylistPlaybackCompleted(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_handlePlaylistPlaybackCompleted(
     unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -392,7 +392,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_handlePlaylistPlaybackFailed(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_handlePlaylistPlaybackFailed(
     unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -404,7 +404,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_currentPlaylistActiveItem(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_currentPlaylistActiveItem(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -427,7 +427,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_drainPlaylistPreloadCommands(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_drainPlaylistPreloadCommands(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -460,7 +460,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_completePlaylistPreloadTask(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_completePlaylistPreloadTask(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,
@@ -481,7 +481,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_failPlaylistPreloadTask(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_failPlaylistPreloadTask(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     session_handle: jlong,

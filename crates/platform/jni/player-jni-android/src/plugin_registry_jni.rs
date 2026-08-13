@@ -153,7 +153,7 @@ fn dispose_android_plugin_registry(handle: jlong) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_createEmbeddedPluginRegistry(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_createEmbeddedPluginRegistry(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     registry_fragments: JObjectArray<'_>,
@@ -238,7 +238,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_disposeEmbeddedPluginRegistry(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_disposeEmbeddedPluginRegistry(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     registry_handle: jlong,
@@ -249,7 +249,7 @@ pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJ
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_io_github_ikaros_vesper_player_android_VesperNativeJni_createBenchmarkSinkSessionFromRegistry(
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_VesperNativeJni_createBenchmarkSinkSessionFromRegistry(
     mut unowned_env: EnvUnowned<'_>,
     _class: JClass<'_>,
     registry_handle: jlong,

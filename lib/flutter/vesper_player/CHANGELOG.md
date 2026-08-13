@@ -12,6 +12,10 @@
 
 ### Breaking Changes
 
+- Native plugin packages, channels, platform-view identifiers, and first-party
+  plugin references now use the `io.github.umbrella22` reverse-DNS root instead
+  of `io.github.ikaros`. Flutter auto-registration needs no application code,
+  but custom channel integrations and stored plugin references must be updated.
 - The Flutter package family now requires Flutter 3.44.0 or newer.
 - External subtitle declarations now use `VesperExternalSubtitleSource` and
   `VesperPlayerSource.externalSubtitles`; the old names are deprecated aliases.

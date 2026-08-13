@@ -5,7 +5,7 @@ import 'package:vesper_player_ui/vesper_player_ui.dart';
 
 class ExampleDeviceControls implements VesperPlayerDeviceControls {
   static const MethodChannel _channel = MethodChannel(
-    'io.github.ikaros.vesper.example.flutter_host/device_controls',
+    'io.github.umbrella22.vesper.example.flutter_host/device_controls',
   );
 
   @override

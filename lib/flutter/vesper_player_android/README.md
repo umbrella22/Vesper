@@ -30,8 +30,8 @@ directly.
 ## Technical Notes
 
 - Playback backend: Media3 ExoPlayer behind the `VesperPlayerController` Kotlin facade
-- Flutter integration: `MethodChannel` and `EventChannel` using `io.github.ikaros.vesper_player`
-- View embedding: `AndroidView` with view type `io.github.ikaros.vesper_player/platform_view`
+- Flutter integration: `MethodChannel` and `EventChannel` using `io.github.umbrella22.vesper_player`
+- View embedding: `AndroidView` with view type `io.github.umbrella22.vesper_player/platform_view`
 - Render path: `VesperPlayerController.create(renderSurfaceKind: ...)` selects the Android surface for Flutter playback. `auto` maps to `SurfaceView` for the Flutter 3.44+ high-fidelity native video path. Use `textureView` when the host depends on complex Flutter overlays, scrolling, clipping, rounded corners, or animation-heavy composition.
 - Runtime snapshot: exposes the currently active adaptive video variant through `controller.snapshot.effectiveVideoTrackId`
 - Backend family: runtime snapshots use the public Android `VesperPlayerController.backendFamily` facade and do not depend on Android host-kit bridge or `Native*` implementation types
@@ -40,6 +40,11 @@ directly.
 - Screen awake: `createPlayer(keepScreenOnDuringPlayback: ...)` and `setKeepScreenOnDuringPlayback(...)` control whether the host playback view keeps the display awake while playback is active
 - Downloads: `VesperDownloadConfiguration` defaults to task snapshot restore and resumable partial transfers for SDK-managed downloads
 - Rust runtime: bridged through JNI so defaults, timeline, resilience, and playlist semantics stay aligned with the rest of the SDK
+
+The Android plugin package is
+`io.github.umbrella22.vesper.player.flutter.android`. The package and channel
+identifiers are a breaking pre-release rename from `io.github.ikaros`; no old
+package or channel handlers are registered.
 
 ## System Playback Host Requirements
 
@@ -97,7 +102,7 @@ beside `:vesper-player-kit` and `:vesper-player-kit-ffmpeg-runtime` in the host
 Android Gradle settings. The external-playback module contributes a default
 `VesperExternalCastOptionsProvider` that uses Google's Default Media Receiver.
 Hosts that need a custom receiver can override the manifest meta-data key
-`io.github.ikaros.vesper.player.android.external.RECEIVER_APPLICATION_ID`.
+`io.github.umbrella22.vesper.player.android.external.RECEIVER_APPLICATION_ID`.
 
 Cast V2 supports remote `http` / `https` HLS, DASH, and progressive sources.
 Sources with headers, local files, and `content://` inputs are exposed to Cast
@@ -135,8 +140,8 @@ Typical setup:
 
 3. Add `vesper-player-kit-ffmpeg-runtime` and the plugin output directory to the
    host app packaging.
-4. Configure plugin ID `io.github.ikaros.vesper.remux-ffmpeg`, capability
-   instance `io.github.ikaros.vesper.remux-ffmpeg.post-download`, and native
+4. Configure plugin ID `io.github.umbrella22.vesper.remux-ffmpeg`, capability
+   instance `io.github.umbrella22.vesper.remux-ffmpeg.post-download`, and native
    transport in the download manager. The host kit resolves the packaged
    artifact through its verified embedded registry.
 

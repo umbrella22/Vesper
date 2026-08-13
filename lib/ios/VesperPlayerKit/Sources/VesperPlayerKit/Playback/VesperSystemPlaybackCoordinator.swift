@@ -349,7 +349,7 @@ public final class VesperSystemPlaybackCoordinator {
 enum VesperSharedAudioSession {
     private static var activeOwners: Set<UUID> = []
     private nonisolated static let operationQueue = DispatchQueue(
-        label: "io.github.ikaros.vesper-player.audio-session",
+        label: "io.github.umbrella22.vesper-player.audio-session",
         qos: .userInitiated
     )
     private static var operationThreadObserverForTesting: (@Sendable (Bool) -> Void)?

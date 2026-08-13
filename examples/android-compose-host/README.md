@@ -78,7 +78,7 @@ The player page includes an **External Playback** section:
 
 - Use the Cast route button to select a Google Cast receiver. The example uses
   Google's Default Media Receiver unless the app manifest provides
-  `io.github.ikaros.vesper.player.android.external.RECEIVER_APPLICATION_ID`.
+  `io.github.umbrella22.vesper.player.android.external.RECEIVER_APPLICATION_ID`.
 - Use **Scan DLNA** to discover UPnP AV / DLNA renderers on the current LAN.
   Android 13+ prompts for `NEARBY_WIFI_DEVICES`; Cast does not require that
   permission.
@@ -105,6 +105,11 @@ and only accepts generic `VesperPlayerSource` values.
 - NDK `29.0.14206865`
 - Rust toolchain with `aarch64-linux-android` target
 - arm64 device or arm64 emulator
+
+The example application ID is
+`io.github.umbrella22.vesper.example.androidcomposehost`, and copied host-kit
+imports should use `io.github.umbrella22.vesper.player.android` (plus
+`.compose`, `.compose.ui`, or `.external` where applicable).
 
 ## Run
 

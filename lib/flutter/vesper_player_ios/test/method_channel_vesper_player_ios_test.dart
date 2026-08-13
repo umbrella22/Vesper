@@ -6,7 +6,7 @@ import 'package:vesper_player_platform_interface/vesper_player_platform_interfac
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const channel = MethodChannel('io.github.ikaros.vesper_player');
+  const channel = MethodChannel('io.github.umbrella22.vesper_player');
   final calls = <MethodCall>[];
 
   setUp(() {
@@ -188,9 +188,9 @@ void main() {
     final configuration = VesperDownloadConfiguration(
       postDownloadPluginReferences: <VesperPluginReference>[
         VesperPluginReference(
-          pluginId: 'io.github.ikaros.vesper.remux-ffmpeg',
+          pluginId: 'io.github.umbrella22.vesper.remux-ffmpeg',
           capabilityInstanceId:
-              'io.github.ikaros.vesper.remux-ffmpeg.post-download',
+              'io.github.umbrella22.vesper.remux-ffmpeg.post-download',
           transport: VesperPluginTransport.native,
         ),
       ],
@@ -754,7 +754,7 @@ void main() {
   });
 
   test('snapshot decodes native HDR failure evidence details', () async {
-    const eventChannel = EventChannel('io.github.ikaros.vesper_player/events');
+    const eventChannel = EventChannel('io.github.umbrella22.vesper_player/events');
     final platform = MethodChannelVesperPlayerIos();
     final events = <VesperPlayerEvent>[];
 
@@ -869,7 +869,7 @@ void main() {
 
   test('event stream decodes FairPlay terminal error and snapshot details',
       () async {
-    const eventChannel = EventChannel('io.github.ikaros.vesper_player/events');
+    const eventChannel = EventChannel('io.github.umbrella22.vesper_player/events');
     final platform = MethodChannelVesperPlayerIos();
     final events = <VesperPlayerEvent>[];
     final terminalError = <String, Object?>{
@@ -1163,7 +1163,7 @@ Future<Object?> _invokeNativeMethodCall(MethodCall call) async {
   final response = await TestDefaultBinaryMessengerBinding
       .instance.defaultBinaryMessenger
       .handlePlatformMessage(
-    'io.github.ikaros.vesper_player',
+    'io.github.umbrella22.vesper_player',
     codec.encodeMethodCall(call),
     null,
   );

@@ -6,7 +6,7 @@ name = "Vesper Diagnostic Frame Processor"
 version = "0.4.0"
 description = "Experimental diagnostic FrameProcessor plugin for native-frame conformance testing."
 license = "Apache-2.0"
-publisher = "io.github.ikaros"
+publisher = "io.github.umbrella22"
 
 [compatibility]
 host_sdk = ">=0.4.0, <0.5.0"

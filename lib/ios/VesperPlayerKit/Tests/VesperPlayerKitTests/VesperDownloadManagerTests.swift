@@ -670,8 +670,8 @@ final class VesperDownloadManagerTests: XCTestCase {
     func testCapabilitySpecificPluginReferencesAreForwardedToBindingsConfiguration() throws {
         let bindings = FakeDownloadBindings(autoStart: false)
         let postDownloadReference = try VesperPluginReference(
-            pluginId: "io.github.ikaros.vesper.remux-ffmpeg",
-            capabilityInstanceId: "io.github.ikaros.vesper.remux-ffmpeg.post-download",
+            pluginId: "io.github.umbrella22.vesper.remux-ffmpeg",
+            capabilityInstanceId: "io.github.umbrella22.vesper.remux-ffmpeg.post-download",
             transport: .native
         )
         let eventHookReference = try VesperPluginReference(

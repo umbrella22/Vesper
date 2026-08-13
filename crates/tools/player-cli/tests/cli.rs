@@ -5989,21 +5989,21 @@ fn ios_app_store_plugin_descriptor(
 ) -> Option<player_cli::CanonicalPluginDescriptor> {
     let (plugin_id, capabilities) = match framework_name {
         "VesperPlayerRemuxFfmpegPlugin" => (
-            "io.github.ikaros.vesper.remux-ffmpeg",
+            "io.github.umbrella22.vesper.remux-ffmpeg",
             vec![player_cli::PluginCapabilityDescriptor {
                 interface_id: "e9479dbc-42d2-575e-b39e-a24bc512fbc7".to_owned(),
-                instance_id: "io.github.ikaros.vesper.remux-ffmpeg.post-download".to_owned(),
+                instance_id: "io.github.umbrella22.vesper.remux-ffmpeg.post-download".to_owned(),
                 interface_major: 1,
                 interface_minor: 0,
                 stability: player_cli::PluginStability::Stable,
             }],
         ),
         "VesperPlayerSourceNormalizerFfmpegPlugin" => (
-            "io.github.ikaros.vesper.source-normalizer-ffmpeg",
+            "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
             vec![
                 player_cli::PluginCapabilityDescriptor {
                     interface_id: "a2d653fa-d6ce-5f14-93b8-a818a7a77fdf".to_owned(),
-                    instance_id: "io.github.ikaros.vesper.source-normalizer-ffmpeg.packet"
+                    instance_id: "io.github.umbrella22.vesper.source-normalizer-ffmpeg.packet"
                         .to_owned(),
                     interface_major: 1,
                     interface_minor: 0,
@@ -6011,7 +6011,7 @@ fn ios_app_store_plugin_descriptor(
                 },
                 player_cli::PluginCapabilityDescriptor {
                     interface_id: "b76d1f06-62d7-5d71-aa06-2780e4b4fd0d".to_owned(),
-                    instance_id: "io.github.ikaros.vesper.source-normalizer-ffmpeg.resource"
+                    instance_id: "io.github.umbrella22.vesper.source-normalizer-ffmpeg.resource"
                         .to_owned(),
                     interface_major: 1,
                     interface_minor: 0,
@@ -6020,10 +6020,10 @@ fn ios_app_store_plugin_descriptor(
             ],
         ),
         "VesperPlayerDecoderVideoToolboxPlugin" => (
-            "io.github.ikaros.vesper.decoder-videotoolbox",
+            "io.github.umbrella22.vesper.decoder-videotoolbox",
             vec![player_cli::PluginCapabilityDescriptor {
                 interface_id: "d68be0ed-1958-5922-8b7a-bc6778a26b43".to_owned(),
-                instance_id: "io.github.ikaros.vesper.decoder-videotoolbox.native".to_owned(),
+                instance_id: "io.github.umbrella22.vesper.decoder-videotoolbox.native".to_owned(),
                 interface_major: 1,
                 interface_minor: 0,
                 stability: player_cli::PluginStability::Experimental,
@@ -6049,7 +6049,7 @@ fn ios_app_store_plugin_descriptor(
             version: "0.4.0".to_owned(),
             description: format!("App Store layout fixture for {framework_name}"),
             license: "Apache-2.0".to_owned(),
-            publisher: "io.github.ikaros".to_owned(),
+            publisher: "io.github.umbrella22".to_owned(),
         },
         compatibility: player_cli::PluginCompatibilityDescriptor {
             host_sdk: ">=0.4.0, <0.5.0".to_owned(),
@@ -6071,7 +6071,7 @@ fn ios_app_store_plugin_descriptor(
 #[cfg(unix)]
 fn ios_app_store_bundle_identifier(framework_name: &str) -> String {
     format!(
-        "io.github.ikaros.fixture.{}",
+        "io.github.umbrella22.fixture.{}",
         framework_name.to_ascii_lowercase()
     )
 }
@@ -6094,7 +6094,7 @@ fn ios_app_store_cli_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf)
     let app_info = serde_json::json!({
         "CFBundlePackageType": "APPL",
         "CFBundleExecutable": app_executable_name,
-        "CFBundleIdentifier": "io.github.ikaros.fixture.vesper-sample",
+        "CFBundleIdentifier": "io.github.umbrella22.fixture.vesper-sample",
         "CFBundleName": "Vesper Sample",
         "CFBundleVersion": "1",
         "CFBundleShortVersionString": "0.4.0",
@@ -6109,7 +6109,7 @@ fn ios_app_store_cli_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf)
     .expect("write fixture App Info.plist");
     fs::write(
         app.join(".codesign-identifier"),
-        "io.github.ikaros.fixture.vesper-sample\n",
+        "io.github.umbrella22.fixture.vesper-sample\n",
     )
     .expect("write fixture App code-signing identity");
     let app_executable = app.join(app_executable_name);
