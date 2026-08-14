@@ -19,12 +19,23 @@ runs:
       run: |
         if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
           workspace="$(cygpath -m "${GITHUB_WORKSPACE}")"
-          cli="$workspace/target/release/vesper.exe"
+          install_dir="$(cygpath -m "${RUNNER_TEMP}")/vesper-cli"
+          built_cli="$workspace/target/release/vesper.exe"
+          cli="$install_dir/vesper.exe"
         else
-          cli="${GITHUB_WORKSPACE}/target/release/vesper"
+          install_dir="${RUNNER_TEMP}/vesper-cli"
+          built_cli="${GITHUB_WORKSPACE}/target/release/vesper"
+          cli="$install_dir/vesper"
         fi
+        if [[ ! -x "$built_cli" ]]; then
+          echo "Built Vesper CLI is not executable: $built_cli" >&2
+          exit 1
+        fi
+        mkdir -p "$install_dir"
+        cp "$built_cli" "$cli"
+        chmod +x "$cli"
         if [[ ! -x "$cli" ]]; then
-          echo "Built Vesper CLI is not executable: $cli" >&2
+          echo "Installed Vesper CLI is not executable: $cli" >&2
           exit 1
         fi
         echo "VESPER_CLI=$cli" >> "$GITHUB_ENV"

@@ -99,7 +99,7 @@ enum WorkerEvent {
     },
     Failed {
         task_id: DownloadTaskId,
-        error: PlayerError,
+        error: Box<PlayerError>,
     },
 }
 
@@ -421,10 +421,8 @@ impl DesktopDownloadController {
                         .complete_task(task_id, completed_path, Instant::now());
                 }
                 WorkerEvent::Failed { task_id, error } => {
-                    let _ = self
-                        .manager
-                        .fail_task(task_id, error.clone(), Instant::now());
                     result.messages.push(error.to_string());
+                    let _ = self.manager.fail_task(task_id, *error, Instant::now());
                 }
             }
         }
@@ -712,7 +710,7 @@ fn run_download_task(
         Err(error) => {
             let _ = worker_tx.send(WorkerEvent::Failed {
                 task_id: task.task_id,
-                error,
+                error: Box::new(error),
             });
         }
     }

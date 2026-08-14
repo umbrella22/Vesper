@@ -808,12 +808,8 @@ fn compare_managed_trees(expected: &Path, actual: &Path) -> Result<(), IosError>
     let actual_names = actual.keys().collect::<Vec<_>>();
     let changed = expected
         .iter()
-        .filter_map(|(path, bytes)| {
-            actual
-                .get(path)
-                .is_some_and(|actual| actual != bytes)
-                .then(|| path.display().to_string())
-        })
+        .filter(|&(path, bytes)| actual.get(path).is_some_and(|actual| actual != bytes))
+        .map(|(path, _)| path.display().to_string())
         .collect::<Vec<_>>();
     Err(IosError::conformance(format!(
         "existing Swift package tag differs from the requested release\n  expected files: {:?}\n  actual files: {:?}\n  changed files: {:?}",
