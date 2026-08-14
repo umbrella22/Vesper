@@ -8,6 +8,7 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -17,8 +18,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 private const val SOURCE_LOAD_QUEUE_CAPACITY = 8
+private const val DEFAULT_SOURCE_COMMAND_TIMEOUT_MS = 30_000L
+private const val DEFAULT_SEEK_COMMAND_TIMEOUT_MS = 15_000L
 
 internal class VesperNativePlayerBridge(
     internal val bindings: VesperNativeBindings = MissingVesperNativeBindings(),
@@ -40,6 +44,8 @@ internal class VesperNativePlayerBridge(
     internal val pipelineEventHookRegistryOwner: VesperPluginRegistryHandleOwner? = null,
     internal val nativeFramePipelinePumpScheduler: NativeFramePipelinePumpScheduler =
         HandlerNativeFramePipelinePumpScheduler(),
+    internal val sourceCommandTimeoutMs: Long = DEFAULT_SOURCE_COMMAND_TIMEOUT_MS,
+    internal val seekCommandTimeoutMs: Long = DEFAULT_SEEK_COMMAND_TIMEOUT_MS,
 ) : PlayerBridge {
     override val appContext: Context? = appContext
     internal var currentSource: VesperPlayerSource? = initialSource
@@ -53,6 +59,9 @@ internal class VesperNativePlayerBridge(
     internal val mainHandler = Handler(Looper.getMainLooper())
     internal val nativeFramePipelineRuntimeLock = Any()
     internal val sourceLoadEpoch = AtomicLong(0L)
+    internal val sourceCommandGeneration = AtomicLong(0L)
+    internal val seekCommandGeneration = AtomicLong(0L)
+    internal val pendingSourceCommand = AtomicReference<PendingSourceCommand?>(null)
     internal val sourceLoadDispatcher: ExecutorCoroutineDispatcher =
         ThreadPoolExecutor(
             2,
@@ -271,9 +280,15 @@ internal class VesperNativePlayerBridge(
 
     override fun seekBy(deltaMs: Long) = seekNativeBridgeBy(deltaMs)
 
+    override suspend fun seekByAsync(deltaMs: Long) = seekNativeBridgeByAsync(deltaMs)
+
     override fun seekToRatio(ratio: Float) = seekNativeBridgeToRatio(ratio)
 
+    override suspend fun seekToRatioAsync(ratio: Float) = seekNativeBridgeToRatioAsync(ratio)
+
     override fun seekToLiveEdge() = seekNativeBridgeToLiveEdge()
+
+    override suspend fun seekToLiveEdgeAsync() = seekNativeBridgeToLiveEdgeAsync()
 
     override fun setPlaybackRate(rate: Float) = setNativePlaybackRate(rate)
 
@@ -337,3 +352,11 @@ internal class VesperNativePlayerBridge(
         benchmarkRecorder.awaitSinkShutdown(timeoutMs)
 
 }
+
+internal data class PendingSourceCommand(
+    val commandId: Long,
+    val source: VesperPlayerSource,
+    val startedAtNs: Long = System.nanoTime(),
+    val completion: CompletableDeferred<Unit> = CompletableDeferred(),
+    val job: AtomicReference<Job?> = AtomicReference(null),
+)

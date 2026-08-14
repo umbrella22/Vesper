@@ -241,6 +241,8 @@ internal class FakePlayerBridge(
         }
     }
 
+    override suspend fun seekByAsync(deltaMs: Long) = seekBy(deltaMs)
+
     override fun seekToRatio(ratio: Float) {
         if (isDisposed.get()) {
             return
@@ -253,6 +255,8 @@ internal class FakePlayerBridge(
         }
     }
 
+    override suspend fun seekToRatioAsync(ratio: Float) = seekToRatio(ratio)
+
     override fun seekToLiveEdge() {
         if (isDisposed.get()) {
             return
@@ -263,6 +267,8 @@ internal class FakePlayerBridge(
             copy(timeline = timeline.copy(positionMs = liveEdge))
         }
     }
+
+    override suspend fun seekToLiveEdgeAsync() = seekToLiveEdge()
 
     override fun setPlaybackRate(rate: Float) {
         if (isDisposed.get()) {

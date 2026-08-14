@@ -57,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.withFrameNanos
@@ -125,6 +126,7 @@ internal fun PlayerHostApp(
     frameProcessorPluginReferences: List<VesperPluginReference>,
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val activity = remember(context) { context.findActivity() }
     val deviceControls = remember(context, activity) {
         ExampleAndroidDeviceControls(context.applicationContext, activity)
@@ -234,7 +236,7 @@ internal fun PlayerHostApp(
             Toast
                 .makeText(
                     context,
-                    context.getString(R.string.example_external_permission_required),
+                    resources.getString(R.string.example_external_permission_required),
                     Toast.LENGTH_SHORT,
                 ).show()
         }
@@ -254,7 +256,7 @@ internal fun PlayerHostApp(
     val displayedUiState =
         externalSession?.let { session ->
             uiState.copy(
-                subtitle = context.getString(R.string.example_external_connected_route, session.routeName),
+                subtitle = resources.getString(R.string.example_external_connected_route, session.routeName),
                 playbackState = exampleExternalPlaybackState(session),
                 isBuffering = session.status == ExampleExternalPlaybackStatus.Loading,
                 timeline = exampleExternalTimeline(uiState.timeline, session, externalNowMillis),
@@ -366,16 +368,16 @@ internal fun PlayerHostApp(
             result.exceptionOrNull()?.let { error ->
                 recordHostLog(
                     severity = ExampleHostLogSeverity.Error,
-                    title = context.getString(R.string.example_log_download_create_failed),
+                    title = resources.getString(R.string.example_log_download_create_failed),
                     detail = error.localizedMessage ?: error::class.java.simpleName,
                 )
                 Toast
                     .makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             R.string.example_download_create_task_failed,
                             error.localizedMessage
-                                ?: context.getString(R.string.example_download_save_to_gallery_failed_unknown),
+                                ?: resources.getString(R.string.example_download_save_to_gallery_failed_unknown),
                         ),
                         Toast.LENGTH_SHORT,
                     ).show()
@@ -389,7 +391,7 @@ internal fun PlayerHostApp(
             Toast
                 .makeText(
                     context,
-                    context.getString(R.string.example_pip_unavailable),
+                    resources.getString(R.string.example_pip_unavailable),
                     Toast.LENGTH_SHORT,
                 ).show()
             return
@@ -398,7 +400,7 @@ internal fun PlayerHostApp(
             Toast
                 .makeText(
                     context,
-                    context.getString(R.string.example_pip_unavailable),
+                    resources.getString(R.string.example_pip_unavailable),
                     Toast.LENGTH_SHORT,
                 ).show()
             return
@@ -421,7 +423,7 @@ internal fun PlayerHostApp(
                 Toast
                     .makeText(
                         context,
-                        context.getString(R.string.example_pip_unavailable),
+                        resources.getString(R.string.example_pip_unavailable),
                         Toast.LENGTH_SHORT,
                     ).show()
             }
@@ -438,7 +440,7 @@ internal fun PlayerHostApp(
             if (preset.sampleId == "NETWORK-FAILURE-CONTROL") {
                 VesperPlayerSource.remote(
                     uri = ANDROID_HDR_EVIDENCE_NETWORK_CONTROL_URL,
-                    label = context.getString(R.string.example_plugins_hdr_evidence_network_control_label),
+                    label = resources.getString(R.string.example_plugins_hdr_evidence_network_control_label),
                     protocol = VesperPlayerSourceProtocol.Progressive,
                 )
             } else if (dolbyAcceptancePreset != null) {
@@ -507,13 +509,13 @@ internal fun PlayerHostApp(
                 onSuccess = { directory ->
                     recordHostLog(
                         severity = ExampleHostLogSeverity.Info,
-                        title = context.getString(R.string.example_log_hdr_evidence_written),
+                        title = resources.getString(R.string.example_log_hdr_evidence_written),
                         detail = directory.absolutePath,
                     )
                     Toast
                         .makeText(
                             context,
-                            context.getString(
+                            resources.getString(
                                 R.string.example_plugins_hdr_evidence_written,
                                 directory.absolutePath,
                             ),
@@ -523,13 +525,13 @@ internal fun PlayerHostApp(
                 onFailure = { error ->
                     recordHostLog(
                         severity = ExampleHostLogSeverity.Error,
-                        title = context.getString(R.string.example_log_hdr_evidence_failed),
+                        title = resources.getString(R.string.example_log_hdr_evidence_failed),
                         detail = error.message ?: error::class.java.simpleName,
                     )
                     Toast
                         .makeText(
                             context,
-                            context.getString(
+                            resources.getString(
                                 R.string.example_plugins_hdr_evidence_failed,
                                 error.message ?: error::class.java.simpleName,
                             ),
@@ -577,7 +579,7 @@ internal fun PlayerHostApp(
             )
             recordHostLog(
                 severity = ExampleHostLogSeverity.Info,
-                title = context.getString(R.string.example_log_source_selected),
+                title = resources.getString(R.string.example_log_source_selected),
                 detail = source.label.ifBlank { source.uri },
             )
         }
@@ -690,7 +692,7 @@ internal fun PlayerHostApp(
             )
             recordHostLog(
                 severity = ExampleHostLogSeverity.Info,
-                title = context.getString(R.string.example_log_controller_rebuilt),
+                title = resources.getString(R.string.example_log_controller_rebuilt),
                 detail = preset.label,
             )
             Toast
@@ -706,7 +708,7 @@ internal fun PlayerHostApp(
         controlsVisible = true
         recordHostLog(
             severity = ExampleHostLogSeverity.Info,
-            title = context.getString(R.string.example_log_dolby_play_now),
+            title = resources.getString(R.string.example_log_dolby_play_now),
             detail = preset.label,
         )
         Log.i(
@@ -750,8 +752,8 @@ internal fun PlayerHostApp(
             )
         recordHostLog(
             severity = ExampleHostLogSeverity.Info,
-            title = context.getString(R.string.example_log_source_normalizer_changed),
-            detail = context.getString(setting.titleRes),
+            title = resources.getString(R.string.example_log_source_normalizer_changed),
+            detail = resources.getString(setting.titleRes),
         )
         if (activeSource != null) {
             nextController.configureSystemPlayback(
@@ -789,8 +791,8 @@ internal fun PlayerHostApp(
         if (!requiresControllerRebuild) {
             recordHostLog(
                 severity = ExampleHostLogSeverity.Info,
-                title = context.getString(R.string.example_log_native_frame_changed),
-                detail = context.getString(setting.titleRes),
+                title = resources.getString(R.string.example_log_native_frame_changed),
+                detail = resources.getString(setting.titleRes),
             )
             controlsVisible = true
             return
@@ -814,8 +816,8 @@ internal fun PlayerHostApp(
             )
         recordHostLog(
             severity = ExampleHostLogSeverity.Info,
-            title = context.getString(R.string.example_log_native_frame_changed),
-            detail = context.getString(setting.titleRes),
+            title = resources.getString(R.string.example_log_native_frame_changed),
+            detail = resources.getString(setting.titleRes),
         )
         if (activeSource != null) {
             nextController.configureSystemPlayback(
@@ -865,8 +867,8 @@ internal fun PlayerHostApp(
         if (!requiresControllerRebuild) {
             recordHostLog(
                 severity = ExampleHostLogSeverity.Info,
-                title = context.getString(R.string.example_log_video_surface_changed),
-                detail = context.getString(setting.titleRes),
+                title = resources.getString(R.string.example_log_video_surface_changed),
+                detail = resources.getString(setting.titleRes),
             )
             controlsVisible = true
             return
@@ -890,8 +892,8 @@ internal fun PlayerHostApp(
             )
         recordHostLog(
             severity = ExampleHostLogSeverity.Info,
-            title = context.getString(R.string.example_log_video_surface_changed),
-            detail = context.getString(setting.titleRes),
+            title = resources.getString(R.string.example_log_video_surface_changed),
+            detail = resources.getString(setting.titleRes),
         )
         if (activeSource != null) {
             nextController.configureSystemPlayback(
@@ -938,7 +940,7 @@ internal fun PlayerHostApp(
         Toast
             .makeText(
                 context,
-                context.getString(R.string.example_external_route_error, message),
+                resources.getString(R.string.example_external_route_error, message),
                 Toast.LENGTH_SHORT,
             ).show()
     }
@@ -990,7 +992,7 @@ internal fun PlayerHostApp(
             Toast
                 .makeText(
                     context,
-                    context.getString(R.string.example_external_no_active_source),
+                    resources.getString(R.string.example_external_no_active_source),
                     Toast.LENGTH_SHORT,
                 ).show()
             return
@@ -1077,7 +1079,7 @@ internal fun PlayerHostApp(
             Toast
                 .makeText(
                     context,
-                    context.getString(R.string.example_external_no_active_source),
+                    resources.getString(R.string.example_external_no_active_source),
                     Toast.LENGTH_SHORT,
                 ).show()
         }
@@ -1095,7 +1097,7 @@ internal fun PlayerHostApp(
                 Toast
                     .makeText(
                         context,
-                        message ?: context.getString(R.string.example_external_route_error, "Cast is unavailable."),
+                        message ?: resources.getString(R.string.example_external_route_error, "Cast is unavailable."),
                         Toast.LENGTH_SHORT,
                     ).show()
             }
@@ -1203,7 +1205,7 @@ internal fun PlayerHostApp(
             Toast
                 .makeText(
                     context,
-                    context.getString(R.string.example_download_save_to_gallery_missing_output),
+                    resources.getString(R.string.example_download_save_to_gallery_missing_output),
                     Toast.LENGTH_SHORT,
                 ).show()
             return
@@ -1216,7 +1218,7 @@ internal fun PlayerHostApp(
             Toast
                 .makeText(
                     context,
-                    context.getString(R.string.example_download_export_plugin_missing),
+                    resources.getString(R.string.example_download_export_plugin_missing),
                     Toast.LENGTH_SHORT,
                 ).show()
             return
@@ -1259,13 +1261,13 @@ internal fun PlayerHostApp(
                     }
                 }.fold(
                     onSuccess = {
-                        context.getString(R.string.example_download_save_to_gallery_success)
+                        resources.getString(R.string.example_download_save_to_gallery_success)
                     },
                     onFailure = { error ->
-                        context.getString(
+                        resources.getString(
                             R.string.example_download_save_to_gallery_failed,
                             error.localizedMessage
-                                ?: context.getString(R.string.example_download_save_to_gallery_failed_unknown),
+                                ?: resources.getString(R.string.example_download_save_to_gallery_failed_unknown),
                         )
                     },
                 )
@@ -1329,7 +1331,7 @@ internal fun PlayerHostApp(
         )
         recordHostLog(
             severity = ExampleHostLogSeverity.Info,
-            title = context.getString(R.string.example_log_dolby_added_to_queue),
+            title = resources.getString(R.string.example_log_dolby_added_to_queue),
             detail = preset.label,
         )
     }
@@ -1372,10 +1374,10 @@ internal fun PlayerHostApp(
                     Toast
                         .makeText(
                             context,
-                            context.getString(
+                            resources.getString(
                                 R.string.example_sources_prepare_local_failed,
                                 error.localizedMessage
-                                    ?: context.getString(R.string.example_download_save_to_gallery_failed_unknown),
+                                    ?: resources.getString(R.string.example_download_save_to_gallery_failed_unknown),
                             ),
                             Toast.LENGTH_SHORT,
                         ).show()
@@ -1485,7 +1487,7 @@ internal fun PlayerHostApp(
                 -> {
                     recordHostLog(
                         severity = ExampleHostLogSeverity.Warning,
-                        title = context.getString(R.string.example_log_external_disconnected),
+                        title = resources.getString(R.string.example_log_external_disconnected),
                         detail = event.routeName ?: event.routeId,
                     )
                     externalSession = null
@@ -1502,7 +1504,7 @@ internal fun PlayerHostApp(
                                 } else {
                                     ExampleHostLogSeverity.Warning
                                 },
-                            title = context.getString(R.string.example_log_external_event),
+                            title = resources.getString(R.string.example_log_external_event),
                             detail = message,
                         )
                         externalSession =
@@ -1831,7 +1833,7 @@ internal fun PlayerHostApp(
                                                     val remoteSource =
                                                         VesperPlayerSource.remote(
                                                             uri = url,
-                                                            label = context.getString(R.string.example_source_custom_remote_label),
+                                                            label = resources.getString(R.string.example_source_custom_remote_label),
                                                         )
                                                     queuedRemoteSource = remoteSource
                                                     val nextPlaylistItems =
@@ -2023,14 +2025,14 @@ internal fun PlayerHostApp(
                                                         selectedResilienceProfile = previousProfile
                                                         recordHostLog(
                                                             severity = ExampleHostLogSeverity.Error,
-                                                            title = context.getString(R.string.example_log_resilience_failed),
+                                                            title = resources.getString(R.string.example_log_resilience_failed),
                                                             detail = result.exceptionOrNull()?.localizedMessage,
                                                         )
                                                     } else {
                                                         recordHostLog(
                                                             severity = ExampleHostLogSeverity.Info,
-                                                            title = context.getString(R.string.example_log_resilience_applied),
-                                                            detail = context.getString(profile.titleRes),
+                                                            title = resources.getString(R.string.example_log_resilience_applied),
+                                                            detail = resources.getString(profile.titleRes),
                                                         )
                                                     }
                                                     isApplyingResilienceProfile = false
@@ -2130,7 +2132,7 @@ internal fun PlayerHostApp(
                                     }.onFailure { error ->
                                         recordHostLog(
                                             severity = ExampleHostLogSeverity.Error,
-                                            title = context.getString(R.string.example_common_subtitles),
+                                            title = resources.getString(R.string.example_common_subtitles),
                                             detail = error.localizedMessage,
                                         )
                                     }

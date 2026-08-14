@@ -38,7 +38,7 @@ internal fun Map<String, Any?>.withAppProbeConvergence(
         put("appProbeHdrKind", probeResult.hdrKind.toWireName())
         put("appProbeDolbyVisionMode", probeResult.dolbyVisionMode.toWireName())
         put("appProbeMissingCapabilities", probeResult.missingCapabilities.joinToString(","))
-        probe.sourceUri?.let { put("appProbeSourceUri", it) }
+        put("appProbeSourceUri", probe.sourceUri)
         probe.sourceProtocol?.let { put("appProbeSourceProtocol", it) }
         if (payloadSourceUri != null) {
             put("appProbeSourceMatchesRuntime", true)

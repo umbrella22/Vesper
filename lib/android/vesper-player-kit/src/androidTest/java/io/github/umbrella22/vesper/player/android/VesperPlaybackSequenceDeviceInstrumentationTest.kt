@@ -2,9 +2,10 @@ package io.github.umbrella22.vesper.player.android
 
 import android.content.Context
 import android.net.Uri
+import android.widget.FrameLayout
+import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
@@ -30,59 +31,64 @@ class VesperPlaybackSequenceDeviceInstrumentationTest {
 
         var controller: VesperPlayerController? = null
         var sequence: VesperPlaybackSequence? = null
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
         try {
-            instrumentation.runOnMainSync {
-                controller =
-                    VesperPlayerControllerFactory.createDefault(
-                        context = context,
-                        resiliencePolicy = VesperPlaybackResiliencePolicy.streaming(),
-                        decoderBackend = VesperDecoderBackend.SystemOnly,
-                        surfaceKind = VesperVideoSurfaceKind.SurfaceView,
-                        keepScreenOnDuringPlayback = false,
-                    )
-                sequence =
-                    VesperPlaybackSequence(
-                        VesperPlaybackSequenceConfiguration(
-                            sequenceId = "android-device-progressive-sequence",
-                            forwardWindow = 1,
-                        ),
-                    )
-                requireNotNull(sequence).attach(requireNotNull(controller))
-                requireNotNull(sequence).replace(
-                    listOf(firstItem, secondItem),
-                    activeItemId = firstItem.itemId,
-                )
-            }
-            val activeController = requireNotNull(controller)
-            val activeSequence = requireNotNull(sequence)
+            ActivityScenario.launch(VesperSurfaceLayoutTestActivity::class.java).use { scenario ->
+                try {
+                    scenario.onActivity { activity ->
+                        val surfaceHost: FrameLayout = activity.replaceSurfaceHost()
+                        controller =
+                            VesperPlayerControllerFactory.createDefault(
+                                context = activity.applicationContext,
+                                resiliencePolicy = VesperPlaybackResiliencePolicy.streaming(),
+                                decoderBackend = VesperDecoderBackend.SystemOnly,
+                                surfaceKind = VesperVideoSurfaceKind.SurfaceView,
+                                keepScreenOnDuringPlayback = false,
+                            ).also { it.attachSurfaceHost(surfaceHost) }
+                        sequence =
+                            VesperPlaybackSequence(
+                                VesperPlaybackSequenceConfiguration(
+                                    sequenceId = "android-device-progressive-sequence",
+                                    forwardWindow = 1,
+                                ),
+                            )
+                        requireNotNull(sequence).attach(requireNotNull(controller))
+                        requireNotNull(sequence).replace(
+                            listOf(firstItem, secondItem),
+                            activeItemId = firstItem.itemId,
+                        )
+                    }
+                    val activeController = requireNotNull(controller)
+                    val activeSequence = requireNotNull(sequence)
 
-            awaitPlayback(activeController, activeSequence, firstItem.itemId, "device item A")
-            awaitWarmup(activeSequence, expectedCompleted = 2L)
+                    awaitPlayback(activeController, activeSequence, firstItem.itemId, "device item A")
+                    awaitWarmup(activeSequence, expectedCompleted = 2L)
 
-            instrumentation.runOnMainSync { activeSequence.next() }
-            awaitPlayback(activeController, activeSequence, secondItem.itemId, "device item B")
+                    scenario.onActivity { activeSequence.next() }
+                    awaitPlayback(activeController, activeSequence, secondItem.itemId, "device item B")
 
-            instrumentation.runOnMainSync { activeSequence.previous() }
-            awaitPlayback(activeController, activeSequence, firstItem.itemId, "device item A")
+                    scenario.onActivity { activeSequence.previous() }
+                    awaitPlayback(activeController, activeSequence, firstItem.itemId, "device item A")
 
-            val warmup = activeSequence.warmupSnapshot()
-            assertEquals(2L, warmup.completedJobs)
-            assertEquals(0L, warmup.failedJobs)
-            assertEquals(0L, warmup.cancelledJobs)
-            assertEquals(0L, warmup.unsupportedJobs)
-            assertEquals(2L, warmup.cacheMisses)
-            assertEquals(0, warmup.activeJobs)
-            assertTrue(warmup.actualBytes > 0L)
-            assertTrue(warmup.cacheEntries >= 2)
-            assertTrue(warmup.cacheBytes > 0L)
-        } finally {
-            if (sequence != null || controller != null) {
-                instrumentation.runOnMainSync {
-                    sequence?.dispose()
-                    controller?.dispose()
+                    val warmup = activeSequence.warmupSnapshot()
+                    assertEquals(2L, warmup.completedJobs)
+                    assertEquals(0L, warmup.failedJobs)
+                    assertEquals(0L, warmup.cancelledJobs)
+                    assertEquals(0L, warmup.unsupportedJobs)
+                    assertEquals(2L, warmup.cacheMisses)
+                    assertEquals(0, warmup.activeJobs)
+                    assertTrue(warmup.actualBytes > 0L)
+                    assertTrue(warmup.cacheEntries >= 2)
+                    assertTrue(warmup.cacheBytes > 0L)
+                } finally {
+                    scenario.onActivity {
+                        sequence?.dispose()
+                        controller?.dispose()
+                        sequence = null
+                        controller = null
+                    }
                 }
             }
+        } finally {
             fixtureRoot.deleteRecursively()
         }
     }
@@ -165,7 +171,7 @@ class VesperPlaybackSequenceDeviceInstrumentationTest {
                 VesperPlaybackSequenceCacheIdentity(
                     providerNamespace = "device.fixture",
                     contentIdentity = itemId,
-                    renditionIdentity = "h264-aac-128x72",
+                    renditionIdentity = "h264-aac-128x96",
                     resourceIdentity = "progressive-file",
                     accessPartition = "instrumentation",
                     sourceRevision = revision,
@@ -183,7 +189,7 @@ class VesperPlaybackSequenceDeviceInstrumentationTest {
         context: Context,
         destination: File,
     ): File {
-        context.assets.open("tiny-h264-aac.m4v").use { input ->
+        context.assets.open("tiny-h264-aac-mediacodec.m4v").use { input ->
             destination.outputStream().use(input::copyTo)
         }
         return destination

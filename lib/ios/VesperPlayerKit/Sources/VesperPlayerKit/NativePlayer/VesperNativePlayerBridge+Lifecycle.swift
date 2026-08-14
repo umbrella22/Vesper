@@ -55,9 +55,10 @@ extension VesperNativePlayerBridge {
         startSourceLoadTask(source: currentSource, shouldAutoPlay: shouldAutoPlay)
     }
 
-    func initializeAsync() async {
+    func initializeAsync() async throws {
         initialize()
-        await sourceLoadTask?.value
+        guard let task = sourceLoadTask else { return }
+        try await task.value
     }
 
     func dispose() {
@@ -66,7 +67,7 @@ extension VesperNativePlayerBridge {
         iosHostLog("dispose")
         cancelPendingRetry(resetAttempts: true)
         cancelStopSeekTimeout()
-        cancelSourceLoadTask()
+        cancelSourceLoadTask(reason: "sourceCommandDisposed")
         advanceSubtitleSourceEpoch()
         pendingResilienceRestore = nil
         currentSource = nil
@@ -75,7 +76,7 @@ extension VesperNativePlayerBridge {
         pendingAutoPlay = false
         pendingNativeFrameSurfaceLoad = false
         pendingNativeFrameSeek = nil
-        tearDownActivePlayback()
+        tearDownActivePlayback(cancelSourceCommand: false)
         deactivateAudioSessionIfNeeded()
         benchmarkRecorder.dispose()
         _ = pipelineEventHookSession?.flush()
@@ -100,6 +101,10 @@ extension VesperNativePlayerBridge {
     }
 
     func selectSource(_ source: VesperPlayerSource) {
+        _ = startSourceSelection(source)
+    }
+
+    func startSourceSelection(_ source: VesperPlayerSource) -> Task<Void, Error> {
         clearLastError()
         recordBenchmark(
             "select_source_start",
@@ -109,15 +114,17 @@ extension VesperNativePlayerBridge {
         iosHostLog(
             "selectSource source=\(sourceDescription) kind=\(source.kind.rawValue) protocol=\(source.protocol.rawValue)"
         )
+        cancelPendingRetry(resetAttempts: true)
+        cancelSourceLoadTask(reason: "sourceCommandSuperseded")
+        cancelPendingSeekCommand(reason: "seekSourceChanged")
+        tearDownActivePlayback(cancelSourceCommand: false)
         advanceSubtitleSourceEpoch()
         currentSource = source
+        currentSourceIsConfirmedLive = nil
         currentHdrFailureEvidence = nil
-        cancelPendingRetry(resetAttempts: true)
         pendingResilienceRestore = nil
         pendingAutoPlay = true
         pendingNativeFrameSeek = nil
-        cancelSourceLoadTask()
-        tearDownActivePlayback()
         updateState {
             PlayerHostUiState(
                 title: $0.title,
@@ -125,7 +132,7 @@ extension VesperNativePlayerBridge {
                 sourceLabel: source.label,
                 playbackState: .ready,
                 playbackRate: $0.playbackRate,
-                isBuffering: false,
+                isBuffering: true,
                 isInterrupted: $0.isInterrupted,
                 timeline: TimelineUiState(
                     kind: .vod,
@@ -137,74 +144,168 @@ extension VesperNativePlayerBridge {
                 )
             )
         }
-        initialize()
+        configureAudioSessionIfNeeded()
+        return startSourceLoadTask(source: source, shouldAutoPlay: true)
     }
 
-    func selectSourceAsync(_ source: VesperPlayerSource) async {
-        selectSource(source)
-        await sourceLoadTask?.value
+    func selectSourceAsync(_ source: VesperPlayerSource) async throws {
+        let task = startSourceSelection(source)
+        try await task.value
     }
 
-    func startSourceLoadTask(source: VesperPlayerSource, shouldAutoPlay: Bool) {
-        cancelSourceLoadTask()
-        let epoch = nextSourceLoadEpoch()
-        sourceLoadTask = Task { @MainActor [weak self] in
-            guard let self else { return }
+    @discardableResult
+    func startSourceLoadTask(
+        source: VesperPlayerSource,
+        shouldAutoPlay: Bool
+    ) -> Task<Void, Error> {
+        cancelSourceLoadTask(reason: "sourceCommandSuperseded")
+        sourceCommandGeneration &+= 1
+        if sourceCommandGeneration == 0 {
+            sourceCommandGeneration = 1
+        }
+        let command = VesperSourceCommandHandle(
+            commandId: sourceCommandGeneration,
+            source: source,
+            deadline: ContinuousClock().now.advanced(by: sourceReadinessWaitPolicy.timeout)
+        )
+        activeSourceCommand = command
+        pendingSourceCommandFailure = nil
+        retryAttemptCount = 0
+        let task = Task { @MainActor [weak self, weak command] in
+            guard let self, let command else {
+                throw CancellationError()
+            }
             do {
-                let pluginDiagnostics = await self.probeMobilePluginsAsync(for: source)
-                guard !Task.isCancelled, self.isCurrentSourceLoad(epoch, source: source) else { return }
-                self.currentPluginDiagnostics = self.pluginDiagnosticsWithNativeFramePipeline(pluginDiagnostics)
-                try await self.loadCurrentSource(source, sourceLoadEpoch: epoch)
-                guard !Task.isCancelled, self.isCurrentSourceLoad(epoch, source: source) else { return }
-                self.sourceLoadTask = nil
-                self.pendingNativeFrameSurfaceLoad = false
-                let shouldStartAfterLoad = shouldAutoPlay && self.pendingAutoPlay
-                self.pendingAutoPlay = false
-                if shouldStartAfterLoad {
-                    iosHostLog(
-                        "auto-playing source=\(diagnosticURLDescription(source.uri))"
-                    )
-                    self.startPlayback()
-                }
-                self.refreshPlaybackState()
-                self.recordBenchmark("initialize_completed")
+                try await self.executeSourceCommand(
+                    command,
+                    shouldAutoPlay: shouldAutoPlay
+                )
+            } catch is CancellationError {
+                throw self.obsoleteSourceCommandError(
+                    command,
+                    reason: command.cancellationReason ?? "sourceCommandCancelled"
+                )
             } catch {
-                guard !Task.isCancelled, self.isCurrentSourceLoad(epoch, source: source) else { return }
-                self.sourceLoadTask = nil
-                self.finishSourceLoadFailure(error)
+                throw error
             }
         }
+        command.task = task
+        sourceLoadTask = task
+        return task
     }
 
-    func cancelSourceLoadTask() {
+    func cancelSourceLoadTask(reason: String = "sourceCommandCancelled") {
+        activeSourceCommand?.cancellationReason = reason
+        activeSourceCommand?.task?.cancel()
         sourceLoadTask?.cancel()
+        activeSourceCommand = nil
         sourceLoadTask = nil
+        pendingSourceCommandFailure = nil
         subtitleOverlayLoadTask?.cancel()
         subtitleOverlayLoadTask = nil
         sourceLoadEpoch &+= 1
         fairPlayDrmCoordinator?.cancelPendingRequests()
     }
 
-    func finishSourceLoadFailure(_ error: Error) {
-        if !pendingNativeFrameSurfaceLoad {
-            pendingAutoPlay = false
+    func executeSourceCommand(
+        _ command: VesperSourceCommandHandle,
+        shouldAutoPlay: Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        defer {
+            if activeSourceCommand === command {
+                activeSourceCommand = nil
+                sourceLoadTask = nil
+                pendingSourceCommandFailure = nil
+            }
         }
-        if pendingNativeFrameSurfaceLoad {
-            iosHostLog("initialize deferred: \(error.localizedDescription)")
-            recordBenchmark(
-                "initialize_deferred",
-                attributes: ["reason": error.localizedDescription]
-            )
-            resumePendingNativeFrameSurfaceLoadIfNeeded()
-            return
+
+        while true {
+            try Task.checkCancellation()
+            try ensureCurrentSourceCommand(command)
+            guard clock.now < command.deadline else {
+                let error = sourceCommandTimeoutError(command)
+                tearDownActivePlayback(cancelSourceCommand: false)
+                publishSourceCommandFailure(error, command: command)
+                throw error
+            }
+            let epoch = nextSourceLoadEpoch()
+            do {
+                let pluginDiagnostics = await probeMobilePluginsAsync(for: command.source)
+                try Task.checkCancellation()
+                try ensureCurrentSourceCommand(command)
+                guard isCurrentSourceLoad(epoch, source: command.source) else {
+                    throw obsoleteSourceCommandError(command, reason: "sourceCommandSuperseded")
+                }
+                currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(pluginDiagnostics)
+                if let sourceLoadAttemptOverride {
+                    try await sourceLoadAttemptOverride(
+                        self,
+                        command.source,
+                        epoch,
+                        command.deadline
+                    )
+                } else {
+                    try await loadCurrentSource(
+                        command.source,
+                        sourceLoadEpoch: epoch,
+                        deadline: command.deadline
+                    )
+                }
+                try Task.checkCancellation()
+                try ensureCurrentSourceCommand(command)
+                guard isCurrentSourceLoad(epoch, source: command.source) else {
+                    throw obsoleteSourceCommandError(command, reason: "sourceCommandSuperseded")
+                }
+
+                pendingNativeFrameSurfaceLoad = false
+                retryAttemptCount = 0
+                let shouldStartAfterLoad = shouldAutoPlay && pendingAutoPlay
+                pendingAutoPlay = false
+                if shouldStartAfterLoad {
+                    iosHostLog(
+                        "auto-playing source=\(diagnosticURLDescription(command.source.uri))"
+                    )
+                    startPlayback()
+                }
+                refreshPlaybackState()
+                recordBenchmark("initialize_completed")
+                return
+            } catch is CancellationError {
+                throw obsoleteSourceCommandError(
+                    command,
+                    reason: command.cancellationReason ?? "sourceCommandCancelled"
+                )
+            } catch let error as VesperPlayerError where error.details["obsolete"] == "true" {
+                throw error
+            } catch {
+                try ensureCurrentSourceCommand(command)
+                let resolved = resolvedPlaybackFailure(
+                    error: error,
+                    fallbackMessage: error.localizedDescription
+                )
+                if let delay = sourceCommandRetryDelay(resolved, command: command) {
+                    command.retryAttemptCount += 1
+                    retryAttemptCount = command.retryAttemptCount
+                    tearDownActivePlayback(cancelSourceCommand: false)
+                    publishSourceCommandRetry(
+                        resolved,
+                        command: command,
+                        delayMs: delay
+                    )
+                    try await clock.sleep(for: .milliseconds(Int64(delay)))
+                    continue
+                }
+
+                let terminal = sourceCommandTerminalError(
+                    resolved,
+                    command: command
+                )
+                tearDownActivePlayback(cancelSourceCommand: false)
+                publishSourceCommandFailure(terminal, command: command)
+                throw terminal
+            }
         }
-        iosHostLog("initialize failed: \(error.localizedDescription)")
-        closeCurrentSourceNormalizerResource()
-        recordBenchmark(
-            "initialize_failed",
-            attributes: ["error": error.localizedDescription]
-        )
-        handlePlaybackFailure(error: error, fallbackMessage: error.localizedDescription)
     }
 
     func probeMobilePluginsAsync(for source: VesperPlayerSource) async -> [[String: Any]] {
@@ -322,12 +423,18 @@ extension VesperNativePlayerBridge {
         guard nativeFramePipelineCoordinator.activeSession == nil else {
             return
         }
+        if activeSourceCommand != nil {
+            return
+        }
         pendingNativeFrameSurfaceLoad = false
         initialize()
     }
 
-    func tearDownActivePlayback() {
-        cancelSourceLoadTask()
+    func tearDownActivePlayback(cancelSourceCommand: Bool = true) {
+        if cancelSourceCommand {
+            cancelSourceLoadTask()
+        }
+        cancelPendingSeekCommand(reason: "seekPlaybackTornDown")
         releaseDashStartupAbrLimitIfNeeded(reason: "tearDown", item: player?.currentItem)
         _ = advancePlaybackEpoch()
         cancelStopSeekTimeout()

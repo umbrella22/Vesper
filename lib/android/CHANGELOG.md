@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.1 - 2026-08-14
 
 ### Breaking Changes
 
@@ -32,6 +32,9 @@
 
 ### Changed
 
+- Android host modules now build with Kotlin 2.4.10, Media3 1.11.0,
+  kotlinx.coroutines 1.11.0, AndroidX AppCompat 1.8.0, Lifecycle 2.10.0,
+  Compose BOM 2026.06.01, and OkHttp 5.4.0.
 - HTTP `.flv` URLs infer progressive playback; use `VesperPlayerSource.flvLive`
   when the source is explicitly an HTTP-FLV live stream.
 - Fixed-track requests revalidate the current Media3 track support before
@@ -43,6 +46,16 @@
 
 ### Fixed
 
+- Instrumentation JNI libraries now stage under the host-kit project directory
+  even when a Flutter consumer redirects Gradle build outputs, keeping the Rust
+  CLI's module-owned publication boundary intact.
+- External-playback theme attributes that require API 29 are now isolated in
+  `values-v29`, so resource validation remains compatible with the API 26 floor.
+- Pausing during an in-flight source load now cancels pending autoplay.
+- Async source and seek commands now complete only after Media3 publishes
+  command readiness or seek completion for the current source generation;
+  superseded commands return structured obsolete failures without changing the
+  active `lastError`.
 - Delayed Media3 TEXT-track visibility no longer produces an early
   `subtitle_track_not_found` result when the target becomes selectable within
   the command deadline.

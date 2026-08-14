@@ -6,7 +6,8 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
@@ -83,7 +84,7 @@ class VesperSubtitleSelectionLifecycleInstrumentationTest {
         val activeBridge = activeBridge(context, bindings, "First source")
         bridge = activeBridge
 
-        val selection = async(SupervisorJob()) {
+        val selection = asyncCatching {
             activeBridge.setSubtitleTrackSelection(VesperTrackSelection.track(firstTrackId))
         }
         yield()
@@ -98,7 +99,7 @@ class VesperSubtitleSelectionLifecycleInstrumentationTest {
 
         val failure =
             try {
-                selection.await()
+                selection.await().getOrThrow()
                 throw AssertionError("Expected source selection to cancel the subtitle request.")
             } catch (error: VesperPlayerUnsupportedOperation) {
                 error
@@ -123,7 +124,7 @@ class VesperSubtitleSelectionLifecycleInstrumentationTest {
         val activeBridge = activeBridge(context, bindings, "Supersede source")
         bridge = activeBridge
 
-        val firstSelection = async(SupervisorJob()) {
+        val firstSelection = asyncCatching {
             activeBridge.setSubtitleTrackSelection(VesperTrackSelection.track(firstTrackId))
         }
         yield()
@@ -132,7 +133,7 @@ class VesperSubtitleSelectionLifecycleInstrumentationTest {
             bindings.firstSelectionIssued.await(1, TimeUnit.SECONDS),
         )
 
-        val secondSelection = async(SupervisorJob()) {
+        val secondSelection = asyncCatching {
             activeBridge.setSubtitleTrackSelection(VesperTrackSelection.track(secondTrackId))
         }
         yield()
@@ -143,7 +144,7 @@ class VesperSubtitleSelectionLifecycleInstrumentationTest {
 
         val firstFailure =
             try {
-                firstSelection.await()
+                firstSelection.await().getOrThrow()
                 throw AssertionError("Expected the newer subtitle command to supersede the first.")
             } catch (error: VesperPlayerUnsupportedOperation) {
                 error
@@ -153,7 +154,7 @@ class VesperSubtitleSelectionLifecycleInstrumentationTest {
 
         bindings.confirmDeferredSelection()
         activeBridge.refreshFromNative()
-        secondSelection.await()
+        secondSelection.await().getOrThrow()
 
         assertEquals(
             VesperTrackSelection.track(secondTrackId),
@@ -190,6 +191,17 @@ class VesperSubtitleSelectionLifecycleInstrumentationTest {
         assertEquals(0L, failure.details["sourceEpoch"])
     }
 }
+
+private fun <T> CoroutineScope.asyncCatching(block: suspend CoroutineScope.() -> T) =
+    async {
+        try {
+            Result.success(block())
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            Result.failure(error)
+        }
+    }
 
 private class DeviceDeferredSubtitleBindings(
     initialCatalog: VesperTrackCatalog,

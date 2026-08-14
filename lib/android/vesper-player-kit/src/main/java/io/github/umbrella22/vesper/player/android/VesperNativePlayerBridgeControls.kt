@@ -61,6 +61,10 @@ internal fun VesperNativePlayerBridge.playNativeBridge() {
 
 internal fun VesperNativePlayerBridge.pauseNativeBridge() {
     recordBenchmark("pause_command")
+    // A pause received while the source is still preparing owns the playback
+    // intent. Clear the deferred autoplay bit before any early return or
+    // backend call so initialization cannot replay a stale play request.
+    pendingAutoPlay = false
     stopNativeFramePipelinePump()
     releasePendingTimedNativeFrameOnRuntime(presented = false)
     if (isRequiredNativeFramePipelineFailureActive()) {
@@ -84,6 +88,14 @@ internal fun VesperNativePlayerBridge.toggleNativePause() {
 
 internal fun VesperNativePlayerBridge.stopNativeBridge() {
     recordBenchmark("stop_command")
+    pendingAutoPlay = false
+    sourceLoadEpoch.incrementAndGet()
+    sourceCommandGeneration.incrementAndGet()
+    seekCommandGeneration.incrementAndGet()
+    cancelPendingBridgeSourceCommand("sourceCommandStopped")
+    sourceLoadJob?.cancel()
+    bindings.cancelPendingSourceCommand("sourceCommandStopped")
+    bindings.cancelPendingSeekCommand("seekCommandStopped")
     if (isRequiredNativeFramePipelineFailureActive()) {
         return
     }
@@ -106,6 +118,7 @@ internal fun VesperNativePlayerBridge.stopNativeBridge() {
 }
 
 internal fun VesperNativePlayerBridge.seekNativeBridgeBy(deltaMs: Long) {
+    supersedePendingSeekCommand()
     val current = _uiState.value.timeline
     val target = current.clampedPosition(current.positionMs + deltaMs)
     recordBenchmark("seek_start", mapOf("positionMs" to target.toString()))
@@ -117,6 +130,7 @@ internal fun VesperNativePlayerBridge.seekNativeBridgeBy(deltaMs: Long) {
 }
 
 internal fun VesperNativePlayerBridge.seekNativeBridgeToRatio(ratio: Float) {
+    supersedePendingSeekCommand()
     val timeline = _uiState.value.timeline
     val position = timeline.positionForRatio(ratio)
     recordBenchmark("seek_start", mapOf("positionMs" to position.toString()))
@@ -128,6 +142,7 @@ internal fun VesperNativePlayerBridge.seekNativeBridgeToRatio(ratio: Float) {
 }
 
 internal fun VesperNativePlayerBridge.seekNativeBridgeToLiveEdge() {
+    supersedePendingSeekCommand()
     val timeline = _uiState.value.timeline
     val liveEdge = timeline.goLivePositionMs ?: return
     recordBenchmark("seek_start", mapOf("positionMs" to liveEdge.toString()))
@@ -136,6 +151,115 @@ internal fun VesperNativePlayerBridge.seekNativeBridgeToLiveEdge() {
     }
     updateState { copy(timeline = timeline.copy(positionMs = liveEdge)) }
     refreshFromNative()
+}
+
+internal suspend fun VesperNativePlayerBridge.seekNativeBridgeByAsync(deltaMs: Long) {
+    val timeline = _uiState.value.timeline
+    awaitNativeSeekCommand(timeline.clampedPosition(timeline.positionMs + deltaMs))
+}
+
+internal suspend fun VesperNativePlayerBridge.seekNativeBridgeToRatioAsync(ratio: Float) {
+    val timeline = _uiState.value.timeline
+    awaitNativeSeekCommand(timeline.positionForRatio(ratio))
+}
+
+internal suspend fun VesperNativePlayerBridge.seekNativeBridgeToLiveEdgeAsync() {
+    val target = _uiState.value.timeline.goLivePositionMs
+        ?: throw commandFailure(
+            message = "The current Android timeline has no live edge.",
+            code = VesperPlayerErrorCode.InvalidState,
+            category = VesperPlayerErrorCategory.Playback,
+            reason = "seekLiveEdgeUnavailable",
+            commandId = seekCommandGeneration.incrementAndGet(),
+            sourceEpoch = sourceCommandGeneration.get(),
+        )
+    awaitNativeSeekCommand(target)
+}
+
+private suspend fun VesperNativePlayerBridge.awaitNativeSeekCommand(positionMs: Long) {
+    val commandId = seekCommandGeneration.incrementAndGet()
+    val sourceEpoch = sourceCommandGeneration.get()
+    bindings.cancelPendingSeekCommand("seekCommandSuperseded")
+    recordBenchmark("seek_start", mapOf("positionMs" to positionMs.toString()))
+    if (isDisposed.get()) {
+        throw obsoleteCommandFailure(
+            message = "Android seek command cannot run after disposal.",
+            category = VesperPlayerErrorCategory.Playback,
+            reason = "seekCommandDisposed",
+            commandId = commandId,
+            sourceEpoch = sourceEpoch,
+        )
+    }
+    if (!hasInitializedSource || isRequiredNativeFramePipelineFailureActive()) {
+        throw commandFailure(
+            message = "Android playback is not ready for seek.",
+            code = VesperPlayerErrorCode.InvalidState,
+            category = VesperPlayerErrorCategory.Playback,
+            reason = "seekCommandNotReady",
+            commandId = commandId,
+            sourceEpoch = sourceEpoch,
+        )
+    }
+    try {
+        val completedPosition =
+            if (bindings.supportsAwaitableCommands && nativeFramePipelineOpenStatus == null) {
+                bindings.seekToAndAwait(
+                    positionMs = positionMs,
+                    commandId = commandId,
+                    sourceEpoch = sourceEpoch,
+                    timeoutMs = seekCommandTimeoutMs.coerceAtLeast(1L),
+                )
+            } else {
+                if (!seekBindingsTo(positionMs)) {
+                    throw commandFailure(
+                        message = "Android playback route rejected seek.",
+                        code = VesperPlayerErrorCode.SeekFailure,
+                        category = VesperPlayerErrorCategory.Playback,
+                        reason = "seekCommandRejected",
+                        commandId = commandId,
+                        sourceEpoch = sourceEpoch,
+                    )
+                }
+                positionMs
+            }
+        if (isDisposed.get() ||
+            seekCommandGeneration.get() != commandId ||
+            sourceCommandGeneration.get() != sourceEpoch
+        ) {
+            throw obsoleteCommandFailure(
+                message = "Android seek command was superseded.",
+                category = VesperPlayerErrorCategory.Playback,
+                reason = "seekCommandSuperseded",
+                commandId = commandId,
+                sourceEpoch = sourceEpoch,
+            )
+        }
+        updateState { copy(timeline = timeline.copy(positionMs = completedPosition)) }
+        refreshFromNative()
+    } catch (error: VesperPlayerCommandException) {
+        publishSeekCommandFailureIfCurrent(commandId, sourceEpoch, error)
+        throw error
+    }
+}
+
+private fun VesperNativePlayerBridge.publishSeekCommandFailureIfCurrent(
+    commandId: Long,
+    sourceEpoch: Long,
+    error: VesperPlayerCommandException,
+) {
+    if (error.errorState.details["obsolete"] == true ||
+        isDisposed.get() ||
+        seekCommandGeneration.get() != commandId ||
+        sourceCommandGeneration.get() != sourceEpoch
+    ) {
+        return
+    }
+    updateState { copy(isBuffering = false, lastError = error.errorState) }
+}
+
+private fun VesperNativePlayerBridge.supersedePendingSeekCommand() {
+    seekCommandGeneration.incrementAndGet()
+    bindings.cancelPendingSeekCommand("seekCommandSuperseded")
 }
 
 internal fun VesperNativePlayerBridge.setNativePlaybackRate(rate: Float) {

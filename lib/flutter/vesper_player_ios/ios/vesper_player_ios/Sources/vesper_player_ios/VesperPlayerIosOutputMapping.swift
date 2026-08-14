@@ -363,6 +363,9 @@ extension VesperDownloadError {
 extension VesperPlayerError {
     var toMap: [String: Any] {
         var mappedDetails: [String: Any] = details
+        if mappedDetails["obsolete"] as? String == "true" {
+            mappedDetails["obsolete"] = true
+        }
         if mappedDetails["hdrMetadata"] == nil,
            let hdrMetadata = flutterHdrMetadataMap(fromErrorDetails: self.details) {
             mappedDetails["hdrMetadata"] = hdrMetadata
@@ -822,6 +825,9 @@ func errorMap(from error: Error) -> [String: Any] {
     if let pictureInPictureError = error as? VesperIosPictureInPictureError {
         return pictureInPictureError.toMap()
     }
+    if let playerError = error as? VesperPlayerError {
+        return playerError.toMap
+    }
     if let drmError = error as? VesperPlayerDrmUnsupportedError {
         return [
             "message": drmError.localizedDescription,
@@ -914,6 +920,11 @@ func errorMap(from error: Error) -> [String: Any] {
 }
 
 func shouldPublishAsyncPlayerError(_ error: Error) -> Bool {
+    if let playerError = error as? VesperPlayerError,
+        playerError.details["obsolete"] == "true"
+    {
+        return false
+    }
     guard let commandError = error as? VesperSubtitleSelectionCommandError else {
         return true
     }
@@ -1057,7 +1068,7 @@ func asFlutterError(_ error: Error, code: String) -> FlutterError {
     }
     return FlutterError(
         code: flutterCode,
-        message: error.localizedDescription,
+        message: details["message"] as? String ?? error.localizedDescription,
         details: details
     )
 }

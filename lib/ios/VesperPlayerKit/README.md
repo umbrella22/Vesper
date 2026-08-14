@@ -174,6 +174,14 @@ not require a token or write to GitHub:
 - `VesperCodecSupport` — hardware decode capability probe
 - `VesperDownloadManager` — download orchestration with `createTask / startTask / pauseTask / resumeTask / removeTask / exportTaskOutput / shareTaskOutput / saveTaskOutput / drainEvents`
 
+The Flutter adapter uses `@_spi(VesperFlutter)` async source and seek entry
+points. Source selection waits within one total deadline for a stable VOD, live
+DVR, or non-seekable live timeline across retries. Seek completion requires
+AVPlayer to report `finished == true` for the current command and source epoch.
+Superseded SPI commands throw a structured obsolete `VesperPlayerError` without
+replacing the current controller `lastError`. The synchronous Swift APIs remain
+available for ordinary native hosts.
+
 The package does not embed demo URLs or preset sources. Construct
 `VesperPlayerSource` from your own content. A runnable sample lives at
 [`examples/ios-swift-host`](../../../examples/ios-swift-host/).

@@ -466,14 +466,17 @@ class VesperPlayerController {
     try {
       await operation();
     } catch (error, stackTrace) {
-      if (!_isObsoleteSubtitleTransactionError(error)) {
+      if (!_isObsoleteCommandError(error)) {
         _publishSyntheticError(error, stackTrace);
       }
       rethrow;
     }
   }
 
-  bool _isObsoleteSubtitleTransactionError(Object error) {
+  bool _isObsoleteCommandError(Object error) {
+    if (error is VesperPlayerCommandException) {
+      return error.isObsolete;
+    }
     if (error is! VesperSubtitleException) {
       return false;
     }

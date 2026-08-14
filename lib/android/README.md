@@ -127,7 +127,7 @@ Android versions, without a separate product-direction change.
 - Android Gradle Plugin `9.1.0`
 - Gradle runtime JDK `21`
 - Java / Kotlin bytecode target `17`
-- Kotlin `2.3.10`
+- Kotlin `2.4.10`
 - Android SDK `36` with Build Tools `36.0.0`
 - Android NDK `29.0.14206865`
 
@@ -199,6 +199,10 @@ Core (`vesper-player-kit`):
 
 `setSubtitleTrackSelection` is a suspending API in 0.4. It returns only after
 Media3 confirms the requested state or throws a structured subtitle error.
+`selectSourceAsync`, `seekByAsync`, `seekToRatioAsync`, and
+`seekToLiveEdgeAsync` also wait for Media3 command readiness or completion.
+Superseded commands throw `VesperPlayerCommandException` and do not overwrite
+the current generation's `lastError`.
 `VesperSubtitleSideLoad` remains a deprecated typealias, and
 `VesperPlayerSource.subtitleConfigurations` remains a deprecated read-only alias;
 new source declarations use `externalSubtitles`.

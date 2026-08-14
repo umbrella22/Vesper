@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.1 - 2026-08-14
 
 ### Added
 
@@ -36,6 +36,12 @@
 - `setSubtitleTrackSelection` now awaits native confirmation and throws
   `VesperSubtitleException` for structured subtitle failures. Snapshots expose
   requested, confirmed, and effective subtitle selection separately.
+
+### Fixed
+
+- Mobile source and seek futures now complete after native command readiness or
+  seek confirmation. Obsolete source and seek failures reject only their
+  originating future and no longer publish a synthetic player error.
 
 ## 0.3.0 - 2026-05-18
 

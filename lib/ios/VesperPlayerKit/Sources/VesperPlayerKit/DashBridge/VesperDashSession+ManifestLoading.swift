@@ -3,6 +3,10 @@ import Foundation
 internal import VesperPlayerKitBridgeShim
 
 extension VesperDashSession {
+    func manifestTypeSnapshot() -> VesperDashManifestType? {
+        manifest?.type
+    }
+
     func mediaSegments(
         for playable: VesperDashPlayableRepresentation,
         segmentBase: VesperDashSegmentBase

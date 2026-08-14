@@ -1,12 +1,13 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.1 - 2026-08-14
 
 - The Android plugin package and bundled SourceNormalizer plugin identity now
   use the `io.github.umbrella22` reverse-DNS root. Existing serialized plugin
   references using `io.github.ikaros` must be recreated.
 - Aligned package and Android plugin metadata with the Vesper 0.4 package
   family.
+- Android build tooling now uses Kotlin 2.4.10.
 - Changed the iOS SPM package to depend on the canonical
   `VesperPlayerSourceNormalizerFfmpegPlugin` product. Flutter App targets embed
   and sign its framework and the FFmpeg component frameworks as top-level

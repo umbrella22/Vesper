@@ -59,12 +59,14 @@ final class PlayerErrorStateTests: XCTestCase {
             )
         )
 
-        await bridge.selectSourceAsync(source)
+        let commandError = await sourceSelectionError(bridge, source: source)
 
+        XCTAssertEqual(commandError, bridge.lastError)
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)
         XCTAssertEqual(bridge.lastError?.retriable, false)
         XCTAssertEqual(bridge.lastError?.details["reason"], "fairPlayCertificateMissing")
+        assertSourceCommandMetadata(bridge.lastError, reason: "sourceCommandFailed")
         XCTAssertEqual(bridge.lastError?.details["route"], "direct")
         XCTAssertEqual(bridge.lastError?.details["keySystem"], "fairPlay")
     }
@@ -80,12 +82,14 @@ final class PlayerErrorStateTests: XCTestCase {
             )
         )
 
-        await bridge.selectSourceAsync(source)
+        let commandError = await sourceSelectionError(bridge, source: source)
 
+        XCTAssertEqual(commandError, bridge.lastError)
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)
         XCTAssertEqual(bridge.lastError?.retriable, false)
         XCTAssertEqual(bridge.lastError?.details["reason"], "drmUnsupportedKeySystem")
+        assertSourceCommandMetadata(bridge.lastError, reason: "sourceCommandFailed")
         XCTAssertEqual(bridge.lastError?.details["route"], "direct")
         XCTAssertEqual(bridge.lastError?.details["keySystem"], "widevine")
     }
@@ -102,12 +106,14 @@ final class PlayerErrorStateTests: XCTestCase {
             )
         )
 
-        await bridge.selectSourceAsync(source)
+        let commandError = await sourceSelectionError(bridge, source: source)
 
+        XCTAssertEqual(commandError, bridge.lastError)
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)
         XCTAssertEqual(bridge.lastError?.retriable, false)
         XCTAssertEqual(bridge.lastError?.details["reason"], "fairPlayLicenseUriInvalid")
+        assertSourceCommandMetadata(bridge.lastError, reason: "sourceCommandFailed")
         XCTAssertEqual(bridge.lastError?.details["route"], "direct")
         XCTAssertEqual(bridge.lastError?.details["keySystem"], "fairPlay")
     }
@@ -124,12 +130,14 @@ final class PlayerErrorStateTests: XCTestCase {
             )
         )
 
-        await bridge.selectSourceAsync(source)
+        let commandError = await sourceSelectionError(bridge, source: source)
 
+        XCTAssertEqual(commandError, bridge.lastError)
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertEqual(bridge.lastError?.category, .capability)
         XCTAssertEqual(bridge.lastError?.retriable, false)
         XCTAssertEqual(bridge.lastError?.details["reason"], "fairPlaySimulatorUnsupported")
+        assertSourceCommandMetadata(bridge.lastError, reason: "sourceCommandFailed")
         XCTAssertEqual(bridge.lastError?.details["route"], "direct")
         XCTAssertEqual(bridge.lastError?.details["keySystem"], "fairPlay")
         XCTAssertNil(bridge.fairPlayDrmCoordinator)
@@ -1111,6 +1119,35 @@ final class PlayerErrorStateTests: XCTestCase {
         XCTAssertEqual(bridge.uiState.isBuffering, false)
         XCTAssertEqual(bridge.uiState.playbackState, .paused)
     }
+}
+
+@MainActor
+private func sourceSelectionError(
+    _ bridge: VesperNativePlayerBridge,
+    source: VesperPlayerSource
+) async -> VesperPlayerError? {
+    do {
+        try await bridge.selectSourceAsync(source)
+        XCTFail("source selection should fail")
+        return nil
+    } catch let error as VesperPlayerError {
+        return error
+    } catch {
+        XCTFail("expected VesperPlayerError, got \(error)")
+        return nil
+    }
+}
+
+private func assertSourceCommandMetadata(
+    _ error: VesperPlayerError?,
+    reason: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    XCTAssertEqual(error?.details["commandReason"], reason, file: file, line: line)
+    XCTAssertEqual(error?.details["commandId"], "1", file: file, line: line)
+    XCTAssertEqual(error?.details["sourceEpoch"], "1", file: file, line: line)
+    XCTAssertNil(error?.details["obsolete"], file: file, line: line)
 }
 
 private func settleTrackCatalogRefresh() async throws {

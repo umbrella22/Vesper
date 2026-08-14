@@ -115,7 +115,9 @@ class VesperPlayerController internal constructor(
      */
     suspend fun selectSourceAsync(source: VesperPlayerSource) {
         checkDirectSourceSelectionAllowed()
-        bridge.selectSourceAsync(source)
+        withContext(Dispatchers.Main.immediate) {
+            bridge.selectSourceAsync(source)
+        }
     }
 
     internal fun attachPlaybackSequence(attachment: VesperPlaybackSequenceAttachment) {
@@ -179,9 +181,24 @@ class VesperPlayerController internal constructor(
 
     fun seekBy(deltaMs: Long) = bridge.seekBy(deltaMs)
 
+    /** Seeks relatively and resumes only after the active native route confirms completion. */
+    suspend fun seekByAsync(deltaMs: Long) = withContext(Dispatchers.Main.immediate) {
+        bridge.seekByAsync(deltaMs)
+    }
+
     fun seekToRatio(ratio: Float) = bridge.seekToRatio(ratio)
 
+    /** Seeks by timeline ratio and resumes only after native confirmation. */
+    suspend fun seekToRatioAsync(ratio: Float) = withContext(Dispatchers.Main.immediate) {
+        bridge.seekToRatioAsync(ratio)
+    }
+
     fun seekToLiveEdge() = bridge.seekToLiveEdge()
+
+    /** Seeks to the live edge and resumes only after native confirmation. */
+    suspend fun seekToLiveEdgeAsync() = withContext(Dispatchers.Main.immediate) {
+        bridge.seekToLiveEdgeAsync()
+    }
 
     fun setPlaybackRate(rate: Float) = bridge.setPlaybackRate(rate)
 

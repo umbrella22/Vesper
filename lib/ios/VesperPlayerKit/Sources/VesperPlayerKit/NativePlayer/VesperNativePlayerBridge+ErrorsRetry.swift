@@ -15,6 +15,190 @@ func staleRetryDiagnosticMessage(
 }
 
 extension VesperNativePlayerBridge {
+    func sourceCommandTimeoutError(
+        _ command: VesperSourceCommandHandle
+    ) -> VesperPlayerError {
+        vesperCommandError(
+            message: "iOS source selection did not become command-ready before the deadline.",
+            code: .timeout,
+            category: .source,
+            retriable: command.source.kind == .remote,
+            reason: "sourceCommandTimeout",
+            commandId: command.commandId,
+            sourceEpoch: command.commandId,
+            details: [
+                "retryAttempts": "\(command.retryAttemptCount)",
+                "sourceProtocol": command.source.protocol.rawValue,
+            ]
+        )
+    }
+
+    func ensureCurrentSourceCommand(
+        _ command: VesperSourceCommandHandle
+    ) throws {
+        guard activeSourceCommand === command, currentSource == command.source else {
+            throw obsoleteSourceCommandError(
+                command,
+                reason: command.cancellationReason ?? "sourceCommandSuperseded"
+            )
+        }
+    }
+
+    func obsoleteSourceCommandError(
+        _ command: VesperSourceCommandHandle,
+        reason: String
+    ) -> VesperPlayerError {
+        obsoleteVesperCommandError(
+            message: "iOS source selection was superseded before it completed.",
+            category: .source,
+            reason: reason,
+            commandId: command.commandId,
+            sourceEpoch: command.commandId
+        )
+    }
+
+    func resolvedPlaybackFailure(
+        error: Error?,
+        fallbackMessage: String,
+        itemStatusDetails: [String: String] = [:],
+        itemErrorLogDetails: [String: String] = [:]
+    ) -> ResolvedBridgeError {
+        let classifiedError = reclassifyHTTPSourceError(
+            classifyPlaybackFailure(error, fallbackMessage: fallbackMessage),
+            nativeError: error,
+            itemStatusDetails: itemStatusDetails,
+            itemErrorLogDetails: itemErrorLogDetails
+        )
+        return classifiedError
+            .enrichedWithDetails(
+                sourceFailureDiagnosticDetails(
+                    for: classifiedError,
+                    nativeError: error
+                )
+            )
+            .enrichedWithDetails(itemStatusDetails)
+            .enrichedWithDetails(itemErrorLogDetails)
+            .enrichedWithHdrFailureEvidence(currentHdrFailureEvidence)
+    }
+
+    func sourceCommandRetryDelay(
+        _ error: ResolvedBridgeError,
+        command: VesperSourceCommandHandle
+    ) -> UInt64? {
+        guard error.retriable, command.source.kind == .remote else {
+            return nil
+        }
+        let retryPolicy = currentResiliencePolicy.resolvedForRuntimeSource(command.source).retry
+        let nextAttempt = command.retryAttemptCount + 1
+        if let maxAttempts = retryPolicy.maxAttempts, nextAttempt > maxAttempts {
+            return nil
+        }
+
+        let remainingMs = positiveMilliseconds(
+            ContinuousClock().now.duration(to: command.deadline)
+        )
+        guard remainingMs > 0 else {
+            return nil
+        }
+        return min(
+            retryDelayMs(forAttempt: nextAttempt, retryPolicy: retryPolicy),
+            remainingMs
+        )
+    }
+
+    func publishSourceCommandRetry(
+        _ error: ResolvedBridgeError,
+        command: VesperSourceCommandHandle,
+        delayMs: UInt64
+    ) {
+        guard activeSourceCommand === command else { return }
+        updateState {
+            PlayerHostUiState(
+                title: $0.title,
+                subtitle: VesperPlayerI18n.retryScheduled(
+                    delay: formattedRetryDelay(delayMs),
+                    message: error.message
+                ),
+                sourceLabel: $0.sourceLabel,
+                playbackState: .ready,
+                playbackRate: $0.playbackRate,
+                isBuffering: true,
+                isInterrupted: $0.isInterrupted,
+                timeline: $0.timeline
+            )
+        }
+        recordBenchmark(
+            "source_command_retry_scheduled",
+            attributes: [
+                "attempt": "\(command.retryAttemptCount)",
+                "category": error.category.rawValue,
+                "delayMs": "\(delayMs)",
+            ]
+        )
+    }
+
+    func sourceCommandTerminalError(
+        _ error: ResolvedBridgeError,
+        command: VesperSourceCommandHandle
+    ) -> VesperPlayerError {
+        guard ContinuousClock().now < command.deadline else {
+            return sourceCommandTimeoutError(command)
+        }
+
+        var details = error.details
+        details["retryAttempts"] = "\(command.retryAttemptCount)"
+        if error.retriable {
+            details["attemptsExhausted"] = "true"
+            if let maxAttempts = currentResiliencePolicy
+                .resolvedForRuntimeSource(command.source)
+                .retry.maxAttempts
+            {
+                details["maxAttempts"] = "\(maxAttempts)"
+            }
+        }
+        return vesperCommandError(
+            message: error.message,
+            code: error.code,
+            category: error.category,
+            retriable: error.retriable,
+            reason: error.retriable
+                ? "sourceCommandRetryExhausted"
+                : "sourceCommandFailed",
+            commandId: command.commandId,
+            sourceEpoch: command.commandId,
+            details: details
+        )
+    }
+
+    func publishSourceCommandFailure(
+        _ error: VesperPlayerError,
+        command: VesperSourceCommandHandle
+    ) {
+        guard activeSourceCommand === command else { return }
+        pendingAutoPlay = false
+        pendingPlaybackStart = false
+        player?.pause()
+        publishedLastError = error
+        updateErrorState(message: error.message)
+        recordBenchmark(
+            "source_command_failed",
+            attributes: [
+                "category": error.category.rawValue,
+                "code": error.code.rawValue,
+                "retriable": "\(error.retriable)",
+            ]
+        )
+    }
+
+    private func positiveMilliseconds(_ duration: Duration) -> UInt64 {
+        let components = duration.components
+        guard components.seconds >= 0 else { return 0 }
+        let millisecondsFromSeconds = UInt64(components.seconds) * 1_000
+        let positiveAttoseconds = max(components.attoseconds, 0)
+        return millisecondsFromSeconds
+            + UInt64(positiveAttoseconds) / 1_000_000_000_000_000
+    }
+
     func sourceSubtitle(for source: VesperPlayerSource) -> String {
         switch source.kind {
         case .local:
@@ -88,25 +272,27 @@ extension VesperNativePlayerBridge {
         itemStatusDetails: [String: String] = [:],
         itemErrorLogDetails: [String: String] = [:]
     ) {
-        let classifiedError = reclassifyHTTPSourceError(
-            classifyPlaybackFailure(error, fallbackMessage: fallbackMessage),
-            nativeError: error,
+        let resolvedError = resolvedPlaybackFailure(
+            error: error,
+            fallbackMessage: fallbackMessage,
             itemStatusDetails: itemStatusDetails,
             itemErrorLogDetails: itemErrorLogDetails
         )
-        let resolvedError = classifiedError
-            .enrichedWithDetails(
-                sourceFailureDiagnosticDetails(
-                    for: classifiedError,
-                    nativeError: error
-                )
-            )
-            .enrichedWithDetails(itemStatusDetails)
-            .enrichedWithDetails(itemErrorLogDetails)
         iosHostLog(
             "playbackFailure category=\(resolvedError.category.rawValue) retriable=\(resolvedError.retriable) message=\(resolvedError.message)"
         )
         let enrichedError = resolvedError.enrichedWithHdrFailureEvidence(currentHdrFailureEvidence)
+        if activeSourceCommand != nil {
+            pendingSourceCommandFailure = enrichedError.toPlayerError()
+            recordBenchmark(
+                "source_command_attempt_failed",
+                attributes: [
+                    "category": enrichedError.category.rawValue,
+                    "retriable": "\(enrichedError.retriable)",
+                ]
+            )
+            return
+        }
         releaseDashStartupAbrLimitIfNeeded(reason: "playbackFailure", item: player?.currentItem)
         recordBenchmark(
             "playback_error",
@@ -278,6 +464,16 @@ extension VesperNativePlayerBridge {
                 category: .platform,
                 retriable: false,
                 message: fallbackMessage
+            )
+        }
+
+        if let playerError = error as? VesperPlayerError {
+            return ResolvedBridgeError(
+                code: playerError.code,
+                category: playerError.category,
+                retriable: playerError.retriable,
+                message: playerError.message,
+                details: playerError.details
             )
         }
 

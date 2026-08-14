@@ -17,7 +17,9 @@ internal fun routeAsyncSessionCommandFailure(
     val isObsoleteSubtitleSelectionFailure =
         methodErrorMap["domain"] == "subtitle" &&
             methodErrorMap["code"] in OBSOLETE_SUBTITLE_SELECTION_ERROR_CODES
-    if (isCurrentSession && !isObsoleteSubtitleSelectionFailure) {
+    val commandDetails = methodErrorMap["details"] as? Map<*, *>
+    val isObsoleteCommandFailure = commandDetails?.get("obsolete") == true
+    if (isCurrentSession && !isObsoleteSubtitleSelectionFailure && !isObsoleteCommandFailure) {
         publishPlayerError(methodErrorMap.toEventErrorMap())
     }
     val flutterErrorCode =

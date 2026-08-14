@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.1 - 2026-08-14
 
 ### Added
 
@@ -11,6 +11,8 @@
   unknown-value preservation, and `VesperFixedTrackSelectionException`.
 - Added RTMP, RTSP, and HTTP-FLV source protocol values. HTTP `.flv` inference
   remains progressive; explicit live sources use `VesperPlayerSource.flvLive`.
+- Added `VesperPlayerCommandException` for structured mobile source and seek
+  failures, including preserved native details and obsolete-command detection.
 
 ### Breaking Changes
 
@@ -34,6 +36,9 @@
 - `setAbrPolicy` carries an optional expected catalog revision; fixed-track
   capability failures decode to a stable typed exception without treating
   missing support evidence as confirmed unsupported.
+- Mobile source and seek platform methods now define native completion
+  semantics. Obsolete commands fail only their originating future and must not
+  publish a terminal error for the active generation.
 
 ## 0.3.0 - 2026-05-18
 

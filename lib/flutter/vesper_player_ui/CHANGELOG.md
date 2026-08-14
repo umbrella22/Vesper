@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.1 - 2026-08-14
 
 ### Breaking Changes
 
@@ -9,6 +9,7 @@
 ### Changed
 
 - Material widgets are imported through the official `material_ui` package.
+- The `material_ui` dependency now uses the stable 1.0 release.
 - `VesperPlayerStage` now accepts `pictureInPicturePresentation` so hosts can
   hide custom chrome while system Picture in Picture owns playback controls.
 

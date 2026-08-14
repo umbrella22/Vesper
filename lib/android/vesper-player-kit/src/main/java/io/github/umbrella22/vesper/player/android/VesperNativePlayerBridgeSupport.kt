@@ -366,6 +366,9 @@ internal interface VesperNativeBindings {
     /** Whether the bindings already own an active system-playback item. */
     val isSystemPlaybackActive: Boolean
         get() = false
+    /** Whether this binding can confirm source and seek command completion. */
+    val supportsAwaitableCommands: Boolean
+        get() = false
 
     fun probeMobilePlugins(
         source: VesperPlayerSource,
@@ -458,6 +461,12 @@ internal interface VesperNativeBindings {
     fun detachSurface()
     fun pollSnapshot(): NativeBridgeSnapshot?
     fun sampleTimeline(): TimelineUiState? = null
+    suspend fun awaitSourceCommandReadiness(
+        commandId: Long,
+        sourceEpoch: Long,
+        timeoutMs: Long,
+    ): TimelineUiState =
+        throw UnsupportedOperationException("awaitable source commands are not supported")
     fun drainEvents(): List<NativeBridgeEvent>
     /** Returns and clears structured reports emitted by playback EventHooks. */
     fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch =
@@ -466,6 +475,17 @@ internal interface VesperNativeBindings {
     fun pause()
     fun stop()
     fun seekTo(positionMs: Long)
+    suspend fun seekToAndAwait(
+        positionMs: Long,
+        commandId: Long,
+        sourceEpoch: Long,
+        timeoutMs: Long,
+    ): Long {
+        seekTo(positionMs)
+        return sampleTimeline()?.positionMs ?: positionMs
+    }
+    fun cancelPendingSourceCommand(reason: String) = Unit
+    fun cancelPendingSeekCommand(reason: String) = Unit
     fun setPlaybackRate(rate: Float)
     fun setVideoTrackSelection(selection: VesperTrackSelection)
     fun setAudioTrackSelection(selection: VesperTrackSelection)

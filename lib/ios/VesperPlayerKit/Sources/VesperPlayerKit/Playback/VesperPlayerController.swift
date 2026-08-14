@@ -153,12 +153,13 @@ public final class VesperPlayerController: ObservableObject {
 
     private var bridgeObservation: AnyCancellable?
     private let initializeImpl: () -> Void
-    private let initializeAsyncImpl: () async -> Void
+    private let initializeAsyncImpl: () async throws -> Void
     private let disposeImpl: () -> Void
     private let refreshImpl: () -> Void
     private let sampleTimelineImpl: () -> TimelineUiState?
     private let selectSourceImpl: (VesperPlayerSource) -> Void
-    private let selectSourceAsyncImpl: (VesperPlayerSource) async -> Void
+    private let startSourceSelectionImpl: (VesperPlayerSource) -> Task<Void, Error>
+    private let selectSourceAsyncImpl: (VesperPlayerSource) async throws -> Void
     private let attachSurfaceHostImpl: (UIView) -> Void
     private let detachSurfaceHostImpl: () -> Void
     private let detachSurfaceHostForHostImpl: (UIView) -> Void
@@ -167,8 +168,11 @@ public final class VesperPlayerController: ObservableObject {
     private let togglePauseImpl: () -> Void
     private let stopImpl: () -> Void
     private let seekByImpl: (Int64) -> Void
+    private let seekByAsyncImpl: (Int64) async throws -> Void
     private let seekToRatioImpl: (Double) -> Void
+    private let seekToRatioAsyncImpl: (Double) async throws -> Void
     private let seekToLiveEdgeImpl: () -> Void
+    private let seekToLiveEdgeAsyncImpl: () async throws -> Void
     private let setPlaybackRateImpl: (Float) -> Void
     private let setVideoTrackSelectionImpl: (VesperTrackSelection) -> Void
     private let setAudioTrackSelectionImpl: (VesperTrackSelection) -> Void
@@ -229,6 +233,7 @@ public final class VesperPlayerController: ObservableObject {
         refreshImpl = bridge.refresh
         sampleTimelineImpl = bridge.sampleTimeline
         selectSourceImpl = bridge.selectSource
+        startSourceSelectionImpl = bridge.startSourceSelection
         selectSourceAsyncImpl = bridge.selectSourceAsync
         attachSurfaceHostImpl = { host in
             bridge.attachSurfaceHost(host)
@@ -244,10 +249,17 @@ public final class VesperPlayerController: ObservableObject {
         seekByImpl = { deltaMs in
             bridge.seek(by: deltaMs)
         }
+        seekByAsyncImpl = { deltaMs in
+            try await bridge.seekAsync(by: deltaMs)
+        }
         seekToRatioImpl = { ratio in
             bridge.seek(toRatio: ratio)
         }
+        seekToRatioAsyncImpl = { ratio in
+            try await bridge.seekAsync(toRatio: ratio)
+        }
         seekToLiveEdgeImpl = bridge.seekToLiveEdge
+        seekToLiveEdgeAsyncImpl = bridge.seekToLiveEdgeAsync
         setPlaybackRateImpl = bridge.setPlaybackRate
         setVideoTrackSelectionImpl = bridge.setVideoTrackSelection
         setAudioTrackSelectionImpl = bridge.setAudioTrackSelection
@@ -324,8 +336,8 @@ public final class VesperPlayerController: ObservableObject {
     }
 
     @_spi(VesperFlutter)
-    public func initializeAsync() async {
-        await initializeAsyncImpl()
+    public func initializeAsync() async throws {
+        try await initializeAsyncImpl()
     }
 
     public func dispose() {
@@ -386,18 +398,33 @@ public final class VesperPlayerController: ObservableObject {
     }
 
     @_spi(VesperFlutter)
-    public func selectSourceAsync(_ source: VesperPlayerSource) async {
+    public func startSourceSelection(
+        _ source: VesperPlayerSource
+    ) throws -> Task<Void, Error> {
         guard sequenceAttachment == nil else {
-            publishedLastError = VesperPlayerError(
+            throw VesperPlayerError(
                 message: "direct source selection is blocked while a playback sequence is attached",
                 code: .invalidState,
                 category: .playback,
                 retriable: false,
                 details: ["code": "sequence_attached_conflict"]
             )
-            return
         }
-        await selectSourceAsyncImpl(source)
+        return startSourceSelectionImpl(source)
+    }
+
+    @_spi(VesperFlutter)
+    public func selectSourceAsync(_ source: VesperPlayerSource) async throws {
+        guard sequenceAttachment == nil else {
+            throw VesperPlayerError(
+                message: "direct source selection is blocked while a playback sequence is attached",
+                code: .invalidState,
+                category: .playback,
+                retriable: false,
+                details: ["code": "sequence_attached_conflict"]
+            )
+        }
+        try await selectSourceAsyncImpl(source)
     }
 
     internal func attachPlaybackSequence(_ attachment: VesperPlaybackSequenceAttachment) throws {
@@ -476,12 +503,27 @@ public final class VesperPlayerController: ObservableObject {
         seekByImpl(deltaMs)
     }
 
+    @_spi(VesperFlutter)
+    public func seekAsync(by deltaMs: Int64) async throws {
+        try await seekByAsyncImpl(deltaMs)
+    }
+
     public func seek(toRatio ratio: Double) {
         seekToRatioImpl(ratio)
     }
 
+    @_spi(VesperFlutter)
+    public func seekAsync(toRatio ratio: Double) async throws {
+        try await seekToRatioAsyncImpl(ratio)
+    }
+
     public func seekToLiveEdge() {
         seekToLiveEdgeImpl()
+    }
+
+    @_spi(VesperFlutter)
+    public func seekToLiveEdgeAsync() async throws {
+        try await seekToLiveEdgeAsyncImpl()
     }
 
     public func setPlaybackRate(_ rate: Float) {

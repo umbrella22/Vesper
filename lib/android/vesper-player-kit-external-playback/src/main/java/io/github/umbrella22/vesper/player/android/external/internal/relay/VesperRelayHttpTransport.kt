@@ -1,6 +1,5 @@
 package io.github.umbrella22.vesper.player.android.external.internal.relay
 
-import java.io.ByteArrayInputStream
 import java.io.Closeable
 import java.io.IOException
 import java.io.InputStream
@@ -35,12 +34,11 @@ internal class VesperRelayHttpExchange(
         get() = response.message
 
     val contentLength: Long
-        get() = response.body?.contentLength() ?: 0L
+        get() = response.body.contentLength()
 
     fun header(name: String): String? = response.header(name)
 
-    fun bodyStream(): InputStream =
-        response.body?.byteStream() ?: ByteArrayInputStream(ByteArray(0))
+    fun bodyStream(): InputStream = response.body.byteStream()
 
     fun cancel() {
         call.cancel()

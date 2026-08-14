@@ -1,5 +1,9 @@
 package io.github.umbrella22.vesper.player.flutter.android
 
+import io.github.umbrella22.vesper.player.android.VesperPlayerCommandException
+import io.github.umbrella22.vesper.player.android.VesperPlayerErrorCategory
+import io.github.umbrella22.vesper.player.android.VesperPlayerErrorCode
+import io.github.umbrella22.vesper.player.android.VesperPlayerErrorState
 import io.github.umbrella22.vesper.player.android.VesperPlayerUnsupportedOperation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -7,6 +11,63 @@ import org.junit.Assert.assertSame
 import org.junit.Test
 
 class VesperPlayerAndroidErrorRoutingTest {
+    @Test
+    fun obsoletePlayerCommandFailuresOnlyReturnTheMethodError() {
+        val sentinelLastError = mapOf<String, Any?>("code" to "newer_error")
+        var lastError = sentinelLastError
+        var publishedErrorCount = 0
+        var methodErrorCount = 0
+        var returnedCode: String? = null
+        var returnedMessage: String? = null
+        var returnedError: Map<String, Any?>? = null
+
+        routeAsyncSessionCommandFailure(
+            error =
+                VesperPlayerCommandException(
+                    VesperPlayerErrorState(
+                        message = "obsolete seek",
+                        code = VesperPlayerErrorCode.Cancelled,
+                        category = VesperPlayerErrorCategory.Playback,
+                        retriable = true,
+                        details =
+                            mapOf(
+                                "reason" to "decoderFailure",
+                                "commandReason" to "seekCommandSuperseded",
+                                "commandId" to 62L,
+                                "sourceEpoch" to 14L,
+                                "obsolete" to true,
+                            ),
+                    )
+                ),
+            isCurrentSession = true,
+            publishPlayerError = { publishedError ->
+                publishedErrorCount += 1
+                lastError = publishedError
+            },
+            returnMethodError = { code, message, details ->
+                methodErrorCount += 1
+                returnedCode = code
+                returnedMessage = message
+                returnedError = details
+            },
+        )
+
+        assertSame(sentinelLastError, lastError)
+        assertEquals(0, publishedErrorCount)
+        assertEquals(1, methodErrorCount)
+        assertEquals("vesper_operation_failed", returnedCode)
+        assertEquals("obsolete seek", returnedMessage)
+        assertEquals("cancelled", returnedError?.get("code"))
+        assertEquals("playback", returnedError?.get("category"))
+        @Suppress("UNCHECKED_CAST")
+        val commandDetails = returnedError?.get("details") as Map<String, Any?>
+        assertEquals("decoderFailure", commandDetails["reason"])
+        assertEquals("seekCommandSuperseded", commandDetails["commandReason"])
+        assertEquals(62L, commandDetails["commandId"])
+        assertEquals(14L, commandDetails["sourceEpoch"])
+        assertEquals(true, commandDetails["obsolete"])
+    }
+
     @Test
     fun obsoleteSubtitleSelectionFailuresOnlyReturnTheMethodError() {
         listOf(

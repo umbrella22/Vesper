@@ -168,6 +168,10 @@
     <string name="example_plugins_source_normalizer_diagnostics_subtitle">只加载 SourceNormalizer 插件并上报 capability，不打开 packet session。</string>
     <string name="example_plugins_source_normalizer_preflight">Preflight</string>
     <string name="example_plugins_source_normalizer_preflight_subtitle">加载 SourceNormalizer 插件，为当前 source 打开并关闭 packet session，然后继续播放原始 source。</string>
+    <string name="example_plugins_source_normalizer_prefer">优先归一化</string>
+    <string name="example_plugins_source_normalizer_prefer_subtitle">尝试使用磁盘支持的 fMP4/HLS 归一化播放，失败时回退到原始媒体源。</string>
+    <string name="example_plugins_source_normalizer_require">要求归一化</string>
+    <string name="example_plugins_source_normalizer_require_subtitle">要求使用磁盘支持的归一化播放，失败时直接显示错误，不进行回退。</string>
     <string name="example_plugins_native_frame_disabled">Native frame off</string>
     <string name="example_plugins_native_frame_disabled_subtitle">不请求 Android SDK-managed native-frame 诊断。</string>
     <string name="example_plugins_native_frame_diagnostics">Native frame diagnostics</string>
@@ -176,6 +180,12 @@
     <string name="example_plugins_native_frame_prefer_subtitle">优先使用 Android SDK-managed native-frame route；MediaCodec packet lane 不可用时回退到系统播放器。</string>
     <string name="example_plugins_native_frame_require">Require native frame</string>
     <string name="example_plugins_native_frame_require_subtitle">要求使用 Android SDK-managed native-frame route；MediaCodec packet lane 不可用时直接显示错误。</string>
+    <string name="example_plugins_video_surface_auto">自动选择 Surface</string>
+    <string name="example_plugins_video_surface_auto_subtitle">普通滚动宿主使用 TextureView；DRM 或 native-frame 播放需要时使用 SurfaceView。</string>
+    <string name="example_plugins_video_surface_texture">TextureView</string>
+    <string name="example_plugins_video_surface_texture_subtitle">优先使用适合滚动的 Android 视频 Surface，适用于裁剪、移动或动画较多的播放器舞台。</string>
+    <string name="example_plugins_video_surface_surface">SurfaceView</string>
+    <string name="example_plugins_video_surface_surface_subtitle">优先使用高保真的 Android 视频 Surface，适用于固定 HDR、高帧率和低功耗播放。</string>
     <string name="example_plugins_source_normalizer_path">source</string>
     <string name="example_plugins_decoder_mediacodec_path">decoder</string>
     <string name="example_plugins_frame_processor_path">frame</string>
@@ -210,10 +220,20 @@
     <string name="example_diagnostics_origin">来源</string>
     <string name="example_diagnostics_source_normalizer">normalizer</string>
     <string name="example_diagnostics_native_frame">native frame</string>
+    <string name="example_diagnostics_video_surface">视频 Surface</string>
     <string name="example_diagnostics_origin_queue">队列：%1$s</string>
     <string name="example_diagnostics_origin_dolby">Dolby 临时播放：%1$s</string>
     <string name="example_diagnostics_origin_none">无</string>
     <string name="example_diagnostics_none">无</string>
+    <string name="example_frame_metrics_title">帧指标</string>
+    <string name="example_frame_metrics_subtitle">滚动或与播放交互时采集 Android 帧时序窗口。</string>
+    <string name="example_frame_metrics_collect">采集帧时序</string>
+    <string name="example_frame_metrics_collect_subtitle">每 120 帧报告一次，并使用 VesperHostFrameMetrics 标签记录相同摘要。</string>
+    <string name="example_frame_metrics_waiting">正在采集帧…</string>
+    <string name="example_frame_metrics_disabled">帧指标采集已关闭。</string>
+    <string name="example_frame_metrics_summary">帧数=%1$d · 卡顿=%2$d · UI 慢=%3$d · 绘制慢=%4$d · GPU 慢=%5$d</string>
+    <string name="example_frame_metrics_total">总耗时 p50=%1$s · p95=%2$s · 最大=%3$s</string>
+    <string name="example_frame_metrics_breakdown">p95 输入=%1$s · 布局=%2$s · 绘制=%3$s · 同步=%4$s · GPU=%5$s</string>
 
     <string name="example_event_log_title">事件日志</string>
     <string name="example_event_log_subtitle">示例 App 内部记录的最近宿主操作和诊断事件。</string>
@@ -227,6 +247,7 @@
     <string name="example_log_controller_rebuilt">Controller 已重建</string>
     <string name="example_log_source_normalizer_changed">SourceNormalizer 模式已切换</string>
     <string name="example_log_native_frame_changed">Native-frame 模式已切换</string>
+    <string name="example_log_video_surface_changed">视频 Surface 已切换</string>
     <string name="example_log_hdr_evidence_written">HDR evidence 已写入</string>
     <string name="example_log_hdr_evidence_failed">HDR evidence 失败</string>
     <string name="example_log_download_create_failed">创建下载任务失败</string>

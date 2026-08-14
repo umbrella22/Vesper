@@ -284,7 +284,7 @@ void main() {
           'displayHdrTypes': <String>['HDR10'],
           'displayRefreshRate': 120.0,
           'displayModes': <String>['1080x2400@120.00'],
-          'media3Version': '1.9.3',
+          'media3Version': '1.11.0',
           'decoderCandidates': <String, Object?>{
             'hevc': <String>['c2.fixture.hevc.decoder'],
           },

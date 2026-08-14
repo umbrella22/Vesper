@@ -354,25 +354,25 @@ class VesperPlayerAndroidPlugin :
                 emitSnapshot(session)
                 null
             }
-            "seekBy" -> handleSessionCommand(call, result) { session ->
+            "seekBy" -> handleSessionCommandAsync(call, result) { session ->
                 val deltaMs = (call.argumentMap()["deltaMs"] as? Number)?.toLong()
                     ?: throw IllegalArgumentException("Missing deltaMs.")
                 session.lastError = null
-                session.controller.seekBy(deltaMs)
+                session.controller.seekByAsync(deltaMs)
                 emitSnapshot(session)
                 null
             }
-            "seekToRatio" -> handleSessionCommand(call, result) { session ->
+            "seekToRatio" -> handleSessionCommandAsync(call, result) { session ->
                 val ratio = (call.argumentMap()["ratio"] as? Number)?.toFloat()
                     ?: throw IllegalArgumentException("Missing ratio.")
                 session.lastError = null
-                session.controller.seekToRatio(ratio)
+                session.controller.seekToRatioAsync(ratio)
                 emitSnapshot(session)
                 null
             }
-            "seekToLiveEdge" -> handleSessionCommand(call, result) { session ->
+            "seekToLiveEdge" -> handleSessionCommandAsync(call, result) { session ->
                 session.lastError = null
-                session.controller.seekToLiveEdge()
+                session.controller.seekToLiveEdgeAsync()
                 emitSnapshot(session)
                 null
             }

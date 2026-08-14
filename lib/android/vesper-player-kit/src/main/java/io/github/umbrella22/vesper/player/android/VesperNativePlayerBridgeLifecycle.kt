@@ -6,6 +6,7 @@ import android.util.Log
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -16,6 +17,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
@@ -467,6 +470,9 @@ internal fun VesperNativePlayerBridge.disposeNativeBridge() {
         return
     }
     sourceLoadEpoch.incrementAndGet()
+    sourceCommandGeneration.incrementAndGet()
+    seekCommandGeneration.incrementAndGet()
+    cancelPendingBridgeSourceCommand("sourceCommandDisposed")
     sourceLoadRequestGeneration += 1L
     val completed = runOnMainSynchronously("dispose") {
         disposeNativeBridgeOnMain()
@@ -481,6 +487,8 @@ internal fun VesperNativePlayerBridge.disposeNativeBridge() {
 
 private fun VesperNativePlayerBridge.disposeNativeBridgeOnMain() {
     if (!disposeCleanupStarted.compareAndSet(false, true)) return
+    bindings.cancelPendingSourceCommand("sourceCommandDisposed")
+    bindings.cancelPendingSeekCommand("seekCommandDisposed")
     cancelPendingSubtitleSelectionForDispose()
     sourceLoadEpoch.incrementAndGet()
     advanceNativeUpdateEpoch(clearListener = true)
@@ -561,7 +569,7 @@ internal fun VesperNativePlayerBridge.selectNativeSource(source: VesperPlayerSou
         return
     }
     val completed = runOnMainSynchronously("selectSource") {
-        if (beginNativeSourceSelectionOnMain(source)) {
+        if (beginNativeSourceSelectionOnMain(source) != null) {
             launchSourceLoad { initializeNativeBridgeAsync() }
         }
     }
@@ -572,18 +580,213 @@ internal fun VesperNativePlayerBridge.selectNativeSource(source: VesperPlayerSou
 
 internal suspend fun VesperNativePlayerBridge.selectNativeSourceAsync(source: VesperPlayerSource) {
     if (isDisposed.get()) {
+        val commandId = sourceCommandGeneration.incrementAndGet()
+        throw obsoleteCommandFailure(
+            message = "Android source command cannot start after disposal.",
+            category = VesperPlayerErrorCategory.Source,
+            reason = "sourceCommandDisposed",
+            commandId = commandId,
+            sourceEpoch = commandId,
+        )
+    }
+    val commandId = runOnMainForSourceLoad { beginNativeSourceSelectionOnMain(source) }
+        ?: throw obsoleteCommandFailure(
+            message = "Android source command did not start.",
+            category = VesperPlayerErrorCategory.Source,
+            reason = "sourceCommandNotStarted",
+            commandId = sourceCommandGeneration.get(),
+            sourceEpoch = sourceCommandGeneration.get(),
+        )
+    val pending =
+        runOnMainForSourceLoad {
+            ensureCurrentSourceCommand(commandId, source)
+            PendingSourceCommand(commandId = commandId, source = source).also {
+                pendingSourceCommand.getAndSet(it)?.let { previous ->
+                    previous.completion.completeExceptionally(
+                        obsoleteCommandFailure(
+                            message = "Android source command was superseded.",
+                            category = VesperPlayerErrorCategory.Source,
+                            reason = "sourceCommandSuperseded",
+                            commandId = previous.commandId,
+                            sourceEpoch = previous.commandId,
+                        )
+                    )
+                    previous.job.get()?.cancel()
+                }
+            }
+        }
+    val loadJob =
+        sourceLoadScope.launch {
+            executePendingSourceCommand(pending)
+        }
+    pending.job.set(loadJob)
+    if (!pending.completion.isActive) {
+        loadJob.cancel()
+    }
+    try {
+        withTimeout(sourceCommandTimeoutMs.coerceAtLeast(1L)) {
+            pending.completion.await()
+        }
+    } catch (error: TimeoutCancellationException) {
+        if (!currentCoroutineContext().isActive) {
+            cancelPendingBridgeSourceCommand("sourceCommandCallerCancelled", pending)
+            throw error
+        }
+        val failure = runOnMainForSourceLoad {
+            ensureCurrentSourceCommand(commandId, source)
+            sourceCommandTimeoutFailure(commandId, source)
+        }
+        publishSourceCommandFailureIfCurrent(commandId, source, failure)
+        sourceLoadEpoch.incrementAndGet()
+        bindings.cancelPendingSourceCommand("sourceCommandReadinessTimeout")
+        pendingSourceCommand.compareAndSet(pending, null)
+        pending.job.get()?.cancel()
+        throw failure
+    } catch (error: CancellationException) {
+        cancelPendingBridgeSourceCommand("sourceCommandCallerCancelled", pending)
+        throw error
+    }
+}
+
+private suspend fun VesperNativePlayerBridge.executePendingSourceCommand(
+    pending: PendingSourceCommand,
+) {
+    try {
+        initializeNativeBridgeAsync()
+        val commandBindings =
+            runOnMainForSourceLoad {
+                ensureCurrentSourceCommand(pending.commandId, pending.source)
+                bindings.takeIf { it.supportsAwaitableCommands }
+            }
+        if (commandBindings != null) {
+            val remainingTimeoutMs = pending.remainingTimeoutMs(sourceCommandTimeoutMs)
+            if (remainingTimeoutMs <= 0L) {
+                throw sourceCommandTimeoutFailure(pending.commandId, pending.source)
+            }
+            val readyTimeline =
+                withContext(Dispatchers.Main.immediate) {
+                    commandBindings.awaitSourceCommandReadiness(
+                        commandId = pending.commandId,
+                        sourceEpoch = pending.commandId,
+                        timeoutMs = remainingTimeoutMs,
+                    )
+                }
+            runOnMainForSourceLoad {
+                ensureCurrentSourceCommand(pending.commandId, pending.source)
+                updateState { copy(timeline = readyTimeline, isBuffering = false) }
+                refreshFromNative()
+            }
+        }
+        pending.completion.complete(Unit)
+    } catch (error: CancellationException) {
+        if (pending.completion.isActive) {
+            pending.completion.completeExceptionally(
+                obsoleteCommandFailure(
+                    message = "Android source command was cancelled.",
+                    category = VesperPlayerErrorCategory.Source,
+                    reason = "sourceCommandCancelled",
+                    commandId = pending.commandId,
+                    sourceEpoch = pending.commandId,
+                )
+            )
+        }
+    } catch (error: Throwable) {
+        val commandError =
+            when (error) {
+                is VesperPlayerCommandException -> error
+                else -> VesperPlayerCommandException(error.toInitializePlayerErrorState(
+                    error.message?.takeUnless(String::isBlank) ?: i18n.nativeBindingsUnavailable(),
+                ))
+            }
+        publishSourceCommandFailureIfCurrent(pending.commandId, pending.source, commandError)
+        pending.completion.completeExceptionally(commandError)
+    } finally {
+        pendingSourceCommand.compareAndSet(pending, null)
+    }
+}
+
+internal fun VesperNativePlayerBridge.cancelPendingBridgeSourceCommand(
+    reason: String,
+    expected: PendingSourceCommand? = null,
+) {
+    while (true) {
+        val pending = pendingSourceCommand.get() ?: return
+        if (expected != null && pending !== expected) {
+            return
+        }
+        if (!pendingSourceCommand.compareAndSet(pending, null)) {
+            continue
+        }
+        pending.completion.completeExceptionally(
+            obsoleteCommandFailure(
+                message = "Android source command is no longer current.",
+                category = VesperPlayerErrorCategory.Source,
+                reason = reason,
+                commandId = pending.commandId,
+                sourceEpoch = pending.commandId,
+            )
+        )
+        pending.job.get()?.cancel()
         return
     }
-    val started = runOnMainForSourceLoad { beginNativeSourceSelectionOnMain(source) }
-    if (!started || isDisposed.get()) return
-    initializeNativeBridgeAsync()
 }
+
+private suspend fun VesperNativePlayerBridge.publishSourceCommandFailureIfCurrent(
+    commandId: Long,
+    source: VesperPlayerSource,
+    error: VesperPlayerCommandException,
+) {
+    if (error.errorState.details["obsolete"] == true) {
+        return
+    }
+    runOnMainForSourceLoad {
+        if (!isDisposed.get() &&
+            sourceCommandGeneration.get() == commandId &&
+            currentSource == source
+        ) {
+            if (hasInitializedSource || _uiState.value.lastError != error.errorState) {
+                handleInitializeFailureOnMain(source, error)
+            }
+        }
+    }
+}
+
+private fun PendingSourceCommand.remainingTimeoutMs(totalTimeoutMs: Long): Long {
+    val boundedTimeoutMs = totalTimeoutMs.coerceAtLeast(1L)
+    val elapsedNs = (System.nanoTime() - startedAtNs).coerceAtLeast(0L)
+    val elapsedMs = TimeUnit.NANOSECONDS.toMillis(elapsedNs)
+    return boundedTimeoutMs - elapsedMs
+}
+
+private fun VesperNativePlayerBridge.sourceCommandTimeoutFailure(
+    commandId: Long,
+    source: VesperPlayerSource,
+): VesperPlayerCommandException =
+    commandFailure(
+        message = "Android source did not become command-ready before the deadline.",
+        code = VesperPlayerErrorCode.Timeout,
+        category = VesperPlayerErrorCategory.Source,
+        reason = "sourceCommandReadinessTimeout",
+        commandId = commandId,
+        sourceEpoch = commandId,
+        retriable = source.kind == VesperPlayerSourceKind.Remote,
+        extraDetails =
+            mapOf(
+                "protocol" to source.protocol.name.lowercase(),
+                "sourceKind" to source.kind.name.lowercase(),
+            ),
+    )
 
 private fun VesperNativePlayerBridge.beginNativeSourceSelectionOnMain(
     source: VesperPlayerSource,
-): Boolean {
-    if (isDisposed.get()) return false
+): Long? {
+    if (isDisposed.get()) return null
+    cancelPendingBridgeSourceCommand("sourceCommandSuperseded")
+    sourceLoadJob?.cancel()
+    val commandId = sourceCommandGeneration.incrementAndGet()
+    seekCommandGeneration.incrementAndGet()
     sourceLoadEpoch.incrementAndGet()
+    bindings.cancelPendingSourceCommand("sourceCommandSuperseded")
     recordBenchmark(
         "select_source_start",
         mapOf("targetProtocol" to source.protocol.name.lowercase()),
@@ -598,6 +801,7 @@ private fun VesperNativePlayerBridge.beginNativeSourceSelectionOnMain(
     pendingAutoPlay = true
     // Fence the previous Media3 item and cancel its pending subtitle command
     // before either source API returns.
+    bindings.cancelPendingSeekCommand("seekSourceChanged")
     bindings.invalidateSystemPlaybackCallbacks()
     clearTrackState()
     synchronized(runtimeWarnings) { runtimeWarnings.clear() }
@@ -617,7 +821,25 @@ private fun VesperNativePlayerBridge.beginNativeSourceSelectionOnMain(
             lastError = null,
         )
     }
-    return true
+    return commandId
+}
+
+private fun VesperNativePlayerBridge.ensureCurrentSourceCommand(
+    commandId: Long,
+    source: VesperPlayerSource,
+) {
+    if (isDisposed.get() ||
+        sourceCommandGeneration.get() != commandId ||
+        currentSource != source
+    ) {
+        throw obsoleteCommandFailure(
+            message = "Android source command was superseded.",
+            category = VesperPlayerErrorCategory.Source,
+            reason = if (isDisposed.get()) "sourceCommandDisposed" else "sourceCommandSuperseded",
+            commandId = commandId,
+            sourceEpoch = commandId,
+        )
+    }
 }
 
 internal fun VesperNativePlayerBridge.launchSourceLoad(block: suspend () -> Unit) {
@@ -819,6 +1041,7 @@ internal fun mainThreadBridgeTimeout(operation: String): IllegalStateException =
 
 private fun Throwable.toInitializePlayerErrorState(message: String): VesperPlayerErrorState =
     when (this) {
+        is VesperPlayerCommandException -> errorState
         is VesperPlayerUnsupportedOperation -> toPlayerErrorState()
         else ->
             VesperPlayerErrorState(

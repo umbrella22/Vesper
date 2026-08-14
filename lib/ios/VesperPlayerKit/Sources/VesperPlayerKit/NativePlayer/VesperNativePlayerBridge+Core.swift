@@ -43,6 +43,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var pendingAutoPlay = false
     var pendingNativeFrameSurfaceLoad = false
     var pendingNativeFrameSeek: PendingNativeFrameSeek?
+    var currentSourceIsConfirmedLive: Bool?
     var playbackEpoch: UInt64 = 0
     var firstFrameRenderedPlaybackEpoch: UInt64?
     var readyForDisplayCountByEpoch: [UInt64: Int] = [:]
@@ -73,14 +74,23 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var pendingResilienceRestore: PendingResilienceRestore?
     var retryTask: Task<Void, Never>?
     var stopSeekTimeoutTask: Task<Void, Never>?
-    var sourceLoadTask: Task<Void, Never>?
+    var sourceLoadTask: Task<Void, Error>?
     var subtitleOverlayLoadTask: Task<Void, Never>?
     var sourceLoadEpoch: UInt64 = 0
+    var sourceCommandGeneration: UInt64 = 0
+    var activeSourceCommand: VesperSourceCommandHandle?
+    var pendingSourceCommandFailure: Error?
+    var seekCommandGeneration: UInt64 = 0
+    var activeSeekCommand: VesperSeekCommandHandle?
     var subtitleSourceEpoch: UInt64 = 0
     var nextSubtitleCommandId: UInt64 = 0
     var pendingSubtitleSelection: PendingSubtitleSelection?
     var subtitleSelectionTask: Task<Void, Error>?
     let subtitleSelectionWaitPolicy: VesperSubtitleSelectionWaitPolicy
+    let sourceReadinessWaitPolicy: VesperSourceReadinessWaitPolicy
+    let seekCommandWaitPolicy: VesperSeekCommandWaitPolicy
+    let sourceLoadAttemptOverride: VesperSourceLoadAttemptOverride?
+    let systemPlayerSeekSubmitter: VesperSystemPlayerSeekSubmitter
     var trackCatalogLoadGeneration: UInt64 = 0
     /// Monotonic for the lifetime of this bridge/session. Source resets clear
     /// the public catalog but intentionally do not reset this counter.
@@ -241,7 +251,19 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration =
             VesperPipelineEventHookConfiguration(),
         nativeFramePipelineCoordinator: VesperNativeFramePipelineCoordinator? = nil,
-        subtitleSelectionWaitPolicy: VesperSubtitleSelectionWaitPolicy = .production
+        subtitleSelectionWaitPolicy: VesperSubtitleSelectionWaitPolicy = .production,
+        sourceReadinessWaitPolicy: VesperSourceReadinessWaitPolicy = .production,
+        seekCommandWaitPolicy: VesperSeekCommandWaitPolicy = .production,
+        sourceLoadAttemptOverride: VesperSourceLoadAttemptOverride? = nil,
+        systemPlayerSeekSubmitter: @escaping VesperSystemPlayerSeekSubmitter = {
+            player, target, toleranceBefore, toleranceAfter, completion in
+            player.seek(
+                to: target,
+                toleranceBefore: toleranceBefore,
+                toleranceAfter: toleranceAfter,
+                completionHandler: completion
+            )
+        }
     ) {
         currentSource = initialSource
         currentResiliencePolicy = resiliencePolicy
@@ -269,6 +291,10 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         }
         self.nativeFramePipelineCoordinator = nativeFramePipelineCoordinator ?? VesperNativeFramePipelineCoordinator()
         self.subtitleSelectionWaitPolicy = subtitleSelectionWaitPolicy
+        self.sourceReadinessWaitPolicy = sourceReadinessWaitPolicy
+        self.seekCommandWaitPolicy = seekCommandWaitPolicy
+        self.sourceLoadAttemptOverride = sourceLoadAttemptOverride
+        self.systemPlayerSeekSubmitter = systemPlayerSeekSubmitter
         currentPluginDiagnostics = []
         benchmarkRecorder = VesperBenchmarkRecorder(configuration: benchmarkConfiguration)
         preloadCoordinator = VesperNativePreloadCoordinator(

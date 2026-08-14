@@ -44,8 +44,8 @@ extensions.configure<KotlinAndroidProjectExtension>("kotlin") {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.02.01")
-    val media3Version = "1.9.3"
+    val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
+    val media3Version = "1.11.0"
 
     api(project(":vesper-player-kit"))
     api(composeBom)

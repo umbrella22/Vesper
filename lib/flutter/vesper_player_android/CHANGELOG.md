@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.1 - 2026-08-14
 
 ### Added
 
@@ -25,6 +25,8 @@
 
 ### Changed
 
+- Android build tooling now uses Kotlin 2.4.10, AndroidX Activity 1.13.0, and
+  kotlinx.coroutines 1.11.0.
 - Picture in Picture failures now emit PiP-specific events and method errors
   without publishing generic player errors.
 - `setAbrPolicy` now forwards the optional expected catalog revision and keeps
@@ -34,6 +36,12 @@
   best-effort foreground restore for `exitPictureInPicture`.
 - Subtitle snapshots now carry canonical catalog/selection state and
   requested/confirmed/effective selection fields.
+
+### Fixed
+
+- Source and seek MethodChannel calls now await Android host-kit readiness or
+  seek completion. Structured obsolete command failures are returned to Dart
+  without publishing a player error for the current session.
 
 ## 0.3.0 - 2026-05-18
 

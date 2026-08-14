@@ -313,10 +313,10 @@ internal class VesperAndroidSystemPlaybackCoordinator(
 
     private fun systemPlaybackSessionCallback(): MediaSession.Callback =
         object : MediaSession.Callback {
-            override fun onConnect(
+            override fun onConnectAsync(
                 session: MediaSession,
                 controllerInfo: MediaSession.ControllerInfo,
-            ): MediaSession.ConnectionResult {
+            ): ListenableFuture<MediaSession.ConnectionResult> {
                 val sessionCommands =
                     MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
                         .buildUpon()
@@ -331,12 +331,14 @@ internal class VesperAndroidSystemPlaybackCoordinator(
                             }
                         }
                         .build()
-                return MediaSession.ConnectionResult
-                    .AcceptedResultBuilder(session)
-                    .setAvailableSessionCommands(sessionCommands)
-                    .setAvailablePlayerCommands(playerCommands)
-                    .setMediaButtonPreferences(buildMediaButtonPreferences())
-                    .build()
+                return Futures.immediateFuture(
+                    MediaSession.ConnectionResult
+                        .AcceptedResultBuilder(session, controllerInfo)
+                        .setAvailableSessionCommands(sessionCommands)
+                        .setAvailablePlayerCommands(playerCommands)
+                        .setMediaButtonPreferences(buildMediaButtonPreferences())
+                        .build(),
+                )
             }
 
             @Suppress("OVERRIDE_DEPRECATION")

@@ -6,7 +6,8 @@ internal import VesperPlayerKitBridgeShim
 extension VesperNativePlayerBridge {
     func loadCurrentSource(
         _ source: VesperPlayerSource,
-        sourceLoadEpoch: UInt64
+        sourceLoadEpoch: UInt64,
+        deadline: ContinuousClock.Instant
     ) async throws {
         guard currentSource == source else {
             throw NSError(
@@ -24,70 +25,73 @@ extension VesperNativePlayerBridge {
         ) {
             throw drmFailure
         }
-        switch evaluateNativeFramePipelineRoute(for: source) {
-        case .systemPlayer, .fallback:
-            break
-        case .waitForSurface(let issue):
-            pendingNativeFrameSurfaceLoad = true
-            pendingAutoPlay = pendingAutoPlay || player == nil
-            currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
-            throw NSError(
-                domain: "io.github.umbrella22.vesper.host.ios",
-                code: -5,
-                userInfo: [NSLocalizedDescriptionKey: issue.message]
-            )
-        case .nativeFrame:
-            let startupSession = nativeFramePipelineCoordinator.activeSession
-            switch await nativeFramePipelineCoordinator.startActiveSession() {
-            case .success(let session):
-                guard !Task.isCancelled else {
-                    nativeFramePipelineCoordinator.closeSession(session)
-                    throw CancellationError()
-                }
-                guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else {
-                    nativeFramePipelineCoordinator.closeSession(session)
-                    throw NSError(
-                        domain: "io.github.umbrella22.vesper.host.ios",
-                        code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: "Selected source changed before native-frame startup completed."]
-                    )
-                }
-                configureNativeFramePlayback(source: source, session: session)
-                return
-            case .failure(let error):
-                guard !Task.isCancelled else {
-                    nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
-                    throw CancellationError()
-                }
-                guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else {
-                    nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
-                    throw NSError(
-                        domain: "io.github.umbrella22.vesper.host.ios",
-                        code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: "Selected source changed before native-frame startup completed."]
-                    )
-                }
-                if nativeFramePipelineConfiguration.mode == .preferNativeFrame {
-                    nativeFramePipelineFallbackIssue = error.issue
-                    nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
-                    currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
-                    iosHostLog("native-frame pipeline fallback: \(error.message)")
-                    break
-                }
+        nativeFrameRoute: while true {
+            switch evaluateNativeFramePipelineRoute(for: source) {
+            case .systemPlayer, .fallback:
+                break nativeFrameRoute
+            case .waitForSurface:
+                pendingNativeFrameSurfaceLoad = true
+                pendingAutoPlay = pendingAutoPlay || player == nil
                 currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
-                nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
+                try await awaitNativeFrameSurfaceHost(
+                    source: source,
+                    sourceLoadEpoch: sourceLoadEpoch,
+                    deadline: deadline
+                )
+                continue nativeFrameRoute
+            case .nativeFrame:
+                let startupSession = nativeFramePipelineCoordinator.activeSession
+                switch await nativeFramePipelineCoordinator.startActiveSession() {
+                case .success(let session):
+                    guard !Task.isCancelled else {
+                        nativeFramePipelineCoordinator.closeSession(session)
+                        throw CancellationError()
+                    }
+                    guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else {
+                        nativeFramePipelineCoordinator.closeSession(session)
+                        throw NSError(
+                            domain: "io.github.umbrella22.vesper.host.ios",
+                            code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "Selected source changed before native-frame startup completed."]
+                        )
+                    }
+                    configureNativeFramePlayback(source: source, session: session)
+                    return
+                case .failure(let error):
+                    guard !Task.isCancelled else {
+                        nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
+                        throw CancellationError()
+                    }
+                    guard isCurrentSourceLoad(sourceLoadEpoch, source: source) else {
+                        nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
+                        throw NSError(
+                            domain: "io.github.umbrella22.vesper.host.ios",
+                            code: -1,
+                            userInfo: [NSLocalizedDescriptionKey: "Selected source changed before native-frame startup completed."]
+                        )
+                    }
+                    if nativeFramePipelineConfiguration.mode == .preferNativeFrame {
+                        nativeFramePipelineFallbackIssue = error.issue
+                        nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
+                        currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
+                        iosHostLog("native-frame pipeline fallback: \(error.message)")
+                        break nativeFrameRoute
+                    }
+                    currentPluginDiagnostics = pluginDiagnosticsWithNativeFramePipeline(currentPluginDiagnostics)
+                    nativeFramePipelineCoordinator.closeActiveSession(ifSameAs: startupSession)
+                    throw NSError(
+                        domain: "io.github.umbrella22.vesper.host.ios",
+                        code: -3,
+                        userInfo: [NSLocalizedDescriptionKey: error.localizedDescription]
+                    )
+                }
+            case .fail(let issue):
                 throw NSError(
                     domain: "io.github.umbrella22.vesper.host.ios",
-                    code: -3,
-                    userInfo: [NSLocalizedDescriptionKey: error.localizedDescription]
+                    code: -4,
+                    userInfo: [NSLocalizedDescriptionKey: issue.message]
                 )
             }
-        case .fail(let issue):
-            throw NSError(
-                domain: "io.github.umbrella22.vesper.host.ios",
-                code: -4,
-                userInfo: [NSLocalizedDescriptionKey: issue.message]
-            )
         }
         let normalizedResource = await openSourceNormalizerResourceIfNeeded(
             for: source,
@@ -185,15 +189,19 @@ extension VesperNativePlayerBridge {
         )
         recordBenchmark("source_load_configured")
 
+        let sourceLoadPlaybackState: PlaybackStateUi =
+            !pendingAutoPlay && publishedUiState.playbackState == .paused
+                ? .paused
+                : .ready
         updateState {
             PlayerHostUiState(
                 title: $0.title,
                 subtitle: normalizedResource.map { "SourceNormalizer \($0.outputRoute)" }
                     ?? sourceSubtitle(for: source),
                 sourceLabel: source.label,
-                playbackState: .ready,
+                playbackState: sourceLoadPlaybackState,
                 playbackRate: $0.playbackRate,
-                isBuffering: false,
+                isBuffering: true,
                 isInterrupted: false,
                 timeline: TimelineUiState(
                     kind: .vod,
@@ -205,6 +213,14 @@ extension VesperNativePlayerBridge {
                 )
             )
         }
+        try await awaitSystemPlayerCommandReadiness(
+            source: source,
+            sourceLoadEpoch: sourceLoadEpoch,
+            player: player,
+            item: item,
+            playbackEpoch: playbackEpoch,
+            deadline: deadline
+        )
     }
 
     func startSubtitleOverlayLoadTask(

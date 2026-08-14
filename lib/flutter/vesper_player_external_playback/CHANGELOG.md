@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.1 - 2026-08-14
 
 ### Breaking Changes
 
@@ -12,6 +12,15 @@
 ### Changed
 
 - Material widgets are imported through the official `material_ui` package.
+- The `material_ui` dependency now uses the stable 1.0 release.
+- Android build tooling now uses Kotlin 2.4.10 and kotlinx.coroutines 1.11.0;
+  the native external-playback host uses AndroidX AppCompat 1.8.0 and OkHttp
+  5.4.0.
+
+### Fixed
+
+- Android resource merging no longer contributes an unused route-theme alias
+  that could resolve through an inheritance cycle with the native host kit.
 
 ## 0.3.0 - 2026-05-18
 

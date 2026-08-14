@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import io.github.umbrella22.vesper.player.android.TimelineKind
 import io.github.umbrella22.vesper.player.android.TimelineUiState
@@ -379,14 +380,15 @@ internal fun formatStorageBytes(value: Long?): String {
     if (value == 0L) {
         return "0 B"
     }
+    val locale = LocalConfiguration.current.locales[0]
     if (value >= 1024L * 1024L * 1024L) {
-        return String.format(Locale.getDefault(), "%.1f GB", value / (1024.0 * 1024.0 * 1024.0))
+        return String.format(locale, "%.1f GB", value / (1024.0 * 1024.0 * 1024.0))
     }
     if (value >= 1024L * 1024L) {
-        return String.format(Locale.getDefault(), "%.0f MB", value / (1024.0 * 1024.0))
+        return String.format(locale, "%.0f MB", value / (1024.0 * 1024.0))
     }
     if (value >= 1024L) {
-        return String.format(Locale.getDefault(), "%.0f KB", value / 1024.0)
+        return String.format(locale, "%.0f KB", value / 1024.0)
     }
     return "$value B"
 }

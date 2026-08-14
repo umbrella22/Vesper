@@ -8,9 +8,17 @@ extension VesperNativePlayerBridge {
         let playbackEpoch = currentPlaybackEpoch()
         let time = CMTime(milliseconds: positionMs)
         recordBenchmark("seek_start", attributes: ["positionMs": "\(positionMs)"])
-        player?.seek(to: time) { [weak self] _ in
+        player?.seek(
+            to: time,
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        ) { [weak self] finished in
             guard let self else { return }
             Task { @MainActor in
+                guard finished else {
+                    iosHostLog("seek did not finish positionMs=\(positionMs)")
+                    return
+                }
                 self.handleSeekCompletion(positionMs: positionMs, playbackEpoch: playbackEpoch)
             }
         }
@@ -367,11 +375,15 @@ extension VesperNativePlayerBridge {
         }
     }
 
-    func currentTimelineState(positionMs explicitPositionMs: Int64? = nil) -> TimelineUiState {
+    func currentTimelineState(
+        positionMs explicitPositionMs: Int64? = nil,
+        kindOverride: TimelineKindUi? = nil
+    ) -> TimelineUiState {
         let durationMs = currentDurationMs()
         let item = player?.currentItem
         let seekableRange = currentSeekableRange(item: item, durationMs: durationMs)
-        let kind = currentTimelineKind(durationMs: durationMs, seekableRange: seekableRange)
+        let kind = kindOverride
+            ?? currentTimelineKind(durationMs: durationMs, seekableRange: seekableRange)
         let seekableRangeStartMs = seekableRange?.startMs ?? 0
         let seekableRangeEndMs = seekableRange?.endMs ?? 0
         let hasSeekableWindow = seekableRangeEndMs > seekableRangeStartMs
@@ -425,11 +437,7 @@ extension VesperNativePlayerBridge {
         durationMs: Int64?,
         seekableRange: SeekableRangeUi?
     ) -> TimelineKindUi {
-        if let durationMs, durationMs > 0 {
-            return .vod
-        }
-
-        guard currentSource?.kind == .remote, currentSource?.protocol == .hls else {
+        guard currentSourceIsConfirmedLive == true else {
             return .vod
         }
 

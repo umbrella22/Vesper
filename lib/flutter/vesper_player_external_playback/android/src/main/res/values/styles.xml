@@ -8,13 +8,10 @@
     <color name="vesper_player_external_route_primary_dark_variant">#FF1A73E8</color>
 
     <!-- MediaRouter uses android:colorBackground for contrast calculations; keep every SDK-owned route theme opaque. -->
-    <style name="VesperPlayerExternalRouteButtonTheme" parent="@style/VesperPlayerExternalRouteButtonTheme.Light" />
-
     <style name="VesperPlayerExternalRouteButtonTheme.Light" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="android:windowBackground">@color/vesper_player_external_route_background_light</item>
         <item name="android:windowIsTranslucent">false</item>
         <item name="android:colorBackground">@color/vesper_player_external_route_background_light</item>
-        <item name="android:isLightTheme">true</item>
         <item name="colorBackgroundFloating">@color/vesper_player_external_route_background_light</item>
         <item name="colorPrimary">@color/vesper_player_external_route_primary_light</item>
         <item name="colorPrimaryDark">@color/vesper_player_external_route_primary_light</item>
@@ -28,7 +25,6 @@
         <item name="android:windowBackground">@color/vesper_player_external_route_background_dark</item>
         <item name="android:windowIsTranslucent">false</item>
         <item name="android:colorBackground">@color/vesper_player_external_route_background_dark</item>
-        <item name="android:isLightTheme">false</item>
         <item name="colorBackgroundFloating">@color/vesper_player_external_route_background_floating_dark</item>
         <item name="colorPrimary">@color/vesper_player_external_route_primary_dark</item>
         <item name="colorPrimaryDark">@color/vesper_player_external_route_primary_dark_variant</item>
@@ -42,7 +38,6 @@
         <item name="android:colorBackground">@color/vesper_player_external_route_background_light</item>
         <item name="android:windowBackground">@color/vesper_player_external_route_background_light</item>
         <item name="android:windowIsTranslucent">false</item>
-        <item name="android:isLightTheme">true</item>
         <item name="colorBackgroundFloating">@color/vesper_player_external_route_background_light</item>
         <item name="colorPrimary">@color/vesper_player_external_route_primary_light</item>
         <item name="colorPrimaryDark">@color/vesper_player_external_route_primary_light</item>
@@ -54,7 +49,6 @@
         <item name="android:colorBackground">@color/vesper_player_external_route_background_dark</item>
         <item name="android:windowBackground">@color/vesper_player_external_route_background_dark</item>
         <item name="android:windowIsTranslucent">false</item>
-        <item name="android:isLightTheme">false</item>
         <item name="colorBackgroundFloating">@color/vesper_player_external_route_background_floating_dark</item>
         <item name="colorPrimary">@color/vesper_player_external_route_primary_dark</item>
         <item name="colorPrimaryDark">@color/vesper_player_external_route_primary_dark_variant</item>

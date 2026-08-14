@@ -172,6 +172,13 @@ await controller.seekToLiveEdge();
 await controller.setPlaybackRate(1.5);
 ```
 
+Mobile source and seek commands have native completion semantics. A successful
+`selectSource` completes only after the current source publishes a stable VOD,
+live DVR, or non-seekable live timeline. The three seek methods complete only
+after the active native route confirms the current seek. Superseded commands
+throw `VesperPlayerCommandException` with `isObsolete == true`; they reject only
+their originating `Future` and do not replace the current snapshot error.
+
 ### `VesperPlayerView`
 
 Embeds the native video surface into Flutter UI.

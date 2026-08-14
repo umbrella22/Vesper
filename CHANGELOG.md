@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.1 - 2026-08-14
 
 ### Migration
 
@@ -73,6 +73,12 @@ runtime artifact.
 
 ### Changed
 
+- Updated the Android and Flutter host toolchain to Kotlin 2.4.10, Media3 1.11.0,
+  kotlinx.coroutines 1.11.0, AndroidX Activity 1.13.0, AppCompat 1.8.0,
+  Fragment 1.9.0, Lifecycle 2.10.0, Compose BOM 2026.06.01, OkHttp 5.4.0,
+  and `material_ui` 1.0.0.
+- Updated Flutter CI and publication workflows to Flutter 3.47.0 while keeping
+  the public package compatibility floor at Flutter 3.44.0.
 - Moved the repository Codex marketplace and maintainer plugins under
   `.agents/plugins`, reserving the root `plugins/` directory for Vesper runtime
   plugin projects.
@@ -103,6 +109,19 @@ runtime artifact.
   contract.
 
 ### Fixed
+
+- Android instrumentation JNI staging now stays inside the host-kit module when
+  Flutter redirects Gradle build directories, preserving the Rust CLI output
+  boundary. The Android examples also serialize FFmpeg relay generation after
+  remux and SourceNormalizer plugin tasks that share the same profile output.
+- Android external-playback themes now scope `android:isLightTheme` to API 29+
+  resources, and the Flutter package no longer contributes a self-referential
+  route-theme alias during resource merging.
+- Mobile source selection and seek commands now have bounded, generation-fenced
+  native completion semantics across Android, iOS, and Flutter. Pausing during
+  an in-flight source load cancels pending autoplay and preserves a paused
+  snapshot even at timeline position zero. Obsolete commands fail only their
+  originating call without replacing the current playback error.
 
 - Redacted credentials, query parameters, and fragments from iOS playback
   diagnostics, including current-source details, lifecycle and retry logs, HDR

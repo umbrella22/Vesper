@@ -23,6 +23,7 @@ import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.text.Cue
+import androidx.media3.common.util.ExperimentalApi
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
@@ -83,9 +84,14 @@ internal class VesperNativeJniBindings(
     internal val subtitleSelectionCommandGenerationState = AtomicLong(0L)
     internal var player: ExoPlayer? = null
     internal var playerListener: Player.Listener? = null
+    internal var pendingSourceCommandId: Long? = null
+    internal var pendingSourceCommandCancellation: ((String) -> Unit)? = null
+    internal var pendingSeekCommandId: Long? = null
+    internal var pendingSeekCommandCancellation: ((String) -> Unit)? = null
 
     override val isSystemPlaybackActive: Boolean
         get() = player != null && !isDisposed.get()
+    override val supportsAwaitableCommands: Boolean = true
     internal var analyticsListener: AnalyticsListener? = null
     @Volatile
     internal var attachedSurface: Surface? = null
@@ -677,6 +683,8 @@ internal class VesperNativeJniBindings(
     }
 
     override fun invalidateSystemPlaybackCallbacks() {
+        cancelPendingSourceCommandInternal("sourceCommandSuperseded")
+        cancelPendingSeekCommand("seekSourceChanged")
         systemPlaybackCallbackGeneration.incrementAndGet()
         localBridgeEvents.clear()
     }
@@ -685,6 +693,8 @@ internal class VesperNativeJniBindings(
         if (!isDisposed.compareAndSet(false, true)) {
             return
         }
+        cancelPendingSourceCommandInternal("sourceCommandDisposed")
+        cancelPendingSeekCommand("seekCommandDisposed")
         systemPlaybackCallbackGeneration.incrementAndGet()
         Log.i(NATIVE_JNI_BINDINGS_TAG, "dispose")
         closeNativeFramePipeline()
@@ -841,6 +851,28 @@ internal class VesperNativeJniBindings(
             seekableEndMs = sample.seekableEndMs,
             liveEdgeMs = sample.liveEdgeMs,
         )
+    }
+
+    override suspend fun awaitSourceCommandReadiness(
+        commandId: Long,
+        sourceEpoch: Long,
+        timeoutMs: Long,
+    ): TimelineUiState =
+        awaitMedia3SourceCommandReadiness(commandId, sourceEpoch, timeoutMs)
+
+    override suspend fun seekToAndAwait(
+        positionMs: Long,
+        commandId: Long,
+        sourceEpoch: Long,
+        timeoutMs: Long,
+    ): Long = awaitMedia3SeekCompletion(positionMs, commandId, sourceEpoch, timeoutMs)
+
+    override fun cancelPendingSourceCommand(reason: String) {
+        cancelPendingSourceCommandInternal(reason)
+    }
+
+    override fun cancelPendingSeekCommand(reason: String) {
+        cancelPendingSeekCommandInternal(reason)
     }
 
     override fun currentTrackCatalog(): VesperTrackCatalog = currentTrackCatalogState
@@ -1085,10 +1117,10 @@ internal class VesperNativeJniBindings(
 
 /**
  * Enables Media3's render-time decoding for Vesper's side-loaded subtitle
- * sources. Media3 1.9 keeps this legacy path disabled by default even though
+ * sources. Media3 keeps this legacy path disabled by default even though
  * external WebVTT, SRT, and ASS samples still use it.
  */
-@OptIn(UnstableApi::class)
+@OptIn(UnstableApi::class, ExperimentalApi::class)
 internal class VesperExternalSubtitleRenderersFactory(
     context: Context,
 ) : DefaultRenderersFactory(context) {

@@ -44,7 +44,7 @@ extensions.configure<KotlinAndroidProjectExtension>("kotlin") {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.02.01")
+    val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
 
     api(project(":vesper-player-kit-compose"))
     api(composeBom)

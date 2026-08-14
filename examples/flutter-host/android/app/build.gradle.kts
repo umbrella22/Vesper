@@ -383,6 +383,7 @@ relayFfmpegProject.plugins.withId("com.android.library") {
         task.name == "buildRelayFfmpegAndroidJni"
     }.configureEach {
         dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
+        dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)
     }
     relayFfmpegProject.tasks.matching { task ->
         (task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")) ||

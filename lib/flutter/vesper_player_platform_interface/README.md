@@ -56,6 +56,7 @@ authors. Application code should usually depend on `vesper_player` directly.
 | `VesperPlayerViewport`           | Normalized viewport rectangle used for viewport hints                                                                                                                                                          |
 | `VesperViewportHint`             | Visibility hint: visible, near visible, prefetch only, or hidden                                                                                                                                               |
 | `VesperPlayerError`              | Playback error with category and retryability metadata                                                                                                                                                         |
+| `VesperPlayerCommandException`   | Structured source or seek command failure with preserved native details and obsolete-command detection                                                                                                      |
 
 ### Player events
 
@@ -146,6 +147,13 @@ Methods that remain unimplemented should report `VesperPlayerError` with
 `category: VesperPlayerErrorCategory.capability`. That keeps capability checks
 explicit and lets apps branch on `VesperPlayerCapabilities` instead of
 depending on exceptions.
+
+Mobile implementations complete `selectSource`, `seekBy`, `seekToRatio`, and
+`seekToLiveEdge` only after native confirmation. Structured failures map to
+`VesperPlayerCommandException`; native command details such as `reason`,
+`commandReason`, `commandId`, `sourceEpoch`, and boolean `obsolete` remain
+available in `details`. An obsolete command must fail its own `Future` without
+publishing a terminal error for the current player generation.
 
 Snapshot payloads should also round-trip the backend's current
 `VesperPlaybackResiliencePolicy`, `VesperTrackSelectionSnapshot`, and

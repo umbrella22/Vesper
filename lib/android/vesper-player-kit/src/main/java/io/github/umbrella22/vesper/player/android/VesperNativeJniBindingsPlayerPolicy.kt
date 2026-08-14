@@ -293,6 +293,8 @@ internal data class PreparedExternalSubtitleMediaSources(
     val failures: List<NativeTrackSelectionFailure>,
 )
 
+// Per-subtitle request headers still require Media3's explicitly enabled legacy subtitle source.
+@Suppress("DEPRECATION")
 internal fun prepareExternalSubtitleMediaSources(
     appContext: Context,
     cachePolicy: NativeCachePolicy,
@@ -368,7 +370,6 @@ internal fun prepareExternalSubtitleMediaSources(
             val dataSourceFactory = buildDataSourceFactory(appContext, cachePolicy, source.headers)
             mediaSources +=
                 SingleSampleMediaSource.Factory(dataSourceFactory)
-                    .setTrackId(source.id)
                     .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
                     .setTreatLoadErrorsAsEndOfStream(true)
                     .createMediaSource(buildExternalSubtitleConfiguration(source), C.TIME_UNSET)

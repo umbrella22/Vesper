@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 
 import 'models.dart';
 import 'fixed_track_exception.dart';
+import 'player_command_exception.dart';
 import 'subtitle_exception.dart';
 import 'vesper_player_platform.dart' show VesperUnsupportedError;
 
@@ -14,6 +15,11 @@ Object vesperMapPlatformException(PlatformException error) {
       VesperFixedTrackSelectionException.tryFromPlatformException(error);
   if (fixedTrackError != null) {
     return fixedTrackError;
+  }
+  final commandError =
+      VesperPlayerCommandException.tryFromPlatformException(error);
+  if (commandError != null) {
+    return commandError;
   }
   final details = error.details;
   final normalized = details is Map

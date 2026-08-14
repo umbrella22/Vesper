@@ -3,13 +3,13 @@ schema_version = 1
 [plugin]
 id = "io.github.umbrella22.vesper.decoder-mediacodec"
 name = "Vesper MediaCodec Decoder"
-version = "0.4.0"
+version = "0.4.1"
 description = "Experimental Android MediaCodec native-frame decoder plugin."
 license = "Apache-2.0"
 publisher = "io.github.umbrella22"
 
 [compatibility]
-host_sdk = ">=0.4.0, <0.5.0"
+host_sdk = ">=0.4.1, <0.5.0"
 abi_major = 1
 abi_minor_min = 0
 abi_minor_max = 0

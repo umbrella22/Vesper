@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.1 - 2026-08-14
 
 ### Breaking Changes
 
@@ -45,6 +45,13 @@
 
 ### Fixed
 
+- Flutter SPI source selection now waits across retries for a stable VOD, live
+  DVR, or non-seekable live timeline within one total deadline.
+- Flutter SPI seek commands now succeed only after AVPlayer reports a finished
+  exact seek for the current command and source epoch. Superseded source and
+  seek commands return structured obsolete errors without changing
+  `lastError`, and pause cancels pending autoplay during source loading without
+  collapsing a zero-position paused snapshot back to ready.
 - Playback diagnostics now remove credentials, query parameters, and fragments
   from current-source details, lifecycle and retry logs, HDR evidence, DASH
   network errors, and AVPlayer error-log URLs.

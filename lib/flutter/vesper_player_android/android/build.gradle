@@ -1,5 +1,5 @@
 group = "io.github.umbrella22.vesper.player.flutter.android"
-version = "0.4.0"
+version = "0.4.1"
 
 ext.vesperPlayerKitVersion = providers
     .gradleProperty("vesperPlayerKitVersion")
@@ -7,7 +7,7 @@ ext.vesperPlayerKitVersion = providers
     .get()
 
 buildscript {
-    ext.kotlin_version = "2.3.10"
+    ext.kotlin_version = "2.4.10"
     repositories {
         google()
         mavenCentral()
@@ -66,8 +66,8 @@ dependencies {
         implementation "io.github.umbrella22.vesper:vesper-player-kit:$vesperPlayerKitVersion"
     }
 
-    implementation "androidx.activity:activity:1.8.2"
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
+    implementation "androidx.activity:activity:1.13.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0"
     testImplementation "junit:junit:4.13.2"
-    testImplementation "org.json:json:20250517"
+    testImplementation "org.json:json:20260719"
 }

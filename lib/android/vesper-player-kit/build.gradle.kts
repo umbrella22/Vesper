@@ -13,7 +13,9 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
 
 val repoRoot = projectDir.resolve("../../..").canonicalFile
 val vesperCli = repoRoot.resolve("scripts/vesper")
-val androidTestJniLibsDir = layout.buildDirectory.dir("generated/androidTestJniLibs")
+// The Rust CLI deliberately restricts test JNI publication to this module-owned tree.
+// Keep that boundary stable when Flutter rehomes Gradle build directories.
+val androidTestJniLibsDir = layout.projectDirectory.dir("build/generated/androidTestJniLibs")
 val rustAndroidAbis = providers.gradleProperty("vesper.player.android.abis").orNull
 val hostJniLibraries =
     providers
@@ -59,7 +61,7 @@ val provisionAndroidTestNativeLibraries = tasks.register<Exec>("provisionAndroid
         vesperCli.absolutePath,
         "android",
         "provision-test-jni",
-        androidTestJniLibsDir.get().asFile.absolutePath,
+        androidTestJniLibsDir.asFile.absolutePath,
         "--profile",
         "debug",
         "--ffmpeg-profile",
@@ -109,7 +111,7 @@ android {
 
     sourceSets.getByName("androidTest").apply {
         assets.srcDir(repoRoot.resolve("fixtures/media"))
-        jniLibs.srcDir(androidTestJniLibsDir.get().asFile)
+        jniLibs.srcDir(androidTestJniLibsDir.asFile)
     }
 
     publishing {
@@ -126,17 +128,17 @@ extensions.configure<KotlinAndroidProjectExtension>("kotlin") {
 }
 
 dependencies {
-    val media3Version = "1.9.3"
+    val media3Version = "1.11.0"
 
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
     implementation("androidx.media3:media3-session:$media3Version")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20250517")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+    testImplementation("org.json:json:20260719")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test:rules:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")

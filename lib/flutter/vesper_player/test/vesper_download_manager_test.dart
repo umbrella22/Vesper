@@ -359,6 +359,52 @@ void main() {
     expect(reportedErrors, isEmpty);
   });
 
+  test('obsolete player commands only reject their originating future',
+      () async {
+    final reportedErrors = <FlutterErrorDetails>[];
+    final previousOnError = FlutterError.onError;
+    FlutterError.onError = reportedErrors.add;
+    addTearDown(() {
+      FlutterError.onError = previousOnError;
+    });
+
+    final controller = await VesperPlayerController.create();
+    addTearDown(controller.dispose);
+    final playerErrors = <VesperPlayerErrorEvent>[];
+    final subscription = controller.events.listen((event) {
+      if (event is VesperPlayerErrorEvent) {
+        playerErrors.add(event);
+      }
+    });
+    addTearDown(subscription.cancel);
+    platform.sourceSelectionError = const VesperPlayerCommandException(
+      message: 'source command was superseded',
+      code: VesperPlayerErrorCode.cancelled,
+      category: VesperPlayerErrorCategory.source,
+      retriable: true,
+      details: <String, Object?>{
+        'reason': 'sourceCommandSuperseded',
+        'obsolete': true,
+      },
+    );
+
+    await expectLater(
+      controller.selectSource(
+        VesperPlayerSource.remote(
+          uri: 'https://example.com/replacement.mpd',
+          label: 'Replacement',
+          protocol: VesperPlayerSourceProtocol.dash,
+        ),
+      ),
+      throwsA(isA<VesperPlayerCommandException>()),
+    );
+
+    await _flushEvents();
+    expect(controller.snapshot.lastError, isNull);
+    expect(playerErrors, isEmpty);
+    expect(reportedErrors, isEmpty);
+  });
+
   test('player controller forwards picture-in-picture APIs and events',
       () async {
     platform.pictureInPictureAvailability =
@@ -496,6 +542,7 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
   List<VesperPluginDiagnostic> playerPluginDiagnostics =
       const <VesperPluginDiagnostic>[];
   Object? playError;
+  Object? sourceSelectionError;
   Object? subtitleSelectionError;
   VesperPictureInPictureAvailability pictureInPictureAvailability =
       const VesperPictureInPictureAvailability(isAvailable: false);
@@ -687,8 +734,13 @@ final class _FakeVesperPlatform extends VesperPlayerPlatform {
       throw UnimplementedError();
 
   @override
-  Future<void> selectSource(String playerId, VesperPlayerSource source) async =>
-      throw UnimplementedError();
+  Future<void> selectSource(String playerId, VesperPlayerSource source) async {
+    final error = sourceSelectionError;
+    if (error != null) {
+      throw error;
+    }
+    throw UnimplementedError();
+  }
 
   @override
   Future<void> play(String playerId) async {

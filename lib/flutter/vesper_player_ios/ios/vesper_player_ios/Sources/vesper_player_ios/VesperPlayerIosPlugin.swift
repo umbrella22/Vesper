@@ -164,8 +164,14 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-        Task { @MainActor in
-            handleOnMain(call, result: result)
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                handleOnMain(call, result: result)
+            }
+            return
+        }
+        DispatchQueue.main.async {
+            self.handleOnMain(call, result: result)
         }
     }
 
@@ -221,21 +227,12 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         case "initialize":
             handleAsyncSessionCommand(call, result: result) { session in
                 session.lastError = nil
-                await session.controller.initializeAsync()
+                try await session.controller.initializeAsync()
                 self.emitSnapshot(for: session)
                 return nil
             }
         case "selectSource":
-            handleAsyncSessionCommand(call, result: result) { session in
-                let sourceMap = try requireNestedMap(arguments: arguments(of: call), key: "source")
-                let source = try sourceMap.toVesperPlayerSource()
-                session.lastError = nil
-                session.currentSourceFingerprint = VesperSourceFingerprint(source: source)
-                session.recentHdrProbeEvidence = nil
-                await session.controller.selectSourceAsync(source)
-                self.emitSnapshot(for: session)
-                return nil
-            }
+            handleSourceSelection(call, result: result)
         case "play":
             handleSessionCommand(call, result: result) { session in
                 session.lastError = nil
@@ -265,32 +262,32 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 return nil
             }
         case "seekBy":
-            handleSessionCommand(call, result: result) { session in
+            handleAsyncSessionCommand(call, result: result) { session in
                 let arguments = arguments(of: call)
                 guard let deltaMs = (arguments["deltaMs"] as? NSNumber)?.int64Value else {
                     throw PluginError.missingArgument("deltaMs")
                 }
                 session.lastError = nil
-                session.controller.seek(by: deltaMs)
-                emitSnapshot(for: session)
+                try await session.controller.seekAsync(by: deltaMs)
+                self.emitSnapshot(for: session)
                 return nil
             }
         case "seekToRatio":
-            handleSessionCommand(call, result: result) { session in
+            handleAsyncSessionCommand(call, result: result) { session in
                 let arguments = arguments(of: call)
                 guard let ratio = (arguments["ratio"] as? NSNumber)?.doubleValue else {
                     throw PluginError.missingArgument("ratio")
                 }
                 session.lastError = nil
-                session.controller.seek(toRatio: ratio)
-                emitSnapshot(for: session)
+                try await session.controller.seekAsync(toRatio: ratio)
+                self.emitSnapshot(for: session)
                 return nil
             }
         case "seekToLiveEdge":
-            handleSessionCommand(call, result: result) { session in
+            handleAsyncSessionCommand(call, result: result) { session in
                 session.lastError = nil
-                session.controller.seekToLiveEdge()
-                emitSnapshot(for: session)
+                try await session.controller.seekToLiveEdgeAsync()
+                self.emitSnapshot(for: session)
                 return nil
             }
         case "setPlaybackRate":
@@ -1034,6 +1031,56 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                         return
                     }
                     result(value)
+                } catch {
+                    if self.sessions[playerId] === session,
+                        shouldPublishAsyncPlayerError(error)
+                    {
+                        session.lastError = errorMap(from: error)
+                        self.emitError(for: session, error: error)
+                    }
+                    result(asFlutterError(error, code: "vesper_operation_failed"))
+                }
+            }
+        } catch {
+            if let playerId = arguments(of: call)["playerId"] as? String,
+                let session = sessions[playerId]
+            {
+                session.lastError = errorMap(from: error)
+                emitError(for: session, error: error)
+            }
+            result(asFlutterError(error, code: "vesper_operation_failed"))
+        }
+    }
+
+    @MainActor
+    private func handleSourceSelection(
+        _ call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) {
+        do {
+            let arguments = arguments(of: call)
+            guard let playerId = arguments["playerId"] as? String, !playerId.isEmpty else {
+                throw PluginError.missingArgument("playerId")
+            }
+            guard let session = sessions[playerId] else {
+                throw PluginError.unknownPlayer(playerId)
+            }
+            let sourceMap = try requireNestedMap(arguments: arguments, key: "source")
+            let source = try sourceMap.toVesperPlayerSource()
+            session.lastError = nil
+            session.currentSourceFingerprint = VesperSourceFingerprint(source: source)
+            session.recentHdrProbeEvidence = nil
+            let sourceTask = try session.controller.startSourceSelection(source)
+
+            Task { @MainActor in
+                do {
+                    try await sourceTask.value
+                    guard self.sessions[playerId] === session else {
+                        result(nil)
+                        return
+                    }
+                    self.emitSnapshot(for: session)
+                    result(nil)
                 } catch {
                     if self.sessions[playerId] === session,
                         shouldPublishAsyncPlayerError(error)

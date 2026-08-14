@@ -7,7 +7,10 @@ import androidx.media3.common.Format
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
@@ -27,6 +30,32 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VesperNativePlayerBridgeTest {
+    @Test
+    fun commandFailurePreservesDomainReasonAndOwnsCommandMetadata() {
+        val error =
+            commandFailure(
+                message = "source retry exhausted",
+                code = VesperPlayerErrorCode.BackendFailure,
+                category = VesperPlayerErrorCategory.Network,
+                reason = "sourceCommandRetryExhausted",
+                commandId = 42L,
+                sourceEpoch = 7L,
+                retriable = true,
+                extraDetails =
+                    mapOf(
+                        "reason" to "fixtureNetworkFailure",
+                        "commandReason" to "staleCommandReason",
+                        "commandId" to -1L,
+                        "sourceEpoch" to -1L,
+                    ),
+            )
+
+        assertEquals("fixtureNetworkFailure", error.errorState.details["reason"])
+        assertEquals("sourceCommandRetryExhausted", error.errorState.details["commandReason"])
+        assertEquals(42L, error.errorState.details["commandId"])
+        assertEquals(7L, error.errorState.details["sourceEpoch"])
+    }
+
     @Test
     fun dashSubtitleStateStaysLoadingUntilMedia3ReportsTracks() {
         val bindings = FakeBindings().apply { trackCatalogReady = false }
@@ -280,7 +309,7 @@ class VesperNativePlayerBridgeTest {
             }
         val bridge = VesperNativePlayerBridge(bindings = bindings)
 
-        val request = async(kotlinx.coroutines.SupervisorJob()) {
+        val request = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
         }
         kotlinx.coroutines.yield()
@@ -291,7 +320,7 @@ class VesperNativePlayerBridgeTest {
         assertEquals(VesperSubtitleSelectionState.Applying, bridge.subtitleState.value.selectionState)
 
         bindings.confirmDeferredSubtitleSelection()
-        request.await()
+        request.await().getOrThrow()
 
         assertEquals(VesperTrackSelection.track(trackId), bridge.confirmedSubtitleSelection.value)
         assertEquals(trackId, bridge.effectiveSubtitleTrackId.value)
@@ -324,7 +353,7 @@ class VesperNativePlayerBridgeTest {
                 subtitleTrackSelectable = false
             }
         val bridge = VesperNativePlayerBridge(bindings = bindings)
-        val request = async(kotlinx.coroutines.SupervisorJob()) {
+        val request = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
         }
 
@@ -334,7 +363,7 @@ class VesperNativePlayerBridgeTest {
         bindings.subtitleTrackSelectable = true
         advanceTimeBy(25L)
         runCurrent()
-        request.await()
+        request.await().getOrThrow()
 
         assertEquals(1, bindings.subtitleTrackSelectionCount)
         assertEquals(VesperTrackSelection.track(trackId), bridge.confirmedSubtitleSelection.value)
@@ -346,7 +375,7 @@ class VesperNativePlayerBridgeTest {
         val trackId = "subtitle:external:late"
         val bindings = FakeBindings(trackCatalog = VesperTrackCatalog.Empty)
         val bridge = VesperNativePlayerBridge(bindings = bindings)
-        val request = async(kotlinx.coroutines.SupervisorJob()) {
+        val request = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
         }
 
@@ -357,7 +386,7 @@ class VesperNativePlayerBridgeTest {
         bindings.trackCatalog = subtitleCatalog(trackId)
         advanceTimeBy(25L)
         runCurrent()
-        request.await()
+        request.await().getOrThrow()
 
         assertEquals(1, bindings.subtitleTrackSelectionCount)
         assertEquals(VesperTrackSelection.track(trackId), bridge.confirmedSubtitleSelection.value)
@@ -380,14 +409,14 @@ class VesperNativePlayerBridgeTest {
             }
         val bridge = VesperNativePlayerBridge(bindings = bindings)
 
-        val request = async(kotlinx.coroutines.SupervisorJob()) {
+        val request = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
         }
         runCurrent()
 
         val failure =
             try {
-                request.await()
+                request.await().getOrThrow()
                 throw AssertionError("Expected the identity failure.")
             } catch (error: VesperPlayerUnsupportedOperation) {
                 error
@@ -414,14 +443,14 @@ class VesperNativePlayerBridgeTest {
             }
         val bridge = VesperNativePlayerBridge(bindings = bindings)
 
-        val request = async(kotlinx.coroutines.SupervisorJob()) {
+        val request = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
         }
         runCurrent()
 
         val failure =
             try {
-                request.await()
+                request.await().getOrThrow()
                 throw AssertionError("Expected the resource failure.")
             } catch (error: VesperPlayerUnsupportedOperation) {
                 error
@@ -465,7 +494,7 @@ class VesperNativePlayerBridgeTest {
                 subtitleTrackSelectable = false
             }
         val bridge = VesperNativePlayerBridge(bindings = bindings)
-        val request = async(kotlinx.coroutines.SupervisorJob()) {
+        val request = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
         }
 
@@ -474,7 +503,7 @@ class VesperNativePlayerBridgeTest {
         runCurrent()
         val failure =
             try {
-                request.await()
+                request.await().getOrThrow()
                 throw AssertionError("Expected subtitle target readiness to expire.")
             } catch (error: VesperPlayerUnsupportedOperation) {
                 error
@@ -506,7 +535,7 @@ class VesperNativePlayerBridgeTest {
                 effectiveSubtitleTrackId = confirmedId,
             )
         bindings.deferSubtitleSelectionConfirmation = true
-        val request = async(kotlinx.coroutines.SupervisorJob()) {
+        val request = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(timedOutId))
         }
         runCurrent()
@@ -521,7 +550,7 @@ class VesperNativePlayerBridgeTest {
         runCurrent()
         val error =
             try {
-                request.await()
+                request.await().getOrThrow()
                 throw AssertionError("Expected the bounded subtitle selection timeout.")
             } catch (error: VesperPlayerUnsupportedOperation) {
                 error
@@ -554,19 +583,19 @@ class VesperNativePlayerBridgeTest {
             }
         val bridge = VesperNativePlayerBridge(bindings = bindings)
 
-        val first = async(kotlinx.coroutines.SupervisorJob()) {
+        val first = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(firstId))
         }
         kotlinx.coroutines.yield()
         first.cancel()
         first.join()
 
-        val second = async(kotlinx.coroutines.SupervisorJob()) {
+        val second = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(secondId))
         }
         kotlinx.coroutines.yield()
         bindings.confirmDeferredSubtitleSelection()
-        second.await()
+        second.await().getOrThrow()
         assertEquals(secondId, bridge.effectiveSubtitleTrackId.value)
 
         // A delayed callback from the cancelled command can arrive on the
@@ -592,7 +621,7 @@ class VesperNativePlayerBridgeTest {
             }
         val bridge = VesperNativePlayerBridge(bindings = bindings)
 
-        val request = async(kotlinx.coroutines.SupervisorJob()) {
+        val request = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(trackId))
         }
         kotlinx.coroutines.yield()
@@ -600,7 +629,7 @@ class VesperNativePlayerBridgeTest {
 
         val error =
             try {
-                request.await()
+                request.await().getOrThrow()
                 throw AssertionError("Expected the source epoch change to cancel the selection.")
             } catch (error: VesperPlayerUnsupportedOperation) {
                 error
@@ -625,18 +654,18 @@ class VesperNativePlayerBridgeTest {
             }
         val bridge = VesperNativePlayerBridge(bindings = bindings)
 
-        val first = async(kotlinx.coroutines.SupervisorJob()) {
+        val first = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(firstId))
         }
         kotlinx.coroutines.yield()
-        val second = async(kotlinx.coroutines.SupervisorJob()) {
+        val second = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(secondId))
         }
         kotlinx.coroutines.yield()
 
         val firstError =
             try {
-                first.await()
+                first.await().getOrThrow()
                 throw AssertionError("Expected the first selection to be superseded.")
             } catch (error: VesperPlayerUnsupportedOperation) {
                 error
@@ -646,7 +675,7 @@ class VesperNativePlayerBridgeTest {
         assertFalse(second.isCompleted)
 
         bindings.confirmDeferredSubtitleSelection()
-        second.await()
+        second.await().getOrThrow()
 
         assertEquals(VesperTrackSelection.track(secondId), bridge.confirmedSubtitleSelection.value)
         assertEquals(secondId, bridge.effectiveSubtitleTrackId.value)
@@ -662,12 +691,12 @@ class VesperNativePlayerBridgeTest {
             }
         val bridge = VesperNativePlayerBridge(bindings = bindings)
 
-        val first = async(kotlinx.coroutines.SupervisorJob()) {
+        val first = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(firstId))
         }
         kotlinx.coroutines.yield()
         val firstCommandGeneration = bindings.subtitleSelectionCommandGeneration
-        val second = async(kotlinx.coroutines.SupervisorJob()) {
+        val second = asyncCatching {
             bridge.setSubtitleTrackSelection(VesperTrackSelection.track(secondId))
         }
         kotlinx.coroutines.yield()
@@ -685,10 +714,10 @@ class VesperNativePlayerBridgeTest {
 
         assertFalse(second.isCompleted)
         bindings.confirmDeferredSubtitleSelection()
-        second.await()
+        second.await().getOrThrow()
         val firstError =
             try {
-                first.await()
+                first.await().getOrThrow()
                 throw AssertionError("Expected the first selection to be superseded.")
             } catch (error: VesperPlayerUnsupportedOperation) {
                 error
@@ -872,6 +901,325 @@ class VesperNativePlayerBridgeTest {
         assertEquals(1, bindings.playCount)
         assertFalse(bridge.pendingAutoPlay)
         assertEquals(PlaybackStateUi.Playing, bridge.uiState.value.playbackState)
+    }
+
+    @Test
+    fun pauseWhileSourceIsLoadingCancelsPendingAutoplay() = runBlocking {
+        val source = VesperPlayerSource.hls("https://example.com/live.m3u8", "Live")
+        val preparationStarted = CountDownLatch(1)
+        val releasePreparation = CountDownLatch(1)
+        val bindings =
+            FakeBindings(systemPlaybackActive = false).apply {
+                onPrepareSourceNormalizerForPlayback = {
+                    preparationStarted.countDown()
+                    assertTrue(releasePreparation.await(5, TimeUnit.SECONDS))
+                }
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+
+        val sourceSelection = async(Dispatchers.Default) { bridge.selectSourceAsync(source) }
+        assertTrue(preparationStarted.await(5, TimeUnit.SECONDS))
+        assertTrue(bridge.pendingAutoPlay)
+
+        bridge.pause()
+        assertFalse(bridge.pendingAutoPlay)
+        releasePreparation.countDown()
+        sourceSelection.await()
+
+        assertEquals(0, bindings.playCount)
+        assertEquals(1, bindings.pauseCount)
+        assertEquals(PlaybackStateUi.Paused, bridge.uiState.value.playbackState)
+        bridge.dispose()
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun asyncSourceSelectionWaitsForCommandReadyTimeline() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val bindings = FakeBindings(awaitableCommands = true)
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+        val source = VesperPlayerSource.remote("https://example.com/video.mp4", "Video")
+        try {
+            val selection = async(Dispatchers.Default) { bridge.selectSourceAsync(source) }
+            assertTrue(waitUntil { bindings.sourceReadinessRequestCount == 1 })
+            assertFalse(selection.isCompleted)
+
+            val readyTimeline = testVodTimeline(positionMs = 125L)
+            bindings.completeSourceReadiness(0, readyTimeline)
+            selection.await()
+
+            assertEquals(readyTimeline, bridge.uiState.value.timeline)
+            assertFalse(bridge.uiState.value.isBuffering)
+            assertNull(bridge.uiState.value.lastError)
+        } finally {
+            bridge.dispose()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun commandReadinessClassifiesFiniteVod() {
+        val timeline =
+            ExoTimelineSample(
+                timelinePositionMs = 125L,
+                durationMs = 10_000L,
+                isLive = false,
+                isSeekable = true,
+                seekableStartMs = C.TIME_UNSET,
+                seekableEndMs = C.TIME_UNSET,
+                liveEdgeMs = C.TIME_UNSET,
+            ).commandReadyTimeline(playbackReady = true, timelineEmpty = false)
+
+        assertEquals(TimelineKind.Vod, timeline?.kind)
+        assertEquals(10_000L, timeline?.durationMs)
+        assertEquals(SeekableRangeUi(0L, 10_000L), timeline?.seekableRange)
+    }
+
+    @Test
+    fun commandReadinessClassifiesLiveDvrFromNonEmptyWindow() {
+        val timeline =
+            ExoTimelineSample(
+                timelinePositionMs = 12_000L,
+                durationMs = 30_000L,
+                isLive = true,
+                isSeekable = true,
+                seekableStartMs = 5_000L,
+                seekableEndMs = 35_000L,
+                liveEdgeMs = 35_000L,
+            ).commandReadyTimeline(playbackReady = true, timelineEmpty = false)
+
+        assertEquals(TimelineKind.LiveDvr, timeline?.kind)
+        assertTrue(timeline?.isSeekable == true)
+        assertEquals(SeekableRangeUi(5_000L, 35_000L), timeline?.seekableRange)
+    }
+
+    @Test
+    fun commandReadinessClassifiesConfirmedNonSeekableLive() {
+        val timeline =
+            ExoTimelineSample(
+                timelinePositionMs = 12_000L,
+                durationMs = C.TIME_UNSET,
+                isLive = true,
+                isSeekable = false,
+                seekableStartMs = C.TIME_UNSET,
+                seekableEndMs = C.TIME_UNSET,
+                liveEdgeMs = 12_000L,
+            ).commandReadyTimeline(playbackReady = true, timelineEmpty = false)
+
+        assertEquals(TimelineKind.Live, timeline?.kind)
+        assertFalse(timeline?.isSeekable ?: true)
+        assertNull(timeline?.seekableRange)
+    }
+
+    @Test
+    fun commandReadinessRejectsIndefiniteVodWithoutTimelineEvidence() {
+        val timeline =
+            ExoTimelineSample(
+                timelinePositionMs = 0L,
+                durationMs = C.TIME_UNSET,
+                isLive = false,
+                isSeekable = true,
+                seekableStartMs = C.TIME_UNSET,
+                seekableEndMs = C.TIME_UNSET,
+                liveEdgeMs = C.TIME_UNSET,
+            ).commandReadyTimeline(playbackReady = true, timelineEmpty = false)
+
+        assertNull(timeline)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun sourceReadinessReceivesOnlyRemainingCommandBudget() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val preparationStarted = CountDownLatch(1)
+        val releasePreparation = CountDownLatch(1)
+        val bindings =
+            FakeBindings(awaitableCommands = true).apply {
+                onPrepareSourceNormalizerForPlayback = {
+                    preparationStarted.countDown()
+                    assertTrue(releasePreparation.await(5, TimeUnit.SECONDS))
+                }
+            }
+        val bridge = VesperNativePlayerBridge(bindings = bindings, sourceCommandTimeoutMs = 2_000L)
+        val commandScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val selection =
+                commandScope.async {
+                    bridge.selectSourceAsync(
+                        VesperPlayerSource.remote("https://example.com/video.mp4", "Video"),
+                    )
+                }
+            assertTrue(preparationStarted.await(5, TimeUnit.SECONDS))
+            Thread.sleep(100L)
+            releasePreparation.countDown()
+            assertTrue(waitUntil { bindings.sourceReadinessRequestCount == 1 })
+
+            val readinessTimeoutMs = bindings.sourceReadinessTimeoutMs.single()
+            assertTrue(readinessTimeoutMs in 1L..<2_000L)
+            bindings.completeSourceReadiness(0, testVodTimeline())
+            selection.await()
+        } finally {
+            releasePreparation.countDown()
+            commandScope.cancel()
+            bridge.dispose()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun sourceSelectionTimeoutPublishesTypedCurrentError() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val bindings = FakeBindings(awaitableCommands = true)
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                sourceCommandTimeoutMs = 50L,
+            )
+        try {
+            val error =
+                runCatching {
+                    bridge.selectSourceAsync(
+                        VesperPlayerSource.remote("https://example.com/stalled.mp4", "Stalled"),
+                    )
+                }.exceptionOrNull()
+
+            assertTrue(error is VesperPlayerCommandException)
+            val commandError = error as VesperPlayerCommandException
+            assertEquals(VesperPlayerErrorCode.Timeout, commandError.errorState.code)
+            assertEquals("sourceCommandReadinessTimeout", commandError.errorState.details["reason"])
+            assertEquals(VesperPlayerErrorCode.Timeout, bridge.uiState.value.lastError?.code)
+            assertFalse(bridge.uiState.value.isBuffering)
+        } finally {
+            bridge.dispose()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun newerSourceSupersedesOldFutureWithoutOverwritingCurrentErrorState() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val bindings = FakeBindings(awaitableCommands = true)
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+        val firstSource = VesperPlayerSource.remote("https://example.com/first.mp4", "First")
+        val secondSource = VesperPlayerSource.remote("https://example.com/second.mp4", "Second")
+        val commandScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val first = commandScope.async { bridge.selectSourceAsync(firstSource) }
+            assertTrue(waitUntil { bindings.sourceReadinessRequestCount == 1 })
+
+            val second = commandScope.async { bridge.selectSourceAsync(secondSource) }
+            assertTrue(waitUntil { bindings.sourceReadinessRequestCount == 2 })
+            val firstError = runCatching { first.await() }.exceptionOrNull()
+            assertTrue(firstError is VesperPlayerCommandException)
+            assertEquals(true, (firstError as VesperPlayerCommandException).errorState.details["obsolete"])
+
+            bindings.completeSourceReadiness(1, testVodTimeline(positionMs = 250L))
+            second.await()
+
+            assertEquals("Second", bridge.uiState.value.sourceLabel)
+            assertEquals(250L, bridge.uiState.value.timeline.positionMs)
+            assertNull(bridge.uiState.value.lastError)
+        } finally {
+            commandScope.cancel()
+            bridge.dispose()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun stopSettlesPendingSourceCommandAsObsolete() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val bindings = FakeBindings(awaitableCommands = true)
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+        val commandScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val selection =
+                commandScope.async {
+                    bridge.selectSourceAsync(
+                        VesperPlayerSource.remote("https://example.com/video.mp4", "Video"),
+                    )
+                }
+            assertTrue(waitUntil { bindings.sourceReadinessRequestCount == 1 })
+
+            bridge.stop()
+            val error = runCatching { selection.await() }.exceptionOrNull()
+
+            assertTrue(error is VesperPlayerCommandException)
+            assertEquals(true, (error as VesperPlayerCommandException).errorState.details["obsolete"])
+            assertEquals("sourceCommandStopped", error.errorState.details["reason"])
+            assertNull(bridge.uiState.value.lastError)
+            assertFalse(bridge.pendingAutoPlay)
+        } finally {
+            commandScope.cancel()
+            bridge.dispose()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun asyncSeekWaitsForNativeConfirmation() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val bindings = FakeBindings(awaitableCommands = true)
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = VesperPlayerSource.remote("https://example.com/video.mp4", "Video"),
+            )
+        val commandScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            bridge.initializeAsync()
+            val seek = commandScope.async { bridge.seekToRatioAsync(0.5f) }
+            assertTrue(waitUntil { bindings.seekRequestCount == 1 })
+            assertFalse(seek.isCompleted)
+            assertEquals(0L, bridge.uiState.value.timeline.positionMs)
+
+            bindings.completeSeek(0, 5_000L)
+            seek.await()
+
+            assertEquals(5_000L, bridge.uiState.value.timeline.positionMs)
+            assertNull(bridge.uiState.value.lastError)
+        } finally {
+            commandScope.cancel()
+            bridge.dispose()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun consecutiveAsyncSeeksSupersedeOnlyTheFirstFuture() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val bindings = FakeBindings(awaitableCommands = true)
+        val bridge =
+            VesperNativePlayerBridge(
+                bindings = bindings,
+                initialSource = VesperPlayerSource.remote("https://example.com/video.mp4", "Video"),
+            )
+        val commandScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            bridge.initializeAsync()
+            val first = commandScope.async { bridge.seekToRatioAsync(0.25f) }
+            assertTrue(waitUntil { bindings.seekRequestCount == 1 })
+            val second = commandScope.async { bridge.seekToRatioAsync(0.75f) }
+            assertTrue(waitUntil { bindings.seekRequestCount == 2 })
+
+            val firstError = runCatching { first.await() }.exceptionOrNull()
+            assertTrue(firstError is VesperPlayerCommandException)
+            assertEquals(true, (firstError as VesperPlayerCommandException).errorState.details["obsolete"])
+            bindings.completeSeek(1, 7_500L)
+            second.await()
+
+            assertEquals(7_500L, bridge.uiState.value.timeline.positionMs)
+            assertNull(bridge.uiState.value.lastError)
+        } finally {
+            commandScope.cancel()
+            bridge.dispose()
+            Dispatchers.resetMain()
+        }
     }
 
     @Test
@@ -5522,9 +5870,12 @@ private class FakeBindings(
     var nativeFramePipelineSeekError: Throwable? = null,
     var nativeFramePipelineAdvanceStatus: Map<String, Any?>? = null,
     var nativeFramePipelineAdvanceStatuses: MutableList<Map<String, Any?>> = mutableListOf(),
+    private val awaitableCommands: Boolean = false,
 ) : VesperNativeBindings {
     override val isSystemPlaybackActive: Boolean
         get() = systemPlaybackActive
+    override val supportsAwaitableCommands: Boolean
+        get() = awaitableCommands
 
     var onInitialize: (() -> Unit)? = null
     var onAdvanceNativeFramePipeline: (() -> Unit)? = null
@@ -5564,6 +5915,13 @@ private class FakeBindings(
     val releasedNativeFramePipelineFrames = mutableListOf<Pair<Long, Boolean>>()
     val seekNativeFramePipelinePositions = mutableListOf<Long>()
     val seekToPositions = mutableListOf<Long>()
+    private val sourceReadinessRequests = mutableListOf<PendingTestSourceReadiness>()
+    val sourceReadinessTimeoutMs = mutableListOf<Long>()
+    private val seekRequests = mutableListOf<PendingTestSeek>()
+    val sourceReadinessRequestCount: Int
+        get() = synchronized(sourceReadinessRequests) { sourceReadinessRequests.size }
+    val seekRequestCount: Int
+        get() = synchronized(seekRequests) { seekRequests.size }
     val playbackRates = mutableListOf<Float>()
     var lastProbeSource: VesperPlayerSource? = null
     var lastSourceNormalizerConfiguration: VesperSourceNormalizerConfiguration? = null
@@ -5776,6 +6134,8 @@ private class FakeBindings(
     override fun invalidateSystemPlaybackCallbacks() {
         invalidateSystemPlaybackCallbacksCount += 1
         sourceCallbackGenerationValue += 1L
+        cancelPendingSourceCommand("sourceCommandSuperseded")
+        cancelPendingSeekCommand("seekSourceChanged")
         events.clear()
     }
 
@@ -5833,6 +6193,68 @@ private class FakeBindings(
     override fun detachSurface() = Unit
 
     override fun pollSnapshot(): NativeBridgeSnapshot? = snapshot
+
+    override suspend fun awaitSourceCommandReadiness(
+        commandId: Long,
+        sourceEpoch: Long,
+        timeoutMs: Long,
+    ): TimelineUiState {
+        synchronized(sourceReadinessTimeoutMs) { sourceReadinessTimeoutMs += timeoutMs }
+        val pending = PendingTestSourceReadiness(commandId, sourceEpoch)
+        synchronized(sourceReadinessRequests) { sourceReadinessRequests += pending }
+        return pending.completion.await()
+    }
+
+    override suspend fun seekToAndAwait(
+        positionMs: Long,
+        commandId: Long,
+        sourceEpoch: Long,
+        timeoutMs: Long,
+    ): Long {
+        val pending = PendingTestSeek(commandId, sourceEpoch, positionMs)
+        synchronized(seekRequests) { seekRequests += pending }
+        return pending.completion.await()
+    }
+
+    override fun cancelPendingSourceCommand(reason: String) {
+        val pending = synchronized(sourceReadinessRequests) {
+            sourceReadinessRequests.lastOrNull { it.completion.isActive }
+        } ?: return
+        pending.completion.completeExceptionally(
+            obsoleteCommandFailure(
+                message = "test source command was cancelled",
+                category = VesperPlayerErrorCategory.Source,
+                reason = reason,
+                commandId = pending.commandId,
+                sourceEpoch = pending.sourceEpoch,
+            )
+        )
+    }
+
+    override fun cancelPendingSeekCommand(reason: String) {
+        val pending = synchronized(seekRequests) {
+            seekRequests.lastOrNull { it.completion.isActive }
+        } ?: return
+        pending.completion.completeExceptionally(
+            obsoleteCommandFailure(
+                message = "test seek command was cancelled",
+                category = VesperPlayerErrorCategory.Playback,
+                reason = reason,
+                commandId = pending.commandId,
+                sourceEpoch = pending.sourceEpoch,
+            )
+        )
+    }
+
+    fun completeSourceReadiness(index: Int, timeline: TimelineUiState) {
+        val pending = synchronized(sourceReadinessRequests) { sourceReadinessRequests[index] }
+        pending.completion.complete(timeline)
+    }
+
+    fun completeSeek(index: Int, positionMs: Long) {
+        val pending = synchronized(seekRequests) { seekRequests[index] }
+        pending.completion.complete(positionMs)
+    }
 
     override fun drainEvents(): List<NativeBridgeEvent> = events.toList().also { events.clear() }
 
@@ -5975,6 +6397,30 @@ private fun nativeFramePipelineStatus(
                 ?: "test status",
         ) + overrides.toMap()
 }
+
+private data class PendingTestSourceReadiness(
+    val commandId: Long,
+    val sourceEpoch: Long,
+    val completion: CompletableDeferred<TimelineUiState> = CompletableDeferred(),
+)
+
+private data class PendingTestSeek(
+    val commandId: Long,
+    val sourceEpoch: Long,
+    val targetMs: Long,
+    val completion: CompletableDeferred<Long> = CompletableDeferred(),
+)
+
+private fun <T> CoroutineScope.asyncCatching(block: suspend CoroutineScope.() -> T) =
+    async {
+        try {
+            Result.success(block())
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            Result.failure(error)
+        }
+    }
 
 private fun waitUntil(timeoutMs: Long = 5_000L, predicate: () -> Boolean): Boolean {
     val deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)

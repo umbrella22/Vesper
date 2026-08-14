@@ -206,7 +206,7 @@ class MainActivity : FlutterFragmentActivity() {
         "displayModes" to display.supportedModes.map { mode ->
           "${mode.physicalWidth}x${mode.physicalHeight}@${"%.2f".format(mode.refreshRate)}"
         },
-        "media3Version" to "1.9.3",
+        "media3Version" to "1.11.0",
         "decoderCandidates" to mapOf(
           "hevc" to decoderCandidates("video/hevc"),
           "dolbyVision" to decoderCandidates("video/dolby-vision"),

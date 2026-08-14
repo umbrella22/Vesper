@@ -103,8 +103,8 @@ android {
         applicationId = "io.github.umbrella22.vesper.example.androidcomposehost"
         minSdk = 26
         targetSdk = 36
-        versionCode = 400
-        versionName = "0.4.0"
+        versionCode = 401
+        versionName = "0.4.1"
 
         ndk {
             abiFilters += configuredAndroidAbis
@@ -148,14 +148,14 @@ android {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.02.01")
+    val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
 
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.activity:activity-compose:1.13.0")
-    implementation("androidx.fragment:fragment:1.7.1")
+    implementation("androidx.fragment:fragment:1.9.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -318,6 +318,16 @@ ffmpegRuntimeProject.plugins.withId("com.android.library") {
         (task.name.startsWith("merge") &&
             (task.name.endsWith("Assets") || task.name.endsWith("JniLibFolders"))) ||
             (task.name.startsWith("generate") && task.name.contains("Lint") && task.name.endsWith("Model"))
+    }.configureEach {
+        dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
+        dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)
+    }
+}
+
+val relayFfmpegProject = rootProject.project(":vesper-player-kit-external-playback")
+relayFfmpegProject.plugins.withId("com.android.library") {
+    relayFfmpegProject.tasks.matching { task ->
+        task.name == "buildRelayFfmpegAndroidJni"
     }.configureEach {
         dependsOn(buildPlayerRemuxFfmpegAndroidPlugin)
         dependsOn(buildPlayerSourceNormalizerFfmpegAndroidPlugin)

@@ -23,7 +23,7 @@ class VesperSurfaceLayoutInstrumentationTest {
     fun videoAspectFitSurvivesSurfaceHostRecreation() {
         val appContext = ApplicationProvider.getApplicationContext<android.content.Context>()
         val mediaFile = File(appContext.cacheDir, "vesper-surface-layout.m4v")
-        appContext.assets.open("tiny-h264-aac.m4v").use { input ->
+        appContext.assets.open("tiny-h264-aac-mediacodec.m4v").use { input ->
             mediaFile.outputStream().use(input::copyTo)
         }
         val source = VesperPlayerSource.local(Uri.fromFile(mediaFile).toString(), "surface layout")
@@ -33,7 +33,7 @@ class VesperSurfaceLayoutInstrumentationTest {
         ActivityScenario.launch(VesperSurfaceLayoutTestActivity::class.java).use { scenario ->
             try {
                 scenario.onActivity { activity ->
-                    host = activity.replaceSurfaceHost()
+                    host = activity.replaceSurfaceHost(width = 400, height = 400)
                     controller =
                         VesperPlayerControllerFactory.createDefault(
                             context = activity.applicationContext,
@@ -52,7 +52,7 @@ class VesperSurfaceLayoutInstrumentationTest {
                 scenario.onActivity { activity ->
                     val previousHost = requireNotNull(host)
                     requireNotNull(controller).detachSurfaceHost(previousHost)
-                    host = activity.replaceSurfaceHost()
+                    host = activity.replaceSurfaceHost(width = 400, height = 400)
                     requireNotNull(controller).attachSurfaceHost(requireNotNull(host))
                 }
 
@@ -84,19 +84,19 @@ class VesperSurfaceLayoutInstrumentationTest {
                     (surfaceView?.layoutParams?.width ?: 0) to
                         (surfaceView?.layoutParams?.height ?: 0)
             }
-            observedHostSize == (400 to 300) && observedSurfaceSize == (400 to 225)
+            observedHostSize == (400 to 400) && observedSurfaceSize == (400 to 300)
         }
 
         assertTrue(
-            "expected 16:9 SurfaceView 400x225 inside 400x300 host; " +
+            "expected 4:3 SurfaceView 400x300 inside 400x400 host; " +
                 "host=${observedHostSize.first}x${observedHostSize.second}, " +
                 "surface=${observedSurfaceSize.first}x${observedSurfaceSize.second}, " +
                 "layoutParams=${observedLayoutParamsSize.first}x${observedLayoutParamsSize.second}",
             fitted,
         )
-        assertEquals(400 to 300, observedHostSize)
-        assertEquals(400 to 225, observedSurfaceSize)
-        assertEquals(400 to 225, observedLayoutParamsSize)
+        assertEquals(400 to 400, observedHostSize)
+        assertEquals(400 to 300, observedSurfaceSize)
+        assertEquals(400 to 300, observedLayoutParamsSize)
     }
 
     private fun awaitCondition(
@@ -121,12 +121,15 @@ class VesperSurfaceLayoutTestActivity : Activity() {
         setContentView(root)
     }
 
-    fun replaceSurfaceHost(): FrameLayout =
+    fun replaceSurfaceHost(
+        width: Int = 400,
+        height: Int = 300,
+    ): FrameLayout =
         FrameLayout(this).also { host ->
             root.removeAllViews()
             root.addView(
                 host,
-                FrameLayout.LayoutParams(400, 300, Gravity.CENTER),
+                FrameLayout.LayoutParams(width, height, Gravity.CENTER),
             )
         }
 }

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - Unreleased
+## 0.4.1 - 2026-08-14
 
 ### Added
 
@@ -33,6 +33,15 @@
 - Bundled SourceNormalizer discovery now resolves the signed sibling framework
   embedded by the Flutter App target through the canonical optional-plugin
   SwiftPM package.
+
+### Fixed
+
+- Source selection starts synchronously on the main actor, waits for the same
+  host-kit source task, and preserves a following pause command's intent even
+  when the replacement source remains at timeline position zero.
+- Seek MethodChannel calls now wait for AVPlayer completion. Structured native
+  command errors preserve their message and details, normalize obsolete flags
+  for Dart, and do not publish stale command failures as current player errors.
 
 ## 0.3.0 - 2026-05-18
 

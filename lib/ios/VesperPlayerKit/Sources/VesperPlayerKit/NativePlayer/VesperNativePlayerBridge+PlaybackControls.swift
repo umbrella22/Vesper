@@ -175,6 +175,8 @@ extension VesperNativePlayerBridge {
         clearLastError()
         recordBenchmark("pause_command")
         pendingAutoPlay = false
+        pendingPlaybackStart = false
+        pendingPlayAfterStopSeek = false
         if let nativeSession = nativeFramePipelineCoordinator.activeSession,
            nativeSession.didStart {
             iosHostLog("pause native-frame")
@@ -195,6 +197,18 @@ extension VesperNativePlayerBridge {
         }
         iosHostLog("pause")
         player?.pause()
+        updateState {
+            PlayerHostUiState(
+                title: $0.title,
+                subtitle: $0.subtitle,
+                sourceLabel: $0.sourceLabel,
+                playbackState: .paused,
+                playbackRate: $0.playbackRate,
+                isBuffering: false,
+                isInterrupted: $0.isInterrupted,
+                timeline: $0.timeline
+            )
+        }
         refreshPlaybackState()
     }
 
@@ -210,6 +224,7 @@ extension VesperNativePlayerBridge {
     func stop() {
         clearLastError()
         recordBenchmark("stop_command")
+        cancelPendingSeekCommand(reason: "seekCommandStopped")
         pendingAutoPlay = false
         if let nativeSession = nativeFramePipelineCoordinator.activeSession,
            nativeSession.didStart {
@@ -277,6 +292,8 @@ extension VesperNativePlayerBridge {
 
     func seek(by deltaMs: Int64) {
         clearLastError()
+        cancelPendingSeekCommand(reason: "seekCommandSuperseded")
+        seekCommandGeneration &+= 1
         if let nativeSession = nativeFramePipelineCoordinator.activeSession,
            nativeSession.didStart {
             let timeline = publishedUiState.timeline
@@ -298,8 +315,26 @@ extension VesperNativePlayerBridge {
         seekToPosition(target)
     }
 
+    func seekAsync(by deltaMs: Int64) async throws {
+        let timeline = publishedUiState.timeline
+        try await executeSeekCommand(
+            to: timeline.clampedPosition(timeline.positionMs + deltaMs)
+        )
+    }
+
     func seek(toRatio ratio: Double) {
         clearLastError()
+        cancelPendingSeekCommand(reason: "seekCommandSuperseded")
+        seekCommandGeneration &+= 1
+        guard ratio.isFinite else {
+            reportCommandError(
+                code: .invalidArgument,
+                category: .input,
+                message: "seek ratio must be finite",
+                details: ["reason": "seekRatioNotFinite"]
+            )
+            return
+        }
         if let nativeSession = nativeFramePipelineCoordinator.activeSession,
            nativeSession.didStart {
             let timeline = publishedUiState.timeline
@@ -321,8 +356,31 @@ extension VesperNativePlayerBridge {
         seekToPosition(target)
     }
 
+    func seekAsync(toRatio ratio: Double) async throws {
+        guard ratio.isFinite else {
+            cancelPendingSeekCommand(reason: "seekCommandSuperseded")
+            seekCommandGeneration &+= 1
+            let error = vesperCommandError(
+                message: "seek ratio must be finite",
+                code: .invalidArgument,
+                category: .input,
+                retriable: false,
+                reason: "seekRatioNotFinite",
+                commandId: seekCommandGeneration,
+                sourceEpoch: sourceCommandGeneration
+            )
+            publishedLastError = error
+            throw error
+        }
+        try await executeSeekCommand(
+            to: publishedUiState.timeline.position(forRatio: ratio)
+        )
+    }
+
     func seekToLiveEdge() {
         clearLastError()
+        cancelPendingSeekCommand(reason: "seekCommandSuperseded")
+        seekCommandGeneration &+= 1
         if let nativeSession = nativeFramePipelineCoordinator.activeSession,
            nativeSession.didStart {
             reportCommandError(
@@ -342,6 +400,23 @@ extension VesperNativePlayerBridge {
         }
         iosHostLog("seekToLiveEdge targetMs=\(target)")
         seekToPosition(target)
+    }
+
+    func seekToLiveEdgeAsync() async throws {
+        guard let target = publishedUiState.timeline.goLivePositionMs else {
+            cancelPendingSeekCommand(reason: "seekCommandSuperseded")
+            seekCommandGeneration &+= 1
+            let error = seekCommandError(
+                message: "The current iOS timeline has no live edge.",
+                code: .invalidState,
+                reason: "seekLiveEdgeUnavailable",
+                commandId: seekCommandGeneration,
+                sourceEpoch: sourceCommandGeneration
+            )
+            publishedLastError = error
+            throw error
+        }
+        try await executeSeekCommand(to: target)
     }
 
     func setPlaybackRate(_ rate: Float) {

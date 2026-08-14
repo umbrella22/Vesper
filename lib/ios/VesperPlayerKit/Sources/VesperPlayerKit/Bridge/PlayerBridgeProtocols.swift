@@ -21,7 +21,7 @@ protocol PlayerBridge: AnyObject {
     var routePickerPlayer: AVPlayer? { get }
 
     func initialize()
-    func initializeAsync() async
+    func initializeAsync() async throws
     func dispose()
     func refresh()
     /// Returns a timeline projection without reconciling the complete player state.
@@ -34,7 +34,8 @@ protocol PlayerBridge: AnyObject {
     /// serializing a complete snapshot for every native progress tick.
     func consumeTimelineOnlyUpdate() -> Bool
     func selectSource(_ source: VesperPlayerSource)
-    func selectSourceAsync(_ source: VesperPlayerSource) async
+    func startSourceSelection(_ source: VesperPlayerSource) -> Task<Void, Error>
+    func selectSourceAsync(_ source: VesperPlayerSource) async throws
 
     func attachSurfaceHost(_ host: UIView)
     func detachSurfaceHost()
@@ -45,8 +46,11 @@ protocol PlayerBridge: AnyObject {
     func togglePause()
     func stop()
     func seek(by deltaMs: Int64)
+    func seekAsync(by deltaMs: Int64) async throws
     func seek(toRatio ratio: Double)
+    func seekAsync(toRatio ratio: Double) async throws
     func seekToLiveEdge()
+    func seekToLiveEdgeAsync() async throws
     func setPlaybackRate(_ rate: Float)
     func setVideoTrackSelection(_ selection: VesperTrackSelection)
     func setAudioTrackSelection(_ selection: VesperTrackSelection)
@@ -108,12 +112,30 @@ extension PlayerBridge {
         nil
     }
 
-    func initializeAsync() async {
+    func initializeAsync() async throws {
         initialize()
     }
 
-    func selectSourceAsync(_ source: VesperPlayerSource) async {
+    func selectSourceAsync(_ source: VesperPlayerSource) async throws {
         selectSource(source)
+    }
+
+    func startSourceSelection(_ source: VesperPlayerSource) -> Task<Void, Error> {
+        Task { @MainActor in
+            try await selectSourceAsync(source)
+        }
+    }
+
+    func seekAsync(by deltaMs: Int64) async throws {
+        seek(by: deltaMs)
+    }
+
+    func seekAsync(toRatio ratio: Double) async throws {
+        seek(toRatio: ratio)
+    }
+
+    func seekToLiveEdgeAsync() async throws {
+        seekToLiveEdge()
     }
 
     func detachSurfaceHost(_ host: UIView) {

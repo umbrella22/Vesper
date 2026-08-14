@@ -103,7 +103,9 @@ func derivePlaybackState(
         return .finished
     }
 
-    if positionMs > 0 {
+    // Paused is an explicit playback intent. A zero timeline position must not
+    // collapse that intent back to ready during periodic AVPlayer refreshes.
+    if currentState == .paused || positionMs > 0 {
         return .paused
     }
 
