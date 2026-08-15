@@ -742,10 +742,75 @@ jobs:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
           MAVEN_NAMESPACE: ${{ vars.MAVEN_NAMESPACE }}
         run: |
+          set -euo pipefail
           namespace="${MAVEN_NAMESPACE:-io.github.umbrella22}"
+          publish_log="$(mktemp)"
+          trap 'rm -f "$publish_log"' EXIT
+
+          set +e
           ./scripts/vesper android publish-maven-central \
             "${RELEASE_TAG}" \
-            --namespace "$namespace"
+            --namespace "$namespace" 2>&1 | tee "$publish_log"
+          publish_status="${PIPESTATUS[0]}"
+          set -e
+          if (( publish_status == 0 )); then
+            exit 0
+          fi
+
+          # v0.4.1 is immutable and carries the pre-fix publisher. Accept only
+          # its known Portal PURL alias mismatch, then prove the signed public
+          # coordinates are available before treating the retry as successful.
+          if [[ "$RELEASE_TAG" != "v0.4.1" ]] || \
+             ! grep -Fqx -- \
+               'Central deployment components do not match the expected coordinates' \
+               "$publish_log"; then
+            exit "$publish_status"
+          fi
+
+          expected_components="$(mktemp)"
+          reported_components="$(mktemp)"
+          canonical_components="$(mktemp)"
+          trap 'rm -f "$publish_log" "$expected_components" "$reported_components" "$canonical_components"' EXIT
+          version="${RELEASE_TAG#v}"
+          artifacts=(
+            vesper-player-kit
+            vesper-player-kit-compose
+            vesper-player-kit-compose-ui
+          )
+          for artifact in "${artifacts[@]}"; do
+            printf 'pkg:maven/io.github.umbrella22.vesper/%s@%s\n' \
+              "$artifact" "$version"
+          done | LC_ALL=C sort -u > "$expected_components"
+          sed -n 's/^  actual: //p' "$publish_log" \
+            | tr ',' '\n' \
+            | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+            | grep -Fvxe '' \
+            > "$reported_components"
+          sed 's/[?]type=aar$//' "$reported_components" \
+            | LC_ALL=C sort -u \
+            > "$canonical_components"
+          if ! diff -u "$expected_components" "$canonical_components"; then
+            exit "$publish_status"
+          fi
+
+          repository="https://repo.maven.apache.org/maven2/io/github/umbrella22/vesper"
+          for artifact in "${artifacts[@]}"; do
+            base_url="${repository}/${artifact}/${version}/${artifact}-${version}"
+            for suffix in pom pom.asc aar aar.asc; do
+              curl \
+                --fail \
+                --silent \
+                --show-error \
+                --location \
+                --retry 12 \
+                --retry-delay 10 \
+                --retry-all-errors \
+                --max-time 240 \
+                --output /dev/null \
+                "${base_url}.${suffix}"
+            done
+          done
+          echo "Verified published Maven Central coordinates for ${RELEASE_TAG}."
 
   publish-swift-package:
     name: Publish VesperPlayerKit Swift Package

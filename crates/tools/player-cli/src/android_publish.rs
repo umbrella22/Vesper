@@ -1066,23 +1066,28 @@ fn validate_component_purls<'a>(
     group_id: &str,
     version: &str,
 ) -> Result<(), AndroidError> {
-    let actual = actual.collect::<BTreeSet<_>>();
+    let reported = actual.map(str::to_owned).collect::<BTreeSet<_>>();
+    let actual = reported
+        .iter()
+        .map(|purl| canonical_central_aar_component_purl(purl).to_owned())
+        .collect::<BTreeSet<_>>();
     let expected = ARTIFACTS
         .iter()
         .map(|artifact| format!("pkg:maven/{group_id}/{artifact}@{version}"))
-        .collect::<BTreeSet<_>>();
-    let actual = actual
-        .into_iter()
-        .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     if actual != expected {
         return Err(AndroidError::conformance(format!(
             "Central deployment components do not match the expected coordinates\n  expected: {}\n  actual: {}",
             expected.into_iter().collect::<Vec<_>>().join(", "),
-            actual.into_iter().collect::<Vec<_>>().join(", ")
+            reported.into_iter().collect::<Vec<_>>().join(", ")
         )));
     }
     Ok(())
+}
+
+fn canonical_central_aar_component_purl(purl: &str) -> &str {
+    // Central reports an AAR both as its Maven coordinate and as a packaging-qualified PURL.
+    purl.strip_suffix("?type=aar").unwrap_or(purl)
 }
 
 fn central_request(
@@ -1275,6 +1280,42 @@ mod tests {
                 extra.iter().copied(),
                 "io.github.umbrella22.vesper",
                 "0.4.0"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn component_purls_accept_central_aar_packaging_aliases_only() {
+        let coordinates = [
+            "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit@0.4.0",
+            "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-compose@0.4.0",
+            "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-compose-ui@0.4.0",
+        ];
+        let packaging_qualified = coordinates
+            .iter()
+            .map(|coordinate| format!("{coordinate}?type=aar"))
+            .collect::<Vec<_>>();
+        assert!(
+            validate_component_purls(
+                coordinates
+                    .iter()
+                    .copied()
+                    .chain(packaging_qualified.iter().map(String::as_str)),
+                "io.github.umbrella22.vesper",
+                "0.4.0",
+            )
+            .is_ok()
+        );
+
+        let mut unsupported_qualifier = coordinates.to_vec();
+        unsupported_qualifier[0] =
+            "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit@0.4.0?type=jar";
+        assert!(
+            validate_component_purls(
+                unsupported_qualifier.iter().copied(),
+                "io.github.umbrella22.vesper",
+                "0.4.0",
             )
             .is_err()
         );
