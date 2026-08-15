@@ -697,8 +697,10 @@ jobs:
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
 
-      - name: Add Android Rust target
-        run: rustup target add aarch64-linux-android
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
 
       - name: Set up Java
         uses: actions/setup-java@v4
