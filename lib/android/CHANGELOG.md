@@ -32,7 +32,8 @@
 
 ### Changed
 
-- Android host modules now build with Kotlin 2.4.10, Media3 1.11.0,
+- Android host modules now build with Kotlin 2.2.10, matching the compiler
+  embedded in Android Gradle Plugin 9.1, plus Media3 1.11.0,
   kotlinx.coroutines 1.11.0, AndroidX AppCompat 1.8.0, Lifecycle 2.10.0,
   Compose BOM 2026.06.01, and OkHttp 5.4.0.
 - HTTP `.flv` URLs infer progressive playback; use `VesperPlayerSource.flvLive`

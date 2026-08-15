@@ -127,7 +127,7 @@ Android versions, without a separate product-direction change.
 - Android Gradle Plugin `9.1.0`
 - Gradle runtime JDK `21`
 - Java / Kotlin bytecode target `17`
-- Kotlin `2.4.10`
+- Kotlin `2.2.10`
 - Android SDK `36` with Build Tools `36.0.0`
 - Android NDK `29.0.14206865`
 

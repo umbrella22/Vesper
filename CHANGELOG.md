@@ -73,7 +73,9 @@ runtime artifact.
 
 ### Changed
 
-- Updated the Android and Flutter host toolchain to Kotlin 2.4.10, Media3 1.11.0,
+- Updated the published Android host-kit baseline to AGP 9.1-compatible Kotlin
+  2.2.10 while the native Compose and Flutter consumer hosts use Kotlin
+  2.4.10, plus Media3 1.11.0,
   kotlinx.coroutines 1.11.0, AndroidX Activity 1.13.0, AppCompat 1.8.0,
   Fragment 1.9.0, Lifecycle 2.10.0, Compose BOM 2026.06.01, OkHttp 5.4.0,
   and `material_ui` 1.0.0.
@@ -110,6 +112,9 @@ runtime artifact.
 
 ### Fixed
 
+- iOS native-frame initialization now reports its pending surface state before
+  asynchronous plugin diagnostics, preventing surface attachment from racing
+  command readiness.
 - Android instrumentation JNI staging now stays inside the host-kit module when
   Flutter redirects Gradle build directories, preserving the Rust CLI output
   boundary. The Android examples also serialize FFmpeg relay generation after

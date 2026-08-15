@@ -171,6 +171,12 @@ extension VesperNativePlayerBridge {
         activeSourceCommand = command
         pendingSourceCommandFailure = nil
         retryAttemptCount = 0
+        switch nativeFramePipelineConfiguration.mode {
+        case .preferNativeFrame, .requireNativeFrame:
+            pendingNativeFrameSurfaceLoad = surfaceHost == nil
+        case .disabled, .diagnosticsOnly:
+            pendingNativeFrameSurfaceLoad = false
+        }
         let task = Task { @MainActor [weak self, weak command] in
             guard let self, let command else {
                 throw CancellationError()

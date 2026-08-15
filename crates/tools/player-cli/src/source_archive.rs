@@ -7,6 +7,7 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
 use std::io::{self, Read};
+use std::marker::PhantomData;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -94,7 +95,7 @@ pub(crate) fn ensure_cached_archive(
         policy,
         label,
         curl.as_os_str(),
-        ArchiveDownloadMode::Standalone,
+        ArchiveDownloadMode::Standalone(PhantomData),
     )
 }
 
@@ -120,7 +121,7 @@ pub(crate) fn ensure_cached_archive_in_deferral(
 }
 
 enum ArchiveDownloadMode<'a> {
-    Standalone,
+    Standalone(PhantomData<&'a ()>),
     #[cfg(unix)]
     InDeferral(&'a external_process::InterruptDeferral),
 }
@@ -208,7 +209,7 @@ fn ensure_cached_archive_with_mode(
             .arg(url);
         let process_label = format!("{label} download");
         let captured = match mode {
-            ArchiveDownloadMode::Standalone => {
+            ArchiveDownloadMode::Standalone(_) => {
                 external_process::run_interruptible_capture_with_timeout(
                     &mut command,
                     &process_label,

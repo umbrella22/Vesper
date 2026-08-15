@@ -270,7 +270,7 @@ jobs:
           fi
 
       - name: Install cbindgen
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
         run: cargo install cbindgen --locked
 
       - name: Verify generated FFI header

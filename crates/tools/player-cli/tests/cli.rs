@@ -2818,6 +2818,7 @@ fn ios_optional_release_dry_run_ignores_ambient_source_and_runtime_skip_override
     let output = directory.path().join("release output");
 
     let result = Command::new(env!("CARGO_BIN_EXE_vesper"))
+        .env_remove("CI")
         .args(["ios", "--root"])
         .arg(&root)
         .arg("stage-optional-plugins-release")
@@ -7792,6 +7793,7 @@ fn ios_optional_release_routes_to_rust_without_a_shell_worker() {
 
     let result = Command::new(&wrapper)
         .env("VESPER_CLI", env!("CARGO_BIN_EXE_vesper"))
+        .env_remove("CI")
         .args(["ios", "stage-optional-plugins-release", "--root"])
         .arg(&root)
         .arg(&output)
@@ -11679,7 +11681,7 @@ fn release_version_validation_uses_stable_exit_codes() {
     assert!(verified.stderr.is_empty());
     assert_eq!(
         String::from_utf8(verified.stdout).expect("UTF-8 verification output"),
-        "Verified Vesper product version 0.4.0.\n"
+        "Verified Vesper product version 0.4.1.\n"
     );
 }
 
@@ -13360,6 +13362,7 @@ fn android_aar_optional_build_failure_preserves_all_previous_outputs() {
     let tools = root.join("optional Android failure tools");
     let path = prepare_android_optional_toolchain(&root, &tools);
     let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
+        .env_remove("CI")
         .env("PATH", path)
         .env(
             "ANDROID_TEST_TARGET_LIBDIR",
@@ -14071,6 +14074,7 @@ printf 'fixture host\n' > "$VESPER_ANDROID_HOST_JNI_LIBS/arm64-v8a/libvesper_pla
     write_test_zip(&compose, &[("classes.jar", b"compose classes")]);
 
     let success = Command::new(env!("CARGO_BIN_EXE_vesper"))
+        .env_remove("CI")
         .args(["mobile", "verify-no-remux", "android", "--root"])
         .arg(root)
         .output()
@@ -14102,6 +14106,7 @@ printf 'fixture host\n' > "$VESPER_ANDROID_HOST_JNI_LIBS/arm64-v8a/libvesper_pla
         &[("jni/arm64-v8a/libavcodec.so.61", b"unexpected")],
     );
     let payload = Command::new(env!("CARGO_BIN_EXE_vesper"))
+        .env_remove("CI")
         .args(["mobile", "verify-no-remux", "android", "--root"])
         .arg(root)
         .output()
@@ -14111,6 +14116,7 @@ printf 'fixture host\n' > "$VESPER_ANDROID_HOST_JNI_LIBS/arm64-v8a/libvesper_pla
 
     write_test_zip(&compose, &[("../libavcodec.so", b"unsafe path")]);
     let traversal = Command::new(env!("CARGO_BIN_EXE_vesper"))
+        .env_remove("CI")
         .args(["mobile", "verify-no-remux", "android", "--root"])
         .arg(root)
         .output()
@@ -14144,6 +14150,7 @@ while :; do sleep 1; done
     let build_pid_path = root.join("build.pid");
     let descendant_pid_path = root.join("descendant.pid");
     let mut process = Command::new(env!("CARGO_BIN_EXE_vesper"))
+        .env_remove("CI")
         .env("MOBILE_BUILD_PID_FILE", &build_pid_path)
         .env("MOBILE_BUILD_DESCENDANT_PID_FILE", &descendant_pid_path)
         .args(["mobile", "verify-no-remux", "android", "--root"])

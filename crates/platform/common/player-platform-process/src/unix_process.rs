@@ -111,10 +111,12 @@ mod tests {
         let output_reader = std::thread::spawn(move || {
             let master = File::from(master);
             let mut output = Vec::new();
-            master
-                .take(64 * 1024)
-                .read_to_end(&mut output)
-                .expect("read PTY controller output");
+            let result = master.take(64 * 1024).read_to_end(&mut output);
+            if let Err(error) = result
+                && error.raw_os_error() != Some(libc::EIO)
+            {
+                panic!("read PTY controller output: {error}");
+            }
             output
         });
         let status = wait_for_pty_controller(controller, Duration::from_secs(5));

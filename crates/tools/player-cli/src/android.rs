@@ -5765,7 +5765,11 @@ mod tests {
             stages.push(stage);
         }
         let replaced_target = canonical_parent.join("output-2");
-        fs::remove_dir_all(&replaced_target).expect("remove second Android transaction output");
+        fs::rename(
+            &replaced_target,
+            canonical_parent.join("displaced-output-2"),
+        )
+        .expect("displace second Android transaction output");
         fs::create_dir(&replaced_target).expect("replace second Android transaction output");
         fs::write(replaced_target.join("concurrent.txt"), b"concurrent")
             .expect("write concurrent Android transaction output");

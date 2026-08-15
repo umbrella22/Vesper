@@ -68,6 +68,9 @@
   frame before starting.
 - Explicit automatic subtitle selection can use a default track even when the
   startup policy leaves subtitles disabled by default.
+- Native-frame initialization now reports its pending surface state before
+  asynchronous plugin diagnostics, so attaching the surface cannot race the
+  command readiness contract.
 
 ## 0.3.0 - 2026-05-18
 

@@ -162,7 +162,8 @@ The project is pinned to:
 - Gradle Wrapper `9.6.0`
 - Gradle runtime JDK `21`
 - Java / Kotlin bytecode target `17`
-- Kotlin `2.4.10`
+- Kotlin `2.4.10` (consumer host; published Android AARs use the AGP-aligned
+  Kotlin `2.2.10` metadata baseline)
 - Compose BOM `2026.06.01`
 - Android SDK `36` with Build Tools `36.0.0`
 - Android NDK `29.0.14206865`

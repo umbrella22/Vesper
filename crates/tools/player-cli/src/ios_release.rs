@@ -479,11 +479,11 @@ pub(crate) fn stage_optional_plugins_release(
     arguments: Vec<OsString>,
     output: &mut dyn Write,
 ) -> Result<(), IosError> {
-    require_macos_stage_host()?;
     let request = parse_optional_release_arguments(root, arguments)?;
     if request.dry_run {
         return write_optional_release_dry_run(&request, output);
     }
+    require_macos_stage_host()?;
 
     let _lock = ReleaseLock::acquire(root)?;
     let state_directory = PreparedDirectory::prepare(
