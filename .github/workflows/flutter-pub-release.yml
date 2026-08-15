@@ -4,12 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      tag_name:
-        description: Stable tag to publish, for example v0.3.0
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -20,14 +14,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+  RELEASE_TAG: ${{ github.ref_name }}
 
 jobs:
   publish-flutter-packages:
     name: Publish Flutter packages to pub.dev
     runs-on: ubuntu-latest
     environment: pub.dev
-    if: github.event_name == 'workflow_dispatch' || (startsWith(github.ref_name, 'v') && !contains(github.ref_name, '-'))
+    if: startsWith(github.ref_name, 'v') && !contains(github.ref_name, '-')
 
     steps:
       - name: Checkout
@@ -38,13 +32,6 @@ jobs:
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.47.0"
-          channel: stable
-          cache: true
 
       - name: Resolve package version
         id: version
@@ -67,9 +54,18 @@ jobs:
           ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
           cargo build --locked --release -p player-cli --bin vesper
 
+      - name: Set up Dart pub authentication
+        uses: dart-lang/setup-dart@v1
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.0"
+          channel: stable
+          cache: true
+
       - name: Publish Flutter packages
         run: >-
           ./scripts/vesper flutter pub-publish
           /tmp/vesper-flutter-pub-release
           "${VESPER_RELEASE_VERSION}"
-          --include-optional-plugins

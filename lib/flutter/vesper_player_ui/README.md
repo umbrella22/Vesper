@@ -30,11 +30,19 @@ Exported from `package:vesper_player_ui/vesper_player_ui.dart`:
 
 ## Installation
 
-The Flutter package family is not published yet. Repository development first
-runs `./scripts/vesper flutter local-overrides`. External hosts must configure
-the root-level federated package overrides described in the
-[`vesper_player` installation guide](../vesper_player/README.md#installation)
-before using source-checkout dependencies:
+Use the hosted packages for normal application integration:
+
+```yaml
+dependencies:
+  vesper_player: ^0.4.1
+  vesper_player_ui: ^0.4.1
+```
+
+Repository development first runs
+`./scripts/vesper flutter local-overrides`. External hosts that intentionally
+consume a source checkout must configure the root-level federated package
+overrides described in the
+[`vesper_player` installation guide](../vesper_player/README.md#installation):
 
 ```yaml
 dependencies:

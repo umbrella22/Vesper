@@ -96,6 +96,9 @@ jobs:
       - name: Show Flutter version
         run: flutter --version
 
+      - name: Generate local Flutter dependency overrides
+        run: ./scripts/vesper flutter local-overrides
+
       - name: Analyze and test shared Flutter packages
         shell: bash
         run: |
@@ -125,7 +128,6 @@ jobs:
         run: >-
           ./scripts/vesper flutter pub-dry-run
           /tmp/vesper-flutter-pub-dry-run
-          --include-optional-plugins
 
   flutter-android:
     name: Flutter Android Host ${{ matrix.abi }}
@@ -200,6 +202,9 @@ jobs:
 
       - name: Show Flutter version
         run: flutter --version
+
+      - name: Generate local Flutter dependency overrides
+        run: ./scripts/vesper flutter local-overrides
 
       - name: Write Android local.properties
         run: |
@@ -334,6 +339,22 @@ jobs:
 
       - name: Show Flutter version
         run: flutter --version
+
+      - name: Generate local Flutter dependency overrides
+        run: ./scripts/vesper flutter local-overrides
+
+      - name: Flutter optional plugin pub publish dry-run
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          stage="$RUNNER_TEMP/vesper-flutter-optional-pub-dry-run"
+          ./scripts/vesper flutter stage-pub "$stage" --include-optional-plugins
+          (
+            cd "$stage/vesper_player_source_normalizer_ffmpeg"
+            flutter pub get
+            flutter pub publish --dry-run
+          )
 
       - name: Enable Swift Package Manager
         run: |

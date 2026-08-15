@@ -35,16 +35,29 @@ are not a compatibility backlog. Desktop Flutter implementations are not shipped
 
 ## Installation
 
-The Flutter package family is not published yet. Repository development writes
-the package and example overrides with:
+Use the hosted package for normal application integration. The Android and iOS
+federated implementations resolve automatically:
+
+```yaml
+dependencies:
+  vesper_player: ^0.4.1
+  # Optional unified Android Cast / DLNA external playback.
+  vesper_player_external_playback: ^0.4.1
+  # Optional stage controls and AirPlay route button.
+  vesper_player_ui: ^0.4.1
+```
+
+Repository source-checkout development writes ignored local dependency
+overrides with:
 
 ```sh
 ./scripts/vesper flutter local-overrides
 ```
 
-External hosts must provide root-level overrides for the federated packages
-that `vesper_player` resolves through hosted constraints. The following source
-checkout example includes the core family plus two optional packages:
+External hosts that intentionally consume a source checkout must provide
+root-level overrides for the federated packages that `vesper_player` resolves
+through hosted constraints. The following example includes the core family plus
+two optional packages:
 
 ```yaml
 dependencies:
@@ -66,9 +79,8 @@ dependency_overrides:
     path: path/to/rust-player-sdk/lib/flutter/vesper_player_ios
 ```
 
-Add each other optional Vesper package as a direct path or Git dependency when
-the host enables that feature. Once the family is published, normal hosted
-constraints replace these source-checkout overrides.
+Add each other optional Vesper package as a direct hosted, path, or Git
+dependency only when the host enables that feature.
 
 ### Native identifier baseline
 

@@ -149,6 +149,10 @@ development uses generated, ignored `pubspec_overrides.yaml` files:
 ./scripts/vesper flutter local-overrides
 ```
 
+Flutter CI generates the same overrides before resolving package or example
+dependencies. Source validation therefore does not depend on the checkout's
+package version already being available from pub.dev.
+
 The pub helpers stage temporary packages, copy the root license, remove any
 local-only publication metadata, and normalize internal package constraints for
 the selected version. If no version argument is passed, the staging helper uses
@@ -159,12 +163,38 @@ main package family. Optional native dependency packages such as
 `vesper_player_source_normalizer_ffmpeg` are skipped unless
 `VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS=1` is set.
 
+The stable-tag pub workflow publishes only the default six-package Flutter
+family.
+Optional native dependency packages are validated and published separately,
+after their matching native artifacts, FFmpeg compliance archive, and exact
+corresponding source archive are available.
+
 Release workflows do not hardcode product versions. They derive the numeric
 product version from the pushed tag, apply it to the CI workspace with
 `./scripts/vesper release prepare-from-tag "$RELEASE_TAG"`, and verify the
 updated metadata before packaging. Stable tags such as `vMAJOR.MINOR.PATCH`
 publish staged Flutter packages to pub.dev; RC tags publish GitHub release
 artifacts but do not publish to pub.dev.
+
+pub.dev accepts GitHub OIDC publication only from a tag-push workflow. The
+first version of each package must be published interactively by its initial
+uploader; after that, configure each package for repository
+`umbrella22/Vesper`, tag pattern `v{{version}}`, and GitHub environment
+`pub.dev` before relying on stable-tag automation.
+
+Publish the first version of the default six-package family from the release
+checkout with the final owner account:
+
+```sh
+./scripts/vesper flutter pub-publish \
+  /tmp/vesper-flutter-pub-MAJOR.MINOR.PATCH \
+  MAJOR.MINOR.PATCH \
+  --include-optional-plugins=false
+```
+
+The release workflow runs `dart-lang/setup-dart` before Flutter so the Dart pub
+client receives the short-lived GitHub OIDC credential. It does not use a
+long-lived `PUB_TOKEN` secret.
 
 ## Mobile FFmpeg Profiles
 
