@@ -392,7 +392,7 @@ jobs:
 
       - name: Test core iOS release validation failures
         env:
-          VESPER_IOS_CORE_RELEASE_FIXTURE: release-assets/ios
+          VESPER_IOS_CORE_RELEASE_FIXTURE: ${{ github.workspace }}/release-assets/ios
         run: >-
           cargo test -p player-cli --test ios_release_regressions
           ios_core_release_real_fixture_rejects_policy_drift
@@ -400,7 +400,7 @@ jobs:
 
       - name: Test optional iOS release validation failures
         env:
-          VESPER_IOS_OPTIONAL_RELEASE_FIXTURE: release-assets/ios
+          VESPER_IOS_OPTIONAL_RELEASE_FIXTURE: ${{ github.workspace }}/release-assets/ios
         run: >-
           cargo test -p player-cli --test ios_release_regressions
           ios_optional_release_real_fixture_rejects_policy_drift
