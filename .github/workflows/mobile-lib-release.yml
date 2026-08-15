@@ -554,7 +554,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --json tagName,isDraft,isPrerelease,assets \
             > "$release_json" 2> "$release_error"; then
-            if ! rg -Fxq 'release not found' "$release_error"; then
+            if ! grep -Fqx -- 'release not found' "$release_error"; then
               cat "$release_error" >&2
               exit 1
             fi
