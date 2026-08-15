@@ -265,6 +265,9 @@ jobs:
           ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
           cargo build --locked --release -p player-cli --bin vesper
 
+      - name: Configure local Flutter package overrides
+        run: ./scripts/vesper flutter local-overrides
+
       - name: Write Android local.properties
         run: |
           cat <<EOF > examples/android-compose-host/local.properties
