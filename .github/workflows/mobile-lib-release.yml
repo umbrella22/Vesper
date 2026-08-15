@@ -278,8 +278,28 @@ jobs:
           flutter.sdk=${FLUTTER_ROOT}
           EOF
 
+      - name: Configure Flutter Android JNI sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          real_flutter="$(command -v flutter)"
+          test -x "$real_flutter"
+          wrapper_dir="${RUNNER_TEMP}/vesper-flutter-bin"
+          mkdir -p "$wrapper_dir"
+          cat > "${wrapper_dir}/flutter" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          export VESPER_ANDROID_SOURCE_NORMALIZER_JNI_LIBS="${GITHUB_WORKSPACE}/examples/flutter-host/build/app/generated/playerSourceNormalizerFfmpeg/jniLibs"
+          export VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS="${GITHUB_WORKSPACE}/examples/flutter-host/build/app/generated/playerFrameProcessorDiagnostic/jniLibs"
+          exec "$real_flutter" "\$@"
+          EOF
+          chmod 700 "${wrapper_dir}/flutter"
+
       - name: Stage Android sample APKs
-        run: ./scripts/vesper android sample-apks release-assets/android-samples ${{ matrix.abi }}
+        run: |
+          export PATH="${RUNNER_TEMP}/vesper-flutter-bin:${PATH}"
+          test "$(command -v flutter)" = "${RUNNER_TEMP}/vesper-flutter-bin/flutter"
+          ./scripts/vesper android sample-apks release-assets/android-samples ${{ matrix.abi }}
 
       - name: Verify Android sample APKs are arm64-only
         shell: bash
@@ -345,6 +365,24 @@ jobs:
         run: |
           ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
           cargo build --locked --release -p player-cli --bin vesper
+
+      - name: Configure retrying source downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x /usr/bin/curl
+          curl_wrapper="${RUNNER_TEMP}/vesper-curl-with-retry"
+          cat > "$curl_wrapper" <<'EOF'
+          #!/usr/bin/env bash
+          exec /usr/bin/curl \
+            --retry 5 \
+            --retry-delay 5 \
+            --retry-max-time 180 \
+            --retry-all-errors \
+            "$@"
+          EOF
+          chmod 700 "$curl_wrapper"
+          echo "CURL=$curl_wrapper" >> "$GITHUB_ENV"
 
       - name: Build VesperPlayerKit iOS release assets
         run: ./scripts/vesper ios stage-release release-assets/ios --include-optional-plugins
