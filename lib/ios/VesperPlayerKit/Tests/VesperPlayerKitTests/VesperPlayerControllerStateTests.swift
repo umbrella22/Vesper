@@ -2996,19 +2996,16 @@ final class VesperPlayerControllerStateTests: XCTestCase {
 
     func testUtilityQueueRequiredVoidWaitsForBoundedSlotWhenQueueIsFull() async {
         let queue = VesperBoundedUtilityQueue(maxConcurrentOperations: 1, maxPendingOperations: 1)
-        let firstEntered = ThreadSafeFlag()
+        let firstEntered = expectation(description: "first operation enters the utility queue")
         let releaseFirst = DispatchSemaphore(value: 0)
         let firstTask = Task {
             await queue.run(fallback: { false }) {
-                firstEntered.set()
+                firstEntered.fulfill()
                 _ = releaseFirst.wait(timeout: .now() + 5)
                 return true
             }
         }
-        let started = await waitForNativeFrameSmoke(timeout: 1.0) {
-            firstEntered.isSet
-        }
-        XCTAssertTrue(started)
+        await fulfillment(of: [firstEntered], timeout: 5)
 
         let optionalResult = await queue.run(fallback: { "fallback" }) {
             "unexpected"
@@ -3016,11 +3013,14 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         XCTAssertEqual(optionalResult, "fallback")
 
         let cleanupRan = ThreadSafeFlag()
+        let cleanupSubmitted = expectation(description: "required cleanup is submitted")
         let cleanupTask = Task {
+            cleanupSubmitted.fulfill()
             await queue.runRequiredVoid {
                 cleanupRan.set()
             }
         }
+        await fulfillment(of: [cleanupSubmitted], timeout: 5)
         let ranWhileFull = await waitForNativeFrameSmoke(timeout: 0.2) {
             cleanupRan.isSet
         }

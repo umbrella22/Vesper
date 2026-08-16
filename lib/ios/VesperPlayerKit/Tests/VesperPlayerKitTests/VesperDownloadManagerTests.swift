@@ -869,8 +869,6 @@ final class VesperDownloadManagerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: baseDirectory) }
         let executor = VesperForegroundDownloadExecutor(baseDirectory: baseDirectory)
         defer { executor.dispose() }
-        let failure = expectation(description: "insecure size probe should fail")
-        let reporter = DownloadReporterProbe(failureExpectation: failure)
         let task = VesperDownloadTaskSnapshot(
             taskId: 2,
             assetId: "asset-http-probe",
@@ -893,16 +891,17 @@ final class VesperDownloadManagerTests: XCTestCase {
             )
         )
 
-        executor.prepare(task: task, reporter: reporter)
-        await fulfillment(of: [failure], timeout: 2)
-
-        XCTAssertTrue(reporter.failure?.message.contains("App Transport Security") == true)
-        XCTAssertTrue(
-            reporter.failure?.message.contains("http://cdn.example.com:8080/video.mp4") == true
-        )
-        XCTAssertFalse(reporter.failure?.message.contains("password") == true)
-        XCTAssertFalse(reporter.failure?.message.contains("upsig") == true)
-        XCTAssertFalse(reporter.failure?.message.contains("secret") == true)
+        do {
+            _ = try await executor.prepareAssetIndex(task: task)
+            XCTFail("insecure size probe should fail")
+        } catch {
+            let message = error.localizedDescription
+            XCTAssertTrue(message.contains("App Transport Security"))
+            XCTAssertTrue(message.contains("http://cdn.example.com:8080/video.mp4"))
+            XCTAssertFalse(message.contains("password"))
+            XCTAssertFalse(message.contains("upsig"))
+            XCTAssertFalse(message.contains("secret"))
+        }
     }
 
     func testForegroundExecutorRejectsInsecureHTTPMediaTransferBeforeATS() async throws {
