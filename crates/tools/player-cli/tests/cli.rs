@@ -11682,7 +11682,7 @@ fn release_version_validation_uses_stable_exit_codes() {
     assert!(verified.stderr.is_empty());
     assert_eq!(
         String::from_utf8(verified.stdout).expect("UTF-8 verification output"),
-        "Verified Vesper product version 0.4.1.\n"
+        "Verified Vesper product version 0.4.2.\n"
     );
 }
 
