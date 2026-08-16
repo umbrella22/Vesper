@@ -613,16 +613,14 @@ fn validate_pom(
                     .iter()
                     .map(String::as_str)
                     .eq(["project", "dependencies", "dependency"])
-                {
-                    if current_dependency
+                    && current_dependency
                         .replace(PomDependency::default())
                         .is_some()
-                    {
-                        return Err(AndroidError::conformance(format!(
-                            "POM '{}' contains nested dependency elements",
-                            path.display()
-                        )));
-                    }
+                {
+                    return Err(AndroidError::conformance(format!(
+                        "POM '{}' contains nested dependency elements",
+                        path.display()
+                    )));
                 }
             }
             Ok(Event::End(event)) => {
