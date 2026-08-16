@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::ffmpeg::{FfmpegError, FfmpegRequest, NativeFfmpegProfile};
 use crate::ffmpeg_source::FfmpegBuildSource;
 
+#[cfg(target_os = "macos")]
 pub(crate) const APPLE_SHARED_LIBRARY_LINK_FLAGS: &str = "-dynamiclib -Wl,-install_name,$(INSTALL_NAME_DIR)/$(SLIBNAME_WITH_MAJOR),-current_version,$(LIBVERSION),-compatibility_version,$(LIBMAJOR)";
 
 pub(crate) fn run(
