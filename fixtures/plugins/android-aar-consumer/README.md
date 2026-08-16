@@ -1,8 +1,9 @@
 # Android Staged AAR Consumer
 
-This fixture verifies the Android artifacts produced by `vesper android stage-release`
-from the perspective of an external application. It contains only one `:app` module,
-uses raw AAR file dependencies, and never invokes repository Rust or Android build tasks.
+This fixture verifies Vesper Android artifacts from the perspective of an external
+application. It contains only one `:app` module and never invokes repository Rust or
+Android build tasks. It can consume either raw staged AAR files or the hosted
+external-playback Maven coordinate and its transitive core / FFmpeg runtime closure.
 
 Run the Release instrumentation tests with a staged artifact directory:
 
@@ -18,3 +19,12 @@ fragments and native libraries, load SourceNormalizer, FrameProcessor, and Media
 decoder capabilities through the public `VesperPluginReference` API, and execute the
 native-frame route against a real `SurfaceView` until decoded, processed, and presented
 frame counters advance.
+
+To verify the hosted external-playback dependency closure without a device:
+
+```sh
+GRADLE_USER_HOME="$PWD/.gradle/gradle-user-home" \
+  /path/to/cached/gradle -p fixtures/plugins/android-aar-consumer \
+  :app:assembleRelease \
+  -Pvesper.mavenVersion=0.4.2
+```

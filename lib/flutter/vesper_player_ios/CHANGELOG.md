@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.2 - 2026-08-16
+
+### Fixed
+
+- The Swift package manifest now depends on the remote
+  `umbrella22/VesperPlayerKit` package within the compatible `0.4.x` range and
+  requests only its exported `VesperPlayerKit` product.
+- Removed monorepo-local package discovery and the nonexistent remote
+  `VesperPlayerFFI` product dependency. The binary `VesperPlayerKit` product
+  already contains the native bridge closure required by Flutter consumers.
+
 ## 0.4.1 - 2026-08-14
 
 ### Added

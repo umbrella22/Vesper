@@ -25,15 +25,19 @@ use crate::android::{self, AndroidError};
 use crate::external_process::{self, ExternalProcessErrorKind};
 use crate::release;
 
-const ARTIFACTS: [&str; 3] = [
+const ARTIFACTS: [&str; 5] = [
     "vesper-player-kit",
     "vesper-player-kit-compose",
     "vesper-player-kit-compose-ui",
+    "vesper-player-kit-ffmpeg-runtime",
+    "vesper-player-kit-external-playback",
 ];
 const MAVEN_GROUP_ID: &str = "io.github.umbrella22.vesper";
 const MAVEN_PROJECT_URL: &str = "https://github.com/umbrella22/Vesper";
 const MAVEN_LICENSE_NAME: &str = "Apache License, Version 2.0";
 const MAVEN_LICENSE_URL: &str = "https://www.apache.org/licenses/LICENSE-2.0.txt";
+const MAVEN_LGPL_LICENSE_NAME: &str = "GNU Lesser General Public License, Version 2.1 or later";
+const MAVEN_LGPL_LICENSE_URL: &str = "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html";
 const MAVEN_DEVELOPER_ID: &str = "umbrella22";
 const MAVEN_DEVELOPER_NAME: &str = "umbrella22";
 const MAVEN_DEVELOPER_URL: &str = "https://github.com/umbrella22";
@@ -96,6 +100,14 @@ struct DeploymentStatus {
 
 struct CentralAuth {
     config: NamedTempFile,
+}
+
+#[derive(Default)]
+struct PomDependency {
+    group_id: Option<String>,
+    artifact_id: Option<String>,
+    version: Option<String>,
+    scope: Option<String>,
 }
 
 impl CentralAuth {
@@ -591,13 +603,44 @@ fn validate_pom(
     let mut scm_connection = None;
     let mut scm_developer_connection = None;
     let mut scm_url = None;
+    let mut current_dependency = None::<PomDependency>;
+    let mut dependencies = Vec::<PomDependency>::new();
     loop {
         match reader.read_event() {
             Ok(Event::Start(event)) => {
                 stack.push(String::from_utf8_lossy(event.name().as_ref()).into_owned());
+                if stack
+                    .iter()
+                    .map(String::as_str)
+                    .eq(["project", "dependencies", "dependency"])
+                {
+                    if current_dependency
+                        .replace(PomDependency::default())
+                        .is_some()
+                    {
+                        return Err(AndroidError::conformance(format!(
+                            "POM '{}' contains nested dependency elements",
+                            path.display()
+                        )));
+                    }
+                }
             }
             Ok(Event::End(event)) => {
                 let name = String::from_utf8_lossy(event.name().as_ref()).into_owned();
+                if name == "dependency"
+                    && stack.iter().map(String::as_str).eq([
+                        "project",
+                        "dependencies",
+                        "dependency",
+                    ])
+                {
+                    dependencies.push(current_dependency.take().ok_or_else(|| {
+                        AndroidError::conformance(format!(
+                            "POM '{}' closed a dependency without opening it",
+                            path.display()
+                        ))
+                    })?);
+                }
                 if stack.pop().as_deref() != Some(name.as_str()) {
                     return Err(AndroidError::conformance(format!(
                         "POM '{}' has mismatched XML elements",
@@ -664,6 +707,62 @@ fn validate_pom(
                     ["project", "scm", "url"] => {
                         assign_unique_pom_value(path, "scm.url", &mut scm_url, value)?
                     }
+                    ["project", "dependencies", "dependency", "groupId"] => {
+                        let dependency = current_dependency.as_mut().ok_or_else(|| {
+                            AndroidError::conformance(format!(
+                                "POM '{}' contains dependency fields outside a dependency",
+                                path.display()
+                            ))
+                        })?;
+                        assign_unique_pom_value(
+                            path,
+                            "dependency.groupId",
+                            &mut dependency.group_id,
+                            value,
+                        )?;
+                    }
+                    ["project", "dependencies", "dependency", "artifactId"] => {
+                        let dependency = current_dependency.as_mut().ok_or_else(|| {
+                            AndroidError::conformance(format!(
+                                "POM '{}' contains dependency fields outside a dependency",
+                                path.display()
+                            ))
+                        })?;
+                        assign_unique_pom_value(
+                            path,
+                            "dependency.artifactId",
+                            &mut dependency.artifact_id,
+                            value,
+                        )?;
+                    }
+                    ["project", "dependencies", "dependency", "version"] => {
+                        let dependency = current_dependency.as_mut().ok_or_else(|| {
+                            AndroidError::conformance(format!(
+                                "POM '{}' contains dependency fields outside a dependency",
+                                path.display()
+                            ))
+                        })?;
+                        assign_unique_pom_value(
+                            path,
+                            "dependency.version",
+                            &mut dependency.version,
+                            value,
+                        )?;
+                    }
+                    ["project", "dependencies", "dependency", "scope"] => {
+                        let dependency = current_dependency.as_mut().ok_or_else(|| {
+                            AndroidError::conformance(format!(
+                                "POM '{}' contains dependency fields outside a dependency",
+                                path.display()
+                            ))
+                        })?;
+                        assign_unique_pom_value(
+                            path,
+                            "dependency.scope",
+                            &mut dependency.scope,
+                            value,
+                        )?;
+                    }
                     _ => {}
                 }
             }
@@ -699,8 +798,13 @@ fn validate_pom(
         )));
     }
 
-    let expected_license_names = [MAVEN_LICENSE_NAME.to_owned()];
-    let expected_license_urls = [MAVEN_LICENSE_URL.to_owned()];
+    let (expected_license_name, expected_license_url) = pom_license(artifact).ok_or_else(|| {
+        AndroidError::worker(format!(
+            "missing POM license policy for artifact {artifact}"
+        ))
+    })?;
+    let expected_license_names = [expected_license_name.to_owned()];
+    let expected_license_urls = [expected_license_url.to_owned()];
     let expected_developer_ids = [MAVEN_DEVELOPER_ID.to_owned()];
     let expected_developer_names = [MAVEN_DEVELOPER_NAME.to_owned()];
     let expected_developer_urls = [MAVEN_DEVELOPER_URL.to_owned()];
@@ -720,6 +824,75 @@ fn validate_pom(
     if !metadata_is_valid {
         return Err(AndroidError::conformance(format!(
             "POM '{}' does not contain the required Maven Central metadata for {artifact}",
+            path.display()
+        )));
+    }
+    validate_internal_pom_dependencies(path, namespace, artifact, version, &dependencies)?;
+    Ok(())
+}
+
+fn validate_internal_pom_dependencies(
+    path: &Path,
+    namespace: &str,
+    artifact: &str,
+    version: &str,
+    dependencies: &[PomDependency],
+) -> Result<(), AndroidError> {
+    let actual = dependencies
+        .iter()
+        .filter(|dependency| dependency.group_id.as_deref() == Some(namespace))
+        .map(|dependency| {
+            let artifact_id = dependency.artifact_id.as_deref().ok_or_else(|| {
+                AndroidError::conformance(format!(
+                    "POM '{}' contains an internal dependency without artifactId",
+                    path.display()
+                ))
+            })?;
+            let dependency_version = dependency.version.as_deref().ok_or_else(|| {
+                AndroidError::conformance(format!(
+                    "POM '{}' contains internal dependency {artifact_id} without version",
+                    path.display()
+                ))
+            })?;
+            let scope = dependency.scope.as_deref().ok_or_else(|| {
+                AndroidError::conformance(format!(
+                    "POM '{}' contains internal dependency {artifact_id} without scope",
+                    path.display()
+                ))
+            })?;
+            Ok((
+                artifact_id.to_owned(),
+                dependency_version.to_owned(),
+                scope.to_owned(),
+            ))
+        })
+        .collect::<Result<BTreeSet<_>, AndroidError>>()?;
+    let expected_artifacts: &[&str] = match artifact {
+        "vesper-player-kit" | "vesper-player-kit-ffmpeg-runtime" => &[],
+        "vesper-player-kit-compose" => &["vesper-player-kit"],
+        "vesper-player-kit-compose-ui" => &["vesper-player-kit-compose"],
+        "vesper-player-kit-external-playback" => {
+            &["vesper-player-kit", "vesper-player-kit-ffmpeg-runtime"]
+        }
+        _ => {
+            return Err(AndroidError::worker(format!(
+                "missing internal dependency policy for artifact {artifact}"
+            )));
+        }
+    };
+    let expected = expected_artifacts
+        .iter()
+        .map(|artifact_id| {
+            (
+                (*artifact_id).to_owned(),
+                version.to_owned(),
+                "compile".to_owned(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    if actual != expected {
+        return Err(AndroidError::conformance(format!(
+            "POM '{}' does not contain the required same-version internal dependency closure for {artifact}",
             path.display()
         )));
     }
@@ -761,6 +934,24 @@ fn pom_identity(artifact: &str) -> Option<(&'static str, &'static str)> {
             "Vesper Player Android Compose UI",
             "Optional Jetpack Compose controls and player UI for Vesper Player.",
         )),
+        "vesper-player-kit-ffmpeg-runtime" => Some((
+            "Vesper Player Android FFmpeg Runtime",
+            "Optional Android FFmpeg runtime libraries for Vesper Player plugins. Redistributed FFmpeg components keep their upstream license terms.",
+        )),
+        "vesper-player-kit-external-playback" => Some((
+            "Vesper Player Android External Playback",
+            "Optional Cast, DLNA, local relay, and relay format adaptation integration for Vesper Player Android hosts.",
+        )),
+        _ => None,
+    }
+}
+
+fn pom_license(artifact: &str) -> Option<(&'static str, &'static str)> {
+    match artifact {
+        "vesper-player-kit-ffmpeg-runtime" => {
+            Some((MAVEN_LGPL_LICENSE_NAME, MAVEN_LGPL_LICENSE_URL))
+        }
+        artifact if ARTIFACTS.contains(&artifact) => Some((MAVEN_LICENSE_NAME, MAVEN_LICENSE_URL)),
         _ => None,
     }
 }
@@ -1243,10 +1434,83 @@ mod tests {
         assert!(validate_pom(&missing_scm, MAVEN_GROUP_ID, "vesper-player-kit", "0.4.0",).is_err());
     }
 
+    #[test]
+    fn pom_validation_requires_external_playback_dependency_closure_and_ffmpeg_license() {
+        let directory = tempfile::tempdir().expect("temporary POM directory");
+        let external = directory.path().join("external.pom");
+        fs::write(
+            &external,
+            valid_test_pom("vesper-player-kit-external-playback"),
+        )
+        .expect("write external playback POM");
+        validate_pom(
+            &external,
+            MAVEN_GROUP_ID,
+            "vesper-player-kit-external-playback",
+            "0.4.0",
+        )
+        .expect("valid external playback POM");
+
+        let missing_runtime = directory.path().join("missing-runtime.pom");
+        fs::write(
+            &missing_runtime,
+            valid_test_pom("vesper-player-kit-external-playback").replace(
+                &internal_dependency_xml("vesper-player-kit-ffmpeg-runtime"),
+                "",
+            ),
+        )
+        .expect("write incomplete external playback POM");
+        assert!(
+            validate_pom(
+                &missing_runtime,
+                MAVEN_GROUP_ID,
+                "vesper-player-kit-external-playback",
+                "0.4.0",
+            )
+            .expect_err("reject missing FFmpeg runtime dependency")
+            .to_string()
+            .contains("dependency closure")
+        );
+
+        let runtime = directory.path().join("runtime.pom");
+        fs::write(&runtime, valid_test_pom("vesper-player-kit-ffmpeg-runtime"))
+            .expect("write FFmpeg runtime POM");
+        validate_pom(
+            &runtime,
+            MAVEN_GROUP_ID,
+            "vesper-player-kit-ffmpeg-runtime",
+            "0.4.0",
+        )
+        .expect("valid FFmpeg runtime POM");
+    }
+
     fn valid_test_pom(artifact: &str) -> String {
         let (name, description) = pom_identity(artifact).expect("known test artifact");
+        let (license_name, license_url) = pom_license(artifact).expect("known license policy");
+        let dependencies = match artifact {
+            "vesper-player-kit" | "vesper-player-kit-ffmpeg-runtime" => String::new(),
+            "vesper-player-kit-compose" => internal_dependency_xml("vesper-player-kit"),
+            "vesper-player-kit-compose-ui" => internal_dependency_xml("vesper-player-kit-compose"),
+            "vesper-player-kit-external-playback" => format!(
+                "{}{}",
+                internal_dependency_xml("vesper-player-kit"),
+                internal_dependency_xml("vesper-player-kit-ffmpeg-runtime")
+            ),
+            _ => panic!("unknown test artifact: {artifact}"),
+        };
+        let dependencies = if dependencies.is_empty() {
+            String::new()
+        } else {
+            format!("<dependencies>{dependencies}</dependencies>")
+        };
         format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><project><modelVersion>4.0.0</modelVersion><groupId>{MAVEN_GROUP_ID}</groupId><artifactId>{artifact}</artifactId><version>0.4.0</version><packaging>aar</packaging><name>{name}</name><description>{description}</description><url>{MAVEN_PROJECT_URL}</url><licenses><license><name>{MAVEN_LICENSE_NAME}</name><url>{MAVEN_LICENSE_URL}</url></license></licenses><developers><developer><id>{MAVEN_DEVELOPER_ID}</id><name>{MAVEN_DEVELOPER_NAME}</name><url>{MAVEN_DEVELOPER_URL}</url></developer></developers><scm><connection>{MAVEN_SCM_CONNECTION}</connection><developerConnection>{MAVEN_SCM_DEVELOPER_CONNECTION}</developerConnection><url>{MAVEN_PROJECT_URL}</url></scm></project>"
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><project><modelVersion>4.0.0</modelVersion><groupId>{MAVEN_GROUP_ID}</groupId><artifactId>{artifact}</artifactId><version>0.4.0</version><packaging>aar</packaging><name>{name}</name><description>{description}</description><url>{MAVEN_PROJECT_URL}</url><licenses><license><name>{license_name}</name><url>{license_url}</url></license></licenses><developers><developer><id>{MAVEN_DEVELOPER_ID}</id><name>{MAVEN_DEVELOPER_NAME}</name><url>{MAVEN_DEVELOPER_URL}</url></developer></developers><scm><connection>{MAVEN_SCM_CONNECTION}</connection><developerConnection>{MAVEN_SCM_DEVELOPER_CONNECTION}</developerConnection><url>{MAVEN_PROJECT_URL}</url></scm>{dependencies}</project>"
+        )
+    }
+
+    fn internal_dependency_xml(artifact: &str) -> String {
+        format!(
+            "<dependency><groupId>{MAVEN_GROUP_ID}</groupId><artifactId>{artifact}</artifactId><version>0.4.0</version><scope>compile</scope></dependency>"
         )
     }
 
@@ -1256,6 +1520,8 @@ mod tests {
             "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit@0.4.0",
             "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-compose@0.4.0",
             "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-compose-ui@0.4.0",
+            "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-ffmpeg-runtime@0.4.0",
+            "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-external-playback@0.4.0",
         ];
         assert!(
             validate_component_purls(
@@ -1267,7 +1533,7 @@ mod tests {
         );
         assert!(
             validate_component_purls(
-                complete[..2].iter().copied(),
+                complete[..4].iter().copied(),
                 "io.github.umbrella22.vesper",
                 "0.4.0"
             )
@@ -1291,6 +1557,8 @@ mod tests {
             "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit@0.4.0",
             "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-compose@0.4.0",
             "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-compose-ui@0.4.0",
+            "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-ffmpeg-runtime@0.4.0",
+            "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-external-playback@0.4.0",
         ];
         let packaging_qualified = coordinates
             .iter()

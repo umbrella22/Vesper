@@ -24,7 +24,7 @@ edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/umbrella22/Vesper"
 rust-version = "1.97"
-version = "0.4.1"
+version = "0.4.2"
 
 [workspace.dependencies]
 anyhow = "1.0.104"

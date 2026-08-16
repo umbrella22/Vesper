@@ -814,6 +814,47 @@ jobs:
           done
           echo "Verified published Maven Central coordinates for ${RELEASE_TAG}."
 
+      - name: Verify hosted external-playback Android app dependency closure
+        if: env.RELEASE_TAG != 'v0.4.1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          repository="https://repo.maven.apache.org/maven2/io/github/umbrella22/vesper"
+          artifacts=(
+            vesper-player-kit
+            vesper-player-kit-ffmpeg-runtime
+            vesper-player-kit-external-playback
+          )
+
+          for attempt in $(seq 1 60); do
+            missing=()
+            for artifact in "${artifacts[@]}"; do
+              base="${repository}/${artifact}/${version}/${artifact}-${version}"
+              if ! curl --fail --silent --location \
+                --max-time 30 --output /dev/null "${base}.pom" || \
+                 ! curl --fail --silent --location \
+                --max-time 30 --output /dev/null "${base}.aar"; then
+                missing+=("$artifact")
+              fi
+            done
+            if (( ${#missing[@]} == 0 )); then
+              break
+            fi
+            if (( attempt == 60 )); then
+              printf 'Hosted Maven coordinate is unavailable: %s\n' \
+                "${missing[@]}" >&2
+              exit 1
+            fi
+            echo "Waiting for hosted Maven coordinates ($attempt/60)."
+            sleep 10
+          done
+
+          gradle \
+            -p fixtures/plugins/android-aar-consumer \
+            -Pvesper.mavenVersion="$version" \
+            :app:assembleRelease
+
   publish-swift-package:
     name: Publish VesperPlayerKit Swift Package
     runs-on: macos-latest

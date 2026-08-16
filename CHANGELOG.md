@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.2 - 2026-08-16
+
+### Fixed
+
+- Added `vesper-player-kit-external-playback` and its transitive
+  `vesper-player-kit-ffmpeg-runtime` dependency to the stable Maven Central
+  publication set, including same-version POM closure validation and a hosted
+  Android application build after publication.
+- Changed the published `vesper_player_ios` Swift package manifest to resolve
+  `VesperPlayerKit` from the remote binary package, removed monorepo-local path
+  discovery, and removed the nonexistent remote `VesperPlayerFFI` product
+  dependency.
+- Made Flutter package publication wait for the matching Maven Central
+  coordinates and remote Swift package tag before acquiring Dart publication
+  credentials and uploading packages.
+
+SourceNormalizer, offline MP4 remux, and the remaining experimental mobile
+plugin artifacts stay outside the default hosted dependency closure in this
+release.
+
 ## 0.4.1 - 2026-08-14
 
 ### Migration

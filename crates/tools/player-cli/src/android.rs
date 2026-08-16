@@ -3243,12 +3243,16 @@ fn build_aar_transaction(
 ) -> Result<(), AndroidError> {
     let _aar_build_lock = AndroidBuildLock::acquire(root, "aar")?;
     let _jni_build_lock = AndroidBuildLock::acquire(root, "jni")?;
+    let ffmpeg_release_lock = maven
+        .is_some()
+        .then(|| AndroidFfmpegReleaseLock::load(root))
+        .transpose()?;
     let stages = build_aar_stages(
         root,
         module_task,
         include_optional,
         requested_abis,
-        None,
+        ffmpeg_release_lock.as_ref(),
         maven,
         cancellation,
     )?;
@@ -3283,7 +3287,8 @@ fn build_aar_stages(
         format!(":vesper-player-kit-compose:{module_task}"),
         format!(":vesper-player-kit-compose-ui:{module_task}"),
     ];
-    let optional_build = if include_optional {
+    let needs_external_playback_distribution = maven.is_some();
+    let optional_build = if include_optional || needs_external_playback_distribution {
         let optional_build = build_optional_android_plugins(
             root,
             &project,
@@ -3291,13 +3296,17 @@ fn build_aar_stages(
             ffmpeg_release_lock,
             cancellation,
         )?;
-        tasks.extend([
-            format!(":vesper-player-kit-ffmpeg-runtime:{module_task}"),
-            format!(":vesper-player-kit-decoder-mediacodec:{module_task}"),
-            format!(":vesper-player-kit-source-normalizer-ffmpeg:{module_task}"),
-            format!(":vesper-player-kit-frame-processor-diagnostic:{module_task}"),
-            format!(":vesper-player-kit-external-playback:{module_task}"),
-        ]);
+        tasks.push(format!(":vesper-player-kit-ffmpeg-runtime:{module_task}"));
+        tasks.push(format!(
+            ":vesper-player-kit-external-playback:{module_task}"
+        ));
+        if include_optional {
+            tasks.extend([
+                format!(":vesper-player-kit-decoder-mediacodec:{module_task}"),
+                format!(":vesper-player-kit-source-normalizer-ffmpeg:{module_task}"),
+                format!(":vesper-player-kit-frame-processor-diagnostic:{module_task}"),
+            ]);
+        }
         Some(optional_build)
     } else {
         None

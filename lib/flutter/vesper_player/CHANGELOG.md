@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2 - 2026-08-16
+
+- Prepared package metadata for the 0.4.2 release.
+
 ## 0.4.1 - 2026-08-14
 
 ### Added

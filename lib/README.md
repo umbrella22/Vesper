@@ -44,22 +44,28 @@ View-based hosts can depend on `vesper-player-kit` alone. Compose hosts add the
 adapter, and add the UI module only when the packaged stage fits the product.
 External playback and FFmpeg-backed extensions remain explicit dependencies.
 
-GitHub release staging can produce the complete AAR set. Maven publication is
-currently narrower: the core kit is the default publication, while the FFmpeg
-runtime and SourceNormalizer publications require the optional-plugin
-publication flag. The Android package README and release workflow define the
-current published set.
+GitHub release staging can produce the complete AAR set. Stable Maven
+publication contains the core kit, both Compose modules, external playback,
+and its transitive FFmpeg runtime. SourceNormalizer, Decoder, FrameProcessor,
+and offline-remux plugin distribution remain outside that default dependency
+closure. The Android package README and release workflow define the current
+published set.
 
 ### iOS
 
 [`ios/VesperPlayerKit`](ios/VesperPlayerKit/README.md) is the core Swift package
-and XCFramework project. Its Swift package exposes three products:
+and XCFramework project. The source-local package exposes three products:
 
 | Product | Role |
 | --- | --- |
 | `VesperPlayerKit` | Public `@MainActor` controller, source, track, download, diagnostics, and AVPlayer host APIs |
 | `VesperPlayerKitUI` | Optional SwiftUI `VesperPlayerStage` controls |
 | `VesperPlayerFFI` | Low-level binary product consumed by the host kit and bridge shim |
+
+The remote binary package at `umbrella22/VesperPlayerKit` intentionally exports
+only `VesperPlayerKit` and `VesperPlayerKitUI`. Its binary `VesperPlayerKit`
+target already contains the native bridge closure; remote consumers, including
+`vesper_player_ios`, must not request a separate `VesperPlayerFFI` product.
 
 `ios/VesperPlayerOptionalPlugins` exposes seven direct binary products. The
 three `VesperFFmpeg*` products are shared FFmpeg component dependencies;

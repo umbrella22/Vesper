@@ -53,6 +53,10 @@ dependencies {
     // Optional Compose integration.
     implementation("io.github.umbrella22.vesper:vesper-player-kit-compose:<version>")
     implementation("io.github.umbrella22.vesper:vesper-player-kit-compose-ui:<version>")
+
+    // Optional Cast, DLNA, and relay integration. The matching FFmpeg runtime
+    // coordinate is resolved transitively for relay format adaptation.
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-external-playback:<version>")
 }
 ```
 
@@ -72,10 +76,12 @@ Android packaging is `arm64-v8a` only. Use an arm64 device or arm64 Android
 emulator. See [Release Downloads](../../README.md#release-downloads) for the
 public package names and artifact-selection notes.
 
-Default Android releases do not publish optional plugin AARs. Use the dedicated
-plugin build commands, or set `VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1` for
-release staging, when you intentionally need FFmpeg runtime, SourceNormalizer,
-Decoder, FrameProcessor, or external-playback extension artifacts.
+Stable Maven releases publish the external-playback AAR together with its
+transitive `vesper-player-kit-ffmpeg-runtime` coordinate. Default standalone
+GitHub Release staging remains core-only. Use the dedicated plugin build
+commands, or set `VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1` for release staging,
+when you intentionally need SourceNormalizer, Decoder, FrameProcessor, or other
+experimental plugin AARs.
 
 The optional `vesper-player-kit-compose-ui` module remains available both as a
 source module and as a release AAR.
@@ -87,7 +93,8 @@ cannot be consumed by an RC build.
 ### Maven Central Publishing
 
 The `publish-maven-central` release job builds, signs, validates, and uploads one
-Central Portal bundle containing all three public coordinates. The Maven
+Central Portal bundle containing the core, Compose, FFmpeg runtime, and
+external-playback coordinates. The Maven
 `groupId` remains `io.github.umbrella22.vesper`; the Portal namespace controls
 publishing permission and may be that value or one of its parent prefixes. The
 job requires:

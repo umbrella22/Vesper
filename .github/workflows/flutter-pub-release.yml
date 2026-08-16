@@ -54,6 +54,57 @@ jobs:
           ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
           cargo build --locked --release -p player-cli --bin vesper
 
+      - name: Wait for hosted native dependencies
+        shell: bash
+        timeout-minutes: 180
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.version.outputs.version }}"
+          maven_root="https://repo.maven.apache.org/maven2/io/github/umbrella22/vesper"
+          swift_package="https://github.com/umbrella22/VesperPlayerKit.git"
+          artifacts=(
+            vesper-player-kit
+            vesper-player-kit-compose
+            vesper-player-kit-compose-ui
+            vesper-player-kit-ffmpeg-runtime
+            vesper-player-kit-external-playback
+          )
+
+          for attempt in $(seq 1 540); do
+            missing=()
+            for artifact in "${artifacts[@]}"; do
+              base="$maven_root/$artifact/$version/$artifact-$version"
+              if ! curl --fail --silent --location \
+                --max-time 30 --output /dev/null "$base.pom" || \
+                 ! curl --fail --silent --location \
+                --max-time 30 --output /dev/null "$base.aar"; then
+                missing+=("$artifact")
+              fi
+            done
+            swift_ready=false
+            if git ls-remote --exit-code "$swift_package" \
+              "refs/tags/v$version" >/dev/null 2>&1; then
+              swift_ready=true
+            fi
+            if [[ "$swift_ready" == true ]] && (( ${#missing[@]} == 0 )); then
+              echo "Hosted native dependencies are available for $version."
+              break
+            fi
+            if (( attempt == 540 )); then
+              echo "Hosted native dependencies did not become available for $version." >&2
+              if [[ "$swift_ready" != true ]]; then
+                echo "Missing Swift package tag: v$version" >&2
+              fi
+              if (( ${#missing[@]} > 0 )); then
+                printf 'Missing Maven coordinate: %s\n' "${missing[@]}" >&2
+              fi
+              exit 1
+            fi
+            echo "Waiting for hosted native dependencies ($attempt/540)."
+            sleep 20
+          done
+
       - name: Set up Dart pub authentication
         uses: dart-lang/setup-dart@v1
 

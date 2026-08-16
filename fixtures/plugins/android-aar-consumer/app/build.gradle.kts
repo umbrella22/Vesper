@@ -9,9 +9,13 @@ val vesperReleaseDir =
     providers.gradleProperty("vesper.releaseDir").orNull
         ?.let(::File)
         ?.canonicalFile
-        ?: throw GradleException(
-            "Set -Pvesper.releaseDir to a directory produced by `vesper android stage-release`.",
-        )
+val vesperMavenVersion = providers.gradleProperty("vesper.mavenVersion").orNull
+
+if ((vesperReleaseDir == null) == (vesperMavenVersion == null)) {
+    throw GradleException(
+        "Set exactly one of -Pvesper.releaseDir or -Pvesper.mavenVersion.",
+    )
+}
 
 val vesperAarNames =
     listOf(
@@ -21,13 +25,17 @@ val vesperAarNames =
         "VesperPlayerKitDecoderMediaCodec-android-arm64-v8a.aar",
         "VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar",
     )
-val vesperAars = vesperAarNames.map(vesperReleaseDir::resolve)
-val missingVesperAars = vesperAars.filterNot(File::isFile)
-if (missingVesperAars.isNotEmpty()) {
-    throw GradleException(
-        "The staged Vesper release is incomplete:\n" +
-            missingVesperAars.joinToString(separator = "\n") { file -> "- ${file.absolutePath}" },
-    )
+val vesperAars = vesperReleaseDir?.let { directory -> vesperAarNames.map(directory::resolve) }
+vesperAars?.let { artifacts ->
+    val missingVesperAars = artifacts.filterNot(File::isFile)
+    if (missingVesperAars.isNotEmpty()) {
+        throw GradleException(
+            "The staged Vesper release is incomplete:\n" +
+                missingVesperAars.joinToString(separator = "\n") { file ->
+                    "- ${file.absolutePath}"
+                },
+        )
+    }
 }
 
 extensions.configure<ApplicationExtension>("android") {
@@ -66,10 +74,20 @@ extensions.configure<ApplicationExtension>("android") {
         .assets
         .directories
         .add(rootProject.file("../../media").absolutePath)
+
+    if (vesperMavenVersion != null) {
+        sourceSets.getByName("main").java.directories.add("src/maven/java")
+    }
 }
 
 dependencies {
-    implementation(files(vesperAars))
+    if (vesperAars != null) {
+        implementation(files(vesperAars))
+    } else {
+        implementation(
+            "io.github.umbrella22.vesper:vesper-player-kit-external-playback:$vesperMavenVersion",
+        )
+    }
 
     val media3Version = "1.11.0"
     implementation("androidx.core:core-ktx:1.18.0")

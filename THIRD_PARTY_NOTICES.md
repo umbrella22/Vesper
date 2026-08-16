@@ -32,6 +32,12 @@ Release gate:
   `vesper-player-kit-external-playback` relay FFmpeg JNI layer must not carry
   their own `libav*` copies; they depend on the shared runtime profile selected
   by the host
+- stable Maven releases publish `vesper-player-kit-external-playback` and
+  `vesper-player-kit-ffmpeg-runtime` as one dependency closure. The matching
+  tagged GitHub Release carries the verified FFmpeg compliance archive and
+  exact corresponding FFmpeg source archive; this does not make the
+  SourceNormalizer or offline-remux plugin families default published
+  dependencies
 - iOS core `VesperPlayerKit.xcframework` must not embed FFmpeg. Optional iOS
   FFmpeg-backed remux and SourceNormalizer support uses the sibling signable
   `VesperFFmpegAVCodec.xcframework.zip`,

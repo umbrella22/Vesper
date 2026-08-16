@@ -6,6 +6,13 @@ It is built on AVPlayer and the Vesper iOS host kit in `lib/ios/VesperPlayerKit`
 The package is registered automatically by `vesper_player`, so most app code
 does not need to depend on it directly.
 
+The published Flutter package resolves the binary Swift package from
+`https://github.com/umbrella22/VesperPlayerKit.git` within the compatible
+`0.4.x` line. It depends only on the remote `VesperPlayerKit` product. The
+binary target already contains the native bridge closure, so consumers do not
+need a monorepo checkout, a local `lib/ios/VesperPlayerKit` path, or a separate
+`VesperPlayerFFI` product.
+
 Native registration uses `io.github.umbrella22.vesper_player` for the player
 MethodChannel and related EventChannel suffixes. This is a breaking pre-release
 rename from `io.github.ikaros`; no old channel handlers are registered. The

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.2 - 2026-08-16
+
+### Fixed
+
+- Stable Maven Central publication now includes
+  `vesper-player-kit-external-playback` and its same-version
+  `vesper-player-kit-ffmpeg-runtime` dependency instead of leaving the public
+  external-playback coordinate unavailable.
+- Maven staging now validates the complete internal dependency graph, uses
+  LGPL metadata for the FFmpeg runtime POM, and builds a hosted Android
+  application against the published external-playback coordinate.
+
+SourceNormalizer, offline remux, Decoder, and FrameProcessor artifacts remain
+opt-in and are not part of this default Maven dependency closure.
+
 ## 0.4.1 - 2026-08-14
 
 ### Breaking Changes

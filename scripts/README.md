@@ -125,9 +125,11 @@ The workflow split is intentional:
 - `mobile-lib-release.yml` stages and verifies tagged Android/iOS release
   assets, publishes the GitHub Release, then publishes stable Android
   coordinates to Maven Central and the stable iOS binary package through its
-  SwiftPM index repository.
+  SwiftPM index repository. The Maven set includes external playback and its
+  transitive FFmpeg runtime.
 - `flutter-pub-release.yml` publishes stable-tag Flutter packages after applying
-  tag-derived version metadata.
+  tag-derived version metadata and waiting for their hosted Maven and SwiftPM
+  dependencies.
 
 The signed iOS physical-device acceptance command remains a release-owner gate
 because it requires a connected device, a current Apple Development identity,
@@ -229,11 +231,12 @@ semantics by validating `--disable-network` and `--disable-openssl`.
 
 Android FFmpeg runtime packaging is split from consumers. The root command builds
 `vesper-player-kit-ffmpeg-runtime` by default; pass `--android-artifact prebuilts`
-only when a private flow needs raw prebuilts. Default Android release staging
-publishes the host kit and Compose AARs only. Set
-`VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1`, or run the dedicated plugin build
-commands, when you intentionally want optional FFmpeg runtime, SourceNormalizer,
-Decoder, FrameProcessor, or external-playback extension AARs. `player-remux-ffmpeg`,
+only when a private flow needs raw prebuilts. Default standalone Android release
+staging publishes the host kit and Compose AARs only. Stable Maven publication
+adds external playback and its shared FFmpeg runtime as one dependency closure.
+Set `VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1`, or run the dedicated plugin build
+commands, when you intentionally want SourceNormalizer, Decoder, or
+FrameProcessor extension AARs. `player-remux-ffmpeg`,
 `player-source-normalizer-ffmpeg`, and the external-playback relay FFmpeg JNI
 library must package only their own plugin/JNI libraries and depend on the
 shared runtime AAR. The FrameProcessor diagnostic plugin is not FFmpeg-backed.

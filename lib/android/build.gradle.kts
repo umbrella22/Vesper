@@ -15,7 +15,7 @@ val vesperMavenGroupId =
 
 allprojects {
     group = vesperMavenGroupId.get()
-    version = "0.4.1"
+    version = "0.4.2"
 }
 
 data class AndroidPublicationMetadata(
@@ -68,7 +68,7 @@ val vesperAndroidCorePublications =
             ),
     )
 
-val vesperAndroidOptionalPluginPublications =
+val vesperAndroidExternalPlaybackPublications =
     mapOf(
         "vesper-player-kit-ffmpeg-runtime" to
             AndroidPublicationMetadata(
@@ -78,6 +78,18 @@ val vesperAndroidOptionalPluginPublications =
                         "Redistributed FFmpeg components keep their upstream license terms.",
                 licenses = listOf(lgplLicense),
             ),
+        "vesper-player-kit-external-playback" to
+            AndroidPublicationMetadata(
+                pomName = "Vesper Player Android External Playback",
+                description =
+                    "Optional Cast, DLNA, local relay, and relay format adaptation " +
+                        "integration for Vesper Player Android hosts.",
+                licenses = listOf(apacheLicense),
+            ),
+    )
+
+val vesperAndroidOptionalPluginPublications =
+    mapOf(
         "vesper-player-kit-source-normalizer-ffmpeg" to
             AndroidPublicationMetadata(
                 pomName = "Vesper Player Android SourceNormalizer FFmpeg Plugin",
@@ -89,7 +101,7 @@ val vesperAndroidOptionalPluginPublications =
     )
 
 val vesperAndroidPublications =
-    vesperAndroidCorePublications +
+    vesperAndroidCorePublications + vesperAndroidExternalPlaybackPublications +
         if (publishOptionalPluginArtifacts) {
             vesperAndroidOptionalPluginPublications
         } else {

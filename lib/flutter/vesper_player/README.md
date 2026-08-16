@@ -40,11 +40,11 @@ federated implementations resolve automatically:
 
 ```yaml
 dependencies:
-  vesper_player: ^0.4.1
+  vesper_player: ^0.4.2
   # Optional unified Android Cast / DLNA external playback.
-  vesper_player_external_playback: ^0.4.1
+  vesper_player_external_playback: ^0.4.2
   # Optional stage controls and AirPlay route button.
-  vesper_player_ui: ^0.4.1
+  vesper_player_ui: ^0.4.2
 ```
 
 Repository source-checkout development writes ignored local dependency

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2 - 2026-08-16
+
+### Fixed
+
+- The matching Android `vesper-player-kit-external-playback` coordinate and
+  transitive FFmpeg runtime are now included in stable Maven Central
+  publication, so a hosted Flutter application can resolve the package without
+  a Vesper source checkout.
+
 ## 0.4.1 - 2026-08-14
 
 ### Breaking Changes

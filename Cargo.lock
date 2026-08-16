@@ -276,7 +276,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "basic-player"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -2504,7 +2504,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "player-audio-cpal"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "cpal",
@@ -2513,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "player-backend-ffmpeg"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "ffmpeg-next",
@@ -2524,7 +2524,7 @@ dependencies = [
 
 [[package]]
 name = "player-cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "base64",
@@ -2568,7 +2568,7 @@ dependencies = [
 
 [[package]]
 name = "player-dash-hls-bridge"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-model",
  "serde",
@@ -2578,7 +2578,7 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-d3d11"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-plugin",
  "windows",
@@ -2586,14 +2586,14 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-fixture"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-plugin",
 ]
 
 [[package]]
 name = "player-decoder-mediacodec"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-plugin",
  "tracing",
@@ -2601,14 +2601,14 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-videotoolbox"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-plugin",
 ]
 
 [[package]]
 name = "player-download"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-model",
  "player-plugin",
@@ -2618,7 +2618,7 @@ dependencies = [
 
 [[package]]
 name = "player-ffi"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-backend-ffmpeg",
  "player-ffi-common",
@@ -2632,11 +2632,11 @@ dependencies = [
 
 [[package]]
 name = "player-ffi-common"
-version = "0.4.1"
+version = "0.4.2"
 
 [[package]]
 name = "player-ffi-ios"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-dash-hls-bridge",
  "player-ffi-common",
@@ -2654,14 +2654,14 @@ dependencies = [
 
 [[package]]
 name = "player-frame-processor-diagnostic"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-plugin",
 ]
 
 [[package]]
 name = "player-host-desktop"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "player-model",
@@ -2676,7 +2676,7 @@ dependencies = [
 
 [[package]]
 name = "player-ios-bridge-shim-generator"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "player-cli",
@@ -2684,7 +2684,7 @@ dependencies = [
 
 [[package]]
 name = "player-jni-android"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "jni",
  "player-model",
@@ -2698,7 +2698,7 @@ dependencies = [
 
 [[package]]
 name = "player-model"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-android"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-model",
  "player-platform-mobile",
@@ -2723,11 +2723,11 @@ dependencies = [
 
 [[package]]
 name = "player-platform-apple"
-version = "0.4.1"
+version = "0.4.2"
 
 [[package]]
 name = "player-platform-desktop"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "player-audio-cpal",
@@ -2743,7 +2743,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-ios"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-model",
  "player-platform-mobile",
@@ -2755,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-linux"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-model",
  "player-platform-desktop",
@@ -2764,7 +2764,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-macos"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -2780,7 +2780,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-mobile"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-model",
  "player-plugin",
@@ -2792,7 +2792,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-native-frame"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-plugin",
  "player-runtime",
@@ -2801,7 +2801,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-process"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "nix",
  "windows-sys 0.61.2",
@@ -2809,7 +2809,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-windows"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -2823,7 +2823,7 @@ dependencies = [
 
 [[package]]
 name = "player-playlist"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-download",
  "player-model",
@@ -2832,7 +2832,7 @@ dependencies = [
 
 [[package]]
 name = "player-plugin"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-plugin-abi",
  "player-plugin-macros",
@@ -2844,18 +2844,18 @@ dependencies = [
 
 [[package]]
 name = "player-plugin-abi"
-version = "0.4.1"
+version = "0.4.2"
 
 [[package]]
 name = "player-plugin-fixture"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-plugin",
 ]
 
 [[package]]
 name = "player-plugin-loader"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "hex",
  "libloading 0.9.0",
@@ -2879,7 +2879,7 @@ dependencies = [
 
 [[package]]
 name = "player-plugin-macros"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2888,7 +2888,7 @@ dependencies = [
 
 [[package]]
 name = "player-plugin-package"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
@@ -2910,7 +2910,7 @@ dependencies = [
 
 [[package]]
 name = "player-plugin-wasm"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "dlmalloc",
  "wit-bindgen 0.60.0",
@@ -2918,7 +2918,7 @@ dependencies = [
 
 [[package]]
 name = "player-plugin-wasm-host"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-plugin",
  "thiserror 2.0.19",
@@ -2932,7 +2932,7 @@ dependencies = [
 
 [[package]]
 name = "player-preload"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-download",
  "player-model",
@@ -2941,7 +2941,7 @@ dependencies = [
 
 [[package]]
 name = "player-relay-ffmpeg-android"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "ffmpeg-next",
  "jni",
@@ -2952,7 +2952,7 @@ dependencies = [
 
 [[package]]
 name = "player-remux-ffmpeg"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "ffmpeg-next",
  "player-plugin",
@@ -2961,7 +2961,7 @@ dependencies = [
 
 [[package]]
 name = "player-render-wgpu"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "wgpu",
@@ -2970,7 +2970,7 @@ dependencies = [
 
 [[package]]
 name = "player-runtime"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-download",
  "player-model",
@@ -2984,7 +2984,7 @@ dependencies = [
 
 [[package]]
 name = "player-source-normalizer"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "serde",
  "thiserror 2.0.19",
@@ -2993,14 +2993,14 @@ dependencies = [
 
 [[package]]
 name = "player-source-normalizer-diagnostic"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "player-plugin",
 ]
 
 [[package]]
 name = "player-source-normalizer-ffmpeg"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "ffmpeg-next",
  "player-plugin",
