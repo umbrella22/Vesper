@@ -115,7 +115,8 @@ android {
 
         if (!isFlutterSplitPerAbiBuild.get()) {
             ndk {
-                abiFilters += configuredAndroidAbis
+                abiFilters.clear()
+                abiFilters.addAll(configuredAndroidAbis)
             }
         }
     }
