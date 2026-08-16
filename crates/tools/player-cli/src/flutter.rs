@@ -1,12 +1,14 @@
+use std::collections::VecDeque;
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, Permissions};
 use std::io::{self, Read, Write};
 use std::path::Component;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
-use crate::external_process;
+use crate::external_process::{self, ExternalProcessErrorKind};
 
 const CORE_PACKAGES: [&str; 6] = [
     "vesper_player_platform_interface",
@@ -22,7 +24,13 @@ const MAX_FLUTTER_PUBSPEC_BYTES: u64 = 1024 * 1024;
 const MAX_FLUTTER_STAGE_ENTRIES: usize = 100_000;
 const MAX_FLUTTER_STAGE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const PUB_GET_PROPAGATION_RETRIES: usize = 6;
-const PUB_GET_PROPAGATION_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+const PUB_GET_PROPAGATION_WAIT: Duration = Duration::from_secs(20);
+const PUB_DEV_API_BASE_URL: &str = "https://pub.dev/api/packages/";
+const PUB_DEV_LOOKUP_MAXIMUM_BYTES: usize = 2 * 1024 * 1024;
+const PUB_DEV_LOOKUP_TIMEOUT: Duration = Duration::from_secs(45);
+const PUB_DEV_NEW_PACKAGE_BURST_LIMIT: usize = 4;
+const PUB_DEV_NEW_PACKAGE_BURST_WINDOW: Duration = Duration::from_secs(120);
+const PUB_DEV_NEW_PACKAGE_BURST_BUFFER: Duration = Duration::from_secs(5);
 const OPTIONAL_IOS_ARTIFACTS: [&str; 7] = [
     "VesperFFmpegAVCodec",
     "VesperFFmpegAVFormat",
@@ -441,6 +449,13 @@ pub fn publish_pub_packages(
     output: &mut dyn Write,
     diagnostics: &mut dyn Write,
 ) -> Result<(), FlutterError> {
+    let canonical_root = root.canonicalize().map_err(|error| {
+        FlutterError::storage(format!(
+            "failed to resolve repository root '{}': {error}",
+            root.display()
+        ))
+    })?;
+    let version = resolve_flutter_package_version(&canonical_root, requested_version)?;
     stage_pub_packages(
         root,
         output_directory,
@@ -451,9 +466,23 @@ pub fn publish_pub_packages(
     let stage = resolved_stage_after_staging(root, output_directory)?;
     let packages = selected_packages(include_optional);
     let flutter = require_path_executable("flutter", "Flutter SDK executable")?;
+    let mut recent_new_packages = VecDeque::new();
     for package in &packages {
         writeln!(output, "::group::flutter pub publish {package}").map_err(output_error)?;
         output.flush().map_err(output_error)?;
+        if pub_dev_resource_exists(package, Some(&version))? {
+            writeln!(
+                output,
+                "Skipping {package} {version}: this exact version is already published on pub.dev."
+            )
+            .map_err(output_error)?;
+            writeln!(output, "::endgroup::").map_err(output_error)?;
+            continue;
+        }
+        let creates_package = !pub_dev_resource_exists(package, None)?;
+        if creates_package {
+            wait_for_pub_dev_new_package_slot(&mut recent_new_packages, diagnostics)?;
+        }
         run_pub_get_with_retry(&flutter, &stage.join(package), package, diagnostics)?;
         run_flutter_command(
             &flutter,
@@ -461,6 +490,9 @@ pub fn publish_pub_packages(
             &["pub", "publish", "--force"],
             &format!("flutter pub publish for {package}"),
         )?;
+        if creates_package {
+            recent_new_packages.push_back(Instant::now());
+        }
         writeln!(output, "::endgroup::").map_err(output_error)?;
     }
     output.flush().map_err(output_error)?;
@@ -523,6 +555,122 @@ fn require_path_executable(command: &str, label: &str) -> Result<PathBuf, Flutte
     resolve_path_executable(command)?.ok_or_else(|| {
         FlutterError::compatibility(format!("{label} '{command}' was not found in PATH"))
     })
+}
+
+fn pub_dev_resource_exists(package: &str, version: Option<&str>) -> Result<bool, FlutterError> {
+    let mut url = url::Url::parse(PUB_DEV_API_BASE_URL).map_err(|error| {
+        FlutterError::compatibility(format!("invalid pub.dev API base URL: {error}"))
+    })?;
+    {
+        let mut segments = url.path_segments_mut().map_err(|_| {
+            FlutterError::compatibility("pub.dev API base URL cannot contain path segments")
+        })?;
+        segments.push(package);
+        if let Some(version) = version {
+            segments.push("versions");
+            segments.push(version);
+        }
+    }
+
+    let curl = env::var_os("CURL").unwrap_or_else(|| OsString::from("curl"));
+    let label = match version {
+        Some(version) => format!("pub.dev lookup for {package} {version}"),
+        None => format!("pub.dev lookup for {package}"),
+    };
+    let mut command = Command::new(curl);
+    command.args([
+        "--silent",
+        "--show-error",
+        "--location",
+        "--connect-timeout",
+        "15",
+        "--max-time",
+        "30",
+        "--retry",
+        "3",
+        "--retry-all-errors",
+        "--write-out",
+        "\n%{http_code}",
+    ]);
+    command.arg(url.as_str());
+    let result = external_process::run_interruptible_capture_with_timeout(
+        &mut command,
+        &label,
+        PUB_DEV_LOOKUP_MAXIMUM_BYTES,
+        PUB_DEV_LOOKUP_MAXIMUM_BYTES,
+        PUB_DEV_LOOKUP_TIMEOUT,
+    )
+    .map_err(|error| match error.kind() {
+        ExternalProcessErrorKind::Compatibility => FlutterError::compatibility(error.to_string()),
+        ExternalProcessErrorKind::Worker | ExternalProcessErrorKind::Cancelled => {
+            FlutterError::worker(error.to_string())
+        }
+    })?;
+    if !result.status.success() {
+        return Err(FlutterError::worker(format!(
+            "{label} failed with {}: {}",
+            result.status,
+            String::from_utf8_lossy(&result.stderr).trim()
+        )));
+    }
+    let response = String::from_utf8(result.stdout).map_err(|error| {
+        FlutterError::worker(format!("{label} returned non-UTF-8 output: {error}"))
+    })?;
+    let (_, status) = response
+        .rsplit_once('\n')
+        .ok_or_else(|| FlutterError::worker(format!("{label} did not report an HTTP status")))?;
+    match status.trim() {
+        "200" => Ok(true),
+        "404" => Ok(false),
+        status => Err(FlutterError::worker(format!(
+            "{label} returned unexpected HTTP status {status}"
+        ))),
+    }
+}
+
+fn wait_for_pub_dev_new_package_slot(
+    recent: &mut VecDeque<Instant>,
+    diagnostics: &mut dyn Write,
+) -> Result<(), FlutterError> {
+    let now = Instant::now();
+    let Some(wait) = pub_dev_new_package_wait(recent, now) else {
+        return Ok(());
+    };
+    writeln!(
+        diagnostics,
+        "pub.dev limits initial package creation to {PUB_DEV_NEW_PACKAGE_BURST_LIMIT} packages per two-minute window; waiting {} seconds before continuing.",
+        wait.as_secs()
+    )
+    .map_err(|error| {
+        FlutterError::storage(format!("failed to write Flutter command diagnostics: {error}"))
+    })?;
+    diagnostics.flush().map_err(|error| {
+        FlutterError::storage(format!(
+            "failed to write Flutter command diagnostics: {error}"
+        ))
+    })?;
+    std::thread::sleep(wait);
+    let _ = pub_dev_new_package_wait(recent, Instant::now());
+    Ok(())
+}
+
+fn pub_dev_new_package_wait(recent: &mut VecDeque<Instant>, now: Instant) -> Option<Duration> {
+    while recent
+        .front()
+        .is_some_and(|created| now.duration_since(*created) >= PUB_DEV_NEW_PACKAGE_BURST_WINDOW)
+    {
+        recent.pop_front();
+    }
+    let oldest = recent
+        .front()
+        .copied()
+        .filter(|_| recent.len() >= PUB_DEV_NEW_PACKAGE_BURST_LIMIT)?;
+    let elapsed = now.duration_since(oldest);
+    Some(
+        PUB_DEV_NEW_PACKAGE_BURST_WINDOW
+            .saturating_sub(elapsed)
+            .saturating_add(PUB_DEV_NEW_PACKAGE_BURST_BUFFER),
+    )
 }
 
 fn run_flutter_command(
@@ -2283,6 +2431,25 @@ fn output_error(error: io::Error) -> FlutterError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pub_dev_new_package_wait_enforces_and_expires_the_burst_window() {
+        let now = Instant::now();
+        let mut recent = VecDeque::from([
+            now - Duration::from_secs(30),
+            now - Duration::from_secs(20),
+            now - Duration::from_secs(10),
+            now - Duration::from_secs(1),
+        ]);
+        assert_eq!(
+            pub_dev_new_package_wait(&mut recent, now),
+            Some(Duration::from_secs(95))
+        );
+
+        let later = now + Duration::from_secs(91);
+        assert_eq!(pub_dev_new_package_wait(&mut recent, later), None);
+        assert_eq!(recent.len(), 3);
+    }
 
     #[test]
     fn flutter_package_version_matches_the_legacy_release_contract() {

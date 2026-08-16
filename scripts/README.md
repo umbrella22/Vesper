@@ -192,6 +192,15 @@ checkout with the final owner account:
   --include-optional-plugins=false
 ```
 
+The publish helper checks the exact package version on pub.dev before every
+upload. Re-running the same command after a network, authentication, or
+pub.dev rate-limit failure skips versions that were already accepted and
+continues in dependency order. During one uninterrupted first publication it
+also respects pub.dev's new-package burst window before creating a fifth
+package. If pub.dev reports that the account-level creation limit is already
+exhausted by an earlier process, wait for the reported window and rerun the
+same command.
+
 The release workflow runs `dart-lang/setup-dart` before Flutter so the Dart pub
 client receives the short-lived GitHub OIDC credential. It does not use a
 long-lived `PUB_TOKEN` secret.

@@ -14736,6 +14736,19 @@ fn flutter_pub_dry_run_and_publish_preserve_package_order_and_arguments() {
 } >> "$FLUTTER_COMMAND_LOG"
 "#,
     );
+    write_executable_script(
+        &tools.join("curl"),
+        r#"#!/bin/sh
+url=''
+for argument in "$@"; do
+  url="$argument"
+done
+case "$url" in
+  */versions/*) printf '{}\n404' ;;
+  *) printf '{}\n200' ;;
+esac
+"#,
+    );
     let stage = directory.path().join("Flutter command stage - 发布");
     let command_log = directory.path().join("flutter-command.log");
 
@@ -14819,6 +14832,88 @@ fn flutter_pub_dry_run_and_publish_preserve_package_order_and_arguments() {
     assert_eq!(
         fs::read_to_string(command_log).expect("read publish Flutter command log"),
         expected_publish_log
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn flutter_pub_publish_resumes_after_already_published_versions() {
+    let directory = flutter_fixture(true);
+    let root = flutter_fixture_root(&directory);
+    prepare_flutter_pub_fixture(&root);
+    let tools = directory.path().join("fake Flutter resume tools");
+    fs::create_dir_all(&tools).expect("create fake Flutter resume tools directory");
+    write_executable_script(
+        &tools.join("flutter"),
+        r#"#!/bin/sh
+{
+  printf 'cwd=%s' "$PWD"
+  for argument in "$@"; do
+    printf '\t%s' "$argument"
+  done
+  printf '\n'
+} >> "$FLUTTER_COMMAND_LOG"
+"#,
+    );
+    write_executable_script(
+        &tools.join("curl"),
+        r#"#!/bin/sh
+url=''
+for argument in "$@"; do
+  url="$argument"
+done
+case "$url" in
+  */vesper_player_platform_interface/versions/0.4.0|\
+  */vesper_player_android/versions/0.4.0|\
+  */vesper_player_ios/versions/0.4.0|\
+  */vesper_player/versions/0.4.0) printf '{}\n200' ;;
+  */versions/0.4.0) printf '{}\n404' ;;
+  */vesper_player_external_playback|*/vesper_player_ui) printf '{}\n404' ;;
+  *) printf '{}\n500' ;;
+esac
+"#,
+    );
+    let stage = directory.path().join("Flutter resume stage");
+    let command_log = directory.path().join("flutter-resume-command.log");
+
+    let publish = Command::new(env!("CARGO_BIN_EXE_vesper"))
+        .env("PATH", &tools)
+        .env("FLUTTER_COMMAND_LOG", &command_log)
+        .args(["flutter", "pub-publish"])
+        .arg(&stage)
+        .args(["0.4.0", "--include-optional-plugins=false", "--root"])
+        .arg(&root)
+        .output()
+        .expect("resume Flutter pub publish with fixture executables");
+
+    assert_eq!(
+        publish.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&publish.stderr)
+    );
+    assert!(publish.stderr.is_empty());
+    let stdout = String::from_utf8(publish.stdout).expect("UTF-8 resume output");
+    for package in &FLUTTER_CORE_PACKAGES[..4] {
+        assert!(stdout.contains(&format!(
+            "Skipping {package} 0.4.0: this exact version is already published on pub.dev."
+        )));
+    }
+    let canonical_stage = stage.canonicalize().expect("resolve Flutter resume stage");
+    let mut expected_log = String::new();
+    for package in &FLUTTER_CORE_PACKAGES[4..] {
+        expected_log.push_str(&format!(
+            "cwd={}\tpub\tget\n",
+            canonical_stage.join(package).display()
+        ));
+        expected_log.push_str(&format!(
+            "cwd={}\tpub\tpublish\t--force\n",
+            canonical_stage.join(package).display()
+        ));
+    }
+    assert_eq!(
+        fs::read_to_string(command_log).expect("read resumed Flutter command log"),
+        expected_log
     );
 }
 
