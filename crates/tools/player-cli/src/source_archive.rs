@@ -20,6 +20,9 @@ use crate::external_process::{self, ExternalProcessErrorKind};
 
 const DOWNLOAD_CONNECT_TIMEOUT_SECONDS: &str = "15";
 const DOWNLOAD_TOTAL_TIMEOUT_SECONDS: u64 = 15 * 60;
+const DOWNLOAD_RETRY_COUNT: &str = "3";
+const DOWNLOAD_RETRY_DELAY_SECONDS: &str = "2";
+const DOWNLOAD_RETRY_MAX_TIME_SECONDS: &str = "120";
 const DOWNLOAD_LOW_SPEED_BYTES_PER_SECOND: &str = "1024";
 const DOWNLOAD_LOW_SPEED_SECONDS: &str = "60";
 const DOWNLOAD_OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
@@ -194,6 +197,12 @@ fn ensure_cached_archive_with_mode(
                 "--show-error",
                 "--connect-timeout",
                 DOWNLOAD_CONNECT_TIMEOUT_SECONDS,
+                "--retry",
+                DOWNLOAD_RETRY_COUNT,
+                "--retry-delay",
+                DOWNLOAD_RETRY_DELAY_SECONDS,
+                "--retry-max-time",
+                DOWNLOAD_RETRY_MAX_TIME_SECONDS,
                 "--max-time",
                 &DOWNLOAD_TOTAL_TIMEOUT_SECONDS.to_string(),
                 "--speed-limit",
@@ -621,6 +630,7 @@ mod tests {
             concat!(
                 "#!/bin/sh\n",
                 "set -eu\n",
+                "printf '%s\\n' \"$@\" > \"$0.arguments\"\n",
                 "output=\n",
                 "while [ \"$#\" -gt 0 ]; do\n",
                 "  if [ \"$1\" = --output ]; then shift; output=$1; fi\n",
@@ -656,6 +666,11 @@ mod tests {
             fs::read(&resolved).expect("read downloaded archive"),
             b"downloaded archive\n"
         );
+        let arguments = fs::read_to_string(format!("{}.arguments", curl.display()))
+            .expect("read curl arguments");
+        assert!(arguments.contains("--retry\n3\n"));
+        assert!(arguments.contains("--retry-delay\n2\n"));
+        assert!(arguments.contains("--retry-max-time\n120\n"));
     }
 
     #[test]
