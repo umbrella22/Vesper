@@ -1656,10 +1656,9 @@ mod tests {
         );
         assert_eq!(prepared.asset_index.resources.len(), 1);
         assert_eq!(prepared.asset_index.segments.len(), 1);
-        assert!(
-            prepared.asset_index.segments[0]
-                .uri
-                .ends_with("segment_000.ts")
+        assert_eq!(
+            PathBuf::from(&prepared.asset_index.segments[0].uri),
+            workspace.path().join("segment_000.ts")
         );
     }
 

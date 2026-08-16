@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use quick_xml::{
     Reader, XmlVersion,
@@ -1754,6 +1754,10 @@ fn resolve_uri(base: &str, reference: &str) -> String {
     if reference.contains("://") || reference.starts_with("data:") {
         return reference.to_owned();
     }
+    if !base.contains("://") {
+        let parent = Path::new(base).parent().unwrap_or_else(|| Path::new(""));
+        return parent.join(reference).to_string_lossy().into_owned();
+    }
     if reference.starts_with('/')
         && let Some((scheme, rest)) = base.split_once("://")
         && let Some(host_end) = rest.find('/')
@@ -1830,7 +1834,7 @@ fn planning_error(
 mod tests {
     use super::{
         DownloadPlanner, DownloadPlanningClient, dash_event_attribute,
-        parse_iso8601_duration_seconds,
+        parse_iso8601_duration_seconds, resolve_uri,
     };
     use crate::{
         DownloadByteRange, DownloadContentFormat, DownloadProfile, DownloadSource,
@@ -1839,6 +1843,7 @@ mod tests {
     use player_model::MediaSource;
     use quick_xml::{Reader, events::Event};
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
     #[derive(Debug, Default)]
     struct FakeClient {
@@ -1883,6 +1888,23 @@ mod tests {
     fn hls_source(uri: &str) -> DownloadSource {
         DownloadSource::new(MediaSource::new(uri), DownloadContentFormat::HlsSegments)
             .with_manifest_uri(uri)
+    }
+
+    #[test]
+    fn local_manifest_reference_resolves_from_the_manifest_parent() {
+        let manifest = PathBuf::from("fixtures").join("video").join("main.m3u8");
+        let expected = manifest
+            .parent()
+            .expect("manifest parent")
+            .join("segment_000.ts");
+
+        assert_eq!(
+            PathBuf::from(resolve_uri(
+                manifest.to_string_lossy().as_ref(),
+                "segment_000.ts"
+            )),
+            expected
+        );
     }
 
     #[test]

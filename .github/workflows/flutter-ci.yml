@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/flutter-ci.yml"
+      - ".github/scripts/run-flutter-ios-subtitle-integration.sh"
       - ".github/actions/select-xcode/**"
       - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
@@ -37,6 +38,7 @@ on:
       - main
     paths:
       - ".github/workflows/flutter-ci.yml"
+      - ".github/scripts/run-flutter-ios-subtitle-integration.sh"
       - ".github/actions/select-xcode/**"
       - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
@@ -418,6 +420,8 @@ jobs:
           set -euo pipefail
 
           simulator_record="$(
+            # $stdin belongs to the embedded Ruby program.
+            # shellcheck disable=SC2016
             xcrun simctl list devices available --json | ruby -rjson -e '
               devices = JSON.parse($stdin.read).fetch("devices").flat_map do |runtime_identifier, runtime_devices|
                 match = runtime_identifier.match(/SimRuntime\.iOS-(\d+)(?:-(\d+))?(?:-(\d+))?\z/)
@@ -455,89 +459,24 @@ jobs:
           xcrun simctl bootstatus "$simulator_id" -b
           echo "VESPER_FLUTTER_IOS_SIMULATOR=$simulator_id" >> "$GITHUB_ENV"
 
+      # Flutter #181771 is an upstream race in the iOS log reader: the app can
+      # launch before the reader is ready and the tool then waits forever for
+      # the VM Service URI. Keep each attempt bounded and retry from a clean app
+      # process while the upstream issue remains open.
       - name: Run Flutter iOS subtitle integration
         id: subtitle_integration
-        shell: bash
-        working-directory: examples/flutter-host
-        timeout-minutes: 30
-        run: |
-          set -euo pipefail
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          VESPER_SUBTITLE_ATTEMPT: primary
+        run: bash .github/scripts/run-flutter-ios-subtitle-integration.sh
 
-          evidence_dir="$RUNNER_TEMP/flutter-subtitle-evidence"
-          log_dir="$RUNNER_TEMP/flutter-subtitle-logs"
-          mkdir -p "$evidence_dir" "$log_dir"
-          status=0
-
-          run_subtitle_integration() {
-            local evidence_name="$1"
-            local target="$2"
-            local -a pipeline_status
-            local command_status
-            local tee_status
-            set +e
-            VESPER_SUBTITLE_EVIDENCE_DIR="$evidence_dir" \
-            VESPER_SUBTITLE_EVIDENCE_NAME="$evidence_name" \
-              flutter drive \
-                --verbose \
-                --no-pub \
-                --driver=test_driver/subtitle_integration_test.dart \
-                --target="$target" \
-                --device-id "$VESPER_FLUTTER_IOS_SIMULATOR" \
-                2>&1 | tee "$log_dir/$evidence_name.log"
-            pipeline_status=("${PIPESTATUS[@]}")
-            command_status="${pipeline_status[0]}"
-            tee_status="${pipeline_status[1]}"
-            set -e
-            if [[ "$command_status" -ne 0 || "$tee_status" -ne 0 ]]; then
-              status=1
-            fi
-          }
-
-          run_subtitle_integration subtitle-positive integration_test/subtitle_contract_test.dart
-          run_subtitle_integration subtitle-lifecycle integration_test/subtitle_lifecycle_test.dart
-
-          required_evidence=(
-            "$evidence_dir/subtitle-positive.json"
-            "$evidence_dir/subtitle-positive.png"
-            "$evidence_dir/subtitle-lifecycle.json"
-          )
-          for evidence_path in "${required_evidence[@]}"; do
-            if [[ ! -s "$evidence_path" ]]; then
-              echo "Missing required subtitle evidence: $evidence_path" >&2
-              status=1
-            fi
-          done
-
-          if ! ruby -rjson -e '
-            positive = JSON.parse(File.read(ARGV.fetch(0)))
-            snapshot = positive.fetch("snapshot")
-            frame = snapshot.fetch("frame")
-            abort("Positive subtitle evidence is not visibly attached") unless
-              positive["evidenceName"] == "subtitle-positive" &&
-                snapshot["text"] == "Subtitle B" && snapshot["visible"] == true &&
-                snapshot["hidden"] == false && snapshot["windowAttached"] == true &&
-                snapshot.fetch("alpha").to_f > 0 && frame.fetch("width").to_f > 0 &&
-                frame.fetch("height").to_f > 0
-            abort("Positive subtitle evidence PNG is invalid") unless
-              File.binread(ARGV.fetch(1), 8) == "\x89PNG\r\n\x1a\n".b
-
-            lifecycle = JSON.parse(File.read(ARGV.fetch(2)))
-            scenarios = lifecycle.fetch("scenarios")
-            {
-              "timeout" => "subtitle_selection_timeout",
-              "sourceChange" => "subtitle_source_changed",
-              "supersede" => "subtitle_selection_superseded"
-            }.each do |name, code|
-              abort("Unexpected #{name} subtitle evidence") unless
-                scenarios.fetch(name).fetch("error").fetch("code") == code
-            end
-          ' \
-            "$evidence_dir/subtitle-positive.json" \
-            "$evidence_dir/subtitle-positive.png" \
-            "$evidence_dir/subtitle-lifecycle.json"; then
-            status=1
-          fi
-          exit "$status"
+      - name: Retry Flutter iOS subtitle integration
+        if: steps.subtitle_integration.outcome == 'failure'
+        timeout-minutes: 15
+        env:
+          VESPER_SUBTITLE_ATTEMPT: retry
+        run: bash .github/scripts/run-flutter-ios-subtitle-integration.sh
 
       - name: Upload Flutter iOS subtitle evidence
         if: always() && steps.subtitle_integration.outcome != 'skipped'
