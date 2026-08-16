@@ -1,4 +1,5 @@
 import com.android.Version
+import com.android.build.api.dsl.LibraryExtension
 
 plugins {
     id("com.android.library")
@@ -14,7 +15,7 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
     apply(plugin = "org.jetbrains.kotlin.android")
 }
 
-android {
+extensions.configure<LibraryExtension>("android") {
     namespace = "io.github.umbrella22.vesper.player.android.frame.processor.diagnostic"
     compileSdk = 36
 
@@ -24,7 +25,10 @@ android {
     }
 
     sourceSets {
-        getByName("main").jniLibs.setSrcDirs(listOf(frameProcessorJniLibraries.get()))
+        getByName("main").jniLibs.directories.apply {
+            clear()
+            add(frameProcessorJniLibraries.get())
+        }
     }
 
     buildTypes {

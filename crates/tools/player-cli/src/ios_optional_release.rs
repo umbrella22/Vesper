@@ -231,7 +231,7 @@ mod implementation {
     const ZIP_EOCD_MINIMUM_BYTES: usize = 22;
     const ZIP_MAXIMUM_COMMENT_BYTES: usize = u16::MAX as usize;
 
-    const BUILD_METADATA_KEYS: [&str; 22] = [
+    const BUILD_METADATA_KEYS: [&str; 23] = [
         "platform",
         "target",
         "profile",
@@ -254,6 +254,7 @@ mod implementation {
         "source_url",
         "source_sha256",
         "configure_line",
+        "shared_library_link_flags",
     ];
     const SOURCE_RECORD_KEYS: [&str; 11] = [
         "component",
@@ -2571,6 +2572,12 @@ mod implementation {
         )?;
         require_metadata_value(metadata, "profile_hash", profile, label)?;
         require_metadata_value(metadata, "license_flags", "", label)?;
+        require_metadata_value(
+            metadata,
+            "shared_library_link_flags",
+            crate::ffmpeg_apple::APPLE_SHARED_LIBRARY_LINK_FLAGS,
+            label,
+        )?;
         let declared_profile = required_metadata_value(metadata, "declared_profile", label)?;
         validate_profile_name(declared_profile, label)?;
         let configure = required_metadata_value(metadata, "configure_line", label)?;

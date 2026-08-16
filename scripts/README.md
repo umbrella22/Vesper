@@ -322,8 +322,10 @@ consume the resolved artifacts produced by that command.
 Resolved profile outputs are written under
 `third_party/ffmpeg/<platform>/profiles/` by default. Every prebuilt slice writes
 `vesper-ffmpeg-build-metadata.txt` with the declared profile, profile hash,
-external dependencies, license-sensitive flags, source archive SHA-256, and
-full configure line.
+external dependencies, license-sensitive flags, source archive SHA-256, full
+configure line, and platform linker overrides. Apple builds record the Darwin
+shared-library flags used in place of FFmpeg's obsolete `-single_module`
+default; the upstream source archive remains unmodified.
 Source archives are cached under `third_party/_cache` by default; override this
 with `VESPER_THIRD_PARTY_SOURCE_CACHE_DIR` when local automation keeps third-party
 tarballs somewhere else.

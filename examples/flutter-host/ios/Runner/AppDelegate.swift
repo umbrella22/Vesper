@@ -4,6 +4,7 @@ import Flutter
 import MediaPlayer
 import Photos
 import UIKit
+import UniformTypeIdentifiers
 import VesperPlayerKit
 
 @main
@@ -93,8 +94,8 @@ import VesperPlayerKit
 
     pendingVideoPickerResult = result
     let picker = UIDocumentPickerViewController(
-      documentTypes: ["public.movie", "public.video"],
-      in: .import
+      forOpeningContentTypes: [.movie, .video],
+      asCopy: true
     )
     picker.delegate = self
     picker.allowsMultipleSelection = false

@@ -1,4 +1,5 @@
 import com.android.Version
+import com.android.build.api.dsl.LibraryExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -19,7 +20,7 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
     apply(plugin = "org.jetbrains.kotlin.android")
 }
 
-android {
+extensions.configure<LibraryExtension>("android") {
     namespace = "io.github.umbrella22.vesper.player.android.ffmpeg.runtime"
     compileSdk = 36
 

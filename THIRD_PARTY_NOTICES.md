@@ -95,7 +95,10 @@ Default Vesper scripts are intended to stay on the LGPL-oriented side:
 - Every generated ABI / slice writes `vesper-ffmpeg-build-metadata.txt`; use
   that file as the source of truth for the declared profile, profile hash,
   external dependencies, license-sensitive flags, build-time source archive
-  SHA-256, and full configure line in release notices.
+  SHA-256, full configure line, and any platform linker override in release
+  notices. Apple shared-library builds record the Darwin linker flags used to
+  replace FFmpeg's obsolete, no-op `-single_module` default without patching
+  the corresponding upstream source.
 - The scripts block `--enable-gpl` and `--enable-nonfree` unless the caller
   passes `--acknowledge-gpl-nonfree`. Passing that acknowledgement does not
   resolve licensing obligations; it only records an intentional release-owner

@@ -40,7 +40,6 @@ import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
-import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
@@ -369,7 +368,7 @@ internal fun prepareExternalSubtitleMediaSources(
         try {
             val dataSourceFactory = buildDataSourceFactory(appContext, cachePolicy, source.headers)
             mediaSources +=
-                SingleSampleMediaSource.Factory(dataSourceFactory)
+                androidx.media3.exoplayer.source.SingleSampleMediaSource.Factory(dataSourceFactory)
                     .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
                     .setTreatLoadErrorsAsEndOfStream(true)
                     .createMediaSource(buildExternalSubtitleConfiguration(source), C.TIME_UNSET)

@@ -403,8 +403,10 @@ Callers can add controlled overlays with `--extra-libraries`,
 `--extra-parsers`, `--extra-bsfs`, and repeated `--extra-configure-arg` flags.
 Validation fails if an overlay violates the selected profile policy. Generated
 ABIs and slices record `vesper-ffmpeg-build-metadata.txt` with the declared
-profile, profile hash, source archive SHA-256, license-sensitive flags, and
-exact configure line for release review.
+profile, profile hash, source archive SHA-256, license-sensitive flags, exact
+configure line, and platform linker overrides for release review. Apple builds
+record the Darwin shared-library flags that replace FFmpeg's obsolete
+`-single_module` default without modifying the upstream source archive.
 
 Android builds that explicitly opt into `--tls-backend openssl` provision
 OpenSSL from the 3.5 LTS series by default. FFmpeg source builds default to the

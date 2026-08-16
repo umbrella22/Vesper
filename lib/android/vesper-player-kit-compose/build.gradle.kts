@@ -1,4 +1,5 @@
 import com.android.Version
+import com.android.build.api.dsl.LibraryExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -12,7 +13,7 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
 }
 apply(plugin = "org.jetbrains.kotlin.plugin.compose")
 
-android {
+extensions.configure<LibraryExtension>("android") {
     namespace = "io.github.umbrella22.vesper.player.android.compose"
     compileSdk = 36
 
@@ -47,7 +48,7 @@ dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
     val media3Version = "1.11.0"
 
-    api(project(":vesper-player-kit"))
+    api(project.dependencies.project(":vesper-player-kit"))
     api(composeBom)
     api("androidx.compose.runtime:runtime")
     api("androidx.compose.ui:ui")

@@ -1,3 +1,4 @@
+import com.android.build.api.dsl.ApplicationExtension
 import java.io.File
 
 plugins {
@@ -29,7 +30,7 @@ if (missingVesperAars.isNotEmpty()) {
     )
 }
 
-android {
+extensions.configure<ApplicationExtension>("android") {
     namespace = "io.github.umbrella22.vesper.fixture.androidaarconsumer"
     compileSdk = 36
 

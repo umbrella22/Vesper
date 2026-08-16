@@ -1503,7 +1503,8 @@ fn configure_ios_plugin_ffmpeg_fixture(fixture: &IosPluginFixture) {
                         "source_archive=fixture.tar.xz\n",
                         "source_url=https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz\n",
                         "source_sha256=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c\n",
-                        "configure_line=--enable-shared\n"
+                        "configure_line=--enable-shared\n",
+                        "shared_library_link_flags=-dynamiclib -Wl,-install_name,$(INSTALL_NAME_DIR)/$(SLIBNAME_WITH_MAJOR),-current_version,$(LIBVERSION),-compatibility_version,$(LIBMAJOR)\n"
                     ),
                     target,
                     metadata_profile,

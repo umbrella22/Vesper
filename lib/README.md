@@ -170,7 +170,7 @@ Add the UI dependency in the consuming module's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation(project(":vesper-player-kit-compose-ui"))
+    implementation(project.dependencies.project(":vesper-player-kit-compose-ui"))
 }
 ```
 

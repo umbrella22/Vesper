@@ -1,4 +1,5 @@
 import com.android.Version
+import com.android.build.api.dsl.LibraryExtension
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -74,7 +75,7 @@ val provisionAndroidTestNativeLibraries = tasks.register<Exec>("provisionAndroid
     outputs.upToDateWhen { false }
 }
 
-android {
+extensions.configure<LibraryExtension>("android") {
     namespace = "io.github.umbrella22.vesper.player.android"
     compileSdk = 36
     ndkVersion = "29.0.14206865"
@@ -107,11 +108,14 @@ android {
         jniLibs.useLegacyPackaging = extractsInstrumentationNativeLibraries
     }
 
-    sourceSets.getByName("main").jniLibs.setSrcDirs(listOf(hostJniLibraries.get()))
+    sourceSets.getByName("main").jniLibs.directories.apply {
+        clear()
+        add(hostJniLibraries.get())
+    }
 
     sourceSets.getByName("androidTest").apply {
-        assets.srcDir(repoRoot.resolve("fixtures/media"))
-        jniLibs.srcDir(androidTestJniLibsDir.asFile)
+        assets.directories.add(repoRoot.resolve("fixtures/media").absolutePath)
+        jniLibs.directories.add(androidTestJniLibsDir.asFile.absolutePath)
     }
 
     publishing {

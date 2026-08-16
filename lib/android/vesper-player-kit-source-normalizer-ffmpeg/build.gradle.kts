@@ -1,4 +1,5 @@
 import com.android.Version
+import com.android.build.api.dsl.LibraryExtension
 
 plugins {
     id("com.android.library")
@@ -18,7 +19,7 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
     apply(plugin = "org.jetbrains.kotlin.android")
 }
 
-android {
+extensions.configure<LibraryExtension>("android") {
     namespace = "io.github.umbrella22.vesper.player.android.source.normalizer.ffmpeg"
     compileSdk = 36
 
@@ -29,8 +30,14 @@ android {
 
     sourceSets {
         getByName("main").apply {
-            jniLibs.setSrcDirs(listOf(sourceNormalizerJniLibraries.get()))
-            assets.setSrcDirs(listOf(sourceNormalizerAssets.get()))
+            jniLibs.directories.apply {
+                clear()
+                add(sourceNormalizerJniLibraries.get())
+            }
+            assets.directories.apply {
+                clear()
+                add(sourceNormalizerAssets.get())
+            }
         }
     }
 
@@ -51,7 +58,7 @@ android {
 }
 
 dependencies {
-    api(project(":vesper-player-kit-ffmpeg-runtime"))
+    api(project.dependencies.project(":vesper-player-kit-ffmpeg-runtime"))
 }
 
 val checkNoBundledFfmpegRuntimeLibraries = tasks.register("checkNoBundledFfmpegRuntimeLibraries") {

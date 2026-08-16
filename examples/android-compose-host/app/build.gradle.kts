@@ -1,3 +1,4 @@
+import com.android.build.api.dsl.ApplicationExtension
 import java.io.File
 
 plugins {
@@ -94,7 +95,9 @@ val buildVesperPluginCli =
         outputs.upToDateWhen { false }
     }
 
-android {
+val androidExtension = extensions.getByType(ApplicationExtension::class.java)
+
+extensions.configure<ApplicationExtension>("android") {
     namespace = "io.github.umbrella22.vesper.example.androidcomposehost"
     compileSdk = 36
     ndkVersion = "29.0.14206865"
@@ -161,9 +164,9 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation(project(":vesper-player-kit-compose-ui"))
-    implementation(project(":vesper-player-kit-external-playback"))
-    implementation(project(":vesper-player-kit-ffmpeg-runtime"))
+    implementation(project.dependencies.project(":vesper-player-kit-compose-ui"))
+    implementation(project.dependencies.project(":vesper-player-kit-external-playback"))
+    implementation(project.dependencies.project(":vesper-player-kit-ffmpeg-runtime"))
     testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
@@ -338,7 +341,7 @@ listOf("debug", "release").forEach { variant ->
     val variantTitle = variant.replaceFirstChar(Char::uppercaseChar)
     val generatedAssets =
         layout.buildDirectory.dir("generated/vesperPluginRegistryAssets/$variant")
-    android.sourceSets.maybeCreate(variant).assets.directories.add(
+    androidExtension.sourceSets.maybeCreate(variant).assets.directories.add(
         generatedAssets.get().asFile.absolutePath,
     )
     val stripTaskName = "strip${variantTitle}DebugSymbols"

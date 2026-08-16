@@ -1,3 +1,4 @@
+import com.android.build.api.dsl.ApplicationExtension
 import java.io.File
 
 plugins {
@@ -95,7 +96,9 @@ val buildVesperPluginCli =
         outputs.upToDateWhen { false }
     }
 
-android {
+val androidExtension = extensions.getByType(ApplicationExtension::class.java)
+
+extensions.configure<ApplicationExtension>("android") {
     namespace = "io.github.umbrella22.vesper.example.flutterhost"
     compileSdk = 36
     ndkVersion = "29.0.14206865"
@@ -311,7 +314,7 @@ val verifyVesperProfileReleaseSelection = tasks.register("verifyVesperProfileRel
     group = "verification"
     description = "Verifies Flutter Profile uses release Android and native variants."
     doLast {
-        val profileBuildType = android.buildTypes.getByName("profile")
+        val profileBuildType = androidExtension.buildTypes.getByName("profile")
         require(profileBuildType.matchingFallbacks == listOf("release")) {
             "Flutter Profile must resolve release Android variants; fallbacks=" +
                 profileBuildType.matchingFallbacks
@@ -386,7 +389,7 @@ listOf("debug", "profile", "release").forEach { variant ->
     val variantTitle = variant.replaceFirstChar(Char::uppercaseChar)
     val generatedAssets =
         layout.buildDirectory.dir("generated/vesperPluginRegistryAssets/$variant")
-    android.sourceSets.maybeCreate(variant).assets.directories.add(
+    androidExtension.sourceSets.maybeCreate(variant).assets.directories.add(
         generatedAssets.get().asFile.absolutePath,
     )
     val stripTaskName = "strip${variantTitle}DebugSymbols"

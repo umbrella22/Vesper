@@ -3,6 +3,8 @@ use std::path::Path;
 use crate::ffmpeg::{FfmpegError, FfmpegRequest, NativeFfmpegProfile};
 use crate::ffmpeg_source::FfmpegBuildSource;
 
+pub(crate) const APPLE_SHARED_LIBRARY_LINK_FLAGS: &str = "-dynamiclib -Wl,-install_name,$(INSTALL_NAME_DIR)/$(SLIBNAME_WITH_MAJOR),-current_version,$(LIBVERSION),-compatibility_version,$(LIBMAJOR)";
+
 pub(crate) fn run(
     root: &Path,
     request: &FfmpegRequest,
@@ -102,6 +104,8 @@ pub(crate) fn run_holding_repository_lock_with_canonical_source(
 
 #[cfg(target_os = "macos")]
 mod implementation {
+    use super::APPLE_SHARED_LIBRARY_LINK_FLAGS;
+
     use std::collections::{BTreeMap, BTreeSet};
     use std::env;
     use std::ffi::OsString;
@@ -467,7 +471,7 @@ mod implementation {
             if let Some(pkg_config) = &tools.pkg_config {
                 configure_line.push(format!("--pkg-config={}", pkg_config.display()));
             }
-            let metadata = profile.metadata_text(
+            let mut metadata = profile.metadata_text(
                 "apple",
                 slice,
                 &source.version,
@@ -476,6 +480,9 @@ mod implementation {
                 source_sha256,
                 &configure_line,
             );
+            metadata.push_str("shared_library_link_flags=");
+            metadata.push_str(APPLE_SHARED_LIBRARY_LINK_FLAGS);
+            metadata.push('\n');
             Ok(Self {
                 slice: slice.to_owned(),
                 output,
@@ -589,7 +596,9 @@ mod implementation {
             cancellation,
         )?;
         let mut make = Command::new(&plan.tools.make);
-        make.current_dir(&plan.build).arg(format!("-j{jobs}"));
+        make.current_dir(&plan.build)
+            .arg(format!("-j{jobs}"))
+            .arg(format!("SHFLAGS={APPLE_SHARED_LIBRARY_LINK_FLAGS}"));
         run_required_command(&mut make, "Apple FFmpeg build", diagnostics, cancellation)?;
 
         let parent = plan.output.parent().ok_or_else(|| {
@@ -1924,6 +1933,14 @@ mod implementation {
                 forbid_network: true,
                 forbid_openssl: true,
             }
+        }
+
+        #[test]
+        fn shared_library_link_flags_omit_obsolete_single_module_mode() {
+            assert!(!APPLE_SHARED_LIBRARY_LINK_FLAGS.contains("single_module"));
+            assert!(APPLE_SHARED_LIBRARY_LINK_FLAGS.contains("-install_name"));
+            assert!(APPLE_SHARED_LIBRARY_LINK_FLAGS.contains("-current_version"));
+            assert!(APPLE_SHARED_LIBRARY_LINK_FLAGS.contains("-compatibility_version"));
         }
 
         fn write_valid_prebuilt(output: &Path) -> PathBuf {

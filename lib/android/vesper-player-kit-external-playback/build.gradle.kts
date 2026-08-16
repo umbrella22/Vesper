@@ -1,4 +1,5 @@
 import com.android.Version
+import com.android.build.api.dsl.LibraryExtension
 import java.io.File
 import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
@@ -82,7 +83,7 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
     apply(plugin = "org.jetbrains.kotlin.android")
 }
 
-android {
+extensions.configure<LibraryExtension>("android") {
     namespace = "io.github.umbrella22.vesper.player.android.external"
     compileSdk = 36
 
@@ -137,8 +138,8 @@ dependencies {
     val media3Version = "1.11.0"
     val okhttpVersion = "5.4.0"
 
-    api(project(":vesper-player-kit"))
-    api(project(":vesper-player-kit-ffmpeg-runtime"))
+    api(project.dependencies.project(":vesper-player-kit"))
+    api(project.dependencies.project(":vesper-player-kit-ffmpeg-runtime"))
     api("androidx.appcompat:appcompat:1.8.0")
     api("androidx.media3:media3-cast:$media3Version")
     api("androidx.mediarouter:mediarouter:1.8.1")
