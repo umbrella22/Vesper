@@ -45,6 +45,7 @@ run_subtitle_integration() {
       flutter drive \
         --verbose \
         --no-pub \
+        --keep-app-running \
         --driver=test_driver/subtitle_integration_test.dart \
         --target="$target" \
         --device-id "$simulator_id"
@@ -52,6 +53,12 @@ run_subtitle_integration() {
   pipeline_status=("${PIPESTATUS[@]}")
   command_status="${pipeline_status[0]}"
   tee_status="${pipeline_status[1]}"
+
+  # Flutter 3.47 can report a passed drive as failed when its automatic
+  # Simulator teardown races an app process that already exited. Own teardown
+  # here so an already-stopped or already-uninstalled app remains idempotent.
+  xcrun simctl terminate "$simulator_id" "$bundle_identifier" >/dev/null 2>&1 || true
+  xcrun simctl uninstall "$simulator_id" "$bundle_identifier" >/dev/null 2>&1 || true
   set -e
 
   if [[ "$command_status" -ne 0 || "$tee_status" -ne 0 ]]; then
