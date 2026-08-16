@@ -159,7 +159,7 @@ GRADLE_USER_HOME=$PWD/.gradle/gradle-user-home ./gradlew \
 The project is pinned to:
 
 - Android Gradle Plugin `9.1.0`
-- Gradle Wrapper `9.6.0`
+- Gradle Wrapper `9.3.1`
 - Gradle runtime JDK `21`
 - Java / Kotlin bytecode target `17`
 - Kotlin `2.4.10` (consumer host; published Android AARs use the AGP-aligned

@@ -146,7 +146,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
-          gradle-version: "9.6.0"
+          gradle-version: "9.3.1"
 
       - name: Prepare release version metadata
         run: |
@@ -251,7 +251,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
-          gradle-version: "9.6.0"
+          gradle-version: "9.3.1"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -729,7 +729,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
-          gradle-version: "9.6.0"
+          gradle-version: "9.3.1"
 
       - name: Prepare release version metadata
         run: |
