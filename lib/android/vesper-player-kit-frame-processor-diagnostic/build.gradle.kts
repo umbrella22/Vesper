@@ -7,6 +7,7 @@ plugins {
 val frameProcessorJniLibraries =
     providers
         .environmentVariable("VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS")
+        .orElse(providers.gradleProperty("vesper.player.android.frameProcessorDiagnosticJniLibs"))
         .orElse("src/main/jniLibs")
 
 if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {

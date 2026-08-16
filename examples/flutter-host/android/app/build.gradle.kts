@@ -1,4 +1,3 @@
-import com.android.build.gradle.LibraryExtension
 import java.io.File
 
 plugins {
@@ -283,12 +282,6 @@ tasks.named("preBuild").configure {
 val sourceNormalizerPluginProject =
     rootProject.project(":vesper-player-kit-source-normalizer-ffmpeg")
 sourceNormalizerPluginProject.plugins.withId("com.android.library") {
-    sourceNormalizerPluginProject.extensions
-        .getByType(LibraryExtension::class.java)
-        .sourceSets
-        .getByName("main")
-        .jniLibs
-        .setSrcDirs(listOf(playerSourceNormalizerPluginJniLibsDirFile))
     sourceNormalizerPluginProject.tasks.matching { task ->
         (task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")) ||
             (task.name.startsWith("generate") &&
@@ -303,12 +296,6 @@ sourceNormalizerPluginProject.plugins.withId("com.android.library") {
 val frameProcessorPluginProject =
     rootProject.project(":vesper-player-kit-frame-processor-diagnostic")
 frameProcessorPluginProject.plugins.withId("com.android.library") {
-    frameProcessorPluginProject.extensions
-        .getByType(LibraryExtension::class.java)
-        .sourceSets
-        .getByName("main")
-        .jniLibs
-        .setSrcDirs(listOf(playerFrameProcessorDiagnosticPluginJniLibsDirFile))
     frameProcessorPluginProject.tasks.matching { task ->
         (task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")) ||
             (task.name.startsWith("generate") &&

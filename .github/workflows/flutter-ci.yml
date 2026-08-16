@@ -223,6 +223,8 @@ jobs:
           android.builtInKotlin=false
           vesper.player.android.abis=${{ matrix.abi }}
           vesper.player.android.app.abis=${{ matrix.abi }}
+          vesper.player.android.sourceNormalizerJniLibs=../../../examples/flutter-host/build/app/generated/playerSourceNormalizerFfmpeg/jniLibs
+          vesper.player.android.frameProcessorDiagnosticJniLibs=../../../examples/flutter-host/build/app/generated/playerFrameProcessorDiagnostic/jniLibs
           vesper.player.android.ffmpegProfile=default
           vesper.player.android.external.ffmpegProfile=default
           EOF
@@ -426,14 +428,27 @@ jobs:
               end.select do |device|
                 device["isAvailable"] != false && device.fetch("name", "").start_with?("iPhone")
               end
-              selected = devices.select { |device| device["state"] == "Booted" }
+              # Flutter #181771 can miss the VM service log on slow iOS 26
+              # simulator launches. Keep Xcode current while preferring the
+              # newest runtime from the lowest available supported iOS major.
+              runtime_major = devices.map { |device| device.fetch("_runtimeVersion").first }.min
+              preferred_devices = devices.select do |device|
+                device.fetch("_runtimeVersion").first == runtime_major
+              end
+              selected = preferred_devices.select { |device| device["state"] == "Booted" }
                 .max_by { |device| device.fetch("_runtimeVersion") } ||
-                devices.max_by { |device| device.fetch("_runtimeVersion") }
+                preferred_devices.max_by { |device| device.fetch("_runtimeVersion") }
               abort("No available iPhone Simulator with iOS 17 or newer was found.") unless selected
-              puts "#{selected.fetch("udid")}\t#{selected.fetch("state")}"
+              puts [
+                selected.fetch("udid"),
+                selected.fetch("state"),
+                selected.fetch("_runtimeVersion").join("."),
+                selected.fetch("name"),
+              ].join("\t")
             '
           )"
-          IFS=$'\t' read -r simulator_id simulator_state <<< "$simulator_record"
+          IFS=$'\t' read -r simulator_id simulator_state simulator_runtime simulator_name <<< "$simulator_record"
+          echo "Selected $simulator_name ($simulator_id) on iOS $simulator_runtime."
           if [[ "$simulator_state" != "Booted" ]]; then
             xcrun simctl boot "$simulator_id"
           fi
@@ -463,6 +478,8 @@ jobs:
             VESPER_SUBTITLE_EVIDENCE_DIR="$evidence_dir" \
             VESPER_SUBTITLE_EVIDENCE_NAME="$evidence_name" \
               flutter drive \
+                --verbose \
+                --no-pub \
                 --driver=test_driver/subtitle_integration_test.dart \
                 --target="$target" \
                 --device-id "$VESPER_FLUTTER_IOS_SIMULATOR" \

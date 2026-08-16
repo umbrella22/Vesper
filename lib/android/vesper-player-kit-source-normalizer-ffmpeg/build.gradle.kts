@@ -7,6 +7,7 @@ plugins {
 val sourceNormalizerJniLibraries =
     providers
         .environmentVariable("VESPER_ANDROID_SOURCE_NORMALIZER_JNI_LIBS")
+        .orElse(providers.gradleProperty("vesper.player.android.sourceNormalizerJniLibs"))
         .orElse("src/main/jniLibs")
 val sourceNormalizerAssets =
     providers
