@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.4.3 - 2026-08-17
+
+### Added
+
+- Added hosted Android SourceNormalizer and post-download remux AARs. Maven
+  Central now publishes seven same-version coordinates, and each optional
+  FFmpeg-backed plugin depends on the core kit plus the single shared FFmpeg
+  runtime instead of bundling duplicate `libav*` libraries.
+- Added `VesperPlayerSourceNormalizerFfmpeg` and
+  `VesperPlayerRemuxFfmpeg` capability-level products to the remote Swift
+  package. Each product closes over only its plugin and the three matching
+  FFmpeg component frameworks.
+- Added the `vesper_player_remux_ffmpeg` optional Flutter package and included
+  both optional native dependency packages in tag-driven pub.dev publication.
+
+### Changed
+
+- Stable and prerelease tags now publish matching Maven, SwiftPM, and pub.dev
+  versions. Prereleases retain a numeric Cargo and platform bundle version while
+  using the full `-rc.N` version for public package coordinates.
+- Flutter iOS optional packages resolve remote capability products and no
+  longer copy a repository-local optional `Artifacts/` directory into pub
+  staging.
+
+### Fixed
+
+- Expanded release verification to require the remux plugin, independent
+  SourceNormalizer/remux/runtime/relay profile receipts, complete Maven POM
+  closure, and the expected plugin registries and ELF payloads in Android sample
+  APKs.
+
+This release candidate is intended for external consumer and physical-device
+acceptance. Archive and hosted dependency checks do not by themselves establish
+successful playback on a device.
+
 ## 0.4.2 - 2026-08-16
 
 ### Fixed

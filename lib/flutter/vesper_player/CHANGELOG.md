@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3-rc.1 - 2026-08-17
+
+### Changed
+
+- Documented the hosted SourceNormalizer and remux dependency packages. Both
+  remain direct opt-ins and are not part of the default player dependency graph.
+
 ## 0.4.2 - 2026-08-16
 
 - Prepared package metadata for the 0.4.2 release.

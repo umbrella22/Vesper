@@ -18,7 +18,10 @@ const CORE_PACKAGES: [&str; 6] = [
     "vesper_player_external_playback",
     "vesper_player_ui",
 ];
-const OPTIONAL_PACKAGES: [&str; 1] = ["vesper_player_source_normalizer_ffmpeg"];
+const OPTIONAL_PACKAGES: [&str; 2] = [
+    "vesper_player_source_normalizer_ffmpeg",
+    "vesper_player_remux_ffmpeg",
+];
 const MAX_LOCAL_OVERRIDES_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_FLUTTER_PUBSPEC_BYTES: u64 = 1024 * 1024;
 const MAX_FLUTTER_STAGE_ENTRIES: usize = 100_000;
@@ -31,15 +34,13 @@ const PUB_DEV_LOOKUP_TIMEOUT: Duration = Duration::from_secs(45);
 const PUB_DEV_NEW_PACKAGE_BURST_LIMIT: usize = 4;
 const PUB_DEV_NEW_PACKAGE_BURST_WINDOW: Duration = Duration::from_secs(120);
 const PUB_DEV_NEW_PACKAGE_BURST_BUFFER: Duration = Duration::from_secs(5);
-const OPTIONAL_IOS_ARTIFACTS: [&str; 7] = [
-    "VesperFFmpegAVCodec",
-    "VesperFFmpegAVFormat",
-    "VesperFFmpegAVUtil",
-    "VesperPlayerRemuxFfmpegPlugin",
-    "VesperPlayerSourceNormalizerFfmpegPlugin",
-    "VesperPlayerDecoderVideoToolboxPlugin",
-    "VesperPlayerFrameProcessorDiagnosticPlugin",
-];
+const STAGED_PUBIGNORE: &str = concat!(
+    ".dart_tool/\n",
+    ".pub/\n",
+    "build/\n",
+    "pubspec.lock\n",
+    "pubspec_overrides.yaml\n",
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlutterErrorKind {
@@ -114,6 +115,7 @@ pub fn verify_android_plugin(root: &Path, include_optional: bool) -> Result<(), 
         .arg(":vesper_player_external_playback:compileDebugKotlin");
     if include_optional {
         command.arg(":vesper_player_source_normalizer_ffmpeg:compileDebugKotlin");
+        command.arg(":vesper_player_remux_ffmpeg:compileDebugKotlin");
     }
     command
         .stdin(Stdio::inherit())
@@ -315,21 +317,10 @@ pub fn stage_pub_packages(
         });
     }
 
-    let optional_ios = if include_optional {
-        Some(preflight_optional_ios_package(
-            &canonical_root,
-            &mut budget,
-        )?)
-    } else {
-        None
-    };
-    let mut protected_source_roots = package_plans
+    let protected_source_roots = package_plans
         .iter()
         .map(|plan| plan.tree.source_root.clone())
         .collect::<Vec<_>>();
-    if let Some(optional_ios) = optional_ios.as_ref() {
-        protected_source_roots.push(optional_ios.source_root.clone());
-    }
     let default_output = canonical_root.join("dist/release/flutter-pub");
     let displayed_output = output_directory.unwrap_or(&default_output);
     let target = resolve_flutter_stage_target(
@@ -363,15 +354,6 @@ pub fn stage_pub_packages(
             license_snapshot.identity,
             &mut copy_budget,
         )?;
-        if plan.package == OPTIONAL_PACKAGES[0]
-            && let Some(optional_ios) = optional_ios.as_ref()
-        {
-            copy_flutter_stage_tree(
-                optional_ios,
-                &destination.join("ios/VesperPlayerOptionalPlugins"),
-                &mut copy_budget,
-            )?;
-        }
         let pubspec = destination.join("pubspec.yaml");
         let source = read_bounded_utf8_file(
             &pubspec,
@@ -384,6 +366,15 @@ pub fn stage_pub_packages(
                 pubspec.display()
             ))
         })?;
+        let pubignore = destination.join(".pubignore");
+        remove_staged_regular_file(&pubignore, "package pubignore")?;
+        fs::write(&pubignore, STAGED_PUBIGNORE).map_err(|error| {
+            FlutterError::storage(format!(
+                "failed to write staged Flutter pubignore '{}': {error}",
+                pubignore.display()
+            ))
+        })?;
+        rewrite_staged_native_dependency_versions(&destination, &version)?;
     }
 
     promote_flutter_stage(staging, &target)?;
@@ -416,11 +407,13 @@ pub fn dry_run_pub_packages(
         include_optional,
         output,
     )?;
-    let stage = resolved_stage_after_staging(root, output_directory)?;
+    let staged = resolved_stage_after_staging(root, output_directory)?;
     let packages = selected_packages(include_optional);
+    let execution = prepare_pub_execution_stage(root, &staged, &packages)?;
+    let stage = &execution.path;
     let flutter = require_path_executable("flutter", "Flutter SDK executable")?;
     for package in &packages {
-        write_staged_package_overrides(&stage, package, &packages)?;
+        write_staged_package_overrides(stage, package, &packages)?;
         writeln!(output, "::group::flutter pub publish --dry-run {package}")
             .map_err(output_error)?;
         output.flush().map_err(output_error)?;
@@ -463,8 +456,10 @@ pub fn publish_pub_packages(
         include_optional,
         output,
     )?;
-    let stage = resolved_stage_after_staging(root, output_directory)?;
+    let staged = resolved_stage_after_staging(root, output_directory)?;
     let packages = selected_packages(include_optional);
+    let execution = prepare_pub_execution_stage(root, &staged, &packages)?;
+    let stage = &execution.path;
     let flutter = require_path_executable("flutter", "Flutter SDK executable")?;
     let mut recent_new_packages = VecDeque::new();
     for package in &packages {
@@ -500,6 +495,77 @@ pub fn publish_pub_packages(
         FlutterError::storage(format!(
             "failed to write Flutter command diagnostics: {error}"
         ))
+    })
+}
+
+struct FlutterPubExecutionStage {
+    path: PathBuf,
+    _temporary: Option<tempfile::TempDir>,
+}
+
+fn prepare_pub_execution_stage(
+    root: &Path,
+    staged: &Path,
+    packages: &[&str],
+) -> Result<FlutterPubExecutionStage, FlutterError> {
+    let canonical_root = root.canonicalize().map_err(|error| {
+        FlutterError::storage(format!(
+            "failed to resolve repository root '{}': {error}",
+            root.display()
+        ))
+    })?;
+    let canonical_stage = staged.canonicalize().map_err(|error| {
+        FlutterError::storage(format!(
+            "failed to resolve staged Flutter pub directory '{}': {error}",
+            staged.display()
+        ))
+    })?;
+    if !canonical_stage.starts_with(&canonical_root) {
+        return Ok(FlutterPubExecutionStage {
+            path: canonical_stage,
+            _temporary: None,
+        });
+    }
+
+    let temporary = tempfile::Builder::new()
+        .prefix("vesper-flutter-pub-execution-")
+        .tempdir()
+        .map_err(|error| {
+            FlutterError::storage(format!(
+                "failed to create external Flutter pub execution directory: {error}"
+            ))
+        })?;
+    let canonical_temporary = temporary.path().canonicalize().map_err(|error| {
+        FlutterError::storage(format!(
+            "failed to resolve Flutter pub execution directory: {error}"
+        ))
+    })?;
+    if canonical_temporary.starts_with(&canonical_root) {
+        return Err(FlutterError::compatibility(
+            "Flutter pub execution directory must be outside the repository so root ignore rules cannot hide staged files",
+        ));
+    }
+
+    let execution_root = canonical_temporary.join("flutter-pub");
+    let mut collection_budget = FlutterStageBudget::default();
+    let mut copy_budget = FlutterStageCopyBudget::default();
+    for package in packages {
+        let source = require_contained_directory(
+            &canonical_stage,
+            &canonical_stage.join(package),
+            "staged Flutter package directory",
+        )?;
+        let tree = collect_flutter_stage_tree(
+            &source,
+            StageCopyProfile::FlutterPackage,
+            &mut collection_budget,
+        )?;
+        copy_flutter_stage_tree(&tree, &execution_root.join(package), &mut copy_budget)?;
+    }
+
+    Ok(FlutterPubExecutionStage {
+        path: execution_root,
+        _temporary: Some(temporary),
     })
 }
 
@@ -778,7 +844,6 @@ enum FlutterStageEntryKind {
 #[derive(Clone, Copy)]
 enum StageCopyProfile {
     FlutterPackage,
-    OptionalIosPackage,
 }
 
 #[derive(Default)]
@@ -979,7 +1044,6 @@ fn flutter_stage_path_is_excluded(relative: &Path, profile: StageCopyProfile) ->
                     Some("iml" | "xcworkspace" | "xcuserdata" | "xcuserstate")
                 )
         }
-        StageCopyProfile::OptionalIosPackage => matches_os_str(file_name, &[".build", ".swiftpm"]),
     }
 }
 
@@ -1245,32 +1309,6 @@ fn remove_staged_regular_file(path: &Path, label: &str) -> Result<(), FlutterErr
     }
 }
 
-fn preflight_optional_ios_package(
-    root: &Path,
-    budget: &mut FlutterStageBudget,
-) -> Result<FlutterStageTree, FlutterError> {
-    let source = require_contained_directory(
-        root,
-        &root.join("lib/ios/VesperPlayerOptionalPlugins"),
-        "canonical iOS optional plugin package",
-    )?;
-    require_contained_regular_file(
-        root,
-        &source.join("Package.swift"),
-        "canonical iOS optional plugin package manifest",
-    )?;
-    for artifact in OPTIONAL_IOS_ARTIFACTS {
-        require_contained_directory(
-            root,
-            &source
-                .join("Artifacts")
-                .join(format!("{artifact}.xcframework")),
-            "optional iOS artifact for Flutter pub staging",
-        )?;
-    }
-    collect_flutter_stage_tree(&source, StageCopyProfile::OptionalIosPackage, budget)
-}
-
 fn resolve_flutter_package_version(
     root: &Path,
     requested: Option<&str>,
@@ -1298,6 +1336,82 @@ fn resolve_flutter_package_version(
             "Unable to resolve a valid Flutter package version: {version}"
         )))
     }
+}
+
+fn rewrite_staged_native_dependency_versions(
+    package: &Path,
+    version: &str,
+) -> Result<(), FlutterError> {
+    let android = package.join("android/build.gradle");
+    if android.is_file() {
+        rewrite_staged_version_line(
+            &android,
+            version,
+            |line| line.starts_with("version = \"") && line.ends_with('"'),
+            |version| format!("version = \"{version}\""),
+            "Flutter Android publication version",
+        )?;
+    }
+
+    let ios = package.join("ios");
+    if !ios.is_dir() {
+        return Ok(());
+    }
+    let package_name = package
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| FlutterError::compatibility("staged Flutter package name is not UTF-8"))?;
+    let manifest = ios.join(package_name).join("Package.swift");
+    if manifest.is_file() {
+        rewrite_staged_version_line(
+            &manifest,
+            version,
+            |line| {
+                line.starts_with("private let vesperPlayerKitVersion: Version = \"")
+                    && line.ends_with('"')
+            },
+            |version| format!("private let vesperPlayerKitVersion: Version = \"{version}\""),
+            "Flutter iOS native dependency version",
+        )?;
+    }
+    Ok(())
+}
+
+fn rewrite_staged_version_line(
+    path: &Path,
+    version: &str,
+    matches: impl Fn(&str) -> bool,
+    replacement: impl Fn(&str) -> String,
+    label: &str,
+) -> Result<(), FlutterError> {
+    let source = read_bounded_utf8_file(path, MAX_FLUTTER_PUBSPEC_BYTES, label)?;
+    let mut replacements = 0_usize;
+    let mut output = String::with_capacity(source.len());
+    for line in source.split_inclusive('\n') {
+        let has_newline = line.ends_with('\n');
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        if matches(body) {
+            replacements += 1;
+            output.push_str(&replacement(version));
+        } else {
+            output.push_str(body);
+        }
+        if has_newline {
+            output.push('\n');
+        }
+    }
+    if replacements != 1 {
+        return Err(FlutterError::conformance(format!(
+            "{label} '{}' must contain exactly one version declaration, found {replacements}",
+            path.display()
+        )));
+    }
+    fs::write(path, output).map_err(|error| {
+        FlutterError::storage(format!(
+            "failed to rewrite {label} '{}': {error}",
+            path.display()
+        ))
+    })
 }
 
 fn read_bounded_utf8_file(path: &Path, maximum: u64, label: &str) -> Result<String, FlutterError> {
@@ -2528,6 +2642,91 @@ dependencies:
         assert_eq!(
             rewrite_pubspec(version_dependency, "1.2.3", &["vesper_player_android"]),
             version_dependency
+        );
+    }
+
+    #[test]
+    fn staged_native_dependency_versions_follow_the_requested_prerelease() {
+        let directory = tempfile::tempdir().expect("temporary staged Flutter package");
+        let package = directory.path().join("vesper_player_optional");
+        let android = package.join("android/build.gradle");
+        let ios = package.join("ios/vesper_player_optional/Package.swift");
+        fs::create_dir_all(android.parent().expect("Android parent"))
+            .expect("create Android fixture directory");
+        fs::create_dir_all(ios.parent().expect("iOS parent"))
+            .expect("create iOS fixture directory");
+        fs::write(&android, "group = \"fixture\"\nversion = \"0.4.2\"\n")
+            .expect("write Android fixture");
+        fs::write(
+            &ios,
+            "private let vesperPlayerKitVersion: Version = \"0.4.2\"\n",
+        )
+        .expect("write iOS fixture");
+
+        rewrite_staged_native_dependency_versions(&package, "0.4.3-rc.1")
+            .expect("rewrite staged native versions");
+
+        assert!(
+            fs::read_to_string(android)
+                .expect("read Android fixture")
+                .contains("version = \"0.4.3-rc.1\"")
+        );
+        assert!(
+            fs::read_to_string(ios)
+                .expect("read iOS fixture")
+                .contains("vesperPlayerKitVersion: Version = \"0.4.3-rc.1\"")
+        );
+    }
+
+    #[test]
+    fn staged_pubignore_excludes_only_generated_publication_state() {
+        assert_eq!(
+            STAGED_PUBIGNORE,
+            ".dart_tool/\n.pub/\nbuild/\npubspec.lock\npubspec_overrides.yaml\n"
+        );
+        for required in [
+            "pubspec.yaml",
+            "LICENSE",
+            "README.md",
+            "CHANGELOG.md",
+            "lib/",
+        ] {
+            assert!(!STAGED_PUBIGNORE.lines().any(|line| line == required));
+        }
+    }
+
+    #[test]
+    fn repository_staging_is_copied_outside_root_before_pub_execution() {
+        let directory = tempfile::tempdir().expect("temporary Flutter publication fixture");
+        let repository = directory.path().join("repository");
+        let stage = repository.join("dist/release/flutter-pub");
+        let package = stage.join("fixture");
+        fs::create_dir_all(package.join("lib")).expect("create staged package fixture");
+        fs::write(
+            package.join("pubspec.yaml"),
+            "name: fixture\nversion: 1.0.0\n",
+        )
+        .expect("write staged pubspec");
+        fs::write(package.join("lib/fixture.dart"), "const fixture = true;\n")
+            .expect("write staged library");
+        fs::write(
+            package.join("pubspec_overrides.yaml"),
+            "dependency_overrides: {}\n",
+        )
+        .expect("write generated override");
+
+        let execution = prepare_pub_execution_stage(&repository, &stage, &["fixture"])
+            .expect("prepare external pub execution stage");
+        let canonical_repository = repository.canonicalize().expect("resolve repository");
+
+        assert!(!execution.path.starts_with(canonical_repository));
+        assert!(execution.path.join("fixture/pubspec.yaml").is_file());
+        assert!(execution.path.join("fixture/lib/fixture.dart").is_file());
+        assert!(
+            !execution
+                .path
+                .join("fixture/pubspec_overrides.yaml")
+                .exists()
         );
     }
 

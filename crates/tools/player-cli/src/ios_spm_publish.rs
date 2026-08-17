@@ -26,6 +26,19 @@ const SWIFT_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_TIMEOUT: Duration = Duration::from_secs(300);
 const MANAGED_FILES: [&str; 3] = ["Package.swift", "README.md", "LICENSE"];
 const UI_SOURCE_PATH: &str = "Sources/VesperPlayerKitUI";
+const OPTIONAL_BINARY_TARGETS: [&str; 5] = [
+    "VesperFFmpegAVCodec",
+    "VesperFFmpegAVFormat",
+    "VesperFFmpegAVUtil",
+    "VesperPlayerRemuxFfmpegPlugin",
+    "VesperPlayerSourceNormalizerFfmpegPlugin",
+];
+
+struct PublishedBinaryArtifact {
+    target: &'static str,
+    url: String,
+    checksum: String,
+}
 
 pub(crate) struct SpmPublishRequest<'a> {
     pub(crate) tag: &'a str,
@@ -84,7 +97,7 @@ pub(crate) fn publish(
     request: SpmPublishRequest<'_>,
     output: &mut dyn Write,
 ) -> Result<(), IosError> {
-    let version = release::ReleaseContext::stable_version_from_tag(request.tag)
+    let version = release::ReleaseContext::publication_version_from_tag(request.tag)
         .map_err(|error| IosError::conformance(error.to_string()))?;
     let source_repository = resolve_repository(
         request.source_repository,
@@ -98,10 +111,28 @@ pub(crate) fn publish(
         Some(DEFAULT_SPM_REPOSITORY),
         "Swift package GitHub repository",
     )?;
-    let archive = resolve_input(root, request.archive);
-    validate_archive(&archive)?;
-    let checksum = compute_checksum(root, &archive)?;
-    let asset_url = release_asset_url(&source_repository, request.tag, &archive)?;
+    let core_archive = resolve_input(root, request.archive);
+    validate_archive(&core_archive, "VesperPlayerKit")?;
+    let archive_directory = core_archive.parent().ok_or_else(|| {
+        IosError::conformance(format!(
+            "released VesperPlayerKit archive has no parent directory: {}",
+            core_archive.display()
+        ))
+    })?;
+    let mut artifacts = Vec::with_capacity(OPTIONAL_BINARY_TARGETS.len() + 1);
+    for target in std::iter::once("VesperPlayerKit").chain(OPTIONAL_BINARY_TARGETS) {
+        let archive = if target == "VesperPlayerKit" {
+            core_archive.clone()
+        } else {
+            archive_directory.join(format!("{target}.xcframework.zip"))
+        };
+        validate_archive(&archive, target)?;
+        artifacts.push(PublishedBinaryArtifact {
+            target,
+            url: release_asset_url(&source_repository, request.tag, &archive)?,
+            checksum: compute_checksum(root, &archive)?,
+        });
+    }
 
     let candidate_workspace = tempfile::Builder::new()
         .prefix("vesper-spm-candidate.")
@@ -112,7 +143,7 @@ pub(crate) fn publish(
             ))
         })?;
     let candidate = candidate_workspace.path().join("package");
-    generate_candidate(root, &candidate, &asset_url, &checksum, &source_repository)?;
+    generate_candidate(root, &candidate, &artifacts, &source_repository)?;
     validate_manifest(&candidate)?;
 
     if request.dry_run {
@@ -124,8 +155,9 @@ pub(crate) fn publish(
         promote_candidate(&candidate, &destination)?;
         writeln!(
             output,
-            "Verified Swift package dry-run for {version}:\n  {}\n  checksum: {checksum}",
-            destination.display()
+            "Verified Swift package dry-run for {version}:\n  {}\n  binary targets: {}",
+            destination.display(),
+            artifacts.len()
         )
         .map_err(output_error)?;
         return output.flush().map_err(output_error);
@@ -135,8 +167,9 @@ pub(crate) fn publish(
     publish_remote(&candidate, &package_repository, request.tag, &auth, output)?;
     writeln!(
         output,
-        "Published Swift package {package_repository}@{} with checksum {checksum}.",
-        request.tag
+        "Published Swift package {package_repository}@{} with {} binary targets.",
+        request.tag,
+        artifacts.len()
     )
     .map_err(output_error)?;
     output.flush().map_err(output_error)
@@ -215,23 +248,24 @@ fn resolve_output(root: &Path, path: &Path) -> Result<PathBuf, IosError> {
     Ok(output)
 }
 
-fn validate_archive(path: &Path) -> Result<(), IosError> {
+fn validate_archive(path: &Path, target: &str) -> Result<(), IosError> {
     let metadata = fs::symlink_metadata(path).map_err(|error| {
         IosError::conformance(format!(
-            "released VesperPlayerKit XCFramework archive '{}' is unavailable: {error}",
+            "released {target} XCFramework archive '{}' is unavailable: {error}",
             path.display()
         ))
     })?;
     if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > MAX_ARCHIVE_BYTES
     {
         return Err(IosError::conformance(format!(
-            "released VesperPlayerKit XCFramework archive '{}' must be a non-empty regular file no larger than {MAX_ARCHIVE_BYTES} bytes",
+            "released {target} XCFramework archive '{}' must be a non-empty regular file no larger than {MAX_ARCHIVE_BYTES} bytes",
             path.display()
         )));
     }
-    if path.file_name().and_then(|name| name.to_str()) != Some("VesperPlayerKit.xcframework.zip") {
+    let expected_name = format!("{target}.xcframework.zip");
+    if path.file_name().and_then(|name| name.to_str()) != Some(expected_name.as_str()) {
         return Err(IosError::conformance(format!(
-            "Swift package publication requires VesperPlayerKit.xcframework.zip, got '{}'",
+            "Swift package publication requires {expected_name}, got '{}'",
             path.display()
         )));
     }
@@ -285,8 +319,7 @@ fn release_asset_url(repository: &str, tag: &str, archive: &Path) -> Result<Stri
 fn generate_candidate(
     root: &Path,
     destination: &Path,
-    asset_url: &str,
-    checksum: &str,
+    artifacts: &[PublishedBinaryArtifact],
     source_repository: &str,
 ) -> Result<(), IosError> {
     fs::create_dir_all(destination).map_err(|error| {
@@ -295,6 +328,16 @@ fn generate_candidate(
             destination.display()
         ))
     })?;
+    let binary_targets = artifacts
+        .iter()
+        .map(|artifact| {
+            format!(
+                "        .binaryTarget(\n            name: \"{}\",\n            url: \"{}\",\n            checksum: \"{}\"\n        )",
+                artifact.target, artifact.url, artifact.checksum
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
     let package = format!(
         r#"// swift-tools-version: 5.10
 import PackageDescription
@@ -307,13 +350,27 @@ let package = Package(
     products: [
         .library(name: "VesperPlayerKit", targets: ["VesperPlayerKit"]),
         .library(name: "VesperPlayerKitUI", targets: ["VesperPlayerKitUI"]),
+        .library(
+            name: "VesperPlayerSourceNormalizerFfmpeg",
+            targets: [
+                "VesperPlayerSourceNormalizerFfmpegPlugin",
+                "VesperFFmpegAVCodec",
+                "VesperFFmpegAVFormat",
+                "VesperFFmpegAVUtil",
+            ]
+        ),
+        .library(
+            name: "VesperPlayerRemuxFfmpeg",
+            targets: [
+                "VesperPlayerRemuxFfmpegPlugin",
+                "VesperFFmpegAVCodec",
+                "VesperFFmpegAVFormat",
+                "VesperFFmpegAVUtil",
+            ]
+        ),
     ],
     targets: [
-        .binaryTarget(
-            name: "VesperPlayerKit",
-            url: "{asset_url}",
-            checksum: "{checksum}"
-        ),
+{binary_targets},
         .target(
             name: "VesperPlayerKitUI",
             dependencies: ["VesperPlayerKit"],
@@ -325,7 +382,7 @@ let package = Package(
     );
     write_file(&destination.join("Package.swift"), package.as_bytes())?;
     let readme = format!(
-        "# VesperPlayerKit\n\nBinary Swift package distribution for [Vesper](https://github.com/{source_repository}).\n\nThe `VesperPlayerKit` product contains the released binary host kit. The `VesperPlayerKitUI` product layers the version-matched SwiftUI controls on top.\n"
+        "# VesperPlayerKit\n\nBinary Swift package distribution for [Vesper](https://github.com/{source_repository}).\n\nThe `VesperPlayerKit` product contains the released binary host kit. The `VesperPlayerKitUI` product layers the version-matched SwiftUI controls on top. `VesperPlayerSourceNormalizerFfmpeg` and `VesperPlayerRemuxFfmpeg` are opt-in capability products; each embeds its plugin plus the matching AVCodec, AVFormat, and AVUtil runtime components. Decoder and FrameProcessor plugins are not part of these products.\n"
     );
     write_file(&destination.join("README.md"), readme.as_bytes())?;
     copy_regular_file(
@@ -1037,5 +1094,57 @@ mod tests {
         assert!(resolve_output(root, Path::new("dist/../outside")).is_err());
         assert!(resolve_output(root, Path::new("release/spm-index")).is_err());
         assert!(resolve_output(root, Path::new("/tmp/spm-index")).is_err());
+    }
+
+    #[test]
+    fn generated_manifest_exports_only_capability_level_optional_products() {
+        let directory = tempfile::tempdir().expect("temporary Swift package fixture");
+        let root = directory.path();
+        fs::write(root.join("LICENSE"), "license\n").expect("write fixture license");
+        let ui = root.join("lib/ios/VesperPlayerKit/Sources/VesperPlayerKitUI");
+        fs::create_dir_all(&ui).expect("create fixture UI sources");
+        fs::write(ui.join("Controls.swift"), "public struct Controls {}\n")
+            .expect("write fixture UI source");
+        let targets = std::iter::once("VesperPlayerKit")
+            .chain(OPTIONAL_BINARY_TARGETS)
+            .collect::<Vec<_>>();
+        let artifacts = targets
+            .iter()
+            .map(|target| PublishedBinaryArtifact {
+                target,
+                url: format!("https://example.invalid/{target}.xcframework.zip"),
+                checksum: "0".repeat(64),
+            })
+            .collect::<Vec<_>>();
+        let candidate = root.join("candidate");
+
+        generate_candidate(root, &candidate, &artifacts, "umbrella22/Vesper")
+            .expect("generate Swift package candidate");
+
+        let manifest =
+            fs::read_to_string(candidate.join("Package.swift")).expect("read generated manifest");
+        for product in [
+            "VesperPlayerKit",
+            "VesperPlayerKitUI",
+            "VesperPlayerSourceNormalizerFfmpeg",
+            "VesperPlayerRemuxFfmpeg",
+        ] {
+            assert!(manifest.contains(&format!("name: \"{product}\"")));
+        }
+        for excluded in [
+            "VesperPlayerDecoderVideoToolboxPlugin",
+            "VesperPlayerFrameProcessorDiagnosticPlugin",
+        ] {
+            assert!(!manifest.contains(excluded));
+        }
+        for target in targets {
+            assert_eq!(
+                manifest
+                    .matches(&format!(".binaryTarget(\n            name: \"{target}\""))
+                    .count(),
+                1,
+                "binary target {target} must be declared exactly once"
+            );
+        }
     }
 }

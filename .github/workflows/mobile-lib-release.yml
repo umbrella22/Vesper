@@ -180,6 +180,7 @@ jobs:
             "release-assets/android/VesperPlayerKitFfmpegRuntime-android-${{ matrix.abi }}.aar"
             "release-assets/android/VesperPlayerKitDecoderMediaCodec-android-${{ matrix.abi }}.aar"
             "release-assets/android/VesperPlayerKitSourceNormalizerFfmpeg-android-${{ matrix.abi }}.aar"
+            "release-assets/android/VesperPlayerKitRemuxFfmpeg-android-${{ matrix.abi }}.aar"
             "release-assets/android/VesperPlayerKitFrameProcessorDiagnostic-android-${{ matrix.abi }}.aar"
           )
           for unexpected in "${optional_artifacts[@]}"; do
@@ -289,6 +290,7 @@ jobs:
           cat > "${wrapper_dir}/flutter" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
+          export VESPER_ANDROID_REMUX_JNI_LIBS="${GITHUB_WORKSPACE}/examples/flutter-host/build/app/generated/playerFfmpeg/jniLibs"
           export VESPER_ANDROID_SOURCE_NORMALIZER_JNI_LIBS="${GITHUB_WORKSPACE}/examples/flutter-host/build/app/generated/playerSourceNormalizerFfmpeg/jniLibs"
           export VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS="${GITHUB_WORKSPACE}/examples/flutter-host/build/app/generated/playerFrameProcessorDiagnostic/jniLibs"
           exec "$real_flutter" "\$@"
@@ -684,7 +686,6 @@ jobs:
     needs:
       - release-checks
       - publish-release
-    if: needs.release-checks.outputs.stable == 'true'
     environment: maven-central
 
     steps:
@@ -773,7 +774,7 @@ jobs:
           reported_components="$(mktemp)"
           canonical_components="$(mktemp)"
           trap 'rm -f "$publish_log" "$expected_components" "$reported_components" "$canonical_components"' EXIT
-          version="${RELEASE_TAG#v}"
+          version="${VESPER_RELEASE_PUBLICATION_VERSION}"
           artifacts=(
             vesper-player-kit
             vesper-player-kit-compose
@@ -819,12 +820,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${RELEASE_TAG#v}"
+          version="${VESPER_RELEASE_PUBLICATION_VERSION}"
           repository="https://repo.maven.apache.org/maven2/io/github/umbrella22/vesper"
           artifacts=(
             vesper-player-kit
             vesper-player-kit-ffmpeg-runtime
             vesper-player-kit-external-playback
+            vesper-player-kit-source-normalizer-ffmpeg
+            vesper-player-kit-remux-ffmpeg
           )
 
           for attempt in $(seq 1 60); do
@@ -861,7 +864,6 @@ jobs:
     needs:
       - release-checks
       - publish-release
-    if: needs.release-checks.outputs.stable == 'true'
     environment: swift-package
 
     steps:
@@ -874,13 +876,18 @@ jobs:
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
 
-      - name: Download released XCFramework
+      - name: Download released XCFrameworks
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release download "${RELEASE_TAG}"
           --repo "${GITHUB_REPOSITORY}"
           --pattern VesperPlayerKit.xcframework.zip
+          --pattern VesperFFmpegAVCodec.xcframework.zip
+          --pattern VesperFFmpegAVFormat.xcframework.zip
+          --pattern VesperFFmpegAVUtil.xcframework.zip
+          --pattern VesperPlayerRemuxFfmpegPlugin.xcframework.zip
+          --pattern VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip
           --dir release-assets/ios
 
       - name: Publish remote Swift package index

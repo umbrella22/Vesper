@@ -22,6 +22,7 @@ val vesperAarNames =
         "VesperPlayerKit-android-arm64-v8a.aar",
         "VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar",
         "VesperPlayerKitSourceNormalizerFfmpeg-android-arm64-v8a.aar",
+        "VesperPlayerKitRemuxFfmpeg-android-arm64-v8a.aar",
         "VesperPlayerKitDecoderMediaCodec-android-arm64-v8a.aar",
         "VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar",
     )
@@ -86,6 +87,12 @@ dependencies {
     } else {
         implementation(
             "io.github.umbrella22.vesper:vesper-player-kit-external-playback:$vesperMavenVersion",
+        )
+        implementation(
+            "io.github.umbrella22.vesper:vesper-player-kit-source-normalizer-ffmpeg:$vesperMavenVersion",
+        )
+        implementation(
+            "io.github.umbrella22.vesper:vesper-player-kit-remux-ffmpeg:$vesperMavenVersion",
         )
     }
 

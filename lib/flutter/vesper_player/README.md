@@ -40,11 +40,15 @@ federated implementations resolve automatically:
 
 ```yaml
 dependencies:
-  vesper_player: ^0.4.2
+  vesper_player: 0.4.3-rc.1
   # Optional unified Android Cast / DLNA external playback.
-  vesper_player_external_playback: ^0.4.2
+  vesper_player_external_playback: 0.4.3-rc.1
   # Optional stage controls and AirPlay route button.
-  vesper_player_ui: ^0.4.2
+  vesper_player_ui: 0.4.3-rc.1
+  # Optional normalized-resource playback.
+  vesper_player_source_normalizer_ffmpeg: 0.4.3-rc.1
+  # Optional post-download MP4 remux.
+  vesper_player_remux_ffmpeg: 0.4.3-rc.1
 ```
 
 Repository source-checkout development writes ignored local dependency
@@ -654,6 +658,11 @@ frameworks. Export becomes available only after the host app packages the
 runtime components and plugin, then selects the packaged plugin with a native
 `VesperPluginReference`.
 
+For hosted Flutter integration, add `vesper_player_remux_ffmpeg` at the same
+version as `vesper_player`. Its Android dependency resolves the matching core,
+remux, and shared FFmpeg runtime Maven closure; its iOS package resolves the
+matching `VesperPlayerRemuxFfmpeg` SwiftPM capability product.
+
 ```dart
 final remuxPlugin = VesperPluginReference(
   pluginId: 'io.github.umbrella22.vesper.remux-ffmpeg',
@@ -691,10 +700,9 @@ Key points:
   component frameworks are dependencies, not plugin references.
 - `exportTaskOutput(...)` triggers the plugin and reports progress through
   `VesperDownloadExportProgressEvent`.
-- The mobile examples in this repository already show the full host wiring.
-  Android builds the plugin during Gradle `preBuild`; Flutter iOS adds the seven
-  direct products from `VesperPlayerOptionalPlugins` to the App target so Xcode
-  embeds and signs the sibling frameworks.
+- Hosted consumers use the optional Flutter package above. The source-checkout
+  mobile examples additionally exercise local Gradle generation and the local
+  seven-framework iOS staging path for release verification.
 - Depending on `vesper_player` alone does not pull FFmpeg into your app. That
   keeps app size stable when export is not needed.
 - FFmpeg prebuilts are selected through `./scripts/vesper ffmpeg --platform
@@ -722,9 +730,10 @@ All three are disabled by default. Apps can depend on the optional
 `VesperSourceNormalizerConfiguration.preferBundled()` or
 `VesperSourceNormalizerConfiguration.requireBundled()` to use the Android AAR
 or the iOS host-embedded plugin without app-side path lookup code. On iOS, the
-App target directly embeds `VesperPlayerSourceNormalizerFfmpegPlugin` and its
-three `VesperFFmpeg*` dependencies; the Flutter package does not expose binary
-paths or an aggregate optional-plugin product.
+optional Flutter package resolves the
+`VesperPlayerSourceNormalizerFfmpeg` capability product, which embeds the
+plugin and its three `VesperFFmpeg*` dependencies. Flutter does not expose
+binary paths or an aggregate optional-plugin product.
 Custom builds also select plugins with `VesperPluginReference`; the Android
 embedded registry or iOS host resolver must map the selected identity to its
 build-time artifact. Flutter does not accept arbitrary plugin binary paths.

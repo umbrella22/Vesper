@@ -65,22 +65,26 @@ separate product-direction change.
 
 ### Swift Package (remote)
 
-Stable releases are available from the dedicated package repository:
+Stable and prerelease releases are available from the dedicated package
+repository:
 
 ```text
 https://github.com/umbrella22/VesperPlayerKit.git
 ```
 
-Add that URL in Xcode's package dependency editor and select a released
-`MAJOR.MINOR.PATCH` version. Link the `VesperPlayerKit` product for the binary
-host kit. Link `VesperPlayerKitUI` as well when the app uses the version-matched
-SwiftUI stage and controls.
+Add that URL in Xcode's package dependency editor and select the exact release
+version, including a suffix such as `0.4.3-rc.1` when testing a prerelease. Link
+the `VesperPlayerKit` product for the binary host kit. Link
+`VesperPlayerKitUI` as well when the app uses the version-matched SwiftUI stage
+and controls. Optional apps link `VesperPlayerSourceNormalizerFfmpeg` or
+`VesperPlayerRemuxFfmpeg`; each capability product includes only its plugin and
+the three matching FFmpeg component targets.
 
 The package repository contains the manifest, license, and
-`VesperPlayerKitUI` sources. Its `VesperPlayerKit` binary target references the
-matching `VesperPlayerKit.xcframework.zip` GitHub Release asset and pins the
-archive checksum. Prerelease tags remain GitHub prereleases and are not pushed
-to the package repository.
+`VesperPlayerKitUI` sources. Its binary targets reference the matching GitHub
+Release assets and pin every archive checksum. Stable and prerelease tags are
+pushed to the package repository after all required release assets pass
+verification.
 
 ### Swift Package (local)
 
@@ -116,10 +120,12 @@ separate `ios verify-optional-plugins-device` gate documented in
 hashes, sanitized tested hashes, and XCResult rather than treating archive
 verification as device evidence.
 
-The Rust CLI stages the complete release file set and the optional Swift package
-`Artifacts/` directory before committing either destination. Use
-`--package-artifacts-directory <PATH>` only when a release workflow needs an
-explicit package-artifact destination outside the default package directory.
+For repository-local examples, the Rust CLI stages the complete release file
+set and the local optional Swift package `Artifacts/` directory before
+committing either destination. Remote package consumers do not need that local
+directory. Use `--package-artifacts-directory <PATH>` only when a source-build
+workflow needs an explicit package-artifact destination outside the default
+package directory.
 
 The build script:
 
@@ -135,8 +141,10 @@ builds, or any other working directory.
 ### Swift Package Publishing
 
 The `publish-swift-package` release job runs after the GitHub Release. It
-downloads the released XCFramework, computes the SwiftPM checksum, validates the
-generated manifest, and atomically pushes the package branch and matching tag.
+downloads the core XCFramework plus the three FFmpeg components and the remux
+and SourceNormalizer plugin XCFrameworks, computes their SwiftPM checksums,
+validates the generated capability-level manifest, and atomically pushes the
+package branch and matching stable or prerelease tag.
 Publishing requires:
 
 - a public `umbrella22/VesperPlayerKit` repository, or another repository named
@@ -410,8 +418,15 @@ host-provided path and keeps the original offline file in place.
 
 ## Optional iOS Plugin Package
 
-FFmpeg is not embedded in the core `VesperPlayerKit.xcframework`. Repository
-hosts stage the canonical optional package before SwiftPM resolution:
+FFmpeg is not embedded in the core `VesperPlayerKit.xcframework`. Remote
+consumers add one or both capability-level products:
+
+- `VesperPlayerSourceNormalizerFfmpeg`
+- `VesperPlayerRemuxFfmpeg`
+
+Each product closes over its plugin and the three shared FFmpeg component
+targets. Repository examples and archive verification instead stage the local
+seven-product package before SwiftPM resolution:
 
 ```sh
 ./scripts/vesper ios stage-optional-plugins-release \
@@ -420,11 +435,13 @@ hosts stage the canonical optional package before SwiftPM resolution:
   ios-arm64 ios-simulator-arm64
 ```
 
-The App target depends on the local `VesperPlayerOptionalPlugins` Swift package
-and embeds its seven same-named binary products with Embed & Sign. SwiftPM then
-places the three FFmpeg component frameworks and four plugin frameworks as
-top-level siblings under `App.app/Frameworks`. Do not create flat dylibs,
-nested frameworks, or the legacy `VesperPlayerFfmpegRuntime.framework` umbrella.
+The repository App targets depend on the local
+`VesperPlayerOptionalPlugins` Swift package and embed its seven same-named
+binary products with Embed & Sign. Hosted consumers let the selected capability
+products embed only the required closure. SwiftPM places the selected FFmpeg
+component and plugin frameworks as top-level siblings under
+`App.app/Frameworks`. Do not create flat dylibs, nested frameworks, or the
+legacy `VesperPlayerFfmpegRuntime.framework` umbrella.
 
 At runtime, select the remux plugin with a native `VesperPluginReference` in
 `VesperDownloadConfiguration.postDownloadPluginReferences`. The host kit maps

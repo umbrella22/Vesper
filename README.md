@@ -310,8 +310,12 @@ Android is distributed as AAR modules:
   and local relay integration.
 - `vesper-player-kit-ffmpeg-runtime`: optional FFmpeg runtime package used by
   remux and relay workflows.
-- Decoder, SourceNormalizer, and FrameProcessor plugin AARs: explicit
-  experimental native-frame and diagnostic extensions.
+- `vesper-player-kit-source-normalizer-ffmpeg`: optional SourceNormalizer
+  plugin that depends on the core kit and shared FFmpeg runtime.
+- `vesper-player-kit-remux-ffmpeg`: optional post-download MP4 remux plugin
+  that depends on the core kit and shared FFmpeg runtime.
+- Decoder and FrameProcessor plugin AARs: explicit experimental native-frame
+  and diagnostic extensions built from the source checkout.
 - `vesper-player-kit-compose`: Compose adapter with `VesperPlayerSurface` and
   controller/state helpers.
 - `vesper-player-kit-compose-ui`: optional opinionated Compose player stage.
@@ -340,10 +344,12 @@ Flutter is a federated plugin family:
   with local HTTP relay support.
 - `vesper_player_source_normalizer_ffmpeg`: optional experimental native
   SourceNormalizer artifacts.
+- `vesper_player_remux_ffmpeg`: optional native dependency package for
+  post-download MP4 remux.
 - `vesper_player_ui`: optional Flutter controls and player stage widgets.
 
-The Flutter packages currently ship from source in this repository and are not
-published to pub.dev yet.
+The Flutter package family is published to pub.dev. SourceNormalizer and remux
+remain direct, opt-in dependencies and are not pulled in by `vesper_player`.
 
 ## Building From Source
 
@@ -470,9 +476,10 @@ Vesper is Apache-2.0 licensed, but FFmpeg remains under its own FFmpeg
 license terms. The repository does not commit generated FFmpeg binaries by
 default; optional Android, iOS, and desktop workflows can build or bundle
 FFmpeg-backed artifacts when a host application explicitly opts in. Tagged
-GitHub Releases publish the optional iOS FFmpeg-backed XCFrameworks only when
-the same release also contains the generated compliance bundle and exactly one
-corresponding FFmpeg source archive for those binaries.
+releases publish the Android FFmpeg runtime and FFmpeg-backed plugin Maven
+coordinates, and publish the optional iOS FFmpeg-backed XCFrameworks, only with
+the generated compliance bundle and exactly one corresponding FFmpeg source
+archive for those binaries.
 
 The default Vesper FFmpeg scripts avoid `--enable-gpl` and
 `--enable-nonfree`; the scripts refuse those flags unless the caller passes an

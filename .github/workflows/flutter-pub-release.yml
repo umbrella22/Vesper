@@ -21,7 +21,7 @@ jobs:
     name: Publish Flutter packages to pub.dev
     runs-on: ubuntu-latest
     environment: pub.dev
-    if: startsWith(github.ref_name, 'v') && !contains(github.ref_name, '-')
+    if: startsWith(github.ref_name, 'v')
 
     steps:
       - name: Checkout
@@ -40,14 +40,7 @@ jobs:
           set -euo pipefail
 
           tag="${RELEASE_TAG}"
-          version="${tag#v}"
-
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Flutter pub release only accepts stable numeric tags, got: $tag" >&2
-            exit 1
-          fi
-
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          ./scripts/vesper release tag-channel "$tag" >> "$GITHUB_OUTPUT"
 
       - name: Prepare release version metadata
         run: |
@@ -60,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          version="${{ steps.version.outputs.version }}"
+          version="${{ steps.version.outputs.publication_version }}"
           maven_root="https://repo.maven.apache.org/maven2/io/github/umbrella22/vesper"
           swift_package="https://github.com/umbrella22/VesperPlayerKit.git"
           artifacts=(
@@ -69,6 +62,8 @@ jobs:
             vesper-player-kit-compose-ui
             vesper-player-kit-ffmpeg-runtime
             vesper-player-kit-external-playback
+            vesper-player-kit-source-normalizer-ffmpeg
+            vesper-player-kit-remux-ffmpeg
           )
 
           for attempt in $(seq 1 540); do
@@ -119,4 +114,5 @@ jobs:
         run: >-
           ./scripts/vesper flutter pub-publish
           /tmp/vesper-flutter-pub-release
-          "${VESPER_RELEASE_VERSION}"
+          "${VESPER_RELEASE_PUBLICATION_VERSION}"
+          --include-optional-plugins

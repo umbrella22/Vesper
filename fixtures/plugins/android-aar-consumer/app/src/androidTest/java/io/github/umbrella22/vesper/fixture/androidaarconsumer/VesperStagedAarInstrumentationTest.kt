@@ -41,6 +41,7 @@ class VesperStagedAarInstrumentationTest {
             setOf(
                 "dev.vesper.frame-processor-diagnostic.json",
                 "io.github.umbrella22.vesper.decoder-mediacodec.json",
+                "io.github.umbrella22.vesper.remux-ffmpeg.json",
                 "io.github.umbrella22.vesper.source-normalizer-ffmpeg.json",
             ),
             registryFiles,
@@ -49,6 +50,7 @@ class VesperStagedAarInstrumentationTest {
         listOf(
             "vesper_player_android",
             "vesper_source_normalizer_ffmpeg",
+            "vesper_remux_ffmpeg",
             "vesper_decoder_mediacodec",
             "vesper_frame_processor_diagnostic",
             "avcodec",

@@ -12,13 +12,14 @@ artifacts and consumable from any Android app or library.
 | `vesper-player-kit-ffmpeg-runtime`    | Optional FFmpeg runtime AAR used by download remux and external playback relay remux                                                                                        |
 | `vesper-player-kit-decoder-mediacodec` | Optional MediaCodec decoder plugin AAR used by the explicit SDK-managed native-frame route; it does not bundle FFmpeg runtime libraries                                    |
 | `vesper-player-kit-source-normalizer-ffmpeg` | Optional SourceNormalizer FFmpeg plugin AAR for diagnostics, source preflight, and opt-in normalized-resource playback; depends on the shared FFmpeg runtime |
+| `vesper-player-kit-remux-ffmpeg` | Optional FFmpeg-backed post-download MP4 remux plugin AAR; depends on the core kit and shared FFmpeg runtime and does not bundle `libav*` |
 | `vesper-player-kit-frame-processor-diagnostic` | Optional FrameProcessor diagnostic plugin AAR for capability probing and opt-in SDK-managed native-frame processing; it does not bundle FFmpeg runtime libraries |
 | `vesper-player-kit-compose`    | Optional Jetpack Compose adapter: `VesperPlayerSurface`, `rememberVesperPlayerController`, `rememberVesperPlayerUiState`, lifecycle-scoped progress refresh                         |
 | `vesper-player-kit-compose-ui` | Optional opinionated Compose UI: `VesperPlayerStage` and stage helpers built on top of the Compose adapter                                                                          |
 
 The external playback, FFmpeg runtime, MediaCodec decoder plugin,
-SourceNormalizer plugin, FrameProcessor diagnostic plugin, Compose adapter, and
-higher-level Compose UI modules are
+SourceNormalizer plugin, remux plugin, FrameProcessor diagnostic plugin,
+Compose adapter, and higher-level Compose UI modules are
 optional. View-based or non-Compose hosts can depend on `vesper-player-kit`
 alone without pulling in Google Play Services, Cast Framework, DLNA discovery,
 FFmpeg, native-frame plugins, plugin diagnostics, Compose, or Material3.
@@ -44,7 +45,7 @@ symbols include `io.github.umbrella22.vesper.player.android`.
 
 ## Distribution
 
-Stable `vMAJOR.MINOR.PATCH` releases publish these coordinates to Maven Central:
+Stable and prerelease tags publish these coordinates to Maven Central:
 
 ```kotlin
 dependencies {
@@ -57,6 +58,12 @@ dependencies {
     // Optional Cast, DLNA, and relay integration. The matching FFmpeg runtime
     // coordinate is resolved transitively for relay format adaptation.
     implementation("io.github.umbrella22.vesper:vesper-player-kit-external-playback:<version>")
+
+    // Optional source normalization. Core and FFmpeg runtime resolve transitively.
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-source-normalizer-ffmpeg:<version>")
+
+    // Optional post-download MP4 remux. Core and FFmpeg runtime resolve transitively.
+    implementation("io.github.umbrella22.vesper:vesper-player-kit-remux-ffmpeg:<version>")
 }
 ```
 
@@ -76,25 +83,26 @@ Android packaging is `arm64-v8a` only. Use an arm64 device or arm64 Android
 emulator. See [Release Downloads](../../README.md#release-downloads) for the
 public package names and artifact-selection notes.
 
-Stable Maven releases publish the external-playback AAR together with its
-transitive `vesper-player-kit-ffmpeg-runtime` coordinate. Default standalone
-GitHub Release staging remains core-only. Use the dedicated plugin build
-commands, or set `VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1` for release staging,
-when you intentionally need SourceNormalizer, Decoder, FrameProcessor, or other
-experimental plugin AARs.
+Maven releases publish seven coordinates: core, both Compose modules, external
+playback, the shared FFmpeg runtime, SourceNormalizer, and post-download remux.
+The two FFmpeg-backed plugin coordinates remain direct opt-ins. Default
+standalone GitHub Release staging remains core-only. Use the dedicated plugin
+build commands, or set `VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1` for release
+staging, when you intentionally need Decoder, FrameProcessor, or the complete
+source-built plugin set.
 
 The optional `vesper-player-kit-compose-ui` module remains available both as a
 source module and as a release AAR.
 
-Prerelease tags such as `v0.4.0-rc.1` produce GitHub prerelease assets only.
-Maven Central publication accepts exact stable tags so immutable coordinates
-cannot be consumed by an RC build.
+Prerelease tags such as `v0.4.3-rc.1` publish immutable prerelease coordinates
+such as `0.4.3-rc.1`; consumers must request that exact prerelease version.
+Stable tags publish the matching stable coordinates.
 
 ### Maven Central Publishing
 
 The `publish-maven-central` release job builds, signs, validates, and uploads one
-Central Portal bundle containing the core, Compose, FFmpeg runtime, and
-external-playback coordinates. The Maven
+Central Portal bundle containing all seven coordinates, including the two
+opt-in FFmpeg-backed plugin AARs. The Maven
 `groupId` remains `io.github.umbrella22.vesper`; the Portal namespace controls
 publishing permission and may be that value or one of its parent prefixes. The
 job requires:
@@ -115,7 +123,7 @@ contacting Central:
 ```sh
 MAVEN_GPG_PRIVATE_KEY="$(path-to-secret-provider)" \
 MAVEN_GPG_PASSPHRASE="$(path-to-passphrase-provider)" \
-./scripts/vesper android publish-maven-central v0.4.0 --dry-run
+./scripts/vesper android publish-maven-central v0.4.3-rc.1 --dry-run
 ```
 
 ## Minimum Requirements
@@ -413,7 +421,9 @@ Optional Vesper FFmpeg features use a split runtime:
   `libvesper_decoder_mediacodec.so`. It provides the Android hardware decoder
   plugin for the explicit SDK-managed native-frame route and must not carry
   `libav*`, `libsw*`, `libxml2*`, `libssl*`, or `libcrypto*` copies.
-- `player-remux-ffmpeg` contains only the download remux plugin `.so`.
+- `vesper-player-kit-remux-ffmpeg` contains only
+  `libvesper_remux_ffmpeg.so` plus profile metadata; it depends on the core kit
+  and shared runtime AAR.
 - `vesper-player-kit-source-normalizer-ffmpeg` contains only
   `libvesper_source_normalizer_ffmpeg.so` plus profile metadata; it depends on
   the shared runtime AAR and must not carry `libav*`, `libsw*`, `libxml2*`,

@@ -21,6 +21,8 @@ const FLUTTER_PACKAGES: &[&str] = &[
     "vesper_player_ios",
     "vesper_player_macos",
     "vesper_player_platform_interface",
+    "vesper_player_remux_ffmpeg",
+    "vesper_player_source_normalizer_ffmpeg",
     "vesper_player_ui",
 ];
 
@@ -28,12 +30,22 @@ const FLUTTER_ANDROID_GRADLE_FILES: &[&str] = &[
     "lib/flutter/vesper_player_android/android/build.gradle",
     "lib/flutter/vesper_player_external_playback/android/build.gradle",
     "lib/flutter/vesper_player_source_normalizer_ffmpeg/android/build.gradle",
+    "lib/flutter/vesper_player_remux_ffmpeg/android/build.gradle",
 ];
 
-const CHANGELOG_FILES: &[&str] = &[
+const FLUTTER_IOS_PACKAGE_FILES: &[&str] = &[
+    "lib/flutter/vesper_player_ios/ios/vesper_player_ios/Package.swift",
+    "lib/flutter/vesper_player_source_normalizer_ffmpeg/ios/vesper_player_source_normalizer_ffmpeg/Package.swift",
+    "lib/flutter/vesper_player_remux_ffmpeg/ios/vesper_player_remux_ffmpeg/Package.swift",
+];
+
+const PRODUCT_CHANGELOG_FILES: &[&str] = &[
     "CHANGELOG.md",
     "lib/android/CHANGELOG.md",
     "lib/ios/VesperPlayerKit/CHANGELOG.md",
+];
+
+const FLUTTER_CHANGELOG_FILES: &[&str] = &[
     "lib/flutter/vesper_player/CHANGELOG.md",
     "lib/flutter/vesper_player_android/CHANGELOG.md",
     "lib/flutter/vesper_player_external_playback/CHANGELOG.md",
@@ -41,6 +53,7 @@ const CHANGELOG_FILES: &[&str] = &[
     "lib/flutter/vesper_player_ios/CHANGELOG.md",
     "lib/flutter/vesper_player_ui/CHANGELOG.md",
     "lib/flutter/vesper_player_source_normalizer_ffmpeg/CHANGELOG.md",
+    "lib/flutter/vesper_player_remux_ffmpeg/CHANGELOG.md",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +165,7 @@ pub struct ReleaseMetadataOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseMetadata {
     version: ReleaseVersion,
+    publication_version: String,
     ios_build: String,
     android_version_code: String,
     release_date: String,
@@ -160,14 +174,15 @@ pub struct ReleaseMetadata {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseChannel {
     version: String,
+    publication_version: String,
     stable: bool,
 }
 
 impl ReleaseChannel {
     pub fn output(&self) -> String {
         format!(
-            "version={}\nstable={}\nprerelease={}\n",
-            self.version, self.stable, !self.stable
+            "version={}\npublication_version={}\nstable={}\nprerelease={}\n",
+            self.version, self.publication_version, self.stable, !self.stable
         )
     }
 }
@@ -175,13 +190,21 @@ impl ReleaseChannel {
 impl ReleaseMetadata {
     pub fn output(&self) -> String {
         format!(
-            "version={}\nios_build={}\nandroid_version_code={}\nrelease_date={}\n",
-            self.version, self.ios_build, self.android_version_code, self.release_date
+            "version={}\npublication_version={}\nios_build={}\nandroid_version_code={}\nrelease_date={}\n",
+            self.version,
+            self.publication_version,
+            self.ios_build,
+            self.android_version_code,
+            self.release_date
         )
     }
 
     pub fn version(&self) -> &str {
         self.version.as_str()
+    }
+
+    pub fn publication_version(&self) -> &str {
+        &self.publication_version
     }
 
     pub fn ios_build(&self) -> &str {
@@ -229,6 +252,7 @@ impl ReleaseVersion {
         })
     }
 
+    #[cfg(test)]
     fn from_tag(tag: &str) -> ReleaseResult<Self> {
         let without_ref = tag.strip_prefix("refs/tags/").unwrap_or(tag);
         let without_v = without_ref.strip_prefix('v').unwrap_or(without_ref);
@@ -283,6 +307,7 @@ fn parse_version_component(component: &str, version: &str) -> ReleaseResult<u64>
     })
 }
 
+#[cfg(test)]
 fn capture_text<'a>(
     captures: &'a regex::Captures<'_>,
     index: usize,
@@ -308,6 +333,7 @@ impl ReleaseContext {
         self.environment.github_ref_name.as_deref()
     }
 
+    #[cfg(test)]
     pub fn stable_version_from_tag(tag: &str) -> ReleaseResult<String> {
         let channel = Self::channel_from_tag(tag)?;
         if !channel.stable {
@@ -316,6 +342,10 @@ impl ReleaseContext {
             )));
         }
         Ok(channel.version)
+    }
+
+    pub fn publication_version_from_tag(tag: &str) -> ReleaseResult<String> {
+        Ok(Self::channel_from_tag(tag)?.publication_version)
     }
 
     pub fn channel_from_tag(tag: &str) -> ReleaseResult<ReleaseChannel> {
@@ -338,6 +368,7 @@ impl ReleaseContext {
         ))?;
         Ok(ReleaseChannel {
             version: version.value,
+            publication_version: parsed.to_string(),
             stable: parsed.pre.is_empty(),
         })
     }
@@ -348,7 +379,8 @@ impl ReleaseContext {
         options: ReleaseMetadataOptions,
     ) -> ReleaseResult<ReleaseMetadata> {
         let version = ReleaseVersion::parse(version)?;
-        self.resolve_metadata(version, options, utc_today()?)
+        let publication_version = version.value.clone();
+        self.resolve_metadata(version, publication_version, options, utc_today()?)
     }
 
     pub fn metadata_from_tag(
@@ -356,7 +388,8 @@ impl ReleaseContext {
         tag: &str,
         options: ReleaseMetadataOptions,
     ) -> ReleaseResult<ReleaseMetadata> {
-        let version = ReleaseVersion::from_tag(tag)?;
+        let channel = Self::channel_from_tag(tag.strip_prefix("refs/tags/").unwrap_or(tag))?;
+        let version = ReleaseVersion::parse(&channel.version)?;
         let default_date = if options
             .release_date
             .as_deref()
@@ -366,12 +399,13 @@ impl ReleaseContext {
         } else {
             release_date_from_tag(&self.root, tag)?
         };
-        self.resolve_metadata(version, options, default_date)
+        self.resolve_metadata(version, channel.publication_version, options, default_date)
     }
 
     fn resolve_metadata(
         &self,
         version: ReleaseVersion,
+        publication_version: String,
         options: ReleaseMetadataOptions,
         default_date: String,
     ) -> ReleaseResult<ReleaseMetadata> {
@@ -389,6 +423,7 @@ impl ReleaseContext {
         validate_release_date(&release_date)?;
         Ok(ReleaseMetadata {
             version,
+            publication_version,
             ios_build,
             android_version_code,
             release_date,
@@ -401,11 +436,12 @@ impl ReleaseContext {
         }
         if let Some(path) = &self.environment.github_env {
             let contents = format!(
-                "VESPER_RELEASE_VERSION={}\nVESPER_RELEASE_BUILD={}\nVESPER_RELEASE_IOS_BUILD={}\nVESPER_RELEASE_ANDROID_VERSION_CODE={}\nVESPER_RELEASE_DATE={}\n",
+                "VESPER_RELEASE_VERSION={}\nVESPER_RELEASE_PUBLICATION_VERSION={}\nVESPER_RELEASE_BUILD={}\nVESPER_RELEASE_IOS_BUILD={}\nVESPER_RELEASE_ANDROID_VERSION_CODE={}\nVESPER_RELEASE_DATE={}\n",
                 metadata.version,
-                metadata.ios_build,
-                metadata.ios_build,
-                metadata.android_version_code,
+                metadata.publication_version,
+                metadata.ios_build(),
+                metadata.ios_build(),
+                metadata.android_version_code(),
                 metadata.release_date
             );
             append_file(path, contents.as_bytes(), "GITHUB_ENV")?;
@@ -416,6 +452,7 @@ impl ReleaseContext {
     pub fn set_version(&self, metadata: &ReleaseMetadata) -> ReleaseResult<()> {
         let mut plan = EditPlan::default();
         let version = metadata.version.as_str();
+        let publication_version = metadata.publication_version();
 
         let cargo_path = self.root.join("Cargo.toml");
         let cargo = read_required_text(&cargo_path)?;
@@ -468,14 +505,14 @@ impl ReleaseContext {
         update_required_line(
             &mut plan,
             &self.root.join("lib/android/build.gradle.kts"),
-            r#"^    version = \"[0-9]+\.[0-9]+\.[0-9]+\"$"#,
-            &format!("    version = \"{version}\""),
+            r#"^val vesperDefaultPublicationVersion = \"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?\"$"#,
+            &format!("val vesperDefaultPublicationVersion = \"{publication_version}\""),
             "Android library version",
         )?;
 
         for pubspec in collect_flutter_pubspecs(&self.root)? {
             let source = read_required_text(&pubspec)?;
-            let updated = replace_pubspec_versions(&source, version)?;
+            let updated = replace_pubspec_versions(&source, publication_version)?;
             plan.insert(pubspec, updated)?;
         }
 
@@ -483,9 +520,19 @@ impl ReleaseContext {
             update_required_line(
                 &mut plan,
                 &self.root.join(relative),
-                r#"^version = \"[0-9]+\.[0-9]+\.[0-9]+\"$"#,
-                &format!("version = \"{version}\""),
+                r#"^version = \"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?\"$"#,
+                &format!("version = \"{publication_version}\""),
                 "Flutter Android plugin version",
+            )?;
+        }
+
+        for relative in FLUTTER_IOS_PACKAGE_FILES {
+            update_required_line(
+                &mut plan,
+                &self.root.join(relative),
+                r#"^private let vesperPlayerKitVersion: Version = \"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?\"$"#,
+                &format!("private let vesperPlayerKitVersion: Version = \"{publication_version}\""),
+                "Flutter iOS native dependency version",
             )?;
         }
 
@@ -549,11 +596,20 @@ impl ReleaseContext {
             "Flutter host version",
         )?;
 
-        for relative in CHANGELOG_FILES {
+        for relative in PRODUCT_CHANGELOG_FILES {
             let path = self.root.join(relative);
             if path.is_file() {
                 let source = read_required_text(&path)?;
                 let updated = update_changelog(&source, version, &metadata.release_date)?;
+                plan.insert(path, updated)?;
+            }
+        }
+        for relative in FLUTTER_CHANGELOG_FILES {
+            let path = self.root.join(relative);
+            if path.is_file() {
+                let source = read_required_text(&path)?;
+                let updated =
+                    update_changelog(&source, publication_version, &metadata.release_date)?;
                 plan.insert(path, updated)?;
             }
         }
@@ -578,8 +634,32 @@ impl ReleaseContext {
         };
         validate_numeric_metadata("iOS build", &ios_build)?;
         validate_numeric_metadata("Android versionCode", &android_version_code)?;
-        let issues =
-            verify_product_version(&self.root, &version, &ios_build, &android_version_code)?;
+        let issues = verify_product_version(
+            &self.root,
+            &version,
+            version.as_str(),
+            &ios_build,
+            &android_version_code,
+        )?;
+        if issues.is_empty() {
+            return Ok(());
+        }
+        let mut message = issues.join("\n");
+        message.push_str(&format!(
+            "\nVersion verification failed with {} issue(s).",
+            issues.len()
+        ));
+        Err(ReleaseError::verification(message))
+    }
+
+    pub fn verify_metadata(&self, metadata: &ReleaseMetadata) -> ReleaseResult<()> {
+        let issues = verify_product_version(
+            &self.root,
+            &metadata.version,
+            metadata.publication_version(),
+            metadata.ios_build(),
+            metadata.android_version_code(),
+        )?;
         if issues.is_empty() {
             return Ok(());
         }
@@ -594,8 +674,29 @@ impl ReleaseContext {
     pub fn verify_current(&self) -> ReleaseResult<String> {
         let version = read_workspace_version(&self.root)?;
         let parsed = ReleaseVersion::parse(&version)?;
+        let publication_version = read_android_publication_version(&self.root)?;
+        let channel = Self::channel_from_tag(&format!("v{publication_version}"))?;
+        if channel.version != version {
+            return Err(ReleaseError::verification(format!(
+                "Publication version base mismatch.\n  expected {version}, found {publication_version}"
+            )));
+        }
         let expected_build = parsed.android_code()?;
-        self.verify_version(&version, Some(expected_build.clone()), Some(expected_build))?;
+        let issues = verify_product_version(
+            &self.root,
+            &parsed,
+            &publication_version,
+            &expected_build,
+            &expected_build,
+        )?;
+        if !issues.is_empty() {
+            let mut message = issues.join("\n");
+            message.push_str(&format!(
+                "\nVersion verification failed with {} issue(s).",
+                issues.len()
+            ));
+            return Err(ReleaseError::verification(message));
+        }
         Ok(version)
     }
 
@@ -1387,9 +1488,24 @@ fn read_android_version_code(root: &Path) -> ReleaseResult<String> {
         .ok_or_else(|| ReleaseError::input("Unable to resolve current Android versionCode."))
 }
 
+fn read_android_publication_version(root: &Path) -> ReleaseResult<String> {
+    let path = root.join("lib/android/build.gradle.kts");
+    let source = read_required_text(&path)?;
+    let expression = compile_regex(
+        r#"(?m)^val vesperDefaultPublicationVersion = \"([^\"]+)\"$"#,
+        "Android publication version",
+    )?;
+    expression
+        .captures(&source)
+        .and_then(|captures| captures.get(1))
+        .map(|capture| capture.as_str().to_owned())
+        .ok_or_else(|| ReleaseError::input("Unable to resolve current publication version."))
+}
+
 fn verify_product_version(
     root: &Path,
     version: &ReleaseVersion,
+    publication_version: &str,
     ios_build: &str,
     android_version_code: &str,
 ) -> ReleaseResult<Vec<String>> {
@@ -1409,7 +1525,10 @@ fn verify_product_version(
     expect_line(
         root,
         "lib/android/build.gradle.kts",
-        &format!(r#"^    version = \"{}\"$"#, regex::escape(version.as_str())),
+        &format!(
+            r#"^val vesperDefaultPublicationVersion = \"{}\"$"#,
+            regex::escape(publication_version)
+        ),
         "Android library version mismatch.",
         &mut issues,
     )?;
@@ -1482,24 +1601,37 @@ fn verify_product_version(
     for pubspec in collect_flutter_pubspecs(root)? {
         expect_line_path(
             &pubspec,
-            &format!(r"^version: {}$", regex::escape(version.as_str())),
+            &format!(r"^version: {}$", regex::escape(publication_version)),
             "Flutter package version mismatch.",
             &mut issues,
         )?;
-        verify_pubspec_dependencies(&pubspec, version.as_str(), &mut issues)?;
+        verify_pubspec_dependencies(&pubspec, publication_version, &mut issues)?;
     }
 
     for relative in FLUTTER_ANDROID_GRADLE_FILES {
         expect_line(
             root,
             relative,
-            &format!(r#"^version = \"{}\"$"#, regex::escape(version.as_str())),
+            &format!(r#"^version = \"{}\"$"#, regex::escape(publication_version)),
             "Flutter Android plugin Gradle version mismatch.",
             &mut issues,
         )?;
     }
 
-    for relative in CHANGELOG_FILES {
+    for relative in FLUTTER_IOS_PACKAGE_FILES {
+        expect_line(
+            root,
+            relative,
+            &format!(
+                r#"^private let vesperPlayerKitVersion: Version = \"{}\"$"#,
+                regex::escape(publication_version)
+            ),
+            "Flutter iOS native dependency version mismatch.",
+            &mut issues,
+        )?;
+    }
+
+    for relative in PRODUCT_CHANGELOG_FILES {
         expect_line(
             root,
             relative,
@@ -1508,6 +1640,18 @@ fn verify_product_version(
                 regex::escape(version.as_str())
             ),
             "Changelog version heading mismatch.",
+            &mut issues,
+        )?;
+    }
+    for relative in FLUTTER_CHANGELOG_FILES {
+        expect_line(
+            root,
+            relative,
+            &format!(
+                r"^## {} - (?:Unreleased|[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}})$",
+                regex::escape(publication_version)
+            ),
+            "Flutter changelog version heading mismatch.",
             &mut issues,
         )?;
     }
@@ -1902,7 +2046,11 @@ mod tests {
         write_fixture(
             root,
             "lib/android/build.gradle.kts",
-            "allprojects {\n    version = \"0.4.0\"\n}\n",
+            concat!(
+                "val vesperDefaultPublicationVersion = \"0.4.0\"\n",
+                "val vesperPublicationVersion = vesperDefaultPublicationVersion\n",
+                "allprojects {\n    version = vesperPublicationVersion\n}\n",
+            ),
         );
         for package in [
             "vesper_player",
@@ -1910,6 +2058,7 @@ mod tests {
             "vesper_player_external_playback",
             "vesper_player_ios",
             "vesper_player_platform_interface",
+            "vesper_player_remux_ffmpeg",
             "vesper_player_source_normalizer_ffmpeg",
             "vesper_player_ui",
         ] {
@@ -1921,6 +2070,13 @@ mod tests {
         }
         for relative in FLUTTER_ANDROID_GRADLE_FILES {
             write_fixture(root, relative, "version = \"0.4.0\"\n");
+        }
+        for relative in FLUTTER_IOS_PACKAGE_FILES {
+            write_fixture(
+                root,
+                relative,
+                "private let vesperPlayerKitVersion: Version = \"0.4.0\"\n",
+            );
         }
         write_fixture(
             root,
@@ -1958,7 +2114,10 @@ mod tests {
             "examples/flutter-host/pubspec.yaml",
             "name: fixture\nversion: 0.4.0+400\n",
         );
-        for relative in CHANGELOG_FILES {
+        for relative in PRODUCT_CHANGELOG_FILES
+            .iter()
+            .chain(FLUTTER_CHANGELOG_FILES.iter())
+        {
             write_fixture(
                 root,
                 relative,
@@ -2026,13 +2185,13 @@ mod tests {
             ReleaseContext::channel_from_tag("v0.4.0")
                 .expect("stable channel")
                 .output(),
-            "version=0.4.0\nstable=true\nprerelease=false\n"
+            "version=0.4.0\npublication_version=0.4.0\nstable=true\nprerelease=false\n"
         );
         assert_eq!(
             ReleaseContext::channel_from_tag("v0.4.0-rc.2")
                 .expect("prerelease channel")
                 .output(),
-            "version=0.4.0\nstable=false\nprerelease=true\n"
+            "version=0.4.0\npublication_version=0.4.0-rc.2\nstable=false\nprerelease=true\n"
         );
         assert!(ReleaseContext::channel_from_tag("0.4.0").is_err());
         assert!(ReleaseContext::channel_from_tag("v0.4.0+build.1").is_err());
@@ -2174,6 +2333,68 @@ mod tests {
     }
 
     #[test]
+    fn prerelease_metadata_separates_product_and_publication_versions() {
+        let directory = release_fixture();
+        let context = ReleaseContext::new(
+            directory.path().to_path_buf(),
+            ReleaseEnvironment::default(),
+        );
+        let metadata = context
+            .metadata_from_tag(
+                "refs/tags/v0.4.1-rc.2",
+                ReleaseMetadataOptions {
+                    release_date: Some("2026-08-17".to_owned()),
+                    ..ReleaseMetadataOptions::default()
+                },
+            )
+            .expect("prerelease metadata");
+
+        assert_eq!(metadata.version(), "0.4.1");
+        assert_eq!(metadata.publication_version(), "0.4.1-rc.2");
+        context
+            .set_version(&metadata)
+            .expect("set prerelease version");
+        context
+            .verify_metadata(&metadata)
+            .expect("verify prerelease metadata");
+        assert_eq!(
+            context.verify_current().expect("verify current prerelease"),
+            "0.4.1"
+        );
+
+        let cargo =
+            fs::read_to_string(directory.path().join("Cargo.toml")).expect("workspace manifest");
+        assert!(cargo.contains("version = \"0.4.1\""));
+        let android = fs::read_to_string(directory.path().join("lib/android/build.gradle.kts"))
+            .expect("Android publication version");
+        assert!(android.contains("vesperDefaultPublicationVersion = \"0.4.1-rc.2\""));
+        let pubspec = fs::read_to_string(
+            directory
+                .path()
+                .join("lib/flutter/vesper_player/pubspec.yaml"),
+        )
+        .expect("Flutter package version");
+        assert!(pubspec.contains("version: 0.4.1-rc.2"));
+        let swift = fs::read_to_string(
+            directory
+                .path()
+                .join("lib/flutter/vesper_player_ios/ios/vesper_player_ios/Package.swift"),
+        )
+        .expect("Flutter iOS dependency version");
+        assert!(swift.contains("vesperPlayerKitVersion: Version = \"0.4.1-rc.2\""));
+        let product_changelog =
+            fs::read_to_string(directory.path().join("CHANGELOG.md")).expect("product changelog");
+        assert!(product_changelog.contains("## 0.4.1 - 2026-08-17"));
+        let flutter_changelog = fs::read_to_string(
+            directory
+                .path()
+                .join("lib/flutter/vesper_player/CHANGELOG.md"),
+        )
+        .expect("Flutter changelog");
+        assert!(flutter_changelog.contains("## 0.4.1-rc.2 - 2026-08-17"));
+    }
+
+    #[test]
     fn verification_rejects_bundled_plugin_version_drift() {
         let directory = release_fixture();
         let context = ReleaseContext::new(
@@ -2217,6 +2438,7 @@ mod tests {
         let issues = verify_product_version(
             directory.path(),
             &ReleaseVersion::parse("0.4.0").expect("release version"),
+            "0.4.0",
             "400",
             "400",
         )

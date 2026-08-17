@@ -1,7 +1,7 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
-private let minimumVesperPlayerKitVersion: Version = "0.4.1"
+private let vesperPlayerKitVersion: Version = "0.4.3-rc.1"
 
 let package = Package(
     name: "vesper_player_ios",
@@ -16,7 +16,7 @@ let package = Package(
         .package(name: "FlutterFramework", path: "../FlutterFramework"),
         .package(
             url: "https://github.com/umbrella22/VesperPlayerKit.git",
-            .upToNextMinor(from: minimumVesperPlayerKitVersion)
+            exact: vesperPlayerKitVersion
         ),
     ],
     targets: [

@@ -123,6 +123,11 @@ metadata. Select it with a native `VesperPluginReference` in
 `VesperDownloadConfiguration.postDownloadPluginReferences`; library paths are
 not part of the public download API.
 
+Hosted Flutter apps add `vesper_player_remux_ffmpeg` at the same version as
+`vesper_player`. It resolves `vesper-player-kit-remux-ffmpeg` together with the
+same-version core kit and shared FFmpeg runtime from Maven Central. The steps
+below are only for repository source-checkout development and custom builds.
+
 Typical setup:
 
 1. Build the shared Android FFmpeg runtime for the enabled consumers:
@@ -164,7 +169,8 @@ Both Android examples in this repository already demonstrate the full setup:
 - `examples/flutter-host/android/app/build.gradle.kts`
 
 This also means that depending on `vesper_player_android` alone does not pull
-FFmpeg into your app. The plugin is bundled only when the host chooses to do so.
+FFmpeg into your app. The plugin is bundled only when the host directly adds
+`vesper_player_remux_ffmpeg` or wires an equivalent custom native dependency.
 
 When the host bundles the plugin, treat the shipped `.so` files as FFmpeg
 redistribution. Include FFmpeg license text and notices, provide the exact

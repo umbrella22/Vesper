@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3-rc.1 - 2026-08-17
+
+- Prepared package metadata for the 0.4.3-rc.1 release.
+
 ## 0.4.2 - 2026-08-16
 
 ### Fixed

@@ -14,10 +14,10 @@ wasm = ["dep:player-plugin-wasm-host"]
 [dependencies]
 hex.workspace = true
 libloading.workspace = true
-player-plugin = { version = "0.4.2", path = "../player-plugin" }
-player-plugin-abi = { version = "0.4.2", path = "../player-plugin-abi" }
-player-plugin-package = { version = "0.4.2", path = "../player-plugin-package", optional = true }
-player-plugin-wasm-host = { version = "0.4.2", path = "../player-plugin-wasm-host", optional = true }
+player-plugin = { version = "0.4.3", path = "../player-plugin" }
+player-plugin-abi = { version = "0.4.3", path = "../player-plugin-abi" }
+player-plugin-package = { version = "0.4.3", path = "../player-plugin-package", optional = true }
+player-plugin-wasm-host = { version = "0.4.3", path = "../player-plugin-wasm-host", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true

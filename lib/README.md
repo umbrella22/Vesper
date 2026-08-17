@@ -36,6 +36,7 @@ produce AAR artifacts.
 | `vesper-player-kit-ffmpeg-runtime` | Optional shared FFmpeg runtime for FFmpeg-backed Android extensions |
 | `vesper-player-kit-decoder-mediacodec` | Experimental MediaCodec decoder plugin for the explicit SDK-managed native-frame route |
 | `vesper-player-kit-source-normalizer-ffmpeg` | Experimental FFmpeg SourceNormalizer plugin and verified embedded registry metadata |
+| `vesper-player-kit-remux-ffmpeg` | Optional FFmpeg-backed post-download MP4 remux plugin and verified embedded registry metadata |
 | `vesper-player-kit-frame-processor-diagnostic` | Experimental FrameProcessor diagnostic plugin |
 | `vesper-player-kit-compose` | Optional Compose lifecycle and surface adapter without opinionated controls |
 | `vesper-player-kit-compose-ui` | Optional Compose `VesperPlayerStage` controls built on the Compose adapter |
@@ -44,12 +45,13 @@ View-based hosts can depend on `vesper-player-kit` alone. Compose hosts add the
 adapter, and add the UI module only when the packaged stage fits the product.
 External playback and FFmpeg-backed extensions remain explicit dependencies.
 
-GitHub release staging can produce the complete AAR set. Stable Maven
-publication contains the core kit, both Compose modules, external playback,
-and its transitive FFmpeg runtime. SourceNormalizer, Decoder, FrameProcessor,
-and offline-remux plugin distribution remain outside that default dependency
-closure. The Android package README and release workflow define the current
-published set.
+GitHub release staging can produce the complete AAR set. Stable and prerelease
+Maven publication contains seven coordinates: the core kit, both Compose
+modules, external playback, the shared FFmpeg runtime, SourceNormalizer, and
+post-download remux. SourceNormalizer and remux remain direct opt-in
+dependencies and do not enter the core or main Flutter dependency closure.
+Decoder and FrameProcessor remain source-staged experimental artifacts. The
+Android package README and release workflow define the current published set.
 
 ### iOS
 
@@ -62,16 +64,20 @@ and XCFramework project. The source-local package exposes three products:
 | `VesperPlayerKitUI` | Optional SwiftUI `VesperPlayerStage` controls |
 | `VesperPlayerFFI` | Low-level binary product consumed by the host kit and bridge shim |
 
-The remote binary package at `umbrella22/VesperPlayerKit` intentionally exports
-only `VesperPlayerKit` and `VesperPlayerKitUI`. Its binary `VesperPlayerKit`
-target already contains the native bridge closure; remote consumers, including
-`vesper_player_ios`, must not request a separate `VesperPlayerFFI` product.
+The remote binary package at `umbrella22/VesperPlayerKit` exports
+`VesperPlayerKit`, `VesperPlayerKitUI`,
+`VesperPlayerSourceNormalizerFfmpeg`, and `VesperPlayerRemuxFfmpeg`. Its binary
+`VesperPlayerKit` target already contains the native bridge closure; remote
+consumers, including `vesper_player_ios`, must not request a separate
+`VesperPlayerFFI` product. Each optional capability product closes over its
+plugin and the three matching FFmpeg component targets.
 
-`ios/VesperPlayerOptionalPlugins` exposes seven direct binary products. The
-three `VesperFFmpeg*` products are shared FFmpeg component dependencies;
-`VesperPlayerRemuxFfmpegPlugin` provides optional post-download remux. The
-SourceNormalizer, VideoToolbox decoder, and FrameProcessor products are
-experimental plugin surfaces. There is no aggregate umbrella product.
+For repository-local examples and archive verification,
+`ios/VesperPlayerOptionalPlugins` still exposes seven direct binary products.
+The three `VesperFFmpeg*` products are shared FFmpeg component dependencies;
+the other four are plugin frameworks. Remote application consumers should use
+the capability-level products above instead of wiring those seven targets.
+There is no aggregate umbrella product.
 
 ### Flutter
 
@@ -86,6 +92,7 @@ iOS only; no Flutter desktop implementation is published.
 | [`vesper_player_ios`](flutter/vesper_player_ios/README.md) | iOS MethodChannel / EventChannel adapter over `VesperPlayerKit` |
 | [`vesper_player_external_playback`](flutter/vesper_player_external_playback/README.md) | Optional Android Cast / DLNA and relay integration |
 | [`vesper_player_source_normalizer_ffmpeg`](flutter/vesper_player_source_normalizer_ffmpeg/README.md) | Experimental optional Android/iOS SourceNormalizer artifact package |
+| [`vesper_player_remux_ffmpeg`](flutter/vesper_player_remux_ffmpeg/README.md) | Optional Android/iOS post-download MP4 remux artifact package |
 | [`vesper_player_ui`](flutter/vesper_player_ui/README.md) | Experimental optional controls, Stage UI, and AirPlay route UI |
 
 The platform interface is the only home for public cross-platform Dart DTOs.

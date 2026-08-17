@@ -123,13 +123,13 @@ The workflow split is intentional:
   signed physical-device result.
 - `flutter-ci.yml` analyzes, tests, and packages the federated Flutter hosts.
 - `mobile-lib-release.yml` stages and verifies tagged Android/iOS release
-  assets, publishes the GitHub Release, then publishes stable Android
-  coordinates to Maven Central and the stable iOS binary package through its
-  SwiftPM index repository. The Maven set includes external playback and its
-  transitive FFmpeg runtime.
-- `flutter-pub-release.yml` publishes stable-tag Flutter packages after applying
-  tag-derived version metadata and waiting for their hosted Maven and SwiftPM
-  dependencies.
+  assets, publishes the GitHub Release, then publishes stable or prerelease
+  Android coordinates to Maven Central and the matching iOS binary package
+  through its SwiftPM index repository. The Maven set contains seven
+  coordinates, including the opt-in SourceNormalizer and remux plugins.
+- `flutter-pub-release.yml` publishes stable or prerelease Flutter packages
+  after applying tag-derived version metadata and waiting for all hosted Maven
+  and SwiftPM dependencies.
 
 The signed iOS physical-device acceptance command remains a release-owner gate
 because it requires a connected device, a current Apple Development identity,
@@ -165,18 +165,21 @@ main package family. Optional native dependency packages such as
 `vesper_player_source_normalizer_ffmpeg` are skipped unless
 `VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS=1` is set.
 
-The stable-tag pub workflow publishes only the default six-package Flutter
-family.
-Optional native dependency packages are validated and published separately,
-after their matching native artifacts, FFmpeg compliance archive, and exact
-corresponding source archive are available.
+The tag workflow publishes the default six-package Flutter family followed by
+`vesper_player_source_normalizer_ffmpeg` and
+`vesper_player_remux_ffmpeg`. The two optional packages are published only
+after their matching native artifacts, FFmpeg compliance archive, exact
+corresponding source archive, seven Maven coordinates, and capability-level
+SwiftPM products are available.
 
 Release workflows do not hardcode product versions. They derive the numeric
-product version from the pushed tag, apply it to the CI workspace with
+product version and full publication version from the pushed tag, apply them to
+the CI workspace with
 `./scripts/vesper release prepare-from-tag "$RELEASE_TAG"`, and verify the
-updated metadata before packaging. Stable tags such as `vMAJOR.MINOR.PATCH`
-publish staged Flutter packages to pub.dev; RC tags publish GitHub release
-artifacts but do not publish to pub.dev.
+updated metadata before packaging. Stable tags publish `MAJOR.MINOR.PATCH`;
+prerelease tags publish the full version such as `MAJOR.MINOR.PATCH-rc.1` to
+Maven Central, SwiftPM, and pub.dev while Cargo and platform bundle versions
+retain the numeric base.
 
 pub.dev accepts GitHub OIDC publication only from a tag-push workflow. The
 first version of each package must be published interactively by its initial
@@ -232,11 +235,13 @@ semantics by validating `--disable-network` and `--disable-openssl`.
 Android FFmpeg runtime packaging is split from consumers. The root command builds
 `vesper-player-kit-ffmpeg-runtime` by default; pass `--android-artifact prebuilts`
 only when a private flow needs raw prebuilts. Default standalone Android release
-staging publishes the host kit and Compose AARs only. Stable Maven publication
-adds external playback and its shared FFmpeg runtime as one dependency closure.
-Set `VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1`, or run the dedicated plugin build
-commands, when you intentionally want SourceNormalizer, Decoder, or
-FrameProcessor extension AARs. `player-remux-ffmpeg`,
+staging publishes the host kit and Compose AARs only. Stable and prerelease
+Maven publication adds external playback, the shared FFmpeg runtime,
+SourceNormalizer, and remux as hosted coordinates. SourceNormalizer and remux
+remain direct opt-ins; their POMs close over the same-version core and runtime.
+Set `VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1`, or run the dedicated plugin
+build commands, when you intentionally want the complete source-staged set,
+including Decoder or FrameProcessor extension AARs. `player-remux-ffmpeg`,
 `player-source-normalizer-ffmpeg`, and the external-playback relay FFmpeg JNI
 library must package only their own plugin/JNI libraries and depend on the
 shared runtime AAR. The FrameProcessor diagnostic plugin is not FFmpeg-backed.

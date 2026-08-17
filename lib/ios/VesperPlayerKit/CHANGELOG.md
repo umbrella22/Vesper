@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.3 - 2026-08-17
+
+### Added
+
+- The remote binary Swift package now exports
+  `VesperPlayerSourceNormalizerFfmpeg` and `VesperPlayerRemuxFfmpeg` as
+  capability-level products over the verified plugin and FFmpeg component
+  XCFrameworks.
+
+### Changed
+
+- Stable and prerelease tags are published to the Swift package repository
+  after all required archives and checksums are verified.
+- Remote consumers select a capability product instead of wiring the local
+  seven-product optional package or requesting a nonexistent
+  `VesperPlayerFFI` product.
+
 ## 0.4.2 - 2026-08-16
 
 - Prepared package metadata for the 0.4.2 release.

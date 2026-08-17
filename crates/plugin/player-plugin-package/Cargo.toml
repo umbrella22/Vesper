@@ -11,8 +11,8 @@ rust-version.workspace = true
 ed25519-dalek.workspace = true
 getrandom.workspace = true
 hex.workspace = true
-player-plugin = { version = "0.4.2", path = "../player-plugin" }
-player-plugin-abi = { version = "0.4.2", path = "../player-plugin-abi" }
+player-plugin = { version = "0.4.3", path = "../player-plugin" }
+player-plugin-abi = { version = "0.4.3", path = "../player-plugin-abi" }
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -25,12 +25,14 @@ use crate::android::{self, AndroidError};
 use crate::external_process::{self, ExternalProcessErrorKind};
 use crate::release;
 
-const ARTIFACTS: [&str; 5] = [
+const ARTIFACTS: [&str; 7] = [
     "vesper-player-kit",
     "vesper-player-kit-compose",
     "vesper-player-kit-compose-ui",
     "vesper-player-kit-ffmpeg-runtime",
     "vesper-player-kit-external-playback",
+    "vesper-player-kit-source-normalizer-ffmpeg",
+    "vesper-player-kit-remux-ffmpeg",
 ];
 const MAVEN_GROUP_ID: &str = "io.github.umbrella22.vesper";
 const MAVEN_PROJECT_URL: &str = "https://github.com/umbrella22/Vesper";
@@ -143,7 +145,7 @@ pub(crate) fn publish(
     request: MavenPublishRequest<'_>,
     output: &mut dyn Write,
 ) -> Result<(), AndroidError> {
-    let version = release::ReleaseContext::stable_version_from_tag(request.tag)
+    let version = release::ReleaseContext::publication_version_from_tag(request.tag)
         .map_err(|error| AndroidError::usage(error.to_string()))?;
     validate_namespace(request.portal_namespace)?;
     validate_namespace_prefix(request.portal_namespace, MAVEN_GROUP_ID)?;
@@ -182,6 +184,7 @@ pub(crate) fn publish(
         root,
         &repository,
         MAVEN_GROUP_ID,
+        &version,
         &signing_key,
         signing_passphrase.as_deref(),
     )?;
@@ -872,6 +875,9 @@ fn validate_internal_pom_dependencies(
         "vesper-player-kit-external-playback" => {
             &["vesper-player-kit", "vesper-player-kit-ffmpeg-runtime"]
         }
+        "vesper-player-kit-source-normalizer-ffmpeg" | "vesper-player-kit-remux-ffmpeg" => {
+            &["vesper-player-kit", "vesper-player-kit-ffmpeg-runtime"]
+        }
         _ => {
             return Err(AndroidError::worker(format!(
                 "missing internal dependency policy for artifact {artifact}"
@@ -939,6 +945,14 @@ fn pom_identity(artifact: &str) -> Option<(&'static str, &'static str)> {
         "vesper-player-kit-external-playback" => Some((
             "Vesper Player Android External Playback",
             "Optional Cast, DLNA, local relay, and relay format adaptation integration for Vesper Player Android hosts.",
+        )),
+        "vesper-player-kit-source-normalizer-ffmpeg" => Some((
+            "Vesper Player Android SourceNormalizer FFmpeg Plugin",
+            "Optional Android SourceNormalizer plugin for Vesper Player. The artifact depends on the FFmpeg runtime artifact for libav/libsw dependencies.",
+        )),
+        "vesper-player-kit-remux-ffmpeg" => Some((
+            "Vesper Player Android Remux FFmpeg Plugin",
+            "Optional Android post-download remux plugin for Vesper Player. The artifact depends on the FFmpeg runtime artifact for libav dependencies.",
         )),
         _ => None,
     }
@@ -1482,6 +1496,56 @@ mod tests {
         .expect("valid FFmpeg runtime POM");
     }
 
+    #[test]
+    fn optional_plugin_poms_require_same_version_core_and_runtime_closure() {
+        let directory = tempfile::tempdir().expect("temporary POM directory");
+        for artifact in [
+            "vesper-player-kit-source-normalizer-ffmpeg",
+            "vesper-player-kit-remux-ffmpeg",
+        ] {
+            let valid = directory.path().join(format!("{artifact}.pom"));
+            fs::write(&valid, valid_test_pom(artifact)).expect("write optional plugin POM");
+            validate_pom(&valid, MAVEN_GROUP_ID, artifact, "0.4.0")
+                .expect("valid optional plugin POM");
+
+            for missing in ["vesper-player-kit", "vesper-player-kit-ffmpeg-runtime"] {
+                let incomplete = directory
+                    .path()
+                    .join(format!("{artifact}-missing-{missing}.pom"));
+                fs::write(
+                    &incomplete,
+                    valid_test_pom(artifact).replace(&internal_dependency_xml(missing), ""),
+                )
+                .expect("write incomplete optional plugin POM");
+                assert!(
+                    validate_pom(&incomplete, MAVEN_GROUP_ID, artifact, "0.4.0")
+                        .expect_err("reject incomplete optional plugin closure")
+                        .to_string()
+                        .contains("dependency closure")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pom_validation_accepts_prerelease_publication_versions() {
+        let directory = tempfile::tempdir().expect("temporary POM directory");
+        let path = directory.path().join("remux-prerelease.pom");
+        fs::write(
+            &path,
+            valid_test_pom("vesper-player-kit-remux-ffmpeg").replace("0.4.0", "0.4.3-rc.1"),
+        )
+        .expect("write prerelease optional plugin POM");
+
+        validate_pom(
+            &path,
+            MAVEN_GROUP_ID,
+            "vesper-player-kit-remux-ffmpeg",
+            "0.4.3-rc.1",
+        )
+        .expect("valid prerelease optional plugin POM");
+    }
+
     fn valid_test_pom(artifact: &str) -> String {
         let (name, description) = pom_identity(artifact).expect("known test artifact");
         let (license_name, license_url) = pom_license(artifact).expect("known license policy");
@@ -1489,7 +1553,9 @@ mod tests {
             "vesper-player-kit" | "vesper-player-kit-ffmpeg-runtime" => String::new(),
             "vesper-player-kit-compose" => internal_dependency_xml("vesper-player-kit"),
             "vesper-player-kit-compose-ui" => internal_dependency_xml("vesper-player-kit-compose"),
-            "vesper-player-kit-external-playback" => format!(
+            "vesper-player-kit-external-playback"
+            | "vesper-player-kit-source-normalizer-ffmpeg"
+            | "vesper-player-kit-remux-ffmpeg" => format!(
                 "{}{}",
                 internal_dependency_xml("vesper-player-kit"),
                 internal_dependency_xml("vesper-player-kit-ffmpeg-runtime")
@@ -1520,6 +1586,8 @@ mod tests {
             "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-compose-ui@0.4.0",
             "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-ffmpeg-runtime@0.4.0",
             "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-external-playback@0.4.0",
+            "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-source-normalizer-ffmpeg@0.4.0",
+            "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-remux-ffmpeg@0.4.0",
         ];
         assert!(
             validate_component_purls(
@@ -1531,7 +1599,7 @@ mod tests {
         );
         assert!(
             validate_component_purls(
-                complete[..4].iter().copied(),
+                complete[..6].iter().copied(),
                 "io.github.umbrella22.vesper",
                 "0.4.0"
             )
@@ -1557,6 +1625,8 @@ mod tests {
             "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-compose-ui@0.4.0",
             "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-ffmpeg-runtime@0.4.0",
             "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-external-playback@0.4.0",
+            "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-source-normalizer-ffmpeg@0.4.0",
+            "pkg:maven/io.github.umbrella22.vesper/vesper-player-kit-remux-ffmpeg@0.4.0",
         ];
         let packaging_qualified = coordinates
             .iter()

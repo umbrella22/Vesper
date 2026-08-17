@@ -110,7 +110,8 @@ jobs:
             lib/flutter/vesper_player_platform_interface \
             lib/flutter/vesper_player \
             lib/flutter/vesper_player_ui \
-            lib/flutter/vesper_player_source_normalizer_ffmpeg
+            lib/flutter/vesper_player_source_normalizer_ffmpeg \
+            lib/flutter/vesper_player_remux_ffmpeg
           do
             echo "::group::$pkg_dir"
             (
@@ -224,6 +225,7 @@ jobs:
           android.newDsl=false
           vesper.player.android.abis=${{ matrix.abi }}
           vesper.player.android.app.abis=${{ matrix.abi }}
+          vesper.player.android.remuxJniLibs=../../../examples/flutter-host/build/app/generated/playerFfmpeg/jniLibs
           vesper.player.android.sourceNormalizerJniLibs=../../../examples/flutter-host/build/app/generated/playerSourceNormalizerFfmpeg/jniLibs
           vesper.player.android.frameProcessorDiagnosticJniLibs=../../../examples/flutter-host/build/app/generated/playerFrameProcessorDiagnostic/jniLibs
           vesper.player.android.ffmpegProfile=default
@@ -388,11 +390,16 @@ jobs:
 
           stage="$RUNNER_TEMP/vesper-flutter-optional-pub-dry-run"
           ./scripts/vesper flutter stage-pub "$stage" --include-optional-plugins
-          (
-            cd "$stage/vesper_player_source_normalizer_ffmpeg"
-            flutter pub get
-            flutter pub publish --dry-run
-          )
+          for package in \
+            vesper_player_source_normalizer_ffmpeg \
+            vesper_player_remux_ffmpeg
+          do
+            (
+              cd "$stage/$package"
+              flutter pub get
+              flutter pub publish --dry-run
+            )
+          done
 
       - name: Enable Swift Package Manager
         run: |

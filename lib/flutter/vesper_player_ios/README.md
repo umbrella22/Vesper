@@ -165,27 +165,27 @@ routing.
 ## Optional `player-remux-ffmpeg` Remux Plugin
 
 If the host app wants to export downloaded HLS, DASH, or FLV content to `.mp4`,
-it must embed the three optional FFmpeg component frameworks plus the
-`player-remux-ffmpeg` plugin framework. Select the plugin with a native
+add `vesper_player_remux_ffmpeg` at the same version as `vesper_player`. The
+package resolves the remote `VesperPlayerRemuxFfmpeg` product, which embeds the
+three FFmpeg component frameworks plus the `player-remux-ffmpeg` plugin
+framework. Select the plugin with a native
 `VesperPluginReference` in
 `VesperDownloadConfiguration.postDownloadPluginReferences`; executable paths
 are internal build-time artifact locators. FFmpeg is not embedded in the core
 iOS host kit.
 
-Typical setup:
+Hosted setup:
 
-1. Stage the canonical optional package before SwiftPM resolution.
-2. Add `VesperFFmpegAVCodec`, `VesperFFmpegAVFormat`, `VesperFFmpegAVUtil`, and
-   `VesperPlayerRemuxFfmpegPlugin` from `VesperPlayerOptionalPlugins` to the App
-   target with Embed & Sign. Add the other three direct plugin products only
-   when the host enables those capabilities.
+1. Add the matching `vesper_player_remux_ffmpeg` dependency.
+2. Let SwiftPM resolve `VesperPlayerRemuxFfmpeg` from the exact Vesper release.
 3. Let Xcode place the selected FFmpeg component and plugin
    frameworks as top-level siblings under `Runner.app/Frameworks`.
 4. Configure plugin ID `io.github.umbrella22.vesper.remux-ffmpeg`, capability
    instance `io.github.umbrella22.vesper.remux-ffmpeg.post-download`, and native
    transport. The host kit resolves the embedded signed framework.
 
-Apple FFmpeg prebuilts are built on demand through the root profile CLI:
+Repository source-checkout examples build and stage the complete local optional
+set through the root profile CLI:
 
 ```sh
 ./scripts/vesper ios stage-optional-plugins-release \
@@ -194,7 +194,8 @@ Apple FFmpeg prebuilts are built on demand through the root profile CLI:
   ios-arm64 ios-simulator-arm64
 ```
 
-Both iOS examples in this repository already embed the plugin that way:
+Both iOS examples in this repository exercise that local release-verification
+path:
 
 - `examples/ios-swift-host/VesperPlayerHostDemo.xcodeproj`
 - `examples/flutter-host/ios/Runner.xcodeproj`
@@ -221,10 +222,10 @@ close a packet session while AVPlayer still receives the original source.
 `preferNormalized` and `requireNormalized` may instead hand a disk-backed fMP4
 or short-window HLS resource to AVPlayer. Apps can depend on
 `vesper_player_source_normalizer_ffmpeg` and use the bundled configuration
-presets instead of app-side plugin-path wiring. On iOS, the App target directly
-embeds `VesperPlayerSourceNormalizerFfmpegPlugin` plus
-`VesperFFmpegAVCodec`, `VesperFFmpegAVFormat`, and `VesperFFmpegAVUtil` from the
-optional package. The bundled resolver loads
+presets instead of app-side plugin-path wiring. On iOS, that package resolves
+the remote `VesperPlayerSourceNormalizerFfmpeg` capability product, which
+embeds `VesperPlayerSourceNormalizerFfmpegPlugin` plus `VesperFFmpegAVCodec`,
+`VesperFFmpegAVFormat`, and `VesperFFmpegAVUtil`. The bundled resolver loads
 `VesperPlayerSourceNormalizerFfmpegPlugin.framework/`
 `VesperPlayerSourceNormalizerFfmpegPlugin`. FFmpeg component frameworks are not
 plugin paths.

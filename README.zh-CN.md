@@ -211,6 +211,10 @@ Android 以 AAR modules 分发：
   与本地 relay 集成。
 - `vesper-player-kit-ffmpeg-runtime`：供 remux 与 relay 工作流使用的可选
   FFmpeg runtime package。
+- `vesper-player-kit-source-normalizer-ffmpeg`：依赖 core kit 与共享 FFmpeg
+  runtime 的可选 SourceNormalizer plugin。
+- `vesper-player-kit-remux-ffmpeg`：依赖 core kit 与共享 FFmpeg runtime 的
+  可选下载后 MP4 remux plugin。
 - `vesper-player-kit-compose`：Compose adapter，提供 `VesperPlayerSurface` 和
   controller / state helpers。
 - `vesper-player-kit-compose-ui`：可选的 opinionated Compose player stage。
@@ -237,9 +241,12 @@ Flutter 是 federated plugin family：
 - `vesper_player_ios`：基于 `VesperPlayerKit` 的 iOS 实现。
 - `vesper_player_external_playback`：可选 Android Cast / DLNA 统一控制器，支持本地
   HTTP relay 和系统 Cast route button。
+- `vesper_player_source_normalizer_ffmpeg`：可选 SourceNormalizer 原生依赖包。
+- `vesper_player_remux_ffmpeg`：可选下载后 MP4 remux 原生依赖包。
 - `vesper_player_ui`：可选 Flutter 控件与 player stage widgets。
 
-Flutter packages 目前从本仓库源码分发，尚未发布到 pub.dev。
+Flutter package family 已发布到 pub.dev。SourceNormalizer 与 remux 仍需宿主
+显式直接依赖，默认 `vesper_player` 不会把它们拉入应用。
 
 ## 从源码构建
 

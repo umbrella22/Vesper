@@ -52,6 +52,9 @@ lib/android/vesper-player-kit-decoder-mediacodec/src/main/jniLibs/*
 lib/android/vesper-player-kit-source-normalizer-ffmpeg/build/
 lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/jniLibs/*
 lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/assets/vesper-source-normalizer-ffmpeg/*
+lib/android/vesper-player-kit-remux-ffmpeg/build/
+lib/android/vesper-player-kit-remux-ffmpeg/src/main/jniLibs/*
+lib/android/vesper-player-kit-remux-ffmpeg/src/main/assets/vesper-remux-ffmpeg/*
 lib/android/vesper-player-kit-frame-processor-diagnostic/build/
 lib/android/vesper-player-kit-frame-processor-diagnostic/src/main/jniLibs/*
 lib/android/vesper-player-kit-external-playback/build/

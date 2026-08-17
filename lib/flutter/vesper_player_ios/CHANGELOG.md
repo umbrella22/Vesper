@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.3-rc.1 - 2026-08-17
+
+### Changed
+
+- Optional Flutter native packages now resolve the remote
+  `VesperPlayerSourceNormalizerFfmpeg` and `VesperPlayerRemuxFfmpeg` capability
+  products instead of requiring app-local optional framework staging.
+
 ## 0.4.2 - 2026-08-16
 
 ### Fixed

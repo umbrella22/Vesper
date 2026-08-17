@@ -58,6 +58,7 @@ extensions.configure<LibraryExtension>("android") {
 }
 
 dependencies {
+    api(project.dependencies.project(":vesper-player-kit"))
     api(project.dependencies.project(":vesper-player-kit-ffmpeg-runtime"))
 }
 

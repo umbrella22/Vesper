@@ -1,7 +1,7 @@
 name: flutter_host
 description: Flutter host app for Vesper Player federated plugin validation.
 publish_to: 'none'
-version: 0.4.2+402
+version: 0.4.3+403
 
 environment:
   sdk: ^3.11.4
@@ -13,6 +13,8 @@ dependencies:
     path: ../../lib/flutter/vesper_player
   vesper_player_external_playback:
     path: ../../lib/flutter/vesper_player_external_playback
+  vesper_player_remux_ffmpeg:
+    path: ../../lib/flutter/vesper_player_remux_ffmpeg
   vesper_player_source_normalizer_ffmpeg:
     path: ../../lib/flutter/vesper_player_source_normalizer_ffmpeg
   vesper_player_ui:

@@ -12,10 +12,13 @@ plugins {
 
 val vesperMavenGroupId =
     providers.gradleProperty("vesper.maven.groupId").orElse("io.github.umbrella22.vesper")
+val vesperDefaultPublicationVersion = "0.4.3-rc.1"
+val vesperPublicationVersion =
+    providers.gradleProperty("vesper.mavenVersion").orElse(vesperDefaultPublicationVersion)
 
 allprojects {
     group = vesperMavenGroupId.get()
-    version = "0.4.2"
+    version = vesperPublicationVersion.get()
 }
 
 data class AndroidPublicationMetadata(
@@ -36,15 +39,6 @@ val apacheLicense =
 val lgplLicense =
     "GNU Lesser General Public License, Version 2.1 or later" to
         "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html"
-
-fun String.isTruthy(): Boolean =
-    this == "1" || equals("true", ignoreCase = true) || equals("yes", ignoreCase = true)
-
-val publishOptionalPluginArtifacts =
-    providers.gradleProperty("vesper.publish.optionalPlugins")
-        .map { it.isTruthy() }
-        .orElse(false)
-        .get()
 
 val vesperAndroidCorePublications =
     mapOf(
@@ -98,15 +92,19 @@ val vesperAndroidOptionalPluginPublications =
                         "The artifact depends on the FFmpeg runtime artifact for libav/libsw dependencies.",
                 licenses = listOf(apacheLicense),
             ),
+        "vesper-player-kit-remux-ffmpeg" to
+            AndroidPublicationMetadata(
+                pomName = "Vesper Player Android Remux FFmpeg Plugin",
+                description =
+                    "Optional Android post-download remux plugin for Vesper Player. " +
+                        "The artifact depends on the FFmpeg runtime artifact for libav dependencies.",
+                licenses = listOf(apacheLicense),
+            ),
     )
 
 val vesperAndroidPublications =
     vesperAndroidCorePublications + vesperAndroidExternalPlaybackPublications +
-        if (publishOptionalPluginArtifacts) {
-            vesperAndroidOptionalPluginPublications
-        } else {
-            emptyMap()
-        }
+        vesperAndroidOptionalPluginPublications
 
 val vesperAndroidPluginRegistries =
     mapOf(
@@ -124,6 +122,13 @@ val vesperAndroidPluginRegistries =
                 pluginId = "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
                 variants = setOf("profile", "release"),
             ),
+        "vesper-player-kit-remux-ffmpeg" to
+            AndroidPluginRegistryMetadata(
+                manifestPath = "plugins/remux-ffmpeg/vesper-plugin.toml",
+                libraryName = "vesper_remux_ffmpeg",
+                pluginId = "io.github.umbrella22.vesper.remux-ffmpeg",
+                variants = setOf("release"),
+            ),
         "vesper-player-kit-frame-processor-diagnostic" to
             AndroidPluginRegistryMetadata(
                 manifestPath = "plugins/frame-processor-diagnostic/vesper-plugin.toml",
@@ -139,6 +144,7 @@ val vesperAndroidNativeLibraryEnvironmentVariables =
         "vesper-player-kit-decoder-mediacodec" to "VESPER_ANDROID_DECODER_JNI_LIBS",
         "vesper-player-kit-source-normalizer-ffmpeg" to
             "VESPER_ANDROID_SOURCE_NORMALIZER_JNI_LIBS",
+        "vesper-player-kit-remux-ffmpeg" to "VESPER_ANDROID_REMUX_JNI_LIBS",
         "vesper-player-kit-frame-processor-diagnostic" to
             "VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS",
     )

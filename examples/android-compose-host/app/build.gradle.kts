@@ -1,5 +1,6 @@
 import com.android.build.api.dsl.ApplicationExtension
 import java.io.File
+import org.gradle.api.tasks.Delete
 
 plugins {
     id("com.android.application")
@@ -23,9 +24,19 @@ val configuredAndroidAbis =
 val workspaceRootDir = rootProject.layout.projectDirectory.dir("../..")
 val playerFfmpegPluginJniLibsDir = layout.buildDirectory.dir("generated/playerFfmpeg/jniLibs")
 val playerFfmpegPluginJniLibsDirFile = playerFfmpegPluginJniLibsDir.get().asFile
+val playerFfmpegPluginAssetsDir = layout.buildDirectory.dir("generated/playerFfmpeg/assets")
+val playerFfmpegPluginAssetsDirFile = playerFfmpegPluginAssetsDir.get().asFile
+val playerFfmpegPluginMetadataDirFile =
+    playerFfmpegPluginAssetsDir.get().dir("vesper-remux-ffmpeg").asFile
 val playerSourceNormalizerPluginJniLibsDir =
     layout.buildDirectory.dir("generated/playerSourceNormalizerFfmpeg/jniLibs")
 val playerSourceNormalizerPluginJniLibsDirFile = playerSourceNormalizerPluginJniLibsDir.get().asFile
+val playerSourceNormalizerPluginAssetsDir =
+    layout.buildDirectory.dir("generated/playerSourceNormalizerFfmpeg/assets")
+val playerSourceNormalizerPluginAssetsDirFile =
+    playerSourceNormalizerPluginAssetsDir.get().asFile
+val playerSourceNormalizerPluginMetadataDirFile =
+    playerSourceNormalizerPluginAssetsDir.get().dir("vesper-source-normalizer-ffmpeg").asFile
 val playerDecoderMediaCodecPluginJniLibsDir =
     layout.buildDirectory.dir("generated/playerDecoderMediaCodec/jniLibs")
 val playerDecoderMediaCodecPluginJniLibsDirFile =
@@ -106,8 +117,8 @@ extensions.configure<ApplicationExtension>("android") {
         applicationId = "io.github.umbrella22.vesper.example.androidcomposehost"
         minSdk = 26
         targetSdk = 36
-        versionCode = 402
-        versionName = "0.4.2"
+        versionCode = 403
+        versionName = "0.4.3"
 
         ndk {
             abiFilters += configuredAndroidAbis
@@ -139,6 +150,10 @@ extensions.configure<ApplicationExtension>("android") {
         )
         getByName("main").jniLibs.directories.add(
             playerFrameProcessorDiagnosticPluginJniLibsDirFile.absolutePath,
+        )
+        getByName("main").assets.directories.add(playerFfmpegPluginAssetsDirFile.absolutePath)
+        getByName("main").assets.directories.add(
+            playerSourceNormalizerPluginAssetsDirFile.absolutePath,
         )
     }
 
@@ -186,6 +201,7 @@ val buildPlayerRemuxFfmpegAndroidPlugin = tasks.register<Exec>("buildPlayerRemux
     inputs.property("abis", configuredAndroidAbis)
     inputs.property("profile", playerFfmpegPluginBuildProfile)
     outputs.dir(playerFfmpegPluginJniLibsDirFile)
+    outputs.dir(playerFfmpegPluginMetadataDirFile)
 
     workingDir = workspaceRootDir.asFile
     environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
@@ -199,6 +215,8 @@ val buildPlayerRemuxFfmpegAndroidPlugin = tasks.register<Exec>("buildPlayerRemux
             playerFfmpegPluginBuildProfile.get(),
             "--profile",
             "default",
+            "--metadata-dir",
+            playerFfmpegPluginMetadataDirFile.absolutePath,
         )
     }
 }
@@ -221,6 +239,7 @@ val buildPlayerSourceNormalizerFfmpegAndroidPlugin =
     inputs.property("abis", configuredAndroidAbis)
     inputs.property("profile", playerFfmpegPluginBuildProfile)
     outputs.dir(playerSourceNormalizerPluginJniLibsDirFile)
+    outputs.dir(playerSourceNormalizerPluginMetadataDirFile)
 
     workingDir = workspaceRootDir.asFile
     environment("RUST_ANDROID_ABIS", configuredAndroidAbis.joinToString(","))
@@ -234,6 +253,8 @@ val buildPlayerSourceNormalizerFfmpegAndroidPlugin =
             playerFfmpegPluginBuildProfile.get(),
             "--profile",
             "default",
+            "--metadata-dir",
+            playerSourceNormalizerPluginMetadataDirFile.absolutePath,
         )
     }
 }
@@ -341,6 +362,10 @@ listOf("debug", "release").forEach { variant ->
     val variantTitle = variant.replaceFirstChar(Char::uppercaseChar)
     val generatedAssets =
         layout.buildDirectory.dir("generated/vesperPluginRegistryAssets/$variant")
+    val cleanRegistryAssets =
+        tasks.register<Delete>("clean${variantTitle}VesperPluginRegistryAssets") {
+            delete(generatedAssets)
+        }
     androidExtension.sourceSets.maybeCreate(variant).assets.directories.add(
         generatedAssets.get().asFile.absolutePath,
     )
@@ -365,6 +390,7 @@ listOf("debug", "release").forEach { variant ->
                 group = "vesper"
                 description =
                     "Generates the $variant ${metadata.pluginId} registry from final stripped bytes."
+                dependsOn(cleanRegistryAssets)
                 dependsOn(stripTaskName)
                 dependsOn(buildVesperPluginCli)
                 inputs.file(vesperCli)

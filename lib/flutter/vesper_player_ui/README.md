@@ -34,8 +34,8 @@ Use the hosted packages for normal application integration:
 
 ```yaml
 dependencies:
-  vesper_player: ^0.4.2
-  vesper_player_ui: ^0.4.2
+  vesper_player: 0.4.3-rc.1
+  vesper_player_ui: 0.4.3-rc.1
 ```
 
 Repository development first runs

@@ -1,0 +1,66 @@
+group = "io.github.umbrella22.vesper.player.flutter.remux_ffmpeg"
+version = "0.4.3-rc.1"
+
+buildscript {
+    ext.kotlin_version = "2.4.10"
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath "com.android.tools.build:gradle:9.1.0"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+
+ext.vesperPlayerKitVersion = providers
+    .gradleProperty("vesperPlayerKitVersion")
+    .orElse(version.toString())
+    .get()
+
+android {
+    namespace = "io.github.umbrella22.vesper.player.flutter.remux_ffmpeg"
+    compileSdk = 36
+
+    defaultConfig {
+        minSdk = 26
+        consumerProguardFiles "consumer-rules.pro"
+    }
+
+    buildTypes {
+        profile {
+            initWith release
+            matchingFallbacks = ["release"]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+dependencies {
+    def remuxProject = findProject(":vesper-player-kit-remux-ffmpeg")
+    if (remuxProject != null) {
+        implementation project(":vesper-player-kit-remux-ffmpeg")
+    } else {
+        implementation "io.github.umbrella22.vesper:vesper-player-kit-remux-ffmpeg:$vesperPlayerKitVersion"
+    }
+}

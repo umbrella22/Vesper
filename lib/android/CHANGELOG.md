@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.3 - 2026-08-17
+
+### Added
+
+- Added `vesper-player-kit-source-normalizer-ffmpeg` and
+  `vesper-player-kit-remux-ffmpeg` to Maven Central publication. Both depend on
+  the same-version core kit and shared FFmpeg runtime and carry only plugin
+  glue, registry, and profile metadata.
+
+### Changed
+
+- Stable and prerelease tags publish the same seven-coordinate closure; an RC
+  uses its exact `MAJOR.MINOR.PATCH-rc.N` Maven version.
+- Android sample verification now requires SourceNormalizer, remux,
+  FrameProcessor, relay, the shared FFmpeg runtime, matching profile receipts,
+  plugin registries, and valid arm64 ELF payloads.
+
 ## 0.4.2 - 2026-08-16
 
 ### Fixed

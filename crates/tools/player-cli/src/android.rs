@@ -25,10 +25,12 @@ const DEFAULT_ANDROID_NDK_VERSION: &str = "29.0.14206865";
 const ANDROID_JNI_LIBRARY: &str = "libvesper_player_android.so";
 const ANDROID_DECODER_LIBRARY: &str = "libvesper_decoder_mediacodec.so";
 const ANDROID_SOURCE_NORMALIZER_LIBRARY: &str = "libvesper_source_normalizer_ffmpeg.so";
+const ANDROID_REMUX_LIBRARY: &str = "libvesper_remux_ffmpeg.so";
 const ANDROID_FRAME_PROCESSOR_LIBRARY: &str = "libvesper_frame_processor_diagnostic.so";
 const ANDROID_RELAY_LIBRARY: &str = "libvesper_player_relay_ffmpeg.so";
-const SOURCE_NORMALIZER_PROFILE_HASH: &str = "profile-hash.txt";
+const FFMPEG_PROFILE_HASH: &str = "profile-hash.txt";
 const SOURCE_NORMALIZER_PROFILE_METADATA: &str = "source-normalizer-profile.txt";
+const REMUX_PROFILE_METADATA: &str = "remux-profile.txt";
 const MAX_ANDROID_NDK_DIRECTORY_ENTRIES: usize = 128;
 const MAX_ANDROID_PLUGIN_OUTPUT_ENTRIES: usize = 4096;
 const MAX_ANDROID_PLUGIN_OUTPUT_DEPTH: usize = 16;
@@ -54,6 +56,8 @@ const HOST_JNI_STAGING_ENV: &str = "VESPER_ANDROID_HOST_JNI_LIBS";
 const DECODER_JNI_STAGING_ENV: &str = "VESPER_ANDROID_DECODER_JNI_LIBS";
 const SOURCE_NORMALIZER_JNI_STAGING_ENV: &str = "VESPER_ANDROID_SOURCE_NORMALIZER_JNI_LIBS";
 const SOURCE_NORMALIZER_ASSETS_STAGING_ENV: &str = "VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS";
+const REMUX_JNI_STAGING_ENV: &str = "VESPER_ANDROID_REMUX_JNI_LIBS";
+const REMUX_ASSETS_STAGING_ENV: &str = "VESPER_ANDROID_REMUX_ASSETS";
 const FRAME_PROCESSOR_JNI_STAGING_ENV: &str = "VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS";
 const FFMPEG_RUNTIME_JNI_STAGING_ENV: &str = "VESPER_ANDROID_FFMPEG_RUNTIME_JNI_LIBS";
 const FFMPEG_RUNTIME_ASSETS_STAGING_ENV: &str = "VESPER_ANDROID_FFMPEG_RUNTIME_ASSETS";
@@ -82,6 +86,7 @@ pub(crate) struct AndroidError {
 struct MavenStagingOptions<'a> {
     repository_directory: &'a Path,
     group_id: &'a str,
+    version: &'a str,
     signing_key: &'a str,
     signing_passphrase: Option<&'a str>,
 }
@@ -203,8 +208,22 @@ impl FfmpegPlugin {
 
     const fn library_name(self) -> &'static str {
         match self {
-            Self::Remux => "libvesper_remux_ffmpeg.so",
+            Self::Remux => ANDROID_REMUX_LIBRARY,
             Self::SourceNormalizer => ANDROID_SOURCE_NORMALIZER_LIBRARY,
+        }
+    }
+
+    const fn profile_metadata_name(self) -> &'static str {
+        match self {
+            Self::Remux => REMUX_PROFILE_METADATA,
+            Self::SourceNormalizer => SOURCE_NORMALIZER_PROFILE_METADATA,
+        }
+    }
+
+    const fn display_name(self) -> &'static str {
+        match self {
+            Self::Remux => "remux",
+            Self::SourceNormalizer => "SourceNormalizer",
         }
     }
 
@@ -437,7 +456,7 @@ pub(crate) fn build_ffmpeg_plugin(
         .transpose()?;
 
     if let Some(stage) = metadata_stage.as_ref() {
-        write_source_normalizer_profile_metadata(stage.path(), &profile.name, &profile.hash)?;
+        write_ffmpeg_plugin_profile_metadata(stage.path(), plugin, &profile.name, &profile.hash)?;
     }
 
     for abi in &selected_abis {
@@ -452,7 +471,7 @@ pub(crate) fn build_ffmpeg_plugin(
         if let Some(stage) = metadata_stage.as_ref()
             && metadata_path.exists()
         {
-            copy_source_normalizer_ffmpeg_metadata(
+            copy_ffmpeg_plugin_build_metadata(
                 &metadata_path,
                 &stage
                     .path()
@@ -496,7 +515,7 @@ pub(crate) fn build_ffmpeg_plugin(
     validate_ffmpeg_plugin_output(output_stage.path(), plugin, &selected_abis)?;
     output_stage.validate()?;
     if let Some(stage) = metadata_stage.as_ref() {
-        validate_source_normalizer_metadata(stage.path(), &selected_abis)?;
+        validate_ffmpeg_plugin_metadata(stage.path(), plugin, &selected_abis)?;
         stage.validate()?;
     }
 
@@ -585,7 +604,7 @@ fn parse_ffmpeg_plugin_request(
                     .ok_or_else(|| AndroidError::usage("--profile requires a value"))?
                     .to_owned();
             }
-            "--metadata-dir" if matches!(plugin, FfmpegPlugin::SourceNormalizer) => {
+            "--metadata-dir" => {
                 index += 1;
                 let value = arguments
                     .get(index)
@@ -600,9 +619,7 @@ fn parse_ffmpeg_plugin_request(
                     .ok_or_else(|| AndroidError::usage("--profile requires a value"))?
                     .to_owned();
             }
-            _ if text.starts_with("--metadata-dir=")
-                && matches!(plugin, FfmpegPlugin::SourceNormalizer) =>
-            {
+            _ if text.starts_with("--metadata-dir=") => {
                 let value = text
                     .strip_prefix("--metadata-dir=")
                     .filter(|value| !value.is_empty())
@@ -630,7 +647,7 @@ fn parse_ffmpeg_plugin_request(
 fn ffmpeg_plugin_usage(plugin: FfmpegPlugin) -> &'static str {
     match plugin {
         FfmpegPlugin::Remux => {
-            "Usage: vesper android remux-plugin <output-dir> [debug|release] [--profile <name>]"
+            "Usage: vesper android remux-plugin <output-dir> [debug|release] [--profile <name>] [--metadata-dir <dir>]"
         }
         FfmpegPlugin::SourceNormalizer => {
             "Usage: vesper android source-normalizer-plugin <output-dir> [debug|release] [--profile <name>] [--metadata-dir <dir>]"
@@ -746,29 +763,28 @@ fn read_optional_ffmpeg_metadata(path: &Path) -> Result<String, AndroidError> {
         .collect())
 }
 
-fn write_source_normalizer_profile_metadata(
+fn write_ffmpeg_plugin_profile_metadata(
     root: &Path,
+    plugin: FfmpegPlugin,
     profile_name: &str,
     profile_hash: &str,
 ) -> Result<(), AndroidError> {
-    fs::write(
-        root.join(SOURCE_NORMALIZER_PROFILE_HASH),
-        format!("{profile_hash}\n"),
-    )
-    .and_then(|_| {
-        fs::write(
-            root.join(SOURCE_NORMALIZER_PROFILE_METADATA),
-            format!("profile={profile_name}\nplatform=android\nprofile_hash={profile_hash}\n"),
-        )
-    })
-    .map_err(|error| {
-        AndroidError::storage(format!(
-            "failed to write Android SourceNormalizer profile metadata: {error}"
-        ))
-    })
+    fs::write(root.join(FFMPEG_PROFILE_HASH), format!("{profile_hash}\n"))
+        .and_then(|_| {
+            fs::write(
+                root.join(plugin.profile_metadata_name()),
+                format!("profile={profile_name}\nplatform=android\nprofile_hash={profile_hash}\n"),
+            )
+        })
+        .map_err(|error| {
+            AndroidError::storage(format!(
+                "failed to write Android {} profile metadata: {error}",
+                plugin.display_name()
+            ))
+        })
 }
 
-fn copy_source_normalizer_ffmpeg_metadata(
+fn copy_ffmpeg_plugin_build_metadata(
     source: &Path,
     destination: &Path,
     profile_hash: &str,
@@ -782,7 +798,7 @@ fn copy_source_normalizer_ffmpeg_metadata(
     bytes.extend_from_slice(format!("profile_hash={profile_hash}\n").as_bytes());
     fs::write(destination, bytes).map_err(|error| {
         AndroidError::storage(format!(
-            "failed to write SourceNormalizer FFmpeg metadata '{}': {error}",
+            "failed to write FFmpeg plugin metadata '{}': {error}",
             destination.display()
         ))
     })
@@ -813,20 +829,21 @@ fn validate_ffmpeg_plugin_output(
     validate_plugin_output_tree(root, plugin.crate_name())
 }
 
-fn validate_source_normalizer_metadata(
+fn validate_ffmpeg_plugin_metadata(
     root: &Path,
+    plugin: FfmpegPlugin,
     selected_abis: &[String],
 ) -> Result<(), AndroidError> {
-    for name in [
-        SOURCE_NORMALIZER_PROFILE_HASH,
-        SOURCE_NORMALIZER_PROFILE_METADATA,
-    ] {
-        require_regular_file(&root.join(name), "Android SourceNormalizer metadata")?;
+    for name in [FFMPEG_PROFILE_HASH, plugin.profile_metadata_name()] {
+        require_regular_file(
+            &root.join(name),
+            &format!("Android {} metadata", plugin.display_name()),
+        )?;
     }
     for abi in selected_abis {
         require_regular_file(
             &root.join(format!("{abi}-vesper-ffmpeg-build-metadata.txt")),
-            "Android SourceNormalizer FFmpeg metadata",
+            &format!("Android {} FFmpeg metadata", plugin.display_name()),
         )?;
     }
     Ok(())
@@ -1125,12 +1142,14 @@ pub(crate) fn stage_maven_publications(
     root: &Path,
     repository_directory: &Path,
     group_id: &str,
+    version: &str,
     signing_key: &str,
     signing_passphrase: Option<&str>,
 ) -> Result<(), AndroidError> {
     let options = MavenStagingOptions {
         repository_directory,
         group_id,
+        version,
         signing_key,
         signing_passphrase,
     };
@@ -1451,7 +1470,7 @@ pub(crate) fn build_external_playback_jni(
         "Android external playback relay metadata",
     )?;
     fs::write(
-        assets_stage.path().join(SOURCE_NORMALIZER_PROFILE_HASH),
+        assets_stage.path().join(FFMPEG_PROFILE_HASH),
         format!("{}\n", profile.hash),
     )
     .map_err(|error| {
@@ -1861,38 +1880,18 @@ fn sample_apks_transaction(
         ".vesper-android-samples-stage-",
         "Android sample APK output",
     )?;
+    let optional_build = build_optional_android_plugins(
+        root,
+        &library_project,
+        selected_abis,
+        Some(ffmpeg_release_lock),
+        cancellation,
+    )?;
+    validate_optional_profile_receipts(&optional_build)?;
+    let selected_abis_csv = selected_abis.join(",");
     let mut artifacts = Vec::with_capacity(selected_abis.len() * 2);
 
     for abi in selected_abis {
-        let mut ffmpeg = Command::new(&current_cli);
-        ffmpeg
-            .current_dir(root)
-            .args([
-                OsString::from("ffmpeg"),
-                OsString::from("--root"),
-                root.as_os_str().to_owned(),
-                OsString::from("--platform"),
-                OsString::from("android"),
-                OsString::from("--profile"),
-                OsString::from("default"),
-                OsString::from("--abi"),
-                OsString::from(abi),
-            ])
-            .env(PARENT_SUPERVISES_PROCESS_GROUP_ENV, "1")
-            .env(
-                "VESPER_ANDROID_FFMPEG_OUTPUT_DIR",
-                android_ffmpeg_output_directory(root),
-            )
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit());
-        ffmpeg_release_lock.apply(&mut ffmpeg);
-        require_success_in_deferral(
-            &mut ffmpeg,
-            "Android sample FFmpeg runtime build",
-            cancellation,
-        )?;
-
         let mut compose = Command::new(&compose_gradle);
         compose
             .current_dir(root)
@@ -1901,9 +1900,17 @@ fn sample_apks_transaction(
             .arg(format!("-Pvesper.player.android.abis={abi}"))
             .arg(":app:assembleRelease")
             .env("GRADLE_USER_HOME", &compose_gradle_user_home)
+            .env("VESPER_CLI", &current_cli)
+            .env(PARENT_SUPERVISES_PROCESS_GROUP_ENV, "1")
+            .env("RUST_ANDROID_ABIS", &selected_abis_csv)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
+        configure_optional_android_build_environment(
+            &mut compose,
+            &optional_build,
+            Some(ffmpeg_release_lock),
+        );
         require_success_in_deferral(
             &mut compose,
             "Android Compose sample APK build",
@@ -1945,9 +1952,17 @@ fn sample_apks_transaction(
                     OsString::from("--split-per-abi"),
                 ])
                 .env("GRADLE_USER_HOME", &flutter_gradle_user_home)
+                .env("VESPER_CLI", &current_cli)
+                .env(PARENT_SUPERVISES_PROCESS_GROUP_ENV, "1")
+                .env("RUST_ANDROID_ABIS", &selected_abis_csv)
                 .stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
+            configure_optional_android_build_environment(
+                &mut build,
+                &optional_build,
+                Some(ffmpeg_release_lock),
+            );
             require_success_in_deferral(&mut build, "Flutter sample APK build", cancellation)?;
             flutter_project.join("build/app/outputs/flutter-apk/app-arm64-v8a-release.apk")
         } else {
@@ -1965,9 +1980,17 @@ fn sample_apks_transaction(
                 .arg(format!("-Pvesper.player.android.app.abis={abi}"))
                 .arg(":app:assembleRelease")
                 .env("GRADLE_USER_HOME", &flutter_gradle_user_home)
+                .env("VESPER_CLI", &current_cli)
+                .env(PARENT_SUPERVISES_PROCESS_GROUP_ENV, "1")
+                .env("RUST_ANDROID_ABIS", &selected_abis_csv)
                 .stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
+            configure_optional_android_build_environment(
+                &mut build,
+                &optional_build,
+                Some(ffmpeg_release_lock),
+            );
             require_success_in_deferral(
                 &mut build,
                 "Flutter Android Gradle sample APK build",
@@ -2079,6 +2102,65 @@ pub(crate) fn validate_android_sample_apk(
     require_flutter_aot: bool,
 ) -> Result<(), AndroidError> {
     let index = scan_android_sample_apk(path, expected_abi)?;
+    for library in [
+        ANDROID_JNI_LIBRARY,
+        ANDROID_SOURCE_NORMALIZER_LIBRARY,
+        ANDROID_REMUX_LIBRARY,
+        ANDROID_FRAME_PROCESSOR_LIBRARY,
+        ANDROID_RELAY_LIBRARY,
+        "libavcodec.so",
+        "libavformat.so",
+        "libavutil.so",
+    ] {
+        let entry = format!("lib/{expected_abi}/{library}");
+        if !index.files.contains(&entry) {
+            return Err(AndroidError::conformance(format!(
+                "Android sample APK '{}' is missing required native library {entry}",
+                path.display()
+            )));
+        }
+        let binary = read_android_archive_entry(path, &entry, MAX_ANDROID_SAMPLE_APK_ENTRY_BYTES)?;
+        if !binary.starts_with(b"\x7fELF") {
+            return Err(AndroidError::conformance(format!(
+                "Android sample APK '{}' contains a non-ELF native library {entry}",
+                path.display()
+            )));
+        }
+    }
+    validate_android_sample_registry_entries(
+        path,
+        expected_abi,
+        require_flutter_aot,
+        &index.registry_entries,
+    )?;
+    let receipts = [
+        (
+            "SourceNormalizer",
+            "assets/vesper-source-normalizer-ffmpeg/profile-hash.txt",
+        ),
+        ("remux", "assets/vesper-remux-ffmpeg/profile-hash.txt"),
+        (
+            "FFmpeg runtime",
+            "assets/vesper-ffmpeg-runtime/profile-hash.txt",
+        ),
+        (
+            "external playback relay",
+            "assets/vesper-relay-ffmpeg/profile-hash.txt",
+        ),
+    ]
+    .map(|(label, entry)| read_archive_profile_receipt(path, entry, label))
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+    if !receipts.windows(2).all(|pair| pair[0] == pair[1]) {
+        return Err(AndroidError::conformance(format!(
+            "Android sample APK '{}' contains mismatched optional FFmpeg profile receipts: SourceNormalizer={}, remux={}, runtime={}, relay={}",
+            path.display(),
+            receipts[0],
+            receipts[1],
+            receipts[2],
+            receipts[3],
+        )));
+    }
     if require_flutter_aot {
         let entry = format!("lib/{expected_abi}/libapp.so");
         if !index.files.contains(&entry) {
@@ -2107,6 +2189,38 @@ pub(crate) fn validate_android_sample_apk(
         }
     }
     Ok(())
+}
+
+fn validate_android_sample_registry_entries(
+    path: &Path,
+    expected_abi: &str,
+    require_flutter_aot: bool,
+    actual: &BTreeSet<String>,
+) -> Result<(), AndroidError> {
+    let mut plugin_ids = vec![
+        "io.github.umbrella22.vesper.remux-ffmpeg",
+        "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
+        "dev.vesper.frame-processor-diagnostic",
+    ];
+    if !require_flutter_aot {
+        plugin_ids.push("io.github.umbrella22.vesper.decoder-mediacodec");
+    }
+    let expected = plugin_ids
+        .into_iter()
+        .map(|plugin_id| format!("assets/vesper/plugins/{expected_abi}/{plugin_id}.json"))
+        .collect::<BTreeSet<_>>();
+    if actual == &expected {
+        return Ok(());
+    }
+
+    let missing = expected.difference(actual).cloned().collect::<Vec<_>>();
+    let unexpected = actual.difference(&expected).cloned().collect::<Vec<_>>();
+    Err(AndroidError::conformance(format!(
+        "Android sample APK '{}' plugin registries do not match the expected set: missing=[{}], unexpected=[{}]",
+        path.display(),
+        missing.join(", "),
+        unexpected.join(", "),
+    )))
 }
 
 fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
@@ -2342,7 +2456,7 @@ enum AndroidReleaseArtifactKind {
         plugin_id: &'static str,
         library_name: &'static str,
         manifest: &'static str,
-        profile_receipt: Option<&'static str>,
+        profile_receipt: Option<(&'static str, &'static str, &'static str)>,
     },
 }
 
@@ -2424,9 +2538,27 @@ fn android_release_artifacts(
                     plugin_id: "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
                     library_name: "vesper_source_normalizer_ffmpeg",
                     manifest: "plugins/source-normalizer-ffmpeg/vesper-plugin.toml",
-                    profile_receipt: Some(
+                    profile_receipt: Some((
+                        "source-normalizer",
+                        "SourceNormalizer",
                         "assets/vesper-source-normalizer-ffmpeg/profile-hash.txt",
-                    ),
+                    )),
+                },
+            },
+            AndroidReleaseArtifact {
+                source: project.join(
+                    "vesper-player-kit-remux-ffmpeg/build/outputs/aar/vesper-player-kit-remux-ffmpeg-release.aar",
+                ),
+                file_name: format!("VesperPlayerKitRemuxFfmpeg-android-{abi}.aar"),
+                kind: AndroidReleaseArtifactKind::Plugin {
+                    plugin_id: "io.github.umbrella22.vesper.remux-ffmpeg",
+                    library_name: "vesper_remux_ffmpeg",
+                    manifest: "plugins/remux-ffmpeg/vesper-plugin.toml",
+                    profile_receipt: Some((
+                        "remux",
+                        "remux",
+                        "assets/vesper-remux-ffmpeg/profile-hash.txt",
+                    )),
                 },
             },
             AndroidReleaseArtifact {
@@ -2570,10 +2702,10 @@ fn verify_android_release_artifacts(
                     library_name,
                     manifest,
                 )?;
-                if let Some(receipt) = profile_receipt {
+                if let Some((receipt_key, receipt_label, receipt)) = profile_receipt {
                     profile_receipts.insert(
-                        "source-normalizer",
-                        read_archive_profile_receipt(&path, receipt, "SourceNormalizer")?,
+                        receipt_key,
+                        read_archive_profile_receipt(&path, receipt, receipt_label)?,
                     );
                 }
             }
@@ -2586,12 +2718,14 @@ fn verify_android_release_artifacts(
             )));
         }
         let source = profile_receipts.get("source-normalizer");
+        let remux = profile_receipts.get("remux");
         let runtime = profile_receipts.get("runtime");
         let relay = profile_receipts.get("relay");
-        if source.is_none() || source != runtime || runtime != relay {
+        if source.is_none() || source != remux || remux != runtime || runtime != relay {
             return Err(AndroidError::conformance(format!(
-                "optional Android release FFmpeg profile receipts do not match: SourceNormalizer={}, runtime={}, relay={}",
+                "optional Android release FFmpeg profile receipts do not match: SourceNormalizer={}, remux={}, runtime={}, relay={}",
                 source.map_or("<missing>", String::as_str),
+                remux.map_or("<missing>", String::as_str),
                 runtime.map_or("<missing>", String::as_str),
                 relay.map_or("<missing>", String::as_str),
             )));
@@ -3300,10 +3434,13 @@ fn build_aar_stages(
         tasks.push(format!(
             ":vesper-player-kit-external-playback:{module_task}"
         ));
+        tasks.push(format!(
+            ":vesper-player-kit-source-normalizer-ffmpeg:{module_task}"
+        ));
+        tasks.push(format!(":vesper-player-kit-remux-ffmpeg:{module_task}"));
         if include_optional {
             tasks.extend([
                 format!(":vesper-player-kit-decoder-mediacodec:{module_task}"),
-                format!(":vesper-player-kit-source-normalizer-ffmpeg:{module_task}"),
                 format!(":vesper-player-kit-frame-processor-diagnostic:{module_task}"),
             ]);
         }
@@ -3344,6 +3481,7 @@ fn build_aar_stages(
                 maven.repository_directory.display()
             ))
             .arg(format!("-Pvesper.maven.groupId={}", maven.group_id))
+            .arg(format!("-Pvesper.mavenVersion={}", maven.version))
             .env("MAVEN_GPG_PRIVATE_KEY", maven.signing_key)
             .env_remove("MAVEN_GPG_PASSPHRASE");
         if let Some(passphrase) = maven.signing_passphrase {
@@ -3352,38 +3490,11 @@ fn build_aar_stages(
     }
     command.args(tasks);
     if let Some(build) = optional_build.as_ref() {
-        command
-            .env(DECODER_JNI_STAGING_ENV, build.decoder.path())
-            .env(
-                SOURCE_NORMALIZER_JNI_STAGING_ENV,
-                build.source_normalizer.path(),
-            )
-            .env(
-                SOURCE_NORMALIZER_ASSETS_STAGING_ENV,
-                build.source_normalizer_assets.packaging_root(),
-            )
-            .env(
-                FRAME_PROCESSOR_JNI_STAGING_ENV,
-                build.frame_processor.path(),
-            )
-            .env(FFMPEG_RUNTIME_JNI_STAGING_ENV, build.ffmpeg_runtime.path())
-            .env(
-                FFMPEG_RUNTIME_ASSETS_STAGING_ENV,
-                build.ffmpeg_runtime_assets.packaging_root(),
-            )
-            .env(EXTERNAL_RELAY_JNI_STAGING_ENV, build.external_relay.path())
-            .env(
-                EXTERNAL_RELAY_ASSETS_STAGING_ENV,
-                build.external_relay_assets.packaging_root(),
-            )
-            .env("VESPER_ANDROID_SKIP_FFMPEG_RUNTIME_BUILD", "1");
-        if let Some(lock) = ffmpeg_release_lock {
-            lock.apply(&mut command);
-        }
+        configure_optional_android_build_environment(&mut command, build, ffmpeg_release_lock);
     }
     require_success_in_deferral(&mut command, "Android AAR Gradle build", cancellation)?;
     validate_staged_host_jni(&host_stage, &selected_abis)?;
-    let mut stages = Vec::with_capacity(if optional_build.is_some() { 9 } else { 1 });
+    let mut stages = Vec::with_capacity(if optional_build.is_some() { 11 } else { 1 });
     stages.push(host_stage);
     if let Some(build) = optional_build {
         validate_required_staged_file(
@@ -3393,7 +3504,7 @@ fn build_aar_stages(
         )?;
         validate_required_staged_file(
             &build.external_relay_assets,
-            PathBuf::from(SOURCE_NORMALIZER_PROFILE_HASH),
+            PathBuf::from(FFMPEG_PROFILE_HASH),
             "external playback relay profile hash",
         )?;
         validate_optional_profile_receipts(&build)?;
@@ -3423,6 +3534,8 @@ struct OptionalAndroidBuild {
     decoder: StagedGeneratedDirectory,
     source_normalizer: StagedGeneratedDirectory,
     source_normalizer_assets: StagedGeneratedDirectory,
+    remux: StagedGeneratedDirectory,
+    remux_assets: StagedGeneratedDirectory,
     frame_processor: StagedGeneratedDirectory,
     ffmpeg_runtime: StagedGeneratedDirectory,
     ffmpeg_runtime_assets: StagedGeneratedDirectory,
@@ -3431,12 +3544,54 @@ struct OptionalAndroidBuild {
     vesper_cli: PathBuf,
 }
 
+fn configure_optional_android_build_environment(
+    command: &mut Command,
+    build: &OptionalAndroidBuild,
+    ffmpeg_release_lock: Option<&AndroidFfmpegReleaseLock>,
+) {
+    command
+        .env(DECODER_JNI_STAGING_ENV, build.decoder.path())
+        .env(
+            SOURCE_NORMALIZER_JNI_STAGING_ENV,
+            build.source_normalizer.path(),
+        )
+        .env(
+            SOURCE_NORMALIZER_ASSETS_STAGING_ENV,
+            build.source_normalizer_assets.packaging_root(),
+        )
+        .env(REMUX_JNI_STAGING_ENV, build.remux.path())
+        .env(
+            REMUX_ASSETS_STAGING_ENV,
+            build.remux_assets.packaging_root(),
+        )
+        .env(
+            FRAME_PROCESSOR_JNI_STAGING_ENV,
+            build.frame_processor.path(),
+        )
+        .env(FFMPEG_RUNTIME_JNI_STAGING_ENV, build.ffmpeg_runtime.path())
+        .env(
+            FFMPEG_RUNTIME_ASSETS_STAGING_ENV,
+            build.ffmpeg_runtime_assets.packaging_root(),
+        )
+        .env(EXTERNAL_RELAY_JNI_STAGING_ENV, build.external_relay.path())
+        .env(
+            EXTERNAL_RELAY_ASSETS_STAGING_ENV,
+            build.external_relay_assets.packaging_root(),
+        )
+        .env("VESPER_ANDROID_SKIP_FFMPEG_RUNTIME_BUILD", "1");
+    if let Some(lock) = ffmpeg_release_lock {
+        lock.apply(command);
+    }
+}
+
 impl OptionalAndroidBuild {
     fn into_stages(self) -> Vec<StagedGeneratedDirectory> {
         vec![
             self.decoder,
             self.source_normalizer,
             self.source_normalizer_assets,
+            self.remux,
+            self.remux_assets,
             self.frame_processor,
             self.ffmpeg_runtime,
             self.ffmpeg_runtime_assets,
@@ -3456,6 +3611,7 @@ fn build_optional_android_plugins(
     let selected_abis_csv = selected_abis.join(",");
     let decoder_module = project.join("vesper-player-kit-decoder-mediacodec");
     let source_normalizer_module = project.join("vesper-player-kit-source-normalizer-ffmpeg");
+    let remux_module = project.join("vesper-player-kit-remux-ffmpeg");
     let frame_processor_module = project.join("vesper-player-kit-frame-processor-diagnostic");
     let decoder = StagedGeneratedDirectory::new(
         root,
@@ -3474,6 +3630,18 @@ fn build_optional_android_plugins(
         source_normalizer_module.join("src/main/assets/vesper-source-normalizer-ffmpeg"),
         ".vesper-android-source-normalizer-metadata-stage-",
         "Android SourceNormalizer plugin metadata",
+    )?;
+    let remux = StagedGeneratedDirectory::new(
+        root,
+        remux_module.join("src/main/jniLibs"),
+        ".vesper-android-remux-stage-",
+        "Android remux plugin output",
+    )?;
+    let remux_assets = StagedGeneratedDirectory::new_nested(
+        root,
+        remux_module.join("src/main/assets/vesper-remux-ffmpeg"),
+        ".vesper-android-remux-metadata-stage-",
+        "Android remux plugin metadata",
     )?;
     let frame_processor = StagedGeneratedDirectory::new(
         root,
@@ -3561,6 +3729,22 @@ fn build_optional_android_plugins(
                 OsString::from("android"),
                 OsString::from("--root"),
                 root.as_os_str().to_owned(),
+                OsString::from("__ffmpeg-plugin"),
+                OsString::from("remux"),
+                remux.path().as_os_str().to_owned(),
+                OsString::from("release"),
+                OsString::from("--profile"),
+                OsString::from("default"),
+                OsString::from("--metadata-dir"),
+                remux_assets.path().as_os_str().to_owned(),
+            ],
+            "Android remux FFmpeg plugin build",
+        ),
+        (
+            vec![
+                OsString::from("android"),
+                OsString::from("--root"),
+                root.as_os_str().to_owned(),
                 OsString::from("__runtime-free-plugin"),
                 OsString::from("frame-processor-diagnostic"),
                 frame_processor.path().as_os_str().to_owned(),
@@ -3614,94 +3798,106 @@ fn build_optional_android_plugins(
         require_success_in_deferral(&mut command, label, cancellation)?;
     }
 
-    validate_optional_android_artifacts(
-        &decoder,
-        &source_normalizer,
-        &source_normalizer_assets,
-        &frame_processor,
-        &ffmpeg_runtime,
-        &ffmpeg_runtime_assets,
-        selected_abis,
-    )?;
-
-    for stage in [
-        &decoder,
-        &source_normalizer,
-        &source_normalizer_assets,
-        &frame_processor,
-        &ffmpeg_runtime,
-        &ffmpeg_runtime_assets,
-        &external_relay,
-        &external_relay_assets,
-    ] {
-        stage.validate()?;
-        stage.target.revalidate_target()?;
-    }
-    let _ = cancellation;
-    Ok(OptionalAndroidBuild {
+    let build = OptionalAndroidBuild {
         decoder,
         source_normalizer,
         source_normalizer_assets,
+        remux,
+        remux_assets,
         frame_processor,
         ffmpeg_runtime,
         ffmpeg_runtime_assets,
         external_relay,
         external_relay_assets,
         vesper_cli: current_cli,
-    })
+    };
+    validate_optional_android_artifacts(&build, selected_abis)?;
+
+    for stage in [
+        &build.decoder,
+        &build.source_normalizer,
+        &build.source_normalizer_assets,
+        &build.remux,
+        &build.remux_assets,
+        &build.frame_processor,
+        &build.ffmpeg_runtime,
+        &build.ffmpeg_runtime_assets,
+        &build.external_relay,
+        &build.external_relay_assets,
+    ] {
+        stage.validate()?;
+        stage.target.revalidate_target()?;
+    }
+    let _ = cancellation;
+    Ok(build)
 }
 
 fn validate_optional_android_artifacts(
-    decoder: &StagedGeneratedDirectory,
-    source_normalizer: &StagedGeneratedDirectory,
-    source_normalizer_assets: &StagedGeneratedDirectory,
-    frame_processor: &StagedGeneratedDirectory,
-    ffmpeg_runtime: &StagedGeneratedDirectory,
-    ffmpeg_runtime_assets: &StagedGeneratedDirectory,
+    build: &OptionalAndroidBuild,
     selected_abis: &[String],
 ) -> Result<(), AndroidError> {
     for abi in selected_abis {
         validate_required_staged_file(
-            decoder,
+            &build.decoder,
             Path::new(abi).join(ANDROID_DECODER_LIBRARY),
             "MediaCodec decoder plugin library",
         )?;
         validate_required_staged_file(
-            source_normalizer,
+            &build.source_normalizer,
             Path::new(abi).join(ANDROID_SOURCE_NORMALIZER_LIBRARY),
             "SourceNormalizer plugin library",
         )?;
         validate_required_staged_file(
-            frame_processor,
+            &build.remux,
+            Path::new(abi).join(ANDROID_REMUX_LIBRARY),
+            "remux plugin library",
+        )?;
+        validate_required_staged_file(
+            &build.frame_processor,
             Path::new(abi).join(ANDROID_FRAME_PROCESSOR_LIBRARY),
             "FrameProcessor plugin library",
         )?;
         for library in ["libavcodec.so", "libavformat.so", "libavutil.so"] {
             validate_required_staged_file(
-                ffmpeg_runtime,
+                &build.ffmpeg_runtime,
                 Path::new(abi).join(library),
                 "FFmpeg runtime library",
             )?;
         }
         validate_required_staged_file(
-            source_normalizer_assets,
+            &build.source_normalizer_assets,
             PathBuf::from(format!("{abi}-vesper-ffmpeg-build-metadata.txt")),
             "SourceNormalizer FFmpeg build metadata",
         )?;
+        validate_required_staged_file(
+            &build.remux_assets,
+            PathBuf::from(format!("{abi}-vesper-ffmpeg-build-metadata.txt")),
+            "remux FFmpeg build metadata",
+        )?;
     }
     validate_required_staged_file(
-        source_normalizer_assets,
-        PathBuf::from(SOURCE_NORMALIZER_PROFILE_HASH),
+        &build.source_normalizer_assets,
+        PathBuf::from(FFMPEG_PROFILE_HASH),
         "SourceNormalizer profile hash",
     )?;
     validate_required_staged_file(
-        source_normalizer_assets,
+        &build.remux_assets,
+        PathBuf::from(FFMPEG_PROFILE_HASH),
+        "remux profile hash",
+    )?;
+    validate_required_staged_file(
+        &build.remux_assets,
+        PathBuf::from(REMUX_PROFILE_METADATA),
+        "remux profile metadata",
+    )?;
+    validate_required_staged_file(
+        &build.source_normalizer_assets,
         PathBuf::from(SOURCE_NORMALIZER_PROFILE_METADATA),
         "SourceNormalizer profile metadata",
     )?;
     validate_required_staged_file(
-        ffmpeg_runtime_assets,
-        PathBuf::from(SOURCE_NORMALIZER_PROFILE_HASH),
+        &build.ffmpeg_runtime_assets,
+        PathBuf::from(FFMPEG_PROFILE_HASH),
         "FFmpeg runtime profile hash",
     )
 }
@@ -3711,28 +3907,26 @@ fn validate_optional_profile_receipts(build: &OptionalAndroidBuild) -> Result<()
         &build
             .source_normalizer_assets
             .path()
-            .join(SOURCE_NORMALIZER_PROFILE_HASH),
+            .join(FFMPEG_PROFILE_HASH),
         "SourceNormalizer",
     )?;
     let runtime = read_profile_hash(
-        &build
-            .ffmpeg_runtime_assets
-            .path()
-            .join(SOURCE_NORMALIZER_PROFILE_HASH),
+        &build.ffmpeg_runtime_assets.path().join(FFMPEG_PROFILE_HASH),
         "FFmpeg runtime",
     )?;
+    let remux = read_profile_hash(
+        &build.remux_assets.path().join(FFMPEG_PROFILE_HASH),
+        "remux",
+    )?;
     let relay = read_profile_hash(
-        &build
-            .external_relay_assets
-            .path()
-            .join(SOURCE_NORMALIZER_PROFILE_HASH),
+        &build.external_relay_assets.path().join(FFMPEG_PROFILE_HASH),
         "external playback relay",
     )?;
-    if source_normalizer == runtime && runtime == relay {
+    if source_normalizer == remux && remux == runtime && runtime == relay {
         Ok(())
     } else {
         Err(AndroidError::conformance(format!(
-            "optional Android FFmpeg profile receipts do not match: SourceNormalizer={source_normalizer}, runtime={runtime}, relay={relay}"
+            "optional Android FFmpeg profile receipts do not match: SourceNormalizer={source_normalizer}, remux={remux}, runtime={runtime}, relay={relay}"
         )))
     }
 }
@@ -5159,6 +5353,36 @@ mod tests {
     }
 
     #[test]
+    fn sample_registry_validation_rejects_legacy_or_extra_identities() {
+        let archive = Path::new("sample.apk");
+        let abi = "arm64-v8a";
+        let mut registries = [
+            "dev.vesper.frame-processor-diagnostic",
+            "io.github.umbrella22.vesper.decoder-mediacodec",
+            "io.github.umbrella22.vesper.remux-ffmpeg",
+            "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
+        ]
+        .into_iter()
+        .map(|plugin_id| format!("assets/vesper/plugins/{abi}/{plugin_id}.json"))
+        .collect::<BTreeSet<_>>();
+
+        validate_android_sample_registry_entries(archive, abi, false, &registries)
+            .expect("accept exact Compose registry set");
+        registries.insert(format!(
+            "assets/vesper/plugins/{abi}/io.github.ikaros.vesper.remux-ffmpeg.json"
+        ));
+        let error = validate_android_sample_registry_entries(archive, abi, false, &registries)
+            .expect_err("reject legacy plugin registry");
+        assert!(error.to_string().contains("unexpected="));
+        assert!(error.to_string().contains("io.github.ikaros"));
+
+        registries.retain(|entry| !entry.contains("decoder-mediacodec"));
+        registries.retain(|entry| !entry.contains("io.github.ikaros"));
+        validate_android_sample_registry_entries(archive, abi, true, &registries)
+            .expect("accept exact Flutter registry set");
+    }
+
+    #[test]
     fn release_archive_scan_rejects_test_fixtures_and_foreign_abis() {
         let directory = tempfile::tempdir().expect("temporary Android release archives");
         let fixture = directory.path().join("fixture.aar");
@@ -5247,15 +5471,18 @@ mod tests {
         let remux = parse_ffmpeg_plugin_request(
             root,
             FfmpegPlugin::Remux,
-            &[OsString::from("plugin-output")],
+            &[
+                OsString::from("plugin-output"),
+                OsString::from("--metadata-dir=remux-metadata"),
+            ],
         )
         .expect("parse default Android remux profile");
         assert_eq!(remux.profile, "download-remux");
-        assert!(remux.metadata_directory.is_none());
+        assert_eq!(remux.metadata_directory, Some(root.join("remux-metadata")));
     }
 
     #[test]
-    fn ffmpeg_plugin_arguments_reject_invalid_options_and_cross_plugin_metadata() {
+    fn ffmpeg_plugin_arguments_reject_invalid_options_and_missing_values() {
         let root = Path::new("/tmp/vesper-ffmpeg-plugin-root");
         for (plugin, arguments) in [
             (

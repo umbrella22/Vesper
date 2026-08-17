@@ -92,14 +92,14 @@ flutter build ios --release --no-codesign
 
 The Android Runner project builds and packages the optional remux,
 SourceNormalizer, and FrameProcessor diagnostic plugin `.so` files into
-generated `jniLibs`. The iOS Runner App target directly depends on the aggregate
-`VesperPlayerOptionalPlugins` SwiftPM product. Xcode embeds and signs three
-FFmpeg component frameworks plus the Remux, SourceNormalizer, VideoToolbox
-Decoder, and diagnostic FrameProcessor frameworks as top-level siblings under
-`Runner.app/Frameworks`. Dart sends canonical `VesperPluginReference` values
-through MethodChannel. Each native host kit resolves those identities to its
-packaged plugin artifacts; FFmpeg component frameworks remain sibling dynamic
-dependencies.
+generated `jniLibs`. This repository's iOS Runner directly embeds the seven
+locally staged XCFrameworks so the example can verify the complete release set.
+Hosted Flutter consumers instead add
+`vesper_player_source_normalizer_ffmpeg` and/or
+`vesper_player_remux_ffmpeg`, which resolve capability-level SwiftPM products.
+Dart sends canonical `VesperPluginReference` values through MethodChannel. Each
+native host kit resolves those identities to its packaged plugin artifacts;
+FFmpeg component frameworks remain sibling dynamic dependencies.
 
 `flutter pub get` initially generates its aggregate Swift package with Flutter's
 default deployment target. `flutter build ios` raises it from the Runner's
@@ -109,7 +109,8 @@ run `flutter build ios --config-only --no-codesign` once after the final
 
 ## Optional Plugin Diagnostics
 
-The Flutter example depends on `vesper_player_source_normalizer_ffmpeg` and uses
+The Flutter example depends on `vesper_player_source_normalizer_ffmpeg` and
+`vesper_player_remux_ffmpeg`. It uses
 `VesperSourceNormalizerConfiguration.preferBundled()` /
 `VesperSourceNormalizerConfiguration.requireBundled()` to emit the canonical
 SourceNormalizer reference. An empty reference list selects no plugin; Android

@@ -367,7 +367,7 @@ struct IosStageReleaseArgs {
 
 #[derive(Debug, Args)]
 struct IosPublishSpmIndexArgs {
-    /// Stable release tag in vMAJOR.MINOR.PATCH form.
+    /// Release tag in vMAJOR.MINOR.PATCH[-PRERELEASE] form.
     tag: String,
     /// Released VesperPlayerKit XCFramework archive.
     archive: PathBuf,
@@ -461,7 +461,7 @@ enum AndroidCommand {
     /// Stages Android sample APKs.
     #[command(name = "sample-apks")]
     SampleApks(AndroidSampleApksArgs),
-    /// Publishes the stable Android host-kit coordinates to Maven Central.
+    /// Publishes Android host-kit coordinates to Maven Central.
     #[command(name = "publish-maven-central")]
     PublishMavenCentral(AndroidPublishMavenCentralArgs),
     /// Provisions the Android instrumentation JNI fixture through Rust.
@@ -530,7 +530,7 @@ struct AndroidSampleApksArgs {
 
 #[derive(Debug, Args)]
 struct AndroidPublishMavenCentralArgs {
-    /// Stable release tag in vMAJOR.MINOR.PATCH form.
+    /// Release tag in vMAJOR.MINOR.PATCH[-PRERELEASE] form.
     tag: String,
     /// Approved Central Portal namespace that authorizes io.github.umbrella22.vesper.
     #[arg(long, default_value = "io.github.umbrella22")]
@@ -2223,11 +2223,7 @@ fn run_release(arguments: ReleaseArgs) -> CliResult<()> {
                 .map_err(map_release_error)?;
             context.set_version(&metadata).map_err(map_release_error)?;
             context
-                .verify_version(
-                    metadata.version(),
-                    Some(metadata.ios_build().to_owned()),
-                    Some(metadata.android_version_code().to_owned()),
-                )
+                .verify_metadata(&metadata)
                 .map_err(map_release_error)?;
             context
                 .append_ci_metadata(&metadata)

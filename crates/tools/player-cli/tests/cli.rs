@@ -296,16 +296,94 @@ fn write_test_zip(path: &std::path::Path, entries: &[(&str, &[u8])]) {
     archive.finish().expect("finish test ZIP");
 }
 
+fn android_release_apk_entries(
+    flutter_aot: Option<&'static [u8]>,
+) -> Vec<(&'static str, &'static [u8])> {
+    let mut entries = vec![
+        ("AndroidManifest.xml", b"release manifest".as_slice()),
+        (
+            "lib/arm64-v8a/libvesper_player_android.so",
+            b"\x7fELF host".as_slice(),
+        ),
+        (
+            "lib/arm64-v8a/libvesper_source_normalizer_ffmpeg.so",
+            b"\x7fELF source normalizer".as_slice(),
+        ),
+        (
+            "lib/arm64-v8a/libvesper_remux_ffmpeg.so",
+            b"\x7fELF remux".as_slice(),
+        ),
+        (
+            "lib/arm64-v8a/libvesper_frame_processor_diagnostic.so",
+            b"\x7fELF frame processor".as_slice(),
+        ),
+        (
+            "lib/arm64-v8a/libvesper_player_relay_ffmpeg.so",
+            b"\x7fELF relay".as_slice(),
+        ),
+        ("lib/arm64-v8a/libavcodec.so", b"\x7fELF avcodec".as_slice()),
+        (
+            "lib/arm64-v8a/libavformat.so",
+            b"\x7fELF avformat".as_slice(),
+        ),
+        ("lib/arm64-v8a/libavutil.so", b"\x7fELF avutil".as_slice()),
+        (
+            "assets/vesper/plugins/arm64-v8a/io.github.umbrella22.vesper.remux-ffmpeg.json",
+            b"{}".as_slice(),
+        ),
+        (
+            "assets/vesper/plugins/arm64-v8a/io.github.umbrella22.vesper.source-normalizer-ffmpeg.json",
+            b"{}".as_slice(),
+        ),
+        (
+            "assets/vesper/plugins/arm64-v8a/dev.vesper.frame-processor-diagnostic.json",
+            b"{}".as_slice(),
+        ),
+        (
+            "assets/vesper-source-normalizer-ffmpeg/profile-hash.txt",
+            b"fixture-profile\n".as_slice(),
+        ),
+        (
+            "assets/vesper-remux-ffmpeg/profile-hash.txt",
+            b"fixture-profile\n".as_slice(),
+        ),
+        (
+            "assets/vesper-ffmpeg-runtime/profile-hash.txt",
+            b"fixture-profile\n".as_slice(),
+        ),
+        (
+            "assets/vesper-relay-ffmpeg/profile-hash.txt",
+            b"fixture-profile\n".as_slice(),
+        ),
+    ];
+    if let Some(flutter_aot) = flutter_aot {
+        entries.push(("lib/arm64-v8a/libapp.so", flutter_aot));
+    }
+    entries
+}
+
+fn android_compose_release_apk_entries() -> Vec<(&'static str, &'static [u8])> {
+    let mut entries = android_release_apk_entries(None);
+    entries.extend([
+        (
+            "lib/arm64-v8a/libvesper_decoder_mediacodec.so",
+            b"\x7fELF decoder".as_slice(),
+        ),
+        (
+            "assets/vesper/plugins/arm64-v8a/io.github.umbrella22.vesper.decoder-mediacodec.json",
+            b"{}".as_slice(),
+        ),
+    ]);
+    entries
+}
+
 #[test]
 fn flutter_android_release_verification_rejects_fixture_markers() {
     let directory = tempfile::tempdir().expect("create Flutter release APK fixture");
     let apk = directory.path().join("app release.apk");
     write_test_zip(
         &apk,
-        &[
-            ("AndroidManifest.xml", b"release manifest"),
-            ("lib/arm64-v8a/libapp.so", b"flutter release aot"),
-        ],
+        &android_release_apk_entries(Some(b"flutter release aot")),
     );
 
     let valid = Command::new(env!("CARGO_BIN_EXE_vesper"))
@@ -321,13 +399,7 @@ fn flutter_android_release_verification_rejects_fixture_markers() {
 
     write_test_zip(
         &apk,
-        &[
-            ("AndroidManifest.xml", b"release manifest"),
-            (
-                "lib/arm64-v8a/libapp.so",
-                b"flutter release aot fixtures/contracts",
-            ),
-        ],
+        &android_release_apk_entries(Some(b"flutter release aot fixtures/contracts")),
     );
     let invalid = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .args(["flutter", "verify-android-release"])
@@ -5771,7 +5843,10 @@ const FLUTTER_CORE_PACKAGES: [&str; 6] = [
     "vesper_player_external_playback",
     "vesper_player_ui",
 ];
-const FLUTTER_OPTIONAL_PACKAGE: &str = "vesper_player_source_normalizer_ffmpeg";
+const FLUTTER_SOURCE_NORMALIZER_PACKAGE: &str = "vesper_player_source_normalizer_ffmpeg";
+const FLUTTER_REMUX_PACKAGE: &str = "vesper_player_remux_ffmpeg";
+const FLUTTER_OPTIONAL_PACKAGES: [&str; 2] =
+    [FLUTTER_SOURCE_NORMALIZER_PACKAGE, FLUTTER_REMUX_PACKAGE];
 
 fn flutter_fixture(include_example: bool) -> tempfile::TempDir {
     let parent = tempfile::tempdir().expect("temporary Flutter fixture parent");
@@ -5781,7 +5856,7 @@ fn flutter_fixture(include_example: bool) -> tempfile::TempDir {
     for package in FLUTTER_CORE_PACKAGES
         .iter()
         .copied()
-        .chain(std::iter::once(FLUTTER_OPTIONAL_PACKAGE))
+        .chain(FLUTTER_OPTIONAL_PACKAGES.iter().copied())
     {
         let package_directory = root.join("lib/flutter").join(package);
         fs::create_dir_all(&package_directory).expect("create Flutter package directory");
@@ -5809,7 +5884,7 @@ fn prepare_flutter_pub_fixture(root: &std::path::Path) {
     for package in FLUTTER_CORE_PACKAGES
         .iter()
         .copied()
-        .chain(std::iter::once(FLUTTER_OPTIONAL_PACKAGE))
+        .chain(FLUTTER_OPTIONAL_PACKAGES.iter().copied())
     {
         let package_directory = root.join("lib/flutter").join(package);
         fs::write(
@@ -6700,6 +6775,7 @@ fn prepare_android_project_fixture(root: &std::path::Path) {
         .expect("create Android JNI output parent");
     fs::create_dir_all(root.join("examples/android-compose-host"))
         .expect("create Android fallback project");
+    let _ = prepare_android_optional_project_fixture(root);
 }
 
 #[cfg(unix)]
@@ -6755,6 +6831,7 @@ fn prepare_android_sample_apk_fixture(
 ) -> (PathBuf, NativeAndroidFfmpegFixture) {
     let fixture =
         prepare_native_android_ffmpeg_fixture(root, &root.join("sample Android tools"), "8.1.2");
+    write_android_optional_cargo_tools(&fixture.tools);
     fs::create_dir_all(root.join("examples/flutter-host/android"))
         .expect("create Flutter Android sample fixture");
     fs::copy(
@@ -6776,35 +6853,27 @@ exit "${ANDROID_SAMPLE_GRADLE_STATUS:-0}"
     );
     let compose_apk = root
         .join("examples/android-compose-host/app/build/outputs/apk/release/compose-release.apk");
-    write_test_zip(
-        &compose_apk,
-        &[
-            ("AndroidManifest.xml", b"compose manifest"),
-            (
-                "lib/arm64-v8a/libvesper_player_android.so",
-                b"compose native library",
-            ),
-        ],
-    );
+    write_test_zip(&compose_apk, &android_compose_release_apk_entries());
     let flutter_apk =
         root.join("examples/flutter-host/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk");
     write_test_zip(
         &flutter_apk,
-        &[
-            ("AndroidManifest.xml", b"flutter manifest"),
-            ("lib/arm64-v8a/libapp.so", b"flutter release aot"),
-        ],
+        &android_release_apk_entries(Some(b"flutter release aot")),
     );
     (root.join("android-sample.log"), fixture)
 }
 
 #[cfg(unix)]
-fn android_optional_output_paths(root: &std::path::Path) -> [PathBuf; 8] {
+fn android_optional_output_paths(root: &std::path::Path) -> [PathBuf; 10] {
     [
         root.join("lib/android/vesper-player-kit-decoder-mediacodec/src/main/jniLibs"),
         root.join("lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/jniLibs"),
         root.join(
             "lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/assets/vesper-source-normalizer-ffmpeg",
+        ),
+        root.join("lib/android/vesper-player-kit-remux-ffmpeg/src/main/jniLibs"),
+        root.join(
+            "lib/android/vesper-player-kit-remux-ffmpeg/src/main/assets/vesper-remux-ffmpeg",
         ),
         root.join(
             "lib/android/vesper-player-kit-frame-processor-diagnostic/src/main/jniLibs",
@@ -6821,7 +6890,7 @@ fn android_optional_output_paths(root: &std::path::Path) -> [PathBuf; 8] {
 }
 
 #[cfg(unix)]
-fn prepare_android_optional_project_fixture(root: &std::path::Path) -> [PathBuf; 8] {
+fn prepare_android_optional_project_fixture(root: &std::path::Path) -> [PathBuf; 10] {
     let outputs = android_optional_output_paths(root);
     for output in &outputs {
         fs::create_dir_all(output.parent().expect("optional Android output parent"))
@@ -6831,21 +6900,7 @@ fn prepare_android_optional_project_fixture(root: &std::path::Path) -> [PathBuf;
 }
 
 #[cfg(unix)]
-fn prepare_android_optional_toolchain(root: &std::path::Path, tools: &std::path::Path) -> PathBuf {
-    let native = prepare_native_android_ffmpeg_fixture(root, tools, "8.1.2");
-    let target_libdir = root.join("fake rust target/lib");
-    fs::create_dir_all(&target_libdir).expect("create fake Rust target library directory");
-    let sdk = root.join("Android SDK");
-    let ndk = root.join("Android NDK");
-    fs::create_dir_all(&sdk).expect("create Android SDK fixture");
-    std::os::unix::fs::symlink(native.sdk.join("ndk"), sdk.join("ndk"))
-        .expect("link Android SDK NDK fixture");
-    std::os::unix::fs::symlink(native.sdk.join("ndk/29.0.14206865"), &ndk)
-        .expect("link Android NDK fixture");
-    write_executable_script(
-        &tools.join("rustc"),
-        "#!/bin/sh\nprintf '%s\\n' \"$ANDROID_TEST_TARGET_LIBDIR\"\n",
-    );
+fn write_android_optional_cargo_tools(tools: &std::path::Path) {
     write_executable_script(&tools.join("cargo"), "#!/bin/sh\nexit 0\n");
     write_executable_script(
         &tools.join("cargo-ndk"),
@@ -6884,6 +6939,25 @@ esac
 printf '%s\n' "$crate" > "$output/arm64-v8a/$library"
 "#,
     );
+}
+
+#[cfg(unix)]
+fn prepare_android_optional_toolchain(root: &std::path::Path, tools: &std::path::Path) -> PathBuf {
+    let native = prepare_native_android_ffmpeg_fixture(root, tools, "8.1.2");
+    let target_libdir = root.join("fake rust target/lib");
+    fs::create_dir_all(&target_libdir).expect("create fake Rust target library directory");
+    let sdk = root.join("Android SDK");
+    let ndk = root.join("Android NDK");
+    fs::create_dir_all(&sdk).expect("create Android SDK fixture");
+    std::os::unix::fs::symlink(native.sdk.join("ndk"), sdk.join("ndk"))
+        .expect("link Android SDK NDK fixture");
+    std::os::unix::fs::symlink(native.sdk.join("ndk/29.0.14206865"), &ndk)
+        .expect("link Android NDK fixture");
+    write_executable_script(
+        &tools.join("rustc"),
+        "#!/bin/sh\nprintf '%s\\n' \"$ANDROID_TEST_TARGET_LIBDIR\"\n",
+    );
+    write_android_optional_cargo_tools(tools);
     fs::copy(
         workspace_root().join("scripts/ffmpeg-profiles.toml"),
         root.join("scripts/ffmpeg-profiles.toml"),
@@ -6899,7 +6973,7 @@ printf '%s\n' "$crate" > "$output/arm64-v8a/$library"
 }
 
 #[cfg(unix)]
-fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 8] {
+fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 9] {
     let _ = prepare_android_optional_project_fixture(root);
     fs::create_dir_all(root.join("scripts")).expect("create Android release script directory");
     fs::copy(
@@ -6910,6 +6984,7 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 8] 
     for plugin in [
         "decoder-mediacodec",
         "source-normalizer-ffmpeg",
+        "remux-ffmpeg",
         "frame-processor-diagnostic",
     ] {
         let source = workspace_root()
@@ -6930,6 +7005,7 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 8] 
             "source-normalizer-ffmpeg",
             "vesper_source_normalizer_ffmpeg",
         ),
+        ("remux-ffmpeg", "vesper_remux_ffmpeg"),
         (
             "frame-processor-diagnostic",
             "vesper_frame_processor_diagnostic",
@@ -6944,6 +7020,7 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 8] 
         "VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar".to_owned(),
         "VesperPlayerKitDecoderMediaCodec-android-arm64-v8a.aar".to_owned(),
         "VesperPlayerKitSourceNormalizerFfmpeg-android-arm64-v8a.aar".to_owned(),
+        "VesperPlayerKitRemuxFfmpeg-android-arm64-v8a.aar".to_owned(),
         "VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar".to_owned(),
     ];
     let aar_root = root.join("lib/android");
@@ -7040,6 +7117,7 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 8] 
         let aar_name = match plugin {
             "decoder-mediacodec" => "vesper-player-kit-decoder-mediacodec-release.aar",
             "source-normalizer-ffmpeg" => "vesper-player-kit-source-normalizer-ffmpeg-release.aar",
+            "remux-ffmpeg" => "vesper-player-kit-remux-ffmpeg-release.aar",
             "frame-processor-diagnostic" => {
                 "vesper-player-kit-frame-processor-diagnostic-release.aar"
             }
@@ -7048,6 +7126,7 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 8] 
         let module = match plugin {
             "decoder-mediacodec" => "vesper-player-kit-decoder-mediacodec",
             "source-normalizer-ffmpeg" => "vesper-player-kit-source-normalizer-ffmpeg",
+            "remux-ffmpeg" => "vesper-player-kit-remux-ffmpeg",
             "frame-processor-diagnostic" => "vesper-player-kit-frame-processor-diagnostic",
             _ => unreachable!("known Android plugin fixture"),
         };
@@ -7068,6 +7147,11 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 8] 
         if plugin == "source-normalizer-ffmpeg" {
             entries.push((
                 "assets/vesper-source-normalizer-ffmpeg/profile-hash.txt",
+                profile_hash.as_bytes(),
+            ));
+        } else if plugin == "remux-ffmpeg" {
+            entries.push((
+                "assets/vesper-remux-ffmpeg/profile-hash.txt",
                 profile_hash.as_bytes(),
             ));
         }
@@ -11620,6 +11704,7 @@ fn release_metadata_preserves_output_and_ci_environment_contracts() {
         String::from_utf8(output.stdout).expect("UTF-8 metadata output"),
         concat!(
             "version=1.2.34\n",
+            "publication_version=1.2.34-rc.2\n",
             "ios_build=777\n",
             "android_version_code=778\n",
             "release_date=2026-01-01\n",
@@ -11629,6 +11714,7 @@ fn release_metadata_preserves_output_and_ci_environment_contracts() {
         fs::read_to_string(github_output).expect("GitHub output"),
         concat!(
             "version=1.2.34\n",
+            "publication_version=1.2.34-rc.2\n",
             "ios_build=777\n",
             "android_version_code=778\n",
             "release_date=2026-01-01\n",
@@ -11638,6 +11724,7 @@ fn release_metadata_preserves_output_and_ci_environment_contracts() {
         fs::read_to_string(github_env).expect("GitHub environment"),
         concat!(
             "VESPER_RELEASE_VERSION=1.2.34\n",
+            "VESPER_RELEASE_PUBLICATION_VERSION=1.2.34-rc.2\n",
             "VESPER_RELEASE_BUILD=777\n",
             "VESPER_RELEASE_IOS_BUILD=777\n",
             "VESPER_RELEASE_ANDROID_VERSION_CODE=778\n",
@@ -11682,7 +11769,10 @@ fn release_version_validation_uses_stable_exit_codes() {
     assert!(verified.stderr.is_empty());
     assert_eq!(
         String::from_utf8(verified.stdout).expect("UTF-8 verification output"),
-        "Verified Vesper product version 0.4.2.\n"
+        format!(
+            "Verified Vesper product version {}.\n",
+            env!("CARGO_PKG_VERSION")
+        )
     );
 }
 
@@ -12548,10 +12638,7 @@ fn android_sample_apks_reject_missing_flutter_aot_without_replacing_previous_out
     let (log, fixture) = prepare_android_sample_apk_fixture(&root);
     let flutter_apk =
         root.join("examples/flutter-host/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk");
-    write_test_zip(
-        &flutter_apk,
-        &[("AndroidManifest.xml", b"flutter manifest without aot")],
-    );
+    write_test_zip(&flutter_apk, &android_release_apk_entries(None));
     let output_directory = root.join("release output/android samples");
     fs::create_dir_all(&output_directory).expect("create previous Android sample output");
     fs::write(output_directory.join("previous.apk"), b"previous")
@@ -13774,7 +13861,11 @@ test -f "$VESPER_ANDROID_SOURCE_NORMALIZER_JNI_LIBS/arm64-v8a/libvesper_source_n
 test -f "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/profile-hash.txt" || exit 83
 test -f "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/source-normalizer-profile.txt" || exit 84
 test -f "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/arm64-v8a-vesper-ffmpeg-build-metadata.txt" || exit 85
-test -f "$VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS/arm64-v8a/libvesper_frame_processor_diagnostic.so" || exit 86
+test -f "$VESPER_ANDROID_REMUX_JNI_LIBS/arm64-v8a/libvesper_remux_ffmpeg.so" || exit 86
+test -f "$VESPER_ANDROID_REMUX_ASSETS/vesper-remux-ffmpeg/profile-hash.txt" || exit 87
+test -f "$VESPER_ANDROID_REMUX_ASSETS/vesper-remux-ffmpeg/remux-profile.txt" || exit 88
+test -f "$VESPER_ANDROID_REMUX_ASSETS/vesper-remux-ffmpeg/arm64-v8a-vesper-ffmpeg-build-metadata.txt" || exit 89
+test -f "$VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS/arm64-v8a/libvesper_frame_processor_diagnostic.so" || exit 90
 /bin/mkdir -p "$VESPER_ANDROID_EXTERNAL_RELAY_JNI_LIBS/arm64-v8a"
 printf 'relay\n' > "$VESPER_ANDROID_EXTERNAL_RELAY_JNI_LIBS/arm64-v8a/libvesper_player_relay_ffmpeg.so"
 /bin/mkdir -p "$VESPER_ANDROID_EXTERNAL_RELAY_ASSETS/vesper-relay-ffmpeg"
@@ -13788,6 +13879,8 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
   printf 'decoder_jni=%s\n' "$VESPER_ANDROID_DECODER_JNI_LIBS"
   printf 'source_jni=%s\n' "$VESPER_ANDROID_SOURCE_NORMALIZER_JNI_LIBS"
   printf 'source_assets=%s\n' "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS"
+  printf 'remux_jni=%s\n' "$VESPER_ANDROID_REMUX_JNI_LIBS"
+  printf 'remux_assets=%s\n' "$VESPER_ANDROID_REMUX_ASSETS"
   printf 'frame_jni=%s\n' "$VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS"
   printf 'runtime_jni=%s\n' "$VESPER_ANDROID_FFMPEG_RUNTIME_JNI_LIBS"
   printf 'runtime_assets=%s\n' "$VESPER_ANDROID_FFMPEG_RUNTIME_ASSETS"
@@ -13848,27 +13941,37 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
         .expect("read staged source normalizer metadata");
     assert!(!profile_hash.trim().is_empty());
     assert_eq!(
-        fs::read_to_string(outputs[3].join("arm64-v8a/libvesper_frame_processor_diagnostic.so"))
+        fs::read_to_string(outputs[3].join("arm64-v8a/libvesper_remux_ffmpeg.so"))
+            .expect("read staged remux output"),
+        "player-remux-ffmpeg\n"
+    );
+    assert_eq!(
+        fs::read_to_string(outputs[4].join("profile-hash.txt"))
+            .expect("read staged remux metadata"),
+        profile_hash
+    );
+    assert_eq!(
+        fs::read_to_string(outputs[5].join("arm64-v8a/libvesper_frame_processor_diagnostic.so"))
             .expect("read staged frame processor output"),
         "player-frame-processor-diagnostic\n"
     );
     assert_eq!(
-        fs::read_to_string(outputs[4].join("arm64-v8a/libavcodec.so"))
+        fs::read_to_string(outputs[6].join("arm64-v8a/libavcodec.so"))
             .expect("read staged FFmpeg runtime output"),
         "fixture ffmpeg runtime avcodec\n"
     );
     assert_eq!(
-        fs::read_to_string(outputs[5].join("profile-hash.txt"))
+        fs::read_to_string(outputs[7].join("profile-hash.txt"))
             .expect("read staged FFmpeg runtime metadata"),
         profile_hash
     );
     assert_eq!(
-        fs::read_to_string(outputs[6].join("arm64-v8a/libvesper_player_relay_ffmpeg.so"))
+        fs::read_to_string(outputs[8].join("arm64-v8a/libvesper_player_relay_ffmpeg.so"))
             .expect("read staged relay output"),
         "relay\n"
     );
     assert_eq!(
-        fs::read_to_string(outputs[7].join("profile-hash.txt"))
+        fs::read_to_string(outputs[9].join("profile-hash.txt"))
             .expect("read staged relay metadata"),
         profile_hash
     );
@@ -13896,6 +13999,9 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
     let source = log
         .find("cargo-ndk crate=player-source-normalizer-ffmpeg")
         .expect("source normalizer plugin log");
+    let remux = log
+        .find("cargo-ndk crate=player-remux-ffmpeg")
+        .expect("remux plugin log");
     let frame = log
         .find("cargo-ndk crate=player-frame-processor-diagnostic")
         .expect("frame processor plugin log");
@@ -13906,10 +14012,12 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
     assert!(
         ffmpeg_native < decoder
             && decoder < source
-            && source < frame
+            && source < remux
+            && remux < frame
             && frame < relay
             && relay < gradle
     );
+    assert!(log.contains("remux_jni=") && log.contains("remux_assets="));
     assert!(log.contains("runtime_jni=") && log.contains("runtime_assets="));
     assert!(log.contains("relay_jni=") && log.contains("relay_assets="));
     assert!(log.contains("arg=:vesper-player-kit:assembleFixture\n"));
@@ -13990,6 +14098,7 @@ exit "${ANDROID_STAGE_RELEASE_GRADLE_STATUS:-0}"
             "VesperPlayerKitExternalPlayback-android-arm64-v8a.aar",
             "VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar",
             "VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar",
+            "VesperPlayerKitRemuxFfmpeg-android-arm64-v8a.aar",
             "VesperPlayerKitSourceNormalizerFfmpeg-android-arm64-v8a.aar",
         ]
     );
@@ -14217,11 +14326,15 @@ while :; do sleep 1; done
 fn flutter_local_overrides_preserves_order_paths_and_optional_exclusion() {
     let directory = flutter_fixture(true);
     let root = flutter_fixture_root(&directory);
-    let optional_output = root
-        .join("lib/flutter")
-        .join(FLUTTER_OPTIONAL_PACKAGE)
-        .join("pubspec_overrides.yaml");
-    fs::write(&optional_output, b"optional sentinel\n").expect("seed optional override");
+    let optional_outputs = FLUTTER_OPTIONAL_PACKAGES.map(|package| {
+        let output = root
+            .join("lib/flutter")
+            .join(package)
+            .join("pubspec_overrides.yaml");
+        fs::write(&output, format!("optional sentinel for {package}\n"))
+            .expect("seed optional override");
+        (package, output)
+    });
     let first_output = root
         .join("lib/flutter")
         .join(FLUTTER_CORE_PACKAGES[0])
@@ -14277,10 +14390,12 @@ fn flutter_local_overrides_preserves_order_paths_and_optional_exclusion() {
             .expect("read example override"),
         expected_example_overrides(&FLUTTER_CORE_PACKAGES)
     );
-    assert_eq!(
-        fs::read_to_string(optional_output).expect("read untouched optional override"),
-        "optional sentinel\n"
-    );
+    for (package, output) in optional_outputs {
+        assert_eq!(
+            fs::read_to_string(output).expect("read untouched optional override"),
+            format!("optional sentinel for {package}\n")
+        );
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -14297,13 +14412,13 @@ fn flutter_local_overrides_preserves_order_paths_and_optional_exclusion() {
 }
 
 #[test]
-fn flutter_local_overrides_includes_optional_package_from_cli_or_environment() {
+fn flutter_local_overrides_includes_optional_packages_from_cli_or_environment() {
     let directory = flutter_fixture(true);
     let root = flutter_fixture_root(&directory);
     let packages: Vec<_> = FLUTTER_CORE_PACKAGES
         .iter()
         .copied()
-        .chain(std::iter::once(FLUTTER_OPTIONAL_PACKAGE))
+        .chain(FLUTTER_OPTIONAL_PACKAGES.iter().copied())
         .collect();
 
     let cli_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
@@ -14318,21 +14433,26 @@ fn flutter_local_overrides_includes_optional_package_from_cli_or_environment() {
         .expect("write optional Flutter overrides from CLI");
     assert_eq!(cli_output.status.code(), Some(0));
     assert!(cli_output.stderr.is_empty());
-    let optional_output = root
-        .join("lib/flutter")
-        .join(FLUTTER_OPTIONAL_PACKAGE)
-        .join("pubspec_overrides.yaml");
-    assert_eq!(
-        fs::read_to_string(&optional_output).expect("read optional package override"),
-        expected_package_overrides(FLUTTER_OPTIONAL_PACKAGE, &packages)
-    );
+    let optional_outputs = FLUTTER_OPTIONAL_PACKAGES.map(|package| {
+        let output = root
+            .join("lib/flutter")
+            .join(package)
+            .join("pubspec_overrides.yaml");
+        assert_eq!(
+            fs::read_to_string(&output).expect("read optional package override"),
+            expected_package_overrides(package, &packages)
+        );
+        output
+    });
     assert_eq!(
         fs::read_to_string(root.join("examples/flutter-host/pubspec_overrides.yaml"))
             .expect("read optional example override"),
         expected_example_overrides(&packages)
     );
 
-    fs::remove_file(&optional_output).expect("remove optional override before environment run");
+    for output in &optional_outputs {
+        fs::remove_file(output).expect("remove optional override before environment run");
+    }
     let environment_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS", "YES")
         .args(["flutter", "local-overrides", "--root"])
@@ -14340,7 +14460,7 @@ fn flutter_local_overrides_includes_optional_package_from_cli_or_environment() {
         .output()
         .expect("write optional Flutter overrides from environment");
     assert_eq!(environment_output.status.code(), Some(0));
-    assert!(optional_output.is_file());
+    assert!(optional_outputs.iter().all(|output| output.is_file()));
 }
 
 #[cfg(unix)]
@@ -14473,7 +14593,11 @@ fn flutter_stage_pub_rewrites_release_metadata_and_excludes_local_artifacts() {
     );
     assert_eq!(stdout, expected_stdout);
     assert!(!stage.join("stale.txt").exists());
-    assert!(!stage.join(FLUTTER_OPTIONAL_PACKAGE).exists());
+    assert!(
+        FLUTTER_OPTIONAL_PACKAGES
+            .iter()
+            .all(|package| !stage.join(package).exists())
+    );
 
     let staged_first = stage.join(FLUTTER_CORE_PACKAGES[0]);
     let pubspec =
@@ -14671,20 +14795,42 @@ fn flutter_stage_pub_rejects_final_source_symlink_overlap() {
 }
 
 #[test]
-fn flutter_stage_pub_embeds_the_verified_optional_ios_package() {
+fn flutter_stage_pub_keeps_remote_optional_ios_manifests_without_local_artifacts() {
     let directory = flutter_fixture(true);
     let root = flutter_fixture_root(&directory);
     prepare_flutter_pub_fixture(&root);
     prepare_optional_ios_pub_fixture(&root);
+    for package in FLUTTER_OPTIONAL_PACKAGES {
+        let manifest = root
+            .join("lib/flutter")
+            .join(package)
+            .join("ios")
+            .join(package)
+            .join("Package.swift");
+        fs::create_dir_all(
+            manifest
+                .parent()
+                .expect("optional Flutter iOS manifest parent"),
+        )
+        .expect("create optional Flutter iOS manifest directory");
+        fs::write(
+            manifest,
+            concat!(
+                "private let vesperPlayerKitVersion: Version = \"0.4.2\"\n",
+                "// https://github.com/umbrella22/Vesper.git\n",
+            ),
+        )
+        .expect("write optional Flutter remote SwiftPM manifest");
+    }
     let stage = directory.path().join("optional Flutter stage");
 
     let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .args(["flutter", "stage-pub"])
         .arg(&stage)
-        .args(["0.4.0", "--include-optional-plugins=true", "--root"])
+        .args(["0.4.3-rc.1", "--include-optional-plugins=true", "--root"])
         .arg(&root)
         .output()
-        .expect("stage optional Flutter pub package");
+        .expect("stage optional Flutter pub packages");
 
     assert_eq!(
         output.status.code(),
@@ -14693,27 +14839,24 @@ fn flutter_stage_pub_embeds_the_verified_optional_ios_package() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stderr.is_empty());
-    let optional_ios = stage
-        .join(FLUTTER_OPTIONAL_PACKAGE)
-        .join("ios/VesperPlayerOptionalPlugins");
-    assert!(optional_ios.join("Package.swift").is_file());
-    assert!(
-        optional_ios
-            .join("Sources/FixtureProduct/Fixture.swift")
-            .is_file()
-    );
-    assert!(
-        optional_ios
-            .join("Artifacts/VesperPlayerRemuxFfmpegPlugin.xcframework/Info.plist")
-            .is_file()
-    );
-    assert!(!optional_ios.join(".build").exists());
-    assert!(!optional_ios.join(".swiftpm").exists());
-    assert!(
-        String::from_utf8(output.stdout)
-            .expect("UTF-8 optional stage output")
-            .contains(&format!("  {FLUTTER_OPTIONAL_PACKAGE}\n"))
-    );
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 optional stage output");
+    for package in FLUTTER_OPTIONAL_PACKAGES {
+        let staged_package = stage.join(package);
+        let manifest = staged_package
+            .join("ios")
+            .join(package)
+            .join("Package.swift");
+        let source = fs::read_to_string(manifest).expect("read staged remote SwiftPM manifest");
+        assert!(source.contains("vesperPlayerKitVersion: Version = \"0.4.3-rc.1\""));
+        assert!(source.contains("https://github.com/umbrella22/Vesper.git"));
+        assert!(
+            !staged_package
+                .join("ios/VesperPlayerOptionalPlugins")
+                .exists()
+        );
+        assert!(!staged_package.join("Artifacts").exists());
+        assert!(stdout.contains(&format!("  {package}\n")));
+    }
 }
 
 #[cfg(unix)]
@@ -14795,7 +14938,11 @@ esac
         fs::read_to_string(&command_log).expect("read dry-run Flutter command log"),
         expected_log
     );
-    assert!(!stage.join(FLUTTER_OPTIONAL_PACKAGE).exists());
+    assert!(
+        FLUTTER_OPTIONAL_PACKAGES
+            .iter()
+            .all(|package| !stage.join(package).exists())
+    );
 
     fs::write(&command_log, "").expect("clear Flutter command log");
     let publish = Command::new(env!("CARGO_BIN_EXE_vesper"))
@@ -15122,9 +15269,7 @@ fn flutter_android_verification_uses_matching_local_gradle_and_exact_tasks() {
         "gradle_user_home={}\n",
         custom_gradle_home.display()
     )));
-    assert!(
-        optional_log.ends_with("arg=:vesper_player_source_normalizer_ffmpeg:compileDebugKotlin\n")
-    );
+    assert!(optional_log.ends_with("arg=:vesper_player_remux_ffmpeg:compileDebugKotlin\n"));
 }
 
 #[cfg(unix)]
