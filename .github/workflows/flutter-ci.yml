@@ -344,6 +344,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          ./scripts/vesper release verify-current
           manifest="$RUNNER_TEMP/vesper-player-ios-package.json"
           swift package dump-package \
             --package-path lib/flutter/vesper_player_ios/ios/vesper_player_ios \
@@ -360,8 +361,8 @@ jobs:
               .dependencies[]
               | .sourceControl[]?
               | select(.identity == "vesperplayerkit")
-              | .requirement.range[]
-            ] == [{"lowerBound":"0.4.1","upperBound":"0.5.0"}])
+              | .requirement.exact[]
+            ] | length == 1)
             and
             ([
               .targets[]
