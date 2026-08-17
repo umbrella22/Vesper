@@ -92,9 +92,10 @@ flutter build ios --release --no-codesign
 
 The Android Runner project builds and packages the optional remux,
 SourceNormalizer, and FrameProcessor diagnostic plugin `.so` files into
-generated `jniLibs`. This repository's iOS Runner directly embeds the seven
-locally staged XCFrameworks so the example can verify the complete release set.
-Hosted Flutter consumers instead add
+generated `jniLibs`. The iOS Runner keeps the runtime-free Decoder and
+FrameProcessor diagnostic XCFrameworks locally staged; the FFmpeg component,
+Remux, and SourceNormalizer frameworks come from the hosted SwiftPM capability
+products pulled by the Flutter optional packages. Hosted Flutter consumers add
 `vesper_player_source_normalizer_ffmpeg` and/or
 `vesper_player_remux_ffmpeg`, which resolve capability-level SwiftPM products.
 Dart sends canonical `VesperPluginReference` values through MethodChannel. Each

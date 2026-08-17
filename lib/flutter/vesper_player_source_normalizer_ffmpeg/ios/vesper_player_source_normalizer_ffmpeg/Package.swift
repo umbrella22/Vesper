@@ -12,6 +12,7 @@ let package = Package(
     products: [
         .library(
             name: "vesper-player-source-normalizer-ffmpeg",
+            type: .dynamic,
             targets: ["vesper_player_source_normalizer_ffmpeg"]
         ),
     ],

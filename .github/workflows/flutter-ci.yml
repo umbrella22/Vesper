@@ -193,6 +193,18 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
+      - name: Prepare Flutter Android FFmpeg runtime staging
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          runtime_root="$RUNNER_TEMP/vesper-flutter-android-ffmpeg-runtime"
+          mkdir -p "$runtime_root/jniLibs" "$runtime_root/assets"
+          {
+            echo "VESPER_ANDROID_FFMPEG_RUNTIME_JNI_LIBS=$runtime_root/jniLibs"
+            echo "VESPER_ANDROID_FFMPEG_RUNTIME_ASSETS=$runtime_root/assets"
+          } >> "$GITHUB_ENV"
+
       - name: Build Android FFmpeg runtime AAR
         run: ./scripts/vesper ffmpeg --platform android --profile default --abi ${{ matrix.abi }}
 

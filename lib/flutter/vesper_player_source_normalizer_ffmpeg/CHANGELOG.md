@@ -9,6 +9,9 @@
 - iOS now resolves the exact remote
   `VesperPlayerSourceNormalizerFfmpeg` capability product; pub staging no
   longer copies local optional XCFrameworks.
+- The iOS SwiftPM product is dynamic so optional FFmpeg frameworks remain
+  discoverable by the native plugin loader instead of being linked by the host
+  executable.
 
 ## 0.4.2 - 2026-08-16
 

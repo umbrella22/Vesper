@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag to publish (for example v0.4.3-rc.1)"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -14,21 +20,26 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_TAG: ${{ github.ref_name }}
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
 
 jobs:
   publish-flutter-packages:
     name: Publish Flutter packages to pub.dev
     runs-on: ubuntu-latest
     environment: pub.dev
-    if: startsWith(github.ref_name, 'v')
+    if: >-
+      startsWith(github.ref_name, 'v') ||
+      (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag_name, 'v'))
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ env.RELEASE_TAG }}
+          # A manual retry starts from the current main commit so it includes
+          # publication workflow fixes while retaining the requested tag's
+          # release metadata.
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.ref_name }}
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli

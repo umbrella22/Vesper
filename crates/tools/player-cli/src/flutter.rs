@@ -26,7 +26,9 @@ const MAX_LOCAL_OVERRIDES_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_FLUTTER_PUBSPEC_BYTES: u64 = 1024 * 1024;
 const MAX_FLUTTER_STAGE_ENTRIES: usize = 100_000;
 const MAX_FLUTTER_STAGE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-const PUB_GET_PROPAGATION_RETRIES: usize = 6;
+// pub.dev may take up to ten minutes to expose a newly published version to
+// dependency resolution, even after the upload request has succeeded.
+const PUB_GET_PROPAGATION_RETRIES: usize = 30;
 const PUB_GET_PROPAGATION_WAIT: Duration = Duration::from_secs(20);
 const PUB_DEV_API_BASE_URL: &str = "https://pub.dev/api/packages/";
 const PUB_DEV_LOOKUP_MAXIMUM_BYTES: usize = 2 * 1024 * 1024;

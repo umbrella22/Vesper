@@ -12,6 +12,7 @@ let package = Package(
     products: [
         .library(
             name: "vesper-player-remux-ffmpeg",
+            type: .dynamic,
             targets: ["vesper_player_remux_ffmpeg"]
         ),
     ],
