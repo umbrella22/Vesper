@@ -340,6 +340,7 @@ jobs:
           minimum-major: "16"
 
       - name: Verify Flutter iOS remote Swift package contract
+        id: ios-package
         shell: bash
         run: |
           set -euo pipefail
@@ -371,6 +372,16 @@ jobs:
               | .product[0]
             ] | sort == ["FlutterFramework", "VesperPlayerKit"])
           ' "$manifest"
+          version="$(
+            jq -r '[
+              .dependencies[]
+              | .sourceControl[]?
+              | select(.identity == "vesperplayerkit")
+              | .requirement.exact[]
+            ] | if length == 1 then .[0] else empty end' "$manifest"
+          )"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Stage canonical optional iOS plugin XCFrameworks
         run: ./scripts/vesper ios stage-optional-plugins-release /tmp/vesper-flutter-ios-optional-plugins-release --profile source-normalizer ios-arm64 ios-simulator-arm64
@@ -406,6 +417,28 @@ jobs:
         run: |
           flutter config --enable-swift-package-manager
           flutter config
+
+      - name: Wait for hosted Flutter iOS Swift package dependency
+        shell: bash
+        timeout-minutes: 180
+        run: |
+          set -euo pipefail
+
+          version="${{ steps.ios-package.outputs.version }}"
+          repository="https://github.com/umbrella22/VesperPlayerKit.git"
+          for attempt in $(seq 1 540); do
+            if git ls-remote --exit-code "$repository" \
+              "refs/tags/v$version" >/dev/null 2>&1; then
+              echo "Hosted Swift package dependency is available for $version."
+              break
+            fi
+            if (( attempt == 540 )); then
+              echo "Hosted Swift package dependency did not become available for $version." >&2
+              exit 1
+            fi
+            echo "Waiting for hosted Swift package dependency ($attempt/540)."
+            sleep 20
+          done
 
       - name: Install Flutter dependencies
         working-directory: examples/flutter-host
