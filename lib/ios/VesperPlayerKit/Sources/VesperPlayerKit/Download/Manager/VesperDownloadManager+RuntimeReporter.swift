@@ -1,5 +1,5 @@
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 extension VesperDownloadManager {
     final class RuntimeReporter: VesperDownloadExecutionReporter {

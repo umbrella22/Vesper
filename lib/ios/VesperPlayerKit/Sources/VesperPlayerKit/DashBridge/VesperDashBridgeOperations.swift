@@ -1,5 +1,5 @@
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 private enum VesperDashRustBridge {
     static func execute<Request: Encodable, Response: Decodable>(

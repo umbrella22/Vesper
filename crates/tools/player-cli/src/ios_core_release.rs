@@ -631,6 +631,12 @@ fn validate_interfaces(framework: &Path, target: &str) -> Result<(), IosError> {
     let module = framework
         .join("Modules")
         .join("VesperPlayerKit.swiftmodule");
+    const PRIVATE_MODULE_MARKERS: [&str; 4] = [
+        "VesperPlayerKitBridgeShim",
+        "PlayerFfi",
+        "VesperRuntime",
+        "vesper_",
+    ];
     for suffix in ["swiftinterface", "private.swiftinterface"] {
         let path = module.join(format!("{target}.{suffix}"));
         let bytes = read_bounded_file(&path, MAX_SMALL_FILE_BYTES, "Swift textual interface")?;
@@ -640,12 +646,7 @@ fn validate_interfaces(framework: &Path, target: &str) -> Result<(), IosError> {
                 path.display()
             ))
         })?;
-        for private in [
-            "VesperPlayerKitBridgeShim",
-            "PlayerFfi",
-            "VesperRuntime",
-            "vesper_",
-        ] {
+        for private in PRIVATE_MODULE_MARKERS {
             if source.contains(private) {
                 return Err(IosError::conformance(format!(
                     "VesperPlayerKit textual interface leaks private bridge declarations: {}",
@@ -653,6 +654,68 @@ fn validate_interfaces(framework: &Path, target: &str) -> Result<(), IosError> {
                 )));
             }
         }
+    }
+
+    // Swift 6 records implementation-only imports in the ABI description.
+    // They are safe to retain, but a plain import would make the private shim
+    // an unresolved dependency for binary consumers.
+    let abi_path = module.join(format!("{target}.abi.json"));
+    if fs::symlink_metadata(&abi_path).is_ok() {
+        let bytes = read_bounded_file(&abi_path, MAX_SMALL_FILE_BYTES, "Swift ABI description")?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+            IosError::conformance(format!(
+                "VesperPlayerKit ABI description is not valid JSON '{}': {error}",
+                abi_path.display()
+            ))
+        })?;
+        validate_abi_private_imports(&value, &abi_path, &PRIVATE_MODULE_MARKERS)?;
+    }
+    Ok(())
+}
+
+fn validate_abi_private_imports(
+    value: &serde_json::Value,
+    path: &Path,
+    private_markers: &[&str],
+) -> Result<(), IosError> {
+    match value {
+        serde_json::Value::Object(object) => {
+            let is_import =
+                object.get("kind").and_then(serde_json::Value::as_str) == Some("Import");
+            if is_import
+                && object
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|name| private_markers.contains(&name))
+            {
+                let implementation_only = object
+                    .get("declAttributes")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|attributes| {
+                        attributes
+                            .iter()
+                            .any(|attribute| attribute.as_str() == Some("ImplementationOnly"))
+                    });
+                if !implementation_only {
+                    return Err(IosError::conformance(format!(
+                        "VesperPlayerKit ABI description exposes a non-implementation-only private import: {}",
+                        path.display()
+                    )));
+                }
+            }
+            for child in object.values() {
+                validate_abi_private_imports(child, path, private_markers)?;
+            }
+        }
+        serde_json::Value::Array(array) => {
+            for child in array {
+                validate_abi_private_imports(child, path, private_markers)?;
+            }
+        }
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
     }
     Ok(())
 }
@@ -1079,4 +1142,46 @@ fn run_tool(command: &mut Command, label: &str) -> Result<Vec<u8>, IosError> {
         )));
     }
     Ok(result.stdout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn abi_validation_rejects_private_import_without_implementation_only() {
+        let value = serde_json::json!({
+            "kind": "Root",
+            "children": [{
+                "kind": "Import",
+                "name": "VesperPlayerKitBridgeShim",
+                "declAttributes": ["AccessControl"]
+            }]
+        });
+        let error = validate_abi_private_imports(
+            &value,
+            Path::new("VesperPlayerKit.abi.json"),
+            &["VesperPlayerKitBridgeShim"],
+        )
+        .expect_err("plain private import must fail release validation");
+        assert!(error.to_string().contains("non-implementation-only"));
+    }
+
+    #[test]
+    fn abi_validation_accepts_implementation_only_private_import() {
+        let value = serde_json::json!({
+            "kind": "Root",
+            "children": [{
+                "kind": "Import",
+                "name": "VesperPlayerKitBridgeShim",
+                "declAttributes": ["ImplementationOnly"]
+            }]
+        });
+        validate_abi_private_imports(
+            &value,
+            Path::new("VesperPlayerKit.abi.json"),
+            &["VesperPlayerKitBridgeShim"],
+        )
+        .expect("implementation-only private import must remain consumable");
+    }
 }

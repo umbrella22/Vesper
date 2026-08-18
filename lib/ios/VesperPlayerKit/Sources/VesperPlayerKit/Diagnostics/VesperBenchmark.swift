@@ -1,5 +1,5 @@
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 public struct VesperBenchmarkConfiguration: Equatable {
     public let enabled: Bool

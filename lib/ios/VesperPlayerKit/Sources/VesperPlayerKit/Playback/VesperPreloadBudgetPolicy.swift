@@ -1,5 +1,5 @@
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 public struct VesperPreloadBudgetPolicy: Equatable {
     public let maxConcurrentTasks: Int?
     public let maxMemoryBytes: Int64?

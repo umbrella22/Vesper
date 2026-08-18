@@ -1,5 +1,5 @@
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 private func decodeRuntimeRecords<T, U>(
     _ pointer: UnsafeMutablePointer<T>?,

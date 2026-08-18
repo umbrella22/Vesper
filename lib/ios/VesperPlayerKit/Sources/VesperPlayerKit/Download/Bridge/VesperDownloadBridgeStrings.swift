@@ -1,5 +1,5 @@
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 func duplicateDownloadCString(_ value: String) -> UnsafeMutablePointer<CChar>? {
     guard let result = strdup(value) else {

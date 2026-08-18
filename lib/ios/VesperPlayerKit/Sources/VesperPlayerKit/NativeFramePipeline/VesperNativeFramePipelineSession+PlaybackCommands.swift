@@ -1,7 +1,7 @@
 @preconcurrency import AVFoundation
 import CoreAudio
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 extension VesperNativeFramePipelineSession {
     @discardableResult
     func play(rate: Float = 1.0) -> Bool {

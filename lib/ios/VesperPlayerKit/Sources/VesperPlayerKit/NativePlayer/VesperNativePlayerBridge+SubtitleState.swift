@@ -1,5 +1,5 @@
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 /// Typed subtitle selection failure produced by the iOS backend.
 public enum VesperSubtitleSelectionError: Error, LocalizedError {

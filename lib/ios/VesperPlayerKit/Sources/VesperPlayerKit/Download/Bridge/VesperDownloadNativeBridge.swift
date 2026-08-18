@@ -1,5 +1,5 @@
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 protocol DownloadBindings: Sendable {
     func createDownloadSession(configuration: VesperDownloadConfiguration) throws -> UInt64

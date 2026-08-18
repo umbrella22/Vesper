@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.3-rc.2 - Unreleased
+
+### Fixed
+
+- Remote iOS consumers no longer inherit `VesperPlayerKitBridgeShim` as an
+  unresolved Swift module dependency through the binary kit's ABI metadata.
+
 ## 0.4.3-rc.1 - 2026-08-17
 
 ### Changed

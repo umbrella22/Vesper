@@ -1,6 +1,6 @@
 import Combine
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 public enum VesperPlaybackSequenceMode: String, Codable {
     case finite

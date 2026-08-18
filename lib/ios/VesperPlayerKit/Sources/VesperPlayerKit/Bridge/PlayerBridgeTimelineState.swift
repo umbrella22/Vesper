@@ -3,7 +3,7 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 import UIKit
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 public enum PlayerBridgeBackend: String {
     case fakeDemo = "fake_demo"
     case rustNativeStub = "rust_native_stub"

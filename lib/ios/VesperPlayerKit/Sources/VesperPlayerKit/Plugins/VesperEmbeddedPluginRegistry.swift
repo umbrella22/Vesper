@@ -1,5 +1,5 @@
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 private let vesperPluginRegistryFileName = "vesper-plugin-registry.json"
 private let maxVesperPluginRegistryFragments = 256

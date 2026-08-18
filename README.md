@@ -293,6 +293,65 @@ canonical manifest, sorted `SHA256SUMS`, Ed25519 signature envelope, notices,
 and target metadata. Mobile hosts embed verified Native artifacts during the
 Android/iOS build; they do not download or execute plugin code at runtime.
 
+### Mobile Native artifact distribution
+
+Third-party publishers can distribute Native plugins independently of the Vesper
+release repositories. The mobile boundary is a build-time artifact contract:
+
+- Android AARs place the final `lib<name>.so` under `jni/arm64-v8a/` and one
+  registry fragment under
+  `assets/vesper/plugins/arm64-v8a/<plugin-id>.json`. The fragment records the
+  plugin identity, capability instances, artifact name, and SHA-256 of the
+  exact library bytes. A local Gradle module or a private Maven repository is
+  sufficient; Maven Central publication is not required.
+- iOS packages ship a signable arm64 XCFramework. Each plugin framework carries
+  `vesper-plugin-registry.json` at its bundle root. A local Swift package,
+  private Swift package registry, or an app-owned XCFramework dependency can
+  provide the artifact. The host embeds and signs the framework before launch.
+- The host selects capabilities with `VesperPluginReference`. Registry
+  fragments from independent dependencies are merged and verified before the
+  selected Native entry point is loaded. A path string is an internal locator,
+  not a public Flutter or mobile runtime input.
+
+The registry fragments can be generated from the canonical plugin descriptor:
+
+```sh
+./scripts/vesper plugin registry-fragment vesper-plugin.toml \
+  --platform android \
+  --target aarch64-linux-android \
+  --architecture arm64-v8a \
+  --minimum-os 26 \
+  --locator-name example_filter \
+  --artifact dist/libexample_filter.so \
+  --output assets/vesper/plugins/arm64-v8a/dev.example.filter.json
+
+./scripts/vesper plugin registry-fragment vesper-plugin.toml \
+  --platform ios \
+  --target aarch64-apple-ios \
+  --architecture arm64 \
+  --minimum-os 17.0 \
+  --locator-name ExampleFilterPlugin \
+  --bundle-identifier dev.example.filter \
+  --output vesper-plugin-registry.json
+```
+
+The Android fragment is kept at the shown asset path. The iOS fragment is
+renamed to `vesper-plugin-registry.json` inside the corresponding framework
+bundle. Stable `PostDownloadProcessor`, `PipelineEventHook`, and `BenchmarkSink`
+registrations use the generic embedded registry. Mobile `SourceNormalizer`,
+`NativeDecoder`, and `FrameProcessor` routes remain experimental; a custom
+artifact in those routes also needs host-side capability wiring because the
+Flutter packages do not accept arbitrary binary paths.
+
+`vesper plugin install` installs and verifies a signed `.vesper-plugin` archive
+for desktop/tooling catalogs. It is not an Android or iOS application installer.
+Rust WASM Components use that desktop/tooling catalog and the Wasmtime host for
+bounded `PipelineEventHook` and `BenchmarkSink` workloads. They do not receive
+media bytes or FFmpeg handles, and mobile hosts currently reject the WASM
+transport. Frictionless external authoring also requires published
+`player-plugin` crates; until those crates are available from a public registry,
+an author project needs a repository or private-registry dependency override.
+
 ## Platform Packages
 
 The [platform package guide](lib/README.md) is the canonical package map. It

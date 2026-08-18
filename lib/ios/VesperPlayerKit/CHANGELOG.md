@@ -17,6 +17,12 @@
   seven-product optional package or requesting a nonexistent
   `VesperPlayerFFI` product.
 
+### Fixed
+
+- Private `VesperPlayerKitBridgeShim` imports are emitted as
+  implementation-only imports, and the release verifier rejects a Swift ABI
+  description that exposes the shim as a public dependency.
+
 ## 0.4.2 - 2026-08-16
 
 - Prepared package metadata for the 0.4.2 release.

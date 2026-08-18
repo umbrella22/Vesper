@@ -30,6 +30,10 @@
   SourceNormalizer/remux/runtime/relay profile receipts, complete Maven POM
   closure, and the expected plugin registries and ELF payloads in Android sample
   APKs.
+- iOS `VesperPlayerKit` release sources now mark the private
+  `VesperPlayerKitBridgeShim` import as implementation-only. Release validation
+  also checks Swift ABI JSON so a private shim cannot become an unresolved
+  dependency for remote SwiftPM consumers.
 
 This release candidate is intended for external consumer and physical-device
 acceptance. Archive and hosted dependency checks do not by themselves establish

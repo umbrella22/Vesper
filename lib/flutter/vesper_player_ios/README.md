@@ -203,6 +203,15 @@ path:
 Note that iOS only allows signed dynamic libraries that are already inside the
 app bundle. Loading unsigned or remotely downloaded plugins is not supported.
 
+Third-party Native plugins follow the same build-time boundary. The plugin
+publisher supplies an arm64 XCFramework with
+`vesper-plugin-registry.json` at the framework root, distributes it through a
+local or private Swift package (or an app-owned XCFramework dependency), and
+the app embeds and signs it. The host selects the plugin by
+`VesperPluginReference`; executable paths remain internal framework locators.
+The Flutter packages do not expose arbitrary dynamic-library paths, and the
+current mobile WASM transport is unsupported.
+
 When the host bundles the plugin, treat the optional XCFramework contents as
 FFmpeg redistribution. Include FFmpeg license text and notices, provide the
 exact corresponding FFmpeg source and configure flags, and preserve LGPL

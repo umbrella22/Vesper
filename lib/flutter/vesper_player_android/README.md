@@ -172,6 +172,18 @@ This also means that depending on `vesper_player_android` alone does not pull
 FFmpeg into your app. The plugin is bundled only when the host directly adds
 `vesper_player_remux_ffmpeg` or wires an equivalent custom native dependency.
 
+An equivalent custom Android dependency is an AAR (or local Gradle module) with
+the plugin `.so` under `jni/arm64-v8a/` and a matching
+`assets/vesper/plugins/arm64-v8a/<plugin-id>.json` registry fragment. The
+fragment is generated with `vesper plugin registry-fragment` from the plugin
+descriptor and hashes the final stripped library. The embedded registry merges
+fragments from all Android dependencies, verifies the selected artifact, and
+loads it from the APK's native library directory. Stable PostDownload,
+PipelineEventHook, and BenchmarkSink references can use third-party identities.
+The SourceNormalizer and native-frame configuration paths are experimental and
+currently require a host resolver for capabilities beyond the first-party
+artifacts. A filesystem `.so` path is not a public Flutter input.
+
 When the host bundles the plugin, treat the shipped `.so` files as FFmpeg
 redistribution. Include FFmpeg license text and notices, provide the exact
 corresponding FFmpeg source and configure flags, preserve LGPL relinking

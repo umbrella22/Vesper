@@ -1,7 +1,7 @@
 @preconcurrency import AVFoundation
 import CoreAudio
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 extension VesperNativeFramePipelineSession {
     func mergeStatus(from object: [String: Any]) {
         updateDuration(from: object["durationMillis"] as? NSNumber)

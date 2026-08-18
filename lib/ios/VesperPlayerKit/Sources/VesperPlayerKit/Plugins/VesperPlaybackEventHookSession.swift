@@ -1,5 +1,5 @@
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 /// Owns one Rust playback EventHook dispatcher for an AVPlayer session.
 ///

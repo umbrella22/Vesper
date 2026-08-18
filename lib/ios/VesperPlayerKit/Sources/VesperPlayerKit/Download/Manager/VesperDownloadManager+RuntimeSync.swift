@@ -1,5 +1,5 @@
 import Foundation
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 extension VesperDownloadManager {
     func syncRuntimeState(processCommands: Bool) {

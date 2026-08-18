@@ -3,7 +3,7 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 import UIKit
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 public enum VesperPlayerErrorCode: String, Equatable, Codable {
     case invalidArgument
     case invalidState

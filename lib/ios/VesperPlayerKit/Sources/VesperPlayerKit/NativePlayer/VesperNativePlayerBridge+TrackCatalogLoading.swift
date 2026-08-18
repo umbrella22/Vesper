@@ -2,7 +2,7 @@
 import Foundation
 import CryptoKit
 import UIKit
-internal import VesperPlayerKitBridgeShim
+@_implementationOnly import VesperPlayerKitBridgeShim
 
 extension VesperNativePlayerBridge {
     func refreshTrackCatalogAndSelection(for item: AVPlayerItem) {
