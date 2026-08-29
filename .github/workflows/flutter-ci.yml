@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/flutter-ci.yml"
       - ".github/scripts/run-flutter-ios-subtitle-integration.sh"
+      - ".github/scripts/prepare-flutter-ios-local-spm.sh"
       - ".github/actions/select-xcode/**"
       - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
@@ -39,6 +40,7 @@ on:
     paths:
       - ".github/workflows/flutter-ci.yml"
       - ".github/scripts/run-flutter-ios-subtitle-integration.sh"
+      - ".github/scripts/prepare-flutter-ios-local-spm.sh"
       - ".github/actions/select-xcode/**"
       - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
@@ -351,7 +353,7 @@ jobs:
         with:
           minimum-major: "16"
 
-      - name: Verify Flutter iOS remote Swift package contract
+      - name: Verify Flutter iOS Swift package contract
         id: ios-package
         shell: bash
         run: |
@@ -401,6 +403,9 @@ jobs:
       - name: Build Rust iOS resolver bundle
         run: ./scripts/vesper ios ffi release
 
+      - name: Prepare local Flutter iOS Swift package dependency
+        run: bash .github/scripts/prepare-flutter-ios-local-spm.sh
+
       - name: Show Flutter version
         run: flutter --version
 
@@ -430,27 +435,19 @@ jobs:
           flutter config --enable-swift-package-manager
           flutter config
 
-      - name: Wait for hosted Flutter iOS Swift package dependency
+      - name: Report hosted Flutter iOS Swift package status
         shell: bash
-        timeout-minutes: 180
         run: |
           set -euo pipefail
 
           version="${{ steps.ios-package.outputs.version }}"
           repository="https://github.com/umbrella22/VesperPlayerKit.git"
-          for attempt in $(seq 1 540); do
-            if git ls-remote --exit-code "$repository" \
-              "refs/tags/v$version" >/dev/null 2>&1; then
-              echo "Hosted Swift package dependency is available for $version."
-              break
-            fi
-            if (( attempt == 540 )); then
-              echo "Hosted Swift package dependency did not become available for $version." >&2
-              exit 1
-            fi
-            echo "Waiting for hosted Swift package dependency ($attempt/540)."
-            sleep 20
-          done
+          if git ls-remote --exit-code "$repository" \
+            "refs/tags/v$version" >/dev/null 2>&1; then
+            echo "Hosted Swift package dependency is already available for $version."
+          else
+            echo "::notice::Hosted Swift package v$version is not published yet; pre-tag CI is using the validated local package."
+          fi
 
       - name: Install Flutter dependencies
         working-directory: examples/flutter-host
