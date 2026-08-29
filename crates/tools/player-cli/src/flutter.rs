@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use serde::Deserialize;
+
 use crate::external_process::{self, ExternalProcessErrorKind};
 
 const CORE_PACKAGES: [&str; 6] = [
@@ -33,6 +35,9 @@ const PUB_GET_PROPAGATION_WAIT: Duration = Duration::from_secs(20);
 const PUB_DEV_API_BASE_URL: &str = "https://pub.dev/api/packages/";
 const PUB_DEV_LOOKUP_MAXIMUM_BYTES: usize = 2 * 1024 * 1024;
 const PUB_DEV_LOOKUP_TIMEOUT: Duration = Duration::from_secs(45);
+const PUB_DEV_OIDC_AUDIENCE: &str = "https://pub.dev";
+const PUB_DEV_OIDC_RESPONSE_MAXIMUM_BYTES: usize = 1024 * 1024;
+const PUB_DEV_OIDC_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 const PUB_DEV_NEW_PACKAGE_BURST_LIMIT: usize = 4;
 const PUB_DEV_NEW_PACKAGE_BURST_WINDOW: Duration = Duration::from_secs(120);
 const PUB_DEV_NEW_PACKAGE_BURST_BUFFER: Duration = Duration::from_secs(5);
@@ -57,6 +62,51 @@ pub enum FlutterErrorKind {
 pub struct FlutterError {
     kind: FlutterErrorKind,
     message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GitHubActionsOidcResponse {
+    value: String,
+}
+
+struct GitHubActionsOidcAuthorizationHeader {
+    file: tempfile::NamedTempFile,
+}
+
+impl GitHubActionsOidcAuthorizationHeader {
+    fn new(request_token: &str) -> Result<Self, FlutterError> {
+        if request_token.is_empty()
+            || request_token
+                .bytes()
+                .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+        {
+            return Err(FlutterError::compatibility(
+                "GitHub Actions OIDC request token is empty or contains an invalid header byte",
+            ));
+        }
+        let mut file = tempfile::Builder::new()
+            .prefix("vesper-pub-oidc-auth.")
+            .tempfile()
+            .map_err(|error| {
+                FlutterError::storage(format!(
+                    "failed to create temporary GitHub Actions OIDC authorization header: {error}"
+                ))
+            })?;
+        writeln!(file, "Authorization: Bearer {request_token}")
+            .and_then(|_| file.flush())
+            .map_err(|error| {
+                FlutterError::storage(format!(
+                    "failed to write temporary GitHub Actions OIDC authorization header: {error}"
+                ))
+            })?;
+        Ok(Self { file })
+    }
+
+    fn curl_argument(&self) -> OsString {
+        let mut argument = OsString::from("@");
+        argument.push(self.file.path());
+        argument
+    }
 }
 
 impl FlutterError {
@@ -481,10 +531,9 @@ pub fn publish_pub_packages(
             wait_for_pub_dev_new_package_slot(&mut recent_new_packages, diagnostics)?;
         }
         run_pub_get_with_retry(&flutter, &stage.join(package), package, diagnostics)?;
-        run_flutter_command(
+        run_flutter_publish_command(
             &flutter,
             &stage.join(package),
-            &["pub", "publish", "--force"],
             &format!("flutter pub publish for {package}"),
         )?;
         if creates_package {
@@ -763,6 +812,144 @@ fn run_flutter_command(
             "{label} exited unsuccessfully ({status})"
         )))
     }
+}
+
+fn run_flutter_publish_command(
+    flutter: &Path,
+    working_directory: &Path,
+    label: &str,
+) -> Result<(), FlutterError> {
+    let refreshed_pub_token = refresh_pub_dev_oidc_token_for_publish()?;
+    let mut command = Command::new(flutter);
+    command
+        .args(["pub", "publish", "--force"])
+        .current_dir(working_directory)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    if let Some(token) = refreshed_pub_token {
+        command.env("PUB_TOKEN", token);
+    }
+    let status = external_process::run_interruptible(&mut command, label)
+        .map_err(|error| FlutterError::worker(error.to_string()))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(FlutterError::conformance(format!(
+            "{label} exited unsuccessfully ({status})"
+        )))
+    }
+}
+
+fn refresh_pub_dev_oidc_token_for_publish() -> Result<Option<String>, FlutterError> {
+    let request_url = github_actions_oidc_environment_value("ACTIONS_ID_TOKEN_REQUEST_URL")?;
+    let request_token = github_actions_oidc_environment_value("ACTIONS_ID_TOKEN_REQUEST_TOKEN")?;
+    match (request_url, request_token) {
+        (None, None) => Ok(None),
+        (Some(request_url), Some(request_token)) => {
+            request_pub_dev_oidc_token(&request_url, &request_token).map(Some)
+        }
+        _ => Err(FlutterError::compatibility(
+            "GitHub Actions OIDC refresh requires both ACTIONS_ID_TOKEN_REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        )),
+    }
+}
+
+fn github_actions_oidc_environment_value(name: &str) -> Result<Option<String>, FlutterError> {
+    match env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => Err(FlutterError::compatibility(format!(
+            "{name} is not valid UTF-8"
+        ))),
+    }
+}
+
+fn request_pub_dev_oidc_token(
+    request_url: &str,
+    request_token: &str,
+) -> Result<String, FlutterError> {
+    let url = github_actions_pub_dev_oidc_request_url(request_url)?;
+    let authorization = GitHubActionsOidcAuthorizationHeader::new(request_token)?;
+    let curl = env::var_os("CURL").unwrap_or_else(|| OsString::from("curl"));
+    let label = "GitHub Actions pub.dev OIDC token refresh";
+    let mut command = Command::new(curl);
+    command.args([
+        "--fail-with-body",
+        "--silent",
+        "--show-error",
+        "--connect-timeout",
+        "15",
+        "--max-time",
+        "30",
+        "--retry",
+        "3",
+        "--retry-all-errors",
+        "--header",
+    ]);
+    command.arg(authorization.curl_argument()).arg(url.as_str());
+    let result = external_process::run_interruptible_capture_with_timeout(
+        &mut command,
+        label,
+        PUB_DEV_OIDC_RESPONSE_MAXIMUM_BYTES,
+        PUB_DEV_OIDC_RESPONSE_MAXIMUM_BYTES,
+        PUB_DEV_OIDC_REQUEST_TIMEOUT,
+    )
+    .map_err(|error| match error.kind() {
+        ExternalProcessErrorKind::Compatibility => FlutterError::compatibility(error.to_string()),
+        ExternalProcessErrorKind::Worker | ExternalProcessErrorKind::Cancelled => {
+            FlutterError::worker(error.to_string())
+        }
+    })?;
+    if !result.status.success() {
+        return Err(FlutterError::worker(format!(
+            "{label} failed with {}: {}",
+            result.status,
+            String::from_utf8_lossy(&result.stderr).trim()
+        )));
+    }
+    parse_github_actions_oidc_response(&result.stdout)
+}
+
+fn github_actions_pub_dev_oidc_request_url(request_url: &str) -> Result<url::Url, FlutterError> {
+    let mut url = url::Url::parse(request_url).map_err(|error| {
+        FlutterError::compatibility(format!(
+            "ACTIONS_ID_TOKEN_REQUEST_URL is not a valid URL: {error}"
+        ))
+    })?;
+    let host = url.host_str().ok_or_else(|| {
+        FlutterError::compatibility("ACTIONS_ID_TOKEN_REQUEST_URL does not contain a host")
+    })?;
+    if url.scheme() != "https"
+        || !(host == "actions.githubusercontent.com"
+            || host.ends_with(".actions.githubusercontent.com"))
+        || url.port_or_known_default() != Some(443)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(FlutterError::compatibility(
+            "ACTIONS_ID_TOKEN_REQUEST_URL must be an HTTPS GitHub Actions token endpoint without userinfo or a fragment",
+        ));
+    }
+    url.query_pairs_mut()
+        .append_pair("audience", PUB_DEV_OIDC_AUDIENCE);
+    Ok(url)
+}
+
+fn parse_github_actions_oidc_response(response: &[u8]) -> Result<String, FlutterError> {
+    let response: GitHubActionsOidcResponse =
+        serde_json::from_slice(response).map_err(|error| {
+            FlutterError::worker(format!(
+                "GitHub Actions pub.dev OIDC token response is invalid JSON: {error}"
+            ))
+        })?;
+    if response.value.is_empty() || response.value.contains('\0') {
+        return Err(FlutterError::worker(
+            "GitHub Actions pub.dev OIDC token response contains an invalid token",
+        ));
+    }
+    Ok(response.value)
 }
 
 fn run_pub_get_with_retry(
@@ -2547,6 +2734,70 @@ fn output_error(error: io::Error) -> FlutterError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn github_actions_oidc_request_url_owns_endpoint_and_audience_validation() {
+        let url = github_actions_pub_dev_oidc_request_url(
+            "https://vstoken.actions.githubusercontent.com/fixture?api-version=2.0",
+        )
+        .expect("valid GitHub Actions OIDC endpoint");
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(
+            url.host_str(),
+            Some("vstoken.actions.githubusercontent.com")
+        );
+        assert!(
+            url.query_pairs()
+                .any(|(key, value)| { key.as_ref() == "api-version" && value.as_ref() == "2.0" })
+        );
+        assert!(url.query_pairs().any(|(key, value)| {
+            key.as_ref() == "audience" && value.as_ref() == PUB_DEV_OIDC_AUDIENCE
+        }));
+
+        for invalid in [
+            "http://vstoken.actions.githubusercontent.com/fixture",
+            "https://actions.githubusercontent.com.evil.example/fixture",
+            "https://user@vstoken.actions.githubusercontent.com/fixture",
+            "https://vstoken.actions.githubusercontent.com:8443/fixture",
+            "https://vstoken.actions.githubusercontent.com/fixture#fragment",
+        ] {
+            assert!(
+                github_actions_pub_dev_oidc_request_url(invalid).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn github_actions_oidc_response_preserves_opaque_token_bytes() {
+        let token = parse_github_actions_oidc_response(
+            br#"{"value":"opaque.Token_-~","futureField":{"enabled":true}}"#,
+        )
+        .expect("valid GitHub Actions OIDC response");
+        assert_eq!(token, "opaque.Token_-~");
+
+        assert!(parse_github_actions_oidc_response(br#"{"value":""}"#).is_err());
+        assert!(parse_github_actions_oidc_response(br#"{"value":"invalid\u0000token"}"#).is_err());
+    }
+
+    #[test]
+    fn github_actions_oidc_authorization_stays_out_of_curl_arguments() {
+        let request_token = "fixture.request-token_123";
+        let authorization = GitHubActionsOidcAuthorizationHeader::new(request_token)
+            .expect("temporary OIDC authorization header");
+        let contents = fs::read_to_string(authorization.file.path())
+            .expect("read temporary OIDC authorization header");
+        assert_eq!(contents, format!("Authorization: Bearer {request_token}\n"));
+        assert!(
+            !authorization
+                .curl_argument()
+                .to_string_lossy()
+                .contains(request_token)
+        );
+
+        assert!(GitHubActionsOidcAuthorizationHeader::new("").is_err());
+        assert!(GitHubActionsOidcAuthorizationHeader::new("token\r\ninjected: value").is_err());
+    }
 
     #[test]
     fn pub_dev_new_package_wait_enforces_and_expires_the_burst_window() {
