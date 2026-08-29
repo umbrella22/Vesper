@@ -15,6 +15,7 @@ fi
 evidence_directory="$runner_temp/flutter-subtitle-evidence"
 log_directory="$runner_temp/flutter-subtitle-logs"
 bundle_identifier="io.github.umbrella22.vesper.example.flutterhost"
+max_attempts=3
 mkdir -p "$evidence_directory" "$log_directory"
 rm -f \
   "$evidence_directory/subtitle-positive.json" \
@@ -22,10 +23,35 @@ rm -f \
   "$evidence_directory/subtitle-lifecycle.json" \
   "$evidence_directory/subtitle-lifecycle.png"
 
-# A timed-out Flutter tool can leave the app paused in the Simulator. Ensure
-# each attempt starts from a clean application process while preserving the
-# already-built artifacts for an incremental retry.
-xcrun simctl terminate "$simulator_id" "$bundle_identifier" >/dev/null 2>&1 || true
+cleanup_application() {
+  xcrun simctl terminate "$simulator_id" "$bundle_identifier" >/dev/null 2>&1 || true
+  xcrun simctl uninstall "$simulator_id" "$bundle_identifier" >/dev/null 2>&1 || true
+}
+
+# shellcheck disable=SC2329
+on_signal() {
+  cleanup_application
+  exit 143
+}
+trap on_signal INT TERM
+trap cleanup_application EXIT
+
+cleanup_stale_flutter_processes() {
+  # A step-level timeout can leave xcodebuild and Flutter children alive. They
+  # must not share the next attempt's Flutter.framework output directory.
+  pkill -TERM -f "$host_directory" >/dev/null 2>&1 || true
+  sleep 2
+  pkill -KILL -f "$host_directory" >/dev/null 2>&1 || true
+}
+
+reset_debug_build_outputs() {
+  rm -rf \
+    "$host_directory/build/ios/Debug-iphonesimulator" \
+    "$host_directory/build/ios/iphonesimulator"
+}
+
+cleanup_application
+cleanup_stale_flutter_processes
 xcrun simctl bootstatus "$simulator_id" -b
 
 status=0
@@ -33,37 +59,68 @@ status=0
 run_subtitle_integration() {
   local evidence_name="$1"
   local target="$2"
+  local attempt_number
   local -a pipeline_status
   local command_status
   local tee_status
+  local evidence_ready=0
 
-  set +e
-  (
-    cd "$host_directory"
-    VESPER_SUBTITLE_EVIDENCE_DIR="$evidence_directory" \
-    VESPER_SUBTITLE_EVIDENCE_NAME="$evidence_name" \
-      flutter drive \
-        --verbose \
-        --no-pub \
-        --keep-app-running \
-        --driver=test_driver/subtitle_integration_test.dart \
-        --target="$target" \
-        --device-id "$simulator_id"
-  ) 2>&1 | tee "$log_directory/$evidence_name-$attempt.log"
-  pipeline_status=("${PIPESTATUS[@]}")
-  command_status="${pipeline_status[0]}"
-  tee_status="${pipeline_status[1]}"
+  for attempt_number in $(seq 1 "$max_attempts"); do
+    evidence_ready=0
+    rm -f \
+      "$evidence_directory/$evidence_name.json" \
+      "$evidence_directory/$evidence_name.png"
+    cleanup_application
+    if [[ "$attempt_number" -gt 1 ]]; then
+      cleanup_stale_flutter_processes
+      reset_debug_build_outputs
+      xcrun simctl bootstatus "$simulator_id" -b
+    fi
 
-  # Flutter 3.47 can report a passed drive as failed when its automatic
-  # Simulator teardown races an app process that already exited. Own teardown
-  # here so an already-stopped or already-uninstalled app remains idempotent.
-  xcrun simctl terminate "$simulator_id" "$bundle_identifier" >/dev/null 2>&1 || true
-  xcrun simctl uninstall "$simulator_id" "$bundle_identifier" >/dev/null 2>&1 || true
-  set -e
+    set +e
+    (
+      cd "$host_directory"
+      VESPER_SUBTITLE_EVIDENCE_DIR="$evidence_directory" \
+      VESPER_SUBTITLE_EVIDENCE_NAME="$evidence_name" \
+        flutter drive \
+          --verbose \
+          --no-pub \
+          --no-dds \
+          --keep-app-running \
+          --driver=test_driver/subtitle_integration_test.dart \
+          --target="$target" \
+          --device-id "$simulator_id"
+    ) 2>&1 | tee "$log_directory/$evidence_name-$attempt-$attempt_number.log"
+    pipeline_status=("${PIPESTATUS[@]}")
+    command_status="${pipeline_status[0]}"
+    tee_status="${pipeline_status[1]}"
+    set -e
 
-  if [[ "$command_status" -ne 0 || "$tee_status" -ne 0 ]]; then
-    status=1
-  fi
+    cleanup_application
+    case "$evidence_name" in
+      subtitle-positive)
+        [[ -s "$evidence_directory/subtitle-positive.json" && \
+          -s "$evidence_directory/subtitle-positive.png" ]] && evidence_ready=1
+        ;;
+      subtitle-lifecycle)
+        [[ -s "$evidence_directory/subtitle-lifecycle.json" ]] && evidence_ready=1
+        ;;
+      *)
+        echo "Unknown subtitle evidence name: $evidence_name" >&2
+        status=1
+        return 1
+        ;;
+    esac
+
+    if [[ "$command_status" -eq 0 && "$tee_status" -eq 0 && "$evidence_ready" -eq 1 ]]; then
+      echo "Subtitle integration $evidence_name passed on attempt $attempt_number."
+      return
+    fi
+
+    echo "Subtitle integration $evidence_name failed on attempt $attempt_number/$max_attempts; retrying if available." >&2
+  done
+
+  status=1
 }
 
 run_subtitle_integration subtitle-positive integration_test/subtitle_contract_test.dart
