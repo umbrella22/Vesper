@@ -16,6 +16,13 @@ evidence_directory="$runner_temp/flutter-subtitle-evidence"
 log_directory="$runner_temp/flutter-subtitle-logs"
 bundle_identifier="io.github.umbrella22.vesper.example.flutterhost"
 max_attempts=3
+attempt_timeout_seconds="${VESPER_SUBTITLE_ATTEMPT_TIMEOUT_SECONDS:-360}"
+
+if [[ ! "$attempt_timeout_seconds" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid subtitle integration timeout: $attempt_timeout_seconds" >&2
+  exit 2
+fi
+
 mkdir -p "$evidence_directory" "$log_directory"
 rm -f \
   "$evidence_directory/subtitle-positive.json" \
@@ -50,6 +57,70 @@ reset_debug_build_outputs() {
     "$host_directory/build/ios/iphonesimulator"
 }
 
+run_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+
+  # Flutter can leave xcodebuild descendants alive when the VM Service never
+  # appears. Run each attempt in its own process group so a timed-out attempt
+  # cannot race the clean retry or reuse a half-written Flutter.framework.
+  ruby - "$timeout_seconds" "$@" <<'RUBY'
+timeout_seconds = Integer(ARGV.shift, 10)
+command = ARGV
+abort("No command supplied to run_with_timeout") if command.empty?
+
+pid = Process.spawn(*command, pgroup: true)
+deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout_seconds
+status = nil
+
+loop do
+  waited_pid = Process.waitpid(pid, Process::WNOHANG)
+  if waited_pid
+    status = $?
+    break
+  end
+
+  if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+    begin
+      Process.kill("TERM", -pid)
+    rescue Errno::ESRCH
+      nil
+    end
+
+    grace_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
+    loop do
+      waited_pid = Process.waitpid(pid, Process::WNOHANG)
+      break if waited_pid
+      break if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= grace_deadline
+      sleep 0.25
+    end
+
+    unless waited_pid
+      begin
+        Process.kill("KILL", -pid)
+      rescue Errno::ESRCH
+        nil
+      end
+      Process.waitpid(pid)
+    end
+
+    warn "Command timed out after #{timeout_seconds}s: #{command.join(" ")}"
+    exit 124
+  end
+
+  sleep 0.25
+end
+
+if status&.exited?
+  exit status.exitstatus
+elsif status&.signaled?
+  exit 128 + status.termsig
+else
+  exit 1
+end
+RUBY
+}
+
 cleanup_application
 cleanup_stale_flutter_processes
 xcrun simctl bootstatus "$simulator_id" -b
@@ -82,7 +153,7 @@ run_subtitle_integration() {
       cd "$host_directory"
       VESPER_SUBTITLE_EVIDENCE_DIR="$evidence_directory" \
       VESPER_SUBTITLE_EVIDENCE_NAME="$evidence_name" \
-        flutter drive \
+        run_with_timeout "$attempt_timeout_seconds" flutter drive \
           --verbose \
           --no-pub \
           --no-dds \

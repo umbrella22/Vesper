@@ -542,25 +542,17 @@ jobs:
 
       # Flutter #181771 is an upstream race in the iOS log reader: the app can
       # launch before the reader is ready and the tool then waits forever for
-      # the VM Service URI. Keep each attempt bounded and retry from a clean app
-      # process while the upstream issue remains open.
+      # the VM Service URI. The script bounds each attempt and retries from a
+      # clean app process while the upstream issue remains open.
       - name: Run Flutter iOS subtitle integration
         id: subtitle_integration
-        continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 50
         env:
           VESPER_SUBTITLE_ATTEMPT: primary
         run: bash .github/scripts/run-flutter-ios-subtitle-integration.sh
 
-      - name: Retry Flutter iOS subtitle integration
-        if: steps.subtitle_integration.outcome == 'failure'
-        timeout-minutes: 15
-        env:
-          VESPER_SUBTITLE_ATTEMPT: retry
-        run: bash .github/scripts/run-flutter-ios-subtitle-integration.sh
-
       - name: Upload Flutter iOS subtitle evidence
-        if: always() && steps.subtitle_integration.outcome != 'skipped'
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: flutter-ios-subtitle-simulator-evidence
