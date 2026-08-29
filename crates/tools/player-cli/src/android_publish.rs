@@ -354,13 +354,7 @@ fn validate_repository(
     }
 
     for primary in &expected_primary {
-        require_regular_nonempty(primary, "Maven publication file")?;
-        let signature = append_suffix(primary, ".asc");
-        require_regular_nonempty(&signature, "Maven signature")?;
-        verify_checksum(primary, "md5")?;
-        verify_checksum(primary, "sha1")?;
-        verify_checksum(&signature, "md5")?;
-        verify_checksum(&signature, "sha1")?;
+        validate_primary_publication(primary)?;
     }
 
     for path in files {
@@ -494,10 +488,14 @@ fn is_expected_publication_file(path: &Path, primary: &BTreeSet<PathBuf>) -> boo
             || [".md5", ".sha1", ".sha256", ".sha512"]
                 .iter()
                 .any(|suffix| path == append_suffix(base, suffix))
-            || [".asc.md5", ".asc.sha1", ".asc.sha256", ".asc.sha512"]
-                .iter()
-                .any(|suffix| path == append_suffix(base, suffix))
     })
+}
+
+fn validate_primary_publication(primary: &Path) -> Result<(), AndroidError> {
+    require_regular_nonempty(primary, "Maven publication file")?;
+    require_regular_nonempty(&append_suffix(primary, ".asc"), "Maven signature")?;
+    verify_checksum(primary, "md5")?;
+    verify_checksum(primary, "sha1")
 }
 
 fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
@@ -1384,7 +1382,7 @@ mod tests {
     }
 
     #[test]
-    fn expected_publication_files_include_signatures_and_checksums() {
+    fn expected_publication_files_include_primary_checksums_without_signature_checksums() {
         let base = PathBuf::from("artifact-0.4.0.aar");
         let primary = BTreeSet::from([base.clone()]);
         assert!(is_expected_publication_file(&base, &primary));
@@ -1397,9 +1395,37 @@ mod tests {
             &primary
         ));
         assert!(!is_expected_publication_file(
+            &PathBuf::from("artifact-0.4.0.aar.asc.md5"),
+            &primary
+        ));
+        assert!(!is_expected_publication_file(
             &PathBuf::from("maven-metadata.xml"),
             &primary
         ));
+    }
+
+    #[test]
+    fn primary_publication_accepts_javadoc_signature_without_signature_checksum() {
+        let directory = tempfile::tempdir().expect("temporary Maven publication directory");
+        let primary = directory.path().join("vesper-player-kit-0.5.0-javadoc.jar");
+        fs::write(&primary, b"javadoc archive").expect("write javadoc archive");
+        fs::write(append_suffix(&primary, ".asc"), b"armored signature")
+            .expect("write javadoc signature");
+        fs::write(
+            append_suffix(&primary, ".md5"),
+            digest_file::<Md5>(&primary).expect("digest javadoc archive with MD5"),
+        )
+        .expect("write javadoc MD5 checksum");
+        fs::write(
+            append_suffix(&primary, ".sha1"),
+            digest_file::<Sha1>(&primary).expect("digest javadoc archive with SHA-1"),
+        )
+        .expect("write javadoc SHA-1 checksum");
+
+        validate_primary_publication(&primary)
+            .expect("signature checksum files are not required by Maven Central");
+        assert!(!append_suffix(&primary, ".asc.md5").exists());
+        assert!(!append_suffix(&primary, ".asc.sha1").exists());
     }
 
     #[test]

@@ -693,7 +693,25 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: refs/tags/${{ env.RELEASE_TAG }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || format('refs/tags/{0}', env.RELEASE_TAG) }}
+
+      - name: Verify manual Maven publisher repair scope
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          while IFS= read -r changed_path; do
+            case "$changed_path" in
+              .github/workflows/mobile-lib-release.yml | \
+              crates/tools/player-cli/src/android_publish.rs)
+                ;;
+              *)
+                echo "Manual Maven repair includes a frozen product change: $changed_path" >&2
+                exit 1
+                ;;
+            esac
+          done < <(git diff --name-only "$tag_commit" HEAD)
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
