@@ -387,8 +387,13 @@ final class VesperPluginDiagnostic {
     this.message,
     this.capability,
     this.participation = VesperPluginParticipation.unknown,
+    this.route,
+    this.fallbackTargetRoute,
+    this.fallbackReason,
     this.statusRawValue,
     this.participationRawValue,
+    this.routeRawValue,
+    this.fallbackTargetRouteRawValue,
     this.extra = const <String, Object?>{},
   });
 
@@ -396,6 +401,11 @@ final class VesperPluginDiagnostic {
     final rawCapability = _rawMap(map['capability']);
     final statusRawValue = map['status'] as String?;
     final participationRawValue = map['participation'] as String?;
+    final routeRawValue = map['route'] as String?;
+    final fallbackTargetRouteRawValue = map['fallbackTargetRoute'] as String?;
+    final route = _decodePluginPlaybackRoute(routeRawValue);
+    final fallbackTargetRoute =
+        _decodePluginPlaybackRoute(fallbackTargetRouteRawValue);
     final knownKeys = <Object?>{
       'path',
       'pluginName',
@@ -404,6 +414,9 @@ final class VesperPluginDiagnostic {
       'message',
       'capability',
       'participation',
+      'route',
+      'fallbackTargetRoute',
+      'fallbackReason',
     };
     return VesperPluginDiagnostic(
       path: map['path'] as String? ?? '',
@@ -423,9 +436,23 @@ final class VesperPluginDiagnostic {
         participationRawValue,
         VesperPluginParticipation.unknown,
       ),
+      route: route,
+      fallbackTargetRoute: fallbackTargetRoute,
+      fallbackReason: map['fallbackReason'] as String?,
       statusRawValue: statusRawValue,
       participationRawValue: participationRawValue,
+      routeRawValue: routeRawValue,
+      fallbackTargetRouteRawValue: fallbackTargetRouteRawValue,
       extra: <String, Object?>{
+        // Keep the raw compatibility projection for callers that still read
+        // route and fallback metadata from the open-ended extras map.
+        if (route == VesperPluginPlaybackRoute.unknown && routeRawValue != null)
+          'route': routeRawValue,
+        if (fallbackTargetRoute == VesperPluginPlaybackRoute.unknown &&
+            fallbackTargetRouteRawValue != null)
+          'fallbackTargetRoute': fallbackTargetRouteRawValue,
+        if (map['fallbackReason'] != null)
+          'fallbackReason': map['fallbackReason'],
         for (final entry in map.entries)
           if (entry.key is String && !knownKeys.contains(entry.key))
             entry.key! as String: entry.value,
@@ -440,8 +467,13 @@ final class VesperPluginDiagnostic {
   final String? message;
   final VesperPluginCapability? capability;
   final VesperPluginParticipation participation;
+  final VesperPluginPlaybackRoute? route;
+  final VesperPluginPlaybackRoute? fallbackTargetRoute;
+  final String? fallbackReason;
   final String? statusRawValue;
   final String? participationRawValue;
+  final String? routeRawValue;
+  final String? fallbackTargetRouteRawValue;
   final Map<String, Object?> extra;
 
   Map<String, Object?> toMap() {
@@ -457,6 +489,15 @@ final class VesperPluginDiagnostic {
         'participation': participationRawValue
       else if (participation != VesperPluginParticipation.unknown)
         'participation': participation.name,
+      if (routeRawValue != null)
+        'route': routeRawValue
+      else if (route != null)
+        'route': route!.name,
+      if (fallbackTargetRouteRawValue != null)
+        'fallbackTargetRoute': fallbackTargetRouteRawValue
+      else if (fallbackTargetRoute != null)
+        'fallbackTargetRoute': fallbackTargetRoute!.name,
+      if (fallbackReason != null) 'fallbackReason': fallbackReason,
       ...extra,
     };
   }
@@ -464,6 +505,14 @@ final class VesperPluginDiagnostic {
 
 T _decodeEnum<T extends Enum>(Iterable<T> values, Object? raw, T fallback) {
   return _decodeEnumOrNull(values, raw) ?? fallback;
+}
+
+VesperPluginPlaybackRoute? _decodePluginPlaybackRoute(Object? raw) {
+  if (raw == null) {
+    return null;
+  }
+  return _decodeEnumOrNull(VesperPluginPlaybackRoute.values, raw) ??
+      VesperPluginPlaybackRoute.unknown;
 }
 
 T _decodeRequiredEnum<T extends Enum>(

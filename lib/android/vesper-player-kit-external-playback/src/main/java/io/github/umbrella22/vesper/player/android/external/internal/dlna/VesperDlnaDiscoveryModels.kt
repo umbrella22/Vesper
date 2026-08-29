@@ -69,11 +69,39 @@ internal fun VesperDlnaDescriptionRequest.details(
 internal fun VesperDlnaDescriptionRequest.descriptionFetchKey(): String =
     "${location.toExternalForm()}|${dlnaRouteIdentityKey(usn)}"
 
+internal fun VesperDlnaDescriptionRequest.descriptionFetchKey(
+    binding: DlnaNetworkBinding,
+): String =
+    descriptionFetchKey(binding.key)
+
+internal fun VesperDlnaDescriptionRequest.descriptionFetchKey(
+    bindingKey: String,
+): String =
+    "${descriptionFetchKey()}|$bindingKey"
+
 internal fun VesperDlnaDevice.matchesDescriptionRequest(
     request: VesperDlnaDescriptionRequest,
 ): Boolean =
     location.sameFile(request.location) ||
         matchesRouteId(request.usn)
+
+internal fun VesperDlnaDevice.canReuseDescriptionFor(
+    request: VesperDlnaDescriptionRequest,
+    binding: DlnaNetworkBinding,
+): Boolean =
+    canReuseDescriptionFor(request, binding.key) &&
+        network == binding.network
+
+internal fun VesperDlnaDevice.canReuseDescriptionFor(
+    request: VesperDlnaDescriptionRequest,
+    bindingKey: String,
+): Boolean =
+    supportsPlayback &&
+        location.sameFile(request.location) &&
+        dlnaBindingKey() == bindingKey
+
+internal fun VesperDlnaDevice.dlnaBindingKey(): String? =
+    localAddress?.hostAddress?.let { address -> "${interfaceName.orEmpty()}@$address" }
 
 internal fun mSearchPayload(target: String, mx: Int): String =
     buildString {

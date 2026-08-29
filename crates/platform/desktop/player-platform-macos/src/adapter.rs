@@ -324,6 +324,7 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
     fallback_reason: Option<String>,
 ) -> PlayerResult<PlayerRuntimeBootstrap> {
     let source_normalizer_packet_session = normalization.packet_session.clone();
+    let frame_processor_participation = frame_processor_participation_tracker(&options);
     let packet_selection = select_macos_source_normalizer_packet_decoder(
         normalization.packet_stream_info.as_ref(),
         &options,
@@ -391,6 +392,7 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
                     frame_processor_paths: selection.frame_processor_paths,
                     frame_processor_mode: selection.frame_processor_mode,
                     frame_processor_policy: selection.frame_processor_policy,
+                    frame_processor_participation: frame_processor_participation.clone(),
                     packet_session,
                 }),
                 macos_native_frame_decoder_capabilities(),
@@ -409,6 +411,7 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
                     frame_processor_paths: selection.frame_processor_paths,
                     frame_processor_mode: selection.frame_processor_mode,
                     frame_processor_policy: selection.frame_processor_policy,
+                    frame_processor_participation: frame_processor_participation.clone(),
                 }),
                 macos_native_frame_decoder_capabilities(),
             )
@@ -531,7 +534,11 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
             selected_plugin_name.as_deref(),
         );
     }
-    let mut diagnostics = macos_runtime_diagnostics(runtime.media_info(), &options);
+    let mut diagnostics = macos_runtime_diagnostics_with_frame_processor_tracker(
+        runtime.media_info(),
+        &options,
+        frame_processor_participation.clone(),
+    );
     if runtime.capabilities().supports_hardware_decode
         && runtime.capabilities().supports_external_video_surface
     {
@@ -557,6 +564,7 @@ pub(crate) fn open_macos_software_runtime_with_prepared_normalization(
                 inner: runtime,
                 video_decode: diagnostics.video_decode.clone(),
                 plugin_diagnostics: diagnostics.plugin_diagnostics.clone(),
+                frame_processor_participation: diagnostics.frame_processor_participation.clone(),
                 has_video_surface: diagnostics.has_video_surface,
                 runtime_fallback,
                 pending_runtime_fallback_events: VecDeque::new(),
@@ -614,6 +622,7 @@ pub(crate) struct MacosSoftwareFallbackFactory;
 pub(crate) struct MacosRuntimeDiagnostics {
     pub(crate) video_decode: PlayerVideoDecodeInfo,
     pub(crate) plugin_diagnostics: Vec<PlayerPluginDiagnostic>,
+    pub(crate) frame_processor_participation: Option<MacosFrameProcessorParticipationTracker>,
     pub(crate) has_video_surface: bool,
 }
 
@@ -658,6 +667,7 @@ pub(crate) struct MacosRuntimeAdapter {
     pub(crate) inner: Box<dyn PlayerRuntimeAdapter>,
     pub(crate) video_decode: PlayerVideoDecodeInfo,
     pub(crate) plugin_diagnostics: Vec<PlayerPluginDiagnostic>,
+    pub(crate) frame_processor_participation: Option<MacosFrameProcessorParticipationTracker>,
     pub(crate) has_video_surface: bool,
     pub(crate) runtime_fallback: Option<MacosRuntimeActiveFallback>,
     pub(crate) pending_runtime_fallback_events: VecDeque<PlayerRuntimeEvent>,
@@ -718,7 +728,12 @@ impl PlayerRuntimeAdapterFactory for MacosSoftwarePlayerRuntimeAdapterFactory {
             select_macos_native_frame_decoder(&source, &media_info, &options, None)
         {
             let capabilities = macos_native_frame_decoder_capabilities();
-            let fallback_diagnostics = macos_runtime_diagnostics(&media_info, &options);
+            let frame_processor_participation = frame_processor_participation_tracker(&options);
+            let fallback_diagnostics = macos_runtime_diagnostics_with_frame_processor_tracker(
+                &media_info,
+                &options,
+                frame_processor_participation.clone(),
+            );
             let native_inner = probe_platform_desktop_source_with_video_source_factory_and_options(
                 MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
                 source.clone(),
@@ -730,11 +745,16 @@ impl PlayerRuntimeAdapterFactory for MacosSoftwarePlayerRuntimeAdapterFactory {
                     frame_processor_paths: selection.frame_processor_paths.clone(),
                     frame_processor_mode: selection.frame_processor_mode,
                     frame_processor_policy: selection.frame_processor_policy.clone(),
+                    frame_processor_participation: frame_processor_participation.clone(),
                 }),
                 capabilities,
             )?;
             let media_info = native_inner.media_info();
-            let mut diagnostics = macos_runtime_diagnostics(&media_info, &options);
+            let mut diagnostics = macos_runtime_diagnostics_with_frame_processor_tracker(
+                &media_info,
+                &options,
+                frame_processor_participation,
+            );
             diagnostics.video_decode =
                 macos_native_frame_decoder_video_decode_info(selection.plugin_name.as_deref());
             diagnostics.has_video_surface = true;
@@ -907,6 +927,7 @@ pub(crate) fn wrap_macos_runtime_bootstrap(
             inner: runtime,
             video_decode: diagnostics.video_decode.clone(),
             plugin_diagnostics: diagnostics.plugin_diagnostics.clone(),
+            frame_processor_participation: diagnostics.frame_processor_participation.clone(),
             has_video_surface: diagnostics.has_video_surface,
             runtime_fallback,
             pending_runtime_fallback_events: VecDeque::new(),
@@ -965,6 +986,11 @@ impl PlayerRuntimeAdapter for MacosRuntimeAdapter {
     }
 
     fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
+        let plugin_diagnostics = self
+            .frame_processor_participation
+            .as_ref()
+            .map(MacosFrameProcessorParticipationTracker::snapshot)
+            .unwrap_or_else(|| self.plugin_diagnostics.clone());
         let mut events = self
             .inner
             .drain_events()
@@ -974,7 +1000,7 @@ impl PlayerRuntimeAdapter for MacosRuntimeAdapter {
                     let startup = apply_video_decode_diagnostics(startup, &self.video_decode);
                     PlayerRuntimeEvent::Initialized(append_plugin_diagnostics(
                         startup,
-                        &self.plugin_diagnostics,
+                        &plugin_diagnostics,
                     ))
                 }
                 other => other,
@@ -1090,7 +1116,11 @@ impl MacosRuntimeAdapter {
         if let Some(video_decode) = bootstrap.startup.video_decode.as_ref() {
             self.video_decode = video_decode.clone();
         }
+        if let Some(participation) = self.frame_processor_participation.as_ref() {
+            participation.mark_fallback();
+        }
         self.plugin_diagnostics = bootstrap.startup.plugin_diagnostics.clone();
+        self.frame_processor_participation = None;
         self.has_video_surface = false;
         self.pending_runtime_fallback_events
             .extend(runtime_fallback_events(runtime_error_message));

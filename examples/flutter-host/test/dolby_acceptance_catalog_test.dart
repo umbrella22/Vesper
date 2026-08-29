@@ -4,19 +4,19 @@ import 'package:flutter_host/src/player/example_player_models.dart';
 import 'package:vesper_player/vesper_player.dart';
 
 void main() {
-  test('clear presets use Dolby Browser Test Kit DASH and HLS URLs', () {
-    final dash = exampleDolbyAcceptancePresetById('DOLBY-DV-P5-24-DASH-CLEAR');
+  test('clear presets use Dolby Online Delivery Kit DASH and HLS URLs', () {
+    final dash = exampleDolbyAcceptancePresetById('DOLBY-DV-P5-25-DASH-CLEAR');
     final hls = exampleDolbyAcceptancePresetById('DOLBY-DV-P81-30-HLS-CLEAR');
 
     expect(
       dash?.source.uri,
-      'https://ott.dolby.com/browser_test_kit/clear/p5/24/dash.mpd',
+      'https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/clear/P5_25/dash.mpd',
     );
     expect(dash?.source.protocol, VesperPlayerSourceProtocol.dash);
     expect(dash?.source.drmConfiguration, isNull);
     expect(
       hls?.source.uri,
-      'https://ott.dolby.com/browser_test_kit/clear/p81/30/master.m3u8',
+      'https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/clear/P8_1_30/master.m3u8',
     );
     expect(hls?.source.protocol, VesperPlayerSourceProtocol.hls);
     expect(hls?.source.drmConfiguration, isNull);
@@ -24,14 +24,14 @@ void main() {
 
   test('widevine presets are DASH direct sources with DRM configuration', () {
     final widevine = exampleDolbyAcceptancePresetById(
-      'DOLBY-DV-P84-50-DASH-WIDEVINE',
+      'DOLBY-DV-P84-60-DASH-WIDEVINE',
     );
 
     expect(widevine, isNotNull);
     expect(widevine?.protocol, VesperPlayerSourceProtocol.dash);
     expect(
       widevine?.source.uri,
-      'https://ott.dolby.com/browser_test_kit/cenc/p84/50/dash.mpd',
+      'https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/cenc/P8_4_60/dash.mpd',
     );
     expect(widevine?.source.drmConfiguration?.keySystem, 'widevine');
     expect(
@@ -44,13 +44,13 @@ void main() {
 
   test('fairplay presets remain pending and disabled', () {
     final fairPlay = exampleDolbyAcceptancePresetById(
-      'DOLBY-DV-P5-24-HLS-FAIRPLAY-PENDING',
+      'DOLBY-DV-P5-25-HLS-FAIRPLAY-PENDING',
     );
 
     expect(fairPlay, isNotNull);
     expect(
       fairPlay?.source.uri,
-      'https://ott.dolby.com/browser_test_kit/cbcs/p5/24/master.m3u8',
+      'https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/cbcs/P5_25/master.m3u8',
     );
     expect(fairPlay?.source.protocol, VesperPlayerSourceProtocol.hls);
     expect(fairPlay?.source.drmConfiguration, isNull);
@@ -60,13 +60,13 @@ void main() {
 
   test('host platform routing keeps iOS Dolby acceptance on HLS direct', () {
     final dashClear = exampleDolbyAcceptancePresetById(
-      'DOLBY-DV-P5-24-DASH-CLEAR',
+      'DOLBY-DV-P5-25-DASH-CLEAR',
     )!;
     final hlsClear = exampleDolbyAcceptancePresetById(
-      'DOLBY-DV-P5-24-HLS-CLEAR',
+      'DOLBY-DV-P5-25-HLS-CLEAR',
     )!;
     final widevine = exampleDolbyAcceptancePresetById(
-      'DOLBY-DV-P84-50-DASH-WIDEVINE',
+      'DOLBY-DV-P84-60-DASH-WIDEVINE',
     )!;
 
     expect(
@@ -115,7 +115,7 @@ void main() {
     'metadata preserves profile, fps, drm, expected HDR, and manual gate',
     () {
       final preset = exampleDolbyAcceptancePresetById(
-        'DOLBY-DV-P81-120-DASH-WIDEVINE',
+        'DOLBY-DV-P81-60-DASH-WIDEVINE',
       )!;
       final evidence = preset.toHdrEvidencePreset();
       final metadata = evidence.sourceMetadata;
@@ -123,7 +123,7 @@ void main() {
 
       expect(evidence.sampleId, preset.id);
       expect(metadata['hdrKind'], 'dolbyVision');
-      expect(metadata['frameRate'], 120.0);
+      expect(metadata['frameRate'], 60.0);
       expect(metadata['drmKind'], 'widevine');
       expect(metadata['manualGate'], 'requiresDolbyVisionDisplay');
       expect(dolbyVision['profile'], 8);
@@ -132,7 +132,7 @@ void main() {
   );
 
   test('catalog covers selected profile, fps, protocol, and DRM matrix', () {
-    expect(exampleDolbyAcceptanceCatalog, hasLength(48));
+    expect(exampleDolbyAcceptanceCatalog, hasLength(36));
     for (final profile in ExampleDolbyAcceptanceProfile.values) {
       for (final fps in exampleDolbyAcceptanceFpsValues) {
         expect(
@@ -150,7 +150,7 @@ void main() {
       presets: exampleDolbyAcceptanceCatalog,
       drmKind: ExampleDolbyAcceptanceDrmKind.clear,
       profile: ExampleDolbyAcceptanceProfile.p81,
-      fps: 50,
+      fps: 60,
     );
 
     expect(filtered, hasLength(2));
@@ -166,12 +166,12 @@ void main() {
       ),
       isTrue,
     );
-    expect(filtered.every((preset) => preset.fps == 50), isTrue);
+    expect(filtered.every((preset) => preset.fps == 60), isTrue);
   });
 
   test('dolby queue ids use explicit prefix and resolve preset id', () {
     final preset = exampleDolbyAcceptancePresetById(
-      'DOLBY-DV-P5-24-HLS-CLEAR',
+      'DOLBY-DV-P5-25-HLS-CLEAR',
     )!;
     final itemId = flutterDolbyPlaylistItemId(preset.id);
 
@@ -182,13 +182,13 @@ void main() {
 
   test('host queueability follows platform playable rules', () {
     final widevine = exampleDolbyAcceptancePresetById(
-      'DOLBY-DV-P84-50-DASH-WIDEVINE',
+      'DOLBY-DV-P84-60-DASH-WIDEVINE',
     )!;
     final fairPlayPending = exampleDolbyAcceptancePresetById(
-      'DOLBY-DV-P5-24-HLS-FAIRPLAY-PENDING',
+      'DOLBY-DV-P5-25-HLS-FAIRPLAY-PENDING',
     )!;
     final hlsClear = exampleDolbyAcceptancePresetById(
-      'DOLBY-DV-P5-24-HLS-CLEAR',
+      'DOLBY-DV-P5-25-HLS-CLEAR',
     )!;
 
     expect(
@@ -225,8 +225,8 @@ void main() {
     );
   });
 
-  test('Dolby Browser Test Kit sources require direct native playback', () {
-    final dolby = exampleDolbyAcceptancePresetById('DOLBY-DV-P5-24-HLS-CLEAR')!;
+  test('Dolby Online Delivery Kit sources require direct native playback', () {
+    final dolby = exampleDolbyAcceptancePresetById('DOLBY-DV-P5-25-HLS-CLEAR')!;
 
     expect(exampleDolbyAcceptancePresetForSource(dolby.source), same(dolby));
     expect(

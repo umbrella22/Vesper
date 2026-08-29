@@ -63,7 +63,7 @@ jobs:
         run: ./scripts/vesper release tag-channel "${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.97.1
+        uses: dtolnay/rust-toolchain@1.98.0
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -112,7 +112,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.97.1
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: aarch64-linux-android
 
@@ -146,7 +146,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
-          gradle-version: "9.3.1"
+          gradle-version: "9.7.1"
 
       - name: Prepare release version metadata
         run: |
@@ -218,7 +218,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.97.1
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: aarch64-linux-android
 
@@ -252,12 +252,12 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
-          gradle-version: "9.3.1"
+          gradle-version: "9.7.1"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.47.0"
+          flutter-version: "3.47.1"
           channel: stable
           cache: true
 
@@ -346,7 +346,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.97.1
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
@@ -699,7 +699,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.97.1
+        uses: dtolnay/rust-toolchain@1.98.0
         with:
           targets: aarch64-linux-android
 
@@ -730,7 +730,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5
         with:
-          gradle-version: "9.3.1"
+          gradle-version: "9.7.1"
 
       - name: Prepare release version metadata
         run: |

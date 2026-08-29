@@ -4,8 +4,8 @@ description: Install the workspace Rust toolchain, build the release CLI, and ex
 runs:
   using: composite
   steps:
-    - name: Install Rust 1.97
-      uses: dtolnay/rust-toolchain@1.97.0
+    - name: Install Rust 1.98
+      uses: dtolnay/rust-toolchain@1.98.0
 
     - name: Cache Rust artifacts
       uses: Swatinem/rust-cache@v2

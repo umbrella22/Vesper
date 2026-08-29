@@ -2,7 +2,7 @@
 name = {{CRATE_NAME}}
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.98"
 license = {{LICENSE}}
 
 [lib]
@@ -10,3 +10,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 player-plugin = "={{VESPER_SDK_VERSION}}"
+
+[workspace]

@@ -23,7 +23,82 @@ class VesperTimelineScrubber extends StatefulWidget {
 }
 
 class _VesperTimelineScrubberState extends State<VesperTimelineScrubber> {
-  double? _dragRatio;
+  final GlobalKey _scrubberKey = GlobalKey();
+  int? _activePointer;
+  Offset? _pointerDownPosition;
+  bool _dragging = false;
+
+  @override
+  void didUpdateWidget(covariant VesperTimelineScrubber oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.enabled && !widget.enabled) {
+      _cancelPointer();
+    }
+  }
+
+  void _handlePointerDown(PointerDownEvent event) {
+    if (!widget.enabled || _activePointer != null) {
+      return;
+    }
+    _activePointer = event.pointer;
+    _pointerDownPosition = event.position;
+    _dragging = false;
+  }
+
+  void _handlePointerMove(PointerMoveEvent event) {
+    if (!widget.enabled || event.pointer != _activePointer) {
+      return;
+    }
+    final downPosition = _pointerDownPosition;
+    if (downPosition == null) {
+      return;
+    }
+    if (!_dragging && (event.position - downPosition).distance <= 8.0) {
+      return;
+    }
+    _dragging = true;
+    final targetRatio = _ratioForGlobalPosition(event.position);
+    widget.onSeekPreview(targetRatio);
+  }
+
+  void _handlePointerUp(PointerUpEvent event) {
+    if (event.pointer != _activePointer) {
+      return;
+    }
+    if (_dragging) {
+      // A touch platform may coalesce the final move before dispatching up.
+      // Re-sample the release coordinate so the committed seek reflects where
+      // the user actually lifted their finger, rather than the last move.
+      final targetRatio = _ratioForGlobalPosition(event.position);
+      widget.onSeekPreview(targetRatio);
+      widget.onSeekCommit(targetRatio);
+    } else {
+      final targetRatio = _ratioForGlobalPosition(event.position);
+      widget.onSeekPreview(targetRatio);
+      widget.onSeekCommit(targetRatio);
+    }
+    _resetPointer();
+  }
+
+  void _handlePointerCancel(PointerCancelEvent event) {
+    if (event.pointer != _activePointer) {
+      return;
+    }
+    _cancelPointer();
+  }
+
+  void _cancelPointer() {
+    if (_activePointer != null && _dragging) {
+      widget.onSeekCancel();
+    }
+    _resetPointer();
+  }
+
+  void _resetPointer() {
+    _activePointer = null;
+    _pointerDownPosition = null;
+    _dragging = false;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -48,51 +123,14 @@ class _VesperTimelineScrubberState extends State<VesperTimelineScrubber> {
       builder: (context, constraints) {
         final width = constraints.maxWidth <= 1 ? 1.0 : constraints.maxWidth;
 
-        double ratioForDx(double dx) {
-          return (dx / width).clamp(0.0, 1.0);
-        }
-
-        return GestureDetector(
+        Widget scrubber = Listener(
           behavior: HitTestBehavior.opaque,
-          onTapDown: enabled
-              ? (details) {
-                  final targetRatio = ratioForDx(details.localPosition.dx);
-                  widget.onSeekPreview(targetRatio);
-                  widget.onSeekCommit(targetRatio);
-                }
-              : null,
-          onHorizontalDragStart: enabled
-              ? (details) {
-                  final targetRatio = ratioForDx(details.localPosition.dx);
-                  _dragRatio = targetRatio;
-                  widget.onSeekPreview(targetRatio);
-                }
-              : null,
-          onHorizontalDragUpdate: enabled
-              ? (details) {
-                  final targetRatio = ratioForDx(details.localPosition.dx);
-                  _dragRatio = targetRatio;
-                  widget.onSeekPreview(targetRatio);
-                }
-              : null,
-          onHorizontalDragCancel: enabled
-              ? () {
-                  _dragRatio = null;
-                  widget.onSeekCancel();
-                }
-              : null,
-          onHorizontalDragEnd: enabled
-              ? (_) {
-                  final targetRatio = _dragRatio;
-                  _dragRatio = null;
-                  if (targetRatio != null) {
-                    widget.onSeekCommit(targetRatio);
-                  } else {
-                    widget.onSeekCancel();
-                  }
-                }
-              : null,
+          onPointerDown: enabled ? _handlePointerDown : null,
+          onPointerMove: enabled ? _handlePointerMove : null,
+          onPointerUp: enabled ? _handlePointerUp : null,
+          onPointerCancel: enabled ? _handlePointerCancel : null,
           child: SizedBox(
+            key: _scrubberKey,
             width: double.infinity,
             height: touchHeight,
             child: Align(
@@ -145,7 +183,35 @@ class _VesperTimelineScrubberState extends State<VesperTimelineScrubber> {
             ),
           ),
         );
+        if (enabled) {
+          scrubber = RawGestureDetector(
+            behavior: HitTestBehavior.opaque,
+            gestures: <Type, GestureRecognizerFactory>{
+              EagerGestureRecognizer:
+                  GestureRecognizerFactoryWithHandlers<EagerGestureRecognizer>(
+                EagerGestureRecognizer.new,
+                (recognizer) {},
+              ),
+            },
+            child: scrubber,
+          );
+        }
+        return scrubber;
       },
     );
+  }
+
+  double _ratioForGlobalPosition(Offset globalPosition) {
+    final renderObject = _scrubberKey.currentContext?.findRenderObject();
+    if (renderObject is RenderBox &&
+        renderObject.attached &&
+        renderObject.hasSize &&
+        renderObject.size.width > 0) {
+      final localPosition = renderObject.globalToLocal(globalPosition);
+      return (localPosition.dx / renderObject.size.width)
+          .clamp(0.0, 1.0)
+          .toDouble();
+    }
+    return 0.0;
   }
 }

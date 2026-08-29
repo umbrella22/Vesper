@@ -86,6 +86,31 @@ void main() {
     expect(diagnostic.message, contains('softwareDecoder'));
   });
 
+  test('plugin diagnostic projects route and fallback as typed fields', () {
+    final diagnostic = VesperPluginDiagnostic.fromMap(<Object?, Object?>{
+      'path': 'embedded://native-frame',
+      'pluginName': 'vesper-mobile-native-frame-pipeline',
+      'pluginKind': 'native_frame_pipeline',
+      'status': 'unsupportedKind',
+      'participation': 'fallback',
+      'route': 'systemPlayer',
+      'fallbackTargetRoute': 'systemPlayer',
+      'fallbackReason': 'native-frame presenter is unavailable',
+    });
+
+    expect(diagnostic.route, VesperPluginPlaybackRoute.systemPlayer);
+    expect(diagnostic.routeRawValue, 'systemPlayer');
+    expect(
+      diagnostic.fallbackTargetRoute,
+      VesperPluginPlaybackRoute.systemPlayer,
+    );
+    expect(diagnostic.fallbackTargetRouteRawValue, 'systemPlayer');
+    expect(
+      diagnostic.fallbackReason,
+      'native-frame presenter is unavailable',
+    );
+  });
+
   test('plugin diagnostic preserves unknown wire values', () {
     final diagnostic = VesperPluginDiagnostic.fromMap(<Object?, Object?>{
       'path': '/tmp/player-future-plugin.dylib',
@@ -93,6 +118,8 @@ void main() {
       'pluginKind': 'future',
       'status': 'futureStatus',
       'participation': 'futureParticipation',
+      'route': 'futureRoute',
+      'fallbackTargetRoute': 'futureFallbackRoute',
       'capability': <Object?, Object?>{
         'kind': 'futureCapability',
         'futureCapability': <Object?, Object?>{
@@ -105,6 +132,13 @@ void main() {
     expect(diagnostic.statusRawValue, 'futureStatus');
     expect(diagnostic.participation, VesperPluginParticipation.unknown);
     expect(diagnostic.participationRawValue, 'futureParticipation');
+    expect(diagnostic.route, VesperPluginPlaybackRoute.unknown);
+    expect(diagnostic.routeRawValue, 'futureRoute');
+    expect(
+      diagnostic.fallbackTargetRoute,
+      VesperPluginPlaybackRoute.unknown,
+    );
+    expect(diagnostic.fallbackTargetRouteRawValue, 'futureFallbackRoute');
     expect(diagnostic.capability?.kind, VesperPluginCapabilityKind.unknown);
     expect(diagnostic.capability?.rawKind, 'futureCapability');
     expect(diagnostic.capability?.decoder, isNull);
@@ -114,6 +148,8 @@ void main() {
     final encoded = diagnostic.toMap();
     expect(encoded['status'], 'futureStatus');
     expect(encoded['participation'], 'futureParticipation');
+    expect(encoded['route'], 'futureRoute');
+    expect(encoded['fallbackTargetRoute'], 'futureFallbackRoute');
     final capability = Map<Object?, Object?>.from(encoded['capability'] as Map);
     expect(capability['kind'], 'futureCapability');
     expect(

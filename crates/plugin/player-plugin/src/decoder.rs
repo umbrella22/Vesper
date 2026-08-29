@@ -25,9 +25,9 @@ pub enum DecoderFrameFormat {
     Nv12,
     /// 10-bit 4:2:0 bi-planar YUV, commonly exposed as P010.
     P010,
-    /// 32-bit floating point PCM samples.
+    /// IEEE 754 binary32 PCM samples, encoded little-endian in `DecoderPcmFrame::data`.
     F32,
-    /// Signed 16-bit PCM samples.
+    /// Signed 16-bit PCM samples, encoded little-endian in `DecoderPcmFrame::data`.
     S16,
     Unknown(String),
 }
@@ -719,13 +719,72 @@ impl DecoderPcmFrameMetadata {
             discontinuity: false,
         }
     }
+
+    /// Validates the metadata before it crosses the decoder/session boundary.
+    pub fn validate(&self) -> Result<usize, DecoderError> {
+        if self.media_kind != DecoderMediaKind::Audio {
+            return Err(DecoderError::InvalidPacket {
+                message: "PCM frame media kind must be audio".to_owned(),
+            });
+        }
+        if self.codec.trim().is_empty() {
+            return Err(DecoderError::InvalidPacket {
+                message: "PCM frame codec must not be empty".to_owned(),
+            });
+        }
+        let bytes_per_sample = match self.format {
+            DecoderFrameFormat::F32 => 4,
+            DecoderFrameFormat::S16 => 2,
+            ref format => {
+                return Err(DecoderError::UnsupportedCapability {
+                    capability: format!("pcm-format::{format:?}"),
+                });
+            }
+        };
+        if self.sample_rate == 0 || self.channels == 0 || self.frame_count == 0 {
+            return Err(DecoderError::InvalidPacket {
+                message: "PCM frame sample rate, channels, and frame count must be non-zero"
+                    .to_owned(),
+            });
+        }
+        if self.duration_us.is_some_and(|duration| duration < 0) {
+            return Err(DecoderError::InvalidPacket {
+                message: "PCM frame duration must not be negative".to_owned(),
+            });
+        }
+        usize::try_from(self.frame_count)
+            .ok()
+            .and_then(|frames| frames.checked_mul(usize::from(self.channels)))
+            .and_then(|samples| samples.checked_mul(bytes_per_sample))
+            .ok_or_else(|| DecoderError::InvalidPacket {
+                message: "PCM frame payload length overflows host size".to_owned(),
+            })
+    }
 }
 
 /// A decoded PCM audio frame returned by an audio decoder session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecoderPcmFrame {
     pub metadata: DecoderPcmFrameMetadata,
+    /// PCM sample bytes in the declared layout. F32 and S16 samples are always little-endian.
     pub data: Vec<u8>,
+}
+
+impl DecoderPcmFrame {
+    /// Validates metadata and the owned PCM payload length.
+    pub fn validate(&self) -> Result<(), DecoderError> {
+        let expected_len = self.metadata.validate()?;
+        if self.data.len() != expected_len {
+            return Err(DecoderError::InvalidPacket {
+                message: format!(
+                    "PCM frame payload length {} does not match expected {}",
+                    self.data.len(),
+                    expected_len
+                ),
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Receive state encoded in PCM frame metadata over the future audio decoder ABI.
@@ -1098,6 +1157,40 @@ mod tests {
             DecoderReceivePcmFrameMetadata::eof().status,
             DecoderReceiveFrameStatus::Eof
         );
+    }
+
+    #[test]
+    fn pcm_frame_validation_rejects_video_format_and_wrong_payload_length() {
+        let frame = DecoderPcmFrame {
+            metadata: DecoderPcmFrameMetadata::audio(
+                "aac",
+                DecoderFrameFormat::Nv12,
+                48_000,
+                2,
+                DecoderPcmSampleLayout::Interleaved,
+                256,
+            ),
+            data: vec![0; 4],
+        };
+
+        let error = frame.validate().expect_err("invalid PCM must be rejected");
+        assert!(matches!(error, DecoderError::UnsupportedCapability { .. }));
+
+        let frame = DecoderPcmFrame {
+            metadata: DecoderPcmFrameMetadata::audio(
+                "aac",
+                DecoderFrameFormat::S16,
+                48_000,
+                2,
+                DecoderPcmSampleLayout::Interleaved,
+                256,
+            ),
+            data: vec![0; 4],
+        };
+        let error = frame
+            .validate()
+            .expect_err("wrong PCM payload must be rejected");
+        assert!(matches!(error, DecoderError::InvalidPacket { .. }));
     }
 
     #[test]

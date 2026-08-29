@@ -5,9 +5,12 @@ use std::collections::BTreeMap;
     target_arch = "aarch64"
 ))]
 use std::fs;
+use std::mem::size_of;
 
 use player_plugin::{
-    BenchmarkEvent, BenchmarkEventBatch, PipelineEvent, PluginReference, PluginTransport,
+    AudioPitchMode, AudioPlaybackPolicy, AudioProcessorSessionConfig, BenchmarkEvent,
+    BenchmarkEventBatch, DecoderFrameFormat, DecoderPcmFrame, DecoderPcmFrameMetadata,
+    DecoderPcmSampleLayout, PipelineEvent, PluginReference, PluginTransport,
 };
 use sha2::{Digest, Sha256};
 
@@ -129,6 +132,81 @@ fn native_dynamic_loader_opens_safe_rust_fixture_and_calls_hook() {
         .on_event(&pipeline_event("download.task.completed", "fixture-task"))
         .expect("event hook outcome");
     assert!(outcome.accepted);
+}
+
+#[test]
+#[ignore = "requires the built audio-processor-diagnostic shared library artifact"]
+fn rewrite_red_native_dynamic_loader_opens_audio_processor_diagnostic() {
+    const AUDIO_PROCESSOR_INTERFACE_ID: [u8; 16] = [
+        0xf3, 0xfc, 0x5d, 0x7c, 0x58, 0x1f, 0x5e, 0x0a, 0x85, 0xbf, 0xdf, 0x00, 0xd7, 0xad, 0xb1,
+        0x3e,
+    ];
+
+    let plugin_path = resolve_plugin_path_with_override(
+        "VESPER_AUDIO_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH",
+        "vesper_audio_processor_diagnostic",
+    )
+    .unwrap_or_else(|error| panic!("failed to resolve audio processor plugin path: {error}"));
+    let plugin = LoadedNativePlugin::load_development(&plugin_path).unwrap_or_else(|error| {
+        panic!(
+            "failed to load audio processor plugin shared library '{}': {error}",
+            plugin_path.display()
+        )
+    });
+
+    assert_eq!(plugin.plugin_id(), "dev.vesper.audio-processor-diagnostic");
+    assert_eq!(plugin.plugin_name(), "Vesper Audio Processor Diagnostic");
+    assert!(plugin.diagnostics().is_empty());
+    assert!(plugin.interfaces().iter().any(|interface| {
+        interface.metadata.interface_id == AUDIO_PROCESSOR_INTERFACE_ID
+            && interface.metadata.instance_id == "dev.vesper.audio-processor-diagnostic.audio"
+            && interface.state == PluginInterfaceState::Available
+    }));
+
+    let reference = PluginReference::new(
+        "dev.vesper.audio-processor-diagnostic",
+        Some("dev.vesper.audio-processor-diagnostic.audio".to_owned()),
+        PluginTransport::Native,
+    )
+    .expect("valid audio processor reference");
+    let factory = plugin
+        .resolve_audio_processor(&reference)
+        .expect("checked audio processor factory");
+    let metadata = DecoderPcmFrameMetadata::audio(
+        "diagnostic-pcm",
+        DecoderFrameFormat::F32,
+        48_000,
+        1,
+        DecoderPcmSampleLayout::Interleaved,
+        48_000,
+    );
+    let policy = AudioPlaybackPolicy {
+        playback_rate: 2.0,
+        pitch_mode: AudioPitchMode::PreservePitch,
+    };
+    let mut session = factory
+        .open_session(&AudioProcessorSessionConfig {
+            processor_index: 0,
+            input_metadata: metadata.clone(),
+            playback_policy: policy,
+            max_in_flight_frames: Some(1),
+        })
+        .expect("open checked audio processor session");
+    session
+        .configure(policy)
+        .expect("configure checked session");
+    let output = session
+        .process(DecoderPcmFrame {
+            metadata,
+            data: vec![0; 48_000 * size_of::<f32>()],
+        })
+        .expect("process PCM through dynamic ABI");
+    output.validate().expect("valid plugin-owned PCM output");
+    assert_eq!(output.metadata.frame_count, 24_000);
+    assert_eq!(output.data.len(), 24_000 * size_of::<f32>());
+    session.flush().expect("flush checked session");
+    session.close().expect("close checked session");
+    session.close().expect("idempotent checked close");
 }
 
 #[cfg(all(

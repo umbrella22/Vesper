@@ -47,6 +47,7 @@ pub(crate) struct PlaybackTimelineState {
     generation: u64,
     media_start: Duration,
     playback_rate: f32,
+    last_pts_end: Option<Duration>,
 }
 
 #[derive(Debug, Default)]
@@ -60,6 +61,13 @@ pub enum AudioBufferWindowWaitResult {
     Inactive,
     Cancelled,
     TimedOut,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioPcmAppendStatus {
+    Accepted,
+    StaleGeneration,
+    StalePts,
 }
 
 pub(crate) struct SharedPlaybackState {
@@ -120,6 +128,7 @@ impl SharedPlaybackState {
                 generation: 0,
                 media_start,
                 playback_rate: sanitize_playback_rate(playback_rate),
+                last_pts_end: None,
             }),
             queue,
             queue_writer: Mutex::new(AudioQueueWriterState::default()),
@@ -153,6 +162,7 @@ impl SharedPlaybackState {
         timeline.generation = u64::from(next_generation);
         timeline.media_start = media_start;
         timeline.playback_rate = sanitize_playback_rate(playback_rate);
+        timeline.last_pts_end = None;
         let generation = timeline.generation;
         self.generation.store(generation, Ordering::Release);
         queue_writer.pending = None;
@@ -171,18 +181,61 @@ impl SharedPlaybackState {
     }
 
     pub(crate) fn append_samples(&self, generation: u64, samples: Vec<f32>) -> Result<bool> {
+        Ok(matches!(
+            self.append_samples_with_pts(generation, None, samples, 0, 1)?,
+            AudioPcmAppendStatus::Accepted
+        ))
+    }
+
+    pub(crate) fn append_samples_with_pts(
+        &self,
+        generation: u64,
+        pts: Option<Duration>,
+        samples: Vec<f32>,
+        sample_rate: u32,
+        channels: u16,
+    ) -> Result<AudioPcmAppendStatus> {
         let mut queue_writer = lock_or_recover(&self.queue_writer);
         let timeline = lock_or_recover(&self.timeline);
         if timeline.generation != generation {
             drop(timeline);
             self.notify_backpressure_waiters();
-            return Ok(false);
+            return Ok(AudioPcmAppendStatus::StaleGeneration);
         }
+        let next_pts_end = if let Some(pts) = pts {
+            if sample_rate == 0
+                || channels == 0
+                || !samples.len().is_multiple_of(usize::from(channels))
+            {
+                anyhow::bail!(
+                    "PCM PTS append requires a valid sample rate and interleaved channel count"
+                );
+            }
+            let stale =
+                pts < timeline.media_start || timeline.last_pts_end.is_some_and(|last| pts < last);
+            if stale {
+                drop(timeline);
+                self.notify_backpressure_waiters();
+                return Ok(AudioPcmAppendStatus::StalePts);
+            }
+            Some(
+                pts.saturating_add(Duration::from_secs_f64(
+                    duration_from_frames(
+                        (samples.len() / usize::from(channels)) as u64,
+                        sample_rate,
+                    )
+                    .as_secs_f64()
+                        * f64::from(timeline.playback_rate),
+                )),
+            )
+        } else {
+            None
+        };
         drop(timeline);
 
         if self.generation.load(Ordering::Acquire) != generation {
             self.notify_backpressure_waiters();
-            return Ok(false);
+            return Ok(AudioPcmAppendStatus::StaleGeneration);
         }
 
         let buffered_samples = self
@@ -246,7 +299,16 @@ impl SharedPlaybackState {
 
         if self.generation.load(Ordering::Acquire) != generation {
             self.notify_backpressure_waiters();
-            return Ok(false);
+            return Ok(AudioPcmAppendStatus::StaleGeneration);
+        }
+
+        if let Some(next_pts_end) = next_pts_end {
+            let mut timeline = lock_or_recover(&self.timeline);
+            if timeline.generation != generation {
+                self.notify_backpressure_waiters();
+                return Ok(AudioPcmAppendStatus::StaleGeneration);
+            }
+            timeline.last_pts_end = Some(next_pts_end);
         }
 
         self.queued_samples
@@ -266,7 +328,7 @@ impl SharedPlaybackState {
             },
         );
         self.notify_backpressure_waiters();
-        Ok(true)
+        Ok(AudioPcmAppendStatus::Accepted)
     }
 
     pub(crate) fn finish_generation(&self, generation: u64) {
@@ -580,6 +642,93 @@ mod tests {
         assert!(!state.append_samples(first, vec![0.0, 0.1]).unwrap());
         assert_eq!(state.buffered_samples(first), None);
         assert_eq!(state.buffered_samples(second), Some(0));
+    }
+
+    #[test]
+    fn pts_append_rejects_stale_pts_and_reanchors_after_generation_change() {
+        let state = state_with_capacity(16);
+        let first = state.begin_generation(2, Duration::from_secs(1), 1.0);
+        assert_eq!(
+            state
+                .append_samples_with_pts(
+                    first,
+                    Some(Duration::from_secs(1)),
+                    vec![0.0, 0.1, 0.2, 0.3],
+                    1_000,
+                    2,
+                )
+                .unwrap(),
+            super::AudioPcmAppendStatus::Accepted
+        );
+        assert_eq!(
+            state
+                .append_samples_with_pts(
+                    first,
+                    Some(Duration::from_millis(999)),
+                    vec![0.0, 0.1],
+                    1_000,
+                    2,
+                )
+                .unwrap(),
+            super::AudioPcmAppendStatus::StalePts
+        );
+
+        let second = state.begin_generation(2, Duration::from_secs(4), 1.0);
+        assert_eq!(
+            state
+                .append_samples_with_pts(
+                    second,
+                    Some(Duration::from_secs(4)),
+                    vec![1.0, 1.1],
+                    1_000,
+                    2,
+                )
+                .unwrap(),
+            super::AudioPcmAppendStatus::Accepted
+        );
+    }
+
+    #[test]
+    fn pts_append_uses_media_duration_at_the_generation_playback_rate() {
+        let state = state_with_capacity(16);
+        let generation = state.begin_generation(2, Duration::ZERO, 1.25);
+
+        assert_eq!(
+            state
+                .append_samples_with_pts(
+                    generation,
+                    Some(Duration::ZERO),
+                    vec![0.0, 0.1, 0.2, 0.3],
+                    1_000,
+                    2,
+                )
+                .unwrap(),
+            super::AudioPcmAppendStatus::Accepted
+        );
+        assert_eq!(
+            state
+                .append_samples_with_pts(
+                    generation,
+                    Some(Duration::from_millis(2)),
+                    vec![0.4, 0.5],
+                    1_000,
+                    2,
+                )
+                .unwrap(),
+            super::AudioPcmAppendStatus::StalePts
+        );
+        assert_eq!(
+            state
+                .append_samples_with_pts(
+                    generation,
+                    Some(Duration::from_micros(2_500)),
+                    vec![0.4, 0.5],
+                    1_000,
+                    2,
+                )
+                .unwrap(),
+            super::AudioPcmAppendStatus::Accepted
+        );
     }
 
     #[test]

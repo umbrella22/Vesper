@@ -1,0 +1,41 @@
+schema_version = 1
+
+[plugin]
+id = "dev.vesper.audio-processor-diagnostic"
+name = "Vesper Audio Processor Diagnostic"
+version = "0.5.0"
+description = "Experimental Native AudioProcessor conformance fixture with pitch-aware playback-rate processing."
+license = "Apache-2.0"
+publisher = "io.github.umbrella22"
+
+[compatibility]
+host_sdk = ">=0.5.0, <0.6.0"
+abi_major = 1
+abi_minor_min = 0
+abi_minor_max = 0
+
+[[capabilities]]
+interface_id = "f3fc5d7c-581f-5e0a-85bf-df00d7adb13e"
+instance_id = "dev.vesper.audio-processor-diagnostic.audio"
+interface_major = 1
+interface_minor = 0
+stability = "experimental"
+
+[[artifacts]]
+transport = "native"
+target = "aarch64-apple-darwin"
+format = "dylib"
+source = "dist/libvesper_audio_processor_diagnostic.dylib"
+path = "artifacts/aarch64-apple-darwin/libvesper_audio_processor_diagnostic.dylib"
+architecture = "arm64"
+capabilities = [{ interface_id = "f3fc5d7c-581f-5e0a-85bf-df00d7adb13e", instance_id = "dev.vesper.audio-processor-diagnostic.audio" }]
+
+[[package_files]]
+source = "../../LICENSE"
+path = "licenses/LICENSE"
+kind = "license"
+
+[[package_files]]
+source = "THIRD_PARTY_NOTICES.md"
+path = "notices/THIRD_PARTY_NOTICES.md"
+kind = "notice"

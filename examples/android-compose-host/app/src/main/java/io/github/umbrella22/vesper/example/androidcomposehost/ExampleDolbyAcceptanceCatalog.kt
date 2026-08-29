@@ -8,11 +8,13 @@ import io.github.umbrella22.vesper.player.android.VesperPlayerSourceProtocol
 
 internal const val EXAMPLE_DOLBY_ACCEPTANCE_WIDEVINE_LICENSE_URI: String =
     "https://widevine-dash.ezdrm.com/proxy?pX=E8A6EE"
+internal const val EXAMPLE_DOLBY_ACCEPTANCE_BASE_URL: String =
+    "https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals"
 
-internal val exampleDolbyAcceptanceFpsValues: List<Int> = listOf(24, 30, 50, 120)
+internal val exampleDolbyAcceptanceFpsValues: List<Int> = listOf(25, 30, 60)
 
 internal enum class ExampleDolbyAcceptanceProfile(
-    val pathSegment: String,
+    val deliveryKitSegment: String,
     val title: String,
     val sampleIdSegment: String,
     val dolbyVisionProfile: Int,
@@ -21,7 +23,7 @@ internal enum class ExampleDolbyAcceptanceProfile(
     val transferFunction: String,
 ) {
     P5(
-        pathSegment = "p5",
+        deliveryKitSegment = "P5",
         title = "P5",
         sampleIdSegment = "P5",
         dolbyVisionProfile = 5,
@@ -30,7 +32,7 @@ internal enum class ExampleDolbyAcceptanceProfile(
         transferFunction = "SMPTE_ST_2084_PQ",
     ),
     P81(
-        pathSegment = "p81",
+        deliveryKitSegment = "P8_1",
         title = "P8.1",
         sampleIdSegment = "P81",
         dolbyVisionProfile = 8,
@@ -39,7 +41,7 @@ internal enum class ExampleDolbyAcceptanceProfile(
         transferFunction = "SMPTE_ST_2084_PQ",
     ),
     P84(
-        pathSegment = "p84",
+        deliveryKitSegment = "P8_4",
         title = "P8.4",
         sampleIdSegment = "P84",
         dolbyVisionProfile = 8,
@@ -128,17 +130,17 @@ internal data class ExampleDolbyAcceptancePreset(
                             "profileFamily" to profile.profileFamily,
                             "baseLayer" to "hevc-main10",
                             "fallbackTarget" to profile.fallbackTarget,
-                            "containerEvidence" to "dolby-browser-test-kit",
+                            "containerEvidence" to "dolby-vision-online-delivery-kit",
                         ),
                     "metadataTool" to
                         mapOf(
-                            "name" to "Dolby Browser Test Kit",
+                            "name" to "Dolby Vision Online Delivery Kit",
                             "version" to "public",
                             "command" to "catalog-url",
                         ),
                     "notes" to
                         listOf(
-                            "Dolby Browser Test Kit public URL; media is not bundled.",
+                            "Dolby Vision Online Delivery Kit public URL; media is not bundled.",
                         ) + notes,
                 ),
         )
@@ -162,8 +164,8 @@ internal fun exampleDolbyAcceptanceUrl(
             ExampleDolbyAcceptanceDrmKind.Widevine -> "cenc"
             ExampleDolbyAcceptanceDrmKind.FairPlayPending -> "cbcs"
         }
-    return "https://ott.dolby.com/browser_test_kit/$pathKind/" +
-        "${profile.pathSegment}/$fps/$protocolFile"
+    return "$EXAMPLE_DOLBY_ACCEPTANCE_BASE_URL/$pathKind/" +
+        "${profile.deliveryKitSegment}_$fps/$protocolFile"
 }
 
 internal fun buildExampleDolbyAcceptanceCatalog(): List<ExampleDolbyAcceptancePreset> =
@@ -278,8 +280,8 @@ private fun buildExampleDolbyAcceptancePreset(
             if (drmKind == ExampleDolbyAcceptanceDrmKind.FairPlayPending) {
                 add("FairPlay certificate URI/base64 is not available yet; preset is disabled.")
             }
-            if (fps == 50) {
-                add("Dolby 50fps signal covers the 60-ish validation bucket.")
+            if (fps == 60) {
+                add("Dolby 60fps signal exercises the high-frame-rate validation bucket.")
             }
             add("MP4 zip assets remain manual local-file material and are not bundled.")
         }

@@ -72,11 +72,17 @@ VESPER_IOS_OPTIONAL_RELEASE_FIXTURE=/tmp/vesper-ios-release \
 ./scripts/vesper flutter stage-pub /tmp/vesper-flutter-pub
 ./scripts/vesper flutter pub-dry-run /tmp/vesper-flutter-pub
 VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper flutter pub-dry-run /tmp/vesper-flutter-pub
+./scripts/vesper release set-version MAJOR.MINOR.PATCH --date YYYY-MM-DD
 ./scripts/vesper release prepare-from-tag vMAJOR.MINOR.PATCH
 ./scripts/vesper release tag-channel vMAJOR.MINOR.PATCH
 ./scripts/vesper release verify-current
 ./scripts/vesper release notes <tag> [output-path]
 ```
+
+`release set-version` atomically aligns the Rust workspace, standalone
+first-party plugin Cargo manifests and lockfiles, plugin compatibility ranges,
+Android/iOS bundle metadata, Flutter packages, and changelog headings.
+`release verify-current` checks the same version surface.
 
 `ios bootstrap-bridge-shim` is an explicit migration/import command. It
 reconstructs the checked-in bridge manifest and C fragments from the current
@@ -103,11 +109,18 @@ root does not contain shared Gradle state. An explicit non-empty
 `GRADLE_USER_HOME` override still takes precedence. Invoke Android commands
 through `./scripts/vesper`; no shell helper is required.
 
+The independent Android library and Compose host pin Gradle 9.7.1. The Flutter
+Android host remains on Gradle 9.3.1 because Flutter 3.47.1 reports Gradle
+9.7.1 with AGP 9.1 as an incompatible tooling pair. CI mirrors this split by
+invocation: Android library and Compose steps use the provisioned Gradle 9.7.1,
+while `flutter build` uses the Flutter host's 9.3.1 wrapper, including in mixed
+release jobs.
+
 ## GitHub Actions
 
 Every workflow that invokes `./scripts/vesper` first runs the local
 `.github/actions/setup-vesper-cli` composite action. The action installs Rust
-1.97, builds `player-cli` once with `cargo build --locked --release`, and
+1.98, builds `player-cli` once with `cargo build --locked --release`, and
 exports the resulting executable through `VESPER_CLI`. The thin
 `scripts/vesper` launcher then executes that prebuilt binary instead of running
 Cargo for every command. On Windows, CLI steps that use the launcher explicitly
@@ -133,8 +146,8 @@ The workflow split is intentional:
 
 The signed iOS physical-device acceptance command remains a release-owner gate
 because it requires a connected device, a current Apple Development identity,
-and device trust. Its current execution status is tracked in
-`CURRENT-CHECKLIST.md`, not inferred from a successful archive-only CI job.
+and device trust. A successful archive-only CI job does not replace its retained
+device evidence and XCResult.
 
 Stable GitHub Releases are assembled as drafts. The workflow reconciles and
 hash-verifies every draft asset before making the release public. A published

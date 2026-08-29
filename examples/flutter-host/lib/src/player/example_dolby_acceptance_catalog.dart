@@ -4,17 +4,19 @@ import '../hdr_evidence/hdr_evidence_capture.dart';
 
 const String exampleDolbyAcceptanceWidevineLicenseUri =
     'https://widevine-dash.ezdrm.com/proxy?pX=E8A6EE';
+const String exampleDolbyAcceptanceBaseUrl =
+    'https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals';
 
-const List<int> exampleDolbyAcceptanceFpsValues = <int>[24, 30, 50, 120];
+const List<int> exampleDolbyAcceptanceFpsValues = <int>[25, 30, 60];
 
 enum ExampleDolbyAcceptanceProfile { p5, p81, p84 }
 
 extension ExampleDolbyAcceptanceProfileLabels on ExampleDolbyAcceptanceProfile {
-  String get pathSegment {
+  String get deliveryKitSegment {
     return switch (this) {
-      ExampleDolbyAcceptanceProfile.p5 => 'p5',
-      ExampleDolbyAcceptanceProfile.p81 => 'p81',
-      ExampleDolbyAcceptanceProfile.p84 => 'p84',
+      ExampleDolbyAcceptanceProfile.p5 => 'P5',
+      ExampleDolbyAcceptanceProfile.p81 => 'P8_1',
+      ExampleDolbyAcceptanceProfile.p84 => 'P8_4',
     };
   }
 
@@ -163,15 +165,15 @@ final class ExampleDolbyAcceptancePreset {
           'profileFamily': profile.profileFamily,
           'baseLayer': 'hevc-main10',
           'fallbackTarget': profile.fallbackTarget,
-          'containerEvidence': 'dolby-browser-test-kit',
+          'containerEvidence': 'dolby-vision-online-delivery-kit',
         },
         'metadataTool': <String, Object?>{
-          'name': 'Dolby Browser Test Kit',
+          'name': 'Dolby Vision Online Delivery Kit',
           'version': 'public',
           'command': 'catalog-url',
         },
         'notes': <String>[
-          'Dolby Browser Test Kit public URL; media is not bundled.',
+          'Dolby Vision Online Delivery Kit public URL; media is not bundled.',
           ...notes,
         ],
       },
@@ -195,8 +197,8 @@ String exampleDolbyAcceptanceUrl({
     ExampleDolbyAcceptanceDrmKind.widevine => 'cenc',
     ExampleDolbyAcceptanceDrmKind.fairPlayPending => 'cbcs',
   };
-  return 'https://ott.dolby.com/browser_test_kit/$pathKind/'
-      '${profile.pathSegment}/$fps/$protocolFile';
+  return '$exampleDolbyAcceptanceBaseUrl/$pathKind/'
+      '${profile.deliveryKitSegment}_$fps/$protocolFile';
 }
 
 List<ExampleDolbyAcceptancePreset> buildExampleDolbyAcceptanceCatalog() {
@@ -373,7 +375,8 @@ ExampleDolbyAcceptancePreset _buildDolbyPreset({
       'Widevine DASH direct native route only.',
     if (drmKind == ExampleDolbyAcceptanceDrmKind.fairPlayPending)
       'FairPlay certificate URI/base64 is not available yet; preset is disabled.',
-    if (fps == 50) 'Dolby 50fps signal covers the 60-ish validation bucket.',
+    if (fps == 60)
+      'Dolby 60fps signal exercises the high-frame-rate validation bucket.',
     'MP4 zip assets remain manual local-file material and are not bundled.',
   ];
   return ExampleDolbyAcceptancePreset(

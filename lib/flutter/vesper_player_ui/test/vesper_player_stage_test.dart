@@ -29,35 +29,45 @@ void main() {
     VesperPlayerSnapshot? snapshot,
     VesperPlayerStageStrings strings = const VesperPlayerStageStrings(),
     bool pictureInPicturePresentation = false,
+    bool isPortrait = true,
+    bool insideVerticalScrollView = false,
+    ScrollController? scrollController,
   }) async {
     addTearDown(() async {
       await tester.pumpWidget(const SizedBox.shrink());
       await controller.dispose();
     });
 
+    final stage = Center(
+      child: SizedBox(
+        width: 400,
+        height: 240,
+        child: VesperPlayerStage(
+          controller: controller,
+          snapshot: snapshot ?? _playingSnapshot,
+          isPortrait: isPortrait,
+          deviceControls: deviceControls,
+          topBarPrimaryAction: topBarPrimaryAction,
+          topBarSecondaryAction: topBarSecondaryAction,
+          pictureInPicturePresentation: pictureInPicturePresentation,
+          strings: strings,
+          onOpenSheet: openedSheets.add,
+          onToggleFullscreen: () {
+            fullscreenToggleCount += 1;
+          },
+        ),
+      ),
+    );
+
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: Center(
-            child: SizedBox(
-              width: 400,
-              height: 240,
-              child: VesperPlayerStage(
-                controller: controller,
-                snapshot: snapshot ?? _playingSnapshot,
-                isPortrait: true,
-                deviceControls: deviceControls,
-                topBarPrimaryAction: topBarPrimaryAction,
-                topBarSecondaryAction: topBarSecondaryAction,
-                pictureInPicturePresentation: pictureInPicturePresentation,
-                strings: strings,
-                onOpenSheet: openedSheets.add,
-                onToggleFullscreen: () {
-                  fullscreenToggleCount += 1;
-                },
-              ),
-            ),
-          ),
+          body: insideVerticalScrollView
+              ? SingleChildScrollView(
+                  controller: scrollController,
+                  child: SizedBox(height: 900, child: stage),
+                )
+              : stage,
         ),
       ),
     );
@@ -199,6 +209,192 @@ void main() {
     await tester.tap(find.byIcon(Icons.fullscreen_rounded));
     await tester.pump();
     expect(fullscreenToggleCount, 1);
+  });
+
+  testWidgets(
+      'windowed timeline drag keeps the scrubber gesture and uses its bounds',
+      (tester) async {
+    await pumpStage(tester);
+
+    final scrubberRect = tester.getRect(find.byType(VesperTimelineScrubber));
+    final start = Offset(
+      scrubberRect.left + scrubberRect.width * 0.15,
+      scrubberRect.center.dy,
+    );
+    final end = Offset(
+      scrubberRect.left + scrubberRect.width * 0.85,
+      scrubberRect.center.dy,
+    );
+
+    final gesture = await tester.startGesture(start);
+    await gesture.moveTo(
+      end,
+      timeStamp: const Duration(milliseconds: 240),
+    );
+    await gesture.up();
+    await tester.pump();
+
+    expect(platform.seekRatios, isNotEmpty);
+    expect(platform.seekRatios, hasLength(1));
+    expect(platform.seekRatios.last, closeTo(0.85, 0.08));
+  });
+
+  testWidgets(
+      'windowed timeline drag is not claimed by the portrait scroll view',
+      (tester) async {
+    final scrollController = ScrollController();
+    addTearDown(scrollController.dispose);
+    await pumpStage(
+      tester,
+      insideVerticalScrollView: true,
+      scrollController: scrollController,
+    );
+
+    final scrubberRect = tester.getRect(find.byType(VesperTimelineScrubber));
+    final gesture = await tester.startGesture(
+      Offset(scrubberRect.left + scrubberRect.width * 0.12,
+          scrubberRect.center.dy),
+    );
+    await gesture.moveBy(
+      const Offset(8, -24),
+      timeStamp: const Duration(milliseconds: 40),
+    );
+    for (final step in <double>[0.26, 0.43, 0.61, 0.79, 0.88]) {
+      await gesture.moveTo(
+        Offset(
+          scrubberRect.left + scrubberRect.width * step,
+          scrubberRect.center.dy + (step < 0.6 ? 3 : -3),
+        ),
+        timeStamp: Duration(milliseconds: (step * 600).round()),
+      );
+    }
+    await gesture.up();
+    await tester.pump();
+
+    expect(scrollController.offset, 0);
+    expect(platform.seekRatios, hasLength(1));
+    expect(platform.seekRatios.single, closeTo(0.88, 0.08));
+  });
+
+  testWidgets('scrubber drag survives sibling width changes', (tester) async {
+    final previews = <double>[];
+    final commits = <double>[];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 360,
+              child: StatefulBuilder(
+                builder: (context, setState) {
+                  final expandedSummary = previews.isNotEmpty;
+                  return Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: VesperTimelineScrubber(
+                          displayedRatio:
+                              previews.isEmpty ? 0.1 : previews.last,
+                          compact: true,
+                          onSeekPreview: (ratio) {
+                            previews.add(ratio);
+                            setState(() {});
+                          },
+                          onSeekCommit: commits.add,
+                          onSeekCancel: () {},
+                        ),
+                      ),
+                      Text(expandedSummary ? '00:00/03:13' : '0'),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final scrubber = find.byType(VesperTimelineScrubber);
+    final initialRect = tester.getRect(scrubber);
+    final gesture = await tester.startGesture(Offset(
+      initialRect.left + initialRect.width * 0.1,
+      initialRect.center.dy,
+    ));
+    await gesture.moveTo(
+      Offset(
+          initialRect.left + initialRect.width * 0.35, initialRect.center.dy),
+      timeStamp: const Duration(milliseconds: 80),
+    );
+    await tester.pump();
+
+    final resizedRect = tester.getRect(scrubber);
+    expect(resizedRect.width, lessThan(initialRect.width));
+    await gesture.moveTo(
+      Offset(resizedRect.left + resizedRect.width * 0.8, resizedRect.center.dy),
+      timeStamp: const Duration(milliseconds: 160),
+    );
+    await gesture.up();
+    await tester.pump();
+
+    expect(previews, isNotEmpty);
+    expect(previews.last, closeTo(0.8, 0.08));
+    expect(commits, hasLength(1));
+    expect(commits.single, closeTo(0.8, 0.08));
+  });
+
+  testWidgets(
+      'scrubber commits the pointer-up position when the final move is coalesced',
+      (tester) async {
+    final previews = <double>[];
+    final commits = <double>[];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 360,
+              child: VesperTimelineScrubber(
+                displayedRatio: 0.1,
+                compact: true,
+                onSeekPreview: previews.add,
+                onSeekCommit: commits.add,
+                onSeekCancel: () {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final scrubberRect = tester.getRect(find.byType(VesperTimelineScrubber));
+    final start = Offset(
+      scrubberRect.left + scrubberRect.width * 0.1,
+      scrubberRect.center.dy,
+    );
+    final lastMove = Offset(
+      scrubberRect.left + scrubberRect.width * 0.35,
+      scrubberRect.center.dy,
+    );
+    final release = Offset(
+      scrubberRect.left + scrubberRect.width * 0.9,
+      scrubberRect.center.dy,
+    );
+    final pointer = TestPointer(41);
+
+    await tester.sendEventToBinding(pointer.down(start));
+    await tester.sendEventToBinding(pointer.move(lastMove));
+    await tester.sendEventToBinding(
+      PointerUpEvent(pointer: pointer.pointer, position: release),
+    );
+    await tester.pump();
+
+    expect(previews, isNotEmpty);
+    expect(commits, hasLength(1));
+    expect(previews.last, closeTo(0.9, 0.04));
+    expect(commits.single, closeTo(0.9, 0.04));
   });
 
   testWidgets(

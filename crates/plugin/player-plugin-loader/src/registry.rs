@@ -3,13 +3,20 @@ use crate::diagnostics::{
     decoder_capability_summary, source_normalizer_packet_capability_summary,
     source_normalizer_resource_capability_summary,
 };
-use player_plugin::{PluginReference, PluginReferenceError, PluginTransport};
+#[cfg(feature = "wasm")]
+use player_plugin::PluginOwnerDisposalError;
+use player_plugin::{
+    AudioProcessorPluginFactory, PluginInvocationPolicy, PluginInvocationWorkload, PluginReference,
+    PluginReferenceError, PluginScope, PluginTransport,
+};
 #[cfg(feature = "installed-catalog")]
 use player_plugin_package::{
     PluginArtifactTransport, VerifiedInstalledArtifact, VerifiedInstalledPluginCatalog,
 };
 #[cfg(feature = "wasm")]
-use player_plugin_wasm_host::{WasmPluginRuntime, WasmPluginRuntimeError};
+use player_plugin_wasm_host::{
+    WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS, WasmPluginRuntime, WasmPluginRuntimeError,
+};
 #[cfg(feature = "installed-catalog")]
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -887,6 +894,10 @@ impl PluginRegistry {
         self.references_for_interface(player_plugin_abi::FRAME_PROCESSOR_INTERFACE_ID.0)
     }
 
+    pub fn audio_processor_references(&self) -> Result<Vec<PluginReference>, PluginSelectionError> {
+        self.references_for_interface(player_plugin_abi::AUDIO_PROCESSOR_INTERFACE_ID.0)
+    }
+
     pub fn source_packet_references(&self) -> Result<Vec<PluginReference>, PluginSelectionError> {
         self.references_for_interface(player_plugin_abi::SOURCE_NORMALIZER_PACKET_INTERFACE_ID.0)
     }
@@ -923,6 +934,7 @@ impl PluginRegistry {
         &self,
         reference: &PluginReference,
     ) -> Result<ResolvedPluginCapability<dyn PostDownloadProcessor>, PluginSelectionError> {
+        self.validate_invocation(reference, PluginInvocationWorkload::Offline)?;
         let plugin = self.plugin_for(reference)?;
         let (instance_id, capability) = plugin.resolve_post_download_selected(reference)?;
         self.resolved(reference, instance_id, capability)
@@ -932,12 +944,16 @@ impl PluginRegistry {
         &self,
         reference: &PluginReference,
     ) -> Result<ResolvedPluginCapability<dyn PipelineEventHook>, PluginSelectionError> {
+        self.validate_invocation(reference, PluginInvocationWorkload::Observer)?;
         if reference.transport() == PluginTransport::Wasm {
             #[cfg(feature = "wasm")]
             {
                 let plugin = self.wasm_plugin_for(reference)?;
-                let (instance_id, capability) = plugin.resolve_pipeline_event_hook(reference)?;
-                return self.resolved(reference, instance_id, capability);
+                plugin.select_pipeline_event_hook(reference)?;
+                return Err(PluginSelectionError::ScopeRequired {
+                    plugin_id: reference.plugin_id().to_owned(),
+                    interface: "PipelineEventHook",
+                });
             }
             #[cfg(not(feature = "wasm"))]
             {
@@ -952,16 +968,64 @@ impl PluginRegistry {
         self.resolved(reference, instance_id, capability)
     }
 
-    pub fn resolve_benchmark_sink(
+    /// Resolves one EventHook and binds a fresh WASM worker/session to `scope`.
+    /// Native capabilities keep their existing trusted owner semantics.
+    pub fn resolve_pipeline_event_hook_in_scope(
         &self,
         reference: &PluginReference,
-    ) -> Result<ResolvedPluginCapability<dyn BenchmarkSink>, PluginSelectionError> {
+        _scope: &PluginScope,
+    ) -> Result<ResolvedPluginCapability<dyn PipelineEventHook>, PluginSelectionError> {
+        self.validate_invocation(reference, PluginInvocationWorkload::Observer)?;
         if reference.transport() == PluginTransport::Wasm {
             #[cfg(feature = "wasm")]
             {
                 let plugin = self.wasm_plugin_for(reference)?;
-                let (instance_id, capability) = plugin.resolve_benchmark_sink(reference)?;
+                let (instance_id, adapter) = plugin.instantiate_pipeline_event_hook(reference)?;
+                let owner = adapter.clone();
+                if let Err(source) = _scope.add_fallible_owner_disposer(move || {
+                    owner
+                        .close(std::time::Duration::from_millis(
+                            WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS,
+                        ))
+                        .map_err(|_| PluginOwnerDisposalError)
+                }) {
+                    let _ = adapter.close(std::time::Duration::from_millis(
+                        WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS,
+                    ));
+                    return Err(PluginSelectionError::ScopeRegistration {
+                        plugin_id: reference.plugin_id().to_owned(),
+                        interface: "PipelineEventHook",
+                        source,
+                    });
+                }
+                let capability: Arc<dyn PipelineEventHook> = adapter;
                 return self.resolved(reference, instance_id, capability);
+            }
+            #[cfg(not(feature = "wasm"))]
+            {
+                return Err(PluginSelectionError::PluginNotFound {
+                    plugin_id: reference.plugin_id().to_owned(),
+                    transport: PluginTransport::Wasm,
+                });
+            }
+        }
+        self.resolve_pipeline_event_hook(reference)
+    }
+
+    pub fn resolve_benchmark_sink(
+        &self,
+        reference: &PluginReference,
+    ) -> Result<ResolvedPluginCapability<dyn BenchmarkSink>, PluginSelectionError> {
+        self.validate_invocation(reference, PluginInvocationWorkload::Offline)?;
+        if reference.transport() == PluginTransport::Wasm {
+            #[cfg(feature = "wasm")]
+            {
+                let plugin = self.wasm_plugin_for(reference)?;
+                plugin.select_benchmark_sink(reference)?;
+                return Err(PluginSelectionError::ScopeRequired {
+                    plugin_id: reference.plugin_id().to_owned(),
+                    interface: "BenchmarkSink",
+                });
             }
             #[cfg(not(feature = "wasm"))]
             {
@@ -976,11 +1040,57 @@ impl PluginRegistry {
         self.resolved(reference, instance_id, capability)
     }
 
+    /// Resolves one BenchmarkSink and binds a fresh WASM worker/session to
+    /// `scope`. Native capabilities keep their existing trusted owner semantics.
+    pub fn resolve_benchmark_sink_in_scope(
+        &self,
+        reference: &PluginReference,
+        _scope: &PluginScope,
+    ) -> Result<ResolvedPluginCapability<dyn BenchmarkSink>, PluginSelectionError> {
+        self.validate_invocation(reference, PluginInvocationWorkload::Offline)?;
+        if reference.transport() == PluginTransport::Wasm {
+            #[cfg(feature = "wasm")]
+            {
+                let plugin = self.wasm_plugin_for(reference)?;
+                let (instance_id, adapter) = plugin.instantiate_benchmark_sink(reference)?;
+                let owner = adapter.clone();
+                if let Err(source) = _scope.add_fallible_owner_disposer(move || {
+                    owner
+                        .close(std::time::Duration::from_millis(
+                            WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS,
+                        ))
+                        .map(|_| ())
+                        .map_err(|_| PluginOwnerDisposalError)
+                }) {
+                    let _ = adapter.close(std::time::Duration::from_millis(
+                        WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS,
+                    ));
+                    return Err(PluginSelectionError::ScopeRegistration {
+                        plugin_id: reference.plugin_id().to_owned(),
+                        interface: "BenchmarkSink",
+                        source,
+                    });
+                }
+                let capability: Arc<dyn BenchmarkSink> = adapter;
+                return self.resolved(reference, instance_id, capability);
+            }
+            #[cfg(not(feature = "wasm"))]
+            {
+                return Err(PluginSelectionError::PluginNotFound {
+                    plugin_id: reference.plugin_id().to_owned(),
+                    transport: PluginTransport::Wasm,
+                });
+            }
+        }
+        self.resolve_benchmark_sink(reference)
+    }
+
     pub fn resolve_native_decoder(
         &self,
         reference: &PluginReference,
     ) -> Result<ResolvedPluginCapability<dyn NativeDecoderPluginFactory>, PluginSelectionError>
     {
+        self.validate_invocation(reference, PluginInvocationWorkload::RealtimeMedia)?;
         let plugin = self.plugin_for(reference)?;
         let (instance_id, capability) = plugin.resolve_native_decoder_selected(reference)?;
         self.resolved(reference, instance_id, capability)
@@ -991,8 +1101,20 @@ impl PluginRegistry {
         reference: &PluginReference,
     ) -> Result<ResolvedPluginCapability<dyn FrameProcessorPluginFactory>, PluginSelectionError>
     {
+        self.validate_invocation(reference, PluginInvocationWorkload::RealtimeMedia)?;
         let plugin = self.plugin_for(reference)?;
         let (instance_id, capability) = plugin.resolve_frame_processor_selected(reference)?;
+        self.resolved(reference, instance_id, capability)
+    }
+
+    pub fn resolve_audio_processor(
+        &self,
+        reference: &PluginReference,
+    ) -> Result<ResolvedPluginCapability<dyn AudioProcessorPluginFactory>, PluginSelectionError>
+    {
+        self.validate_invocation(reference, PluginInvocationWorkload::RealtimeMedia)?;
+        let plugin = self.plugin_for(reference)?;
+        let (instance_id, capability) = plugin.resolve_audio_processor_selected(reference)?;
         self.resolved(reference, instance_id, capability)
     }
 
@@ -1003,6 +1125,7 @@ impl PluginRegistry {
         ResolvedPluginCapability<dyn SourceNormalizerPacketPluginFactory>,
         PluginSelectionError,
     > {
+        self.validate_invocation(reference, PluginInvocationWorkload::RealtimeMedia)?;
         let plugin = self.plugin_for(reference)?;
         let (instance_id, capability) = plugin.resolve_source_packet_selected(reference)?;
         self.resolved(reference, instance_id, capability)
@@ -1015,9 +1138,20 @@ impl PluginRegistry {
         ResolvedPluginCapability<dyn SourceNormalizerResourcePluginFactory>,
         PluginSelectionError,
     > {
+        self.validate_invocation(reference, PluginInvocationWorkload::RealtimeMedia)?;
         let plugin = self.plugin_for(reference)?;
         let (instance_id, capability) = plugin.resolve_source_resource_selected(reference)?;
         self.resolved(reference, instance_id, capability)
+    }
+
+    fn validate_invocation(
+        &self,
+        reference: &PluginReference,
+        workload: PluginInvocationWorkload,
+    ) -> Result<(), PluginSelectionError> {
+        PluginInvocationPolicy::standard()
+            .validate(workload, reference.transport())
+            .map_err(PluginSelectionError::from)
     }
 
     fn plugin_for(

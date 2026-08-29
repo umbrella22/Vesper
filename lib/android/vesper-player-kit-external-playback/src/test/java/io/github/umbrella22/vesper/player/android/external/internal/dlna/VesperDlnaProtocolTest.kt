@@ -5,6 +5,8 @@ import io.github.umbrella22.vesper.player.android.VesperSystemPlaybackMetadata
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.URL
 import java.net.URLConnection
 import java.net.URLStreamHandler
@@ -517,6 +519,33 @@ class VesperDlnaProtocolTest {
     }
 
     @Test
+    fun knownRouteReuseRequiresTheOriginalNetworkBinding() {
+        val device = VesperDlnaDevice(
+            routeId = "uuid:dlna-debug-renderer-001",
+            location = URL("http://192.168.1.10:8000/description.xml"),
+            usn = "uuid:dlna-debug-renderer-001::urn:schemas-upnp-org:device:MediaRenderer:1",
+            friendlyName = "Debug Renderer",
+            localAddress = InetAddress.getByName("192.168.1.20") as Inet4Address,
+            interfaceName = "wlan0",
+            avTransport = VesperDlnaService(
+                serviceType = "urn:schemas-upnp-org:service:AVTransport:1",
+                serviceId = "urn:upnp-org:serviceId:AVTransport",
+                controlUrl = URL("http://192.168.1.10:8000/control/av"),
+                eventSubUrl = null,
+                scpdUrl = null,
+            ),
+        )
+        val request = VesperDlnaDescriptionRequest(
+            location = URL("http://192.168.1.10:8000/description.xml"),
+            usn = "uuid:dlna-debug-renderer-001::upnp:rootdevice",
+            expiresAtMillis = 42L,
+        )
+
+        assertTrue(device.canReuseDescriptionFor(request, "wlan0@192.168.1.20"))
+        assertFalse(device.canReuseDescriptionFor(request, "wlan1@192.168.1.21"))
+    }
+
+    @Test
     fun descriptionFetchKeyIncludesLocationAndIdentity() {
         val request = VesperDlnaDescriptionRequest(
             location = URL("http://192.168.1.10:8000/description.xml"),
@@ -527,6 +556,10 @@ class VesperDlnaProtocolTest {
         assertEquals(
             "http://192.168.1.10:8000/description.xml|dlna-debug-renderer-001",
             request.descriptionFetchKey(),
+        )
+        assertEquals(
+            "http://192.168.1.10:8000/description.xml|dlna-debug-renderer-001|wlan0@192.168.1.20",
+            request.descriptionFetchKey("wlan0@192.168.1.20"),
         )
     }
 

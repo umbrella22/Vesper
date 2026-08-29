@@ -73,7 +73,7 @@ https://github.com/umbrella22/VesperPlayerKit.git
 ```
 
 Add that URL in Xcode's package dependency editor and select the exact release
-version, including a suffix such as `0.4.3-rc.1` when testing a prerelease. Link
+version, including a suffix such as `0.5.0-rc.1` when testing a prerelease. Link
 the `VesperPlayerKit` product for the binary host kit. Link
 `VesperPlayerKitUI` as well when the app uses the version-matched SwiftUI stage
 and controls. Optional apps link `VesperPlayerSourceNormalizerFfmpeg` or
@@ -158,7 +158,7 @@ not require a token or write to GitHub:
 
 ```sh
 ./scripts/vesper ios publish-spm-index \
-  v0.4.0 \
+  v0.5.0 \
   dist/release/ios/VesperPlayerKit.xcframework.zip \
   --source-repository umbrella22/Vesper \
   --dry-run

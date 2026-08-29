@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.0 - 2026-08-29
+
+### Added
+
+- Added physical-device acceptance coverage for timeline drag gestures, Dolby
+  Vision playback, and Widevine playback routes.
+
+### Changed
+
+- Upgraded the library and Compose host toolchain to Gradle 9.7.1.
+- Native-frame diagnostics now report participation only after presented frame
+  counters advance.
+
+### Fixed
+
+- Made Compose timeline taps and drags use the current measured width and
+  callbacks, avoiding stale gesture state during layout and recomposition.
+- Scoped DLNA device-description caching and fetch coalescing to the active
+  Android network binding, and made discovery abort when socket binding fails.
+- Cleared transient retry status text when playback resumes successfully.
+
 ## 0.4.3 - 2026-08-17
 
 ### Added

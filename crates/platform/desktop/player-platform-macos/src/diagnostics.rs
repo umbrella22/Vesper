@@ -1,9 +1,89 @@
 use super::*;
 
+use std::sync::{Arc, Mutex};
+
 pub(crate) use player_platform_desktop::diagnostics::{
     append_plugin_diagnostics, mark_plugin_diagnostics_fallback,
     player_plugin_diagnostic_from_record, plugin_diagnostic_label,
 };
+
+#[derive(Debug, Clone)]
+pub(crate) struct MacosFrameProcessorParticipationTracker {
+    diagnostics: Arc<Mutex<Vec<PlayerPluginDiagnostic>>>,
+}
+
+impl MacosFrameProcessorParticipationTracker {
+    pub(crate) fn from_diagnostics(diagnostics: Vec<PlayerPluginDiagnostic>) -> Self {
+        Self {
+            diagnostics: Arc::new(Mutex::new(diagnostics)),
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> Vec<PlayerPluginDiagnostic> {
+        self.diagnostics
+            .lock()
+            .map(|diagnostics| diagnostics.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn mark_selected(&self, plugin_names: &[String]) {
+        self.update_matching(plugin_names, |participation| {
+            if *participation == PlayerPluginParticipation::Available {
+                *participation = PlayerPluginParticipation::Selected;
+            }
+        });
+    }
+
+    pub(crate) fn observe_presented_frame(
+        &self,
+        plugin_names: &[String],
+        used_processor_output: bool,
+        presenter_succeeded: bool,
+    ) {
+        if !used_processor_output || !presenter_succeeded {
+            return;
+        }
+        self.update_matching(plugin_names, |participation| {
+            *participation = match *participation {
+                PlayerPluginParticipation::Available | PlayerPluginParticipation::Selected => {
+                    PlayerPluginParticipation::Participated
+                }
+                current => current,
+            };
+        });
+    }
+
+    pub(crate) fn mark_fallback(&self) {
+        if let Ok(mut diagnostics) = self.diagnostics.lock() {
+            for diagnostic in &mut *diagnostics {
+                if matches!(
+                    diagnostic.participation,
+                    PlayerPluginParticipation::Selected | PlayerPluginParticipation::Participated
+                ) {
+                    diagnostic.participation = PlayerPluginParticipation::Fallback;
+                }
+            }
+        }
+    }
+
+    fn update_matching(
+        &self,
+        plugin_names: &[String],
+        update: impl Fn(&mut PlayerPluginParticipation),
+    ) {
+        if let Ok(mut diagnostics) = self.diagnostics.lock() {
+            for diagnostic in &mut *diagnostics {
+                if diagnostic
+                    .plugin_name
+                    .as_deref()
+                    .is_some_and(|name| plugin_names.iter().any(|candidate| candidate == name))
+                {
+                    update(&mut diagnostic.participation);
+                }
+            }
+        }
+    }
+}
 
 pub(crate) fn apply_video_decode_diagnostics(
     mut startup: PlayerRuntimeStartup,
@@ -32,6 +112,18 @@ pub(crate) fn macos_runtime_diagnostics(
     media_info: &PlayerMediaInfo,
     options: &PlayerRuntimeOptions,
 ) -> MacosRuntimeDiagnostics {
+    macos_runtime_diagnostics_with_frame_processor_tracker(
+        media_info,
+        options,
+        frame_processor_participation_tracker(options),
+    )
+}
+
+pub(crate) fn macos_runtime_diagnostics_with_frame_processor_tracker(
+    media_info: &PlayerMediaInfo,
+    options: &PlayerRuntimeOptions,
+    frame_processor_participation: Option<MacosFrameProcessorParticipationTracker>,
+) -> MacosRuntimeDiagnostics {
     let mut video_decode = macos_video_decode_info(media_info);
     let mut plugin_diagnostics = Vec::new();
 
@@ -51,12 +143,16 @@ pub(crate) fn macos_runtime_diagnostics(
         }));
     }
     if let Some(registry) = frame_processor_plugin_registry(options) {
-        plugin_diagnostics.extend(registry.records().iter().map(|record| {
-            player_plugin_diagnostic_from_record(
-                record,
-                frame_processor_plugin_participation(record),
-            )
-        }));
+        if let Some(tracker) = frame_processor_participation.as_ref() {
+            plugin_diagnostics.extend(tracker.snapshot());
+        } else {
+            plugin_diagnostics.extend(registry.records().iter().map(|record| {
+                player_plugin_diagnostic_from_record(
+                    record,
+                    frame_processor_plugin_participation(record),
+                )
+            }));
+        }
     }
 
     video_decode =
@@ -66,7 +162,27 @@ pub(crate) fn macos_runtime_diagnostics(
         video_decode,
         plugin_diagnostics,
         has_video_surface: false,
+        frame_processor_participation,
     }
+}
+
+pub(crate) fn frame_processor_participation_tracker(
+    options: &PlayerRuntimeOptions,
+) -> Option<MacosFrameProcessorParticipationTracker> {
+    let registry = frame_processor_plugin_registry(options)?;
+    let diagnostics = registry
+        .records()
+        .iter()
+        .map(|record| {
+            player_plugin_diagnostic_from_record(
+                record,
+                frame_processor_plugin_participation(record),
+            )
+        })
+        .collect();
+    Some(MacosFrameProcessorParticipationTracker::from_diagnostics(
+        diagnostics,
+    ))
 }
 
 pub(crate) fn apply_macos_runtime_diagnostics(

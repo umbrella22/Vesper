@@ -182,7 +182,14 @@ extension _PlayerHostLocalMediaActions on _PlayerHostPageState {
   }
 
   Future<void> _restoreSystemPresentation() async {
-    await SystemChrome.setPreferredOrientations(const <DeviceOrientation>[]);
+    // Explicitly leave fullscreen in portrait on mobile, even when Android
+    // auto-rotate is locked. Desktop hosts do not have an app orientation
+    // contract to restore.
+    if (Platform.isAndroid || Platform.isIOS) {
+      await SystemChrome.setPreferredOrientations(const <DeviceOrientation>[
+        DeviceOrientation.portraitUp,
+      ]);
+    }
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 }

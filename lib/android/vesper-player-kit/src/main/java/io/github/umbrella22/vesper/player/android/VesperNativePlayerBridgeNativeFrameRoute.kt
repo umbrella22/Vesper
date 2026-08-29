@@ -42,13 +42,16 @@ internal fun VesperNativePlayerBridge.nativeFramePipelineDiagnostics(): List<Map
     if (nativeFramePipelineConfiguration.isDisabled) {
         return emptyList()
     }
+    val counters = nativeFramePipelineCounters()
+    val hasPresentedFrame = counters.longValue("presentedFrames") > 0L
     val participation =
         if (nativeFramePipelineFallbackReason != null) {
             if (nativeFramePipelineRequiredFailure) "selected" else "fallback"
         } else {
             when (nativeFramePipelineConfiguration.mode) {
                 VesperNativeFramePipelineMode.PreferNativeFrame,
-                VesperNativeFramePipelineMode.RequireNativeFrame -> "selected"
+                VesperNativeFramePipelineMode.RequireNativeFrame ->
+                    if (nativeFramePipelineParticipated || hasPresentedFrame) "participated" else "selected"
                 VesperNativeFramePipelineMode.Disabled,
                 VesperNativeFramePipelineMode.DiagnosticsOnly -> "available"
             }
@@ -90,7 +93,6 @@ internal fun VesperNativePlayerBridge.nativeFramePipelineDiagnostics(): List<Map
         } ?: nativeFramePipelineOpenStatus?.let {
             "$message Native-frame lifecycle is open; packet decode and release-to-surface presentation are active while playback is running."
         } ?: message
-    val counters = nativeFramePipelineCounters()
     return listOf(
         mutableMapOf<String, Any?>(
             "path" to

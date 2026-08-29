@@ -14,16 +14,22 @@ pub mod diagnostics;
 pub mod download;
 
 use player_audio_cpal::{
-    AudioBufferWindowWaitResult, AudioOutputConfig, AudioOutputDescriptor, AudioSink,
-    AudioSinkController, detect_default_output,
+    AudioBufferWindowWaitResult, AudioOutputConfig, AudioOutputDescriptor, AudioPcmAppendStatus,
+    AudioSink, AudioSinkController, detect_default_output,
 };
 use player_backend_ffmpeg::{
-    AudioMasterClock, AudioStreamProbe, BufferedFramePoll, BufferedVideoSource,
-    BufferedVideoSourceBootstrap, FfmpegBackend, MasterClock, MediaProbe,
+    AudioMasterClock, AudioStreamError, AudioStreamProbe, BufferedFramePoll, BufferedVideoSource,
+    BufferedVideoSourceBootstrap, DecodedAudioChunk, FfmpegBackend, MasterClock, MediaProbe,
     VideoDecodeInfo as BackendVideoDecodeInfo, VideoDecoderMode as BackendVideoDecoderMode,
     VideoStreamProbe,
 };
 use player_model::{MediaSource, MediaSourceKind, MediaSourceProtocol, PlaybackSessionModel};
+use player_plugin::{
+    AudioPitchMode, AudioPlaybackPolicy, AudioProcessorChain, AudioProcessorPluginFactory,
+    AudioProcessorSession, AudioProcessorSessionConfig, AudioProcessorSubmitStatus,
+    DecoderFrameFormat, DecoderPcmFrame, DecoderPcmFrameMetadata, DecoderPcmSampleLayout,
+};
+use player_plugin_loader::PluginRegistry;
 
 use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FirstFrameReady, MAX_PLAYBACK_RATE,
@@ -54,6 +60,7 @@ const AUDIO_STREAM_BACKPRESSURE_WAIT_TIMEOUT: Duration = Duration::from_secs(10)
 const AUDIO_STREAM_WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const AUDIO_STREAM_WORKER_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const MAX_MANAGED_AUDIO_STREAM_WORKERS: usize = 16;
+const MAX_DESKTOP_AUDIO_PROCESSORS: usize = 1;
 const AUDIO_OUTPUT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SOFTWARE_BUFFERING_GRACE_PERIOD: Duration = Duration::from_millis(120);
 
@@ -333,7 +340,6 @@ pub struct SoftwarePlayerRuntimeInitializer {
     capabilities: PlayerRuntimeAdapterCapabilities,
 }
 
-#[derive(Debug)]
 struct SoftwareRuntimeConfig {
     backend: FfmpegBackend,
     source: MediaSource,
@@ -344,6 +350,8 @@ struct SoftwareRuntimeConfig {
     audio_output_descriptor: AudioOutputDescriptor,
     audio_output_config: Option<AudioOutputConfig>,
     audio_output_enabled: bool,
+    audio_processor_factories: Vec<Arc<dyn AudioProcessorPluginFactory>>,
+    audio_pitch_mode: AudioPitchMode,
     interrupt_flag: Option<Arc<AtomicBool>>,
     video_source_factory: Arc<dyn DesktopVideoSourceFactory>,
     capabilities: PlayerRuntimeAdapterCapabilities,
@@ -364,6 +372,8 @@ pub struct SoftwarePlayerRuntime {
     audio_output_descriptor: AudioOutputDescriptor,
     audio_output_config: Option<AudioOutputConfig>,
     audio_output_enabled: bool,
+    audio_processor_factories: Vec<Arc<dyn AudioProcessorPluginFactory>>,
+    audio_pitch_mode: AudioPitchMode,
     video_source: Box<dyn DesktopVideoSource>,
     video_end_of_stream: bool,
     next_frame: Option<DesktopVideoFrame>,
@@ -408,7 +418,7 @@ impl MediaClock for AudioSinkClock<'_> {
 struct PendingAudioStreamWorker {
     generation: u64,
     retry_attempt: u32,
-    receiver: Receiver<Result<AudioStreamWorkerEvent, String>>,
+    receiver: Receiver<Result<AudioStreamWorkerEvent, AudioStreamError>>,
     controller: AudioSinkController,
     interrupt_flag: Option<Arc<AtomicBool>>,
     managed_worker: Option<ManagedAudioStreamWorker>,
@@ -447,6 +457,428 @@ impl Drop for AudioStreamWorkerPermit {
 enum AudioStreamWorkerEvent {
     Metadata(MediaProbe),
     Finished,
+}
+
+struct HostAudioProcessorTimeline {
+    next_presentation_time: Duration,
+}
+
+impl HostAudioProcessorTimeline {
+    fn new(media_start: Duration) -> Self {
+        Self {
+            next_presentation_time: media_start,
+        }
+    }
+
+    fn reanchor(&mut self, chunk: &mut DecodedAudioChunk) {
+        let presentation_time = chunk
+            .presentation_time
+            .unwrap_or(self.next_presentation_time)
+            .max(self.next_presentation_time);
+        chunk.presentation_time = Some(presentation_time);
+        self.next_presentation_time = presentation_time.saturating_add(chunk.duration);
+    }
+}
+
+fn append_decoded_audio_chunk<F>(
+    chunk: DecodedAudioChunk,
+    expected_sample_rate: u32,
+    expected_channels: u16,
+    append: F,
+) -> Result<bool, AudioStreamError>
+where
+    F: FnOnce(Option<Duration>, Vec<f32>) -> anyhow::Result<AudioPcmAppendStatus>,
+{
+    chunk
+        .validate()
+        .map_err(|error| AudioStreamError::InvalidChunk {
+            message: error.to_string(),
+        })?;
+    if chunk.sample_rate != expected_sample_rate || chunk.channels != expected_channels {
+        return Err(AudioStreamError::InvalidChunk {
+            message: format!(
+                "FFmpeg chunk format {}/{} does not match CPAL output {}/{}",
+                chunk.sample_rate, chunk.channels, expected_sample_rate, expected_channels
+            ),
+        });
+    }
+
+    match append(chunk.presentation_time, chunk.samples).map_err(|error| {
+        AudioStreamError::Consumer {
+            message: format!("CPAL PCM admission failed: {error}"),
+        }
+    })? {
+        AudioPcmAppendStatus::Accepted => Ok(true),
+        AudioPcmAppendStatus::StaleGeneration => Ok(false),
+        AudioPcmAppendStatus::StalePts => Err(AudioStreamError::Consumer {
+            message: "CPAL rejected an out-of-order PCM presentation timestamp".to_owned(),
+        }),
+    }
+}
+
+fn process_and_append_decoded_audio_chunk<F>(
+    chunk: DecodedAudioChunk,
+    expected_sample_rate: u32,
+    expected_channels: u16,
+    processor_chain: Option<&mut AudioProcessorChain>,
+    processor_timeline: Option<&mut HostAudioProcessorTimeline>,
+    append: F,
+) -> Result<bool, AudioStreamError>
+where
+    F: FnOnce(Option<Duration>, Vec<f32>) -> anyhow::Result<AudioPcmAppendStatus>,
+{
+    let mut chunk = match processor_chain {
+        Some(processor_chain) => process_decoded_audio_chunk(chunk, processor_chain)?,
+        None => chunk,
+    };
+    if let Some(processor_timeline) = processor_timeline {
+        processor_timeline.reanchor(&mut chunk);
+    }
+    append_decoded_audio_chunk(chunk, expected_sample_rate, expected_channels, append)
+}
+
+fn process_decoded_audio_chunk(
+    chunk: DecodedAudioChunk,
+    processor_chain: &mut AudioProcessorChain,
+) -> Result<DecodedAudioChunk, AudioStreamError> {
+    chunk
+        .validate()
+        .map_err(|error| AudioStreamError::InvalidChunk {
+            message: error.to_string(),
+        })?;
+    let original_presentation_time = chunk.presentation_time;
+    let original_discontinuity = chunk.discontinuity;
+    let original_duration = chunk.duration;
+    let input = decoded_audio_chunk_to_pcm_frame(chunk)?;
+    let input_pts_us = input.metadata.pts_us;
+    match processor_chain
+        .submit(input)
+        .map_err(audio_processor_stream_error)?
+    {
+        AudioProcessorSubmitStatus::Accepted => {}
+        AudioProcessorSubmitStatus::Backpressure => {
+            return Err(AudioStreamError::Consumer {
+                message: "Native audio processor queue reached its bounded capacity".to_owned(),
+            });
+        }
+    }
+    let output = processor_chain
+        .receive()
+        .map_err(audio_processor_stream_error)?
+        .ok_or_else(|| AudioStreamError::InvalidChunk {
+            message: "Native audio processor accepted PCM without returning one output frame"
+                .to_owned(),
+        })?;
+    if output.metadata.pts_us != input_pts_us {
+        return Err(AudioStreamError::InvalidChunk {
+            message: "Native audio processor changed the host-owned PCM presentation timestamp"
+                .to_owned(),
+        });
+    }
+    if output.metadata.discontinuity != original_discontinuity {
+        return Err(AudioStreamError::InvalidChunk {
+            message: "Native audio processor changed the host-owned discontinuity marker"
+                .to_owned(),
+        });
+    }
+    let mut processed = pcm_frame_to_decoded_audio_chunk(output)?;
+    let output_frames = processed.samples.len() / usize::from(processed.channels);
+    let playback_rate = processor_chain.playback_policy().playback_rate;
+    let media_duration = audio_media_duration(output_frames, processed.sample_rate, playback_rate);
+    let frame_tolerance = audio_media_duration(1, processed.sample_rate, playback_rate);
+    if media_duration.abs_diff(original_duration) > frame_tolerance {
+        return Err(AudioStreamError::Processor {
+            message: format!(
+                "processed PCM media duration {media_duration:?} differs from the host interval {original_duration:?} by more than one output frame"
+            ),
+        });
+    }
+    processed.presentation_time = original_presentation_time;
+    processed.duration = media_duration;
+    Ok(processed)
+}
+
+fn audio_media_duration(frame_count: usize, sample_rate: u32, playback_rate: f32) -> Duration {
+    let playout_duration =
+        Duration::from_secs_f64(frame_count as f64 / f64::from(sample_rate.max(1)));
+    Duration::from_secs_f64(playout_duration.as_secs_f64() * f64::from(playback_rate))
+}
+
+fn decoded_audio_chunk_to_pcm_frame(
+    chunk: DecodedAudioChunk,
+) -> Result<DecoderPcmFrame, AudioStreamError> {
+    let channels = usize::from(chunk.channels);
+    let frame_count = chunk.samples.len() / channels;
+    let frame_count = u32::try_from(frame_count).map_err(|_| AudioStreamError::InvalidChunk {
+        message: "FFmpeg PCM frame count exceeds the plugin ABI limit".to_owned(),
+    })?;
+    let mut metadata = DecoderPcmFrameMetadata::audio(
+        "pcm_f32le",
+        DecoderFrameFormat::F32,
+        chunk.sample_rate,
+        chunk.channels,
+        DecoderPcmSampleLayout::Interleaved,
+        frame_count,
+    );
+    metadata.pts_us = chunk
+        .presentation_time
+        .map(duration_to_plugin_micros)
+        .transpose()?;
+    metadata.duration_us = Some(duration_to_plugin_micros(chunk.duration)?);
+    metadata.discontinuity = chunk.discontinuity;
+    let byte_capacity = chunk
+        .samples
+        .len()
+        .checked_mul(std::mem::size_of::<f32>())
+        .ok_or_else(|| AudioStreamError::InvalidChunk {
+            message: "FFmpeg PCM byte length overflowed the plugin ABI limit".to_owned(),
+        })?;
+    let mut data = Vec::with_capacity(byte_capacity);
+    for sample in chunk.samples {
+        data.extend_from_slice(&sample.to_le_bytes());
+    }
+    Ok(DecoderPcmFrame { metadata, data })
+}
+
+fn pcm_frame_to_decoded_audio_chunk(
+    frame: DecoderPcmFrame,
+) -> Result<DecodedAudioChunk, AudioStreamError> {
+    frame
+        .validate()
+        .map_err(|error| AudioStreamError::InvalidChunk {
+            message: format!("Native audio processor returned invalid PCM: {error}"),
+        })?;
+    if frame.metadata.format != DecoderFrameFormat::F32
+        || frame.metadata.sample_layout != DecoderPcmSampleLayout::Interleaved
+    {
+        return Err(AudioStreamError::InvalidChunk {
+            message: "Native audio processor must return interleaved F32 PCM for CPAL".to_owned(),
+        });
+    }
+    let presentation_time = frame
+        .metadata
+        .pts_us
+        .map(plugin_micros_to_duration)
+        .transpose()?;
+    let duration = frame
+        .metadata
+        .duration_us
+        .map(plugin_micros_to_duration)
+        .transpose()?
+        .unwrap_or_else(|| {
+            Duration::from_secs_f64(
+                f64::from(frame.metadata.frame_count)
+                    / f64::from(frame.metadata.sample_rate.max(1)),
+            )
+        });
+    let (samples, remainder) = frame.data.as_chunks::<{ std::mem::size_of::<f32>() }>();
+    if !remainder.is_empty() {
+        return Err(AudioStreamError::InvalidChunk {
+            message: "Native audio processor returned a partial F32 sample".to_owned(),
+        });
+    }
+    let samples = samples
+        .iter()
+        .map(|sample| f32::from_le_bytes(*sample))
+        .collect();
+    Ok(DecodedAudioChunk {
+        presentation_time,
+        duration,
+        sample_rate: frame.metadata.sample_rate,
+        channels: frame.metadata.channels,
+        samples,
+        discontinuity: frame.metadata.discontinuity,
+    })
+}
+
+fn duration_to_plugin_micros(duration: Duration) -> Result<i64, AudioStreamError> {
+    i64::try_from(duration.as_micros()).map_err(|_| AudioStreamError::InvalidChunk {
+        message: "PCM timestamp exceeds the Native audio processor range".to_owned(),
+    })
+}
+
+fn plugin_micros_to_duration(micros: i64) -> Result<Duration, AudioStreamError> {
+    let micros = u64::try_from(micros).map_err(|_| AudioStreamError::InvalidChunk {
+        message: "Native audio processor returned a negative PCM timestamp".to_owned(),
+    })?;
+    Ok(Duration::from_micros(micros))
+}
+
+fn audio_processor_stream_error(error: player_plugin::AudioProcessorError) -> AudioStreamError {
+    AudioStreamError::Processor {
+        message: error.to_string(),
+    }
+}
+
+fn load_desktop_audio_processor_factories(
+    options: &PlayerRuntimeOptions,
+) -> PlayerResult<Vec<Arc<dyn AudioProcessorPluginFactory>>> {
+    if options.audio_processor_library_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    if options.audio_processor_library_paths.len() > MAX_DESKTOP_AUDIO_PROCESSORS {
+        return Err(PlayerError::new(
+            PlayerErrorCode::InvalidArgument,
+            format!(
+                "the experimental desktop route supports at most {MAX_DESKTOP_AUDIO_PROCESSORS} timing-owning Native audio processor"
+            ),
+        ));
+    }
+    options
+        .validate_native_plugin_loading_policy("desktop Native audio processor")
+        .map_err(|error| {
+            PlayerError::new(
+                PlayerErrorCode::InvalidArgument,
+                format!("desktop Native audio processor policy rejected raw paths: {error}"),
+            )
+        })?;
+    let registry = PluginRegistry::load_native_development(&options.audio_processor_library_paths)
+        .map_err(|error| {
+            PlayerError::new(
+                PlayerErrorCode::BackendFailure,
+                format!("failed to load desktop Native audio processor: {error}"),
+            )
+        })?;
+    let references = registry.audio_processor_references().map_err(|error| {
+        PlayerError::new(
+            PlayerErrorCode::BackendFailure,
+            format!("failed to enumerate desktop Native audio processors: {error}"),
+        )
+    })?;
+    if references.len() != options.audio_processor_library_paths.len() {
+        return Err(PlayerError::new(
+            PlayerErrorCode::Unsupported,
+            "each desktop audio processor artifact must expose exactly one available AudioProcessor interface",
+        ));
+    }
+    references
+        .iter()
+        .map(|reference| {
+            let resolved = registry
+                .resolve_audio_processor(reference)
+                .map_err(|error| {
+                    PlayerError::new(
+                        PlayerErrorCode::BackendFailure,
+                        format!("failed to resolve desktop Native audio processor: {error}"),
+                    )
+                })?;
+            let factory = resolved.capability();
+            info!(
+                plugin_id = resolved.reference().plugin_id(),
+                processor = factory.name(),
+                "desktop Native audio processor selected for the experimental PCM route"
+            );
+            Ok(factory)
+        })
+        .collect()
+}
+
+fn open_desktop_audio_processor_chain(
+    factories: &[Arc<dyn AudioProcessorPluginFactory>],
+    sample_rate: u32,
+    channels: u16,
+    playback_policy: AudioPlaybackPolicy,
+) -> Result<Option<AudioProcessorChain>, AudioStreamError> {
+    if factories.is_empty() {
+        return Ok(None);
+    }
+    let input_metadata = DecoderPcmFrameMetadata::audio(
+        "pcm_f32le",
+        DecoderFrameFormat::F32,
+        sample_rate,
+        channels,
+        DecoderPcmSampleLayout::Interleaved,
+        1,
+    );
+    let mut sessions: Vec<Box<dyn AudioProcessorSession>> = Vec::with_capacity(factories.len());
+    for (processor_index, factory) in factories.iter().enumerate() {
+        match factory.open_session(&AudioProcessorSessionConfig {
+            processor_index,
+            input_metadata: input_metadata.clone(),
+            playback_policy,
+            max_in_flight_frames: Some(1),
+        }) {
+            Ok(session) => sessions.push(session),
+            Err(error) => {
+                close_partially_opened_audio_processor_sessions(&mut sessions);
+                return Err(audio_processor_stream_error(error));
+            }
+        }
+    }
+    let mut chain =
+        AudioProcessorChain::with_processors(1, sessions).map_err(audio_processor_stream_error)?;
+    if let Err(error) = chain.set_playback_policy(playback_policy) {
+        let _ = chain.close();
+        return Err(audio_processor_stream_error(error));
+    }
+    Ok(Some(chain))
+}
+
+fn close_partially_opened_audio_processor_sessions(
+    sessions: &mut [Box<dyn AudioProcessorSession>],
+) {
+    for session in sessions.iter_mut().rev() {
+        if let Err(error) = session.close() {
+            tracing::warn!(
+                processor = session.name(),
+                error = %error,
+                "failed to close a partially opened Native audio processor session"
+            );
+        }
+    }
+}
+
+fn flush_and_close_audio_processor_chain(
+    chain: &mut AudioProcessorChain,
+) -> Result<(), AudioStreamError> {
+    let flush_error = chain.flush().err();
+    let close_error = chain.close().err();
+    match (flush_error, close_error) {
+        (Some(error), _) | (None, Some(error)) => Err(audio_processor_stream_error(error)),
+        (None, None) => Ok(()),
+    }
+}
+
+fn settle_audio_processor_chain(
+    stream_result: Result<(), AudioStreamError>,
+    processor_chain: Option<&mut AudioProcessorChain>,
+) -> Result<(), AudioStreamError> {
+    let cleanup_result = processor_chain
+        .map(flush_and_close_audio_processor_chain)
+        .unwrap_or(Ok(()));
+    match (stream_result, cleanup_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn audio_buffer_window_wait_result_to_streaming_result(
+    result: AudioBufferWindowWaitResult,
+) -> Result<bool, AudioStreamError> {
+    match result {
+        AudioBufferWindowWaitResult::Ready => Ok(true),
+        AudioBufferWindowWaitResult::Inactive | AudioBufferWindowWaitResult::Cancelled => Ok(false),
+        AudioBufferWindowWaitResult::TimedOut => Err(AudioStreamError::Consumer {
+            message: format!(
+                "CPAL output did not drain within {} ms",
+                AUDIO_STREAM_BACKPRESSURE_WAIT_TIMEOUT.as_millis()
+            ),
+        }),
+    }
+}
+
+fn player_error_code_for_audio_stream_error(error: &AudioStreamError) -> PlayerErrorCode {
+    match error {
+        AudioStreamError::Consumer { .. } => PlayerErrorCode::AudioOutputUnavailable,
+        AudioStreamError::InvalidOutputRate
+        | AudioStreamError::InvalidOutputChannels
+        | AudioStreamError::InvalidPlaybackRate => PlayerErrorCode::BackendFailure,
+        AudioStreamError::Processor { .. } => PlayerErrorCode::BackendFailure,
+        AudioStreamError::InvalidChunk { .. } | AudioStreamError::Backend { .. } => {
+            PlayerErrorCode::DecodeFailure
+        }
+    }
 }
 
 struct PendingAudioMetadataWorker {
@@ -657,6 +1089,7 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
         };
         let audio_output_enabled =
             options.enable_audio_output && audio_output.default_output_config.is_some();
+        let audio_processor_factories = load_desktop_audio_processor_factories(&options)?;
         let resolved_resilience_policy =
             options.resolved_resilience_policy(source.kind(), source.protocol());
         let resolved_buffering_policy = resolved_resilience_policy.buffering_policy;
@@ -670,6 +1103,8 @@ impl PlayerRuntimeAdapterInitializer for SoftwarePlayerRuntimeInitializer {
             audio_output_descriptor: audio_output.clone(),
             audio_output_config: audio_output.default_output_config,
             audio_output_enabled,
+            audio_processor_factories,
+            audio_pitch_mode: options.audio_pitch_mode,
             interrupt_flag,
             video_source_factory,
             capabilities,
@@ -1053,6 +1488,8 @@ impl SoftwarePlayerRuntime {
             audio_output_descriptor: config.audio_output_descriptor,
             audio_output_config: config.audio_output_config,
             audio_output_enabled: config.audio_output_enabled,
+            audio_processor_factories: config.audio_processor_factories,
+            audio_pitch_mode: config.audio_pitch_mode,
             video_source,
             video_end_of_stream: false,
             next_frame: None,
@@ -1659,7 +2096,7 @@ impl SoftwarePlayerRuntime {
                         self.playback_rate,
                     ) {
                         self.emit_event(PlayerRuntimeEvent::Error(PlayerError::new(
-                            PlayerErrorCode::DecodeFailure,
+                            player_error_code_for_audio_stream_error(&error),
                             format!("failed to stream retimed audio for playback: {error}"),
                         )));
                     }
@@ -1764,6 +2201,21 @@ impl SoftwarePlayerRuntime {
             output_config.channels,
             self.audio_stream_target_buffer_duration,
         );
+        let output_sample_rate = output_config.sample_rate;
+        let output_channels = output_config.channels;
+        let audio_processor_factories = self.audio_processor_factories.clone();
+        let playback_policy = AudioPlaybackPolicy {
+            playback_rate,
+            pitch_mode: self.audio_pitch_mode,
+        };
+        let decode_policy = if audio_processor_factories.is_empty() {
+            playback_policy
+        } else {
+            AudioPlaybackPolicy {
+                playback_rate: 1.0,
+                pitch_mode: AudioPitchMode::PreservePitch,
+            }
+        };
         let worker_controller = controller.clone();
         let worker_permit = AudioStreamWorkerPermit::try_acquire().ok_or_else(|| {
             PlayerError::new(
@@ -1775,42 +2227,74 @@ impl SoftwarePlayerRuntime {
         let join_handle = thread::Builder::new()
             .name("player-remote-audio-stream".to_owned())
             .spawn(move || {
+                let mut processor_chain = match open_desktop_audio_processor_chain(
+                    &audio_processor_factories,
+                    output_sample_rate,
+                    output_channels,
+                    playback_policy,
+                ) {
+                    Ok(processor_chain) => processor_chain,
+                    Err(error) => {
+                        let _ = sender.send(Err(error));
+                        return;
+                    }
+                };
+                let mut processor_timeline = processor_chain
+                    .as_ref()
+                    .map(|_| HostAudioProcessorTimeline::new(position));
                 let backpressure_interrupt_flag = worker_interrupt_flag.clone();
                 let chunk_controller = worker_controller.clone();
-                let emit_metadata = |probe: MediaProbe| -> anyhow::Result<()> {
+                let emit_metadata = |probe: MediaProbe| -> Result<(), AudioStreamError> {
                     let _ = sender.send(Ok(AudioStreamWorkerEvent::Metadata(probe)));
                     Ok(())
                 };
-                let emit_chunk = |chunk: Vec<f32>| -> anyhow::Result<bool> {
-                    if !wait_for_audio_buffer_window(
-                        &chunk_controller,
-                        generation,
-                        target_buffer_samples,
-                        Some(&backpressure_interrupt_flag),
-                    ) {
+                let emit_chunk = |chunk: DecodedAudioChunk| -> Result<bool, AudioStreamError> {
+                    if !audio_buffer_window_wait_result_to_streaming_result(
+                        wait_for_audio_buffer_window(
+                            &chunk_controller,
+                            generation,
+                            target_buffer_samples,
+                            Some(&backpressure_interrupt_flag),
+                        ),
+                    )? {
                         return Ok(false);
                     }
 
-                    chunk_controller.append_samples(generation, chunk)
-                };
-                let result = backend
-                    .stream_audio_source_with_playback_rate_and_interrupt(
-                        source,
-                        output_config.sample_rate,
-                        output_config.channels,
-                        playback_rate,
-                        position,
-                        Some(worker_interrupt_flag),
-                        emit_metadata,
-                        emit_chunk,
+                    process_and_append_decoded_audio_chunk(
+                        chunk,
+                        output_sample_rate,
+                        output_channels,
+                        processor_chain.as_mut(),
+                        processor_timeline.as_mut(),
+                        |presentation_time, samples| {
+                            chunk_controller.append_samples_with_pts(
+                                generation,
+                                presentation_time,
+                                samples,
+                            )
+                        },
                     )
-                    .map(|_| {
-                        if worker_controller.is_generation_active(generation) {
-                            worker_controller.finish_generation(generation);
+                };
+                let stream_result = backend.stream_audio_source_with_playback_policy_and_interrupt(
+                    source,
+                    output_config.sample_rate,
+                    output_config.channels,
+                    decode_policy,
+                    position,
+                    Some(worker_interrupt_flag),
+                    emit_metadata,
+                    emit_chunk,
+                );
+                let result =
+                    match settle_audio_processor_chain(stream_result, processor_chain.as_mut()) {
+                        Err(error) => Err(error),
+                        Ok(()) => {
+                            if worker_controller.is_generation_active(generation) {
+                                worker_controller.finish_generation(generation);
+                            }
+                            Ok(AudioStreamWorkerEvent::Finished)
                         }
-                    })
-                    .map(|_| AudioStreamWorkerEvent::Finished)
-                    .map_err(|error| error.to_string());
+                    };
                 let _ = sender.send(result);
             })
             .map_err(|error| {
@@ -2435,23 +2919,18 @@ fn wait_for_audio_buffer_window(
     generation: u64,
     target_buffer_samples: usize,
     interrupt_flag: Option<&AtomicBool>,
-) -> bool {
+) -> AudioBufferWindowWaitResult {
     let should_cancel = || {
         interrupt_flag
             .map(|flag| flag.load(Ordering::Acquire))
             .unwrap_or(false)
     };
-    let result = controller.wait_for_buffered_samples_at_or_below(
+    controller.wait_for_buffered_samples_at_or_below(
         generation,
         target_buffer_samples,
         AUDIO_STREAM_BACKPRESSURE_WAIT_TIMEOUT,
         should_cancel,
-    );
-    audio_buffer_window_wait_result_is_ready(result)
-}
-
-fn audio_buffer_window_wait_result_is_ready(result: AudioBufferWindowWaitResult) -> bool {
-    matches!(result, AudioBufferWindowWaitResult::Ready)
+    )
 }
 
 fn validate_playback_rate(rate: f32) -> PlayerResult<f32> {
@@ -2697,24 +3176,596 @@ fn should_disable_audio_output_after_open_error(error: &anyhow::Error) -> bool {
 mod tests {
     use super::*;
     use player_model::MediaSource;
+    use player_plugin::{
+        AudioProcessorCapabilities, AudioProcessorChain, AudioProcessorError,
+        AudioProcessorSession, AudioProcessorSessionInfo, DecoderFrameFormat, DecoderPcmFrame,
+    };
     use player_runtime::PlayerRuntimeOptions;
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering};
 
+    struct CountingAudioProcessor {
+        calls: Arc<AtomicUsize>,
+    }
+
+    enum AudioOutputMutation {
+        Format,
+        Channels,
+        Duration,
+    }
+
+    struct MutatingAudioProcessor {
+        mutation: AudioOutputMutation,
+    }
+
+    impl AudioProcessorSession for MutatingAudioProcessor {
+        fn name(&self) -> &str {
+            "mutating-audio-processor"
+        }
+
+        fn capabilities(&self) -> AudioProcessorCapabilities {
+            AudioProcessorCapabilities {
+                accepted_formats: vec![DecoderFrameFormat::F32],
+                supports_flush: true,
+                ..AudioProcessorCapabilities::default()
+            }
+        }
+
+        fn process(
+            &mut self,
+            mut frame: DecoderPcmFrame,
+        ) -> Result<DecoderPcmFrame, AudioProcessorError> {
+            let frame_count = frame.metadata.frame_count as usize;
+            match self.mutation {
+                AudioOutputMutation::Format => {
+                    frame.metadata.format = DecoderFrameFormat::S16;
+                    frame.data.resize(
+                        frame_count * usize::from(frame.metadata.channels) * size_of::<i16>(),
+                        0,
+                    );
+                }
+                AudioOutputMutation::Channels => {
+                    frame.metadata.channels = 1;
+                    frame.data.resize(frame_count * size_of::<f32>(), 0);
+                }
+                AudioOutputMutation::Duration => {
+                    frame.metadata.frame_count = frame.metadata.frame_count.saturating_mul(2);
+                    frame.data.resize(
+                        frame_count * 2 * usize::from(frame.metadata.channels) * size_of::<f32>(),
+                        0,
+                    );
+                }
+            }
+            Ok(frame)
+        }
+
+        fn flush(&mut self) -> Result<(), AudioProcessorError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), AudioProcessorError> {
+            Ok(())
+        }
+    }
+
+    struct FailingLifecycleAudioProcessor {
+        flushes: Arc<AtomicUsize>,
+        closes: Arc<AtomicUsize>,
+    }
+
+    impl AudioProcessorSession for FailingLifecycleAudioProcessor {
+        fn name(&self) -> &str {
+            "failing-lifecycle-audio-processor"
+        }
+
+        fn capabilities(&self) -> AudioProcessorCapabilities {
+            AudioProcessorCapabilities::default()
+        }
+
+        fn process(
+            &mut self,
+            _frame: DecoderPcmFrame,
+        ) -> Result<DecoderPcmFrame, AudioProcessorError> {
+            Err(AudioProcessorError::Processor(
+                "intentional processing failure".to_owned(),
+            ))
+        }
+
+        fn flush(&mut self) -> Result<(), AudioProcessorError> {
+            self.flushes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), AudioProcessorError> {
+            self.closes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    impl AudioProcessorSession for CountingAudioProcessor {
+        fn name(&self) -> &str {
+            "counting-audio-processor"
+        }
+
+        fn capabilities(&self) -> AudioProcessorCapabilities {
+            AudioProcessorCapabilities {
+                accepted_formats: vec![DecoderFrameFormat::F32],
+                output_format: Some(DecoderFrameFormat::F32),
+                supports_flush: true,
+                ..AudioProcessorCapabilities::default()
+            }
+        }
+
+        fn session_info(&self) -> AudioProcessorSessionInfo {
+            AudioProcessorSessionInfo {
+                processor_name: Some(self.name().to_owned()),
+                output_format: Some(DecoderFrameFormat::F32),
+                ..AudioProcessorSessionInfo::default()
+            }
+        }
+
+        fn process(
+            &mut self,
+            mut frame: DecoderPcmFrame,
+        ) -> Result<DecoderPcmFrame, AudioProcessorError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            for sample in frame
+                .data
+                .as_chunks_mut::<{ std::mem::size_of::<f32>() }>()
+                .0
+            {
+                let value = f32::from_le_bytes(*sample);
+                sample.copy_from_slice(&(value * 0.5).to_le_bytes());
+            }
+            Ok(frame)
+        }
+
+        fn flush(&mut self) -> Result<(), AudioProcessorError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), AudioProcessorError> {
+            Ok(())
+        }
+    }
+
     #[test]
-    fn audio_buffer_window_wait_result_mapping_keeps_only_ready_running() {
-        assert!(audio_buffer_window_wait_result_is_ready(
-            AudioBufferWindowWaitResult::Ready
+    fn audio_buffer_window_wait_result_mapping_preserves_stop_and_timeout_causes() {
+        assert_eq!(
+            audio_buffer_window_wait_result_to_streaming_result(AudioBufferWindowWaitResult::Ready),
+            Ok(true)
+        );
+        assert_eq!(
+            audio_buffer_window_wait_result_to_streaming_result(
+                AudioBufferWindowWaitResult::Inactive
+            ),
+            Ok(false)
+        );
+        assert_eq!(
+            audio_buffer_window_wait_result_to_streaming_result(
+                AudioBufferWindowWaitResult::Cancelled
+            ),
+            Ok(false)
+        );
+        assert!(matches!(
+            audio_buffer_window_wait_result_to_streaming_result(
+                AudioBufferWindowWaitResult::TimedOut
+            ),
+            Err(AudioStreamError::Consumer { .. })
         ));
-        assert!(!audio_buffer_window_wait_result_is_ready(
-            AudioBufferWindowWaitResult::Inactive
+    }
+
+    fn decoded_audio_chunk() -> DecodedAudioChunk {
+        DecodedAudioChunk {
+            presentation_time: Some(Duration::from_secs(2)),
+            duration: Duration::from_millis(10),
+            sample_rate: 48_000,
+            channels: 2,
+            samples: vec![0.0; 960],
+            discontinuity: true,
+        }
+    }
+
+    #[test]
+    fn decoded_audio_chunk_admission_preserves_timestamp_and_samples() {
+        let chunk = decoded_audio_chunk();
+        let expected_pts = chunk.presentation_time;
+        let expected_samples = chunk.samples.clone();
+        let mut observed = None;
+
+        let result = append_decoded_audio_chunk(chunk, 48_000, 2, |pts, samples| {
+            observed = Some((pts, samples));
+            Ok(AudioPcmAppendStatus::Accepted)
+        });
+
+        assert_eq!(result, Ok(true));
+        assert_eq!(observed, Some((expected_pts, expected_samples)));
+    }
+
+    #[test]
+    fn audio_processor_handoff_preserves_sub_microsecond_host_timestamp() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut chain = AudioProcessorChain::with_processors(
+            1,
+            vec![Box::new(CountingAudioProcessor { calls })],
+        )
+        .expect("audio processor chain");
+        let expected_pts = Duration::from_secs(2) + Duration::from_nanos(777);
+        let mut chunk = decoded_audio_chunk();
+        chunk.presentation_time = Some(expected_pts);
+        let mut observed_pts = None;
+
+        let accepted = process_and_append_decoded_audio_chunk(
+            chunk,
+            48_000,
+            2,
+            Some(&mut chain),
+            None,
+            |pts, _| {
+                observed_pts = pts;
+                Ok(AudioPcmAppendStatus::Accepted)
+            },
+        )
+        .expect("process PCM with a sub-microsecond PTS");
+
+        assert!(accepted);
+        assert_eq!(observed_pts, Some(expected_pts));
+    }
+
+    #[test]
+    fn audio_processor_handoff_rejects_output_format_and_channel_mismatches() {
+        for mutation in [AudioOutputMutation::Format, AudioOutputMutation::Channels] {
+            let mut chain = AudioProcessorChain::with_processors(
+                1,
+                vec![Box::new(MutatingAudioProcessor { mutation })],
+            )
+            .expect("audio processor chain");
+
+            assert!(matches!(
+                process_and_append_decoded_audio_chunk(
+                    decoded_audio_chunk(),
+                    48_000,
+                    2,
+                    Some(&mut chain),
+                    None,
+                    |_, _| Ok(AudioPcmAppendStatus::Accepted),
+                ),
+                Err(AudioStreamError::InvalidChunk { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn audio_processor_handoff_rejects_output_duration_outside_frame_tolerance() {
+        let mut chain = AudioProcessorChain::with_processors(
+            1,
+            vec![Box::new(MutatingAudioProcessor {
+                mutation: AudioOutputMutation::Duration,
+            })],
+        )
+        .expect("audio processor chain");
+
+        assert!(matches!(
+            process_and_append_decoded_audio_chunk(
+                decoded_audio_chunk(),
+                48_000,
+                2,
+                Some(&mut chain),
+                None,
+                |_, _| Ok(AudioPcmAppendStatus::Accepted),
+            ),
+            Err(AudioStreamError::Processor { ref message })
+                if message.contains("more than one output frame")
         ));
-        assert!(!audio_buffer_window_wait_result_is_ready(
-            AudioBufferWindowWaitResult::Cancelled
+    }
+
+    #[test]
+    fn host_audio_processor_timeline_absorbs_one_frame_rounding_without_losing_first_pts() {
+        let first_pts = Duration::from_nanos(777);
+        let mut timeline = HostAudioProcessorTimeline::new(Duration::ZERO);
+        let mut first = DecodedAudioChunk {
+            presentation_time: Some(first_pts),
+            duration: audio_media_duration(2, 48_000, 2.0),
+            sample_rate: 48_000,
+            channels: 1,
+            samples: vec![0.0; 2],
+            discontinuity: true,
+        };
+        timeline.reanchor(&mut first);
+        let first_end = first_pts + first.duration;
+        assert_eq!(first.presentation_time, Some(first_pts));
+
+        let mut second = DecodedAudioChunk {
+            presentation_time: Some(first_pts + audio_media_duration(3, 48_000, 1.0)),
+            duration: audio_media_duration(2, 48_000, 2.0),
+            sample_rate: 48_000,
+            channels: 1,
+            samples: vec![0.0; 2],
+            discontinuity: false,
+        };
+        timeline.reanchor(&mut second);
+
+        assert_eq!(second.presentation_time, Some(first_end));
+    }
+
+    #[test]
+    fn processor_failure_keeps_typed_cause_and_still_flushes_and_closes() {
+        let flushes = Arc::new(AtomicUsize::new(0));
+        let closes = Arc::new(AtomicUsize::new(0));
+        let mut chain = AudioProcessorChain::with_processors(
+            1,
+            vec![Box::new(FailingLifecycleAudioProcessor {
+                flushes: flushes.clone(),
+                closes: closes.clone(),
+            })],
+        )
+        .expect("audio processor chain");
+        let stream_result = process_and_append_decoded_audio_chunk(
+            decoded_audio_chunk(),
+            48_000,
+            2,
+            Some(&mut chain),
+            None,
+            |_, _| Ok(AudioPcmAppendStatus::Accepted),
+        )
+        .map(|_| ());
+
+        assert!(matches!(
+            settle_audio_processor_chain(stream_result, Some(&mut chain)),
+            Err(AudioStreamError::Processor { ref message })
+                if message.contains("intentional processing failure")
         ));
-        assert!(!audio_buffer_window_wait_result_is_ready(
-            AudioBufferWindowWaitResult::TimedOut
+        assert_eq!(flushes.load(Ordering::SeqCst), 1);
+        assert_eq!(closes.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn rewrite_red_desktop_audio_handoff_executes_processor_before_sink() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut chain = AudioProcessorChain::with_processors(
+            1,
+            vec![Box::new(CountingAudioProcessor {
+                calls: calls.clone(),
+            })],
+        )
+        .expect("audio processor chain");
+        let mut chunk = decoded_audio_chunk();
+        chunk.samples.fill(1.0);
+        let mut observed_first_sample = None;
+
+        let result = process_and_append_decoded_audio_chunk(
+            chunk,
+            48_000,
+            2,
+            Some(&mut chain),
+            None,
+            |_, samples| {
+                observed_first_sample = samples.first().copied();
+                Ok(AudioPcmAppendStatus::Accepted)
+            },
+        );
+
+        assert_eq!(result, Ok(true));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(observed_first_sample, Some(0.5));
+    }
+
+    #[test]
+    #[ignore = "requires the built audio-processor-diagnostic shared library artifact"]
+    fn native_audio_processor_dynamic_session_processes_ffmpeg_chunk_before_sink() {
+        let plugin_path = std::env::var_os("VESPER_AUDIO_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH")
+            .map(std::path::PathBuf::from)
+            .expect("VESPER_AUDIO_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH must point to the dylib");
+        let options = PlayerRuntimeOptions::default()
+            .with_audio_processor_library_paths([plugin_path])
+            .with_audio_pitch_mode(AudioPitchMode::FollowRate)
+            .with_development_native_plugin_loading();
+        let factories =
+            load_desktop_audio_processor_factories(&options).expect("load checked audio factory");
+        let policy = AudioPlaybackPolicy {
+            playback_rate: 2.0,
+            pitch_mode: AudioPitchMode::FollowRate,
+        };
+        let mut chain = open_desktop_audio_processor_chain(&factories, 48_000, 2, policy)
+            .expect("open checked audio processor chain")
+            .expect("configured processor chain");
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../../fixtures/media/tiny-h264-aac.m4v");
+        let mut decoded = None;
+        FfmpegBackend::new()
+            .expect("initialize FFmpeg")
+            .stream_audio_source_with_playback_policy_and_interrupt(
+                MediaSource::new(fixture.to_string_lossy().into_owned()),
+                48_000,
+                2,
+                AudioPlaybackPolicy {
+                    playback_rate: 1.0,
+                    pitch_mode: AudioPitchMode::PreservePitch,
+                },
+                Duration::ZERO,
+                None,
+                |_| Ok(()),
+                |chunk| {
+                    decoded = Some(chunk);
+                    Ok(false)
+                },
+            )
+            .expect("decode one real FFmpeg PCM chunk");
+        let chunk = decoded.expect("fixture produced one PCM chunk");
+        let input_frames = chunk.samples.len() / usize::from(chunk.channels);
+        let expected_pts = chunk.presentation_time;
+        let expected_discontinuity = chunk.discontinuity;
+        let mut observed = None;
+
+        let accepted = process_and_append_decoded_audio_chunk(
+            chunk,
+            48_000,
+            2,
+            Some(&mut chain),
+            None,
+            |pts, samples| {
+                observed = Some((pts, samples));
+                Ok(AudioPcmAppendStatus::Accepted)
+            },
+        )
+        .expect("process and admit dynamic plugin output");
+        assert!(accepted);
+        let (output_pts, output_samples) = observed.expect("sink received processed PCM");
+        assert_eq!(output_pts, expected_pts);
+        assert!(expected_discontinuity);
+        assert_eq!(output_samples.len() / 2, input_frames.div_ceil(2));
+        flush_and_close_audio_processor_chain(&mut chain).expect("flush and close checked chain");
+    }
+
+    #[test]
+    fn raw_audio_processor_paths_require_explicit_development_policy() {
+        let options = PlayerRuntimeOptions::default()
+            .with_audio_processor_library_paths([std::path::PathBuf::from("missing.dylib")]);
+        let error = match load_desktop_audio_processor_factories(&options) {
+            Ok(_) => panic!("raw audio processor path must require development policy"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), PlayerErrorCode::InvalidArgument);
+        assert!(error.message().contains("policy rejected raw paths"));
+    }
+
+    #[test]
+    #[ignore = "requires an explicitly enabled physical CPAL device, silent A/V fixture, and built audio processor dylib"]
+    fn physical_audio_processor_runtime_keeps_audio_master_and_video_bounded() {
+        assert_eq!(
+            std::env::var("VESPER_RUN_PHYSICAL_AUDIO_PROCESSOR_TESTS").as_deref(),
+            Ok("1"),
+            "set VESPER_RUN_PHYSICAL_AUDIO_PROCESSOR_TESTS=1 explicitly"
+        );
+        let plugin_path = std::env::var_os("VESPER_AUDIO_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH")
+            .map(std::path::PathBuf::from)
+            .expect("VESPER_AUDIO_PROCESSOR_DIAGNOSTIC_PLUGIN_PATH must point to the dylib");
+        let fixture_path = std::env::var_os("VESPER_SILENT_AV_FIXTURE_PATH")
+            .map(std::path::PathBuf::from)
+            .expect("VESPER_SILENT_AV_FIXTURE_PATH must point to a silent A/V fixture");
+        let source = MediaSource::new(fixture_path.to_string_lossy().into_owned());
+        let decoded = FfmpegBackend::new()
+            .expect("initialize FFmpeg")
+            .decode_audio_track(source.clone(), 48_000, 2)
+            .expect("decode silent fixture before opening physical output");
+        assert!(
+            decoded
+                .samples
+                .iter()
+                .all(|sample| sample.abs() <= 0.000_001),
+            "physical audio processor fixture must be silent"
+        );
+
+        let options = PlayerRuntimeOptions::default()
+            .with_audio_processor_library_paths([plugin_path])
+            .with_audio_pitch_mode(AudioPitchMode::FollowRate)
+            .with_development_native_plugin_loading();
+        let initializer =
+            SoftwarePlayerRuntimeInitializer::probe_source_with_options(source, options)
+                .expect("probe silent desktop fixture");
+        let bootstrap = Box::new(initializer)
+            .initialize()
+            .expect("initialize physical audio processor runtime");
+        assert!(bootstrap.startup.audio_output.is_some());
+        let mut runtime = bootstrap.runtime;
+        runtime
+            .dispatch(PlayerRuntimeCommand::SetPlaybackRate { rate: 2.0 })
+            .expect("set 2x playback rate");
+        runtime
+            .dispatch(PlayerRuntimeCommand::Play)
+            .expect("start physical silent playback");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut returned_video_frames = usize::from(bootstrap.initial_frame.is_some());
+        let mut max_av_drift = Duration::ZERO;
+        let mut errors = Vec::new();
+        while runtime.presentation_state() != PresentationState::Finished
+            && Instant::now() < deadline
+        {
+            if let Some(frame) = runtime.advance().expect("advance physical A/V runtime") {
+                returned_video_frames = returned_video_frames.saturating_add(1);
+                max_av_drift = max_av_drift.max(
+                    frame
+                        .presentation_time
+                        .abs_diff(runtime.progress().position()),
+                );
+            }
+            for event in runtime.drain_events() {
+                if let PlayerRuntimeEvent::Error(error) = event {
+                    errors.push(error.message().to_owned());
+                }
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+
+        assert!(errors.is_empty(), "physical A/V runtime errors: {errors:?}");
+        assert_eq!(runtime.presentation_state(), PresentationState::Finished);
+        assert!(returned_video_frames > 1);
+        assert!(
+            max_av_drift <= Duration::from_millis(250),
+            "physical audio-master/video drift exceeded 250 ms: {max_av_drift:?}"
+        );
+    }
+
+    #[test]
+    fn decoded_audio_chunk_admission_distinguishes_stale_generation_from_stale_pts() {
+        assert_eq!(
+            append_decoded_audio_chunk(decoded_audio_chunk(), 48_000, 2, |_, _| {
+                Ok(AudioPcmAppendStatus::StaleGeneration)
+            }),
+            Ok(false)
+        );
+        assert!(matches!(
+            append_decoded_audio_chunk(decoded_audio_chunk(), 48_000, 2, |_, _| {
+                Ok(AudioPcmAppendStatus::StalePts)
+            }),
+            Err(AudioStreamError::Consumer { .. })
         ));
+    }
+
+    #[test]
+    fn decoded_audio_chunk_admission_rejects_mismatch_and_append_failure_as_typed_causes() {
+        assert!(matches!(
+            append_decoded_audio_chunk(decoded_audio_chunk(), 44_100, 2, |_, _| {
+                Ok(AudioPcmAppendStatus::Accepted)
+            }),
+            Err(AudioStreamError::InvalidChunk { .. })
+        ));
+        assert!(matches!(
+            append_decoded_audio_chunk(decoded_audio_chunk(), 48_000, 2, |_, _| {
+                Err(anyhow::anyhow!("queue full"))
+            }),
+            Err(AudioStreamError::Consumer { .. })
+        ));
+    }
+
+    #[test]
+    fn audio_stream_error_categories_map_to_host_error_codes() {
+        assert_eq!(
+            player_error_code_for_audio_stream_error(&AudioStreamError::Consumer {
+                message: "queue full".to_owned(),
+            }),
+            PlayerErrorCode::AudioOutputUnavailable
+        );
+        assert_eq!(
+            player_error_code_for_audio_stream_error(&AudioStreamError::Backend {
+                operation: "decode",
+                message: "invalid frame".to_owned(),
+            }),
+            PlayerErrorCode::DecodeFailure
+        );
+        assert_eq!(
+            player_error_code_for_audio_stream_error(&AudioStreamError::Processor {
+                message: "plugin failed".to_owned(),
+            }),
+            PlayerErrorCode::BackendFailure
+        );
+        assert_eq!(
+            player_error_code_for_audio_stream_error(&AudioStreamError::InvalidChunk {
+                message: "bad sample count".to_owned(),
+            }),
+            PlayerErrorCode::DecodeFailure
+        );
     }
 
     #[test]
@@ -3491,6 +4542,8 @@ mod tests {
             },
             audio_output_config: None,
             audio_output_enabled: false,
+            audio_processor_factories: Vec::new(),
+            audio_pitch_mode: AudioPitchMode::PreservePitch,
             video_source,
             video_end_of_stream: false,
             next_frame: None,

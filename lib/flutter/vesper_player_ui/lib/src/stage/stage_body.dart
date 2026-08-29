@@ -97,20 +97,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
               child: _playerView,
             ),
             if (!pictureInPicturePresentation)
-              Positioned.fill(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: _handleTap,
-                  onDoubleTap: _togglePause,
-                  onLongPressStart: (_) => _startTemporarySpeedGesture(),
-                  onLongPressEnd: (_) => _endTemporarySpeedGesture(),
-                  onLongPressCancel: _endTemporarySpeedGesture,
-                  onPanStart: _handleStagePanStart,
-                  onPanUpdate: _handleStagePanUpdate,
-                  onPanEnd: _handleStagePanEnd,
-                  onPanCancel: _handleStagePanCancel,
-                ),
-              ),
+              _buildStageGestureLayer(showControls: showControls),
             if (!pictureInPicturePresentation)
               IgnorePointer(
                 ignoring: true,
@@ -186,6 +173,44 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildStageGestureLayer({required bool showControls}) {
+    return Positioned.fill(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Keep the control bar out of the stage gesture arena. The values
+          // include the bottom inset and a small hit-test buffer around the
+          // rendered timeline/buttons.
+          final reservedHeight =
+              showControls ? (widget.isPortrait ? 74.0 : 112.0) : 0.0;
+          final gestureHeight = (constraints.maxHeight - reservedHeight)
+              .clamp(0.0, constraints.maxHeight)
+              .toDouble();
+
+          return Align(
+            alignment: Alignment.topCenter,
+            child: SizedBox(
+              width: constraints.maxWidth,
+              height: gestureHeight,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _handleTap,
+                onDoubleTap: _togglePause,
+                onLongPressStart: (_) => _startTemporarySpeedGesture(),
+                onLongPressEnd: (_) => _endTemporarySpeedGesture(),
+                onLongPressCancel: _endTemporarySpeedGesture,
+                onPanStart: _handleStagePanStart,
+                onPanUpdate: _handleStagePanUpdate,
+                onPanEnd: _handleStagePanEnd,
+                onPanCancel: _handleStagePanCancel,
+                child: const SizedBox.expand(),
+              ),
+            ),
+          );
+        },
       ),
     );
   }

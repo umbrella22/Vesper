@@ -38,7 +38,7 @@
     <string name="example_sources_prepare_local_video">正在准备本地视频…</string>
     <string name="example_sources_prepare_local_failed">准备本地视频失败：%1$s</string>
     <string name="example_dolby_acceptance_title">Dolby 验收</string>
-    <string name="example_dolby_acceptance_subtitle">使用 Dolby Browser Test Kit 公开信号，只走 direct native 播放；不进入下载、预加载、外部投放或插件处理。</string>
+    <string name="example_dolby_acceptance_subtitle">使用 Dolby Vision Online Delivery Kit 公开信号，只走 direct native 播放；不进入下载、预加载、外部投放或插件处理。</string>
     <string name="example_dolby_acceptance_all_profiles">全部 profile</string>
     <string name="example_dolby_acceptance_all_fps">全部 fps</string>
     <string name="example_dolby_acceptance_fairplay_pending">FairPlay 预设仅保留 metadata，等证书 URI 或 base64 证书明确后再启用。</string>

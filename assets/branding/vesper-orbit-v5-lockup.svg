@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" role="img" aria-labelledby="title desc" shape-rendering="geometricPrecision">
+  <title id="title">Vesper Orbit V v5 logo</title>
+  <desc id="desc">A detached orbit floating above a V cone with a raised play triangle, paired with the Vesper Player SDK wordmark.</desc>
+  <g transform="translate(40 70)">
+    <path d="M54 130L126 270L198 130" fill="none" stroke="#17252a" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M18 94C32 36 76 4 126 4C177 4 220 36 234 94" fill="none" stroke="#28b7b0" stroke-width="16" stroke-linecap="round"/>
+    <g transform="translate(0 -42)">
+      <path d="M110 141L110 187L151 164Z" fill="#e9a451"/>
+    </g>
+    <path d="M57 34L61 49L75 56L61 62L57 78L53 63L39 56L53 49Z" fill="#e9a451"/>
+    <circle cx="209" cy="48" r="8" fill="#e9a451"/>
+  </g>
+  <g transform="translate(350 153)" fill="#17252a">
+    <text x="0" y="0" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="102" font-weight="650">Vesper</text>
+    <text x="4" y="62" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="27" font-weight="600" letter-spacing="5.5" fill="#5c6a6e">PLAYER SDK</text>
+  </g>
+</svg>

@@ -41,6 +41,8 @@ pub const VESPER_MAX_LEASES_PER_SESSION: usize = 64;
 pub const VESPER_MAX_OWNED_BYTES: u64 = 16 * 1024 * 1024;
 /// Maximum size accepted for one borrowed source-normalizer packet payload.
 pub const VESPER_MAX_PACKET_BYTES: u64 = 16 * 1024 * 1024;
+/// Maximum size accepted for one borrowed PCM frame payload.
+pub const VESPER_MAX_PCM_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Raw status returned across the native ABI.
 ///
@@ -90,6 +92,9 @@ pub const NATIVE_DECODER_INTERFACE_ID: VesperInterfaceId = VesperInterfaceId([
 ]);
 pub const FRAME_PROCESSOR_INTERFACE_ID: VesperInterfaceId = VesperInterfaceId([
     0xfc, 0x05, 0x05, 0x97, 0xb7, 0xb7, 0x5c, 0x81, 0x83, 0xb9, 0xb4, 0x25, 0x55, 0xf8, 0xb8, 0x25,
+]);
+pub const AUDIO_PROCESSOR_INTERFACE_ID: VesperInterfaceId = VesperInterfaceId([
+    0xf3, 0xfc, 0x5d, 0x7c, 0x58, 0x1f, 0x5e, 0x0a, 0x85, 0xbf, 0xdf, 0x00, 0xd7, 0xad, 0xb1, 0x3e,
 ]);
 pub const SOURCE_NORMALIZER_PACKET_INTERFACE_ID: VesperInterfaceId = VesperInterfaceId([
     0xa2, 0xd6, 0x53, 0xfa, 0xd6, 0xce, 0x5f, 0x14, 0x93, 0xb8, 0xa8, 0x18, 0xa7, 0xa7, 0x7f, 0xdf,
@@ -291,6 +296,13 @@ mod tests {
         );
         assert_eq!(SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID.0[0], 0xb7);
         assert_eq!(SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID.0[15], 0x0d);
+        assert_eq!(
+            AUDIO_PROCESSOR_INTERFACE_ID.0,
+            [
+                0xf3, 0xfc, 0x5d, 0x7c, 0x58, 0x1f, 0x5e, 0x0a, 0x85, 0xbf, 0xdf, 0x00, 0xd7, 0xad,
+                0xb1, 0x3e,
+            ]
+        );
     }
 
     #[test]

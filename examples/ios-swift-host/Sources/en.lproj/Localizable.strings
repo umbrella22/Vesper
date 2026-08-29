@@ -26,7 +26,7 @@
 "example.sources.remote_url_placeholder" = "Remote URL (HLS / progressive)";
 "example.sources.open_remote_url" = "Open Remote URL";
 "example.dolby_acceptance.title" = "Dolby Acceptance";
-"example.dolby_acceptance.subtitle" = "Dolby Browser Test Kit public signals. Enabled presets play through AVPlayer direct HLS only; they do not enter download, preload, external playback, DASH bridge, or plugin processing.";
+"example.dolby_acceptance.subtitle" = "Dolby Vision Online Delivery Kit public signals. Enabled presets play through AVPlayer direct HLS only; they do not enter download, preload, external playback, DASH bridge, or plugin processing.";
 "example.dolby_acceptance.all_profiles" = "All profiles";
 "example.dolby_acceptance.all_fps" = "All fps";
 "example.dolby_acceptance.fairplay_config_required" = "FairPlay config required. Set the local license URI and certificate URI or base64 certificate in the Xcode scheme before playback.";

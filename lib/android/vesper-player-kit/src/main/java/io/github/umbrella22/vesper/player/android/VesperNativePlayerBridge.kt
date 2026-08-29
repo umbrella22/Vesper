@@ -134,6 +134,7 @@ internal class VesperNativePlayerBridge(
     @Volatile
     internal var nativeFramePipelineOpenStatus: Map<String, Any?>? = null
     internal var nativeFramePipelineLastStatus: Map<String, Any?>? = null
+    internal var nativeFramePipelineParticipated = false
     @Volatile
     internal var nativeFramePipelinePumpRunning = false
     @Volatile
@@ -144,6 +145,7 @@ internal class VesperNativePlayerBridge(
     internal var nativeFramePipelineLastLoggedPumpKey: String? = null
     internal var nativeFramePipelineLastPublishedDiagnosticsKey: String? = null
     internal var nativeFramePipelineDiagnosticsDirty = false
+    internal var activeRetryStatusMessage: String? = null
     internal val runtimeWarnings = ArrayDeque<VesperRuntimeWarning>()
 
     internal companion object {

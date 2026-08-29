@@ -391,7 +391,10 @@ pub struct WasmPipelineEventHookReportBatch {
 
 #[derive(Debug)]
 enum QueueMessage {
-    Event(Box<PipelineEvent>),
+    Event {
+        event: Box<PipelineEvent>,
+        completion: Option<SyncSender<WasmPipelineEventHookReport>>,
+    },
     Barrier(SyncSender<()>),
     Close,
 }
@@ -515,7 +518,35 @@ impl WasmPipelineEventHookQueue {
         event: PipelineEvent,
     ) -> Result<WasmPipelineEventEnqueueStatus, WasmPluginHostError> {
         validate_event_input(&event)?;
-        enqueue_event(&self.inner.shared, event)
+        enqueue_event(&self.inner.shared, event, None)
+    }
+
+    /// Executes one event through the bounded worker queue and waits for its
+    /// matching result for at most `timeout`.
+    pub fn invoke(
+        &self,
+        event: PipelineEvent,
+        timeout: Duration,
+    ) -> Result<WasmPipelineEventHookReport, WasmPluginHostError> {
+        validate_event_input(&event)?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        match enqueue_event(&self.inner.shared, event, Some(sender))? {
+            WasmPipelineEventEnqueueStatus::Enqueued => {}
+            WasmPipelineEventEnqueueStatus::Dropped => {
+                return Err(WasmPluginHostError::Queue(
+                    "WASM event-hook queue is full".to_owned(),
+                ));
+            }
+        }
+        match receiver.recv_timeout(timeout) {
+            Ok(report) => Ok(report),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(WasmPluginHostError::QueueTimeout(
+                "event hook result".to_owned(),
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(WasmPluginHostError::Queue(
+                "WASM event-hook worker stopped before returning a result".to_owned(),
+            )),
+        }
     }
 
     pub fn flush(&self, timeout: Duration) -> Result<(), WasmPluginHostError> {
@@ -568,7 +599,7 @@ impl WasmPipelineEventHookQueue {
         drop(state);
         self.join_worker(started, timeout)?;
         if let Some(error) = worker_error {
-            return Err(WasmPluginHostError::Queue(error));
+            return Err(WasmPluginHostError::Execution(error));
         }
         Ok(())
     }
@@ -595,7 +626,7 @@ impl WasmPipelineEventHookQueue {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             match &*worker_state {
                 EventWorkerJoinState::Joined(result) => {
-                    return result.clone().map_err(WasmPluginHostError::Queue);
+                    return result.clone().map_err(WasmPluginHostError::Execution);
                 }
                 EventWorkerJoinState::Joining => {
                     let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
@@ -644,7 +675,7 @@ impl WasmPipelineEventHookQueue {
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *worker_state = EventWorkerJoinState::Joined(result.clone());
                     self.inner.worker_changed.notify_all();
-                    return result.map_err(WasmPluginHostError::Queue);
+                    return result.map_err(WasmPluginHostError::Execution);
                 }
                 EventWorkerJoinState::Running(_) => {
                     let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
@@ -671,6 +702,7 @@ impl WasmPipelineEventHookQueue {
 fn enqueue_event(
     shared: &EventQueueShared,
     event: PipelineEvent,
+    completion: Option<SyncSender<WasmPipelineEventHookReport>>,
 ) -> Result<WasmPipelineEventEnqueueStatus, WasmPluginHostError> {
     let mut state = shared
         .state
@@ -686,9 +718,10 @@ fn enqueue_event(
         return Ok(WasmPipelineEventEnqueueStatus::Dropped);
     }
     state.queued_events += 1;
-    state
-        .messages
-        .push_back(QueueMessage::Event(Box::new(event)));
+    state.messages.push_back(QueueMessage::Event {
+        event: Box::new(event),
+        completion,
+    });
     shared.message_available.notify_one();
     Ok(WasmPipelineEventEnqueueStatus::Enqueued)
 }
@@ -736,7 +769,7 @@ fn take_event_queue_message(shared: &EventQueueShared) -> Option<QueueMessage> {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     loop {
         if let Some(message) = state.messages.pop_front() {
-            if matches!(message, QueueMessage::Event(_)) {
+            if matches!(message, QueueMessage::Event { .. }) {
                 state.queued_events = state.queued_events.saturating_sub(1);
             }
             return Some(message);
@@ -767,7 +800,7 @@ fn run_queue_worker(shared: Arc<EventQueueShared>, mut session: WasmPipelineEven
     let worker_result = catch_unwind(AssertUnwindSafe(|| {
         while let Some(message) = take_event_queue_message(&shared) {
             match message {
-                QueueMessage::Event(event) => {
+                QueueMessage::Event { event, completion } => {
                     let result = catch_unwind(AssertUnwindSafe(|| session.on_event(&event)))
                         .unwrap_or_else(|_| {
                             session.quarantined = true;
@@ -776,13 +809,17 @@ fn run_queue_worker(shared: Arc<EventQueueShared>, mut session: WasmPipelineEven
                             ))
                         });
                     let logs = session.take_logs();
-                    shared.reports.push(WasmPipelineEventHookReport {
+                    let report = WasmPipelineEventHookReport {
                         run_id: event.run_id,
                         session_id: event.session_id,
                         event_name: event.event_name,
                         result,
                         logs,
-                    });
+                    };
+                    if let Some(completion) = completion {
+                        let _ = completion.send(report.clone());
+                    }
+                    shared.reports.push(report);
                 }
                 QueueMessage::Barrier(acknowledge) => {
                     complete_event_queue_flush(&shared, acknowledge);
@@ -821,14 +858,18 @@ fn fail_event_queue_after_worker_panic(shared: &EventQueueShared) {
     };
     for message in pending {
         match message {
-            QueueMessage::Event(event) => {
-                shared.reports.push(WasmPipelineEventHookReport {
+            QueueMessage::Event { event, completion } => {
+                let report = WasmPipelineEventHookReport {
                     run_id: event.run_id,
                     session_id: event.session_id,
                     event_name: event.event_name,
                     result: Err(WasmPluginHostError::Quarantined),
                     logs: Vec::new(),
-                });
+                };
+                if let Some(completion) = completion {
+                    let _ = completion.send(report.clone());
+                }
+                shared.reports.push(report);
             }
             QueueMessage::Barrier(_) | QueueMessage::Close => {}
         }
@@ -899,14 +940,15 @@ mod tests {
             assert_eq!(
                 enqueue_event(
                     &shared,
-                    queue_test_event(u64::try_from(timestamp_ns).expect("test timestamp"))
+                    queue_test_event(u64::try_from(timestamp_ns).expect("test timestamp")),
+                    None,
                 )
                 .expect("accepted enqueue"),
                 WasmPipelineEventEnqueueStatus::Enqueued
             );
         }
         assert_eq!(
-            enqueue_event(&shared, queue_test_event(u64::MAX)).expect("dropped enqueue"),
+            enqueue_event(&shared, queue_test_event(u64::MAX), None).expect("dropped enqueue"),
             WasmPipelineEventEnqueueStatus::Dropped
         );
 
@@ -917,10 +959,10 @@ mod tests {
         assert_eq!(state.queued_events, WASM_PLUGIN_EVENT_QUEUE_CAPACITY);
         assert_eq!(state.messages.len(), WASM_PLUGIN_EVENT_QUEUE_CAPACITY);
         assert!(
-            matches!(state.messages.front(), Some(QueueMessage::Event(event)) if event.timestamp_ns == 0)
+            matches!(state.messages.front(), Some(QueueMessage::Event { event, .. }) if event.timestamp_ns == 0)
         );
         assert!(
-            matches!(state.messages.back(), Some(QueueMessage::Event(event)) if event.timestamp_ns == 1_023)
+            matches!(state.messages.back(), Some(QueueMessage::Event { event, .. }) if event.timestamp_ns == 1_023)
         );
         assert_eq!(shared.dropped_events.load(Ordering::Relaxed), 1);
     }
@@ -932,6 +974,7 @@ mod tests {
             enqueue_event(
                 &shared,
                 queue_test_event(u64::try_from(timestamp_ns).expect("test timestamp")),
+                None,
             )
             .expect("accepted enqueue");
         }

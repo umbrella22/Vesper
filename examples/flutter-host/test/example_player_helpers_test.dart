@@ -23,7 +23,7 @@ void main() {
     expect(
       shouldAdvancePlaylistOnFinished(
         origin: const ExampleDolbyAdHocPlaybackOrigin(
-          'DOLBY-DV-P5-24-HLS-CLEAR',
+          'DOLBY-DV-P5-25-HLS-CLEAR',
         ),
         activeItemId: flutterHlsPlaylistItemId,
       ),

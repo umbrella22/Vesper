@@ -7,6 +7,9 @@ internal fun VesperNativePlayerBridge.publishNativeFramePipelinePumpStatus(statu
     if (status == null) {
         return
     }
+    if (nativeFramePipelineCountersFromStatus(status).longValue("presentedFrames") > 0L) {
+        nativeFramePipelineParticipated = true
+    }
     val key = nativeFramePipelinePumpSummaryKey(status)
     if (key != nativeFramePipelineLastLoggedPumpKey) {
         nativeFramePipelineLastLoggedPumpKey = key
@@ -138,6 +141,7 @@ internal fun VesperNativePlayerBridge.resetNativeFramePipelineFirstFrameWatchdog
 }
 
 internal fun VesperNativePlayerBridge.resetNativeFramePipelineRuntimeMarkers() {
+    nativeFramePipelineParticipated = false
     nativeFramePipelineFirstFrameWatchdogStartedAtMs = null
     nativeFramePipelineLastLoggedPumpKey = null
     nativeFramePipelineLastPublishedDiagnosticsKey = null

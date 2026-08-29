@@ -5,6 +5,7 @@ pub(crate) fn open_macos_frame_processor_chain(
     paths: &[PathBuf],
     mode: FrameProcessorMode,
     policy: FrameProcessorPolicy,
+    participation: Option<&MacosFrameProcessorParticipationTracker>,
 ) -> anyhow::Result<Option<MacosFrameProcessorChain>> {
     if mode == FrameProcessorMode::Disabled || paths.is_empty() {
         return Ok(None);
@@ -83,6 +84,14 @@ pub(crate) fn open_macos_frame_processor_chain(
     if processors.is_empty() {
         return Ok(None);
     }
+    if let Some(participation) = participation {
+        participation.mark_selected(
+            &processors
+                .iter()
+                .map(|processor| processor.plugin_name.clone())
+                .collect::<Vec<_>>(),
+        );
+    }
     Ok(Some(MacosFrameProcessorChain {
         core: NativeFrameProcessorChainCore::new(processors, mode, policy),
         debug: FrameProcessorDebugState::from_env(),
@@ -99,6 +108,7 @@ pub(crate) fn process_macos_native_frame(
                 decoder_frame: frame.clone(),
                 presentation_frame: frame,
                 processor_outputs: Vec::new(),
+                used_processor_output: false,
             },
         ));
     };
@@ -106,6 +116,10 @@ pub(crate) fn process_macos_native_frame(
 }
 
 impl MacosFrameProcessorChain {
+    pub(crate) fn processor_names(&self) -> Vec<String> {
+        self.core.processor_names().map(str::to_owned).collect()
+    }
+
     pub(crate) fn process(
         &mut self,
         decoder_frame: DecoderNativeFrame,

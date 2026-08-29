@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.4.3-rc.2 - Unreleased
+## Unreleased
+
+## 0.5.0 - 2026-08-29
 
 ### Fixed
 

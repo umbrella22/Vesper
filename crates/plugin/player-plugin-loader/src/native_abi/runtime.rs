@@ -408,6 +408,22 @@ impl InterfaceRuntime {
                 payload,
             });
         }
+        if raw_status == status::PANIC {
+            self.poisoned.store(true, Ordering::Release);
+            return Err(NativeAbiBoundaryError::CallbackPanic {
+                interface: self.interface.clone(),
+                operation,
+            });
+        }
+        if raw_status > status::PANIC {
+            self.poisoned.store(true, Ordering::Release);
+            return Err(NativeAbiBoundaryError::ReportedFailure {
+                interface: self.interface.clone(),
+                operation,
+                status: raw_status,
+                detail: "plugin returned an unknown future status".to_owned(),
+            });
+        }
         Err(self.contract_violation(
             operation,
             format!("returned unexpected status {raw_status}"),
@@ -528,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn unexpected_status_reclaims_bytes_and_poison_blocks_the_next_call() {
+    fn rewrite_w4_reported_panic_reclaims_bytes_and_keeps_typed_identity() {
         let mut owner = FixtureOwner {
             frees: AtomicUsize::new(0),
             destroys: AtomicUsize::new(0),
@@ -543,7 +559,7 @@ mod tests {
         });
         assert!(matches!(
             first,
-            Err(NativeAbiBoundaryError::AbiViolation { .. })
+            Err(NativeAbiBoundaryError::CallbackPanic { .. })
         ));
         assert_eq!(owner.frees.load(Ordering::SeqCst), 1);
 
@@ -556,6 +572,30 @@ mod tests {
             Err(NativeAbiBoundaryError::Poisoned { .. })
         ));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+        drop(runtime);
+        assert_eq!(owner.destroys.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn rewrite_w4_unknown_status_preserves_the_raw_value_and_poisoning() {
+        let mut owner = FixtureOwner {
+            frees: AtomicUsize::new(0),
+            destroys: AtomicUsize::new(0),
+        };
+        let runtime = fixture_runtime(&mut owner);
+        let unknown_status = status::PANIC + 100;
+        let first = runtime.invoke_json("on_event_json", &[status::FAILURE], |_out| unknown_status);
+        assert!(matches!(
+            first,
+            Err(NativeAbiBoundaryError::ReportedFailure {
+                status,
+                ..
+            }) if status == unknown_status
+        ));
+        assert!(matches!(
+            runtime.ensure_healthy("on_event_json"),
+            Err(NativeAbiBoundaryError::Poisoned { .. })
+        ));
         drop(runtime);
         assert_eq!(owner.destroys.load(Ordering::SeqCst), 1);
     }

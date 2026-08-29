@@ -5,7 +5,9 @@ use std::io::Write;
 use std::path::Path;
 
 use player_plugin::{
-    BenchmarkEvent, BenchmarkEventBatch, PipelineEvent, PluginReference, PluginTransport,
+    BenchmarkEvent, BenchmarkEventBatch, PipelineEvent, PluginArtifactTransport, PluginCatalog,
+    PluginReference, PluginResolver, PluginResolverPolicy, PluginRuntime, PluginScopeKind,
+    PluginScopeState, PluginTransport,
 };
 use player_plugin_abi::{BENCHMARK_SINK_INTERFACE_ID, PIPELINE_EVENT_HOOK_INTERFACE_ID};
 use player_plugin_wasm_host::{
@@ -185,6 +187,37 @@ const EVENT_ONLY_CORE_WAT: &str = r#"
 "#;
 
 #[test]
+fn rewrite_w4_wasm_observer_and_offline_resolution_require_a_scope() {
+    let component = write_component(component("event-and-benchmark-plugin", COMBINED_CORE_WAT));
+    let registry = PluginRegistry::load_wasm_artifacts([artifact(
+        "dev.vesper.scope-required",
+        component.path(),
+        [
+            declaration(
+                PIPELINE_EVENT_HOOK_INTERFACE_ID.0,
+                "dev.vesper.scope-required.event",
+            ),
+            declaration(
+                BENCHMARK_SINK_INTERFACE_ID.0,
+                "dev.vesper.scope-required.benchmark",
+            ),
+        ],
+    )])
+    .expect("WASM registry");
+    let reference = reference("dev.vesper.scope-required", None, PluginTransport::Wasm);
+
+    let hook_error = registry
+        .resolve_pipeline_event_hook(&reference)
+        .expect_err("WASM observer resolution must require a lifecycle scope");
+    assert!(hook_error.to_string().contains("scope"));
+
+    let benchmark_error = registry
+        .resolve_benchmark_sink(&reference)
+        .expect_err("WASM offline resolution must require a lifecycle scope");
+    assert!(benchmark_error.to_string().contains("scope"));
+}
+
+#[test]
 fn wasm_registry_resolves_and_executes_both_typed_capabilities() {
     let component = write_component(component("event-and-benchmark-plugin", COMBINED_CORE_WAT));
     let artifact = artifact(
@@ -202,6 +235,8 @@ fn wasm_registry_resolves_and_executes_both_typed_capabilities() {
         ],
     );
     let registry = PluginRegistry::load_wasm_artifacts([artifact]).expect("WASM registry");
+    let lifecycle = empty_plugin_runtime();
+    let scope = lifecycle.root_scope();
 
     assert_eq!(registry.registered_interfaces().len(), 2);
     assert!(
@@ -215,7 +250,7 @@ fn wasm_registry_resolves_and_executes_both_typed_capabilities() {
 
     let implicit = reference("dev.vesper.wasm-fixture", None, PluginTransport::Wasm);
     let hook = registry
-        .resolve_pipeline_event_hook(&implicit)
+        .resolve_pipeline_event_hook_in_scope(&implicit, &scope)
         .expect("unique WASM EventHook");
     assert_eq!(
         hook.reference().capability_instance_id(),
@@ -229,11 +264,14 @@ fn wasm_registry_resolves_and_executes_both_typed_capabilities() {
     );
 
     let benchmark = registry
-        .resolve_benchmark_sink(&reference(
-            "dev.vesper.wasm-fixture",
-            Some("dev.vesper.wasm-fixture.benchmark"),
-            PluginTransport::Wasm,
-        ))
+        .resolve_benchmark_sink_in_scope(
+            &reference(
+                "dev.vesper.wasm-fixture",
+                Some("dev.vesper.wasm-fixture.benchmark"),
+                PluginTransport::Wasm,
+            ),
+            &scope,
+        )
         .expect("explicit WASM BenchmarkSink");
     assert_eq!(
         benchmark
@@ -251,6 +289,10 @@ fn wasm_registry_resolves_and_executes_both_typed_capabilities() {
             .accepted_events,
         1
     );
+    let close = lifecycle
+        .shutdown(std::time::Duration::from_secs(1))
+        .expect("WASM lifecycle close");
+    assert_eq!(close.owners_settled, 2);
 }
 
 #[test]
@@ -271,6 +313,8 @@ fn wasm_registry_requires_an_instance_when_multiple_implementations_match() {
         ],
     );
     let registry = PluginRegistry::load_wasm_artifacts([artifact]).expect("WASM registry");
+    let lifecycle = empty_plugin_runtime();
+    let scope = lifecycle.root_scope();
 
     let implicit = reference("dev.vesper.multi-hook", None, PluginTransport::Wasm);
     assert_eq!(
@@ -288,13 +332,109 @@ fn wasm_registry_requires_an_instance_when_multiple_implementations_match() {
     );
     assert!(
         registry
-            .resolve_pipeline_event_hook(&explicit)
+            .resolve_pipeline_event_hook_in_scope(&explicit, &scope)
             .expect("explicit secondary hook")
             .capability()
             .on_event(&pipeline_event())
             .expect("secondary hook outcome")
             .accepted
     );
+    lifecycle
+        .shutdown(std::time::Duration::from_secs(1))
+        .expect("WASM lifecycle close");
+}
+
+#[test]
+fn rewrite_w4_scoped_wasm_workers_close_once_and_isolate_siblings() {
+    let component = write_component(component("event-and-benchmark-plugin", COMBINED_CORE_WAT));
+    let registry = PluginRegistry::load_wasm_artifacts([artifact(
+        "dev.vesper.scoped-workers",
+        component.path(),
+        [
+            declaration(
+                PIPELINE_EVENT_HOOK_INTERFACE_ID.0,
+                "dev.vesper.scoped-workers.event",
+            ),
+            declaration(
+                BENCHMARK_SINK_INTERFACE_ID.0,
+                "dev.vesper.scoped-workers.benchmark",
+            ),
+        ],
+    )])
+    .expect("WASM registry");
+    let lifecycle = empty_plugin_runtime();
+    let root = lifecycle.root_scope();
+    let hook_scope = root
+        .create_child(PluginScopeKind::Operation)
+        .expect("hook scope");
+    let benchmark_scope = root
+        .create_child(PluginScopeKind::Operation)
+        .expect("benchmark scope");
+    let hook = registry
+        .resolve_pipeline_event_hook_in_scope(
+            &reference(
+                "dev.vesper.scoped-workers",
+                Some("dev.vesper.scoped-workers.event"),
+                PluginTransport::Wasm,
+            ),
+            &hook_scope,
+        )
+        .expect("scoped EventHook");
+    let benchmark = registry
+        .resolve_benchmark_sink_in_scope(
+            &reference(
+                "dev.vesper.scoped-workers",
+                Some("dev.vesper.scoped-workers.benchmark"),
+                PluginTransport::Wasm,
+            ),
+            &benchmark_scope,
+        )
+        .expect("scoped BenchmarkSink");
+
+    assert!(
+        hook.capability()
+            .on_event(&pipeline_event())
+            .expect("hook before close")
+            .accepted
+    );
+    assert_eq!(
+        benchmark
+            .capability()
+            .on_event_batch(&benchmark_batch())
+            .expect("benchmark before sibling close")
+            .accepted_events,
+        1
+    );
+
+    let hook_close = hook_scope
+        .close_with_timeout(std::time::Duration::from_secs(1))
+        .expect("hook scope close");
+    assert_eq!(hook_close.final_state, PluginScopeState::Closed);
+    assert_eq!(hook_close.owners_settled, 1);
+    assert!(hook.capability().on_event(&pipeline_event()).is_err());
+    assert_eq!(
+        benchmark
+            .capability()
+            .on_event_batch(&benchmark_batch())
+            .expect("benchmark sibling remains live")
+            .accepted_events,
+        1
+    );
+
+    let benchmark_close = benchmark_scope
+        .close_with_timeout(std::time::Duration::from_secs(1))
+        .expect("benchmark scope close");
+    assert_eq!(benchmark_close.final_state, PluginScopeState::Closed);
+    assert_eq!(benchmark_close.owners_settled, 1);
+    assert!(
+        benchmark
+            .capability()
+            .on_event_batch(&benchmark_batch())
+            .is_err()
+    );
+    lifecycle
+        .shutdown(std::time::Duration::from_secs(1))
+        .expect("root scope close");
 }
 
 #[test]
@@ -435,8 +575,9 @@ kind = "notice"
     );
     drop(catalog);
 
+    let lifecycle = empty_plugin_runtime();
     let hook = registry
-        .resolve_pipeline_event_hook(&reference)
+        .resolve_pipeline_event_hook_in_scope(&reference, &lifecycle.root_scope())
         .expect("resolved installed EventHook");
     assert!(
         hook.capability()
@@ -444,6 +585,9 @@ kind = "notice"
             .expect("execute installed EventHook")
             .accepted
     );
+    lifecycle
+        .shutdown(std::time::Duration::from_secs(1))
+        .expect("installed WASM lifecycle close");
 }
 
 #[test]
@@ -585,6 +729,22 @@ fn benchmark_batch() -> BenchmarkEventBatch {
             attributes: BTreeMap::new(),
         }],
     }
+}
+
+fn empty_plugin_runtime() -> PluginRuntime {
+    let catalog = PluginCatalog::from_records([]).expect("empty plugin catalog");
+    let policy = PluginResolverPolicy::new(
+        PluginArtifactTransport::Native,
+        "aarch64-apple-darwin",
+        "arm64",
+        1,
+        0,
+    )
+    .expect("empty runtime policy");
+    let plan = PluginResolver::new(&catalog, policy)
+        .resolve_plan(&[])
+        .expect("empty plugin plan");
+    PluginRuntime::new(plan)
 }
 
 fn component(world_name: &str, core_wat: &str) -> Vec<u8> {

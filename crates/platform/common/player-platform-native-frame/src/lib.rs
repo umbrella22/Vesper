@@ -5,20 +5,22 @@
 )]
 
 use std::collections::{HashMap, VecDeque};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use player_plugin::{
     DecoderNativeDeviceContext, DecoderNativeFrame, DecoderPacket, DecoderPacketResult,
     DecoderReceiveNativeFrameOutput, FrameProcessorError, FrameProcessorFrameTimings,
     FrameProcessorInputFrame, FrameProcessorOutputFrame, FrameProcessorReceiveOutput,
     FrameProcessorSession, FrameProcessorSubmitFrame, FrameProcessorSubmitResult,
-    FrameProcessorSubmitStatus, NativeFrame, NativeFrameReleaseTracking, SourceNormalizerPacket,
-    SourceNormalizerPacketMediaKind,
+    FrameProcessorSubmitStatus, MAX_PLUGIN_SCOPE_REASON_BYTES, NativeFrame, NativeFrameLeaseToken,
+    NativeFrameReleaseTracking, PluginScope, PluginScopeCloseReport, PluginScopeKind,
+    PluginScopeState, SourceNormalizerPacket, SourceNormalizerPacketMediaKind,
 };
 use player_runtime::{
     FrameProcessorMode, FrameProcessorPolicy, FrameProcessorPolicyAction, FrameProcessorWarning,
     FrameProcessorWarningKind, PlayerFrameProcessingMetrics, PlayerRuntimeEvent,
-    PlayerRuntimeWarning, PluginBreakerState, PluginBudgetPolicy,
+    PlayerRuntimeWarning, PluginBreakerDisposition, PluginBreakerState, PluginBudgetPolicy,
+    PluginInvocationObservation, PluginInvocationOutcome,
 };
 
 /// Maximum number of pending runtime events the frame processor chain buffers
@@ -44,6 +46,7 @@ pub struct NativeFrameProcessorChainCore {
     policy: FrameProcessorPolicy,
     metrics: PlayerFrameProcessingMetrics,
     pending_events: VecDeque<PlayerRuntimeEvent>,
+    outstanding_processor_outputs: Vec<NativeFrameProcessorOwnedFrame>,
     closed: bool,
 }
 
@@ -54,16 +57,18 @@ impl NativeFrameProcessorChainCore {
         policy: FrameProcessorPolicy,
     ) -> Self {
         let budget = plugin_budget_from_frame_processor_policy(&policy);
-        let processors = processors
+        let mut processors: Vec<NativeFrameProcessorNode> = processors
             .into_iter()
             .map(|node| node.with_budget(budget))
             .collect();
+        processors.sort_by_key(|node| node.processor_index);
         Self {
             processors,
             mode,
             policy,
             metrics: PlayerFrameProcessingMetrics::default(),
             pending_events: VecDeque::new(),
+            outstanding_processor_outputs: Vec::new(),
             closed: false,
         }
     }
@@ -74,6 +79,12 @@ impl NativeFrameProcessorChainCore {
 
     pub fn policy(&self) -> &FrameProcessorPolicy {
         &self.policy
+    }
+
+    pub fn processor_names(&self) -> impl Iterator<Item = &str> {
+        self.processors
+            .iter()
+            .map(|processor| processor.plugin_name.as_str())
     }
 
     pub fn metrics(&self) -> &PlayerFrameProcessingMetrics {
@@ -122,6 +133,7 @@ impl NativeFrameProcessorChainCore {
             decoder_frame,
             presentation_frame,
             processor_outputs: state.processor_outputs,
+            used_processor_output: state.using_processor_output,
         })
     }
 
@@ -136,6 +148,7 @@ impl NativeFrameProcessorChainCore {
             return self.handle_disabled_node(node_index, decoder_frame, state, observer);
         }
 
+        let invocation_started = Instant::now();
         let submit_result = match self.submit_to_node(node_index, &state.current_frame) {
             Ok(result) => result,
             Err(error) => {
@@ -193,6 +206,7 @@ impl NativeFrameProcessorChainCore {
         };
         match receive {
             FrameProcessorReceiveOutput::Frame(output) => {
+                let host_elapsed_us = Some(duration_us_u64(invocation_started.elapsed()));
                 if load_action == FrameProcessorPolicyAction::DropOutput {
                     self.handle_over_budget_output(
                         node_index,
@@ -202,9 +216,17 @@ impl NativeFrameProcessorChainCore {
                         decoder_frame,
                         state,
                         observer,
+                        host_elapsed_us,
                     )
                 } else {
-                    self.handle_ready_output(node_index, output, decoder_frame, state, observer)
+                    self.handle_ready_output(
+                        node_index,
+                        output,
+                        decoder_frame,
+                        state,
+                        observer,
+                        host_elapsed_us,
+                    )
                 }
             }
             FrameProcessorReceiveOutput::Pending | FrameProcessorReceiveOutput::EndOfStream => {
@@ -226,8 +248,16 @@ impl NativeFrameProcessorChainCore {
         decoder_frame: &DecoderNativeFrame,
         state: &mut NativeFrameProcessorProcessState,
         observer: &mut impl NativeFrameProcessorObserver,
+        host_elapsed_us: Option<u64>,
     ) -> Result<(), NativeFrameProcessorProcessError> {
-        self.handle_ready_output(node_index, output, decoder_frame, state, observer)?;
+        self.handle_ready_output(
+            node_index,
+            output,
+            decoder_frame,
+            state,
+            observer,
+            host_elapsed_us,
+        )?;
         self.reset_to_decoder_frame(decoder_frame, state);
         self.metrics.bypassed_frame_count = self.metrics.bypassed_frame_count.saturating_add(1);
         self.metrics.backpressure_count = self.metrics.backpressure_count.saturating_add(1);
@@ -482,23 +512,27 @@ impl NativeFrameProcessorChainCore {
         decoder_frame: &DecoderNativeFrame,
         state: &mut NativeFrameProcessorProcessState,
         observer: &mut impl NativeFrameProcessorObserver,
+        host_elapsed_us: Option<u64>,
     ) -> Result<(), NativeFrameProcessorProcessError> {
         observer.observe_processed_node();
         let node_snapshot = self.node_snapshot(node_index);
-        let timing = self.record_output_timing(node_index, &state.current_frame, &output);
+        let timing =
+            self.record_output_timing(node_index, &state.current_frame, &output, host_elapsed_us);
         observer.observe_timing(timing.deadline_missed, timing.should_drop_output);
         if (timing.should_drop_output || timing.should_fail_playback)
             && output_frame_requires_processor_release(&output.frame)
-            && let Err(error) =
-                self.release_processor_outputs_best_effort(vec![NativeFrameProcessorOwnedFrame {
-                    processor_index: node_snapshot.processor_index,
-                    frame: output.frame.clone(),
-                }])
         {
-            return Err(NativeFrameProcessorProcessError {
-                error: error.error,
-                decoder_frame: decoder_frame.clone(),
-            });
+            let owned = NativeFrameProcessorOwnedFrame {
+                processor_index: node_snapshot.processor_index,
+                frame: output.frame.clone(),
+            };
+            self.track_processor_output(owned.clone());
+            if let Err(error) = self.release_processor_outputs_best_effort(vec![owned]) {
+                return Err(NativeFrameProcessorProcessError {
+                    error: error.error,
+                    decoder_frame: decoder_frame.clone(),
+                });
+            }
         }
         if timing.should_fail_playback && self.mode == FrameProcessorMode::RequireProcessed {
             let _ = self.release_processor_outputs_best_effort(std::mem::take(
@@ -562,12 +596,13 @@ impl NativeFrameProcessorChainCore {
         state: &mut NativeFrameProcessorProcessState,
     ) {
         if output_frame_requires_processor_release(&output_frame) {
-            state
-                .processor_outputs
-                .push(NativeFrameProcessorOwnedFrame {
-                    processor_index: self.processors[node_index].processor_index,
-                    frame: output_frame.clone(),
-                });
+            let owned = NativeFrameProcessorOwnedFrame {
+                processor_index: self.processors[node_index].processor_index,
+                frame: output_frame.clone(),
+            };
+            if self.track_processor_output(owned.clone()) {
+                state.processor_outputs.push(owned);
+            }
         }
         state.current_frame = output_frame;
         if self.mode == FrameProcessorMode::DiagnosticsOnly {
@@ -621,24 +656,49 @@ impl NativeFrameProcessorChainCore {
         let mut first_error = None;
         let mut unreleased_outputs = Vec::new();
         while let Some(output) = outputs.pop() {
-            let Some(node) = self
-                .processors
-                .iter_mut()
-                .find(|node| node.processor_index == output.processor_index)
+            let Some(owned_position) = self
+                .outstanding_processor_outputs
+                .iter()
+                .position(|owned| owned.key() == output.key())
             else {
                 if first_error.is_none() {
                     first_error = Some(NativeFrameProcessorError {
                         processor_index: output.processor_index,
-                        plugin_name: "<missing>".to_owned(),
+                        plugin_name: self
+                            .processors
+                            .iter()
+                            .find(|node| node.processor_index == output.processor_index)
+                            .map(|node| node.plugin_name.clone())
+                            .unwrap_or_else(|| "<missing>".to_owned()),
                         operation: "release_frame".to_owned(),
-                        message: "frame processor is missing for owned output release".to_owned(),
+                        message: "processor output is stale, duplicated, or not tracked".to_owned(),
                         strict: self.mode == FrameProcessorMode::RequireProcessed,
                     });
                 }
                 unreleased_outputs.push(output);
                 continue;
             };
-            if let Err(error) = node.session.release_frame(output.frame.clone()) {
+
+            let tracked_output = self.outstanding_processor_outputs[owned_position].clone();
+            let Some(node_position) = self
+                .processors
+                .iter()
+                .position(|node| node.processor_index == tracked_output.processor_index)
+            else {
+                if first_error.is_none() {
+                    first_error = Some(NativeFrameProcessorError {
+                        processor_index: tracked_output.processor_index,
+                        plugin_name: "<missing>".to_owned(),
+                        operation: "release_frame".to_owned(),
+                        message: "frame processor is missing for owned output release".to_owned(),
+                        strict: self.mode == FrameProcessorMode::RequireProcessed,
+                    });
+                }
+                unreleased_outputs.push(tracked_output);
+                continue;
+            };
+            let node = &mut self.processors[node_position];
+            if let Err(error) = node.session.release_frame(tracked_output.frame.clone()) {
                 if first_error.is_none() {
                     first_error = Some(NativeFrameProcessorError::from_plugin(
                         self.mode,
@@ -648,7 +708,9 @@ impl NativeFrameProcessorChainCore {
                         error,
                     ));
                 }
-                unreleased_outputs.push(output);
+                unreleased_outputs.push(tracked_output);
+            } else {
+                self.outstanding_processor_outputs.remove(owned_position);
             }
         }
         match first_error {
@@ -661,6 +723,7 @@ impl NativeFrameProcessorChainCore {
     }
 
     pub fn flush(&mut self) -> Result<(), NativeFrameProcessorError> {
+        self.release_outstanding_processor_outputs()?;
         for node in &mut self.processors {
             node.session.flush().map_err(|error| {
                 NativeFrameProcessorError::from_plugin(
@@ -679,6 +742,7 @@ impl NativeFrameProcessorChainCore {
         if self.closed {
             return Ok(());
         }
+        self.release_outstanding_processor_outputs()?;
         self.closed = true;
         let mut first_error = None;
         for node in &mut self.processors {
@@ -700,11 +764,32 @@ impl NativeFrameProcessorChainCore {
         Ok(())
     }
 
+    fn track_processor_output(&mut self, output: NativeFrameProcessorOwnedFrame) -> bool {
+        if self
+            .outstanding_processor_outputs
+            .iter()
+            .any(|owned| owned.key() == output.key())
+        {
+            return false;
+        }
+        self.outstanding_processor_outputs.push(output);
+        true
+    }
+
+    fn release_outstanding_processor_outputs(&mut self) -> Result<(), NativeFrameProcessorError> {
+        match self.release_processor_outputs_best_effort(self.outstanding_processor_outputs.clone())
+        {
+            Ok(_) => Ok(()),
+            Err(failure) => Err(failure.error),
+        }
+    }
+
     fn record_output_timing(
         &mut self,
         node_index: usize,
         input: &NativeFrame,
         output: &FrameProcessorOutputFrame,
+        host_elapsed_us: Option<u64>,
     ) -> NativeFrameProcessorTimingDecision {
         self.metrics.processed_frame_count = self.metrics.processed_frame_count.saturating_add(1);
         self.metrics.last_queue_wait_us = output.timings.queue_wait_us;
@@ -712,9 +797,13 @@ impl NativeFrameProcessorChainCore {
         self.metrics.last_submit_to_ready_us = output.timings.submit_to_ready_us;
         let mut decision = NativeFrameProcessorTimingDecision::default();
         let node = self.node_snapshot(node_index);
-        if output
+        let effective_submit_to_ready_us = output
             .timings
             .submit_to_ready_us
+            .into_iter()
+            .chain(host_elapsed_us)
+            .max();
+        if effective_submit_to_ready_us
             .is_some_and(|elapsed| elapsed > self.policy.frame_deadline.as_micros() as u64)
         {
             self.metrics.deadline_miss_count = self.metrics.deadline_miss_count.saturating_add(1);
@@ -732,9 +821,10 @@ impl NativeFrameProcessorChainCore {
             };
             let details = FrameProcessorWarningDetails {
                 consecutive_miss_count: Some(consecutive_miss_count),
-                ..FrameProcessorWarningDetails::from_output_timing(
+                ..FrameProcessorWarningDetails::from_output_timing_with_elapsed(
                     output,
                     self.policy.frame_deadline,
+                    effective_submit_to_ready_us,
                 )
             };
             self.push_warning(
@@ -763,7 +853,7 @@ impl NativeFrameProcessorChainCore {
         } else {
             self.processors[node_index].breaker.record_success();
         }
-        if output.timings.submit_to_ready_us.is_some_and(|elapsed| {
+        if effective_submit_to_ready_us.is_some_and(|elapsed| {
             elapsed
                 > (self.policy.frame_deadline + self.policy.late_output_tolerance).as_micros()
                     as u64
@@ -780,9 +870,10 @@ impl NativeFrameProcessorChainCore {
                 FrameProcessorWarningKind::LateOutputDropped,
                 &node,
                 input,
-                FrameProcessorWarningDetails::from_output_timing(
+                FrameProcessorWarningDetails::from_output_timing_with_elapsed(
                     output,
                     self.policy.frame_deadline,
+                    effective_submit_to_ready_us,
                 ),
                 FrameProcessorPolicyAction::DropOutput,
                 Some("processor output was later than tolerance".to_owned()),
@@ -959,12 +1050,32 @@ pub struct NativeFrameProcessorProcessedFrame {
     pub decoder_frame: DecoderNativeFrame,
     pub presentation_frame: DecoderNativeFrame,
     pub processor_outputs: Vec<NativeFrameProcessorOwnedFrame>,
+    pub used_processor_output: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeFrameProcessorOwnedFrame {
     pub processor_index: usize,
     pub frame: NativeFrame,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct NativeFrameProcessorOutputKey {
+    processor_index: usize,
+    handle: usize,
+    lease_token: Option<NativeFrameLeaseToken>,
+    frame_id: Option<u64>,
+}
+
+impl NativeFrameProcessorOwnedFrame {
+    fn key(&self) -> NativeFrameProcessorOutputKey {
+        NativeFrameProcessorOutputKey {
+            processor_index: self.processor_index,
+            handle: self.frame.handle,
+            lease_token: self.frame.lease_token,
+            frame_id: self.frame.metadata.frame_id,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1060,16 +1171,18 @@ struct FrameProcessorWarningDetails {
 }
 
 impl FrameProcessorWarningDetails {
-    fn from_output_timing(output: &FrameProcessorOutputFrame, deadline: Duration) -> Self {
+    fn from_output_timing_with_elapsed(
+        output: &FrameProcessorOutputFrame,
+        deadline: Duration,
+        effective_submit_to_ready_us: Option<u64>,
+    ) -> Self {
         let deadline_us = deadline.as_micros() as u64;
         Self {
             output_handle_kind: Some(format!("{:?}", output.frame.metadata.handle_kind)),
             queue_wait_us: output.timings.queue_wait_us,
             process_time_us: output.timings.process_time_us,
-            submit_to_ready_us: output.timings.submit_to_ready_us,
-            deadline_overrun_us: output
-                .timings
-                .submit_to_ready_us
+            submit_to_ready_us: effective_submit_to_ready_us,
+            deadline_overrun_us: effective_submit_to_ready_us
                 .and_then(|elapsed| elapsed.checked_sub(deadline_us)),
             ..Self::default()
         }
@@ -1113,6 +1226,10 @@ pub fn present_deadline_us(pts_us: Option<i64>, frame_deadline: Duration) -> Opt
 
 pub fn duration_us_i64(duration: Duration) -> i64 {
     i64::try_from(duration.as_micros()).unwrap_or(i64::MAX)
+}
+
+fn duration_us_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
 pub fn native_frame_release_tracking(requires_release: bool) -> NativeFrameReleaseTracking {
@@ -1271,11 +1388,22 @@ pub struct NativeFramePipelineStatusSnapshot {
     pub pending_packet: bool,
     pub end_of_stream: bool,
     pub epoch: u64,
+    pub generation: u64,
     pub counters: NativeFramePipelineCounters,
+}
+
+/// Stable category for a native-frame pipeline failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeFramePipelineErrorKind {
+    /// A configured pipeline operation returned an error.
+    OperationFailed,
+    /// A Native plugin callback reached its breaker threshold.
+    PluginQuarantined,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeFramePipelineError {
+    pub kind: NativeFramePipelineErrorKind,
     pub operation: &'static str,
     pub message: String,
 }
@@ -1283,9 +1411,28 @@ pub struct NativeFramePipelineError {
 impl NativeFramePipelineError {
     pub fn new(operation: &'static str, message: impl Into<String>) -> Self {
         Self {
+            kind: NativeFramePipelineErrorKind::OperationFailed,
             operation,
             message: message.into(),
         }
+    }
+
+    pub fn plugin_quarantined(operation: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            kind: NativeFramePipelineErrorKind::PluginQuarantined,
+            operation,
+            message: message.into(),
+        }
+    }
+
+    /// Returns the operation that produced the failure.
+    pub const fn operation(&self) -> &'static str {
+        self.operation
+    }
+
+    /// Returns the diagnostic message.
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
@@ -1347,43 +1494,131 @@ pub fn protect_native_frame_packet_source_adapter(
     Box::new(ProtectedNativeFramePacketSourceAdapter::new(inner))
 }
 
+/// Wraps a packet source with a host-observed `read_packet` callback budget.
+///
+/// The budget applies to the realtime packet callback. `close` remains
+/// callable after quarantine so the owner can always attempt cleanup.
+pub fn protect_native_frame_packet_source_adapter_with_budget(
+    inner: Box<dyn NativeFramePacketSourceAdapter>,
+    budget: PluginBudgetPolicy,
+) -> Box<dyn NativeFramePacketSourceAdapter> {
+    Box::new(ProtectedNativeFramePacketSourceAdapter::with_budget(
+        inner, budget,
+    ))
+}
+
 pub fn protect_native_frame_decoder_adapter(
     inner: Box<dyn NativeFrameDecoderAdapter>,
 ) -> Box<dyn NativeFrameDecoderAdapter> {
     Box::new(ProtectedNativeFrameDecoderAdapter::new(inner))
 }
 
+/// Wraps a decoder with host-observed `send_packet` and
+/// `receive_native_frame` callback budgets.
+///
+/// Release, flush, and close remain callable after quarantine so outstanding
+/// Native resources can still be returned to the creating adapter.
+pub fn protect_native_frame_decoder_adapter_with_budget(
+    inner: Box<dyn NativeFrameDecoderAdapter>,
+    budget: PluginBudgetPolicy,
+) -> Box<dyn NativeFrameDecoderAdapter> {
+    Box::new(ProtectedNativeFrameDecoderAdapter::with_budget(
+        inner, budget,
+    ))
+}
+
+#[derive(Debug, Clone)]
+struct NativePluginCallbackGuard {
+    breaker: PluginBreakerState,
+}
+
+impl NativePluginCallbackGuard {
+    fn new(budget: PluginBudgetPolicy) -> Self {
+        Self {
+            breaker: PluginBreakerState::new(budget),
+        }
+    }
+
+    fn observe(&mut self, elapsed: Duration, succeeded: bool) -> PluginInvocationObservation {
+        self.breaker.observe_invocation(elapsed, succeeded)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NativePluginQuarantine {
+    operation: &'static str,
+    observation: PluginInvocationObservation,
+}
+
+impl NativePluginQuarantine {
+    fn message(self, component: &'static str) -> String {
+        let reason = match self.observation.outcome {
+            PluginInvocationOutcome::Succeeded => "reported an invalid healthy quarantine",
+            PluginInvocationOutcome::Failed => "failed repeatedly",
+            PluginInvocationOutcome::DeadlineMissed => "missed the callback deadline repeatedly",
+            PluginInvocationOutcome::Quarantined => "was already quarantined",
+        };
+        format!(
+            "native-frame {component} disabled after callback quarantine: {} {reason} (elapsed_us={}, budget_us={}, consecutive_failures={})",
+            self.operation,
+            self.observation.elapsed_us,
+            self.observation.budget_us,
+            self.observation.consecutive_failures,
+        )
+    }
+}
+
 struct ProtectedNativeFramePacketSourceAdapter {
     inner: Box<dyn NativeFramePacketSourceAdapter>,
-    breaker: PluginBreakerState,
+    read_callback: NativePluginCallbackGuard,
+    quarantine: Option<NativePluginQuarantine>,
 }
 
 impl ProtectedNativeFramePacketSourceAdapter {
     fn new(inner: Box<dyn NativeFramePacketSourceAdapter>) -> Self {
+        Self::with_budget(inner, PluginBudgetPolicy::default())
+    }
+
+    fn with_budget(
+        inner: Box<dyn NativeFramePacketSourceAdapter>,
+        budget: PluginBudgetPolicy,
+    ) -> Self {
         Self {
             inner,
-            breaker: PluginBreakerState::new(PluginBudgetPolicy::default()),
+            read_callback: NativePluginCallbackGuard::new(budget),
+            quarantine: None,
         }
     }
 
-    fn disabled_error(operation: &'static str) -> NativeFramePipelineError {
-        NativeFramePipelineError::new(
-            operation,
-            "native-frame packet source disabled after repeated adapter failures",
-        )
+    fn disabled_error(&self, operation: &'static str) -> NativeFramePipelineError {
+        let message = self.quarantine.map_or_else(
+            || "native-frame packet source disabled by plugin policy".to_owned(),
+            |quarantine| quarantine.message("packet source"),
+        );
+        NativeFramePipelineError::plugin_quarantined(operation, message)
     }
 
     fn ensure_enabled(&self, operation: &'static str) -> Result<(), NativeFramePipelineError> {
-        if self.breaker.is_disabled() {
-            Err(Self::disabled_error(operation))
+        if self.quarantine.is_some() {
+            Err(self.disabled_error(operation))
         } else {
             Ok(())
         }
     }
 
-    fn record_failure(&mut self, error: NativeFramePipelineError) -> NativeFramePipelineError {
-        let _ = self.breaker.record_failure();
-        error
+    fn record_observation(
+        &mut self,
+        operation: &'static str,
+        observation: PluginInvocationObservation,
+    ) {
+        if observation.breaker_disposition == PluginBreakerDisposition::Quarantined
+            && self.quarantine.is_none()
+        {
+            self.quarantine = Some(NativePluginQuarantine {
+                operation,
+                observation,
+            });
+        }
     }
 }
 
@@ -1394,32 +1629,23 @@ impl NativeFramePacketSourceAdapter for ProtectedNativeFramePacketSourceAdapter 
 
     fn read_packet(&mut self) -> Result<NativeFramePacketRead, NativeFramePipelineError> {
         self.ensure_enabled("readPacket")?;
-        let read = self
-            .inner
-            .read_packet()
-            .map_err(|error| self.record_failure(error))?;
-        self.breaker.record_success();
-        Ok(read)
+        let started = Instant::now();
+        let result = self.inner.read_packet();
+        let observation = self
+            .read_callback
+            .observe(started.elapsed(), result.is_ok());
+        self.record_observation("readPacket", observation);
+        result
     }
 
     fn flush(&mut self) -> Result<(), NativeFramePipelineError> {
         self.ensure_enabled("flushPacketSource")?;
-        self.inner
-            .flush()
-            .map(|()| {
-                self.breaker.record_success();
-            })
-            .map_err(|error| self.record_failure(error))
+        self.inner.flush()
     }
 
     fn seek(&mut self, position: Duration) -> Result<(), NativeFramePipelineError> {
         self.ensure_enabled("seekPacketSource")?;
-        self.inner
-            .seek(position)
-            .map(|()| {
-                self.breaker.record_success();
-            })
-            .map_err(|error| self.record_failure(error))
+        self.inner.seek(position)
     }
 
     fn close(&mut self) -> Result<(), NativeFramePipelineError> {
@@ -1429,35 +1655,54 @@ impl NativeFramePacketSourceAdapter for ProtectedNativeFramePacketSourceAdapter 
 
 struct ProtectedNativeFrameDecoderAdapter {
     inner: Box<dyn NativeFrameDecoderAdapter>,
-    breaker: PluginBreakerState,
+    send_callback: NativePluginCallbackGuard,
+    receive_callback: NativePluginCallbackGuard,
+    quarantine: Option<NativePluginQuarantine>,
 }
 
 impl ProtectedNativeFrameDecoderAdapter {
     fn new(inner: Box<dyn NativeFrameDecoderAdapter>) -> Self {
+        Self::with_budget(inner, PluginBudgetPolicy::default())
+    }
+
+    fn with_budget(inner: Box<dyn NativeFrameDecoderAdapter>, budget: PluginBudgetPolicy) -> Self {
         Self {
             inner,
-            breaker: PluginBreakerState::new(PluginBudgetPolicy::default()),
+            send_callback: NativePluginCallbackGuard::new(budget),
+            receive_callback: NativePluginCallbackGuard::new(budget),
+            quarantine: None,
         }
     }
 
-    fn disabled_error(operation: &'static str) -> NativeFramePipelineError {
-        NativeFramePipelineError::new(
-            operation,
-            "native-frame decoder disabled after repeated adapter failures",
-        )
+    fn disabled_error(&self, operation: &'static str) -> NativeFramePipelineError {
+        let message = self.quarantine.map_or_else(
+            || "native-frame decoder disabled by plugin policy".to_owned(),
+            |quarantine| quarantine.message("decoder"),
+        );
+        NativeFramePipelineError::plugin_quarantined(operation, message)
     }
 
     fn ensure_enabled(&self, operation: &'static str) -> Result<(), NativeFramePipelineError> {
-        if self.breaker.is_disabled() {
-            Err(Self::disabled_error(operation))
+        if self.quarantine.is_some() {
+            Err(self.disabled_error(operation))
         } else {
             Ok(())
         }
     }
 
-    fn record_failure(&mut self, error: NativeFramePipelineError) -> NativeFramePipelineError {
-        let _ = self.breaker.record_failure();
-        error
+    fn record_observation(
+        &mut self,
+        operation: &'static str,
+        observation: PluginInvocationObservation,
+    ) {
+        if observation.breaker_disposition == PluginBreakerDisposition::Quarantined
+            && self.quarantine.is_none()
+        {
+            self.quarantine = Some(NativePluginQuarantine {
+                operation,
+                observation,
+            });
+        }
     }
 }
 
@@ -1468,24 +1713,26 @@ impl NativeFrameDecoderAdapter for ProtectedNativeFrameDecoderAdapter {
         data: &[u8],
     ) -> Result<DecoderPacketResult, NativeFramePipelineError> {
         self.ensure_enabled("sendDecoderPacket")?;
-        self.inner
-            .send_packet(packet, data)
-            .inspect(|_| {
-                self.breaker.record_success();
-            })
-            .map_err(|error| self.record_failure(error))
+        let started = Instant::now();
+        let result = self.inner.send_packet(packet, data);
+        let observation = self
+            .send_callback
+            .observe(started.elapsed(), result.is_ok());
+        self.record_observation("sendDecoderPacket", observation);
+        result
     }
 
     fn receive_native_frame(
         &mut self,
     ) -> Result<DecoderReceiveNativeFrameOutput, NativeFramePipelineError> {
         self.ensure_enabled("receiveDecoderFrame")?;
-        let output = self
-            .inner
-            .receive_native_frame()
-            .map_err(|error| self.record_failure(error))?;
-        self.breaker.record_success();
-        Ok(output)
+        let started = Instant::now();
+        let result = self.inner.receive_native_frame();
+        let observation = self
+            .receive_callback
+            .observe(started.elapsed(), result.is_ok());
+        self.record_observation("receiveDecoderFrame", observation);
+        result
     }
 
     fn release_native_frame(
@@ -1493,21 +1740,11 @@ impl NativeFrameDecoderAdapter for ProtectedNativeFrameDecoderAdapter {
         frame: DecoderNativeFrame,
         presented: bool,
     ) -> Result<(), NativeFramePipelineError> {
-        self.inner
-            .release_native_frame(frame, presented)
-            .map(|()| {
-                self.breaker.record_success();
-            })
-            .map_err(|error| self.record_failure(error))
+        self.inner.release_native_frame(frame, presented)
     }
 
     fn flush(&mut self) -> Result<(), NativeFramePipelineError> {
-        self.inner
-            .flush()
-            .map(|()| {
-                self.breaker.record_success();
-            })
-            .map_err(|error| self.record_failure(error))
+        self.inner.flush()
     }
 
     fn close(&mut self) -> Result<(), NativeFramePipelineError> {
@@ -1646,6 +1883,7 @@ struct NativeFramePipelinePendingFrame {
     decoder_frame: Option<DecoderNativeFrame>,
     processor_outputs: Vec<NativeFrameProcessorOwnedFrame>,
     epoch: u64,
+    generation: u64,
 }
 
 pub struct NativeFramePipelineCore {
@@ -1661,6 +1899,7 @@ pub struct NativeFramePipelineCore {
     output_target_attached: bool,
     lifecycle_state: NativeFramePipelineLifecycleState,
     epoch: u64,
+    generation: u64,
     counters: NativeFramePipelineCounters,
     closed: bool,
 }
@@ -1684,6 +1923,7 @@ impl NativeFramePipelineCore {
             output_target_attached: false,
             lifecycle_state: NativeFramePipelineLifecycleState::WaitingForSource,
             epoch: 0,
+            generation: 0,
             counters: NativeFramePipelineCounters::default(),
             closed: false,
         }
@@ -1717,6 +1957,15 @@ impl NativeFramePipelineCore {
         self.epoch
     }
 
+    /// Returns the playback generation currently bound to this pipeline.
+    ///
+    /// A value of zero means that the pipeline has not been attached to a
+    /// playback session yet. Sessions reject zero generations at their public
+    /// boundary and bind a non-zero value before advancing the pipeline.
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn lifecycle_state(&self) -> NativeFramePipelineLifecycleState {
         self.lifecycle_state
     }
@@ -1731,6 +1980,7 @@ impl NativeFramePipelineCore {
             pending_packet: self.pending_packet.is_some(),
             end_of_stream: self.end_of_stream,
             epoch: self.epoch,
+            generation: self.generation,
             counters: self.counters.clone(),
         }
     }
@@ -1791,11 +2041,56 @@ impl NativeFramePipelineCore {
     }
 
     pub fn set_presenter(&mut self, presenter: Box<dyn NativeFramePresenterAdapter>) {
-        if let Some(mut previous) = self.presenter.take() {
-            let _ = previous.close();
+        let _ = self.handoff_presenter(presenter);
+    }
+
+    /// Rebinds the presenter after settling resources owned by the previous
+    /// presenter generation.
+    ///
+    /// Pending frames are released before the old presenter is closed. The
+    /// epoch is then invalidated so a host cannot submit a stale release for a
+    /// frame that belonged to the previous presenter binding.
+    pub fn handoff_presenter(
+        &mut self,
+        presenter: Box<dyn NativeFramePresenterAdapter>,
+    ) -> Result<(), NativeFramePipelineError> {
+        let mut first_error = self.release_all_pending_frames(false).err();
+        self.bump_epoch();
+        if let Some(mut previous) = self.presenter.take()
+            && let Err(error) = previous.close()
+            && first_error.is_none()
+        {
+            first_error = Some(error);
         }
         self.presenter = Some(presenter);
         self.refresh_lifecycle_state();
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// Switches the pipeline to a new playback generation.
+    ///
+    /// The old generation is flushed before the new value is committed. If a
+    /// component fails during the flush, the session keeps its previous
+    /// generation and the error remains visible to the caller.
+    pub fn begin_generation(&mut self, generation: u64) -> Result<(), NativeFramePipelineError> {
+        if generation == 0 {
+            return Err(NativeFramePipelineError::new(
+                "beginVideoPipelineGeneration",
+                "video pipeline generation must be non-zero",
+            ));
+        }
+        if self.generation == generation {
+            return Ok(());
+        }
+        if self.generation != 0 || !self.pending_frames.is_empty() || self.pending_packet.is_some()
+        {
+            self.flush()?;
+        }
+        self.generation = generation;
+        Ok(())
     }
 
     pub fn set_output_target_attached(&mut self, attached: bool) {
@@ -2113,6 +2408,7 @@ impl NativeFramePipelineCore {
                 decoder_frame: decoder_frame.clone(),
                 presentation_frame: decoder_frame,
                 processor_outputs: Vec::new(),
+                used_processor_output: false,
             }),
         )
     }
@@ -2131,6 +2427,7 @@ impl NativeFramePipelineCore {
                 decoder_frame: Some(processed_frame.decoder_frame),
                 processor_outputs: processed_frame.processor_outputs,
                 epoch: self.epoch,
+                generation: self.generation,
             },
         );
         self.counters.decoded_frames = self.counters.decoded_frames.saturating_add(1);
@@ -2200,15 +2497,33 @@ impl NativeFramePipelineCore {
         frame_handle: u64,
         presented: bool,
     ) -> Result<(), NativeFramePipelineError> {
-        let Some(mut pending) = self.pending_frames.remove(&frame_handle) else {
+        let Some(pending) = self.pending_frames.get(&frame_handle) else {
             return Err(NativeFramePipelineError::new(
                 "releaseFrame",
                 "invalid native-frame pending frame handle",
             ));
         };
-        if pending.epoch != self.epoch {
-            return Ok(());
+        if pending.epoch != self.epoch || pending.generation != self.generation {
+            return Err(NativeFramePipelineError::new(
+                "releaseFrame",
+                "stale native-frame pending frame handle",
+            ));
         }
+        let pending = self.pending_frames.remove(&frame_handle).ok_or_else(|| {
+            NativeFramePipelineError::new(
+                "releaseFrame",
+                "native-frame pending frame disappeared during release",
+            )
+        })?;
+        self.release_pending_frame(frame_handle, pending, presented)
+    }
+
+    fn release_pending_frame(
+        &mut self,
+        frame_handle: u64,
+        mut pending: NativeFramePipelinePendingFrame,
+        presented: bool,
+    ) -> Result<(), NativeFramePipelineError> {
         let mut first_error = None;
         let mut released_cleanly = true;
         if !pending.processor_outputs.is_empty() {
@@ -2279,7 +2594,10 @@ impl NativeFramePipelineCore {
         let pending_handles = self.pending_frames.keys().copied().collect::<Vec<_>>();
         let mut first_error = None;
         for handle in pending_handles {
-            if let Err(error) = self.release_frame(handle, presented)
+            let Some(pending) = self.pending_frames.remove(&handle) else {
+                continue;
+            };
+            if let Err(error) = self.release_pending_frame(handle, pending, presented)
                 && first_error.is_none()
             {
                 first_error = Some(error);
@@ -2461,6 +2779,173 @@ impl Drop for NativeFramePipelineCore {
     }
 }
 
+/// Configuration bound to one video playback session.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VideoPipelineSessionConfig {
+    /// Playback generation assigned by the host when the session opens.
+    pub initial_generation: u64,
+}
+
+/// Scope and native-frame state observed for one video playback session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoPipelineSessionStatusSnapshot {
+    /// Playback generation bound to this session.
+    pub generation: u64,
+    /// Plugin scope lifecycle state.
+    pub scope_state: PluginScopeState,
+    /// Native-frame pipeline status.
+    pub pipeline: NativeFramePipelineStatusSnapshot,
+}
+
+/// Playback-scoped adapter around the native-frame pipeline core.
+pub struct VideoPipelineSession {
+    scope: PluginScope,
+    pipeline: NativeFramePipelineCore,
+    generation: u64,
+}
+
+impl VideoPipelineSession {
+    /// Opens a fully assembled video pipeline in a dedicated playback scope.
+    ///
+    /// A setup failure settles the accepted playback scope as `Failed`. The
+    /// pipeline value then drops and performs its idempotent component cleanup.
+    pub fn open(
+        scope: PluginScope,
+        mut pipeline: NativeFramePipelineCore,
+        config: VideoPipelineSessionConfig,
+    ) -> Result<Self, NativeFramePipelineError> {
+        if scope.kind() != PluginScopeKind::Playback {
+            return Err(NativeFramePipelineError::new(
+                "openVideoPipelineSession",
+                "video pipeline session requires a dedicated playback scope",
+            ));
+        }
+        if let Err(error) = scope.start() {
+            return Err(fail_video_pipeline_scope(
+                &scope,
+                format!("video pipeline playback scope could not start: {error}"),
+            ));
+        }
+
+        let setup_error = if !pipeline.has_packet_source() {
+            Some("video pipeline packet source is not configured")
+        } else if !pipeline.has_decoder() {
+            Some("video pipeline decoder is not configured")
+        } else if !pipeline.has_presenter() {
+            Some("video pipeline presenter is not configured")
+        } else if config.initial_generation == 0 {
+            Some("video pipeline initial generation must be non-zero")
+        } else {
+            None
+        };
+        if let Some(message) = setup_error {
+            return Err(fail_video_pipeline_scope(&scope, message));
+        }
+
+        if let Err(error) = pipeline.begin_generation(config.initial_generation) {
+            return Err(fail_video_pipeline_scope(
+                &scope,
+                format!("video pipeline generation could not start: {error}"),
+            ));
+        }
+
+        Ok(Self {
+            scope,
+            pipeline,
+            generation: config.initial_generation,
+        })
+    }
+
+    /// Returns the playback generation bound when the session opened.
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Flushes the old media generation before committing a new one.
+    pub fn begin_generation(&mut self, generation: u64) -> Result<(), NativeFramePipelineError> {
+        self.pipeline.begin_generation(generation)?;
+        self.generation = generation;
+        Ok(())
+    }
+
+    /// Returns the current scope and native-frame state.
+    pub fn status_snapshot(&self) -> VideoPipelineSessionStatusSnapshot {
+        VideoPipelineSessionStatusSnapshot {
+            generation: self.generation,
+            scope_state: self.scope.state(),
+            pipeline: self.pipeline.status_snapshot(),
+        }
+    }
+
+    /// Updates output-target readiness without changing route selection.
+    pub fn set_output_target_attached(&mut self, attached: bool) {
+        self.pipeline.set_output_target_attached(attached);
+    }
+
+    /// Advances packet, decoder, processor, and presenter adapters once.
+    pub fn advance(&mut self) -> Result<NativeFramePipelineFrameResult, NativeFramePipelineError> {
+        self.pipeline.advance()
+    }
+
+    /// Releases a host-held frame through the pipeline that created it.
+    pub fn release_frame(
+        &mut self,
+        frame_handle: u64,
+        presented: bool,
+    ) -> Result<(), NativeFramePipelineError> {
+        self.pipeline.release_frame(frame_handle, presented)
+    }
+
+    /// Closes media components and then settles the playback scope.
+    pub fn close(&mut self) -> Result<PluginScopeCloseReport, NativeFramePipelineError> {
+        let pipeline_error = self.pipeline.close().err();
+        let scope_result = match pipeline_error.as_ref() {
+            Some(error) => self
+                .scope
+                .fail(bounded_scope_failure_reason(error.message())),
+            None => self.scope.close(),
+        };
+        match (pipeline_error, scope_result) {
+            (Some(error), _) => Err(error),
+            (None, Ok(report)) => Ok(report),
+            (None, Err(error)) => Err(NativeFramePipelineError::new(
+                "closeVideoPipelineSessionScope",
+                error.to_string(),
+            )),
+        }
+    }
+}
+
+impl Drop for VideoPipelineSession {
+    fn drop(&mut self) {
+        let _ = self.close();
+    }
+}
+
+fn fail_video_pipeline_scope(
+    scope: &PluginScope,
+    message: impl AsRef<str>,
+) -> NativeFramePipelineError {
+    let message = message.as_ref().to_owned();
+    let _ = scope.fail(bounded_scope_failure_reason(&message));
+    NativeFramePipelineError::new("openVideoPipelineSession", message)
+}
+
+fn bounded_scope_failure_reason(message: &str) -> String {
+    let mut bounded = String::new();
+    for character in message.chars() {
+        if bounded.len().saturating_add(character.len_utf8()) > MAX_PLUGIN_SCOPE_REASON_BYTES {
+            break;
+        }
+        bounded.push(character);
+    }
+    if bounded.is_empty() {
+        "video pipeline failure".to_owned()
+    } else {
+        bounded
+    }
+}
+
 pub fn native_frame_pipeline_frame_from_decoder(
     frame: &DecoderNativeFrame,
 ) -> NativeFramePipelineFrame {
@@ -2477,7 +2962,11 @@ pub fn native_frame_pipeline_frame_from_decoder(
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::thread;
 
     use player_plugin::{
         DecoderFrameFormat, DecoderMediaKind, DecoderNativeDeviceContext, DecoderNativeFrame,
@@ -2486,10 +2975,13 @@ mod tests {
         FrameProcessorOutputFrame, FrameProcessorReceiveOutput, FrameProcessorSession,
         FrameProcessorSessionInfo, FrameProcessorSubmitFrame, FrameProcessorSubmitResult,
         FrameProcessorSubmitStatus, NativeFrameMetadata, NativeFramePipelineProfile,
-        NativeFrameReleaseTracking, SourceNormalizerPacket, SourceNormalizerPacketMediaKind,
+        NativeFrameReleaseTracking, PluginArtifactTransport, PluginCatalog, PluginResolver,
+        PluginResolverPolicy, PluginRuntime, PluginScopeKind, PluginScopeState,
+        SourceNormalizerPacket, SourceNormalizerPacketMediaKind,
     };
     use player_runtime::{
-        FrameProcessorPolicy, FrameProcessorPolicyAction, FrameProcessorWarningKind,
+        DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES, FrameProcessorPolicy, FrameProcessorPolicyAction,
+        FrameProcessorWarningKind,
     };
 
     use super::*;
@@ -2506,6 +2998,7 @@ mod tests {
         submit_queue_depth: Option<u32>,
         submit_in_flight_frames: Option<u32>,
         receive_error: Option<String>,
+        receive_delay: Option<Duration>,
         release_error: Option<String>,
         close_error: Option<String>,
     }
@@ -2513,11 +3006,29 @@ mod tests {
     #[derive(Debug)]
     struct TestSession {
         state: Arc<Mutex<TestState>>,
+        submission_trace: Option<Arc<Mutex<Vec<usize>>>>,
+        trace_index: usize,
     }
 
     impl TestSession {
         fn new(state: Arc<Mutex<TestState>>) -> Self {
-            Self { state }
+            Self {
+                state,
+                submission_trace: None,
+                trace_index: 0,
+            }
+        }
+
+        fn with_submission_trace(
+            state: Arc<Mutex<TestState>>,
+            submission_trace: Arc<Mutex<Vec<usize>>>,
+            trace_index: usize,
+        ) -> Self {
+            Self {
+                state,
+                submission_trace: Some(submission_trace),
+                trace_index,
+            }
         }
     }
 
@@ -2533,6 +3044,12 @@ mod tests {
         ) -> Result<FrameProcessorSubmitResult, player_plugin::FrameProcessorError> {
             let mut state = self.state.lock().expect("state");
             state.submitted_handles.push(frame.native_handle());
+            if let Some(trace) = &self.submission_trace {
+                trace
+                    .lock()
+                    .expect("submission trace")
+                    .push(self.trace_index);
+            }
             if let Some(message) = state.submit_error.clone() {
                 return Err(player_plugin::FrameProcessorError::internal(message));
             }
@@ -2553,10 +3070,16 @@ mod tests {
             if let Some(message) = state.receive_error.clone() {
                 return Err(player_plugin::FrameProcessorError::internal(message));
             }
-            Ok(state
+            let delay = state.receive_delay;
+            let output = state
                 .receive_outputs
                 .pop_front()
-                .unwrap_or(FrameProcessorReceiveOutput::Pending))
+                .unwrap_or(FrameProcessorReceiveOutput::Pending);
+            drop(state);
+            if let Some(delay) = delay {
+                thread::sleep(delay);
+            }
+            Ok(output)
         }
 
         fn release_frame(
@@ -2647,6 +3170,14 @@ mod tests {
         mode: FrameProcessorMode,
         state: Arc<Mutex<TestState>>,
     ) -> NativeFrameProcessorChainCore {
+        chain_with_policy(mode, state, FrameProcessorPolicy::default())
+    }
+
+    fn chain_with_policy(
+        mode: FrameProcessorMode,
+        state: Arc<Mutex<TestState>>,
+        policy: FrameProcessorPolicy,
+    ) -> NativeFrameProcessorChainCore {
         NativeFrameProcessorChainCore::new(
             vec![NativeFrameProcessorNode::new(
                 "test-processor",
@@ -2654,11 +3185,7 @@ mod tests {
                 Box::new(TestSession::new(state)),
             )],
             mode,
-            FrameProcessorPolicy {
-                frame_deadline: Duration::from_millis(16),
-                late_output_tolerance: Duration::from_millis(4),
-                ..FrameProcessorPolicy::default()
-            },
+            policy,
         )
     }
 
@@ -2694,6 +3221,50 @@ mod tests {
         assert!(error.message.contains("first close failed"));
         assert_eq!(first.lock().expect("first state").close_count, 1);
         assert_eq!(second.lock().expect("second state").close_count, 1);
+    }
+
+    #[test]
+    fn rewrite_red_processor_scheduler_orders_nodes_by_processor_index() {
+        let trace = Arc::new(Mutex::new(Vec::new()));
+        let first_state = Arc::new(Mutex::new(TestState::default()));
+        let second_state = Arc::new(Mutex::new(TestState::default()));
+        let mut chain = NativeFrameProcessorChainCore::new(
+            vec![
+                NativeFrameProcessorNode::new(
+                    "processor-two",
+                    2,
+                    Box::new(TestSession::with_submission_trace(
+                        second_state,
+                        trace.clone(),
+                        2,
+                    )),
+                ),
+                NativeFrameProcessorNode::new(
+                    "processor-one",
+                    1,
+                    Box::new(TestSession::with_submission_trace(
+                        first_state,
+                        trace.clone(),
+                        1,
+                    )),
+                ),
+            ],
+            FrameProcessorMode::DiagnosticsOnly,
+            FrameProcessorPolicy::default(),
+        );
+
+        chain
+            .process(
+                decoder_frame(90, Some(900_000)),
+                &mut TestObserver::default(),
+            )
+            .expect("pending processor outputs remain a valid diagnostics path");
+
+        assert_eq!(
+            *trace.lock().expect("submission trace"),
+            vec![1, 2],
+            "linear scheduler must execute processors by stable processor_index"
+        );
     }
 
     fn decoder_frame(handle: usize, pts_us: Option<i64>) -> DecoderNativeFrame {
@@ -2819,6 +3390,34 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_red_processor_chain_close_releases_outstanding_outputs_once() {
+        let input = decoder_frame(18, Some(99_000));
+        let state = Arc::new(Mutex::new(TestState {
+            receive_outputs: VecDeque::from([output_frame(&input, 1_000, true, None)]),
+            ..TestState::default()
+        }));
+        let mut chain = chain(FrameProcessorMode::PreferProcessed, state.clone());
+
+        let processed = chain
+            .process(input, &mut TestObserver::default())
+            .expect("process should succeed");
+        assert_eq!(processed.processor_outputs.len(), 1);
+
+        chain
+            .close()
+            .expect("close should release outstanding output");
+        chain
+            .close()
+            .expect("second close should not release the output again");
+
+        assert_eq!(
+            state.lock().expect("state").released_handles,
+            vec![1_018],
+            "close must release each outstanding processor output exactly once"
+        );
+    }
+
+    #[test]
     fn diagnostics_mode_runs_processor_but_presents_original() {
         let input = decoder_frame(13, Some(120_000));
         let state = Arc::new(Mutex::new(TestState {
@@ -2842,6 +3441,30 @@ mod tests {
     }
 
     #[test]
+    fn stale_processor_output_is_rejected_without_plugin_release() {
+        let input = decoder_frame(16, Some(88_000));
+        let state = Arc::new(Mutex::new(TestState {
+            receive_outputs: VecDeque::from([output_frame(&input, 1_000, true, None)]),
+            ..TestState::default()
+        }));
+        let mut chain = chain(FrameProcessorMode::PreferProcessed, state.clone());
+
+        let processed = chain
+            .process(input, &mut TestObserver::default())
+            .expect("process should succeed");
+        let stale = processed.processor_outputs.clone();
+        chain
+            .release_processor_outputs(processed.processor_outputs)
+            .expect("first release should succeed");
+
+        let error = chain
+            .release_processor_outputs(stale)
+            .expect_err("a repeated release must be rejected");
+        assert!(error.message.contains("stale"));
+        assert_eq!(state.lock().expect("state").released_handles, vec![1_016]);
+    }
+
+    #[test]
     fn backpressure_bypasses_and_reports_queue_state() {
         let state = Arc::new(Mutex::new(TestState {
             submit_status: Some(FrameProcessorSubmitStatus::Backpressure),
@@ -2849,7 +3472,7 @@ mod tests {
             submit_in_flight_frames: Some(2),
             ..TestState::default()
         }));
-        let mut chain = chain(FrameProcessorMode::PreferProcessed, state);
+        let mut chain = chain(FrameProcessorMode::PreferProcessed, state.clone());
         let mut observer = TestObserver::default();
 
         let processed = chain
@@ -3011,6 +3634,77 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_red_processor_chain_uses_host_elapsed_for_deadline_policy() {
+        let input = decoder_frame(17, Some(88_000));
+        let state = Arc::new(Mutex::new(TestState {
+            receive_delay: Some(Duration::from_millis(8)),
+            receive_outputs: VecDeque::from([output_frame(&input, 2_000, true, None)]),
+            ..TestState::default()
+        }));
+        let mut chain = chain_with_policy(
+            FrameProcessorMode::PreferProcessed,
+            state.clone(),
+            FrameProcessorPolicy {
+                frame_deadline: Duration::from_millis(1),
+                late_output_tolerance: Duration::ZERO,
+                ..FrameProcessorPolicy::default()
+            },
+        );
+
+        let processed = chain
+            .process(input, &mut TestObserver::default())
+            .expect("late host callback should remain recoverable");
+
+        assert_eq!(processed.presentation_frame.handle, 17);
+        assert_eq!(chain.metrics().deadline_miss_count, 1);
+        assert_eq!(chain.metrics().late_output_drop_count, 1);
+        assert_eq!(state.lock().expect("state").released_handles, vec![2_017]);
+        let events = chain.drain_events();
+        assert!(
+            frame_processor_warnings(&events, FrameProcessorWarningKind::DeadlineMissed)
+                .iter()
+                .any(|warning| warning.submit_to_ready_us.unwrap_or_default() >= 1_000)
+        );
+    }
+
+    #[test]
+    fn strict_mode_uses_host_elapsed_for_deadline_failure() {
+        let input = decoder_frame(19, Some(96_000));
+        let state = Arc::new(Mutex::new(TestState {
+            receive_delay: Some(Duration::from_millis(8)),
+            receive_outputs: VecDeque::from([output_frame(&input, 2_000, true, None)]),
+            ..TestState::default()
+        }));
+        let mut chain = chain_with_policy(
+            FrameProcessorMode::RequireProcessed,
+            state.clone(),
+            FrameProcessorPolicy {
+                frame_deadline: Duration::from_millis(1),
+                late_output_tolerance: Duration::ZERO,
+                ..FrameProcessorPolicy::default()
+            },
+        );
+
+        let error = chain
+            .process(input, &mut TestObserver::default())
+            .expect_err("strict mode must reject a host-observed deadline miss");
+
+        assert_eq!(error.decoder_frame.handle, 19);
+        assert!(error.error.to_string().contains("missed frame deadline"));
+        assert_eq!(chain.metrics().deadline_miss_count, 1);
+        assert_eq!(chain.metrics().late_output_drop_count, 1);
+        assert_eq!(state.lock().expect("state").released_handles, vec![2_019]);
+        let events = chain.drain_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PlayerRuntimeEvent::Warning(PlayerRuntimeWarning::FrameProcessor(warning))
+                if warning.kind == FrameProcessorWarningKind::DeadlineMissed
+                    && warning.policy_action == FrameProcessorPolicyAction::FailPlayback
+                    && warning.submit_to_ready_us.unwrap_or_default() >= 1_000
+        )));
+    }
+
+    #[test]
     fn over_budget_output_is_released_and_bypassed() {
         let input = decoder_frame(21, Some(120_000));
         let state = Arc::new(Mutex::new(TestState {
@@ -3123,16 +3817,44 @@ mod tests {
             release_error: Some("release failed".to_owned()),
             ..TestState::default()
         }));
-        let mut chain = chain(FrameProcessorMode::PreferProcessed, state);
+        let mut chain = chain(FrameProcessorMode::PreferProcessed, state.clone());
         let processed = chain
             .process(input, &mut TestObserver::default())
             .expect("process should succeed");
 
         let error = chain
-            .release_processor_outputs(processed.processor_outputs)
+            .release_processor_outputs_tracked(processed.processor_outputs)
             .expect_err("release should fail");
 
-        assert!(error.to_string().contains("release_frame failed"));
+        assert!(error.error.to_string().contains("release_frame failed"));
+        assert_eq!(error.unreleased_outputs.len(), 1);
+
+        state.lock().expect("state").release_error = None;
+        chain
+            .release_processor_outputs(error.unreleased_outputs)
+            .expect("a failed release remains retryable");
+        assert_eq!(state.lock().expect("state").released_handles, vec![1_018]);
+    }
+
+    #[test]
+    fn flush_releases_outstanding_outputs_before_session_flush() {
+        let input = decoder_frame(21, Some(101_000));
+        let state = Arc::new(Mutex::new(TestState {
+            receive_outputs: VecDeque::from([output_frame(&input, 1_000, true, None)]),
+            ..TestState::default()
+        }));
+        let mut chain = chain(FrameProcessorMode::PreferProcessed, state.clone());
+
+        chain
+            .process(input, &mut TestObserver::default())
+            .expect("process should succeed");
+        chain
+            .flush()
+            .expect("flush should release outstanding output");
+
+        let state = state.lock().expect("state");
+        assert_eq!(state.released_handles, vec![1_021]);
+        assert_eq!(state.flush_count, 1);
     }
 
     #[test]
@@ -3182,6 +3904,7 @@ mod tests {
         decoder_send_error: Option<String>,
         decoder_receive_error: Option<String>,
         decoder_release_error: Option<String>,
+        decoder_close_error: Option<String>,
     }
 
     #[derive(Debug)]
@@ -3232,6 +3955,36 @@ mod tests {
                 .expect("pipeline state")
                 .close_events
                 .push("packet");
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct SlowPipelinePacketSource {
+        calls: Arc<AtomicUsize>,
+        delay: Duration,
+    }
+
+    impl NativeFramePacketSourceAdapter for SlowPipelinePacketSource {
+        fn selected_video_stream_index(&self) -> Option<u32> {
+            None
+        }
+
+        fn read_packet(&mut self) -> Result<NativeFramePacketRead, NativeFramePipelineError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            thread::sleep(self.delay);
+            Ok(NativeFramePacketRead::NeedMoreData { message: None })
+        }
+
+        fn flush(&mut self) -> Result<(), NativeFramePipelineError> {
+            Ok(())
+        }
+
+        fn seek(&mut self, _position: Duration) -> Result<(), NativeFramePipelineError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), NativeFramePipelineError> {
             Ok(())
         }
     }
@@ -3299,11 +4052,11 @@ mod tests {
         }
 
         fn close(&mut self) -> Result<(), NativeFramePipelineError> {
-            self.state
-                .lock()
-                .expect("pipeline state")
-                .close_events
-                .push("decoder");
+            let mut state = self.state.lock().expect("pipeline state");
+            state.close_events.push("decoder");
+            if let Some(message) = state.decoder_close_error.clone() {
+                return Err(NativeFramePipelineError::new("closeDecoder", message));
+            }
             Ok(())
         }
     }
@@ -3389,6 +4142,132 @@ mod tests {
             None,
             Some(Box::new(PipelinePresenter { state })),
         )
+    }
+
+    fn empty_plugin_runtime() -> PluginRuntime {
+        let catalog = PluginCatalog::empty();
+        let policy =
+            PluginResolverPolicy::new(PluginArtifactTransport::Native, "macos", "arm64", 1, 0)
+                .expect("resolver policy");
+        let plan = PluginResolver::new(&catalog, policy)
+            .resolve_plan(&[])
+            .expect("empty plan");
+        PluginRuntime::new(plan)
+    }
+
+    #[test]
+    fn rewrite_red_video_pipeline_session_setup_failure_closes_scope() {
+        let runtime = empty_plugin_runtime();
+        let scope = runtime
+            .root_scope()
+            .create_child(PluginScopeKind::Playback)
+            .expect("playback scope");
+        let pipeline = NativeFramePipelineCore::new(NativeFramePipelineCoreConfig::default());
+
+        let error = match VideoPipelineSession::open(
+            scope.clone(),
+            pipeline,
+            VideoPipelineSessionConfig {
+                initial_generation: 7,
+            },
+        ) {
+            Ok(_) => panic!("an incomplete video pipeline must not open"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.operation(), "openVideoPipelineSession");
+        assert_eq!(scope.state(), PluginScopeState::Failed);
+        assert_eq!(scope.failure_reason().as_deref(), Some(error.message()));
+    }
+
+    #[test]
+    fn video_pipeline_session_binds_generation_and_closes_scope() {
+        let runtime = empty_plugin_runtime();
+        let scope = runtime
+            .root_scope()
+            .create_child(PluginScopeKind::Playback)
+            .expect("playback scope");
+        let state = Arc::new(Mutex::new(PipelineTestState::default()));
+        let pipeline = pipeline_core(state);
+
+        let mut session = VideoPipelineSession::open(
+            scope.clone(),
+            pipeline,
+            VideoPipelineSessionConfig {
+                initial_generation: 7,
+            },
+        )
+        .expect("assembled video pipeline should open");
+
+        assert_eq!(session.generation(), 7);
+        assert_eq!(scope.state(), PluginScopeState::Running);
+        assert_eq!(
+            session.status_snapshot().scope_state,
+            PluginScopeState::Running
+        );
+
+        let report = session.close().expect("video session close");
+        assert_eq!(report.final_state, PluginScopeState::Closed);
+        assert_eq!(scope.state(), PluginScopeState::Closed);
+    }
+
+    #[test]
+    fn video_pipeline_session_bounds_close_failure_reason_in_scope() {
+        let runtime = empty_plugin_runtime();
+        let scope = runtime
+            .root_scope()
+            .create_child(PluginScopeKind::Playback)
+            .expect("playback scope");
+        let state = Arc::new(Mutex::new(PipelineTestState {
+            decoder_close_error: Some("x".repeat(MAX_PLUGIN_SCOPE_REASON_BYTES + 17)),
+            ..PipelineTestState::default()
+        }));
+        let mut session = VideoPipelineSession::open(
+            scope.clone(),
+            pipeline_core(state),
+            VideoPipelineSessionConfig {
+                initial_generation: 7,
+            },
+        )
+        .expect("assembled video pipeline should open");
+
+        let error = session
+            .close()
+            .expect_err("decoder close failure should be returned");
+
+        assert_eq!(scope.state(), PluginScopeState::Failed);
+        let reason = scope.failure_reason().expect("bounded failure reason");
+        assert_eq!(reason.len(), MAX_PLUGIN_SCOPE_REASON_BYTES);
+        assert_eq!(reason, "x".repeat(MAX_PLUGIN_SCOPE_REASON_BYTES));
+        assert_eq!(error.operation(), "closeDecoder");
+    }
+
+    #[test]
+    fn video_pipeline_session_rejects_zero_generation_and_closes_scope() {
+        let runtime = empty_plugin_runtime();
+        let scope = runtime
+            .root_scope()
+            .create_child(PluginScopeKind::Playback)
+            .expect("playback scope");
+        let state = Arc::new(Mutex::new(PipelineTestState::default()));
+
+        let error = match VideoPipelineSession::open(
+            scope.clone(),
+            pipeline_core(state),
+            VideoPipelineSessionConfig {
+                initial_generation: 0,
+            },
+        ) {
+            Ok(_) => panic!("zero playback generation must be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.operation(), "openVideoPipelineSession");
+        assert_eq!(scope.state(), PluginScopeState::Failed);
+        assert_eq!(
+            scope.failure_reason().as_deref(),
+            Some("video pipeline initial generation must be non-zero")
+        );
     }
 
     #[test]
@@ -3528,6 +4407,125 @@ mod tests {
     }
 
     #[test]
+    fn pipeline_core_generation_switch_releases_old_frame_and_invalidates_handle() {
+        let state = Arc::new(Mutex::new(PipelineTestState {
+            packet_reads: VecDeque::from([
+                source_packet(SourceNormalizerPacketMediaKind::Video, 0),
+                source_packet(SourceNormalizerPacketMediaKind::Video, 0),
+            ]),
+            receive_outputs: VecDeque::from([
+                DecoderReceiveNativeFrameOutput::Frame(decoder_frame(44, Some(1_000))),
+                DecoderReceiveNativeFrameOutput::Frame(decoder_frame(45, Some(2_000))),
+            ]),
+            presenter_accepts: true,
+            presenter_requires_host_release: true,
+            decoder_accepts_packets: true,
+            ..PipelineTestState::default()
+        }));
+        let mut core = pipeline_core(state.clone());
+        core.set_output_target_attached(true);
+        core.begin_generation(1).expect("initial generation");
+
+        let old_output = core.advance().expect("old generation frame");
+        let old_handle = old_output.handle.expect("old host release handle");
+        assert_eq!(core.generation(), 1);
+
+        core.begin_generation(2).expect("generation switch");
+
+        assert_eq!(core.generation(), 2);
+        assert_eq!(core.pending_frame_count(), 0);
+        assert_eq!(
+            state.lock().expect("pipeline state").released_frames,
+            vec![(44, false)]
+        );
+        let stale = core
+            .release_frame(old_handle, true)
+            .expect_err("old generation handle must be rejected");
+        assert!(stale.message.contains("invalid"));
+
+        let new_output = core.advance().expect("new generation frame");
+        assert_eq!(new_output.handle, Some(old_handle + 1));
+        assert_eq!(core.pending_frame_count(), 1);
+        core.release_frame(new_output.handle.unwrap(), false)
+            .expect("new generation release");
+    }
+
+    #[test]
+    fn rewrite_red_presenter_handoff_releases_old_generation_before_rebind() {
+        let old_state = Arc::new(Mutex::new(PipelineTestState {
+            packet_reads: VecDeque::from([source_packet(
+                SourceNormalizerPacketMediaKind::Video,
+                0,
+            )]),
+            receive_outputs: VecDeque::from([DecoderReceiveNativeFrameOutput::Frame(
+                decoder_frame(43, Some(1_000)),
+            )]),
+            presenter_accepts: true,
+            presenter_requires_host_release: true,
+            decoder_accepts_packets: true,
+            ..PipelineTestState::default()
+        }));
+        let new_state = Arc::new(Mutex::new(PipelineTestState {
+            presenter_accepts: true,
+            ..PipelineTestState::default()
+        }));
+        let mut core = pipeline_core(old_state.clone());
+        core.set_output_target_attached(true);
+        let output = core.advance().expect("advance");
+        assert_eq!(output.status, NativeFramePipelineFrameStatus::Frame);
+        assert_eq!(core.pending_frame_count(), 1);
+
+        core.set_presenter(Box::new(PipelinePresenter { state: new_state }));
+
+        let released_before_close = old_state
+            .lock()
+            .expect("old pipeline state")
+            .released_frames
+            .clone();
+        let pending_after_handoff = core.pending_frame_count();
+        core.close()
+            .expect("old pending frame remains cleanup-safe");
+        assert_eq!(
+            released_before_close,
+            vec![(43, false)],
+            "presenter handoff must release frames submitted to the old presenter"
+        );
+        assert_eq!(
+            pending_after_handoff, 0,
+            "old-generation frames must not remain host-releasable after handoff"
+        );
+    }
+
+    #[test]
+    fn video_pipeline_session_generation_updates_after_pipeline_flush() {
+        let runtime = empty_plugin_runtime();
+        let scope = runtime
+            .root_scope()
+            .create_child(PluginScopeKind::Playback)
+            .expect("playback scope");
+        let state = Arc::new(Mutex::new(PipelineTestState::default()));
+        let mut session = VideoPipelineSession::open(
+            scope,
+            pipeline_core(state.clone()),
+            VideoPipelineSessionConfig {
+                initial_generation: 11,
+            },
+        )
+        .expect("video session");
+
+        assert_eq!(session.generation(), 11);
+        session
+            .begin_generation(12)
+            .expect("new session generation");
+        assert_eq!(session.generation(), 12);
+        assert_eq!(session.status_snapshot().pipeline.generation, 12);
+        assert_eq!(
+            state.lock().expect("pipeline state").flush_events,
+            vec!["decoder", "presenter", "packet"]
+        );
+    }
+
+    #[test]
     fn protected_packet_source_need_more_data_does_not_trip_breaker() {
         let state = Arc::new(Mutex::new(PipelineTestState {
             packet_reads: VecDeque::from([
@@ -3572,8 +4570,39 @@ mod tests {
             .advance()
             .expect_err("disabled packet source should short-circuit");
 
+        assert_eq!(error.kind, NativeFramePipelineErrorKind::PluginQuarantined);
         assert_eq!(error.operation, "readPacket");
         assert!(error.message.contains("packet source disabled"));
+    }
+
+    #[test]
+    fn rewrite_w4_slow_packet_callback_is_quarantined_by_host_elapsed_budget() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut source =
+            ProtectedNativeFramePacketSourceAdapter::new(Box::new(SlowPipelinePacketSource {
+                calls: calls.clone(),
+                delay: Duration::from_millis(20),
+            }));
+
+        for _ in 0..DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES {
+            source
+                .read_packet()
+                .expect("the callback result remains usable while the breaker counts misses");
+        }
+        let error = source
+            .read_packet()
+            .expect_err("the quarantined callback must be rejected before another plugin call");
+
+        assert_eq!(error.kind, NativeFramePipelineErrorKind::PluginQuarantined);
+        assert_eq!(error.operation, "readPacket");
+        assert!(error.message.contains("packet source disabled"));
+        assert!(error.message.contains("deadline"));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            usize::try_from(DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES)
+                .expect("failure threshold fits usize"),
+            "the post-quarantine call must not enter the plugin"
+        );
     }
 
     #[test]
@@ -3599,8 +4628,10 @@ mod tests {
             .advance()
             .expect_err("disabled decoder should short-circuit sends");
 
+        assert_eq!(error.kind, NativeFramePipelineErrorKind::PluginQuarantined);
         assert_eq!(error.operation, "sendDecoderPacket");
         assert!(error.message.contains("decoder disabled"));
+        assert!(error.message.contains("sendDecoderPacket"));
         assert_eq!(
             state
                 .lock()
@@ -3612,7 +4643,45 @@ mod tests {
     }
 
     #[test]
-    fn successful_decoder_sends_reset_receive_failures() {
+    fn quarantined_decoder_still_runs_release_flush_and_close_cleanup() {
+        let state = Arc::new(Mutex::new(PipelineTestState {
+            decoder_accepts_packets: true,
+            decoder_send_error: Some("send exploded".to_owned()),
+            ..PipelineTestState::default()
+        }));
+        let mut decoder = ProtectedNativeFrameDecoderAdapter::new(Box::new(PipelineDecoder {
+            state: state.clone(),
+        }));
+        let packet = DecoderPacket::default();
+
+        for _ in 0..DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES {
+            decoder
+                .send_packet(&packet, &[])
+                .expect_err("send failure should count towards quarantine");
+        }
+        let error = decoder
+            .send_packet(&packet, &[])
+            .expect_err("quarantined media callbacks must be preflight rejected");
+        assert_eq!(error.kind, NativeFramePipelineErrorKind::PluginQuarantined);
+
+        decoder
+            .release_native_frame(decoder_frame(90, Some(900_000)), false)
+            .expect("release must remain available after quarantine");
+        decoder
+            .flush()
+            .expect("flush must remain available after quarantine");
+        decoder
+            .close()
+            .expect("close must remain available after quarantine");
+
+        let state = state.lock().expect("pipeline state");
+        assert_eq!(state.released_frames, vec![(90, false)]);
+        assert_eq!(state.flush_events, vec!["decoder"]);
+        assert_eq!(state.close_events, vec!["decoder"]);
+    }
+
+    #[test]
+    fn rewrite_w4_successful_decoder_sends_do_not_mask_repeated_receive_failures() {
         let packets = (0..6)
             .map(|_| source_packet(SourceNormalizerPacketMediaKind::Video, 0))
             .collect();
@@ -3626,18 +4695,27 @@ mod tests {
         let mut core = pipeline_core(state.clone());
         core.set_output_target_attached(true);
 
-        for _ in 0..6 {
+        for _ in 0..DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES {
             let error = core.advance().expect_err("receive error should propagate");
             assert!(error.message.contains("receive exploded"));
         }
 
+        let error = core
+            .advance()
+            .expect_err("the repeatedly failing receive callback must be quarantined");
+
+        assert_eq!(error.kind, NativeFramePipelineErrorKind::PluginQuarantined);
+        assert!(error.message.contains("decoder disabled"));
+        assert!(error.message.contains("receiveDecoderFrame"));
         assert_eq!(
             state
                 .lock()
                 .expect("pipeline state")
                 .sent_packet_streams
                 .len(),
-            6
+            usize::try_from(DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES)
+                .expect("failure threshold fits usize"),
+            "a successful sibling callback must not reset receive failures"
         );
     }
 
@@ -3681,7 +4759,8 @@ mod tests {
             );
         }
 
-        assert!(!decoder.breaker.is_disabled());
-        assert_eq!(decoder.breaker.consecutive_failures(), 0);
+        assert!(decoder.quarantine.is_none());
+        assert_eq!(decoder.send_callback.breaker.consecutive_failures(), 0);
+        assert_eq!(decoder.receive_callback.breaker.consecutive_failures(), 0);
     }
 }

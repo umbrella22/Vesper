@@ -554,6 +554,136 @@ pub struct SequenceSnapshot {
     pub warmup_stats: SequenceWarmupStats,
 }
 
+impl SequenceSnapshot {
+    /// Validates one warmup task token against this authoritative snapshot.
+    pub fn validate_warmup_task_identity(
+        &self,
+        item_id: &SequenceItemId,
+        source_revision: SequenceSourceRevision,
+        warmup_task_id: SequenceWarmupTaskId,
+        warmup_goal: SequenceWarmupGoal,
+    ) -> SequenceResult<()> {
+        let item = self
+            .items
+            .iter()
+            .find(|item| item.item.item_id == *item_id)
+            .ok_or_else(|| {
+                SequenceError::new(
+                    SequenceErrorCode::ItemNotFound,
+                    "warmup task item is not in the sequence snapshot",
+                )
+            })?;
+        let SequenceSourceState::Resolved {
+            revision,
+            cache_identity,
+            ..
+        } = &item.item.source_state
+        else {
+            return Err(SequenceError::new(
+                SequenceErrorCode::StaleSource,
+                "warmup task requires a resolved source",
+            ));
+        };
+        if *revision != source_revision
+            || stable_warmup_task_id(
+                self.session_generation,
+                item_id,
+                *revision,
+                cache_identity,
+                warmup_goal,
+            ) != warmup_task_id
+        {
+            return Err(SequenceError::new(
+                SequenceErrorCode::StaleSource,
+                "warmup task identity no longer matches the sequence snapshot",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validates that an intent still belongs to this authoritative snapshot.
+    pub fn validate_preload_intent(&self, intent: &SequencePreloadIntent) -> SequenceResult<()> {
+        if intent.session_generation != self.session_generation {
+            return Err(SequenceError::new(
+                SequenceErrorCode::StaleGeneration,
+                "preload intent belongs to an older sequence generation",
+            ));
+        }
+        let item_index = self
+            .items
+            .iter()
+            .position(|item| item.item.item_id == intent.item_id)
+            .ok_or_else(|| {
+                SequenceError::new(
+                    SequenceErrorCode::ItemNotFound,
+                    "preload intent item is not in the sequence snapshot",
+                )
+            })?;
+        let active_index = self
+            .items
+            .iter()
+            .position(|item| item.is_active)
+            .ok_or_else(|| {
+                SequenceError::new(
+                    SequenceErrorCode::InvalidState,
+                    "preload intent requires one active sequence item",
+                )
+            })?;
+        let expected_priority = if item_index == active_index {
+            SequencePreloadPriority::Current
+        } else if item_index == active_index.saturating_add(1) {
+            SequencePreloadPriority::Next
+        } else {
+            return Err(SequenceError::new(
+                SequenceErrorCode::InvalidArgument,
+                "preload intent is neither the current nor immediate next item",
+            ));
+        };
+        if intent.priority != expected_priority {
+            return Err(SequenceError::new(
+                SequenceErrorCode::InvalidArgument,
+                "preload intent priority does not match its sequence position",
+            ));
+        }
+        let item = &self.items[item_index].item;
+        let SequenceSourceState::Resolved {
+            source_reference,
+            cache_identity,
+            ..
+        } = &item.source_state
+        else {
+            return Err(SequenceError::new(
+                SequenceErrorCode::StaleSource,
+                "preload intent requires a resolved source",
+            ));
+        };
+        if source_reference != &intent.source_reference
+            || cache_identity != &intent.cache_identity
+            || intent.warmup_goal != SequenceWarmupGoal::ProgressiveRange
+        {
+            return Err(SequenceError::new(
+                SequenceErrorCode::StaleSource,
+                "preload intent identity no longer matches the sequence snapshot",
+            ));
+        }
+        self.validate_warmup_task_identity(
+            &intent.item_id,
+            intent.source_revision,
+            intent.warmup_task_id,
+            intent.warmup_goal,
+        )?;
+        if self.warmup_tasks.iter().any(|task| {
+            task.task_id == intent.warmup_task_id && is_terminal_warmup_status(task.status)
+        }) {
+            return Err(SequenceError::new(
+                SequenceErrorCode::InvalidState,
+                "preload intent warmup task is already terminal",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Reason an item became active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SequenceActivationReason {

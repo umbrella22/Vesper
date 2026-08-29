@@ -1284,10 +1284,7 @@ fn run_flutter_integration(
         .arg(format!("--target={test_target}"))
         .args(["--device-id", target_device]);
     if target_kind == "device" {
-        command.args(["--no-keep-app-running", "--device-connection", "attached"]);
-        if let Some(team) = development_team {
-            command.env("DEVELOPMENT_TEAM", team);
-        }
+        configure_physical_flutter_drive(&mut command, development_team);
     }
     let drive_result = if target_kind == "device" {
         let temporary = evidence._temporary.path().to_path_buf();
@@ -1343,6 +1340,15 @@ fn run_flutter_integration(
         started,
     )?;
     Ok(())
+}
+
+fn configure_physical_flutter_drive(command: &mut Command, development_team: Option<&str>) {
+    // The device preflight accepts both USB and local-network iPhones, so the
+    // drive step must preserve the same connection contract.
+    command.args(["--no-keep-app-running", "--device-connection", "both"]);
+    if let Some(team) = development_team {
+        command.env("DEVELOPMENT_TEAM", team);
+    }
 }
 
 fn cleanup_ios_flutter_host(
@@ -2696,6 +2702,29 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i64, i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_flutter_drive_accepts_attached_and_wireless_devices() {
+        let mut command = Command::new("flutter");
+        configure_physical_flutter_drive(&mut command, Some("TEAM123456"));
+
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            arguments,
+            ["--no-keep-app-running", "--device-connection", "both"]
+        );
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == "DEVELOPMENT_TEAM")
+                .and_then(|(_, value)| value)
+                .and_then(|value| value.to_str()),
+            Some("TEAM123456")
+        );
+    }
 
     #[test]
     fn simulator_selection_prefers_a_booted_supported_iphone_and_honors_exact_ids() {

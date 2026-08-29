@@ -35,6 +35,12 @@ internal data class ExampleExternalPlaybackSession(
 internal fun ExampleExternalPlaybackSession?.isActiveRemotePlayback(): Boolean =
     this != null && status != ExampleExternalPlaybackStatus.Idle
 
+internal fun exampleExternalDiagnosticTargetsSession(
+    sessionRouteId: String?,
+    eventRouteId: String?,
+): Boolean =
+    sessionRouteId != null && eventRouteId != null && sessionRouteId == eventRouteId
+
 internal fun exampleExternalRouteLabel(route: VesperExternalPlaybackRoute): String =
     buildString {
         append(route.name)

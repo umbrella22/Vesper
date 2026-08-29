@@ -39,33 +39,33 @@ final class ExampleTimelineRegressionTests: XCTestCase {
         }
     }
 
-    func testDolbyAcceptanceUrlsFollowBrowserTestKitPatterns() {
+    func testDolbyAcceptanceUrlsFollowOnlineDeliveryKitPatterns() {
         XCTAssertEqual(
             exampleDolbyAcceptanceUrl(
                 profile: .p5,
-                fps: 24,
+                fps: 25,
                 protocol: .hls,
                 drmKind: .clear
             ),
-            "https://ott.dolby.com/browser_test_kit/clear/p5/24/master.m3u8"
+            "https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/clear/P5_25/master.m3u8"
         )
         XCTAssertEqual(
             exampleDolbyAcceptanceUrl(
                 profile: .p81,
-                fps: 50,
+                fps: 60,
                 protocol: .dash,
                 drmKind: .clear
             ),
-            "https://ott.dolby.com/browser_test_kit/clear/p81/50/dash.mpd"
+            "https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/clear/P8_1_60/dash.mpd"
         )
         XCTAssertEqual(
             exampleDolbyAcceptanceUrl(
                 profile: .p84,
-                fps: 120,
+                fps: 30,
                 protocol: .hls,
                 drmKind: .fairPlay
             ),
-            "https://ott.dolby.com/browser_test_kit/cbcs/p84/120/master.m3u8"
+            "https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/cbcs/P8_4_30/master.m3u8"
         )
     }
 
@@ -82,7 +82,7 @@ final class ExampleTimelineRegressionTests: XCTestCase {
         let catalog = buildExampleDolbyAcceptanceCatalog(fairPlayConfiguration: nil)
         let widevine = catalog.first {
             $0.profile == .p5 &&
-                $0.fps == 24 &&
+                $0.fps == 25 &&
                 $0.sourceProtocol == .dash &&
                 $0.drmKind == .widevinePending
         }
@@ -95,8 +95,8 @@ final class ExampleTimelineRegressionTests: XCTestCase {
 
         XCTAssertEqual(widevine?.isPlayable, false)
         XCTAssertEqual(fairPlay?.isPlayable, false)
-        XCTAssertEqual(widevine?.source.uri, "https://ott.dolby.com/browser_test_kit/cenc/p5/24/dash.mpd")
-        XCTAssertEqual(fairPlay?.source.uri, "https://ott.dolby.com/browser_test_kit/cbcs/p81/30/master.m3u8")
+        XCTAssertEqual(widevine?.source.uri, "https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/cenc/P5_25/dash.mpd")
+        XCTAssertEqual(fairPlay?.source.uri, "https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/cbcs/P8_1_30/master.m3u8")
         XCTAssertNil(fairPlay?.source.drmConfiguration)
         XCTAssertEqual(fairPlay?.notes.first, "FairPlay config required.")
     }
@@ -111,13 +111,13 @@ final class ExampleTimelineRegressionTests: XCTestCase {
         let catalog = buildExampleDolbyAcceptanceCatalog(fairPlayConfiguration: config)
         let fairPlay = catalog.first {
             $0.profile == .p5 &&
-                $0.fps == 24 &&
+                $0.fps == 25 &&
                 $0.sourceProtocol == .hls &&
                 $0.drmKind == .fairPlay
         }
 
         XCTAssertEqual(fairPlay?.isPlayable, true)
-        XCTAssertEqual(fairPlay?.source.uri, "https://ott.dolby.com/browser_test_kit/cbcs/p5/24/master.m3u8")
+        XCTAssertEqual(fairPlay?.source.uri, "https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/cbcs/P5_25/master.m3u8")
         XCTAssertEqual(fairPlay?.source.drmConfiguration?.keySystem, "fairPlay")
         XCTAssertEqual(fairPlay?.source.drmConfiguration?.licenseUri, "https://license.example.com/fps")
         XCTAssertEqual(fairPlay?.source.drmConfiguration?.fairPlayCertificateUri, "https://license.example.com/fps.cer")
@@ -133,13 +133,13 @@ final class ExampleTimelineRegressionTests: XCTestCase {
             catalog,
             drmKind: .clear,
             profile: .p81,
-            fps: 50
+            fps: 60
         )
 
         XCTAssertEqual(filtered.count, 2)
         XCTAssertTrue(filtered.allSatisfy { $0.drmKind == .clear })
         XCTAssertTrue(filtered.allSatisfy { $0.profile == .p81 })
-        XCTAssertTrue(filtered.allSatisfy { $0.fps == 50 })
+        XCTAssertTrue(filtered.allSatisfy { $0.fps == 60 })
     }
 
     func testDolbyPlaylistItemIdResolvesPlayablePresetIntoQueueItem() {
@@ -147,7 +147,7 @@ final class ExampleTimelineRegressionTests: XCTestCase {
             $0.drmKind == .clear &&
                 $0.sourceProtocol == .hls &&
                 $0.profile == .p5 &&
-                $0.fps == 24
+                $0.fps == 25
         }!
         let itemId = dolbyPlaylistItemId(preset.id)
 
@@ -232,7 +232,7 @@ final class ExampleTimelineRegressionTests: XCTestCase {
     func testDolbyAdHocOriginDoesNotAdvancePlaylistOnFinished() {
         XCTAssertFalse(
             shouldAdvancePlaylistOnFinished(
-                origin: .dolbyAdHoc(presetId: "DOLBY-DV-P5-24-HLS-CLEAR"),
+                origin: .dolbyAdHoc(presetId: "DOLBY-DV-P5-25-HLS-CLEAR"),
                 activeItemId: IOS_HLS_PLAYLIST_ITEM_ID
             )
         )
@@ -293,14 +293,14 @@ final class ExampleTimelineRegressionTests: XCTestCase {
     func testDolbyHdrEvidencePresetsPreserveProfileFpsProtocolAndDrmMetadata() {
         let preset = buildExampleDolbyAcceptanceCatalog(fairPlayConfiguration: nil).first {
             $0.profile == .p84 &&
-                $0.fps == 50 &&
+                $0.fps == 60 &&
                 $0.sourceProtocol == .hls &&
                 $0.drmKind == .clear
         }?.toHdrEvidencePreset()
 
         XCTAssertEqual(preset?.sourceMetadata["hdrKind"] as? String, "dolbyVision")
         XCTAssertEqual(preset?.sourceMetadata["manifestKind"] as? String, "hls")
-        XCTAssertEqual(preset?.sourceMetadata["frameRate"] as? Double, 50.0)
+        XCTAssertEqual(preset?.sourceMetadata["frameRate"] as? Double, 60.0)
         XCTAssertEqual(preset?.sourceMetadata["drmKind"] as? String, "none")
         XCTAssertEqual(preset?.sourceMetadata["manualGate"] as? String, "requiresDolbyVisionDisplay")
         let dolbyVision = preset?.sourceMetadata["dolbyVision"] as? [String: Any]

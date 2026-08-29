@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,6 +48,9 @@ internal fun TimelineScrubber(
     val activeStart = Color(0xFFFF6B8E).copy(alpha = if (enabled) 1f else 0.42f)
     val activeEnd = Color(0xFFFFB454).copy(alpha = if (enabled) 1f else 0.42f)
     val knobColor = Color.White.copy(alpha = if (enabled) 1f else 0.42f)
+    val latestOnSeekPreview by rememberUpdatedState(onSeekPreview)
+    val latestOnSeekCommit by rememberUpdatedState(onSeekCommit)
+    val latestOnSeekCancel by rememberUpdatedState(onSeekCancel)
 
     var scrubberModifier =
         modifier
@@ -56,27 +60,30 @@ internal fun TimelineScrubber(
     if (enabled) {
         scrubberModifier =
             scrubberModifier
-                .pointerInput(widthPx) {
+                .pointerInput(Unit) {
                     detectTapGestures { offset ->
-                        val targetRatio = (offset.x / widthPx).coerceIn(0f, 1f)
-                        onSeekPreview(targetRatio)
-                        onSeekCommit(targetRatio)
+                        val currentWidth = size.width.toFloat().coerceAtLeast(1f)
+                        val targetRatio = (offset.x / currentWidth).coerceIn(0f, 1f)
+                        latestOnSeekPreview(targetRatio)
+                        latestOnSeekCommit(targetRatio)
                     }
                 }
-                .pointerInput(widthPx) {
+                .pointerInput(Unit) {
                     var dragRatio = ratio
                     detectHorizontalDragGestures(
                         onDragStart = { offset ->
-                            dragRatio = (offset.x / widthPx).coerceIn(0f, 1f)
-                            onSeekPreview(dragRatio)
+                            val currentWidth = size.width.toFloat().coerceAtLeast(1f)
+                            dragRatio = (offset.x / currentWidth).coerceIn(0f, 1f)
+                            latestOnSeekPreview(dragRatio)
                         },
                         onHorizontalDrag = { change, _ ->
-                            dragRatio = (change.position.x / widthPx).coerceIn(0f, 1f)
-                            onSeekPreview(dragRatio)
+                            val currentWidth = size.width.toFloat().coerceAtLeast(1f)
+                            dragRatio = (change.position.x / currentWidth).coerceIn(0f, 1f)
+                            latestOnSeekPreview(dragRatio)
                         },
-                        onDragCancel = onSeekCancel,
+                        onDragCancel = latestOnSeekCancel,
                         onDragEnd = {
-                            onSeekCommit(dragRatio)
+                            latestOnSeekCommit(dragRatio)
                         },
                     )
                 }

@@ -4,7 +4,7 @@ pub(crate) const NATIVE_CARGO_TEMPLATE: &str = r#"[package]
 name = {{CRATE_NAME}}
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.98"
 license = {{LICENSE}}
 
 [lib]
@@ -12,6 +12,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 player-plugin = "={{VESPER_SDK_VERSION}}"
+
+[workspace]
 "#;
 
 pub(crate) const NATIVE_SOURCE_TEMPLATE: &str = r#"#![deny(unsafe_code)]
@@ -47,7 +49,7 @@ pub(crate) const WASM_CARGO_TEMPLATE: &str = r#"[package]
 name = {{CRATE_NAME}}
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.98"
 license = {{LICENSE}}
 
 [lib]
@@ -58,6 +60,8 @@ player-plugin-wasm = "={{VESPER_SDK_VERSION}}"
 
 [profile.release]
 panic = "abort"
+
+[workspace]
 "#;
 
 pub(crate) const WASM_SOURCE_TEMPLATE: &str = r#"#![no_std]

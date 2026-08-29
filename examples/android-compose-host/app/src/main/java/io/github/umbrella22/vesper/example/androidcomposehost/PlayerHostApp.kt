@@ -1505,18 +1505,27 @@ internal fun PlayerHostApp(
                                     ExampleHostLogSeverity.Warning
                                 },
                             title = resources.getString(R.string.example_log_external_event),
-                            detail = message,
+                                detail = message,
                         )
-                        externalSession =
-                            externalSession?.copy(
-                                status =
-                                    if (event.kind == VesperExternalPlaybackEventKind.Error) {
-                                        ExampleExternalPlaybackStatus.Error
-                                    } else {
-                                        externalSession?.status ?: ExampleExternalPlaybackStatus.Discovering
-                                    },
-                                message = message,
-                            )
+                        val updatesSession =
+                            event.kind == VesperExternalPlaybackEventKind.Error ||
+                                exampleExternalDiagnosticTargetsSession(
+                                    sessionRouteId = externalSession?.routeId,
+                                    eventRouteId = event.routeId,
+                                )
+                        if (updatesSession) {
+                            externalSession =
+                                externalSession?.copy(
+                                    status =
+                                        if (event.kind == VesperExternalPlaybackEventKind.Error) {
+                                            ExampleExternalPlaybackStatus.Error
+                                        } else {
+                                            externalSession?.status
+                                                ?: ExampleExternalPlaybackStatus.Discovering
+                                        },
+                                    message = message,
+                                )
+                        }
                     }
                 }
 

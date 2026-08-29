@@ -38,7 +38,7 @@
     <string name="example_sources_prepare_local_video">Preparing local video…</string>
     <string name="example_sources_prepare_local_failed">Failed to prepare the local video: %1$s</string>
     <string name="example_dolby_acceptance_title">Dolby Acceptance</string>
-    <string name="example_dolby_acceptance_subtitle">Dolby Browser Test Kit public signals. Presets play through direct native playback only; they do not enter download, preload, external playback, or plugin processing.</string>
+    <string name="example_dolby_acceptance_subtitle">Dolby Vision Online Delivery Kit public signals. Presets play through direct native playback only; they do not enter download, preload, external playback, or plugin processing.</string>
     <string name="example_dolby_acceptance_all_profiles">All profiles</string>
     <string name="example_dolby_acceptance_all_fps">All fps</string>
     <string name="example_dolby_acceptance_fairplay_pending">FairPlay presets are metadata-only until a certificate URI or base64 certificate is available.</string>

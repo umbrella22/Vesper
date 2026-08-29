@@ -86,6 +86,107 @@ pub struct DecodedAudioTrack {
     pub samples: Arc<[f32]>,
 }
 
+/// A bounded, timestamped PCM chunk emitted by the FFmpeg audio route.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecodedAudioChunk {
+    /// Media presentation time for the first frame in this chunk.
+    pub presentation_time: Option<Duration>,
+    /// Media duration represented by this chunk at the requested playback rate.
+    pub duration: Duration,
+    /// Output sample rate in samples per second.
+    pub sample_rate: u32,
+    /// Number of interleaved output channels.
+    pub channels: u16,
+    /// Interleaved F32 PCM samples.
+    pub samples: Vec<f32>,
+    /// Whether this chunk starts a new decode/seek discontinuity.
+    pub discontinuity: bool,
+}
+
+impl DecodedAudioChunk {
+    /// Validates the backend-to-sink PCM handoff contract.
+    pub fn validate(&self) -> Result<()> {
+        if self.sample_rate == 0 {
+            anyhow::bail!("decoded audio chunk sample rate must be greater than zero");
+        }
+        if self.channels == 0 {
+            anyhow::bail!("decoded audio chunk channel count must be greater than zero");
+        }
+        if !self
+            .samples
+            .len()
+            .is_multiple_of(usize::from(self.channels))
+        {
+            anyhow::bail!(
+                "decoded audio chunk sample count {} is not divisible by channel count {}",
+                self.samples.len(),
+                self.channels
+            );
+        }
+        if self.duration.is_zero() && !self.samples.is_empty() {
+            anyhow::bail!("decoded audio chunk with samples must have a non-zero duration");
+        }
+        Ok(())
+    }
+}
+
+/// Typed failure category for the FFmpeg streaming audio boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioStreamError {
+    InvalidOutputRate,
+    InvalidOutputChannels,
+    InvalidPlaybackRate,
+    InvalidChunk {
+        message: String,
+    },
+    Backend {
+        operation: &'static str,
+        message: String,
+    },
+    Processor {
+        message: String,
+    },
+    Consumer {
+        message: String,
+    },
+}
+
+impl std::fmt::Display for AudioStreamError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidOutputRate => {
+                formatter.write_str("audio output sample rate must be greater than zero")
+            }
+            Self::InvalidOutputChannels => {
+                formatter.write_str("audio output channel count must be greater than zero")
+            }
+            Self::InvalidPlaybackRate => {
+                formatter.write_str("audio playback rate must be a finite value greater than zero")
+            }
+            Self::InvalidChunk { message } => {
+                write!(formatter, "decoded audio chunk is invalid: {message}")
+            }
+            Self::Backend { operation, message } => {
+                write!(
+                    formatter,
+                    "FFmpeg audio backend failed during {operation}: {message}"
+                )
+            }
+            Self::Processor { message } => {
+                write!(formatter, "Native audio processor failed: {message}")
+            }
+            Self::Consumer { message } => {
+                write!(
+                    formatter,
+                    "audio stream consumer callback failed: {message}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for AudioStreamError {}
+
 pub struct VideoFrameSource {
     pub(crate) input: FfmpegInput,
     pub(crate) stream_index: usize,
@@ -287,8 +388,7 @@ impl FfmpegBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::DecodedAudioTrack;
-    use super::audio::playback_rate_filter_chain;
+    use super::audio::{audio_filter_spec, follow_rate_filter_chain, playback_rate_filter_chain};
     use super::hls::{
         MAX_REMOTE_HLS_MANIFEST_BYTES, append_remote_hls_manifest_chunk, parse_hls_master_manifest,
         resolve_hls_master_manifest_sources, resolve_uri_relative_to,
@@ -299,17 +399,219 @@ mod tests {
         input_open_profile_for_source, input_open_tuning_options, input_open_tuning_summary,
         supports_input_format,
     };
+    use super::{AudioStreamError, DecodedAudioChunk, DecodedAudioTrack, FfmpegBackend};
     use player_model::MediaSource;
+    use player_plugin::{AudioPitchMode, AudioPlaybackPolicy};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
+    const SYNTHETIC_SAMPLE_RATE: u32 = 48_000;
+    const SYNTHETIC_FREQUENCY_HZ: f32 = 440.0;
+
+    fn synthetic_sine_track() -> DecodedAudioTrack {
+        let samples = (0..SYNTHETIC_SAMPLE_RATE)
+            .map(|index| {
+                let phase = std::f32::consts::TAU * SYNTHETIC_FREQUENCY_HZ * index as f32
+                    / SYNTHETIC_SAMPLE_RATE as f32;
+                phase.sin()
+            })
+            .collect::<Vec<_>>();
+        DecodedAudioTrack {
+            presentation_time: Duration::ZERO,
+            sample_rate: SYNTHETIC_SAMPLE_RATE,
+            channels: 1,
+            playback_rate: 1.0,
+            samples: Arc::from(samples),
+        }
+    }
+
+    fn positive_zero_crossing_frequency(samples: &[f32]) -> f32 {
+        let crossings = samples
+            .windows(2)
+            .filter(|window| window[0] <= 0.0 && window[1] > 0.0)
+            .count();
+        crossings as f32 * SYNTHETIC_SAMPLE_RATE as f32 / samples.len() as f32
+    }
+
     #[test]
     fn playback_rate_filter_spec_chains_high_rates() {
+        assert_eq!(playback_rate_filter_chain(0.5), "atempo=0.500000");
+        assert_eq!(playback_rate_filter_chain(1.0), "anull");
+        assert_eq!(playback_rate_filter_chain(1.25), "atempo=1.250000");
+        assert_eq!(playback_rate_filter_chain(2.0), "atempo=2.000000");
         assert_eq!(
             playback_rate_filter_chain(3.0),
             "atempo=2.000000,atempo=1.500000"
         );
+    }
+
+    #[test]
+    fn pitch_mode_filter_specs_keep_one_final_resample_stage() {
+        assert_eq!(
+            follow_rate_filter_chain(48_000, 0.5),
+            "asetrate=48000*0.500000"
+        );
+        assert_eq!(follow_rate_filter_chain(48_000, 1.0), "anull");
+        assert_eq!(
+            follow_rate_filter_chain(48_000, 1.25),
+            "asetrate=48000*1.250000"
+        );
+        assert_eq!(
+            follow_rate_filter_chain(48_000, 2.0),
+            "asetrate=48000*2.000000"
+        );
+
+        let output_layout = ffmpeg_next::ChannelLayout::STEREO;
+        let preserve = audio_filter_spec(
+            AudioPlaybackPolicy {
+                playback_rate: 2.0,
+                pitch_mode: AudioPitchMode::PreservePitch,
+            },
+            44_100,
+            48_000,
+            output_layout,
+        );
+        assert!(preserve.starts_with("atempo=2.000000,aresample=48000,"));
+        assert!(!preserve.contains("asetrate="));
+        assert_eq!(preserve.matches("aresample=").count(), 1);
+
+        let follow = audio_filter_spec(
+            AudioPlaybackPolicy {
+                playback_rate: 2.0,
+                pitch_mode: AudioPitchMode::FollowRate,
+            },
+            44_100,
+            48_000,
+            output_layout,
+        );
+        assert!(follow.starts_with("asetrate=44100*2.000000,aresample=48000,"));
+        assert!(!follow.contains("atempo="));
+        assert_eq!(follow.matches("aresample=").count(), 1);
+    }
+
+    #[test]
+    fn rewrite_red_follow_rate_two_x_halves_duration_and_doubles_fundamental() {
+        let source = synthetic_sine_track();
+
+        let output = FfmpegBackend::new()
+            .expect("initialize FFmpeg")
+            .retime_audio_track_with_playback_policy(
+                &source,
+                AudioPlaybackPolicy {
+                    playback_rate: 2.0,
+                    pitch_mode: AudioPitchMode::FollowRate,
+                },
+            )
+            .expect("retime synthetic PCM");
+        let frequency = positive_zero_crossing_frequency(&output.samples);
+        assert!(
+            (840.0..=920.0).contains(&frequency),
+            "2x FollowRate must shift the 440 Hz fundamental to about 880 Hz, got {frequency:.2} Hz"
+        );
+        assert!(
+            (23_000..=25_000).contains(&output.samples.len()),
+            "2x FollowRate must return about 24000 frames, got {}",
+            output.samples.len()
+        );
+    }
+
+    #[test]
+    fn playback_policy_matrix_matches_duration_and_pitch() {
+        let backend = FfmpegBackend::new().expect("initialize FFmpeg");
+        let source = synthetic_sine_track();
+        for pitch_mode in [AudioPitchMode::PreservePitch, AudioPitchMode::FollowRate] {
+            for playback_rate in [0.5_f32, 1.0, 1.25, 2.0] {
+                let output = backend
+                    .retime_audio_track_with_playback_policy(
+                        &source,
+                        AudioPlaybackPolicy {
+                            playback_rate,
+                            pitch_mode,
+                        },
+                    )
+                    .expect("retime synthetic PCM for policy matrix");
+                let expected_frames = SYNTHETIC_SAMPLE_RATE as f32 / playback_rate;
+                let frame_tolerance = (expected_frames * 0.03).max(512.0);
+                assert!(
+                    (output.samples.len() as f32 - expected_frames).abs() <= frame_tolerance,
+                    "{pitch_mode:?} at {playback_rate}x returned {} frames, expected about {expected_frames}",
+                    output.samples.len()
+                );
+
+                let expected_frequency = match pitch_mode {
+                    AudioPitchMode::PreservePitch => SYNTHETIC_FREQUENCY_HZ,
+                    AudioPitchMode::FollowRate => SYNTHETIC_FREQUENCY_HZ * playback_rate,
+                };
+                let frequency = positive_zero_crossing_frequency(&output.samples);
+                let frequency_tolerance = (expected_frequency * 0.06).max(15.0);
+                assert!(
+                    (frequency - expected_frequency).abs() <= frequency_tolerance,
+                    "{pitch_mode:?} at {playback_rate}x produced {frequency:.2} Hz, expected about {expected_frequency:.2} Hz"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_retime_api_keeps_preserve_pitch_semantics() {
+        let output = FfmpegBackend::new()
+            .expect("initialize FFmpeg")
+            .retime_audio_track(&synthetic_sine_track(), 2.0)
+            .expect("retime synthetic PCM through legacy API");
+        let frequency = positive_zero_crossing_frequency(&output.samples);
+        assert!(
+            (420.0..=460.0).contains(&frequency),
+            "legacy retime API must preserve the 440 Hz fundamental, got {frequency:.2} Hz"
+        );
+    }
+
+    #[test]
+    fn decoded_audio_chunk_rejects_invalid_sink_handoff_metadata() {
+        let valid_chunk = DecodedAudioChunk {
+            presentation_time: Some(Duration::from_secs(1)),
+            duration: Duration::from_millis(10),
+            sample_rate: 48_000,
+            channels: 2,
+            samples: vec![0.0; 960],
+            discontinuity: true,
+        };
+        assert!(valid_chunk.validate().is_ok());
+
+        let mut zero_rate = valid_chunk.clone();
+        zero_rate.sample_rate = 0;
+        assert!(zero_rate.validate().is_err());
+
+        let mut zero_channels = valid_chunk.clone();
+        zero_channels.channels = 0;
+        assert!(zero_channels.validate().is_err());
+
+        let mut unaligned_samples = valid_chunk.clone();
+        unaligned_samples.samples.pop();
+        assert!(unaligned_samples.validate().is_err());
+
+        let mut zero_duration = valid_chunk;
+        zero_duration.duration = Duration::ZERO;
+        assert!(zero_duration.validate().is_err());
+    }
+
+    #[test]
+    fn streaming_audio_rejects_invalid_playback_rate_before_opening_source() {
+        let backend = FfmpegBackend { initialized: false };
+        let error = backend
+            .stream_audio_source_with_playback_rate_and_interrupt(
+                MediaSource::new("/a/source-that-need-not-exist.m4a"),
+                48_000,
+                2,
+                0.0,
+                Duration::ZERO,
+                None,
+                |_| Ok(()),
+                |_| Ok(true),
+            )
+            .expect_err("invalid playback rate must be rejected before source opening");
+
+        assert_eq!(error, AudioStreamError::InvalidPlaybackRate);
     }
 
     #[test]

@@ -4,6 +4,16 @@ mod plugin_descriptor;
 mod plugin_package;
 mod plugin_project;
 
+pub use player_plugin::{
+    CanonicalPluginArtifactDescriptor, MAX_PLUGIN_ARCHITECTURE_BYTES,
+    MAX_PLUGIN_ARTIFACT_CAPABILITIES, MAX_PLUGIN_ARTIFACT_PATH_BYTES,
+    MAX_PLUGIN_CATALOG_DIAGNOSTICS, MAX_PLUGIN_CATALOG_RECORDS, MAX_PLUGIN_CATALOG_SOURCE_BYTES,
+    MAX_PLUGIN_PROVISIONS, MAX_PLUGIN_REQUIREMENTS, MAX_PLUGIN_RUNTIME_DEPENDENCIES,
+    MAX_PLUGIN_TARGET_BYTES, PLUGIN_CATALOG_MIGRATION_VERSION, PLUGIN_CATALOG_SCHEMA_VERSION,
+    PluginArtifactDescriptor, PluginCatalog, PluginCatalogDiagnostic, PluginCatalogError,
+    PluginCatalogRecord, PluginCatalogSource, PluginProvision, PluginRequirement,
+    PluginResourcePolicy, PluginRuntimeDependency,
+};
 pub use plugin_descriptor::{
     CanonicalPluginDescriptor, PluginCapabilityDescriptor, PluginCompatibilityDescriptor,
     PluginCompatibilityError, PluginDescriptor, PluginDescriptorError, PluginIdentityDescriptor,

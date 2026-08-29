@@ -1,0 +1,238 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" role="img" aria-labelledby="title desc" shape-rendering="geometricPrecision">
+  <title id="title">Animated Vesper Orbit V v5 logo</title>
+  <desc id="desc">An orange energy point falls and rebounds, triggers a V that grows upward, spins and becomes the raised play triangle, then the orbit and stars appear.</desc>
+  <style>
+    /* The mark is a single causal sequence: impact, growth, transformation, then orbit. */
+    .seed-bounce {
+      opacity: 0;
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: seed-bounce 720ms cubic-bezier(.22, .8, .2, 1) 0ms both;
+    }
+
+    .seed-spin {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: seed-spin 1.48s cubic-bezier(.4, 0, .2, 1) 420ms both;
+    }
+
+    .seed-exit {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: seed-exit 220ms ease-in 1.40s both;
+    }
+
+    .v-arm {
+      fill: none;
+      stroke: #17252a;
+      stroke-width: 30;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 1;
+      stroke-dashoffset: 1;
+      animation: grow-v-arm 780ms cubic-bezier(.22, .8, .2, 1) 500ms both;
+    }
+
+    .play-final {
+      opacity: 0;
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: reveal-play 300ms cubic-bezier(.22, .8, .2, 1) 1.40s both;
+    }
+
+    .orbit-track {
+      fill: none;
+      stroke: #28b7b0;
+      stroke-width: 16;
+      stroke-linecap: round;
+      stroke-dasharray: 1;
+      stroke-dashoffset: 1;
+      animation: draw-orbit 780ms cubic-bezier(.22, .8, .2, 1) 1.40s both;
+    }
+
+    .star-enter {
+      opacity: 0;
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: show-stars 360ms cubic-bezier(.22, .8, .2, 1) 1.66s both;
+    }
+
+    .star-sway {
+      transform-box: fill-box;
+      transform-origin: center;
+      animation: sway-stars 2.8s ease-in-out 2.02s infinite alternate;
+    }
+
+    .wordmark {
+      opacity: 0;
+      animation: show-wordmark 360ms cubic-bezier(.22, .8, .2, 1) 1.90s both;
+    }
+
+    @keyframes seed-bounce {
+      0% {
+        opacity: 0;
+        transform: translateY(-177px) scale(.72, .90);
+      }
+      12% {
+        opacity: 1;
+        transform: translateY(-145px) scale(.88, 1.04);
+      }
+      64% {
+        opacity: 1;
+        transform: translateY(0) scale(1, 1);
+      }
+      71% {
+        opacity: 1;
+        transform: translateY(0) scale(1.28, .56);
+      }
+      84% {
+        opacity: 1;
+        transform: translateY(-18px) scale(.84, 1.16);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0) scale(1, 1);
+      }
+    }
+
+    @keyframes seed-spin {
+      0% { transform: rotate(-14deg); }
+      30% { transform: rotate(72deg); }
+      64% { transform: rotate(196deg); }
+      100% { transform: rotate(420deg); }
+    }
+
+    @keyframes seed-exit {
+      0% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      45% {
+        opacity: 1;
+        transform: scale(.78);
+      }
+      100% {
+        opacity: 0;
+        transform: scale(.05);
+      }
+    }
+
+    @keyframes grow-v-arm {
+      0% { stroke-dashoffset: 1; }
+      100% { stroke-dashoffset: 0; }
+    }
+
+    @keyframes reveal-play {
+      0% {
+        opacity: 0;
+        transform: scale(.22) rotate(-12deg);
+      }
+      58% {
+        opacity: 1;
+        transform: scale(1.08) rotate(2deg);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1) rotate(0deg);
+      }
+    }
+
+    @keyframes draw-orbit {
+      0% { stroke-dashoffset: 1; }
+      100% { stroke-dashoffset: 0; }
+    }
+
+    @keyframes show-stars {
+      0% {
+        opacity: 0;
+        transform: scale(.25);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    @keyframes sway-stars {
+      0% { transform: rotate(-4deg); }
+      50% { transform: rotate(3deg); }
+      100% { transform: rotate(-2deg); }
+    }
+
+    @keyframes show-wordmark {
+      0% {
+        opacity: 0;
+        transform: translateY(6px);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .seed-bounce,
+      .seed-spin,
+      .seed-exit {
+        opacity: 0 !important;
+        animation: none !important;
+      }
+
+      .v-arm,
+      .orbit-track {
+        stroke-dashoffset: 0 !important;
+        animation: none !important;
+      }
+
+      .play-final,
+      .star-enter,
+      .wordmark {
+        opacity: 1 !important;
+        animation: none !important;
+      }
+
+      .play-final,
+      .star-sway {
+        transform: none !important;
+        animation: none !important;
+      }
+    }
+  </style>
+
+  <g transform="translate(40 70)">
+    <path class="v-arm v-arm-left" pathLength="1" d="M126 270L54 130"/>
+    <path class="v-arm v-arm-right" pathLength="1" d="M126 270L198 130"/>
+
+    <g transform="translate(130.5 122)">
+      <g class="seed-bounce">
+        <g class="seed-spin">
+          <g class="seed-exit">
+            <path d="M-1 -11C6 -10 9 -5 8 1C7 7 2 10 -1 11C-6 9 -8 5 -7 -1C-6 -6 -4 -9 -1 -11Z" fill="#e9a451"/>
+          </g>
+        </g>
+      </g>
+    </g>
+
+    <g transform="translate(0 -42)">
+      <g class="play-final">
+        <path d="M110 141L110 187L151 164Z" fill="#e9a451"/>
+      </g>
+    </g>
+
+    <path class="orbit-track" pathLength="1" d="M18 94C32 36 76 4 126 4C177 4 220 36 234 94"/>
+
+    <g class="star-enter">
+      <g class="star-sway">
+        <path d="M57 34L61 49L75 56L61 62L57 78L53 63L39 56L53 49Z" fill="#e9a451"/>
+        <circle cx="209" cy="48" r="8" fill="#e9a451"/>
+      </g>
+    </g>
+  </g>
+
+  <g transform="translate(350 153)" fill="#17252a">
+    <g class="wordmark">
+      <text x="0" y="0" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="102" font-weight="650">Vesper</text>
+      <text x="4" y="62" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="27" font-weight="600" letter-spacing="5.5" fill="#5c6a6e">PLAYER SDK</text>
+    </g>
+  </g>
+</svg>

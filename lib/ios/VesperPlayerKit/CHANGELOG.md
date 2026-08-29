@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.0 - 2026-08-29
+
+### Changed
+
+- Native-frame diagnostics now report `selected` until the first frame is
+  presented, then transition to `participated`.
+
 ## 0.4.3 - 2026-08-17
 
 ### Added

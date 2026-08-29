@@ -9,6 +9,8 @@
     "plugin",
     "compatibility",
     "capabilities",
+    "requires",
+    "provides",
     "artifacts",
     "generated_by"
   ],
@@ -21,6 +23,18 @@
       "minItems": 1,
       "maxItems": 64,
       "items": { "$ref": "#/$defs/capability" }
+    },
+    "requires": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/requirement" },
+      "default": []
+    },
+    "provides": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/provision" },
+      "default": []
     },
     "artifacts": {
       "type": "array",
@@ -92,6 +106,24 @@
         "interface_major": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "interface_minor": { "type": "integer", "minimum": 0, "maximum": 65535 },
         "stability": { "enum": ["stable", "experimental"] }
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "requirement"],
+      "properties": {
+        "service": { "$ref": "#/$defs/reverseDns" },
+        "requirement": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "provision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "version"],
+      "properties": {
+        "service": { "$ref": "#/$defs/reverseDns" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 256 }
       }
     },
     "runtimeDependency": {

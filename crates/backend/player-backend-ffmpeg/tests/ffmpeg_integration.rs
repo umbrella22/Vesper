@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
-use player_backend_ffmpeg::FfmpegBackend;
+use player_backend_ffmpeg::{AudioStreamError, FfmpegBackend};
 use player_model::MediaSource;
 
 fn tiny_fixture_source() -> MediaSource {
@@ -62,6 +62,57 @@ fn probe_decode_audio_video_and_seek_fixture() -> Result<()> {
     assert_eq!(audio.channels, 2);
     assert!(!audio.samples.is_empty());
     assert!(audio.duration() >= Duration::from_secs(1));
+
+    Ok(())
+}
+
+#[test]
+fn streaming_audio_fixture_emits_timestamped_typed_chunks() -> Result<()> {
+    let backend = FfmpegBackend::new()?;
+    let mut chunks = Vec::new();
+
+    backend.stream_audio_source_with_playback_rate_and_interrupt(
+        tiny_fixture_source(),
+        48_000,
+        2,
+        1.25,
+        Duration::ZERO,
+        None,
+        |_| Ok(()),
+        |chunk| {
+            chunk
+                .validate()
+                .map_err(|error| AudioStreamError::InvalidChunk {
+                    message: error.to_string(),
+                })?;
+            chunks.push(chunk);
+            Ok(true)
+        },
+    )?;
+
+    assert!(
+        !chunks.is_empty(),
+        "fixture should emit at least one PCM chunk"
+    );
+    assert!(chunks[0].discontinuity);
+    assert!(chunks[0].presentation_time.is_some());
+    assert!(chunks.iter().all(|chunk| {
+        chunk.sample_rate == 48_000
+            && chunk.channels == 2
+            && !chunk.duration.is_zero()
+            && chunk.presentation_time.is_some()
+    }));
+    assert!(chunks.iter().skip(1).all(|chunk| !chunk.discontinuity));
+    assert!(
+        chunks
+            .windows(2)
+            .all(|pair| pair[0].presentation_time <= pair[1].presentation_time),
+        "filtered audio chunk timestamps must be monotonic: {:?}",
+        chunks
+            .iter()
+            .map(|chunk| chunk.presentation_time)
+            .collect::<Vec<_>>()
+    );
 
     Ok(())
 }

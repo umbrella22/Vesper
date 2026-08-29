@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.0 - 2026-08-29
+
+### Fixed
+
+- Made windowed timeline scrubbing follow forward, reverse, and
+  direction-changing pointer movement, including the final release position.
+
 ## 0.4.3-rc.1 - 2026-08-17
 
 - Prepared package metadata for the 0.4.3-rc.1 release.

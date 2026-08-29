@@ -20,7 +20,9 @@ internal fun VesperDlnaDiscovery.searchOnce(binding: DlnaNetworkBinding, generat
             socket.timeToLive = SSDP_TTL
             binding.networkInterface?.let(socket::setNetworkInterface)
             socket.bind(InetSocketAddress(binding.localAddress, 0))
-            bindSocketToNetwork(socket, binding)
+            if (!bindSocketToNetwork(socket, binding)) {
+                return 0
+            }
             socket.soTimeout = SSDP_RECEIVE_TIMEOUT_MS
             val address = InetAddress.getByName(SSDP_ADDRESS)
             var responseCount = 0
@@ -117,7 +119,7 @@ internal fun VesperDlnaDiscovery.handleSsdp(raw: String, binding: DlnaNetworkBin
     if (refreshKnownDevice(request, binding, generation)) {
         return
     }
-    val fetchKey = request.descriptionFetchKey()
+    val fetchKey = request.descriptionFetchKey(binding)
     if (!pendingDescriptionFetches.add(fetchKey)) {
         emitDiagnostic(
             code = "description_fetch_coalesced",

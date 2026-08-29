@@ -8,7 +8,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use player_plugin::{PluginReference, PluginTransport};
+use player_plugin::{
+    PLUGIN_CATALOG_MIGRATION_VERSION, PLUGIN_CATALOG_SCHEMA_VERSION, PluginArtifactDescriptor,
+    PluginCatalog, PluginCatalogError, PluginCatalogRecord, PluginCatalogSource, PluginProvision,
+    PluginReference, PluginRequirement, PluginTransport,
+};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -109,6 +113,10 @@ pub struct PluginPackageManifest {
     pub plugin: PluginIdentityDescriptor,
     pub compatibility: PluginCompatibilityDescriptor,
     pub capabilities: Vec<PluginCapabilityDescriptor>,
+    #[serde(default)]
+    pub requires: Vec<PluginRequirement>,
+    #[serde(default)]
+    pub provides: Vec<PluginProvision>,
     pub artifacts: Vec<PluginPackageArtifact>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub redistribution: Vec<PluginRedistributionDescriptor>,
@@ -129,6 +137,91 @@ pub struct PluginPackageArtifact {
     pub sha256: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtime_dependencies: Vec<PluginRuntimeDependencySource>,
+}
+
+impl PluginPackageManifest {
+    /// Builds a pure catalog projection from the canonical package manifest.
+    ///
+    /// This method only validates and copies metadata.  It never opens an
+    /// artifact, creates a loader owner, or initializes a WASM runtime.
+    pub fn catalog(&self) -> Result<PluginCatalog, PluginPackageError> {
+        let mut canonical = self.clone();
+        canonical_manifest_bytes(&mut canonical)?;
+        let records = canonical
+            .artifacts
+            .iter()
+            .map(|artifact| canonical.catalog_record(artifact))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(PluginCatalog::from_records(records)?)
+    }
+
+    /// Returns the metadata descriptor for one package artifact without
+    /// reading the artifact bytes.
+    pub fn artifact_descriptor(
+        &self,
+        artifact: &PluginPackageArtifact,
+    ) -> Result<PluginArtifactDescriptor, PluginPackageError> {
+        if !self.artifacts.iter().any(|candidate| candidate == artifact) {
+            return Err(PluginPackageError::InvalidPackage(
+                "artifact does not belong to the package manifest".to_owned(),
+            ));
+        }
+        let mut canonical = self.clone();
+        canonical_manifest_bytes(&mut canonical)?;
+        let artifact = canonical
+            .artifacts
+            .iter()
+            .find(|candidate| {
+                candidate.path == artifact.path && candidate.sha256 == artifact.sha256
+            })
+            .ok_or_else(|| {
+                PluginPackageError::InvalidPackage(
+                    "artifact does not belong to the canonical package manifest".to_owned(),
+                )
+            })?;
+        let descriptor = PluginArtifactDescriptor {
+            schema_version: PLUGIN_CATALOG_SCHEMA_VERSION,
+            plugin_id: self.plugin.id.clone(),
+            version: self.plugin.version.clone(),
+            publisher: self.plugin.publisher.clone(),
+            transport: artifact.transport,
+            target: artifact.target.clone(),
+            format: artifact.format,
+            architecture: artifact.architecture.clone(),
+            abi_major: self.compatibility.abi_major,
+            abi_minor_min: self.compatibility.abi_minor_min,
+            abi_minor_max: self.compatibility.abi_minor_max,
+            capabilities: artifact
+                .capabilities
+                .iter()
+                .map(|capability| player_plugin::PluginArtifactCapability {
+                    interface_id: capability.interface_id.clone(),
+                    instance_id: capability.instance_id.clone(),
+                })
+                .collect(),
+            requires: self.requires.clone(),
+            provides: self.provides.clone(),
+            runtime_dependencies: artifact.runtime_dependencies.clone(),
+            resource_policy: Default::default(),
+            migration_version: PLUGIN_CATALOG_MIGRATION_VERSION.to_owned(),
+        };
+        descriptor.validate().map_err(PluginPackageError::Catalog)?;
+        Ok(descriptor)
+    }
+
+    fn catalog_record(
+        &self,
+        artifact: &PluginPackageArtifact,
+    ) -> Result<PluginCatalogRecord, PluginPackageError> {
+        let descriptor = self.artifact_descriptor(artifact)?;
+        PluginCatalogRecord::new(
+            descriptor,
+            artifact.path.clone(),
+            artifact.sha256.clone(),
+            PluginCatalogSource::Package,
+        )
+        .map_err(PluginPackageError::Catalog)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -266,6 +359,12 @@ impl PluginHostTarget {
 pub struct VerifiedInstalledArtifact {
     plugin_id: String,
     version: String,
+    publisher: String,
+    abi_major: u16,
+    abi_minor_min: u16,
+    abi_minor_max: u16,
+    requires: Vec<PluginRequirement>,
+    provides: Vec<PluginProvision>,
     transport: PluginArtifactTransport,
     target: String,
     format: PluginArtifactFormat,
@@ -285,6 +384,18 @@ impl VerifiedInstalledArtifact {
 
     pub fn version(&self) -> &str {
         &self.version
+    }
+
+    pub fn publisher(&self) -> &str {
+        &self.publisher
+    }
+
+    pub const fn abi_major(&self) -> u16 {
+        self.abi_major
+    }
+
+    pub const fn abi_minor_range(&self) -> (u16, u16) {
+        (self.abi_minor_min, self.abi_minor_max)
     }
 
     pub const fn transport(&self) -> PluginArtifactTransport {
@@ -307,6 +418,14 @@ impl VerifiedInstalledArtifact {
         &self.capabilities
     }
 
+    pub fn requires(&self) -> &[PluginRequirement] {
+        &self.requires
+    }
+
+    pub fn provides(&self) -> &[PluginProvision] {
+        &self.provides
+    }
+
     pub fn minimum_os(&self) -> Option<&str> {
         self.minimum_os.as_deref()
     }
@@ -321,6 +440,55 @@ impl VerifiedInstalledArtifact {
 
     pub fn sha256(&self) -> &str {
         &self.sha256
+    }
+
+    /// Projects the verified installed metadata into the pure catalog model.
+    /// The process-private snapshot remains outside the returned descriptor.
+    pub fn artifact_descriptor(&self) -> Result<PluginArtifactDescriptor, PluginPackageError> {
+        let descriptor = PluginArtifactDescriptor {
+            schema_version: PLUGIN_CATALOG_SCHEMA_VERSION,
+            plugin_id: self.plugin_id.clone(),
+            version: self.version.clone(),
+            publisher: self.publisher.clone(),
+            transport: self.transport,
+            target: self.target.clone(),
+            format: self.format,
+            architecture: self.architecture.clone(),
+            abi_major: self.abi_major,
+            abi_minor_min: self.abi_minor_min,
+            abi_minor_max: self.abi_minor_max,
+            capabilities: self
+                .capabilities
+                .iter()
+                .map(|capability| player_plugin::PluginArtifactCapability {
+                    interface_id: capability.interface_id.clone(),
+                    instance_id: capability.instance_id.clone(),
+                })
+                .collect(),
+            requires: self.requires.clone(),
+            provides: self.provides.clone(),
+            runtime_dependencies: self.runtime_dependencies.clone(),
+            resource_policy: Default::default(),
+            migration_version: PLUGIN_CATALOG_MIGRATION_VERSION.to_owned(),
+        };
+        descriptor.validate().map_err(PluginPackageError::Catalog)?;
+        Ok(descriptor)
+    }
+
+    pub fn catalog_record(&self) -> Result<PluginCatalogRecord, PluginPackageError> {
+        let path = self.installed_path.to_str().ok_or_else(|| {
+            PluginPackageError::Catalog(PluginCatalogError::InvalidField {
+                field: "artifact_path".to_owned(),
+                message: "installed artifact path is not valid UTF-8".to_owned(),
+            })
+        })?;
+        PluginCatalogRecord::new(
+            self.artifact_descriptor()?,
+            path.to_owned(),
+            self.sha256.clone(),
+            PluginCatalogSource::Installed,
+        )
+        .map_err(PluginPackageError::Catalog)
     }
 
     /// Process-private immutable snapshot used by checked loaders.
@@ -379,6 +547,17 @@ pub struct VerifiedInstalledPluginCatalog {
 impl VerifiedInstalledPluginCatalog {
     pub fn artifacts(&self) -> &[VerifiedInstalledArtifact] {
         &self.artifacts
+    }
+
+    /// Rebuilds a pure catalog projection from verified installed metadata.
+    /// The process-private snapshots remain owned by this verification object.
+    pub fn catalog(&self) -> Result<PluginCatalog, PluginPackageError> {
+        let records = self
+            .artifacts
+            .iter()
+            .map(VerifiedInstalledArtifact::catalog_record)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(PluginCatalog::from_records(records)?)
     }
 }
 
@@ -564,6 +743,8 @@ pub enum PluginPackageError {
     Project(#[from] PluginProjectManifestError),
     #[error(transparent)]
     Descriptor(#[from] PluginDescriptorError),
+    #[error(transparent)]
+    Catalog(#[from] PluginCatalogError),
     #[error("failed to {operation} '{path}': {source}")]
     Io {
         operation: &'static str,
@@ -956,6 +1137,8 @@ pub fn build_signed_plugin_package(
         plugin: descriptor.plugin,
         compatibility: descriptor.compatibility,
         capabilities: descriptor.capabilities,
+        requires: descriptor.requires,
+        provides: descriptor.provides,
         artifacts,
         redistribution: descriptor.redistribution,
         generated_by: PluginPackageGenerator {
@@ -1021,6 +1204,8 @@ fn canonical_manifest_bytes(
         plugin: manifest.plugin.clone(),
         compatibility: manifest.compatibility.clone(),
         capabilities: manifest.capabilities.clone(),
+        requires: manifest.requires.clone(),
+        provides: manifest.provides.clone(),
         redistribution: manifest.redistribution.clone(),
     }
     .canonicalize()?
@@ -1029,6 +1214,8 @@ fn canonical_manifest_bytes(
     manifest.plugin = descriptor.plugin;
     manifest.compatibility = descriptor.compatibility;
     manifest.capabilities = descriptor.capabilities;
+    manifest.requires = descriptor.requires;
+    manifest.provides = descriptor.provides;
     manifest.redistribution = descriptor.redistribution;
 
     if manifest.artifacts.is_empty()
@@ -2054,6 +2241,8 @@ pub fn verify_installed_plugin_catalog(
             plugin: verified.manifest.plugin.clone(),
             compatibility: verified.manifest.compatibility.clone(),
             capabilities: verified.manifest.capabilities.clone(),
+            requires: verified.manifest.requires.clone(),
+            provides: verified.manifest.provides.clone(),
             redistribution: verified.manifest.redistribution.clone(),
         };
         descriptor
@@ -2152,6 +2341,12 @@ pub fn verify_installed_plugin_catalog(
             artifacts.push(VerifiedInstalledArtifact {
                 plugin_id: plugin_id.clone(),
                 version: version.clone(),
+                publisher: verified.manifest.plugin.publisher.clone(),
+                abi_major: verified.manifest.compatibility.abi_major,
+                abi_minor_min: verified.manifest.compatibility.abi_minor_min,
+                abi_minor_max: verified.manifest.compatibility.abi_minor_max,
+                requires: verified.manifest.requires.clone(),
+                provides: verified.manifest.provides.clone(),
                 transport: artifact.transport,
                 target: artifact.target.clone(),
                 format: artifact.format,
@@ -3088,8 +3283,9 @@ fn decode_hex<const N: usize>(value: &str) -> Result<[u8; N], String> {
         ));
     }
     let mut decoded = [0_u8; N];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
-        decoded[index] = (decode_hex_nibble(pair[0])? << 4) | decode_hex_nibble(pair[1])?;
+    let (pairs, _) = value.as_bytes().as_chunks::<2>();
+    for (index, [high, low]) in pairs.iter().copied().enumerate() {
+        decoded[index] = (decode_hex_nibble(high)? << 4) | decode_hex_nibble(low)?;
     }
     Ok(decoded)
 }
@@ -3135,6 +3331,14 @@ interface_major = 1
 interface_minor = 0
 stability = "stable"
 
+[[requires]]
+service = "dev.vesper.service.time-stretch"
+requirement = ">=1.0.0, <2.0.0"
+
+[[provides]]
+service = "dev.vesper.service.time-stretch"
+version = "1.4.0"
+
 [[artifacts]]
 transport = "native"
 target = "aarch64-apple-darwin"
@@ -3164,6 +3368,69 @@ kind = "notice"
             .expect("write artifact");
         fs::write(directory.join("LICENSE"), b"Apache-2.0\n").expect("write license");
         fs::write(directory.join("NOTICE"), b"Fixture notice\n").expect("write notice");
+    }
+
+    #[test]
+    fn package_manifest_projects_to_a_pure_catalog_without_opening_artifacts() {
+        let project = project();
+        let descriptor = project.descriptor();
+        let manifest = PluginPackageManifest {
+            schema_version: 1,
+            plugin: descriptor.plugin.clone(),
+            compatibility: descriptor.compatibility.clone(),
+            capabilities: descriptor.capabilities.clone(),
+            requires: descriptor.requires.clone(),
+            provides: descriptor.provides.clone(),
+            artifacts: vec![PluginPackageArtifact {
+                transport: PluginArtifactTransport::Native,
+                target: "aarch64-apple-darwin".to_owned(),
+                format: PluginArtifactFormat::Dylib,
+                path: "artifacts/fixture.dylib".to_owned(),
+                architecture: "arm64".to_owned(),
+                capabilities: vec![crate::PluginArtifactCapability {
+                    interface_id: "e9479dbc-42d2-575e-b39e-a24bc512fbc7".to_owned(),
+                    instance_id: "dev.vesper.fixture.post-download".to_owned(),
+                }],
+                minimum_os: None,
+                sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_owned(),
+                runtime_dependencies: vec![crate::PluginRuntimeDependencySource {
+                    id: "dev.vesper.runtime".to_owned(),
+                    version: "1.0.0".to_owned(),
+                    linkage: crate::PluginRuntimeLinkage::Dynamic,
+                    compatibility_key: "darwin-arm64".to_owned(),
+                }],
+            }],
+            redistribution: descriptor.redistribution.clone(),
+            generated_by: PluginPackageGenerator {
+                vesper: "0.4.3".to_owned(),
+                sdk: "0.4.3".to_owned(),
+            },
+        };
+
+        let catalog = manifest.catalog().expect("pure catalog projection");
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(
+            catalog.records()[0].descriptor().plugin_id,
+            "dev.vesper.fixture"
+        );
+        assert_eq!(
+            catalog.records()[0].artifact_path(),
+            "artifacts/fixture.dylib"
+        );
+        assert_eq!(
+            catalog.records()[0].descriptor().runtime_dependencies.len(),
+            1
+        );
+        assert_eq!(
+            catalog.records()[0].descriptor().requires[0].service,
+            "dev.vesper.service.time-stretch"
+        );
+        assert_eq!(
+            catalog.records()[0].descriptor().provides[0].version,
+            "1.4.0"
+        );
+        assert_eq!(catalog.records()[0].source, PluginCatalogSource::Package);
     }
 
     #[test]
@@ -3346,6 +3613,16 @@ kind = "notice"
             verify_signed_plugin_package(&first, &trust).expect("verified signed package");
         assert_eq!(verified.manifest().plugin.id, "dev.vesper.fixture");
         assert_eq!(verified.manifest().artifacts.len(), 1);
+        assert_eq!(
+            verified.manifest().requires[0].service,
+            "dev.vesper.service.time-stretch"
+        );
+        assert_eq!(verified.manifest().provides[0].version, "1.4.0");
+        let mut manifest_round_trip = verified.manifest().clone();
+        assert_eq!(
+            serde_json::to_vec(verified.manifest()).expect("serialize canonical manifest"),
+            canonical_manifest_bytes(&mut manifest_round_trip).expect("canonical manifest bytes")
+        );
 
         let tampered = directory.path().join("tampered.vesper-plugin");
         rewrite_with_tampered_artifact(&first, &tampered);
@@ -3629,6 +3906,26 @@ kind = "notice"
         assert_eq!(artifact.plugin_id(), "dev.vesper.fixture");
         assert_eq!(artifact.version(), "1.2.3");
         assert_ne!(artifact.snapshot_path(), artifact.installed_path());
+        let pure_catalog = catalog
+            .catalog()
+            .expect("pure installed catalog projection");
+        assert_eq!(pure_catalog.len(), 1);
+        assert_eq!(
+            pure_catalog.records()[0].descriptor().plugin_id,
+            "dev.vesper.fixture"
+        );
+        assert_eq!(
+            pure_catalog.records()[0].source,
+            PluginCatalogSource::Installed
+        );
+        assert_eq!(
+            pure_catalog.records()[0].descriptor().requires[0].service,
+            "dev.vesper.service.time-stretch"
+        );
+        assert_eq!(
+            pure_catalog.records()[0].descriptor().provides[0].version,
+            "1.4.0"
+        );
         assert_eq!(
             artifact.read_snapshot(1024).expect("snapshot bytes"),
             b"fixture artifact"

@@ -1,6 +1,16 @@
+<p align="center">
+  <img src="assets/branding/vesper-orbit-v5-lockup.svg" alt="Vesper Player SDK" width="520">
+</p>
+
 # Vesper Player SDK
 
-Language: [Simplified Chinese](README.zh-CN.md)
+<p align="center"><strong>Native-first playback for Android, iOS, Flutter, and Rust hosts.</strong></p>
+
+<p align="center">
+  <a href="README.zh-CN.md">简体中文</a> ·
+  <a href="lib/README.md">Platform packages</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
 
 Vesper is a native-first, multi-platform player SDK for applications that need
 real platform playback behavior without rebuilding every product feature from
@@ -69,15 +79,17 @@ lives in the [platform package guide](lib/README.md).
   Widevine is configured on Android Media3, and FairPlay is configured on iOS
   AVPlayer. DRM sources are not processed by Rust, FFI, plugins, download,
   preload, remux, SourceNormalizer, or external playback relays.
-- Typed plugin architecture with stable `PostDownloadProcessor`,
-  `PipelineEventHook`, and `BenchmarkSink` interfaces. `NativeDecoder`,
-  `FrameProcessor`, and packet/resource `SourceNormalizer` interfaces remain
-  experimental.
+- Typed plugin architecture with catalog records, dependency resolution,
+  invocation plans, bounded runtime scopes, and stable
+  `PostDownloadProcessor`, `PipelineEventHook`, and `BenchmarkSink` interfaces.
+  `NativeDecoder`, `FrameProcessor`, packet/resource `SourceNormalizer`, and
+  Native `AudioProcessor` interfaces remain experimental.
 - Plugin authors use the safe Rust SDK and explicit `PluginReference` values.
   Native plugins export one `vesper_plugin_entry`; Rust WASM Component
   plugins are limited to desktop/tooling `PipelineEventHook` and
   `BenchmarkSink` workloads with bounded structured input. C/C++ author SDKs,
-  mobile WASM, media-byte transforms, and DRM plugins are outside this release.
+  mobile WASM, WASM media-byte transforms, and DRM plugins are outside this
+  release.
 - The Rust `vesper plugin` CLI creates, checks, signs, packages, verifies, and
   installs deterministic `.vesper-plugin` archives. Native signatures prove
   publisher and artifact integrity; they do not sandbox trusted native code.
@@ -108,6 +120,7 @@ check before exposing advanced controls.
 | DRM direct playback        | ✅ Widevine through Media3 direct paths | ✅ FairPlay through AVPlayer direct paths | ⛔ not supported                                                                                                                                    | ✅ Android / iOS direct native paths only           |
 | Hardware decode probe      | `VesperDecoderBackend`            | `VesperCodecSupport`                       | macOS VideoToolbox native-frame opt-in; Windows D3D11 roadmap; Linux software-only today                                                            | Reflected through mobile capabilities                |
 | Plugin startup diagnostics | Internal runtime diagnostics      | Internal runtime diagnostics               | macOS / Windows decoder diagnostics; macOS frame processor chain; Linux reports unsupported diagnostics for configured plugin paths                | Exposed as create-result diagnostics where supported |
+| Native audio processing    | ⛔ direct Media3 path              | ⛔ direct AVPlayer path                     | ⚠️ experimental `AudioProcessor` with preserve-pitch and follow-rate modes                                                                         | ⛔ not exposed on mobile                              |
 
 Flutter support is mobile-only for now. Desktop Flutter targets are intentionally
 not shipped while the Flutter desktop integration model settles. Product UI
@@ -136,7 +149,6 @@ the current Widevine / FairPlay DRM contract.
 ## Repository Layout
 
 ```text
-.agents/     Repository Codex marketplace, maintainer agent, and Rust skills
 crates/      Rust workspace: shared core, runtime, FFI, backends, render, platform glue
 lib/         Distributable platform integration layers; start with lib/README.md
   android/   Android AAR modules: core kit, external playback, FFmpeg runtime, Compose adapter, optional Compose UI
@@ -154,9 +166,8 @@ third_party/ Vendored dependencies and generated prebuilt media libraries
 
 The public integration surface is concentrated under [lib/](lib/README.md),
 [examples/](examples/), and [include/](include/). The Rust crates under
-[crates/](crates/) power the shared runtime and platform bridges. Repository
-Codex integrations live under [.agents/](.agents/README.md); they are separate
-from the Vesper runtime plugins under [plugins/](plugins/).
+[crates/](crates/) power the shared runtime and platform bridges. Vesper runtime
+plugin projects live under [plugins/](plugins/).
 
 ## Quick Start
 
@@ -285,8 +296,8 @@ This is the intended published author workflow. The `player-plugin` and
 `player-plugin-wasm` crates are not on crates.io yet, so a newly generated
 external project cannot currently resolve the SDK without a repository-local
 Cargo patch. Native and WASM scaffolds have passed that local patched
-acceptance path; public authoring availability remains a release gate tracked in
-[`CURRENT-CHECKLIST.md`](CURRENT-CHECKLIST.md).
+acceptance path; public authoring availability begins after those SDK crates are
+published.
 
 `vesper-plugin.toml` is the author-owned source record. Packaging generates the
 canonical manifest, sorted `SHA256SUMS`, Ed25519 signature envelope, notices,
@@ -621,8 +632,7 @@ run the separate physical-device gate and retain its provenance and XCResult:
 ```
 
 See [`scripts/README.md`](scripts/README.md) for the retained evidence contract
-and [`CURRENT-CHECKLIST.md`](CURRENT-CHECKLIST.md) for the current acceptance
-result.
+and release verification entry points.
 
 Android packaging is currently `arm64-v8a` only, including the downloadable
 sample APKs. The sample APKs are debug-signed for side-load evaluation only and
@@ -663,17 +673,16 @@ generation tasks during their own Gradle / Xcode build.
 
 ## Current Status
 
-Vesper is still evolving and has not yet shipped as a stable 1.0 public SDK.
-Android and iOS host kits have releasable package paths for the deliberate
-modern arm64 platform boundary, while the Flutter federated packages are still
-source-distributed from this repository. Desktop Flutter packages are not
-shipped in the current package set. Desktop and SDK-managed native-frame paths
-remain experimental and do not block mobile release readiness. The plugin
-contracts, package schemas, Rust CLI, and WASM host are implemented in the
-current checkout, and the complete iOS archive verifier has passed. Public plugin
-release readiness still requires crates.io publication, a successful signed
-iOS physical-device plugin gate, real-device DRM/live/lifecycle coverage, and a
-clean independent author, WASM, and iOS consumption validation pass.
+The source tree and package metadata are frozen at `0.5.0`. Android and iOS host
+kits, the Flutter package family, plugin archives, and optional FFmpeg-backed
+artifacts have checked release paths for the modern arm64 platform boundary.
+Publishing starts only from the corresponding release tag; this source commit
+does not imply that every `0.5.0` coordinate is already available remotely.
+
+Mobile production playback remains Media3 and AVPlayer. Desktop playback,
+SDK-managed native-frame routes, Native `AudioProcessor`, decoder plugins,
+`FrameProcessor`, and `SourceNormalizer` remain experimental or opt-in. Flutter
+desktop packages are not part of the current release set.
 
 ## License
 

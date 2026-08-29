@@ -1,8 +1,16 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use player_plugin::{
+    PLUGIN_CATALOG_MIGRATION_VERSION, PLUGIN_CATALOG_SCHEMA_VERSION, PluginArtifactDescriptor,
+    PluginCatalogError, PluginProvision, PluginRequirement,
+};
+pub use player_plugin::{
+    PluginArtifactCapability, PluginArtifactFormat, PluginArtifactTransport,
+    PluginRuntimeDependency as PluginRuntimeDependencySource, PluginRuntimeLinkage,
+};
 use player_plugin::{PluginReference, PluginTransport};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use thiserror::Error;
 use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::UnicodeNormalization;
@@ -41,71 +49,15 @@ struct PluginProjectManifestWire {
     compatibility: PluginCompatibilityDescriptor,
     capabilities: Vec<PluginCapabilityDescriptor>,
     #[serde(default)]
+    requires: Vec<PluginRequirement>,
+    #[serde(default)]
+    provides: Vec<PluginProvision>,
+    #[serde(default)]
     redistribution: Vec<PluginRedistributionDescriptor>,
     #[serde(default)]
     artifacts: Vec<PluginArtifactSource>,
     #[serde(default)]
     package_files: Vec<PluginPackageFileSource>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PluginArtifactTransport {
-    Native,
-    Wasm,
-}
-
-impl PluginArtifactTransport {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Native => "native",
-            Self::Wasm => "wasm",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PluginArtifactFormat {
-    Dylib,
-    Aar,
-    Xcframework,
-    WasmComponent,
-}
-
-impl PluginArtifactFormat {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Dylib => "dylib",
-            Self::Aar => "aar",
-            Self::Xcframework => "xcframework",
-            Self::WasmComponent => "wasm-component",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PluginRuntimeLinkage {
-    Dynamic,
-    Static,
-    System,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PluginRuntimeDependencySource {
-    pub id: String,
-    pub version: String,
-    pub linkage: PluginRuntimeLinkage,
-    pub compatibility_key: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PluginArtifactCapability {
-    pub interface_id: String,
-    pub instance_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -147,6 +99,8 @@ pub enum PluginProjectManifestError {
     Toml(#[from] toml::de::Error),
     #[error(transparent)]
     Descriptor(#[from] PluginDescriptorError),
+    #[error(transparent)]
+    Catalog(#[from] PluginCatalogError),
     #[error("invalid plugin project field '{field}': {message}")]
     InvalidField { field: String, message: String },
     #[error("duplicate package path '{path}'")]
@@ -174,6 +128,8 @@ impl PluginProjectManifest {
             plugin: wire.plugin,
             compatibility: wire.compatibility,
             capabilities: wire.capabilities,
+            requires: wire.requires,
+            provides: wire.provides,
             redistribution: wire.redistribution,
         };
         descriptor.validate()?;
@@ -188,6 +144,39 @@ impl PluginProjectManifest {
 
     pub fn descriptor(&self) -> &PluginDescriptor {
         &self.descriptor
+    }
+
+    /// Projects author-owned artifact declarations into pure catalog
+    /// descriptors.  No artifact file is opened and no runtime is created.
+    pub fn artifact_descriptors(
+        &self,
+    ) -> Result<Vec<PluginArtifactDescriptor>, PluginProjectManifestError> {
+        self.artifacts
+            .iter()
+            .map(|artifact| {
+                let descriptor = PluginArtifactDescriptor {
+                    schema_version: PLUGIN_CATALOG_SCHEMA_VERSION,
+                    plugin_id: self.descriptor.plugin.id.clone(),
+                    version: self.descriptor.plugin.version.clone(),
+                    publisher: self.descriptor.plugin.publisher.clone(),
+                    transport: artifact.transport,
+                    target: artifact.target.clone(),
+                    format: artifact.format,
+                    architecture: artifact.architecture.clone(),
+                    abi_major: self.descriptor.compatibility.abi_major,
+                    abi_minor_min: self.descriptor.compatibility.abi_minor_min,
+                    abi_minor_max: self.descriptor.compatibility.abi_minor_max,
+                    capabilities: artifact.capabilities.clone(),
+                    requires: self.descriptor.requires.clone(),
+                    provides: self.descriptor.provides.clone(),
+                    runtime_dependencies: artifact.runtime_dependencies.clone(),
+                    resource_policy: Default::default(),
+                    migration_version: PLUGIN_CATALOG_MIGRATION_VERSION.to_owned(),
+                };
+                descriptor.validate()?;
+                Ok(descriptor)
+            })
+            .collect()
     }
 
     pub fn artifacts(&self) -> &[PluginArtifactSource] {
@@ -553,6 +542,44 @@ kind = "notice"
             .expect("complete package inputs");
         assert_eq!(project.descriptor().plugin.id, "dev.vesper.fixture");
         assert_eq!(project.artifacts().len(), 1);
+    }
+
+    #[test]
+    fn project_artifacts_project_to_pure_catalog_descriptors() {
+        let project = PluginProjectManifest::from_toml(&project_toml(
+            r#"
+[[requires]]
+service = "dev.vesper.service.time-stretch"
+requirement = ">=1.0.0, <2.0.0"
+
+[[provides]]
+service = "dev.vesper.service.time-stretch"
+version = "1.4.0"
+
+[[artifacts]]
+transport = "native"
+target = "aarch64-apple-darwin"
+format = "dylib"
+source = "plugin.dylib"
+path = "artifacts/plugin.dylib"
+architecture = "arm64"
+capabilities = [{ interface_id = "e9479dbc-42d2-575e-b39e-a24bc512fbc7", instance_id = "dev.vesper.fixture.post-download" }]
+"#,
+        ))
+        .expect("valid project");
+        let descriptors = project
+            .artifact_descriptors()
+            .expect("artifact descriptors");
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].plugin_id, "dev.vesper.fixture");
+        assert_eq!(descriptors[0].format, PluginArtifactFormat::Dylib);
+        assert_eq!(descriptors[0].requires.len(), 1);
+        assert_eq!(
+            descriptors[0].requires[0].service,
+            "dev.vesper.service.time-stretch"
+        );
+        assert_eq!(descriptors[0].provides.len(), 1);
+        assert_eq!(descriptors[0].provides[0].version, "1.4.0");
     }
 
     #[test]

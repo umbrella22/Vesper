@@ -1,0 +1,48 @@
+schema_version = 1
+
+[plugin]
+id = "dev.vesper.wasm-observer-diagnostic"
+name = "Vesper WASM Observer Diagnostic"
+version = "0.5.0"
+description = "Vesper WASM Observer Diagnostic Vesper plugin."
+license = "Apache-2.0"
+publisher = "io.github.umbrella22"
+
+[compatibility]
+host_sdk = ">=0.5.0, <0.6.0"
+abi_major = 1
+abi_minor_min = 0
+abi_minor_max = 0
+
+[[capabilities]]
+interface_id = "c7a69475-79b2-5b5e-a477-08844a5da5d1"
+instance_id = "dev.vesper.wasm-observer-diagnostic.event-hook"
+interface_major = 1
+interface_minor = 0
+stability = "stable"
+
+[[capabilities]]
+interface_id = "2d8e5be8-b1de-5e83-8fe0-6118aabc5118"
+instance_id = "dev.vesper.wasm-observer-diagnostic.benchmark"
+interface_major = 1
+interface_minor = 0
+stability = "stable"
+
+[[artifacts]]
+transport = "wasm"
+target = "wasm32-wasip2"
+format = "wasm-component"
+source = "dist/vesper_plugin_wasm_observer_diagnostic.wasm"
+path = "artifacts/wasm32-wasip2/vesper_plugin_wasm_observer_diagnostic.wasm"
+architecture = "wasm32"
+capabilities = [{ interface_id = "c7a69475-79b2-5b5e-a477-08844a5da5d1", instance_id = "dev.vesper.wasm-observer-diagnostic.event-hook" }, { interface_id = "2d8e5be8-b1de-5e83-8fe0-6118aabc5118", instance_id = "dev.vesper.wasm-observer-diagnostic.benchmark" }]
+
+[[package_files]]
+source = "LICENSE"
+path = "licenses/LICENSE"
+kind = "license"
+
+[[package_files]]
+source = "NOTICE"
+path = "notices/NOTICE"
+kind = "notice"

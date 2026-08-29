@@ -36,11 +36,11 @@ internal fun VesperDlnaDiscovery.refreshKnownDevice(
         val entry = devices.entries.firstOrNull { (_, device) ->
             device.matchesDescriptionRequest(request)
         } ?: return@synchronized false
+        if (!entry.value.canReuseDescriptionFor(request, binding)) {
+            return@synchronized false
+        }
         val refreshed = entry.value.copy(
             usn = request.usn,
-            network = binding.network,
-            localAddress = binding.localAddress,
-            interfaceName = binding.interfaceName,
             expiresAtMillis = maxOf(entry.value.expiresAtMillis, request.expiresAtMillis),
         )
         devices[entry.key] = refreshed

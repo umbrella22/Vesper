@@ -27,7 +27,7 @@ Use this example as a reference for:
   `preflightOnly`, `preferNormalized`, and `requireNormalized` at runtime.
 - FrameProcessor diagnostic plugin logging. The example embeds the diagnostic
   plugin when available, but does not open frame sessions or alter rendering.
-- Dolby Browser Test Kit HLS presets, including locally configured FairPlay
+- Dolby Vision Online Delivery Kit HLS presets, including locally configured FairPlay
   CBCS validation rows for real devices.
 - Bounded in-app event log for host UI actions such as source selection,
   Dolby actions, plugin mode changes, external-route events, and HDR evidence

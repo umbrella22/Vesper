@@ -22,6 +22,22 @@ artifact-independent identity and capability record used by embedded mobile
 registries. `embedded-registry.schema.json` covers Android and Apple
 build-time registry assets.
 
+`catalog.schema.json` describes the pure artifact catalog projection used by
+the rewritten plugin runtime. Catalog records contain canonical metadata,
+artifact digests, and bounded diagnostics only; they never contain a loaded
+library handle, WASM instance, worker, queue, or media bytes.
+
+Descriptors and package manifests carry bounded canonical `requires` and
+`provides` declarations. A requirement names a service and semver range; a
+provision names a service and provided semver. Unknown nested fields are
+rejected by the schema and Rust serde model. Dependency resolution and cycle
+diagnostics remain resolver responsibilities.
+
+The author-owned project input may omit either array; the parser supplies an
+empty declaration list. Canonical descriptors and generated package manifests
+always serialize both arrays, so their schemas require the fields and preserve
+an explicit empty list in the signed metadata.
+
 `signature.schema.json` describes the canonical signature envelope. The
 Ed25519 signature input is:
 

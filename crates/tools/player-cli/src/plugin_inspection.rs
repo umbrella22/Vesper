@@ -1,17 +1,24 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
-use player_cli::{PluginArtifactTransport, PluginCapabilityDescriptor, PluginDescriptor};
+use player_cli::{
+    PLUGIN_CATALOG_MIGRATION_VERSION, PLUGIN_CATALOG_SCHEMA_VERSION, PluginArtifactDescriptor,
+    PluginArtifactTransport, PluginCapabilityDescriptor, PluginDescriptor, PluginProjectManifest,
+    PluginProvision, PluginRequirement,
+};
 use player_plugin::{
-    AssemblyMode, BenchmarkEvent, BenchmarkEventBatch, BenchmarkSinkError, CompletedContentFormat,
-    CompletedDownloadInfo, ContentFormatKind, DownloadMetadata, PipelineEvent,
-    PipelineEventHookError, PluginReference, PluginTransport, ProcessorError, ProcessorProgress,
+    AssemblyMode, AudioPitchMode, AudioPlaybackPolicy, AudioProcessorCapabilities,
+    AudioProcessorError, AudioProcessorSessionConfig, BenchmarkEvent, BenchmarkEventBatch,
+    BenchmarkSinkError, CompletedContentFormat, CompletedDownloadInfo, ContentFormatKind,
+    DecoderFrameFormat, DecoderPcmFrame, DecoderPcmFrameMetadata, DecoderPcmSampleLayout,
+    DownloadMetadata, PipelineEvent, PipelineEventHookError, PluginReference, PluginTransport,
+    ProcessorError, ProcessorProgress,
 };
 use player_plugin_abi::{
-    BENCHMARK_SINK_INTERFACE_ID, FRAME_PROCESSOR_INTERFACE_ID, NATIVE_DECODER_INTERFACE_ID,
-    PIPELINE_EVENT_HOOK_INTERFACE_ID, POST_DOWNLOAD_PROCESSOR_INTERFACE_ID,
-    SOURCE_NORMALIZER_PACKET_INTERFACE_ID, SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID,
-    VesperInterfaceId,
+    AUDIO_PROCESSOR_INTERFACE_ID, BENCHMARK_SINK_INTERFACE_ID, FRAME_PROCESSOR_INTERFACE_ID,
+    NATIVE_DECODER_INTERFACE_ID, PIPELINE_EVENT_HOOK_INTERFACE_ID,
+    POST_DOWNLOAD_PROCESSOR_INTERFACE_ID, SOURCE_NORMALIZER_PACKET_INTERFACE_ID,
+    SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID, VesperInterfaceId,
 };
 use player_plugin_loader::{
     LoadedNativePlugin, PluginContractDiagnosticKind, PluginInterfaceState, PluginLoadError,
@@ -111,6 +118,7 @@ pub struct PluginInspectionReport {
     pub transport: Option<PluginArtifactTransport>,
     pub plugin_id: String,
     pub plugin_version: String,
+    pub migration_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_plugin_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -125,6 +133,21 @@ pub struct PluginInspectionReport {
     pub worker_output: Option<PluginWorkerOutputSummary>,
 }
 
+/// Canonical metadata that plugin tooling can report without opening an
+/// artifact or creating a runtime worker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginCatalogInspectionReport {
+    pub schema_version: u32,
+    pub plugin_id: String,
+    pub plugin_version: String,
+    pub descriptor_sha256: String,
+    pub migration_version: String,
+    pub requires: Vec<PluginRequirement>,
+    pub provides: Vec<PluginProvision>,
+    pub artifacts: Vec<PluginArtifactDescriptor>,
+}
+
 impl PluginInspectionReport {
     fn new(
         descriptor: &PluginDescriptor,
@@ -137,6 +160,7 @@ impl PluginInspectionReport {
             transport,
             plugin_id: descriptor.plugin.id.clone(),
             plugin_version: descriptor.plugin.version.clone(),
+            migration_version: PLUGIN_CATALOG_MIGRATION_VERSION.to_owned(),
             runtime_plugin_id: None,
             runtime_plugin_name: None,
             compatible: true,
@@ -199,6 +223,41 @@ impl PluginInspectionReport {
             message: message.into(),
         });
     }
+}
+
+pub fn inspect_project_catalog(
+    project: &PluginProjectManifest,
+) -> Result<PluginCatalogInspectionReport, String> {
+    let descriptor = project
+        .descriptor()
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let mut artifacts = project
+        .artifact_descriptors()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|artifact| {
+            artifact
+                .canonicalize()
+                .map(|canonical| (canonical.json().to_vec(), canonical.descriptor().clone()))
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    artifacts.sort_by(|left, right| left.0.cmp(&right.0));
+
+    Ok(PluginCatalogInspectionReport {
+        schema_version: PLUGIN_CATALOG_SCHEMA_VERSION,
+        plugin_id: descriptor.descriptor().plugin.id.clone(),
+        plugin_version: descriptor.descriptor().plugin.version.clone(),
+        descriptor_sha256: descriptor.sha256().to_owned(),
+        migration_version: PLUGIN_CATALOG_MIGRATION_VERSION.to_owned(),
+        requires: descriptor.descriptor().requires.clone(),
+        provides: descriptor.descriptor().provides.clone(),
+        artifacts: artifacts
+            .into_iter()
+            .map(|(_, descriptor)| descriptor)
+            .collect(),
+    })
 }
 
 pub fn inspect_manifest(
@@ -597,6 +656,8 @@ fn check_native_capability(
             }
             Err(error) => report.conformance_failure(check_id, error.to_string()),
         }
+    } else if interface_id == interface_uuid(AUDIO_PROCESSOR_INTERFACE_ID) {
+        check_native_audio_processor(loaded, &reference, check_id, report);
     } else if interface_id == interface_uuid(SOURCE_NORMALIZER_PACKET_INTERFACE_ID) {
         match loaded.resolve_source_packet(&reference) {
             Ok(factory) => {
@@ -621,6 +682,120 @@ fn check_native_capability(
             format!("host does not implement conformance checks for interface {interface_id}"),
         );
     }
+}
+
+fn check_native_audio_processor(
+    loaded: &LoadedNativePlugin,
+    reference: &PluginReference,
+    check_id: String,
+    report: &mut PluginInspectionReport,
+) {
+    let factory = match loaded.resolve_audio_processor(reference) {
+        Ok(factory) => factory,
+        Err(error) => {
+            report.conformance_failure(check_id, error.to_string());
+            return;
+        }
+    };
+    let capabilities = factory.capabilities();
+    let Some(format) = audio_check_format(&capabilities) else {
+        report.conformance_failure(check_id, "audio processor does not accept F32 or S16 PCM");
+        return;
+    };
+    let policy = audio_check_policy(&capabilities);
+    if !capabilities.supports_playback_policy(policy) {
+        report.conformance_failure(
+            check_id,
+            "audio processor does not expose a usable playback policy",
+        );
+        return;
+    }
+
+    let mut metadata = DecoderPcmFrameMetadata::audio(
+        "vesper-check-pcm",
+        format.clone(),
+        48_000,
+        1,
+        DecoderPcmSampleLayout::Interleaved,
+        64,
+    );
+    metadata.pts_us = Some(1_000);
+    metadata.duration_us = Some(1_333);
+    metadata.discontinuity = true;
+    let bytes_per_sample = if format == DecoderFrameFormat::F32 {
+        size_of::<f32>()
+    } else {
+        size_of::<i16>()
+    };
+    let frame = DecoderPcmFrame {
+        metadata: metadata.clone(),
+        data: vec![0; 64 * bytes_per_sample],
+    };
+    let config = AudioProcessorSessionConfig {
+        processor_index: 0,
+        input_metadata: metadata,
+        playback_policy: policy,
+        max_in_flight_frames: Some(1),
+    };
+
+    match exercise_native_audio_processor(factory.as_ref(), &config, policy, frame) {
+        Ok(()) => report.passed(
+            check_id,
+            "audio processor completed bounded PCM configure/process/flush/close",
+        ),
+        Err(AudioProcessorError::AbiViolation(message))
+        | Err(AudioProcessorError::PayloadCodec(message)) => {
+            report.conformance_failure(check_id, message)
+        }
+        Err(error) => report.warning(
+            check_id,
+            format!("audio processor returned a valid author failure: {error}"),
+        ),
+    }
+}
+
+fn audio_check_format(capabilities: &AudioProcessorCapabilities) -> Option<DecoderFrameFormat> {
+    [DecoderFrameFormat::F32, DecoderFrameFormat::S16]
+        .into_iter()
+        .find(|format| capabilities.supports_input_format(format))
+}
+
+fn audio_check_policy(capabilities: &AudioProcessorCapabilities) -> AudioPlaybackPolicy {
+    let pitch_mode = capabilities
+        .pitch_modes
+        .first()
+        .copied()
+        .unwrap_or(AudioPitchMode::FollowRate);
+    let normal = AudioPlaybackPolicy {
+        playback_rate: 1.0,
+        pitch_mode,
+    };
+    if capabilities.supports_playback_policy(normal) {
+        return normal;
+    }
+    AudioPlaybackPolicy {
+        playback_rate: capabilities
+            .playback_rate_min
+            .or(capabilities.playback_rate_max)
+            .unwrap_or(1.0),
+        pitch_mode,
+    }
+}
+
+fn exercise_native_audio_processor(
+    factory: &dyn player_plugin::AudioProcessorPluginFactory,
+    config: &AudioProcessorSessionConfig,
+    policy: AudioPlaybackPolicy,
+    frame: DecoderPcmFrame,
+) -> Result<(), AudioProcessorError> {
+    let mut session = factory.open_session(config)?;
+    let operation_result = (|| {
+        session.configure(policy)?;
+        session.process(frame)?;
+        session.flush()
+    })();
+    let close_result = session.close();
+    operation_result.and(close_result)
 }
 
 fn check_native_post_download(
@@ -814,6 +989,11 @@ impl ProcessorProgress for NoopProgress {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use player_cli::{PluginCompatibilityDescriptor, PluginIdentityDescriptor, PluginStability};
 
     use super::*;
@@ -830,7 +1010,7 @@ mod tests {
                 publisher: "dev.vesper.publisher".to_owned(),
             },
             compatibility: PluginCompatibilityDescriptor {
-                host_sdk: ">=0.4.0, <0.5.0".to_owned(),
+                host_sdk: ">=0.5.0, <0.6.0".to_owned(),
                 abi_major: 1,
                 abi_minor_min: 0,
                 abi_minor_max: 0,
@@ -842,6 +1022,8 @@ mod tests {
                 interface_minor: 0,
                 stability: PluginStability::Stable,
             }],
+            requires: Vec::new(),
+            provides: Vec::new(),
             redistribution: Vec::new(),
         }
     }
@@ -892,6 +1074,124 @@ mod tests {
                 check.id == "transport.capability"
                     && check.message.contains("WIT interface version 1.0")
             }));
+        }
+    }
+
+    struct TestAudioFactory {
+        close_calls: Arc<AtomicUsize>,
+        fail_process: bool,
+    }
+
+    impl player_plugin::AudioProcessorPluginFactory for TestAudioFactory {
+        fn name(&self) -> &str {
+            "test-audio-processor"
+        }
+
+        fn capabilities(&self) -> AudioProcessorCapabilities {
+            AudioProcessorCapabilities {
+                accepted_formats: vec![DecoderFrameFormat::F32],
+                output_format: Some(DecoderFrameFormat::F32),
+                supports_flush: true,
+                max_in_flight_frames: Some(1),
+                playback_rate_min: Some(1.0),
+                playback_rate_max: Some(1.0),
+                pitch_modes: vec![AudioPitchMode::FollowRate],
+            }
+        }
+
+        fn open_session(
+            &self,
+            _config: &AudioProcessorSessionConfig,
+        ) -> Result<Box<dyn player_plugin::AudioProcessorSession>, AudioProcessorError> {
+            Ok(Box::new(TestAudioSession {
+                close_calls: Arc::clone(&self.close_calls),
+                fail_process: self.fail_process,
+            }))
+        }
+    }
+
+    struct TestAudioSession {
+        close_calls: Arc<AtomicUsize>,
+        fail_process: bool,
+    }
+
+    impl player_plugin::AudioProcessorSession for TestAudioSession {
+        fn name(&self) -> &str {
+            "test-audio-session"
+        }
+
+        fn capabilities(&self) -> AudioProcessorCapabilities {
+            AudioProcessorCapabilities::default()
+        }
+
+        fn process(
+            &mut self,
+            frame: DecoderPcmFrame,
+        ) -> Result<DecoderPcmFrame, AudioProcessorError> {
+            if self.fail_process {
+                return Err(AudioProcessorError::Processor(
+                    "expected process failure".to_owned(),
+                ));
+            }
+            Ok(frame)
+        }
+
+        fn flush(&mut self) -> Result<(), AudioProcessorError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), AudioProcessorError> {
+            self.close_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    fn test_audio_invocation() -> (
+        AudioProcessorSessionConfig,
+        AudioPlaybackPolicy,
+        DecoderPcmFrame,
+    ) {
+        let metadata = DecoderPcmFrameMetadata::audio(
+            "test-audio-pcm",
+            DecoderFrameFormat::F32,
+            48_000,
+            1,
+            DecoderPcmSampleLayout::Interleaved,
+            64,
+        );
+        let policy = AudioPlaybackPolicy {
+            playback_rate: 1.0,
+            pitch_mode: AudioPitchMode::FollowRate,
+        };
+        (
+            AudioProcessorSessionConfig {
+                processor_index: 0,
+                input_metadata: metadata.clone(),
+                playback_policy: policy,
+                max_in_flight_frames: Some(1),
+            },
+            policy,
+            DecoderPcmFrame {
+                metadata,
+                data: vec![0; 64 * size_of::<f32>()],
+            },
+        )
+    }
+
+    #[test]
+    fn audio_conformance_closes_successful_and_failed_sessions() {
+        for fail_process in [false, true] {
+            let close_calls = Arc::new(AtomicUsize::new(0));
+            let factory = TestAudioFactory {
+                close_calls: Arc::clone(&close_calls),
+                fail_process,
+            };
+            let (config, policy, frame) = test_audio_invocation();
+
+            let result = exercise_native_audio_processor(&factory, &config, policy, frame);
+
+            assert_eq!(result.is_err(), fail_process);
+            assert_eq!(close_calls.load(Ordering::Relaxed), 1);
         }
     }
 }

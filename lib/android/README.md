@@ -94,8 +94,8 @@ source-built plugin set.
 The optional `vesper-player-kit-compose-ui` module remains available both as a
 source module and as a release AAR.
 
-Prerelease tags such as `v0.4.3-rc.1` publish immutable prerelease coordinates
-such as `0.4.3-rc.1`; consumers must request that exact prerelease version.
+Prerelease tags such as `v0.5.0-rc.1` publish immutable prerelease coordinates
+such as `0.5.0-rc.1`; consumers must request that exact prerelease version.
 Stable tags publish the matching stable coordinates.
 
 ### Maven Central Publishing
@@ -123,7 +123,7 @@ contacting Central:
 ```sh
 MAVEN_GPG_PRIVATE_KEY="$(path-to-secret-provider)" \
 MAVEN_GPG_PASSPHRASE="$(path-to-passphrase-provider)" \
-./scripts/vesper android publish-maven-central v0.4.3-rc.1 --dry-run
+./scripts/vesper android publish-maven-central v0.5.0-rc.1 --dry-run
 ```
 
 ## Minimum Requirements
@@ -138,7 +138,7 @@ Android versions, without a separate product-direction change.
 
 ## Source Build Toolchain
 
-- Gradle Wrapper `9.3.1`
+- Gradle Wrapper `9.7.1`
 - Android Gradle Plugin `9.1.0`
 - Gradle runtime JDK `21`
 - Java / Kotlin bytecode target `17`
@@ -297,6 +297,49 @@ code, whose meaning is version-dependent) as the source of truth. A Dolby Vision
 Profile 5 source can also fail as a video capability mismatch on devices without
 a compatible Dolby Vision decoder; that is distinct from Widevine license
 failure.
+
+For a physical-device check using the public Shaka Widevine demo pair, run the
+opt-in instrumentation test below. It is skipped unless the network argument is
+present so routine device suites remain independent of public services:
+
+```bash
+gradle -p lib/android \
+  -Pvesper.player.android.abis=arm64-v8a \
+  -Pandroid.testInstrumentationRunnerArguments.class=io.github.umbrella22.vesper.player.android.VesperWidevinePlaybackInstrumentationTest \
+  -Pandroid.testInstrumentationRunnerArguments.vesperWidevineNetwork=true \
+  :vesper-player-kit:connectedDebugAndroidTest
+```
+
+The test requires keys loaded, a video decoder, a rendered first frame, and at
+least three seconds of timeline progress. A device that has not completed
+Widevine provisioning must also reach Google's provisioning service; access to
+the manifest or license host alone is insufficient.
+
+For Dolby Vision Online Delivery Kit smoke coverage, the example hosts use the
+public signal layout below. The old Browser Test Kit paths are retired/restricted
+and must not be restored:
+
+```text
+https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/{clear|cenc|cbcs}/{P5|P8_1|P8_4}_{25|30|60}/{dash.mpd|master.m3u8}
+```
+
+The opt-in Android gate exercises a P8.1 30fps clear DASH signal and a CENC
+DASH signal with the configured EZDRM Widevine license. It requires native
+Media3 decoder initialization, a rendered first frame, at least three seconds
+of timeline progress, and `onDrmKeysLoaded` for CENC:
+
+```bash
+gradle -p lib/android \
+  -Pvesper.player.android.abis=arm64-v8a \
+  -Pandroid.testInstrumentationRunnerArguments.class=io.github.umbrella22.vesper.player.android.VesperDolbyVisionPlaybackInstrumentationTest \
+  -Pandroid.testInstrumentationRunnerArguments.vesperDolbyVisionNetwork=true \
+  :vesper-player-kit:connectedDebugAndroidTest
+```
+
+This gate is opt-in because it depends on external Dolby and license services;
+routine Android test suites remain independent of those services. Dolby
+protected media stays on the direct native Media3 route and does not enter Rust
+media processing, optional plugins, download, preload, remux, or relay paths.
 
 ## Local-Network Cleartext HTTP
 

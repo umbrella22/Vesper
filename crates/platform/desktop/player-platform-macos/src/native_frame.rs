@@ -8,6 +8,7 @@ pub(crate) struct MacosNativeFrameVideoSourceFactory {
     pub(crate) frame_processor_paths: Vec<PathBuf>,
     pub(crate) frame_processor_mode: FrameProcessorMode,
     pub(crate) frame_processor_policy: FrameProcessorPolicy,
+    pub(crate) frame_processor_participation: Option<MacosFrameProcessorParticipationTracker>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +90,7 @@ pub(crate) struct MacosSourceNormalizerPacketVideoSourceFactory {
     pub(crate) frame_processor_paths: Vec<PathBuf>,
     pub(crate) frame_processor_mode: FrameProcessorMode,
     pub(crate) frame_processor_policy: FrameProcessorPolicy,
+    pub(crate) frame_processor_participation: Option<MacosFrameProcessorParticipationTracker>,
     pub(crate) packet_session: Arc<Mutex<Option<Box<dyn SourceNormalizerPacketSession>>>>,
 }
 
@@ -128,6 +130,8 @@ pub(crate) struct MacosNativeFrameVideoSource {
 // needed. Holding `shared` while taking `session` can deadlock with decoder receive/release paths.
 pub(crate) struct MacosNativeFrameDecoderState {
     pub(crate) frame_processor_chain: Option<MacosFrameProcessorChain>,
+    pub(crate) frame_processor_participation: Option<MacosFrameProcessorParticipationTracker>,
+    pub(crate) frame_processor_plugin_names: Vec<String>,
     pub(crate) presenter: Option<MacosMetalLayerPresenter>,
     pub(crate) presentation_epoch: u64,
 }
@@ -795,6 +799,7 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
             &self.frame_processor_paths,
             self.frame_processor_mode,
             self.frame_processor_policy.clone(),
+            self.frame_processor_participation.as_ref(),
         )?;
         let decode_info = BackendVideoDecodeInfo {
             selected_mode: BackendVideoDecoderMode::Hardware,
@@ -827,7 +832,12 @@ impl DesktopVideoSourceFactory for MacosSourceNormalizerPacketVideoSourceFactory
         let outstanding_frames = Arc::new(AtomicUsize::new(0));
         let session = Arc::new(Mutex::new(session));
         let shared = Arc::new(Mutex::new(MacosNativeFrameDecoderState {
+            frame_processor_plugin_names: frame_processor_chain
+                .as_ref()
+                .map(MacosFrameProcessorChain::processor_names)
+                .unwrap_or_default(),
             frame_processor_chain,
+            frame_processor_participation: self.frame_processor_participation.clone(),
             presenter: Some(presenter),
             presentation_epoch: 0,
         }));
@@ -952,6 +962,7 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
             &self.frame_processor_paths,
             self.frame_processor_mode,
             self.frame_processor_policy.clone(),
+            self.frame_processor_participation.as_ref(),
         )?;
         let decode_info = BackendVideoDecodeInfo {
             selected_mode: BackendVideoDecoderMode::Hardware,
@@ -967,7 +978,12 @@ impl DesktopVideoSourceFactory for MacosNativeFrameVideoSourceFactory {
         let outstanding_frames = Arc::new(AtomicUsize::new(0));
         let session = Arc::new(Mutex::new(session));
         let shared = Arc::new(Mutex::new(MacosNativeFrameDecoderState {
+            frame_processor_plugin_names: frame_processor_chain
+                .as_ref()
+                .map(MacosFrameProcessorChain::processor_names)
+                .unwrap_or_default(),
             frame_processor_chain,
+            frame_processor_participation: self.frame_processor_participation.clone(),
             presenter: Some(presenter),
             presentation_epoch: 0,
         }));
@@ -1733,6 +1749,13 @@ pub(crate) fn present_and_release_macos_processor_frame(
     let present_result = presenter
         .present_cv_pixel_buffer_handle(frame.presentation_frame().handle)
         .map_err(|error| anyhow::anyhow!(error.message().to_owned()));
+    if let Some(participation) = shared.frame_processor_participation.as_ref() {
+        participation.observe_presented_frame(
+            &shared.frame_processor_plugin_names,
+            frame.0.used_processor_output,
+            present_result.is_ok(),
+        );
+    }
     let release_result = release_macos_processor_frame_and_track(
         session.as_mut(),
         &mut shared,

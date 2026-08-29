@@ -1,5 +1,5 @@
 group = "io.github.umbrella22.vesper.player.flutter.source_normalizer_ffmpeg"
-version = "0.4.3-rc.1"
+version = "0.5.0"
 
 buildscript {
     ext.kotlin_version = "2.4.10"

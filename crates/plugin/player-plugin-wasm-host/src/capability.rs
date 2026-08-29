@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::time::Duration;
 
 use player_plugin::{
     BenchmarkEventBatch, BenchmarkSink, BenchmarkSinkError, BenchmarkSinkReport,
@@ -7,14 +7,15 @@ use player_plugin::{
 };
 
 use crate::{
-    WasmBenchmarkSinkSession, WasmPipelineEventHookSession, WasmPluginHostError,
-    WasmPluginLogLevel, WasmPluginLogRecord, WasmPluginRuntime,
+    WASM_PLUGIN_BENCHMARK_RESULT_WAIT_MILLIS, WASM_PLUGIN_EVENT_RESULT_WAIT_MILLIS,
+    WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS, WasmBenchmarkSinkQueue, WasmPipelineEventHookQueue,
+    WasmPluginHostError, WasmPluginLogLevel, WasmPluginLogRecord, WasmPluginRuntime,
 };
 
 /// Thread-safe typed capability backed by one stateful WASM EventHook instance.
 #[derive(Debug)]
 pub struct WasmPipelineEventHookAdapter {
-    session: Mutex<WasmPipelineEventHookSession>,
+    queue: WasmPipelineEventHookQueue,
 }
 
 impl WasmPipelineEventHookAdapter {
@@ -23,10 +24,12 @@ impl WasmPipelineEventHookAdapter {
         bytes: &[u8],
     ) -> Result<Self, WasmPluginHostError> {
         Ok(Self {
-            session: Mutex::new(WasmPipelineEventHookSession::from_component_bytes(
-                runtime, bytes,
-            )?),
+            queue: WasmPipelineEventHookQueue::from_component_bytes(runtime, bytes)?,
         })
+    }
+
+    pub fn close(&self, timeout: Duration) -> Result<(), WasmPluginHostError> {
+        self.queue.close(timeout)
     }
 }
 
@@ -35,15 +38,15 @@ impl PipelineEventHook for WasmPipelineEventHookAdapter {
         &self,
         event: &PipelineEvent,
     ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
-        let mut session = self
-            .session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let result = session.on_event(event).map_err(map_event_hook_error);
-        let logs = session.take_logs();
-        drop(session);
-        emit_logs(logs);
-        result
+        let report = self
+            .queue
+            .invoke(
+                event.clone(),
+                Duration::from_millis(WASM_PLUGIN_EVENT_RESULT_WAIT_MILLIS),
+            )
+            .map_err(map_event_hook_error)?;
+        emit_logs(report.logs);
+        report.result.map_err(map_event_hook_error)
     }
 }
 
@@ -51,7 +54,7 @@ impl PipelineEventHook for WasmPipelineEventHookAdapter {
 #[derive(Debug)]
 pub struct WasmBenchmarkSinkAdapter {
     name: String,
-    session: Mutex<WasmBenchmarkSinkSession>,
+    queue: WasmBenchmarkSinkQueue,
 }
 
 impl WasmBenchmarkSinkAdapter {
@@ -62,10 +65,14 @@ impl WasmBenchmarkSinkAdapter {
     ) -> Result<Self, WasmPluginHostError> {
         Ok(Self {
             name: name.into(),
-            session: Mutex::new(WasmBenchmarkSinkSession::from_component_bytes(
-                runtime, bytes,
-            )?),
+            queue: WasmBenchmarkSinkQueue::from_component_bytes(runtime, bytes)?,
         })
+    }
+
+    pub fn close(&self, timeout: Duration) -> Result<BenchmarkSinkReport, WasmPluginHostError> {
+        let report = self.queue.close(timeout)?;
+        emit_logs(report.logs);
+        report.result
     }
 }
 
@@ -79,27 +86,24 @@ impl BenchmarkSink for WasmBenchmarkSinkAdapter {
         batch: &BenchmarkEventBatch,
     ) -> Result<BenchmarkSinkStatus, BenchmarkSinkError> {
         batch.validate()?;
-        let mut session = self
-            .session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let result = session.on_event_batch(batch).map_err(map_benchmark_error);
-        let logs = session.take_logs();
-        drop(session);
-        emit_logs(logs);
-        result
+        let report = self
+            .queue
+            .submit(
+                batch.clone(),
+                Duration::from_millis(WASM_PLUGIN_BENCHMARK_RESULT_WAIT_MILLIS),
+            )
+            .map_err(map_benchmark_error)?;
+        emit_logs(report.logs);
+        report.result.map_err(map_benchmark_error)
     }
 
     fn flush(&self) -> Result<BenchmarkSinkReport, BenchmarkSinkError> {
-        let mut session = self
-            .session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let result = session.flush().map_err(map_benchmark_error);
-        let logs = session.take_logs();
-        drop(session);
-        emit_logs(logs);
-        result
+        let report = self
+            .queue
+            .flush(Duration::from_millis(WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS))
+            .map_err(map_benchmark_error)?;
+        emit_logs(report.logs);
+        report.result.map_err(map_benchmark_error)
     }
 }
 

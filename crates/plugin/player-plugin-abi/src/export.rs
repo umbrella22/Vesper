@@ -22,6 +22,7 @@ pub enum ExportInterfaceKind {
     BenchmarkSink,
     NativeDecoder,
     FrameProcessor,
+    AudioProcessor,
     SourceNormalizerPacket,
     SourceNormalizerResource,
 }
@@ -34,6 +35,7 @@ impl ExportInterfaceKind {
             Self::BenchmarkSink => BENCHMARK_SINK_INTERFACE_ID,
             Self::NativeDecoder => NATIVE_DECODER_INTERFACE_ID,
             Self::FrameProcessor => FRAME_PROCESSOR_INTERFACE_ID,
+            Self::AudioProcessor => AUDIO_PROCESSOR_INTERFACE_ID,
             Self::SourceNormalizerPacket => SOURCE_NORMALIZER_PACKET_INTERFACE_ID,
             Self::SourceNormalizerResource => SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID,
         }
@@ -165,6 +167,15 @@ pub enum ExportOperation<'a> {
         session_id: VesperSessionId,
         lease_id: VesperLeaseId,
     },
+    AudioConfigure {
+        session_id: VesperSessionId,
+        policy_json: &'a [u8],
+    },
+    AudioProcess {
+        session_id: VesperSessionId,
+        metadata_json: &'a [u8],
+        pcm_data: &'a [u8],
+    },
     PacketRead {
         session_id: VesperSessionId,
     },
@@ -281,6 +292,7 @@ enum RawTable {
     BenchmarkSink(VesperBenchmarkSink),
     NativeDecoder(VesperNativeDecoder),
     FrameProcessor(VesperFrameProcessor),
+    AudioProcessor(VesperAudioProcessor),
     SourceNormalizerPacket(VesperSourceNormalizerPacket),
     SourceNormalizerResource(VesperSourceNormalizerResource),
 }
@@ -293,6 +305,7 @@ impl RawTable {
             Self::BenchmarkSink(table) => &table.header,
             Self::NativeDecoder(table) => &table.header,
             Self::FrameProcessor(table) => &table.header,
+            Self::AudioProcessor(table) => &table.header,
             Self::SourceNormalizerPacket(table) => &table.header,
             Self::SourceNormalizerResource(table) => &table.header,
         }
@@ -305,6 +318,7 @@ impl RawTable {
             Self::BenchmarkSink(table) => &mut table.header,
             Self::NativeDecoder(table) => &mut table.header,
             Self::FrameProcessor(table) => &mut table.header,
+            Self::AudioProcessor(table) => &mut table.header,
             Self::SourceNormalizerPacket(table) => &mut table.header,
             Self::SourceNormalizerResource(table) => &mut table.header,
         }
@@ -477,6 +491,18 @@ fn table_for(kind: ExportInterfaceKind, minor: u16) -> RawTable {
             submit_frame_json: Some(export_frame_submit),
             receive_frame: Some(export_frame_receive),
             release_frame: Some(export_frame_release),
+            flush_session: Some(export_session_flush),
+            close_session: Some(export_session_close),
+        }),
+        ExportInterfaceKind::AudioProcessor => RawTable::AudioProcessor(VesperAudioProcessor {
+            header: header(
+                abi_size::<VesperAudioProcessor>(),
+                AUDIO_PROCESSOR_INTERFACE_ID,
+            ),
+            capabilities_json: Some(export_capabilities),
+            open_session_json: Some(export_open_session),
+            configure_session_json: Some(export_audio_configure),
+            process_pcm_frame: Some(export_audio_process),
             flush_session: Some(export_session_flush),
             close_session: Some(export_session_close),
         }),
@@ -791,6 +817,65 @@ unsafe extern "C" fn export_decoder_receive_pcm_frame(
         invoke_pcm_frame(
             context,
             ExportOperation::DecoderReceivePcmFrame { session_id },
+            out,
+        )
+    }
+}
+
+unsafe extern "C" fn export_audio_configure(
+    context: *mut c_void,
+    session_id: VesperSessionId,
+    policy_json: VesperByteSlice,
+    out: *mut VesperJsonOut,
+) -> VesperStatus {
+    let scope = ExportCallScope;
+    let Ok(policy_json) =
+        // SAFETY: input is borrowed for this call.
+        (unsafe { input_slice(policy_json, &scope) })
+    else {
+        return status::INVALID_ARGUMENT;
+    };
+    // SAFETY: output retains its host-owned callback contract.
+    unsafe {
+        invoke_json(
+            context,
+            ExportOperation::AudioConfigure {
+                session_id,
+                policy_json,
+            },
+            out,
+        )
+    }
+}
+
+unsafe extern "C" fn export_audio_process(
+    context: *mut c_void,
+    session_id: VesperSessionId,
+    metadata_json: VesperByteSlice,
+    pcm_data: VesperByteSlice,
+    out: *mut VesperPcmFrameOut,
+) -> VesperStatus {
+    if pcm_data.len > VESPER_MAX_PCM_BYTES {
+        return status::INVALID_ARGUMENT;
+    }
+    let scope = ExportCallScope;
+    let (Ok(metadata_json), Ok(pcm_data)) = (
+        // SAFETY: inputs are borrowed for this call.
+        unsafe { input_slice(metadata_json, &scope) },
+        // SAFETY: inputs are borrowed for this call.
+        unsafe { input_slice(pcm_data, &scope) },
+    ) else {
+        return status::INVALID_ARGUMENT;
+    };
+    // SAFETY: output retains its host-owned callback contract.
+    unsafe {
+        invoke_pcm_frame(
+            context,
+            ExportOperation::AudioProcess {
+                session_id,
+                metadata_json,
+                pcm_data,
+            },
             out,
         )
     }

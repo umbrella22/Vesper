@@ -43,7 +43,9 @@ internal fun VesperDlnaDiscovery.runNotifyLoop(binding: DlnaNetworkBinding, gene
             socket.reuseAddress = true
             socket.soTimeout = NOTIFY_RECEIVE_TIMEOUT_MS
             val boundPort = bindNotifySocket(socket, binding)
-            bindSocketToNetwork(socket, binding)
+            if (!bindSocketToNetwork(socket, binding)) {
+                return
+            }
             socket.setNetworkInterface(networkInterface)
             try {
                 socket.joinGroup(group, networkInterface)
@@ -168,9 +170,10 @@ internal fun VesperDlnaDiscovery.acquireMulticastLock() {
 internal fun VesperDlnaDiscovery.bindSocketToNetwork(
     socket: DatagramSocket,
     binding: DlnaNetworkBinding,
-) {
+): Boolean {
     try {
         binding.network.bindSocket(socket)
+        return true
     } catch (error: Exception) {
         emitDiagnostic(
             code = "network_bind_socket_failed",
@@ -178,5 +181,6 @@ internal fun VesperDlnaDiscovery.bindSocketToNetwork(
             message = error.message ?: "Socket could not be bound to the Android network.",
             details = binding.details("error" to error.javaClass.simpleName),
         )
+        return false
     }
 }

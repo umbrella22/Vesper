@@ -41,3 +41,7 @@ pub const WASM_PLUGIN_EPOCH_TICK_MILLIS: u64 = 5;
 pub const WASM_PLUGIN_EVENT_TIMEOUT_MILLIS: u64 = 50;
 pub const WASM_PLUGIN_BATCH_TIMEOUT_MILLIS: u64 = 250;
 pub const WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS: u64 = 2_000;
+/// Total caller wait for one queued EventHook result, including queue delay.
+pub const WASM_PLUGIN_EVENT_RESULT_WAIT_MILLIS: u64 = 250;
+/// Total caller wait for one queued BenchmarkSink batch result, including queue delay.
+pub const WASM_PLUGIN_BENCHMARK_RESULT_WAIT_MILLIS: u64 = 500;

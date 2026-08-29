@@ -1028,7 +1028,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
                 bridge.pluginDiagnostics.contains { diagnostic in
                     diagnostic["pluginKind"] as? String == "native_frame_pipeline" &&
                         diagnostic["route"] as? String == "sdkManagedNativeFrame" &&
-                        diagnostic["participation"] as? String == "participated" &&
+                        diagnostic["participation"] as? String == "selected" &&
                         diagnostic["clockSource"] as? String == "swiftNativeAudioBridge" &&
                         diagnostic["audioDecoder"] as? String == "swiftNativeAudioBridge" &&
                         diagnostic["audioOutput"] as? String == "swiftNativeAudioBridge" &&
@@ -1060,7 +1060,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             bridge.pluginDiagnostics.contains { diagnostic in
                 diagnostic["pluginKind"] as? String == "native_frame_pipeline" &&
                     diagnostic["route"] as? String == "sdkManagedNativeFrame" &&
-                    diagnostic["participation"] as? String == "participated" &&
+                    diagnostic["participation"] as? String == "selected" &&
                     diagnostic["clockSource"] as? String == "swiftNativeAudioBridge" &&
                     diagnostic["audioDecoder"] as? String == "swiftNativeAudioBridge" &&
                     diagnostic["audioOutput"] as? String == "swiftNativeAudioBridge" &&
@@ -2737,6 +2737,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         )
         XCTAssertTrue(backend.releasePresentedFlags.isEmpty)
         XCTAssertEqual(session.counters.presentedFrames, 0)
+        XCTAssertEqual(session.participation, "selected")
     }
 
     func testNativeFramePipelineRealPluginPlaybackPresentsSeeksAndReleasesLocalMp4() async throws {

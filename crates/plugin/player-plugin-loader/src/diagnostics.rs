@@ -232,6 +232,27 @@ pub enum PluginDiagnosticStatus {
     SourceNormalizerUnsupported,
 }
 
+/// Capability availability derived from loader inspection only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginCapabilityAvailability {
+    /// The record does not describe a probed capability.
+    Unknown,
+    /// The probed capability is available for later selection.
+    Available,
+    /// Loading or capability inspection rejected the plugin.
+    Unavailable,
+}
+
+impl PluginCapabilityAvailability {
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Available => "available",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
 /// Diagnostic capability family independent from the native ABI layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginCapabilityKind {
@@ -268,6 +289,23 @@ impl PluginDiagnosticStatus {
             Self::FrameProcessorUnsupported => "frameProcessorUnsupported",
             Self::SourceNormalizerSupported => "sourceNormalizerSupported",
             Self::SourceNormalizerUnsupported => "sourceNormalizerUnsupported",
+        }
+    }
+
+    /// Returns availability established by this loader diagnostic.
+    ///
+    /// Availability never implies route selection or runtime participation.
+    pub const fn capability_availability(self) -> PluginCapabilityAvailability {
+        match self {
+            Self::DecoderSupported
+            | Self::FrameProcessorSupported
+            | Self::SourceNormalizerSupported => PluginCapabilityAvailability::Available,
+            Self::Loaded => PluginCapabilityAvailability::Unknown,
+            Self::LoadFailed
+            | Self::UnsupportedKind
+            | Self::DecoderUnsupported
+            | Self::FrameProcessorUnsupported
+            | Self::SourceNormalizerUnsupported => PluginCapabilityAvailability::Unavailable,
         }
     }
 }
@@ -311,6 +349,11 @@ pub(crate) fn source_normalizer_resource_capability_summary(
 }
 
 impl PluginDiagnosticRecord {
+    /// Returns the capability availability established during inspection.
+    pub const fn capability_availability(&self) -> PluginCapabilityAvailability {
+        self.status.capability_availability()
+    }
+
     pub(crate) fn from_native_decoder_interface(
         path: impl Into<PathBuf>,
         plugin: &LoadedNativePlugin,

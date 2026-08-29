@@ -1167,7 +1167,7 @@ impl PlayerRuntimeAdapter for FakeRuntimeAdapter {
     }
 
     fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
-        self.pending_events.drain(..).collect()
+        std::mem::take(&mut self.pending_events)
     }
 
     fn dispatch(

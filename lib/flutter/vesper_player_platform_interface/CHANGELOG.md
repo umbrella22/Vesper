@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.0 - 2026-08-29
+
+### Added
+
+- Added typed plugin diagnostic playback routes and fallback fields through
+  `VesperPluginPlaybackRoute`, while preserving unknown route values for
+  forward-compatible host diagnostics.
+
 ## 0.4.3-rc.1 - 2026-08-17
 
 - Prepared package metadata for the 0.4.3-rc.1 release.

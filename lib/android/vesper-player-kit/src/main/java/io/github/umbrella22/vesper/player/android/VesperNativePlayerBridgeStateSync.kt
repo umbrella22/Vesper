@@ -321,13 +321,29 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
                     "playback_state_changed",
                     mapOf("state" to event.state.name),
                 )
+                val retryStatusMessage = activeRetryStatusMessage
+                if (event.state == PlaybackStateUi.Playing) {
+                    activeRetryStatusMessage = null
+                }
                 nativeFramePipelinePlaybackRequested =
                     event.state == PlaybackStateUi.Playing && _uiState.value.lastError == null
                 updateState {
                     if (lastError != null) {
                         copy(playbackState = PlaybackStateUi.Paused)
                     } else {
-                        copy(playbackState = event.state)
+                        copy(
+                            subtitle =
+                                if (
+                                    event.state == PlaybackStateUi.Playing &&
+                                    retryStatusMessage != null &&
+                                    subtitle == retryStatusMessage
+                                ) {
+                                    currentSource?.let(::sourceSubtitle) ?: i18n.nativeBridgeReady()
+                                } else {
+                                    subtitle
+                                },
+                            playbackState = event.state,
+                        )
                     }
                 }
             }
@@ -390,14 +406,13 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
                         "delayMs" to event.delayMs.toString(),
                     ),
                 )
-                updateState {
-                    copy(
-                        subtitle = i18n.retryScheduled(
-                            i18n.retryDelay(event.delayMs),
-                            event.attempt,
-                        ),
+                val retryStatusMessage =
+                    i18n.retryScheduled(
+                        i18n.retryDelay(event.delayMs),
+                        event.attempt,
                     )
-                }
+                activeRetryStatusMessage = retryStatusMessage
+                updateState { copy(subtitle = retryStatusMessage) }
             }
             is NativeBridgeEvent.Ended -> {
                 recordBenchmark("playback_ended")
@@ -430,6 +445,7 @@ internal fun VesperNativePlayerBridge.refreshFromNative() {
                 if (_uiState.value.lastError != null) {
                     return@forEach
                 }
+                activeRetryStatusMessage = null
                 val terminalError = event.toPlayerErrorState()
                 stopNativeFramePipelinePump()
                 nativeFramePipelinePlaybackRequested = false

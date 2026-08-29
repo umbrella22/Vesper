@@ -91,7 +91,7 @@ final class VesperNativeFramePipelineSession {
     }
 
     var participation: String {
-        didStart ? "participated" : "selected"
+        counters.presentedFrames > 0 ? "participated" : "selected"
     }
 
     func start() async -> Result<VesperNativeFramePipelineSession, VesperNativeFramePipelineStartupError> {

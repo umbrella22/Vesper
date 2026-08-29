@@ -19,6 +19,13 @@ import org.junit.Test
 
 class ExampleTimelineRegressionTest {
     @Test
+    fun `global external diagnostics do not overwrite an active route status`() {
+        assertFalse(exampleExternalDiagnosticTargetsSession("route-a", null))
+        assertFalse(exampleExternalDiagnosticTargetsSession("route-a", "route-b"))
+        assertEquals(true, exampleExternalDiagnosticTargetsSession("route-a", "route-a"))
+    }
+
+    @Test
     fun `live dvr acceptance source is hls and queueable`() {
         val source = androidLiveDvrAcceptanceSource(context = null)
 
@@ -49,30 +56,30 @@ class ExampleTimelineRegressionTest {
     }
 
     @Test
-    fun `dolby acceptance urls follow browser test kit patterns`() {
+    fun `dolby acceptance urls follow online delivery kit patterns`() {
         assertEquals(
-            "https://ott.dolby.com/browser_test_kit/clear/p5/24/dash.mpd",
+            "https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/clear/P5_25/dash.mpd",
             exampleDolbyAcceptanceUrl(
                 profile = ExampleDolbyAcceptanceProfile.P5,
-                fps = 24,
+                fps = 25,
                 protocol = VesperPlayerSourceProtocol.Dash,
                 drmKind = ExampleDolbyAcceptanceDrmKind.Clear,
             ),
         )
         assertEquals(
-            "https://ott.dolby.com/browser_test_kit/clear/p81/50/master.m3u8",
+            "https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/clear/P8_1_60/master.m3u8",
             exampleDolbyAcceptanceUrl(
                 profile = ExampleDolbyAcceptanceProfile.P81,
-                fps = 50,
+                fps = 60,
                 protocol = VesperPlayerSourceProtocol.Hls,
                 drmKind = ExampleDolbyAcceptanceDrmKind.Clear,
             ),
         )
         assertEquals(
-            "https://ott.dolby.com/browser_test_kit/cenc/p84/120/dash.mpd",
+            "https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/cenc/P8_4_30/dash.mpd",
             exampleDolbyAcceptanceUrl(
                 profile = ExampleDolbyAcceptanceProfile.P84,
-                fps = 120,
+                fps = 30,
                 protocol = VesperPlayerSourceProtocol.Dash,
                 drmKind = ExampleDolbyAcceptanceDrmKind.Widevine,
             ),
@@ -84,7 +91,7 @@ class ExampleTimelineRegressionTest {
         val preset =
             exampleDolbyAcceptanceCatalog.first {
                 it.profile == ExampleDolbyAcceptanceProfile.P5 &&
-                    it.fps == 24 &&
+                    it.fps == 25 &&
                     it.protocol == VesperPlayerSourceProtocol.Dash &&
                     it.drmKind == ExampleDolbyAcceptanceDrmKind.Widevine
             }
@@ -103,7 +110,7 @@ class ExampleTimelineRegressionTest {
         val preset =
             exampleDolbyAcceptanceCatalog.first {
                 it.profile == ExampleDolbyAcceptanceProfile.P81 &&
-                    it.fps == 24 &&
+                    it.fps == 25 &&
                     it.protocol == VesperPlayerSourceProtocol.Dash &&
                     it.drmKind == ExampleDolbyAcceptanceDrmKind.Widevine
             }
@@ -131,7 +138,7 @@ class ExampleTimelineRegressionTest {
         assertFalse(preset.isPlayable)
         assertEquals(null, preset.source.drmConfiguration)
         assertEquals(
-            "https://ott.dolby.com/browser_test_kit/cbcs/p81/30/master.m3u8",
+            "https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals/cbcs/P8_1_30/master.m3u8",
             preset.source.uri,
         )
     }
@@ -143,14 +150,14 @@ class ExampleTimelineRegressionTest {
                 presets = exampleDolbyAcceptanceCatalog,
                 drmKind = ExampleDolbyAcceptanceDrmKind.Clear,
                 profile = ExampleDolbyAcceptanceProfile.P81,
-                fps = 50,
+                fps = 60,
             )
 
         assertEquals(2, filtered.size)
         filtered.forEach { preset ->
             assertEquals(ExampleDolbyAcceptanceDrmKind.Clear, preset.drmKind)
             assertEquals(ExampleDolbyAcceptanceProfile.P81, preset.profile)
-            assertEquals(50, preset.fps)
+            assertEquals(60, preset.fps)
         }
     }
 
@@ -169,7 +176,7 @@ class ExampleTimelineRegressionTest {
         val preset =
             exampleDolbyAcceptanceCatalog.first {
                 it.profile == ExampleDolbyAcceptanceProfile.P5 &&
-                    it.fps == 24 &&
+                    it.fps == 25 &&
                     it.protocol == VesperPlayerSourceProtocol.Dash &&
                     it.drmKind == ExampleDolbyAcceptanceDrmKind.Clear
             }
@@ -191,7 +198,7 @@ class ExampleTimelineRegressionTest {
     fun `ad hoc dolby playback does not advance playlist on finished`() {
         assertFalse(
             shouldAdvancePlaylistOnFinished(
-                origin = ExamplePlaybackOrigin.DolbyAdHoc("DOLBY-DV-P5-24-DASH-CLEAR"),
+                origin = ExamplePlaybackOrigin.DolbyAdHoc("DOLBY-DV-P5-25-DASH-CLEAR"),
                 activeItemId = ANDROID_HLS_PLAYLIST_ITEM_ID,
             ),
         )
@@ -251,14 +258,14 @@ class ExampleTimelineRegressionTest {
         val preset =
             exampleDolbyAcceptanceCatalog.first {
                 it.profile == ExampleDolbyAcceptanceProfile.P84 &&
-                    it.fps == 50 &&
+                    it.fps == 60 &&
                     it.protocol == VesperPlayerSourceProtocol.Hls &&
                     it.drmKind == ExampleDolbyAcceptanceDrmKind.Clear
             }.toHdrEvidencePreset()
 
         assertEquals("dolbyVision", preset.sourceMetadata["hdrKind"])
         assertEquals("hls", preset.sourceMetadata["manifestKind"])
-        assertEquals(50.0, preset.sourceMetadata["frameRate"])
+        assertEquals(60.0, preset.sourceMetadata["frameRate"])
         assertEquals("none", preset.sourceMetadata["drmKind"])
         assertEquals("requiresDolbyVisionDisplay", preset.sourceMetadata["manualGate"])
         assertEquals(

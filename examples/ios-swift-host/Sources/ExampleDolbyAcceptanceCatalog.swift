@@ -3,6 +3,8 @@ import VesperPlayerKit
 
 let EXAMPLE_DOLBY_ACCEPTANCE_WIDEVINE_LICENSE_URI =
     "https://widevine-dash.ezdrm.com/proxy?pX=E8A6EE"
+let EXAMPLE_DOLBY_ACCEPTANCE_BASE_URL =
+    "https://ott.dolby.com/OnDelKits/Dolby_Vision_Online_Delivery_Kit/v1/test_signals"
 
 let EXAMPLE_FAIRPLAY_LICENSE_URI_ENV = "VESPER_IOS_FAIRPLAY_LICENSE_URI"
 let EXAMPLE_FAIRPLAY_CERTIFICATE_URI_ENV = "VESPER_IOS_FAIRPLAY_CERTIFICATE_URI"
@@ -10,7 +12,7 @@ let EXAMPLE_FAIRPLAY_CERTIFICATE_BASE64_ENV = "VESPER_IOS_FAIRPLAY_CERTIFICATE_B
 let EXAMPLE_FAIRPLAY_LICENSE_HEADERS_JSON_ENV = "VESPER_IOS_FAIRPLAY_LICENSE_HEADERS_JSON"
 let EXAMPLE_FAIRPLAY_AUTHORIZATION_ENV = "VESPER_IOS_FAIRPLAY_AUTHORIZATION"
 
-let exampleDolbyAcceptanceFpsValues = [24, 30, 50, 120]
+let exampleDolbyAcceptanceFpsValues = [25, 30, 60]
 
 struct ExampleFairPlayLocalConfiguration: Equatable {
     let licenseUri: String
@@ -120,14 +122,14 @@ enum ExampleDolbyAcceptanceProfile: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var pathSegment: String {
+    var deliveryKitSegment: String {
         switch self {
         case .p5:
-            return "p5"
+            return "P5"
         case .p81:
-            return "p81"
+            return "P8_1"
         case .p84:
-            return "p84"
+            return "P8_4"
         }
     }
 
@@ -295,15 +297,15 @@ struct ExampleDolbyAcceptancePreset: Identifiable, Equatable {
                     "profileFamily": profile.profileFamily,
                     "baseLayer": "hevc-main10",
                     "fallbackTarget": profile.fallbackTarget,
-                    "containerEvidence": "dolby-browser-test-kit",
+                    "containerEvidence": "dolby-vision-online-delivery-kit",
                 ],
                 "metadataTool": [
-                    "name": "Dolby Browser Test Kit",
+                    "name": "Dolby Vision Online Delivery Kit",
                     "version": "public",
                     "command": "catalog-url",
                 ],
                 "notes": [
-                    "Dolby Browser Test Kit public URL; media is not bundled.",
+                    "Dolby Vision Online Delivery Kit public URL; media is not bundled.",
                 ] + notes,
             ]
         )
@@ -335,8 +337,8 @@ func exampleDolbyAcceptanceUrl(
     case .fairPlay:
         pathKind = "cbcs"
     }
-    return "https://ott.dolby.com/browser_test_kit/\(pathKind)/" +
-        "\(profile.pathSegment)/\(fps)/\(protocolFile)"
+    return "\(EXAMPLE_DOLBY_ACCEPTANCE_BASE_URL)/\(pathKind)/" +
+        "\(profile.deliveryKitSegment)_\(fps)/\(protocolFile)"
 }
 
 func buildExampleDolbyAcceptanceCatalog(
@@ -455,8 +457,8 @@ private func buildExampleDolbyAcceptancePreset(
     if drmKind == .fairPlay {
         notes.append(fairPlayConfiguration?.summary ?? "FairPlay config required.")
     }
-    if fps == 50 {
-        notes.append("Dolby 50fps signal covers the 60-ish validation bucket.")
+    if fps == 60 {
+        notes.append("Dolby 60fps signal exercises the high-frame-rate validation bucket.")
     }
     notes.append("MP4 zip assets remain manual local-file material and are not bundled.")
 

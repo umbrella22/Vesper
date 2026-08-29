@@ -5,18 +5,19 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 use player_plugin_abi::{
-    BENCHMARK_SINK_INTERFACE_ID, FRAME_PROCESSOR_INTERFACE_ID, NATIVE_DECODER_INTERFACE_ID,
-    PIPELINE_EVENT_HOOK_INTERFACE_ID, POST_DOWNLOAD_PROCESSOR_INTERFACE_ID,
-    SOURCE_NORMALIZER_PACKET_INTERFACE_ID, SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID,
+    AUDIO_PROCESSOR_INTERFACE_ID, BENCHMARK_SINK_INTERFACE_ID, FRAME_PROCESSOR_INTERFACE_ID,
+    NATIVE_DECODER_INTERFACE_ID, PIPELINE_EVENT_HOOK_INTERFACE_ID,
+    POST_DOWNLOAD_PROCESSOR_INTERFACE_ID, SOURCE_NORMALIZER_PACKET_INTERFACE_ID,
+    SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID, VESPER_AUDIO_PROCESSOR_REQUIRED_SIZE,
     VESPER_BENCHMARK_SINK_REQUIRED_SIZE, VESPER_FRAME_PROCESSOR_REQUIRED_SIZE,
     VESPER_INTERFACE_MAJOR, VESPER_MAX_CAPABILITY_INSTANCE_ID_BYTES,
     VESPER_MAX_INTERFACES_PER_PLUGIN, VESPER_MAX_PLUGIN_ID_BYTES, VESPER_MAX_PLUGIN_NAME_BYTES,
     VESPER_NATIVE_DECODER_REQUIRED_SIZE, VESPER_PIPELINE_EVENT_HOOK_REQUIRED_SIZE,
     VESPER_PLUGIN_ABI_MAJOR, VESPER_PLUGIN_ABI_MINOR, VESPER_POST_DOWNLOAD_PROCESSOR_REQUIRED_SIZE,
     VESPER_SOURCE_NORMALIZER_PACKET_REQUIRED_SIZE, VESPER_SOURCE_NORMALIZER_RESOURCE_REQUIRED_SIZE,
-    VesperBenchmarkSink, VesperByteSlice, VesperFrameProcessor, VesperInterfaceDescriptor,
-    VesperInterfaceHeader, VesperInterfaceId, VesperNativeDecoder, VesperOwnedBytes,
-    VesperPipelineEventHook, VesperPluginRoot, VesperPostDownloadProcessor,
+    VesperAudioProcessor, VesperBenchmarkSink, VesperByteSlice, VesperFrameProcessor,
+    VesperInterfaceDescriptor, VesperInterfaceHeader, VesperInterfaceId, VesperNativeDecoder,
+    VesperOwnedBytes, VesperPipelineEventHook, VesperPluginRoot, VesperPostDownloadProcessor,
     VesperSourceNormalizerPacket, VesperSourceNormalizerResource, VesperStatus, abi_contains,
     status,
 };
@@ -24,11 +25,13 @@ use thiserror::Error;
 
 use crate::LibraryHolder;
 use player_plugin::{
-    BenchmarkSink, FrameProcessorPluginFactory, NativeDecoderPluginFactory, PipelineEventHook,
-    PluginReference, PluginTransport, PostDownloadProcessor, SourceNormalizerPacketPluginFactory,
+    AudioProcessorPluginFactory, BenchmarkSink, FrameProcessorPluginFactory,
+    NativeDecoderPluginFactory, PipelineEventHook, PluginInvocationPolicyError, PluginReference,
+    PluginScopeError, PluginTransport, PostDownloadProcessor, SourceNormalizerPacketPluginFactory,
     SourceNormalizerResourcePluginFactory,
 };
 
+mod audio_processor;
 mod frame_processor;
 mod runtime;
 mod session;
@@ -37,6 +40,7 @@ mod stable;
 
 use runtime::NativeAbiBoundaryError;
 
+pub(crate) use audio_processor::NativeAbiAudioProcessorPluginFactory;
 pub(crate) use frame_processor::NativeAbiFrameProcessorPluginFactory;
 pub(crate) use session::NativeAbiDecoderPluginFactory;
 pub(crate) use source_normalizer::{
@@ -172,6 +176,7 @@ pub(crate) enum CheckedInterfaceTable {
     BenchmarkSink(VesperBenchmarkSink),
     NativeDecoder(VesperNativeDecoder),
     FrameProcessor(VesperFrameProcessor),
+    AudioProcessor(VesperAudioProcessor),
     SourceNormalizerPacket(VesperSourceNormalizerPacket),
     SourceNormalizerResource(VesperSourceNormalizerResource),
     Unknown,
@@ -311,6 +316,8 @@ pub struct PluginInterfaceDiagnostic {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PluginSelectionError {
+    #[error(transparent)]
+    InvocationPolicyRejected(#[from] PluginInvocationPolicyError),
     #[error("plugin reference selects transport {actual:?}, but this root uses {expected:?}")]
     TransportMismatch {
         expected: PluginTransport,
@@ -355,6 +362,30 @@ pub enum PluginSelectionError {
         plugin_id: String,
         transport: PluginTransport,
     },
+    #[error("WASM plugin `{plugin_id}` interface {interface} requires a lifecycle scope")]
+    ScopeRequired {
+        plugin_id: String,
+        interface: &'static str,
+    },
+    #[error(
+        "failed to register WASM plugin `{plugin_id}` interface {interface} with its lifecycle scope: {source}"
+    )]
+    ScopeRegistration {
+        plugin_id: String,
+        interface: &'static str,
+        #[source]
+        source: PluginScopeError,
+    },
+    #[cfg(feature = "wasm")]
+    #[error(
+        "failed to instantiate WASM plugin `{plugin_id}` interface {interface} instance `{instance_id}`: {message}"
+    )]
+    WasmInstantiation {
+        plugin_id: String,
+        interface: &'static str,
+        instance_id: String,
+        message: String,
+    },
     #[error(
         "loaded plugin identity `{plugin_id}` or instance `{instance_id}` cannot form a canonical reference"
     )]
@@ -372,6 +403,7 @@ pub struct LoadedNativePlugin {
     benchmark_sinks: BTreeMap<String, Arc<dyn BenchmarkSink>>,
     native_decoders: BTreeMap<String, Arc<dyn NativeDecoderPluginFactory>>,
     frame_processors: BTreeMap<String, Arc<dyn FrameProcessorPluginFactory>>,
+    audio_processors: BTreeMap<String, Arc<dyn AudioProcessorPluginFactory>>,
     source_packets: BTreeMap<String, Arc<dyn SourceNormalizerPacketPluginFactory>>,
     source_resources: BTreeMap<String, Arc<dyn SourceNormalizerResourcePluginFactory>>,
     advertised_instances: BTreeMap<[u8; 16], BTreeSet<String>>,
@@ -394,6 +426,7 @@ impl std::fmt::Debug for LoadedNativePlugin {
             .field("benchmark_sink_instances", &self.benchmark_sinks.keys())
             .field("native_decoder_instances", &self.native_decoders.keys())
             .field("frame_processor_instances", &self.frame_processors.keys())
+            .field("audio_processor_instances", &self.audio_processors.keys())
             .field("source_packet_instances", &self.source_packets.keys())
             .field("source_resource_instances", &self.source_resources.keys())
             .field("advertised_instances", &self.advertised_instances)
@@ -432,6 +465,7 @@ impl LoadedNativePlugin {
             benchmark_sinks: BTreeMap::new(),
             native_decoders: BTreeMap::new(),
             frame_processors: BTreeMap::new(),
+            audio_processors: BTreeMap::new(),
             source_packets: BTreeMap::new(),
             source_resources: BTreeMap::new(),
             advertised_instances,
@@ -522,6 +556,18 @@ impl LoadedNativePlugin {
                     )
                     .map(|value| {
                         loaded.frame_processors.insert(instance_id, Arc::new(value));
+                    })
+                }
+                CheckedInterfaceTable::AudioProcessor(table) => {
+                    NativeAbiAudioProcessorPluginFactory::new(
+                        &loaded.plugin_id,
+                        loaded.plugin_name.clone(),
+                        &instance_id,
+                        owner.clone(),
+                        table,
+                    )
+                    .map(|value| {
+                        loaded.audio_processors.insert(instance_id, Arc::new(value));
                     })
                 }
                 CheckedInterfaceTable::SourceNormalizerPacket(table) => {
@@ -696,6 +742,26 @@ impl LoadedNativePlugin {
             FRAME_PROCESSOR_INTERFACE_ID,
             "FrameProcessor",
             &self.frame_processors,
+        )
+    }
+
+    pub fn resolve_audio_processor(
+        &self,
+        reference: &PluginReference,
+    ) -> Result<Arc<dyn AudioProcessorPluginFactory>, PluginSelectionError> {
+        self.resolve_audio_processor_selected(reference)
+            .map(|(_, capability)| capability)
+    }
+
+    pub(crate) fn resolve_audio_processor_selected(
+        &self,
+        reference: &PluginReference,
+    ) -> Result<(String, Arc<dyn AudioProcessorPluginFactory>), PluginSelectionError> {
+        self.resolve(
+            reference,
+            AUDIO_PROCESSOR_INTERFACE_ID,
+            "AudioProcessor",
+            &self.audio_processors,
         )
     }
 
@@ -1083,6 +1149,7 @@ fn is_known_interface(interface_id: VesperInterfaceId) -> bool {
             | BENCHMARK_SINK_INTERFACE_ID
             | NATIVE_DECODER_INTERFACE_ID
             | FRAME_PROCESSOR_INTERFACE_ID
+            | AUDIO_PROCESSOR_INTERFACE_ID
             | SOURCE_NORMALIZER_PACKET_INTERFACE_ID
             | SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID
     )
@@ -1295,6 +1362,20 @@ unsafe fn check_interface_table(
                 submit_frame_json,
                 receive_frame,
                 release_frame,
+                flush_session,
+                close_session
+            ]
+        )
+    } else if descriptor.interface_id == AUDIO_PROCESSOR_INTERFACE_ID {
+        full_table!(
+            VesperAudioProcessor,
+            VESPER_AUDIO_PROCESSOR_REQUIRED_SIZE,
+            AudioProcessor,
+            [
+                capabilities_json,
+                open_session_json,
+                configure_session_json,
+                process_pcm_frame,
                 flush_session,
                 close_session
             ]
@@ -2274,6 +2355,106 @@ mod tests {
         );
         drop(checked);
         assert_eq!(owner.destroyed.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn audio_processor_table_rejects_missing_required_process_callback() {
+        unsafe extern "C" fn get_json(
+            _context: *mut c_void,
+            _out: *mut player_plugin_abi::VesperJsonOut,
+        ) -> VesperStatus {
+            status::FAILURE
+        }
+        unsafe extern "C" fn open(
+            _context: *mut c_void,
+            _config: VesperByteSlice,
+            _out: *mut player_plugin_abi::VesperOpenSessionOut,
+        ) -> VesperStatus {
+            status::FAILURE
+        }
+        unsafe extern "C" fn configure(
+            _context: *mut c_void,
+            _session_id: u64,
+            _policy: VesperByteSlice,
+            _out: *mut player_plugin_abi::VesperJsonOut,
+        ) -> VesperStatus {
+            status::FAILURE
+        }
+        unsafe extern "C" fn session_operation(
+            _context: *mut c_void,
+            _session_id: u64,
+            _out: *mut player_plugin_abi::VesperJsonOut,
+        ) -> VesperStatus {
+            status::FAILURE
+        }
+
+        let table = VesperAudioProcessor {
+            header: VesperInterfaceHeader::new(
+                size_of::<VesperAudioProcessor>() as u32,
+                AUDIO_PROCESSOR_INTERFACE_ID,
+                VESPER_INTERFACE_MAJOR,
+                VESPER_INTERFACE_MINOR,
+                NonNull::<u8>::dangling().as_ptr().cast(),
+            ),
+            capabilities_json: Some(get_json),
+            open_session_json: Some(open),
+            configure_session_json: Some(configure),
+            process_pcm_frame: None,
+            flush_session: Some(session_operation),
+            close_session: Some(session_operation),
+        };
+        let descriptor = CheckedInterfaceDescriptor {
+            interface_id: AUDIO_PROCESSOR_INTERFACE_ID,
+            major: VESPER_INTERFACE_MAJOR,
+            minor: VESPER_INTERFACE_MINOR,
+            instance_id: "dev.vesper.fixture.audio".to_owned(),
+        };
+        let error =
+            // SAFETY: the complete fixture table outlives this validation call.
+            unsafe { check_interface_table(std::ptr::from_ref(&table.header), &descriptor) }
+                .expect_err("missing audio process callback");
+        assert_eq!(
+            error,
+            NativePluginContractError::MissingInterfaceCallback {
+                interface_id: AUDIO_PROCESSOR_INTERFACE_ID,
+                instance_id: "dev.vesper.fixture.audio".to_owned(),
+                callback: "process_pcm_frame",
+            }
+        );
+    }
+
+    #[test]
+    fn audio_processor_table_rejects_truncated_required_prefix() {
+        let table = VesperAudioProcessor {
+            header: VesperInterfaceHeader::new(
+                VESPER_AUDIO_PROCESSOR_REQUIRED_SIZE - 1,
+                AUDIO_PROCESSOR_INTERFACE_ID,
+                VESPER_INTERFACE_MAJOR,
+                VESPER_INTERFACE_MINOR,
+                NonNull::<u8>::dangling().as_ptr().cast(),
+            ),
+            capabilities_json: None,
+            open_session_json: None,
+            configure_session_json: None,
+            process_pcm_frame: None,
+            flush_session: None,
+            close_session: None,
+        };
+        let descriptor = CheckedInterfaceDescriptor {
+            interface_id: AUDIO_PROCESSOR_INTERFACE_ID,
+            major: VESPER_INTERFACE_MAJOR,
+            minor: VESPER_INTERFACE_MINOR,
+            instance_id: "dev.vesper.fixture.audio".to_owned(),
+        };
+        let error =
+            // SAFETY: the fixture table storage is complete; its advertised
+            // size intentionally claims a truncated required prefix.
+            unsafe { check_interface_table(std::ptr::from_ref(&table.header), &descriptor) }
+                .expect_err("truncated audio processor table");
+        assert!(matches!(
+            error,
+            NativePluginContractError::TruncatedInterface { .. }
+        ));
     }
 
     #[test]

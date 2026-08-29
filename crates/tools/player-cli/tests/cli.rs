@@ -28,7 +28,7 @@ license = "Apache-2.0"
 publisher = "dev.vesper.publisher"
 
 [compatibility]
-host_sdk = ">=0.4.0, <0.5.0"
+host_sdk = ">=0.5.0, <0.6.0"
 abi_major = 1
 abi_minor_min = 0
 abi_minor_max = 0
@@ -6135,6 +6135,8 @@ fn ios_app_store_plugin_descriptor(
             abi_minor_max: 0,
         },
         capabilities,
+        requires: Vec::new(),
+        provides: Vec::new(),
         redistribution: Vec::new(),
     };
 
@@ -11606,7 +11608,7 @@ fn contract_boundary_preserves_default_and_warning_output_channels() {
     assert!(clean.stderr.is_empty());
     assert_eq!(
         String::from_utf8(clean.stdout).expect("UTF-8 clean output"),
-        "Boundary invariant scan passed. Re-run with --warnings to inspect 17 focused warning candidates, or --all-warnings for the broad scan.\n"
+        "Boundary invariant scan passed. Re-run with --warnings to inspect 19 focused warning candidates, or --all-warnings for the broad scan.\n"
     );
 
     let warnings = Command::new(env!("CARGO_BIN_EXE_vesper"))
@@ -11622,12 +11624,12 @@ fn contract_boundary_preserves_default_and_warning_output_channels() {
             .lines()
             .filter(|line| line.starts_with("WARN: "))
             .count(),
-        17
+        19
     );
     assert!(stdout.starts_with(
-        "WARN: crates/plugin/player-plugin/src/sdk/session.rs:142: Review release ownership ordering;"
+        "WARN: crates/plugin/player-plugin/src/scope/playback.rs:400: Review release ownership ordering;"
     ));
-    assert!(stdout.ends_with("Boundary invariant scan passed with 17 warning candidates.\n"));
+    assert!(stdout.ends_with("Boundary invariant scan passed with 19 warning candidates.\n"));
 }
 
 #[test]
@@ -16016,6 +16018,8 @@ fn plugin_new_creates_native_and_wasm_projects_without_path_dependencies() {
             "--capability",
             "frame-processor",
             "--capability",
+            "audio-processor",
+            "--capability",
             "source-normalizer-packet",
             "--capability",
             "source-normalizer-resource",
@@ -16034,13 +16038,15 @@ fn plugin_new_creates_native_and_wasm_projects_without_path_dependencies() {
     assert_eq!(native_report["transport"], "native");
     assert_eq!(
         native_report["capabilities"].as_array().map(Vec::len),
-        Some(7)
+        Some(8)
     );
     let native_cargo = fs::read_to_string(native.join("Cargo.toml")).expect("native Cargo.toml");
     let native_source = fs::read_to_string(native.join("src/lib.rs")).expect("native source");
     assert!(!native_cargo.contains("path ="));
     assert!(!native_source.contains("unsafe {"));
     assert!(!native_source.contains("extern \"C\""));
+    assert!(native_source.contains("impl player_plugin::AudioProcessorPluginFactory"));
+    assert!(native_source.contains("with_audio_processor"));
 
     let wasm = parent.path().join("WASM plugin");
     let wasm_output = Command::new(env!("CARGO_BIN_EXE_vesper"))
@@ -16451,27 +16457,117 @@ capabilities = [{{ interface_id = "e9479dbc-42d2-575e-b39e-a24bc512fbc7", instan
 }
 
 #[test]
-fn incompatible_manifest_inspection_uses_exit_code_four() {
-    let source = manifest("dev.vesper.fixture").replace("abi_major = 1", "abi_major = 2");
+fn plugin_catalog_report_is_canonical_and_does_not_access_artifacts() {
+    let source = format!(
+        r#"{}
+
+[[requires]]
+service = "dev.vesper.service.time-stretch"
+requirement = ">=1.0.0, <2.0.0"
+
+[[provides]]
+service = "dev.vesper.service.time-stretch"
+version = "1.4.0"
+
+[[artifacts]]
+transport = "native"
+target = "aarch64-apple-darwin"
+format = "dylib"
+source = "this artifact must not exist.dylib"
+path = "artifacts/aarch64-apple-darwin/missing.dylib"
+architecture = "arm64"
+capabilities = [{{ interface_id = "e9479dbc-42d2-575e-b39e-a24bc512fbc7", instance_id = "dev.vesper.fixture.post-download" }}]
+"#,
+        manifest("dev.vesper.fixture")
+    );
     let path = temporary_manifest(&source);
     let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
-        .args(["plugin", "inspect"])
+        .args(["plugin", "catalog"])
         .arg(&path)
-        .arg("--manifest-only")
         .output()
-        .expect("inspect incompatible manifest");
+        .expect("report plugin catalog");
     let _ = fs::remove_file(path);
 
-    assert_eq!(output.status.code(), Some(4));
-    let report: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("compatibility report JSON");
-    assert_eq!(report["outcome"], "compatibilityFailure");
-    assert_eq!(report["compatible"], false);
-    assert!(
-        String::from_utf8(output.stderr)
-            .expect("UTF-8 stderr")
-            .contains("compatibility failures")
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "catalog stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("catalog report JSON");
+    assert_eq!(report["schemaVersion"], 1);
+    assert_eq!(report["pluginId"], "dev.vesper.fixture");
+    assert_eq!(report["pluginVersion"], "1.2.3");
+    assert_eq!(
+        report["migrationVersion"],
+        "vesper-plugin-runtime-rewrite-v1"
+    );
+    assert_eq!(report["descriptorSha256"].as_str().map(str::len), Some(64));
+    assert_eq!(
+        report["requires"][0]["service"],
+        "dev.vesper.service.time-stretch"
+    );
+    assert_eq!(report["provides"][0]["version"], "1.4.0");
+    assert_eq!(report["artifacts"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        report["artifacts"][0]["migration_version"],
+        "vesper-plugin-runtime-rewrite-v1"
+    );
+    assert!(report.get("workerOutput").is_none());
+}
+
+#[test]
+fn incompatible_manifest_inspect_and_check_report_migration_context() {
+    let source = manifest("dev.vesper.fixture").replace("abi_major = 1", "abi_major = 2");
+    let path = temporary_manifest(&source);
+    let missing_artifact = path.with_extension("missing.dylib");
+
+    for operation in ["inspect", "check"] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_vesper"));
+        command.args(["plugin", operation]).arg(&path);
+        if operation == "inspect" {
+            command.arg("--manifest-only");
+        } else {
+            command
+                .arg("--artifact")
+                .arg(&missing_artifact)
+                .args(["--transport", "native"]);
+        }
+        let output = command.output().expect("inspect incompatible manifest");
+
+        assert_eq!(output.status.code(), Some(4));
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("compatibility report JSON");
+        assert_eq!(report["outcome"], "compatibilityFailure");
+        assert_eq!(report["compatible"], false);
+        assert_eq!(report["pluginId"], "dev.vesper.fixture");
+        assert_eq!(
+            report["migrationVersion"],
+            "vesper-plugin-runtime-rewrite-v1"
+        );
+        let compatibility = report["checks"]
+            .as_array()
+            .and_then(|checks| {
+                checks
+                    .iter()
+                    .find(|check| check["id"] == "host.compatibility")
+            })
+            .expect("host compatibility check");
+        let message = compatibility["message"]
+            .as_str()
+            .expect("compatibility message");
+        assert!(message.contains("dev.vesper.fixture"));
+        assert!(message.contains("vesper-plugin-runtime-rewrite-v1"));
+        assert!(report.get("workerOutput").is_none());
+        assert!(
+            String::from_utf8(output.stderr)
+                .expect("UTF-8 stderr")
+                .contains("compatibility failures")
+        );
+    }
+    let _ = fs::remove_file(path);
 }
 
 #[test]

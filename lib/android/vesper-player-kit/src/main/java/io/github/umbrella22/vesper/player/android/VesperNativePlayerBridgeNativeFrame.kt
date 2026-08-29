@@ -262,16 +262,14 @@ internal fun VesperNativePlayerBridge.currentNativeFramePipelineStatusOnRuntime(
 }
 
 internal fun VesperNativePlayerBridge.closeNativeFramePipelineOnRuntime() {
-    val epoch = sourceLoadEpoch.get()
     nativeFramePipelinePumpScheduler.executeCommand(
         NativeFramePipelineRuntimeCommand(
             operation = "close",
             runsDuringClose = true,
             replacesPendingCommands = true,
             action = closeCommand@{
-                if (!isCurrentNativeFramePipelineRuntimeCommand(epoch, allowDisposedBridge = true)) {
-                    return@closeCommand
-                }
+                // Closing owns the native session captured by the command. A source
+                // generation change fences active work, but must not revoke cleanup.
                 runCatching {
                     releasePendingTimedNativeFrameFromRuntime(presented = false)
                     bindings.closeNativeFramePipeline()

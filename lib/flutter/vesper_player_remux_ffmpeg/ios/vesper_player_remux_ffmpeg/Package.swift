@@ -1,7 +1,7 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
-private let vesperPlayerKitVersion: Version = "0.4.3-rc.1"
+private let vesperPlayerKitVersion: Version = "0.5.0"
 
 let package = Package(
     name: "vesper_player_remux_ffmpeg",

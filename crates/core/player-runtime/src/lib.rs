@@ -12,6 +12,7 @@
 
 mod adapter;
 mod clock;
+mod plugin_sequence;
 /// Shared policy resolution helpers.
 pub mod policy;
 
@@ -32,7 +33,10 @@ pub use adapter::{
     PlayerRuntimeAdapter, PlayerRuntimeAdapterBootstrap, PlayerRuntimeAdapterFactory,
     PlayerRuntimeAdapterInitializer,
 };
-pub use clock::{MediaClock, PlaybackClock};
+pub use clock::{
+    MediaClock, PlaybackClock, PlaybackClockCoordinator, PlaybackClockSnapshot,
+    PlaybackClockSource, StalePlaybackClockGeneration,
+};
 pub use player_download::{
     DownloadAssetId, DownloadAssetIndex, DownloadAssetStream, DownloadByteRange,
     DownloadContentFormat, DownloadErrorSummary, DownloadEvent, DownloadEventBatch,
@@ -73,7 +77,12 @@ pub use player_playlist::{
     SequenceSourceRevision, SequenceSourceState, SequenceWarmupGoal, SequenceWarmupReport,
     SequenceWarmupStats, SequenceWarmupStatus, SequenceWarmupTaskId, SequenceWarmupTaskSnapshot,
 };
-pub use player_plugin::{PipelineEventHook, PipelineEventHookError};
+pub use player_plugin::{
+    AudioPitchMode as PitchMode, PipelineEventHook, PipelineEventHookError,
+    PluginActivePlaybackCorrelation, PluginNextPrewarmCorrelation, PluginPlaybackAttachment,
+    PluginPlaybackAttachmentToken, PluginPlaybackAuthority, PluginPlaybackError,
+    PluginPlaybackRole, PluginPlaybackTransitionReport, PluginSessionCorrelation,
+};
 pub use player_preload::{
     DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
     DEFAULT_PRELOAD_MAX_MEMORY_BYTES, DEFAULT_PRELOAD_WARMUP_WINDOW, InMemoryPreloadBudgetProvider,
@@ -84,6 +93,7 @@ pub use player_preload::{
     PreloadSnapshot, PreloadSourceIdentity, PreloadTaskId, PreloadTaskSnapshot, PreloadTaskState,
     PreloadTaskStatus,
 };
+pub use plugin_sequence::{PlayerPluginSequenceCorrelation, PlayerPluginSequenceCorrelationError};
 
 /// Download API re-exports.
 pub mod download {
@@ -305,6 +315,10 @@ pub struct PlayerRuntimeOptions {
     pub source_normalizer_mode: SourceNormalizerMode,
     /// Frame processor plugin library paths considered during startup.
     pub frame_processor_library_paths: Vec<PathBuf>,
+    /// Native audio processor plugin paths used only by explicit desktop processing routes.
+    pub audio_processor_library_paths: Vec<PathBuf>,
+    /// Pitch behavior for desktop audio processing and FFmpeg fallback.
+    pub audio_pitch_mode: PitchMode,
     /// Policy required before raw native plugin library paths may be loaded.
     pub native_plugin_loading_policy: NativePluginLoadingPolicy,
     /// Frame processor rollout mode.
@@ -1101,6 +1115,136 @@ impl PlayerPluginParticipation {
     }
 }
 
+/// Evidence step used to advance a plugin participation projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerPluginParticipationTransition {
+    /// The host selected the plugin for a concrete route.
+    Select,
+    /// The plugin processed work for the selected route.
+    Participate,
+    /// The host bypassed the available or selected plugin.
+    Bypass,
+    /// The selected or participating route fell back to another route.
+    Fallback,
+}
+
+/// Error returned when participation evidence skips a required lifecycle step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerPluginParticipationProjectionError {
+    /// State before the rejected transition.
+    pub state: PlayerPluginParticipation,
+    /// Evidence step that could not be applied.
+    pub transition: PlayerPluginParticipationTransition,
+}
+
+impl std::fmt::Display for PlayerPluginParticipationProjectionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "plugin participation cannot apply {:?} while in {:?}",
+            self.transition, self.state
+        )
+    }
+}
+
+impl std::error::Error for PlayerPluginParticipationProjectionError {}
+
+/// Typed projection of plugin availability, selection, and runtime use.
+///
+/// The projection is intentionally monotonic: a capability probe creates an
+/// `Available` projection, selection must be recorded before participation,
+/// and fallback/bypass are explicit observations. A participating plugin may
+/// later be bypassed, and a bypassed route may still fall back. This prevents a
+/// loader success or capability summary from being reported as media-path
+/// participation without a later runtime observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerPluginParticipationProjection {
+    state: PlayerPluginParticipation,
+}
+
+impl PlayerPluginParticipationProjection {
+    /// Creates a projection for a capability that is available to the host.
+    pub const fn available() -> Self {
+        Self {
+            state: PlayerPluginParticipation::Available,
+        }
+    }
+
+    /// Returns the currently observed participation state.
+    pub const fn state(self) -> PlayerPluginParticipation {
+        self.state
+    }
+
+    /// Advances an available plugin to the selected state.
+    pub fn select(self) -> Result<Self, PlayerPluginParticipationProjectionError> {
+        self.advance(PlayerPluginParticipationTransition::Select)
+    }
+
+    /// Advances a selected plugin after it has processed runtime work.
+    pub fn participate(self) -> Result<Self, PlayerPluginParticipationProjectionError> {
+        self.advance(PlayerPluginParticipationTransition::Participate)
+    }
+
+    /// Records that an available, selected, or participating plugin was bypassed.
+    pub fn bypass(self) -> Result<Self, PlayerPluginParticipationProjectionError> {
+        self.advance(PlayerPluginParticipationTransition::Bypass)
+    }
+
+    /// Records fallback away from a selected, participating, or bypassed route.
+    pub fn fallback(self) -> Result<Self, PlayerPluginParticipationProjectionError> {
+        self.advance(PlayerPluginParticipationTransition::Fallback)
+    }
+
+    fn advance(
+        self,
+        transition: PlayerPluginParticipationTransition,
+    ) -> Result<Self, PlayerPluginParticipationProjectionError> {
+        let valid = matches!(
+            (self.state, transition),
+            (
+                PlayerPluginParticipation::Available,
+                PlayerPluginParticipationTransition::Select
+            ) | (
+                PlayerPluginParticipation::Selected,
+                PlayerPluginParticipationTransition::Participate
+            ) | (
+                PlayerPluginParticipation::Available,
+                PlayerPluginParticipationTransition::Bypass
+            ) | (
+                PlayerPluginParticipation::Selected,
+                PlayerPluginParticipationTransition::Bypass
+            ) | (
+                PlayerPluginParticipation::Participated,
+                PlayerPluginParticipationTransition::Bypass
+            ) | (
+                PlayerPluginParticipation::Selected,
+                PlayerPluginParticipationTransition::Fallback
+            ) | (
+                PlayerPluginParticipation::Participated,
+                PlayerPluginParticipationTransition::Fallback
+            ) | (
+                PlayerPluginParticipation::Bypassed,
+                PlayerPluginParticipationTransition::Fallback
+            )
+        );
+        if !valid {
+            return Err(PlayerPluginParticipationProjectionError {
+                state: self.state,
+                transition,
+            });
+        }
+        let state = match transition {
+            PlayerPluginParticipationTransition::Select => PlayerPluginParticipation::Selected,
+            PlayerPluginParticipationTransition::Participate => {
+                PlayerPluginParticipation::Participated
+            }
+            PlayerPluginParticipationTransition::Bypass => PlayerPluginParticipation::Bypassed,
+            PlayerPluginParticipationTransition::Fallback => PlayerPluginParticipation::Fallback,
+        };
+        Ok(Self { state })
+    }
+}
+
 /// Resource limits applied to a plugin to defend the host against misbehaving
 /// or slow plugins. This is the "circuit breaker" tier of plugin defense
 /// (plan: `plugin-defense-budget-circuit-breaker-2026-07-09.md`).
@@ -1164,6 +1308,51 @@ pub const DEFAULT_PLUGIN_MAX_PROCESS_TIME_US: u64 = 16_600;
 /// Default consecutive-failure threshold before a processor is disabled.
 pub const DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES: u32 = 5;
 
+/// Host-observed result of one Native plugin callback invocation.
+///
+/// The elapsed deadline classification is owned by the host. Plugin-reported
+/// timing metadata may still be useful for diagnostics, but it cannot replace
+/// this observation when deciding whether the callback exceeded its budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginInvocationOutcome {
+    /// The callback returned successfully within the configured budget.
+    Succeeded,
+    /// The callback returned an error.
+    Failed,
+    /// The callback returned successfully after the configured budget.
+    DeadlineMissed,
+    /// The callback's breaker was already quarantined.
+    Quarantined,
+}
+
+/// Breaker state after one host-observed callback invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginBreakerDisposition {
+    /// The callback remains healthy.
+    Healthy,
+    /// The callback failed or missed its deadline but remains callable.
+    Degraded,
+    /// The failure threshold was reached and future calls must be skipped.
+    Quarantined,
+}
+
+/// Typed observation emitted after one Native plugin callback invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PluginInvocationObservation {
+    /// Callback result classified by the host.
+    pub outcome: PluginInvocationOutcome,
+    /// Breaker state after applying the observation.
+    pub breaker_disposition: PluginBreakerDisposition,
+    /// Host-observed callback duration, saturated to microseconds.
+    pub elapsed_us: u64,
+    /// Configured callback duration budget in microseconds.
+    pub budget_us: u64,
+    /// Consecutive failure count after this observation.
+    pub consecutive_failures: u32,
+    /// Consecutive deadline-miss count after this observation.
+    pub consecutive_deadline_misses: u32,
+}
+
 /// Tracks per-plugin breaker state so a plugin call site can decide whether to
 /// keep invoking a plugin, downgrade it to bypass, or disable it outright.
 ///
@@ -1203,6 +1392,48 @@ impl PluginBreakerState {
     /// Current consecutive deadline-miss counter (for warning diagnostics).
     pub fn consecutive_deadline_misses(&self) -> u32 {
         self.consecutive_deadline_misses
+    }
+
+    /// Applies a host-observed callback result to the breaker.
+    ///
+    /// A failed callback is counted once even when it also exceeded the time
+    /// budget. Successful calls reset counters only when they complete within
+    /// the budget. Callers remain responsible for mapping `Degraded` to the
+    /// workload-specific bypass, drop, or error policy.
+    pub fn observe_invocation(
+        &mut self,
+        elapsed: Duration,
+        succeeded: bool,
+    ) -> PluginInvocationObservation {
+        let elapsed_us = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
+        let budget_us = self.budget.effective_max_process_time_us();
+        let outcome = if self.disabled {
+            PluginInvocationOutcome::Quarantined
+        } else if !succeeded {
+            let _ = self.record_failure();
+            PluginInvocationOutcome::Failed
+        } else if elapsed_us > budget_us {
+            let _ = self.record_deadline_miss();
+            PluginInvocationOutcome::DeadlineMissed
+        } else {
+            self.record_success();
+            PluginInvocationOutcome::Succeeded
+        };
+        let breaker_disposition = if self.disabled {
+            PluginBreakerDisposition::Quarantined
+        } else if outcome == PluginInvocationOutcome::Succeeded {
+            PluginBreakerDisposition::Healthy
+        } else {
+            PluginBreakerDisposition::Degraded
+        };
+        PluginInvocationObservation {
+            outcome,
+            breaker_disposition,
+            elapsed_us,
+            budget_us,
+            consecutive_failures: self.consecutive_failures,
+            consecutive_deadline_misses: self.consecutive_deadline_misses,
+        }
     }
 
     /// Records a successful plugin invocation; clears failure counters.
@@ -1688,6 +1919,8 @@ impl Default for PlayerRuntimeOptions {
             source_normalizer_plugin_library_paths: Vec::new(),
             source_normalizer_mode: SourceNormalizerMode::Disabled,
             frame_processor_library_paths: Vec::new(),
+            audio_processor_library_paths: Vec::new(),
+            audio_pitch_mode: PitchMode::PreservePitch,
             native_plugin_loading_policy: NativePluginLoadingPolicy::default(),
             frame_processor_mode: FrameProcessorMode::Disabled,
             frame_processor_policy: FrameProcessorPolicy::default(),
@@ -1777,6 +2010,21 @@ impl PlayerRuntimeOptions {
         paths: impl IntoIterator<Item = PathBuf>,
     ) -> Self {
         self.frame_processor_library_paths = paths.into_iter().collect();
+        self
+    }
+
+    /// Replaces Native audio processor paths for the experimental desktop route.
+    pub fn with_audio_processor_library_paths(
+        mut self,
+        paths: impl IntoIterator<Item = PathBuf>,
+    ) -> Self {
+        self.audio_processor_library_paths = paths.into_iter().collect();
+        self
+    }
+
+    /// Sets desktop audio pitch behavior.
+    pub fn with_audio_pitch_mode(mut self, mode: PitchMode) -> Self {
+        self.audio_pitch_mode = mode;
         self
     }
 
@@ -2885,6 +3133,9 @@ impl PlayerRuntime {
         &mut self,
         command: PlayerRuntimeCommand,
     ) -> PlayerResult<PlayerRuntimeCommandResult> {
+        if let PlayerRuntimeCommand::SetPlaybackRate { rate } = &command {
+            validate_playback_rate(*rate, self.inner.capabilities())?;
+        }
         self.inner.dispatch(command)
     }
 
@@ -3093,6 +3344,40 @@ fn playback_protocol(protocol: MediaSourceProtocol) -> &'static str {
     }
 }
 
+fn validate_playback_rate(
+    rate: f32,
+    capabilities: PlayerRuntimeAdapterCapabilities,
+) -> PlayerResult<()> {
+    if !rate.is_finite() || rate <= 0.0 {
+        return Err(PlayerError::with_category(
+            PlayerErrorCode::InvalidArgument,
+            PlayerErrorCategory::Input,
+            format!("playback rate must be finite and greater than zero: {rate}"),
+        ));
+    }
+    if !capabilities.supports_playback_rate {
+        return Err(PlayerError::with_category(
+            PlayerErrorCode::Unsupported,
+            PlayerErrorCategory::Capability,
+            "the active adapter does not support playback-rate changes",
+        ));
+    }
+    if capabilities
+        .playback_rate_min
+        .is_some_and(|minimum| !minimum.is_finite() || rate < minimum)
+        || capabilities
+            .playback_rate_max
+            .is_some_and(|maximum| !maximum.is_finite() || rate > maximum)
+    {
+        return Err(PlayerError::with_category(
+            PlayerErrorCode::Unsupported,
+            PlayerErrorCategory::Capability,
+            format!("playback rate {rate} is outside the active adapter policy"),
+        ));
+    }
+    Ok(())
+}
+
 fn playback_source_kind(kind: MediaSourceKind) -> &'static str {
     match kind {
         MediaSourceKind::Local => "local",
@@ -3199,8 +3484,8 @@ fn default_runtime_adapter_factory() -> PlayerResult<&'static dyn PlayerRuntimeA
 mod tests {
     use super::{
         DEFAULT_PLUGIN_MAX_CONSECUTIVE_FAILURES, DEFAULT_PLUGIN_MAX_IN_FLIGHT_FRAMES,
-        DEFAULT_PLUGIN_MAX_PROCESS_TIME_US, DEFAULT_PLUGIN_MAX_QUEUE_DEPTH, PluginBreakerState,
-        PluginBudgetPolicy,
+        DEFAULT_PLUGIN_MAX_PROCESS_TIME_US, DEFAULT_PLUGIN_MAX_QUEUE_DEPTH,
+        PluginBreakerDisposition, PluginBreakerState, PluginBudgetPolicy, PluginInvocationOutcome,
     };
     use super::{
         DEFAULT_PRELOAD_MAX_CONCURRENT_TASKS, DEFAULT_PRELOAD_MAX_DISK_BYTES,
@@ -3209,11 +3494,11 @@ mod tests {
         FrameProcessorWarning, FrameProcessorWarningKind, MAX_PENDING_RUNTIME_EVENTS,
         MAX_PLAYBACK_PIPELINE_EVENTS_PER_DRAIN, MediaAbrMode, MediaAbrPolicy, MediaSourceKind,
         MediaSourceProtocol, MediaTrackSelection, MediaTrackSelectionMode,
-        NativePluginLoadingPolicy, PlaybackProgress, PlayerAudioOutputInfo, PlayerBufferingPolicy,
-        PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset, PlayerError,
-        PlayerErrorCategory, PlayerErrorCode, PlayerFrameProcessingMetrics, PlayerMediaInfo,
-        PlayerPlaybackRoute, PlayerPluginDiagnosticStatus, PlayerPluginParticipation,
-        PlayerPreloadBudgetPolicy, PlayerResilienceMetricsTracker,
+        NativePluginLoadingPolicy, PitchMode, PlaybackProgress, PlayerAudioOutputInfo,
+        PlayerBufferingPolicy, PlayerBufferingPreset, PlayerCachePolicy, PlayerCachePreset,
+        PlayerError, PlayerErrorCategory, PlayerErrorCode, PlayerFrameProcessingMetrics,
+        PlayerMediaInfo, PlayerPlaybackRoute, PlayerPluginDiagnosticStatus,
+        PlayerPluginParticipation, PlayerPreloadBudgetPolicy, PlayerResilienceMetricsTracker,
         PlayerResolvedPreloadBudgetPolicy, PlayerResult, PlayerRetryBackoff, PlayerRetryPolicy,
         PlayerRuntimeAdapter, PlayerRuntimeAdapterBackendFamily, PlayerRuntimeAdapterBootstrap,
         PlayerRuntimeAdapterCapabilities, PlayerRuntimeAdapterFactory,
@@ -3525,6 +3810,181 @@ mod tests {
             initial_frame: None,
             startup: test_startup(),
         }
+    }
+
+    // --- plugin-runtime-rewrite W1 red test (contract C-07) ---------------
+    //
+    // This test intentionally FAILS until the rewrite lands the playback-rate
+    // policy contract from devnotes/plugin-runtime-rewrite-development-plan.md.
+    // Do not weaken or skip it; the red failure shape is recorded in
+    // devnotes/plugin-runtime-rewrite-execution-ledger.md.
+
+    struct RateRecordingAdapter {
+        media_info: PlayerMediaInfo,
+        applied_rates: Arc<Mutex<Vec<f32>>>,
+    }
+
+    impl PlayerRuntimeAdapter for RateRecordingAdapter {
+        fn source_uri(&self) -> &str {
+            &self.media_info.source_uri
+        }
+
+        fn capabilities(&self) -> PlayerRuntimeAdapterCapabilities {
+            fake_capabilities()
+        }
+
+        fn media_info(&self) -> &PlayerMediaInfo {
+            &self.media_info
+        }
+
+        fn presentation_state(&self) -> PresentationState {
+            PresentationState::Ready
+        }
+
+        fn playback_rate(&self) -> f32 {
+            1.0
+        }
+
+        fn progress(&self) -> PlaybackProgress {
+            PlaybackProgress::new(Duration::ZERO, self.media_info.duration)
+        }
+
+        fn drain_events(&mut self) -> Vec<PlayerRuntimeEvent> {
+            Vec::new()
+        }
+
+        fn take_dropped_event_count(&mut self) -> u64 {
+            0
+        }
+
+        fn dispatch(
+            &mut self,
+            command: PlayerRuntimeCommand,
+        ) -> PlayerResult<PlayerRuntimeCommandResult> {
+            if let PlayerRuntimeCommand::SetPlaybackRate { rate } = command {
+                self.applied_rates
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(rate);
+            }
+            Ok(PlayerRuntimeCommandResult {
+                applied: true,
+                frame: None,
+                snapshot: super::PlayerSnapshot {
+                    source_uri: self.media_info.source_uri.clone(),
+                    state: PresentationState::Ready,
+                    has_video_surface: false,
+                    is_interrupted: false,
+                    is_buffering: false,
+                    playback_rate: 1.0,
+                    progress: PlaybackProgress::new(Duration::ZERO, self.media_info.duration),
+                    timeline: PlayerTimelineSnapshot {
+                        kind: PlayerTimelineKind::Vod,
+                        is_seekable: false,
+                        seekable_range: None,
+                        live_edge: None,
+                        position: Duration::ZERO,
+                        duration: None,
+                    },
+                    media_info: self.media_info.clone(),
+                    resilience_metrics: super::PlayerResilienceMetrics::default(),
+                },
+            })
+        }
+
+        fn advance(&mut self) -> PlayerResult<Option<super::DecodedVideoFrame>> {
+            Ok(None)
+        }
+
+        fn next_deadline(&self) -> Option<std::time::Instant> {
+            None
+        }
+    }
+
+    /// RED TEST (plugin-runtime-rewrite W1, contract C-07).
+    ///
+    /// Target: an out-of-policy playback rate must be rejected by the runtime
+    /// command boundary before it reaches an adapter. The adapter behind this
+    /// test declares `playback_rate_min = 0.5` and `playback_rate_max = 3.0`
+    /// through `fake_capabilities`, so 4.0 is outside the declared policy.
+    ///
+    /// Old failure shape: `set_playback_rate` forwards `SetPlaybackRate` to
+    /// the adapter without any policy validation, so the out-of-policy rate
+    /// is applied and reported as `Ok(applied = true)`.
+    #[test]
+    fn rewrite_red_playback_rate_command_enforces_policy_bounds() {
+        let media_info = test_media_info(
+            MediaSourceKind::Remote,
+            MediaSourceProtocol::Hls,
+            Some(Duration::from_secs(60)),
+        );
+        let (dispatcher, _captured) = capturing_dispatcher();
+        let applied_rates = Arc::new(Mutex::new(Vec::new()));
+        let bootstrap = PlayerRuntimeAdapterBootstrap {
+            runtime: Box::new(RateRecordingAdapter {
+                media_info: media_info.clone(),
+                applied_rates: applied_rates.clone(),
+            }),
+            initial_frame: None,
+            startup: test_startup(),
+        };
+        let mut runtime = super::PlayerRuntime::from_adapter_bootstrap_with_pipeline(
+            "fake-adapter",
+            bootstrap,
+            Some(dispatcher),
+            "host.test".to_owned(),
+        )
+        .runtime;
+
+        let result = runtime.set_playback_rate(4.0);
+
+        assert!(
+            result.is_err(),
+            "an out-of-policy playback rate must be rejected at the runtime boundary (C-07)"
+        );
+        assert!(
+            applied_rates
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty(),
+            "a rejected rate must never reach the adapter"
+        );
+    }
+
+    #[test]
+    fn playback_rate_policy_rejects_non_finite_and_unsupported_rates_before_adapter() {
+        let media_info = test_media_info(
+            MediaSourceKind::Remote,
+            MediaSourceProtocol::Hls,
+            Some(Duration::from_secs(60)),
+        );
+        let (dispatcher, _captured) = capturing_dispatcher();
+        let applied_rates = Arc::new(Mutex::new(Vec::new()));
+        let bootstrap = PlayerRuntimeAdapterBootstrap {
+            runtime: Box::new(RateRecordingAdapter {
+                media_info: media_info.clone(),
+                applied_rates: applied_rates.clone(),
+            }),
+            initial_frame: None,
+            startup: test_startup(),
+        };
+        let mut runtime = super::PlayerRuntime::from_adapter_bootstrap_with_pipeline(
+            "fake-adapter",
+            bootstrap,
+            Some(dispatcher),
+            "host.test".to_owned(),
+        )
+        .runtime;
+
+        assert!(runtime.set_playback_rate(0.0).is_err());
+        assert!(runtime.set_playback_rate(f32::NAN).is_err());
+        assert!(runtime.set_playback_rate(3.5).is_err());
+        assert!(
+            applied_rates
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty()
+        );
     }
 
     fn playback_warning_event() -> PlayerRuntimeEvent {
@@ -4058,6 +4518,8 @@ mod tests {
         assert!(options.source_normalizer_plugin_library_paths.is_empty());
         assert_eq!(options.frame_processor_mode, FrameProcessorMode::Disabled);
         assert!(options.frame_processor_library_paths.is_empty());
+        assert!(options.audio_processor_library_paths.is_empty());
+        assert_eq!(options.audio_pitch_mode, PitchMode::PreservePitch);
         assert_eq!(
             options.frame_processor_policy,
             FrameProcessorPolicy::default()
@@ -4098,6 +4560,21 @@ mod tests {
         assert_eq!(
             development.native_plugin_loading_policy.wire_name(),
             "development-raw-paths"
+        );
+    }
+
+    #[test]
+    fn audio_processor_options_are_explicit_and_keep_native_defaults_unchanged() {
+        let path = PathBuf::from("/tmp/audio-processor.dylib");
+        let options = PlayerRuntimeOptions::default()
+            .with_audio_processor_library_paths([path.clone()])
+            .with_audio_pitch_mode(PitchMode::FollowRate);
+
+        assert_eq!(options.audio_processor_library_paths, vec![path]);
+        assert_eq!(options.audio_pitch_mode, PitchMode::FollowRate);
+        assert_eq!(
+            options.native_plugin_loading_policy,
+            NativePluginLoadingPolicy::DenyRawPaths
         );
     }
 
@@ -4248,6 +4725,69 @@ mod tests {
         assert_eq!(
             PlayerPluginParticipation::from_wire_name("participating"),
             None
+        );
+    }
+
+    #[test]
+    fn rewrite_red_participation_projection_requires_evidence_order() {
+        let available = super::PlayerPluginParticipationProjection::available();
+        assert_eq!(available.state(), PlayerPluginParticipation::Available);
+        assert!(
+            available.participate().is_err(),
+            "availability must not be projected as runtime participation"
+        );
+
+        let selected = available
+            .select()
+            .expect("selection requires an available plugin");
+        assert_eq!(selected.state(), PlayerPluginParticipation::Selected);
+        let participated = selected
+            .participate()
+            .expect("participation requires a selected plugin");
+        assert_eq!(
+            participated.state(),
+            PlayerPluginParticipation::Participated
+        );
+    }
+
+    #[test]
+    fn participation_projection_preserves_bypass_and_fallback_boundaries() {
+        let available = super::PlayerPluginParticipationProjection::available();
+        assert_eq!(
+            available.bypass().expect("available bypass").state(),
+            PlayerPluginParticipation::Bypassed
+        );
+        assert_eq!(
+            available
+                .select()
+                .expect("selection")
+                .fallback()
+                .expect("selected fallback")
+                .state(),
+            PlayerPluginParticipation::Fallback
+        );
+
+        let error = available
+            .fallback()
+            .expect_err("an unselected plugin cannot be a route fallback");
+        assert_eq!(error.state, PlayerPluginParticipation::Available);
+        assert_eq!(
+            error.transition,
+            super::PlayerPluginParticipationTransition::Fallback
+        );
+
+        let fallback_after_runtime_bypass = available
+            .select()
+            .expect("selection")
+            .participate()
+            .expect("participation")
+            .bypass()
+            .expect("runtime bypass")
+            .fallback()
+            .expect("route fallback after bypass");
+        assert_eq!(
+            fallback_after_runtime_bypass.state(),
+            PlayerPluginParticipation::Fallback
         );
     }
 
@@ -4700,6 +5240,44 @@ mod tests {
         );
         assert!(breaker.is_disabled());
         assert_eq!(breaker.consecutive_deadline_misses(), 2);
+    }
+
+    #[test]
+    fn breaker_observes_host_elapsed_and_quarantines_slow_invocations() {
+        let mut breaker = PluginBreakerState::new(PluginBudgetPolicy {
+            max_process_time_us: Some(10),
+            max_consecutive_failures: Some(2),
+            ..PluginBudgetPolicy::default()
+        });
+
+        let first = breaker.observe_invocation(Duration::from_micros(11), true);
+        assert_eq!(first.outcome, PluginInvocationOutcome::DeadlineMissed);
+        assert_eq!(
+            first.breaker_disposition,
+            PluginBreakerDisposition::Degraded
+        );
+        assert_eq!(first.elapsed_us, 11);
+        assert_eq!(first.budget_us, 10);
+        assert_eq!(first.consecutive_failures, 1);
+        assert_eq!(first.consecutive_deadline_misses, 1);
+
+        let second = breaker.observe_invocation(Duration::from_micros(12), true);
+        assert_eq!(second.outcome, PluginInvocationOutcome::DeadlineMissed);
+        assert_eq!(
+            second.breaker_disposition,
+            PluginBreakerDisposition::Quarantined
+        );
+        assert_eq!(second.consecutive_failures, 2);
+        assert_eq!(second.consecutive_deadline_misses, 2);
+        assert!(breaker.is_disabled());
+
+        let skipped = breaker.observe_invocation(Duration::ZERO, true);
+        assert_eq!(skipped.outcome, PluginInvocationOutcome::Quarantined);
+        assert_eq!(
+            skipped.breaker_disposition,
+            PluginBreakerDisposition::Quarantined
+        );
+        assert_eq!(skipped.consecutive_failures, 2);
     }
 
     #[test]

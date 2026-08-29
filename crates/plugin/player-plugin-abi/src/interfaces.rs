@@ -111,6 +111,7 @@ pub struct VesperPcmFrameOut {
     pub struct_size: u32,
     pub reserved: u32,
     pub metadata: VesperOwnedBytes,
+    /// Plugin-owned PCM bytes. F32 and S16 samples use little-endian byte order.
     pub data: VesperOwnedBytes,
 }
 
@@ -287,6 +288,33 @@ pub struct VesperFrameProcessor {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+pub struct VesperAudioProcessor {
+    pub header: VesperInterfaceHeader,
+    pub capabilities_json: Option<VesperGetJsonFn>,
+    pub open_session_json: Option<VesperOpenSessionFn>,
+    pub configure_session_json: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session_id: VesperSessionId,
+            policy_json: VesperByteSlice,
+            out: *mut VesperJsonOut,
+        ) -> VesperStatus,
+    >,
+    pub process_pcm_frame: Option<
+        unsafe extern "C" fn(
+            context: *mut c_void,
+            session_id: VesperSessionId,
+            metadata_json: VesperByteSlice,
+            pcm_data: VesperByteSlice,
+            out: *mut VesperPcmFrameOut,
+        ) -> VesperStatus,
+    >,
+    pub flush_session: Option<VesperSessionOperationFn>,
+    pub close_session: Option<VesperSessionOperationFn>,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct VesperSourceNormalizerPacket {
     pub header: VesperInterfaceHeader,
     pub capabilities_json: Option<VesperGetJsonFn>,
@@ -347,6 +375,7 @@ pub const VESPER_BENCHMARK_SINK_REQUIRED_SIZE: u32 =
 pub const VESPER_NATIVE_DECODER_REQUIRED_SIZE: u32 =
     offset_of!(VesperNativeDecoder, receive_pcm_frame) as u32;
 pub const VESPER_FRAME_PROCESSOR_REQUIRED_SIZE: u32 = size_of::<VesperFrameProcessor>() as u32;
+pub const VESPER_AUDIO_PROCESSOR_REQUIRED_SIZE: u32 = size_of::<VesperAudioProcessor>() as u32;
 pub const VESPER_SOURCE_NORMALIZER_PACKET_REQUIRED_SIZE: u32 =
     offset_of!(VesperSourceNormalizerPacket, seek_session_json) as u32;
 pub const VESPER_SOURCE_NORMALIZER_RESOURCE_REQUIRED_SIZE: u32 =
@@ -383,6 +412,7 @@ mod tests {
         assert_eq!(offset_of!(VesperBenchmarkSink, header), 0);
         assert_eq!(offset_of!(VesperNativeDecoder, header), 0);
         assert_eq!(offset_of!(VesperFrameProcessor, header), 0);
+        assert_eq!(offset_of!(VesperAudioProcessor, header), 0);
         assert_eq!(offset_of!(VesperSourceNormalizerPacket, header), 0);
         assert_eq!(offset_of!(VesperSourceNormalizerResource, header), 0);
     }
@@ -395,6 +425,7 @@ mod tests {
             VESPER_BENCHMARK_SINK_REQUIRED_SIZE,
             VESPER_NATIVE_DECODER_REQUIRED_SIZE,
             VESPER_FRAME_PROCESSOR_REQUIRED_SIZE,
+            VESPER_AUDIO_PROCESSOR_REQUIRED_SIZE,
             VESPER_SOURCE_NORMALIZER_PACKET_REQUIRED_SIZE,
             VESPER_SOURCE_NORMALIZER_RESOURCE_REQUIRED_SIZE,
         ];

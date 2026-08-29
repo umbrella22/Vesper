@@ -18,7 +18,7 @@ Use this example as a reference for:
 - FrameProcessor diagnostic plugin logging when the optional artifact is
   bundled. The example does not expose a mobile FrameProcessor toggle and does
   not route frames through the plugin.
-- Dolby Browser Test Kit catalog with explicit `Play now` and `Add to queue`
+- Dolby Vision Online Delivery Kit catalog with explicit `Play now` and `Add to queue`
   actions.
 - Bounded in-app event log for host UI actions such as source selection,
   Dolby actions, plugin mode changes, external-route events, and HDR evidence
@@ -47,6 +47,11 @@ log; it does not read Logcat, native logs, or system diagnostic streams.
   `29.0.14206865`, and an arm64 device or emulator (for Android target)
 - Xcode 16+ and an arm64 Simulator or device (for iOS target)
 - Rust toolchain with the corresponding mobile targets installed
+
+CI validates this host with Flutter 3.47.1 and its supported Gradle 9.3.1
+wrapper. The independent Android library and Compose host use Gradle 9.7.1,
+but Flutter 3.47.1 reports that version as incompatible with its AGP 9.1
+tooling matrix, so the Flutter Android wrapper intentionally remains separate.
 
 The Android and iOS example targets share the base application identifier
 `io.github.umbrella22.vesper.example.flutterhost`. Native Flutter channels use

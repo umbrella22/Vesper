@@ -1,0 +1,123 @@
+package vesper:plugin;
+
+interface protocol {
+  enum diagnostic-severity {
+    info,
+    warning,
+    error,
+  }
+
+  record attribute {
+    key: string,
+    value: string,
+  }
+
+  record diagnostic {
+    code: string,
+    severity: diagnostic-severity,
+    message: string,
+    attributes: list<attribute>,
+  }
+
+  record measurement {
+    name: string,
+    value: f64,
+    unit: string,
+    attributes: list<attribute>,
+  }
+
+  record pipeline-event {
+    run-id: string,
+    session-id: string,
+    platform: string,
+    protocol: option<string>,
+    event-name: string,
+    timestamp-ns: u64,
+    thread: option<string>,
+    resource-identity: option<string>,
+    attributes: list<attribute>,
+    diagnostic: option<diagnostic>,
+  }
+
+  record event-hook-outcome {
+    accepted: bool,
+    measurements: list<measurement>,
+    diagnostics: list<diagnostic>,
+  }
+
+  record benchmark-event {
+    run-id: string,
+    session-id: string,
+    platform: string,
+    protocol: option<string>,
+    event-name: string,
+    timestamp-ns: u64,
+    elapsed-ns: u64,
+    thread: option<string>,
+    attributes: list<attribute>,
+  }
+
+  record benchmark-batch {
+    events: list<benchmark-event>,
+  }
+
+  record threshold-violation {
+    measurement: string,
+    actual: f64,
+    threshold: f64,
+    comparison: string,
+  }
+
+  record benchmark-report {
+    accepted-events: u64,
+    dropped-events: u64,
+    measurements: list<measurement>,
+    threshold-violations: list<threshold-violation>,
+    diagnostics: list<diagnostic>,
+  }
+
+  variant plugin-error {
+    invalid-input(string),
+    rejected(string),
+    failed(string),
+  }
+}
+
+interface host {
+  enum log-level {
+    trace,
+    debug,
+    info,
+    warn,
+    error,
+  }
+
+  log: func(level: log-level, code: string, message: string);
+}
+
+interface event-hook {
+  use protocol.{pipeline-event, event-hook-outcome, plugin-error};
+  on-event: func(event: pipeline-event) -> result<event-hook-outcome, plugin-error>;
+}
+
+interface benchmark-sink {
+  use protocol.{benchmark-batch, benchmark-report, plugin-error};
+  on-event-batch: func(batch: benchmark-batch) -> result<u64, plugin-error>;
+  flush: func() -> result<benchmark-report, plugin-error>;
+}
+
+world event-hook-plugin {
+  import host;
+  export event-hook;
+}
+
+world benchmark-sink-plugin {
+  import host;
+  export benchmark-sink;
+}
+
+world event-and-benchmark-plugin {
+  import host;
+  export event-hook;
+  export benchmark-sink;
+}

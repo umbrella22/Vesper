@@ -26,5 +26,5 @@ To verify the hosted external-playback dependency closure without a device:
 GRADLE_USER_HOME="$PWD/.gradle/gradle-user-home" \
   /path/to/cached/gradle -p fixtures/plugins/android-aar-consumer \
   :app:assembleRelease \
-  -Pvesper.mavenVersion=0.4.2
+  -Pvesper.mavenVersion=0.5.0
 ```

@@ -122,7 +122,7 @@ void main() {
               presets: exampleDolbyAcceptanceCatalog,
               selectedDrmKind: ExampleDolbyAcceptanceDrmKind.clear,
               selectedProfile: ExampleDolbyAcceptanceProfile.p5,
-              selectedFps: 24,
+              selectedFps: 25,
               onDrmKindChanged: (_) {},
               onProfileChanged: (_) {},
               onFpsChanged: (_) {},
@@ -137,11 +137,11 @@ void main() {
     );
 
     expect(find.text('Dolby 验收'), findsOneWidget);
-    expect(find.text('P5 24fps DASH Clear'), findsOneWidget);
-    expect(find.text('P5 24fps HLS Clear'), findsOneWidget);
+    expect(find.text('P5 25fps DASH Clear'), findsOneWidget);
+    expect(find.text('P5 25fps HLS Clear'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(FilledButton, '立即播放').first);
-    expect(selected?.id, 'DOLBY-DV-P5-24-DASH-CLEAR');
+    expect(selected?.id, 'DOLBY-DV-P5-25-DASH-CLEAR');
 
     await tester.pumpWidget(
       MaterialApp(
@@ -152,7 +152,7 @@ void main() {
               presets: exampleDolbyAcceptanceCatalog,
               selectedDrmKind: ExampleDolbyAcceptanceDrmKind.widevine,
               selectedProfile: ExampleDolbyAcceptanceProfile.p81,
-              selectedFps: 50,
+              selectedFps: 60,
               onDrmKindChanged: (_) {},
               onProfileChanged: (_) {},
               onFpsChanged: (_) {},
@@ -166,7 +166,7 @@ void main() {
       ),
     );
 
-    expect(find.text('P8.1 50fps DASH Widevine'), findsOneWidget);
+    expect(find.text('P8.1 60fps DASH Widevine'), findsOneWidget);
     expect(
       find.textContaining('Widevine DASH direct native route'),
       findsOneWidget,
@@ -189,7 +189,7 @@ void main() {
                 presets: exampleDolbyAcceptanceCatalog,
                 selectedDrmKind: ExampleDolbyAcceptanceDrmKind.clear,
                 selectedProfile: ExampleDolbyAcceptanceProfile.p5,
-                selectedFps: 24,
+                selectedFps: 25,
                 isPresetPlayable: (preset) =>
                     preset.protocol != VesperPlayerSourceProtocol.dash,
                 disabledReasonForPreset: (_) =>
@@ -235,7 +235,7 @@ void main() {
               presets: exampleDolbyAcceptanceCatalog,
               selectedDrmKind: ExampleDolbyAcceptanceDrmKind.fairPlayPending,
               selectedProfile: ExampleDolbyAcceptanceProfile.p5,
-              selectedFps: 24,
+              selectedFps: 25,
               onDrmKindChanged: (_) {},
               onProfileChanged: (_) {},
               onFpsChanged: (_) {},
@@ -249,7 +249,7 @@ void main() {
       ),
     );
 
-    expect(find.text('P5 24fps HLS FairPlay pending'), findsOneWidget);
+    expect(find.text('P5 25fps HLS FairPlay pending'), findsOneWidget);
     expect(find.textContaining('certificate URI or base64'), findsOneWidget);
 
     final button = tester.widget<FilledButton>(

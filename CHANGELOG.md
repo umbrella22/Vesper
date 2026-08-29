@@ -1,5 +1,62 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.0 - 2026-08-29
+
+### Breaking Changes
+
+- Rebuilt the unreleased plugin runtime around typed catalog records,
+  dependency resolution, invocation plans, bounded runtime scopes, and explicit
+  transport/workload policy. Plugin projects must regenerate metadata and
+  packages against the 0.5 SDK; compatibility aliases for the prior draft
+  contract are not retained.
+- Raised the workspace MSRV and release/tooling pins from Rust 1.97 to Rust
+  1.98. Generated plugin templates and diagnostic fixtures use the same minimum
+  version.
+- Advanced first-party plugin versions to `0.5.0` and their host SDK range to
+  `>=0.5.0, <0.6.0`.
+
+### Added
+
+- Added a Native `AudioProcessor` ABI, safe Rust author API, checked loader
+  session, diagnostic plugin, host-owned timing enforcement, and distinct
+  preserve-pitch and follow-rate playback processing.
+- Added language-neutral plugin catalog schemas, typed provisions and
+  requirements, deterministic dependency/cycle diagnostics, resolver policy,
+  participation projection, cancellation, quarantine, and bounded shutdown.
+- Added first-party Native AudioProcessor and WASM observer diagnostic projects
+  that pass build, inspect, check, package, signature, and repeatability gates.
+- Added typed plugin playback route, fallback target, and fallback reason
+  diagnostics to the Flutter platform contract while preserving unknown wire
+  values.
+
+### Changed
+
+- Upgraded the independent Android library, Compose host, wrapper tooling, and
+  their CI Gradle paths to Gradle 9.7.1. Flutter CI and release validation now
+  use Flutter 3.47.1 while `flutter build` remains on Gradle 9.3.1, the newest
+  version accepted by Flutter 3.47.1's AGP 9.1 compatibility check.
+- Tightened audio-master clock, playback-rate, generation fencing, drain, and
+  A/V admission behavior across FFmpeg, CPAL, desktop runtime, and plugin
+  processing paths.
+- Made native-frame diagnostics report `participated` only after a frame is
+  actually presented instead of when a route merely starts.
+
+### Fixed
+
+- Made windowed Flutter and Compose timeline scrubbing track the current pointer
+  position and measured control width through forward, reverse, and
+  direction-changing drags.
+- Scoped Android DLNA description reuse and in-flight fetch coalescing to the
+  active network binding, and stopped discovery work after a socket binding
+  failure.
+- Allowed the iOS subtitle device verifier to drive Flutter tests over either
+  USB or local-network connections, matching its physical-device preflight.
+- Extended release version updates and verification to standalone first-party
+  plugin Cargo manifests and lockfiles, including generic `Unreleased`
+  changelog freezing.
+
 ## 0.4.3 - 2026-08-17
 
 ### Added

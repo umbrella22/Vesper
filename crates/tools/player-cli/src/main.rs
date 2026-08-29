@@ -63,7 +63,7 @@ use plugin_build::{
 };
 use plugin_inspection::{
     PluginInspectionOperation, PluginInspectionOutcome, PluginInspectionReport, inspect_manifest,
-    inspect_wasm_plugin,
+    inspect_project_catalog, inspect_wasm_plugin,
 };
 use plugin_scaffold::{PluginScaffoldCapability, PluginScaffoldRequest, create_plugin_scaffold};
 use worker_protocol::{
@@ -1059,6 +1059,8 @@ enum PluginCommand {
     Inspect(PluginInspectArgs),
     /// Runs bounded conformance checks against one concrete plugin artifact.
     Check(PluginCheckArgs),
+    /// Reports canonical catalog metadata without opening plugin artifacts.
+    Catalog(PluginCatalogArgs),
     /// Emits the artifact-independent canonical descriptor as JSON.
     Descriptor(PluginDescriptorArgs),
     /// Emits one validated mobile registry fragment as JSON.
@@ -1196,6 +1198,12 @@ struct PluginCheckArgs {
         value_parser = clap::value_parser!(u64).range(1..=300_000)
     )]
     timeout_ms: u64,
+}
+
+#[derive(Debug, Args)]
+struct PluginCatalogArgs {
+    /// Path to vesper-plugin.toml.
+    manifest: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -1344,6 +1352,7 @@ fn run(cli: Cli) -> CliResult<()> {
             PluginCommand::Build(arguments) => build_plugin(arguments),
             PluginCommand::Inspect(arguments) => inspect_plugin(arguments),
             PluginCommand::Check(arguments) => check_plugin(arguments),
+            PluginCommand::Catalog(arguments) => report_plugin_catalog(arguments),
             PluginCommand::Descriptor(arguments) => emit_descriptor(arguments),
             PluginCommand::RegistryFragment(arguments) => emit_registry_fragment(arguments),
             PluginCommand::Package(arguments) => package_plugin(arguments),
@@ -2431,6 +2440,12 @@ fn check_plugin(arguments: PluginCheckArgs) -> CliResult<()> {
         PluginInspectionOperation::Check,
         Duration::from_millis(arguments.timeout_ms),
     )
+}
+
+fn report_plugin_catalog(arguments: PluginCatalogArgs) -> CliResult<()> {
+    let project = read_project_manifest(&arguments.manifest)?;
+    let report = inspect_project_catalog(&project).map_err(CliError::manifest_or_package)?;
+    emit_json_result(&report)
 }
 
 fn inspect_or_check_artifact(

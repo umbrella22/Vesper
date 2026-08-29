@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use clap::ValueEnum;
 use player_cli::{PluginArtifactTransport, PluginProjectManifest};
 use player_plugin_abi::{
-    BENCHMARK_SINK_INTERFACE_ID, FRAME_PROCESSOR_INTERFACE_ID, NATIVE_DECODER_INTERFACE_ID,
-    PIPELINE_EVENT_HOOK_INTERFACE_ID, POST_DOWNLOAD_PROCESSOR_INTERFACE_ID,
-    SOURCE_NORMALIZER_PACKET_INTERFACE_ID, SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID,
-    VesperInterfaceId,
+    AUDIO_PROCESSOR_INTERFACE_ID, BENCHMARK_SINK_INTERFACE_ID, FRAME_PROCESSOR_INTERFACE_ID,
+    NATIVE_DECODER_INTERFACE_ID, PIPELINE_EVENT_HOOK_INTERFACE_ID,
+    POST_DOWNLOAD_PROCESSOR_INTERFACE_ID, SOURCE_NORMALIZER_PACKET_INTERFACE_ID,
+    SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID, VesperInterfaceId,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -29,6 +29,7 @@ pub enum PluginScaffoldCapability {
     Benchmark,
     Decoder,
     FrameProcessor,
+    AudioProcessor,
     SourceNormalizerPacket,
     SourceNormalizerResource,
 }
@@ -41,6 +42,7 @@ impl PluginScaffoldCapability {
             Self::Benchmark => "benchmark",
             Self::Decoder => "decoder",
             Self::FrameProcessor => "frame-processor",
+            Self::AudioProcessor => "audio-processor",
             Self::SourceNormalizerPacket => "source-normalizer-packet",
             Self::SourceNormalizerResource => "source-normalizer-resource",
         }
@@ -53,6 +55,7 @@ impl PluginScaffoldCapability {
             Self::Benchmark => BENCHMARK_SINK_INTERFACE_ID,
             Self::Decoder => NATIVE_DECODER_INTERFACE_ID,
             Self::FrameProcessor => FRAME_PROCESSOR_INTERFACE_ID,
+            Self::AudioProcessor => AUDIO_PROCESSOR_INTERFACE_ID,
             Self::SourceNormalizerPacket => SOURCE_NORMALIZER_PACKET_INTERFACE_ID,
             Self::SourceNormalizerResource => SOURCE_NORMALIZER_RESOURCE_INTERFACE_ID,
         }
@@ -65,6 +68,7 @@ impl PluginScaffoldCapability {
             Self::Benchmark => "benchmark",
             Self::Decoder => "decoder",
             Self::FrameProcessor => "frame-processor",
+            Self::AudioProcessor => "audio-processor",
             Self::SourceNormalizerPacket => "source-normalizer-packet",
             Self::SourceNormalizerResource => "source-normalizer-resource",
         }
@@ -75,6 +79,7 @@ impl PluginScaffoldCapability {
             Self::PostDownload | Self::EventHook | Self::Benchmark => "stable",
             Self::Decoder
             | Self::FrameProcessor
+            | Self::AudioProcessor
             | Self::SourceNormalizerPacket
             | Self::SourceNormalizerResource => "experimental",
         }
@@ -87,8 +92,9 @@ impl PluginScaffoldCapability {
             Self::Benchmark => 2,
             Self::Decoder => 3,
             Self::FrameProcessor => 4,
-            Self::SourceNormalizerPacket => 5,
-            Self::SourceNormalizerResource => 6,
+            Self::AudioProcessor => 5,
+            Self::SourceNormalizerPacket => 6,
+            Self::SourceNormalizerResource => 7,
         }
     }
 
@@ -472,6 +478,7 @@ fn native_type_name(capability: PluginScaffoldCapability) -> &'static str {
         PluginScaffoldCapability::Benchmark => "Benchmark",
         PluginScaffoldCapability::Decoder => "DecoderFactory",
         PluginScaffoldCapability::FrameProcessor => "FrameProcessorFactory",
+        PluginScaffoldCapability::AudioProcessor => "AudioProcessorFactory",
         PluginScaffoldCapability::SourceNormalizerPacket => "PacketNormalizerFactory",
         PluginScaffoldCapability::SourceNormalizerResource => "ResourceNormalizerFactory",
     }
@@ -484,6 +491,7 @@ fn native_builder_method(capability: PluginScaffoldCapability) -> &'static str {
         PluginScaffoldCapability::Benchmark => "with_benchmark_sink",
         PluginScaffoldCapability::Decoder => "with_native_decoder",
         PluginScaffoldCapability::FrameProcessor => "with_frame_processor",
+        PluginScaffoldCapability::AudioProcessor => "with_audio_processor",
         PluginScaffoldCapability::SourceNormalizerPacket => "with_source_normalizer_packet",
         PluginScaffoldCapability::SourceNormalizerResource => "with_source_normalizer_resource",
     }
@@ -583,6 +591,36 @@ impl player_plugin::FrameProcessorPluginFactory for FrameProcessorFactory {
     ) -> Result<Box<dyn player_plugin::FrameProcessorSession>, player_plugin::FrameProcessorError> {
         Err(player_plugin::FrameProcessorError::internal(
             "implement frame-processor session",
+        ))
+    }
+}"#
+        }
+        PluginScaffoldCapability::AudioProcessor => {
+            r#"struct AudioProcessorFactory;
+
+impl player_plugin::AudioProcessorPluginFactory for AudioProcessorFactory {
+    fn name(&self) -> &str {
+        "audio-processor"
+    }
+
+    fn capabilities(&self) -> player_plugin::AudioProcessorCapabilities {
+        player_plugin::AudioProcessorCapabilities {
+            accepted_formats: vec![player_plugin::DecoderFrameFormat::F32],
+            output_format: Some(player_plugin::DecoderFrameFormat::F32),
+            supports_flush: true,
+            max_in_flight_frames: Some(1),
+            playback_rate_min: Some(1.0),
+            playback_rate_max: Some(1.0),
+            pitch_modes: vec![player_plugin::AudioPitchMode::FollowRate],
+        }
+    }
+
+    fn open_session(
+        &self,
+        _config: &player_plugin::AudioProcessorSessionConfig,
+    ) -> Result<Box<dyn player_plugin::AudioProcessorSession>, player_plugin::AudioProcessorError> {
+        Err(player_plugin::AudioProcessorError::Processor(
+            "implement audio-processor session".to_owned(),
         ))
     }
 }"#

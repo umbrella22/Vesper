@@ -726,10 +726,17 @@ impl NativeDecoderSession for NativeAbiDecoderSession {
                         ),
                     ));
                 };
-                Ok(DecoderReceivePcmFrameOutput::Frame(DecoderPcmFrame {
+                let frame = DecoderPcmFrame {
                     metadata: frame_metadata,
                     data,
-                }))
+                };
+                frame.validate().map_err(|error| {
+                    map_decoder_boundary(self.factory.runtime.contract_violation(
+                        "receive_pcm_frame",
+                        format!("invalid PCM frame returned by plugin: {error}"),
+                    ))
+                })?;
+                Ok(DecoderReceivePcmFrameOutput::Frame(frame))
             }
             DecoderReceiveFrameStatus::NeedMoreInput | DecoderReceiveFrameStatus::Eof => {
                 if metadata.frame.is_some() || !data.is_empty() {
@@ -1083,7 +1090,7 @@ mod tests {
         fn receive_pcm_frame(&mut self) -> Result<DecoderReceivePcmFrameOutput, DecoderError> {
             Ok(DecoderReceivePcmFrameOutput::Frame(DecoderPcmFrame {
                 metadata: pcm_frame_metadata(),
-                data: vec![1, 2, 3, 4],
+                data: vec![1; 8],
             }))
         }
 
@@ -1521,7 +1528,7 @@ mod tests {
             Err(_) => return status::FAILURE,
         };
         out.metadata = VesperOwnedBytes::from_vec(metadata);
-        out.data = VesperOwnedBytes::from_vec(vec![1, 2, 3, 4]);
+        out.data = VesperOwnedBytes::from_vec(vec![1; 8]);
         status::OK
     }
 
@@ -1608,7 +1615,7 @@ mod tests {
         let output = session.receive_pcm_frame().expect("PCM frame");
         assert!(matches!(
             output,
-            DecoderReceivePcmFrameOutput::Frame(DecoderPcmFrame { data, .. }) if data == [1, 2, 3, 4]
+            DecoderReceivePcmFrameOutput::Frame(DecoderPcmFrame { data, .. }) if data == [1; 8]
         ));
         assert_eq!(counters.freed.load(Ordering::SeqCst), baseline + 2);
     }

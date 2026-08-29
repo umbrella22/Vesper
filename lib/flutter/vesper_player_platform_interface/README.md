@@ -57,6 +57,7 @@ authors. Application code should usually depend on `vesper_player` directly.
 | `VesperViewportHint`             | Visibility hint: visible, near visible, prefetch only, or hidden                                                                                                                                               |
 | `VesperPlayerError`              | Playback error with category and retryability metadata                                                                                                                                                         |
 | `VesperPlayerCommandException`   | Structured source or seek command failure with preserved native details and obsolete-command detection                                                                                                      |
+| `VesperPluginDiagnostic`          | Plugin availability, participation, playback route, fallback reason, capability details, and preserved unknown wire values                                                                                   |
 
 ### Player events
 

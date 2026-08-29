@@ -16,7 +16,8 @@ use super::macos_runtime_adapter_factory;
 use super::{
     FrameProcessorDebugState, MACOS_HOST_PLAYER_RUNTIME_ADAPTER_ID,
     MACOS_NATIVE_PLAYER_RUNTIME_ADAPTER_ID, MACOS_SOFTWARE_PLAYER_RUNTIME_ADAPTER_ID,
-    MacosFrameProcessorChain, MacosHostPlayerRuntimeAdapterFactory, MacosNativeFrameDecoderState,
+    MacosFrameProcessorChain, MacosFrameProcessorParticipationTracker,
+    MacosHostPlayerRuntimeAdapterFactory, MacosNativeFrameDecoderState,
     MacosNativeFramePacketSendStatus, MacosNativeFramePacketSource, MacosNativeFramePrefetchWakeup,
     MacosNativeFrameVideoSource, MacosNativeFrameWorkerCommand, MacosNativeFrameWorkerEvent,
     MacosRuntimeActiveFallback, MacosRuntimeAdapter, MacosRuntimeAdapterFallback,
@@ -519,6 +520,7 @@ fn software_runtime_initializer_falls_back_when_native_frame_initialize_fails() 
     let diagnostics = MacosRuntimeDiagnostics {
         video_decode: macos_native_frame_decoder_video_decode_info(Some("fixture-native")),
         plugin_diagnostics: Vec::new(),
+        frame_processor_participation: None,
         has_video_surface: true,
     };
     let fallback_diagnostics = MacosRuntimeDiagnostics {
@@ -531,6 +533,7 @@ fn software_runtime_initializer_falls_back_when_native_frame_initialize_fails() 
         .video_decode
         .expect("fallback video decode"),
         plugin_diagnostics: Vec::new(),
+        frame_processor_participation: None,
         has_video_surface: false,
     };
 
@@ -609,6 +612,7 @@ fn software_runtime_initializer_returns_native_frame_error_without_fallback() {
     let diagnostics = MacosRuntimeDiagnostics {
         video_decode: macos_native_frame_decoder_video_decode_info(Some("fixture-native")),
         plugin_diagnostics: Vec::new(),
+        frame_processor_participation: None,
         has_video_surface: true,
     };
     let initializer = Box::new(MacosRuntimeAdapterInitializer {
@@ -677,6 +681,7 @@ fn runtime_advance_backend_failure_falls_back_to_software_runtime() {
             fallback_reason: None,
         },
         plugin_diagnostics: Vec::new(),
+        frame_processor_participation: None,
         has_video_surface: true,
         runtime_fallback: Some(MacosRuntimeActiveFallback {
             source: fallback_source.clone(),
@@ -764,6 +769,7 @@ fn runtime_fallback_marks_selected_plugin_diagnostics_as_fallback() {
             fallback_reason: None,
         },
         plugin_diagnostics: Vec::new(),
+        frame_processor_participation: None,
         has_video_surface: true,
         runtime_fallback: Some(MacosRuntimeActiveFallback {
             source: MediaSource::new("fixture.mp4"),
@@ -866,6 +872,7 @@ fn runtime_dispatch_seek_backend_failure_falls_back_to_software_runtime() {
             fallback_reason: None,
         },
         plugin_diagnostics: Vec::new(),
+        frame_processor_participation: None,
         has_video_surface: true,
         runtime_fallback: Some(MacosRuntimeActiveFallback {
             source: MediaSource::new("fixture.mp4"),
@@ -950,6 +957,7 @@ fn runtime_dispatch_play_and_rate_backend_failure_fall_back_to_software_runtime(
                 fallback_reason: None,
             },
             plugin_diagnostics: Vec::new(),
+            frame_processor_participation: None,
             has_video_surface: true,
             runtime_fallback: Some(MacosRuntimeActiveFallback {
                 source: MediaSource::new("fixture.mp4"),
@@ -1088,6 +1096,7 @@ fn runtime_dispatch_pause_and_stop_do_not_trigger_fallback() {
                 fallback_reason: None,
             },
             plugin_diagnostics: Vec::new(),
+            frame_processor_participation: None,
             has_video_surface: true,
             runtime_fallback: Some(MacosRuntimeActiveFallback {
                 source: MediaSource::new("fixture.mp4"),
@@ -2106,6 +2115,16 @@ fn macos_native_frame_runtime_loads_frame_processor_diagnostic_plugin() {
     assert!(
         bootstrap
             .startup
+            .plugin_diagnostics
+            .iter()
+            .any(|diagnostic| {
+                diagnostic.plugin_name.as_deref() == Some("player-frame-processor-diagnostic")
+                    && diagnostic.participation == PlayerPluginParticipation::Selected
+            })
+    );
+    assert!(
+        bootstrap
+            .startup
             .video_decode
             .as_ref()
             .and_then(|info| info.fallback_reason.as_deref())
@@ -2113,6 +2132,35 @@ fn macos_native_frame_runtime_loads_frame_processor_diagnostic_plugin() {
             .contains("selected sdkManagedNativeFrame route for VideoToolbox playback"),
         "expected native-frame decoder selection diagnostic, got {:?}",
         bootstrap.startup.video_decode
+    );
+
+    let mut runtime = bootstrap.runtime;
+    runtime
+        .dispatch(PlayerRuntimeCommand::Play)
+        .expect("native-frame playback should start");
+    let mut participated = false;
+    for _ in 0..120 {
+        let _ = runtime
+            .advance()
+            .expect("native-frame playback advance should succeed");
+        for event in runtime.drain_events() {
+            let PlayerRuntimeEvent::Initialized(startup) = event else {
+                continue;
+            };
+            if startup.plugin_diagnostics.iter().any(|diagnostic| {
+                diagnostic.plugin_name.as_deref() == Some("player-frame-processor-diagnostic")
+                    && diagnostic.participation == PlayerPluginParticipation::Participated
+            }) {
+                participated = true;
+            }
+        }
+        if participated {
+            break;
+        }
+    }
+    assert!(
+        participated,
+        "processed route should report participation only after a presented frame"
     );
 }
 
@@ -2451,6 +2499,147 @@ fn macos_decoder_plugin_registry_reports_supported_candidate_as_diagnostic_only(
             .as_deref()
             .unwrap_or_default()
             .contains("available for sdkManagedNativeFrame route")
+    );
+}
+
+#[test]
+fn rewrite_red_macos_processed_route_marks_frame_processor_participated_after_consume() {
+    let tracker =
+        MacosFrameProcessorParticipationTracker::from_diagnostics(vec![PlayerPluginDiagnostic {
+            path: "/tmp/fixture-frame-processor".to_owned(),
+            plugin_name: Some("fixture-frame-processor".to_owned()),
+            plugin_kind: Some("frame_processor".to_owned()),
+            status: PlayerPluginDiagnosticStatus::FrameProcessorSupported,
+            message: Some("fixture frame processor supports CVPixelBuffer".to_owned()),
+            capability: None,
+            participation: PlayerPluginParticipation::Available,
+            details: Vec::new(),
+        }]);
+
+    tracker.mark_selected(&["fixture-frame-processor".to_owned()]);
+    tracker.observe_presented_frame(&["fixture-frame-processor".to_owned()], true, true);
+
+    let diagnostic = tracker
+        .snapshot()
+        .into_iter()
+        .next()
+        .expect("frame processor diagnostic");
+    assert_eq!(
+        diagnostic.participation,
+        PlayerPluginParticipation::Participated
+    );
+}
+
+#[test]
+fn macos_frame_processor_participation_requires_successful_processed_consume() {
+    let make_tracker = || {
+        MacosFrameProcessorParticipationTracker::from_diagnostics(vec![PlayerPluginDiagnostic {
+            path: "/tmp/fixture-frame-processor".to_owned(),
+            plugin_name: Some("fixture-frame-processor".to_owned()),
+            plugin_kind: Some("frame_processor".to_owned()),
+            status: PlayerPluginDiagnosticStatus::FrameProcessorSupported,
+            message: Some("fixture frame processor supports CVPixelBuffer".to_owned()),
+            capability: None,
+            participation: PlayerPluginParticipation::Available,
+            details: Vec::new(),
+        }])
+    };
+
+    let tracker = make_tracker();
+    tracker.mark_selected(&["fixture-frame-processor".to_owned()]);
+    tracker.observe_presented_frame(&["fixture-frame-processor".to_owned()], false, true);
+    assert_eq!(
+        tracker.snapshot()[0].participation,
+        PlayerPluginParticipation::Selected,
+        "diagnostics-only or bypassed output must remain selected"
+    );
+
+    let tracker = make_tracker();
+    tracker.mark_selected(&["fixture-frame-processor".to_owned()]);
+    tracker.observe_presented_frame(&["fixture-frame-processor".to_owned()], true, false);
+    assert_eq!(
+        tracker.snapshot()[0].participation,
+        PlayerPluginParticipation::Selected,
+        "presenter failure must not claim processed participation"
+    );
+
+    let tracker = make_tracker();
+    tracker.mark_selected(&["fixture-frame-processor".to_owned()]);
+    tracker.observe_presented_frame(&["fixture-frame-processor".to_owned()], true, true);
+    assert_eq!(
+        tracker.snapshot()[0].participation,
+        PlayerPluginParticipation::Participated
+    );
+
+    let tracker = make_tracker();
+    tracker.mark_selected(&["fixture-frame-processor".to_owned()]);
+    tracker.mark_fallback();
+    assert_eq!(
+        tracker.snapshot()[0].participation,
+        PlayerPluginParticipation::Fallback
+    );
+}
+
+#[test]
+fn macos_runtime_events_project_live_frame_processor_participation() {
+    let diagnostic = PlayerPluginDiagnostic {
+        path: "/tmp/fixture-frame-processor".to_owned(),
+        plugin_name: Some("fixture-frame-processor".to_owned()),
+        plugin_kind: Some("frame_processor".to_owned()),
+        status: PlayerPluginDiagnosticStatus::FrameProcessorSupported,
+        message: Some("fixture frame processor supports CVPixelBuffer".to_owned()),
+        capability: None,
+        participation: PlayerPluginParticipation::Available,
+        details: Vec::new(),
+    };
+    let tracker = MacosFrameProcessorParticipationTracker::from_diagnostics(vec![diagnostic]);
+    tracker.mark_selected(&["fixture-frame-processor".to_owned()]);
+    tracker.observe_presented_frame(&["fixture-frame-processor".to_owned()], true, true);
+
+    let mut adapter = MacosRuntimeAdapter {
+        inner: Box::new(FakeStrategyRuntime {
+            capabilities: default_software_capabilities(),
+            media_info: media_info_with_codec("H264"),
+            playback_rate: 1.0,
+            progress: PlaybackProgress::new(Duration::ZERO, Some(Duration::from_secs(30))),
+            state: PresentationState::Ready,
+            events: VecDeque::from([PlayerRuntimeEvent::Initialized(startup_with_video_decode(
+                PlayerVideoDecodeInfo {
+                    selected_mode: PlayerVideoDecodeMode::Software,
+                    hardware_available: false,
+                    hardware_backend: None,
+                    fallback_reason: None,
+                },
+            ))]),
+            dropped_events: 0,
+            advance_error: None,
+            dispatch_error: None,
+        }),
+        video_decode: PlayerVideoDecodeInfo {
+            selected_mode: PlayerVideoDecodeMode::Software,
+            hardware_available: false,
+            hardware_backend: None,
+            fallback_reason: None,
+        },
+        plugin_diagnostics: Vec::new(),
+        frame_processor_participation: Some(tracker),
+        has_video_surface: true,
+        runtime_fallback: None,
+        pending_runtime_fallback_events: VecDeque::new(),
+        source_normalizer_packet_session: None,
+    };
+
+    let initialized = adapter.drain_events().into_iter().find_map(|event| {
+        if let PlayerRuntimeEvent::Initialized(startup) = event {
+            Some(startup)
+        } else {
+            None
+        }
+    });
+    let startup = initialized.expect("runtime should emit initialized diagnostics");
+    assert_eq!(
+        startup.plugin_diagnostics[0].participation,
+        PlayerPluginParticipation::Participated
     );
 }
 
@@ -2899,6 +3088,8 @@ fn native_frame_source_seek_flushes_processor_before_decoder_and_packet_session(
             FrameProcessorMode::DiagnosticsOnly,
             vec![RecordingFrameProcessorSession::new(processor_state.clone())],
         )),
+        frame_processor_participation: None,
+        frame_processor_plugin_names: Vec::new(),
         presenter: None,
         presentation_epoch: 0,
     }));
@@ -3044,14 +3235,20 @@ fn dropping_native_frame_source_releases_queued_processor_output() {
             state: session_state.clone(),
         })),
     );
-    let shared = Arc::new(std::sync::Mutex::new(MacosNativeFrameDecoderState {
+    let mut shared_state = MacosNativeFrameDecoderState {
         frame_processor_chain: Some(frame_processor_chain_for_test(
             FrameProcessorMode::DiagnosticsOnly,
             vec![RecordingFrameProcessorSession::new(processor_state.clone())],
         )),
+        frame_processor_participation: None,
+        frame_processor_plugin_names: Vec::new(),
         presenter: None,
         presentation_epoch: 0,
-    }));
+    };
+    let queued_frame =
+        process_macos_native_frame(&mut shared_state, test_native_frame(9, Some(100_000)))
+            .expect("processor should produce a queued frame");
+    let shared = Arc::new(std::sync::Mutex::new(shared_state));
     let (command_tx, _command_rx) = mpsc::channel();
     let (frame_tx, frame_rx) = mpsc::channel();
     let current_generation = Arc::new(AtomicU64::new(0));
@@ -3060,11 +3257,7 @@ fn dropping_native_frame_source_releases_queued_processor_output() {
     frame_tx
         .send(MacosNativeFrameWorkerEvent::Frame {
             generation: 0,
-            frame: Box::new(macos_frame_processor_frame_for_test_with_processor_output(
-                9,
-                Some(100_000),
-                1_009,
-            )),
+            frame: Box::new(queued_frame),
         })
         .expect("queued frame event should be sent");
     let source = MacosNativeFrameVideoSource {
@@ -3169,6 +3362,8 @@ fn native_frame_worker_cancels_permanent_need_more_data_retry() {
         })));
     let shared = Arc::new(Mutex::new(MacosNativeFrameDecoderState {
         frame_processor_chain: None,
+        frame_processor_participation: None,
+        frame_processor_plugin_names: Vec::new(),
         presenter: None,
         presentation_epoch: 0,
     }));
@@ -3283,27 +3478,29 @@ fn macos_native_frame_source_switch_releases_old_source_and_decodes_new_source()
             state: old_session_state.clone(),
         })),
     );
-    let old_shared = Arc::new(std::sync::Mutex::new(MacosNativeFrameDecoderState {
+    let mut old_shared_state = MacosNativeFrameDecoderState {
         frame_processor_chain: Some(frame_processor_chain_for_test(
             FrameProcessorMode::DiagnosticsOnly,
             vec![RecordingFrameProcessorSession::new(
                 old_processor_state.clone(),
             )],
         )),
+        frame_processor_participation: None,
+        frame_processor_plugin_names: Vec::new(),
         presenter: None,
         presentation_epoch: 0,
-    }));
+    };
+    let old_queued_frame =
+        process_macos_native_frame(&mut old_shared_state, test_native_frame(9, Some(100_000)))
+            .expect("old processor should produce a queued frame");
+    let old_shared = Arc::new(std::sync::Mutex::new(old_shared_state));
     let (old_command_tx, _old_command_rx) = mpsc::channel();
     let (old_frame_tx, old_frame_rx) = mpsc::channel();
     let old_outstanding_frames = Arc::new(AtomicUsize::new(1));
     old_frame_tx
         .send(MacosNativeFrameWorkerEvent::Frame {
             generation: 0,
-            frame: Box::new(macos_frame_processor_frame_for_test_with_processor_output(
-                9,
-                Some(100_000),
-                1_009,
-            )),
+            frame: Box::new(old_queued_frame),
         })
         .expect("queued old-source frame event should be sent");
     let old_source = MacosNativeFrameVideoSource {
@@ -4104,6 +4301,8 @@ fn frame_processor_strict_deadline_failure_releases_processor_and_decoder_frames
             FrameProcessorMode::RequireProcessed,
             vec![RecordingFrameProcessorSession::new(state.clone())],
         )),
+        frame_processor_participation: None,
+        frame_processor_plugin_names: Vec::new(),
         presenter: None,
         presentation_epoch: 0,
     };
@@ -5057,6 +5256,8 @@ fn native_frame_source_for_test(
     );
     let shared = Arc::new(std::sync::Mutex::new(MacosNativeFrameDecoderState {
         frame_processor_chain: None,
+        frame_processor_participation: None,
+        frame_processor_plugin_names: Vec::new(),
         presenter: None,
         presentation_epoch: 0,
     }));
@@ -5294,29 +5495,7 @@ fn macos_frame_processor_frame_for_test(
         decoder_frame: frame.clone(),
         presentation_frame: frame,
         processor_outputs: Vec::new(),
-    })
-}
-
-fn macos_frame_processor_frame_for_test_with_processor_output(
-    handle: usize,
-    pts_us: Option<i64>,
-    processor_handle: usize,
-) -> super::MacosFrameProcessorFrame {
-    let frame = test_native_frame(handle, pts_us);
-    let mut processor_frame = frame.clone();
-    processor_frame.handle = processor_handle;
-    processor_frame.metadata.frame_id = Some(processor_handle as u64);
-    super::MacosFrameProcessorFrame(NativeFrameProcessorProcessedFrame {
-        decoder_frame: frame.clone(),
-        presentation_frame: frame,
-        processor_outputs: vec![super::ProcessorOwnedNativeFrame {
-            processor_index: 0,
-            frame: NativeFrame {
-                metadata: processor_frame.metadata.into(),
-                handle: processor_frame.handle,
-                lease_token: None,
-            },
-        }],
+        used_processor_output: false,
     })
 }
 

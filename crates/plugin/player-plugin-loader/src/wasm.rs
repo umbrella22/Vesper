@@ -1,15 +1,16 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use player_plugin::{BenchmarkSink, PipelineEventHook, PluginReference, PluginTransport};
+use player_plugin::{PluginReference, PluginTransport};
 use player_plugin_abi::{BENCHMARK_SINK_INTERFACE_ID, PIPELINE_EVENT_HOOK_INTERFACE_ID};
 use player_plugin_wasm_host::{
     MAX_WASM_PLUGIN_COMPONENT_BYTES, WASM_PLUGIN_WIT_INTERFACE_MAJOR,
-    WASM_PLUGIN_WIT_INTERFACE_MINOR, WasmBenchmarkSinkAdapter, WasmPipelineEventHookAdapter,
-    WasmPluginHostError, WasmPluginRuntime,
+    WASM_PLUGIN_WIT_INTERFACE_MINOR, WasmBenchmarkSinkAdapter, WasmBenchmarkSinkSession,
+    WasmPipelineEventHookAdapter, WasmPipelineEventHookSession, WasmPluginHostError,
+    WasmPluginRuntime,
 };
 use thiserror::Error;
 
@@ -214,8 +215,10 @@ pub enum WasmPluginLoadError {
 
 pub(crate) struct LoadedWasmPlugin {
     plugin_id: String,
-    pipeline_event_hooks: BTreeMap<String, Arc<dyn PipelineEventHook>>,
-    benchmark_sinks: BTreeMap<String, Arc<dyn BenchmarkSink>>,
+    runtime: WasmPluginRuntime,
+    component_bytes: Arc<[u8]>,
+    pipeline_event_hooks: BTreeSet<String>,
+    benchmark_sinks: BTreeSet<String>,
     interfaces: Vec<PluginInterfaceRecord>,
 }
 
@@ -235,30 +238,19 @@ impl LoadedWasmPlugin {
         runtime: &WasmPluginRuntime,
     ) -> Result<Self, WasmPluginLoadError> {
         let bytes = read_component(artifact.path())?;
-        let mut pipeline_event_hooks = BTreeMap::new();
-        let mut benchmark_sinks = BTreeMap::new();
+        let mut pipeline_event_hooks = BTreeSet::new();
+        let mut benchmark_sinks = BTreeSet::new();
         let mut interfaces = Vec::with_capacity(artifact.interfaces.len());
 
         for declaration in &artifact.interfaces {
             if declaration.interface_id == PIPELINE_EVENT_HOOK_INTERFACE_ID.0 {
-                let adapter =
-                    WasmPipelineEventHookAdapter::from_component_bytes(runtime, &bytes)
-                        .map_err(|source| interface_load_error(artifact, declaration, source))?;
-                pipeline_event_hooks.insert(
-                    declaration.instance_id.clone(),
-                    Arc::new(adapter) as Arc<dyn PipelineEventHook>,
-                );
+                WasmPipelineEventHookSession::from_component_bytes(runtime, &bytes)
+                    .map_err(|source| interface_load_error(artifact, declaration, source))?;
+                pipeline_event_hooks.insert(declaration.instance_id.clone());
             } else if declaration.interface_id == BENCHMARK_SINK_INTERFACE_ID.0 {
-                let adapter = WasmBenchmarkSinkAdapter::from_component_bytes(
-                    declaration.instance_id.clone(),
-                    runtime,
-                    &bytes,
-                )
-                .map_err(|source| interface_load_error(artifact, declaration, source))?;
-                benchmark_sinks.insert(
-                    declaration.instance_id.clone(),
-                    Arc::new(adapter) as Arc<dyn BenchmarkSink>,
-                );
+                WasmBenchmarkSinkSession::from_component_bytes(runtime, &bytes)
+                    .map_err(|source| interface_load_error(artifact, declaration, source))?;
+                benchmark_sinks.insert(declaration.instance_id.clone());
             }
             interfaces.push(PluginInterfaceRecord {
                 metadata: PluginInterfaceMetadata {
@@ -273,6 +265,8 @@ impl LoadedWasmPlugin {
 
         Ok(Self {
             plugin_id: artifact.plugin_id.clone(),
+            runtime: runtime.clone(),
+            component_bytes: bytes.into(),
             pipeline_event_hooks,
             benchmark_sinks,
             interfaces,
@@ -287,26 +281,63 @@ impl LoadedWasmPlugin {
         &self.interfaces
     }
 
-    pub(crate) fn resolve_pipeline_event_hook(
+    pub(crate) fn select_pipeline_event_hook(
         &self,
         reference: &PluginReference,
-    ) -> Result<(String, Arc<dyn PipelineEventHook>), PluginSelectionError> {
-        self.select(reference, "PipelineEventHook", &self.pipeline_event_hooks)
+    ) -> Result<String, PluginSelectionError> {
+        self.select_instance(reference, "PipelineEventHook", &self.pipeline_event_hooks)
     }
 
-    pub(crate) fn resolve_benchmark_sink(
+    pub(crate) fn instantiate_pipeline_event_hook(
         &self,
         reference: &PluginReference,
-    ) -> Result<(String, Arc<dyn BenchmarkSink>), PluginSelectionError> {
-        self.select(reference, "BenchmarkSink", &self.benchmark_sinks)
+    ) -> Result<(String, Arc<WasmPipelineEventHookAdapter>), PluginSelectionError> {
+        let instance_id = self.select_pipeline_event_hook(reference)?;
+        let adapter = WasmPipelineEventHookAdapter::from_component_bytes(
+            &self.runtime,
+            &self.component_bytes,
+        )
+        .map_err(|source| PluginSelectionError::WasmInstantiation {
+            plugin_id: self.plugin_id.clone(),
+            interface: "PipelineEventHook",
+            instance_id: instance_id.clone(),
+            message: source.to_string(),
+        })?;
+        Ok((instance_id, Arc::new(adapter)))
     }
 
-    fn select<T: ?Sized>(
+    pub(crate) fn select_benchmark_sink(
+        &self,
+        reference: &PluginReference,
+    ) -> Result<String, PluginSelectionError> {
+        self.select_instance(reference, "BenchmarkSink", &self.benchmark_sinks)
+    }
+
+    pub(crate) fn instantiate_benchmark_sink(
+        &self,
+        reference: &PluginReference,
+    ) -> Result<(String, Arc<WasmBenchmarkSinkAdapter>), PluginSelectionError> {
+        let instance_id = self.select_benchmark_sink(reference)?;
+        let adapter = WasmBenchmarkSinkAdapter::from_component_bytes(
+            instance_id.clone(),
+            &self.runtime,
+            &self.component_bytes,
+        )
+        .map_err(|source| PluginSelectionError::WasmInstantiation {
+            plugin_id: self.plugin_id.clone(),
+            interface: "BenchmarkSink",
+            instance_id: instance_id.clone(),
+            message: source.to_string(),
+        })?;
+        Ok((instance_id, Arc::new(adapter)))
+    }
+
+    fn select_instance(
         &self,
         reference: &PluginReference,
         interface: &'static str,
-        capabilities: &BTreeMap<String, Arc<T>>,
-    ) -> Result<(String, Arc<T>), PluginSelectionError> {
+        capabilities: &BTreeSet<String>,
+    ) -> Result<String, PluginSelectionError> {
         if reference.transport() != PluginTransport::Wasm {
             return Err(PluginSelectionError::TransportMismatch {
                 expected: PluginTransport::Wasm,
@@ -320,15 +351,13 @@ impl LoadedWasmPlugin {
             });
         }
         if let Some(instance_id) = reference.capability_instance_id() {
-            return capabilities
-                .get(instance_id)
-                .cloned()
-                .map(|capability| (instance_id.to_owned(), capability))
-                .ok_or_else(|| PluginSelectionError::InstanceNotFound {
+            return capabilities.get(instance_id).cloned().ok_or_else(|| {
+                PluginSelectionError::InstanceNotFound {
                     plugin_id: self.plugin_id.clone(),
                     interface,
                     instance_id: instance_id.to_owned(),
-                });
+                }
+            });
         }
 
         match capabilities.len() {
@@ -336,13 +365,12 @@ impl LoadedWasmPlugin {
                 plugin_id: self.plugin_id.clone(),
                 interface,
             }),
-            1 => capabilities
-                .first_key_value()
-                .map(|(instance_id, capability)| (instance_id.clone(), capability.clone()))
-                .ok_or_else(|| PluginSelectionError::InterfaceNotFound {
+            1 => capabilities.first().cloned().ok_or_else(|| {
+                PluginSelectionError::InterfaceNotFound {
                     plugin_id: self.plugin_id.clone(),
                     interface,
-                }),
+                }
+            }),
             count => Err(PluginSelectionError::Ambiguous {
                 plugin_id: self.plugin_id.clone(),
                 interface,

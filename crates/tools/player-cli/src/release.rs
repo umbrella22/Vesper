@@ -479,6 +479,39 @@ impl ReleaseContext {
             }
         }
 
+        for manifest in collect_plugin_cargo_manifests(&self.root)? {
+            let source = read_required_text(&manifest)?;
+            validate_toml(&manifest, &source)?;
+            let package_name = cargo_package_name(&manifest, &source)?;
+            let updated = replace_toml_section_string(
+                &source,
+                "package",
+                "version",
+                version,
+                "plugin Cargo package version",
+            )?;
+            let updated = replace_path_dependency_versions(&updated, version)?;
+            validate_toml(&manifest, &updated)?;
+            plan.insert(manifest.clone(), updated)?;
+
+            let lock_path = manifest
+                .parent()
+                .ok_or_else(|| {
+                    ReleaseError::storage(format!(
+                        "plugin Cargo manifest has no parent directory: '{}'",
+                        manifest.display()
+                    ))
+                })?
+                .join("Cargo.lock");
+            if lock_path.is_file() {
+                let lock = read_required_text(&lock_path)?;
+                validate_toml(&lock_path, &lock)?;
+                let updated = replace_plugin_cargo_lock_versions(&lock, version, &package_name)?;
+                validate_toml(&lock_path, &updated)?;
+                plan.insert(lock_path, updated)?;
+            }
+        }
+
         let plugin_host_sdk = plugin_host_sdk_requirement(&metadata.version)?;
         let plugin_manifests = collect_plugin_manifests(&self.root)?;
         for manifest in plugin_manifests {
@@ -1151,6 +1184,33 @@ fn replace_toml_section_string(
 }
 
 fn replace_cargo_lock_versions(source: &str, version: &str) -> ReleaseResult<String> {
+    replace_cargo_lock_versions_matching(
+        source,
+        version,
+        |name| name == "basic-player" || name.starts_with("player-"),
+        "Cargo.lock does not contain Vesper workspace packages",
+    )
+}
+
+fn replace_plugin_cargo_lock_versions(
+    source: &str,
+    version: &str,
+    package_name: &str,
+) -> ReleaseResult<String> {
+    replace_cargo_lock_versions_matching(
+        source,
+        version,
+        |name| name == package_name || name.starts_with("player-"),
+        "plugin Cargo.lock does not contain its package or Vesper path dependencies",
+    )
+}
+
+fn replace_cargo_lock_versions_matching(
+    source: &str,
+    version: &str,
+    matches_package: impl Fn(&str) -> bool,
+    empty_message: &str,
+) -> ReleaseResult<String> {
     let name_expression = compile_regex(r#"^name = \"([^\"]+)\"$"#, "Cargo.lock package name")?;
     let version_expression =
         compile_regex(r#"^version = \"[^\"]+\"$"#, "Cargo.lock package version")?;
@@ -1166,9 +1226,7 @@ fn replace_cargo_lock_versions(source: &str, version: &str) -> ReleaseResult<Str
             return None;
         }
         if version_expression.is_match(line)
-            && current_name
-                .as_deref()
-                .is_some_and(|name| name == "basic-player" || name.starts_with("player-"))
+            && current_name.as_deref().is_some_and(&matches_package)
         {
             replacements += 1;
             return Some(format!("version = \"{version}\""));
@@ -1176,11 +1234,26 @@ fn replace_cargo_lock_versions(source: &str, version: &str) -> ReleaseResult<Str
         None
     });
     if replacements == 0 {
-        return Err(ReleaseError::storage(
-            "Cargo.lock does not contain Vesper workspace packages",
-        ));
+        return Err(ReleaseError::storage(empty_message));
     }
     Ok(output)
+}
+
+fn cargo_package_name(path: &Path, source: &str) -> ReleaseResult<String> {
+    let value = toml::from_str::<toml::Value>(source).map_err(|error| {
+        ReleaseError::storage(format!("invalid TOML in '{}': {error}", path.display()))
+    })?;
+    value
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            ReleaseError::storage(format!(
+                "plugin Cargo manifest has no package name: '{}'",
+                path.display()
+            ))
+        })
 }
 
 fn replace_path_dependency_versions(source: &str, version: &str) -> ReleaseResult<String> {
@@ -1321,12 +1394,16 @@ fn update_changelog(source: &str, version: &str, release_date: &str) -> ReleaseR
             "Unable to update changelog heading for {version}."
         )));
     } else {
-        let unreleased = compile_regex(
+        let versioned_unreleased = compile_regex(
             r"(?m)^## [0-9]+\.[0-9]+\.[0-9]+ - Unreleased$",
             "unreleased changelog heading",
         )?;
-        if unreleased.is_match(source) {
-            unreleased.replace(source, heading.as_str()).into_owned()
+        if versioned_unreleased.is_match(source) {
+            versioned_unreleased
+                .replace(source, heading.as_str())
+                .into_owned()
+        } else if source.lines().any(|line| line == "## Unreleased") {
+            source.replacen("## Unreleased", &format!("## Unreleased\n\n{heading}"), 1)
         } else if let Some(rest) = source.strip_prefix("# Changelog\n\n") {
             format!(
                 "# Changelog\n\n{heading}\n\n- Prepared package metadata for the {version} release.\n\n{rest}"
@@ -1375,6 +1452,14 @@ fn collect_plugin_manifests(root: &Path) -> ReleaseResult<Vec<PathBuf>> {
         return Ok(Vec::new());
     }
     collect_named_files(&directory, "vesper-plugin.toml")
+}
+
+fn collect_plugin_cargo_manifests(root: &Path) -> ReleaseResult<Vec<PathBuf>> {
+    let directory = root.join("plugins");
+    if !directory.is_dir() {
+        return Ok(Vec::new());
+    }
+    collect_named_files(&directory, "Cargo.toml")
 }
 
 fn collect_named_files(root: &Path, name: &str) -> ReleaseResult<Vec<PathBuf>> {
@@ -1658,6 +1743,7 @@ fn verify_product_version(
 
     verify_cargo_lock(root, version.as_str(), &mut issues)?;
     verify_path_dependency_versions(root, version.as_str(), &mut issues)?;
+    verify_plugin_cargo_versions(root, version.as_str(), &mut issues)?;
     verify_plugin_manifest_versions(root, version, &mut issues)?;
     verify_stale_version_fields(root, &mut issues)?;
     verify_release_hardcoding(root, &mut issues)?;
@@ -1764,7 +1850,9 @@ fn verify_path_dependency_versions(
         r#"^player-[A-Za-z0-9_-]+ = \{[^\r\n]*version = \"([0-9]+\.[0-9]+\.[0-9]+)\"[^\r\n]*path = [^\r\n]*\}$"#,
         "Cargo path dependency version",
     )?;
-    for manifest in collect_named_files(&root.join("crates"), "Cargo.toml")? {
+    let mut manifests = collect_named_files(&root.join("crates"), "Cargo.toml")?;
+    manifests.extend(collect_plugin_cargo_manifests(root)?);
+    for manifest in manifests {
         let source = read_required_text(&manifest)?;
         for line in source.lines() {
             if let Some(captures) = expression.captures(line)
@@ -1776,6 +1864,67 @@ fn verify_path_dependency_versions(
                     "Cargo path dependency version mismatch.\n  {}\n  {line}",
                     manifest.display()
                 ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_plugin_cargo_versions(
+    root: &Path,
+    version: &str,
+    issues: &mut Vec<String>,
+) -> ReleaseResult<()> {
+    for manifest in collect_plugin_cargo_manifests(root)? {
+        let source = read_required_text(&manifest)?;
+        let value = toml::from_str::<toml::Value>(&source).map_err(|error| {
+            ReleaseError::storage(format!("invalid TOML in '{}': {error}", manifest.display()))
+        })?;
+        let package_name = cargo_package_name(&manifest, &source)?;
+        let package_version = value
+            .get("package")
+            .and_then(|package| package.get("version"))
+            .and_then(toml::Value::as_str);
+        if package_version != Some(version) {
+            issues.push(format!(
+                "Plugin Cargo package version mismatch.\n  {}\n  expected {version}, found {}",
+                manifest.display(),
+                package_version.unwrap_or("<missing>")
+            ));
+        }
+
+        let lock_path = manifest
+            .parent()
+            .ok_or_else(|| {
+                ReleaseError::storage(format!(
+                    "plugin Cargo manifest has no parent directory: '{}'",
+                    manifest.display()
+                ))
+            })?
+            .join("Cargo.lock");
+        if !lock_path.is_file() {
+            continue;
+        }
+        let lock = read_required_text(&lock_path)?;
+        let value = toml::from_str::<toml::Value>(&lock).map_err(|error| {
+            ReleaseError::storage(format!(
+                "invalid TOML in '{}': {error}",
+                lock_path.display()
+            ))
+        })?;
+        if let Some(packages) = value.get("package").and_then(toml::Value::as_array) {
+            for package in packages {
+                let name = package.get("name").and_then(toml::Value::as_str);
+                let package_version = package.get("version").and_then(toml::Value::as_str);
+                if let (Some(name), Some(package_version)) = (name, package_version)
+                    && (name == package_name || name.starts_with("player-"))
+                    && package_version != version
+                {
+                    issues.push(format!(
+                        "Plugin Cargo.lock package version mismatch.\n  {}\n  expected {name} {version}, found {package_version}",
+                        lock_path.display()
+                    ));
+                }
             }
         }
     }
@@ -2045,6 +2194,32 @@ mod tests {
         );
         write_fixture(
             root,
+            "plugins/fixture/Cargo.toml",
+            concat!(
+                "[package]\n",
+                "name = \"vesper-plugin-fixture\"\n",
+                "version = \"0.4.0\"\n",
+                "edition = \"2024\"\n\n",
+                "[dependencies]\n",
+                "player-plugin = { version = \"0.4.0\", path = \"../../crates/player-plugin\" }\n\n",
+                "[workspace]\n",
+            ),
+        );
+        write_fixture(
+            root,
+            "plugins/fixture/Cargo.lock",
+            concat!(
+                "version = 4\n\n",
+                "[[package]]\n",
+                "name = \"player-plugin\"\n",
+                "version = \"0.4.0\"\n\n",
+                "[[package]]\n",
+                "name = \"vesper-plugin-fixture\"\n",
+                "version = \"0.4.0\"\n",
+            ),
+        );
+        write_fixture(
+            root,
             "lib/android/build.gradle.kts",
             concat!(
                 "val vesperDefaultPublicationVersion = \"0.4.0\"\n",
@@ -2214,6 +2389,15 @@ mod tests {
     }
 
     #[test]
+    fn changelog_update_freezes_generic_unreleased_content() {
+        let source = "# Changelog\n\n## Unreleased\n\n- Work.\n";
+        assert_eq!(
+            update_changelog(source, "0.5.0", "2026-08-01").expect("changelog"),
+            "# Changelog\n\n## Unreleased\n\n## 0.5.0 - 2026-08-01\n\n- Work.\n"
+        );
+    }
+
+    #[test]
     fn path_dependency_update_changes_only_versioned_player_paths() {
         let source = concat!(
             "player-plugin = { version = \"0.4.0\", path = \"../plugin\" }\n",
@@ -2330,6 +2514,13 @@ mod tests {
                 .expect("plugin manifest");
         assert!(plugin_manifest.contains("version = \"0.4.1\""));
         assert!(plugin_manifest.contains("host_sdk = \">=0.4.1, <0.5.0\""));
+        let plugin_cargo = fs::read_to_string(directory.path().join("plugins/fixture/Cargo.toml"))
+            .expect("plugin Cargo manifest");
+        assert!(plugin_cargo.contains("version = \"0.4.1\""));
+        assert!(plugin_cargo.contains("player-plugin = { version = \"0.4.1\""));
+        let plugin_lock = fs::read_to_string(directory.path().join("plugins/fixture/Cargo.lock"))
+            .expect("plugin Cargo lock");
+        assert_eq!(plugin_lock.matches("version = \"0.4.1\"").count(), 2);
     }
 
     #[test]

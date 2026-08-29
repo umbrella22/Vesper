@@ -11,14 +11,16 @@ use player_plugin_abi::export::{
     ExportInvocation, ExportOperation,
 };
 use player_plugin_abi::{
-    VESPER_MAX_LEASES_PER_SESSION, VESPER_MAX_PACKET_BYTES, VESPER_RELEASE_DISCARDED,
-    VESPER_RELEASE_PRESENTED, status,
+    VESPER_MAX_LEASES_PER_SESSION, VESPER_MAX_PACKET_BYTES, VESPER_MAX_PCM_BYTES,
+    VESPER_RELEASE_DISCARDED, VESPER_RELEASE_PRESENTED, status,
 };
 
 use super::session::{SessionGuard, SessionRegistry, SessionRegistryError};
 use super::{decode, encode, failure, json_invocation, unexpected_operation};
 use crate::{
-    DecoderError, DecoderNativeFrame, DecoderOperationStatus, DecoderReceiveNativeFrameMetadata,
+    AudioPlaybackPolicy, AudioProcessorError, AudioProcessorOperationStatus,
+    AudioProcessorPluginFactory, AudioProcessorSession, AudioProcessorSessionConfig, DecoderError,
+    DecoderNativeFrame, DecoderOperationStatus, DecoderPcmFrame, DecoderReceiveNativeFrameMetadata,
     DecoderReceiveNativeFrameOutput, DecoderReceivePcmFrameMetadata, DecoderReceivePcmFrameOutput,
     DecoderSessionConfig, FrameProcessorError, FrameProcessorInputFrame,
     FrameProcessorOperationStatus, FrameProcessorPluginFactory, FrameProcessorReceiveFrameMetadata,
@@ -278,10 +280,15 @@ where
                 let mut session = self.acquire(session_id)?;
                 let state = session.value_mut().ok_or_else(contract_failure)?;
                 match state.session.receive_pcm_frame().map_err(decoder_failure)? {
-                    DecoderReceivePcmFrameOutput::Frame(frame) => Ok(ExportInvocation::PcmFrame {
-                        metadata: encode(&DecoderReceivePcmFrameMetadata::frame(frame.metadata))?,
-                        data: frame.data,
-                    }),
+                    DecoderReceivePcmFrameOutput::Frame(frame) => {
+                        frame.validate().map_err(decoder_failure)?;
+                        Ok(ExportInvocation::PcmFrame {
+                            metadata: encode(&DecoderReceivePcmFrameMetadata::frame(
+                                frame.metadata,
+                            ))?,
+                            data: frame.data,
+                        })
+                    }
                     DecoderReceivePcmFrameOutput::NeedMoreInput => Ok(ExportInvocation::PcmFrame {
                         metadata: encode(&DecoderReceivePcmFrameMetadata::need_more_input())?,
                         data: Vec::new(),
@@ -642,6 +649,247 @@ fn frame_processor_failure(error: FrameProcessorError) -> ExportFailure {
         FrameProcessorError::Backpressure { .. } => status::EXHAUSTED,
         FrameProcessorError::Timeout { .. } => status::TIMEOUT,
         _ => status::FAILURE,
+    };
+    failure(raw_status, &error)
+}
+
+pub(super) struct AudioProcessorAdapter<F> {
+    instance_id: String,
+    factory: F,
+    sessions: Mutex<SessionRegistry<Box<dyn AudioProcessorSession>>>,
+}
+
+impl<F> AudioProcessorAdapter<F>
+where
+    F: AudioProcessorPluginFactory,
+{
+    pub(super) fn new(instance_id: String, factory: F) -> Self {
+        Self {
+            instance_id,
+            factory,
+            sessions: Mutex::new(SessionRegistry::default()),
+        }
+    }
+
+    fn acquire(
+        &self,
+        session_id: u64,
+    ) -> Result<SessionGuard<Box<dyn AudioProcessorSession>>, ExportFailure> {
+        lock_registry(&self.sessions)
+            .acquire(session_id)
+            .map_err(registry_failure)
+    }
+
+    fn close(&self, session_id: u64) -> Result<ExportInvocation, ExportFailure> {
+        let closing = lock_registry(&self.sessions)
+            .begin_close(session_id)
+            .map_err(registry_failure)?;
+        let Some(mut closing) = closing else {
+            return json_invocation(&AudioProcessorOperationStatus { completed: true });
+        };
+        let close_result = closing.value_mut().ok_or_else(contract_failure)?.close();
+        close_result.map_err(audio_processor_failure)?;
+        closing.commit();
+        json_invocation(&AudioProcessorOperationStatus { completed: true })
+    }
+}
+
+impl<F> RawExportInterface for AudioProcessorAdapter<F>
+where
+    F: AudioProcessorPluginFactory,
+{
+    fn kind(&self) -> ExportInterfaceKind {
+        ExportInterfaceKind::AudioProcessor
+    }
+
+    fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    fn invoke(&self, operation: ExportOperation<'_>) -> Result<ExportInvocation, ExportFailure> {
+        match operation {
+            ExportOperation::Capabilities => json_invocation(&self.factory.capabilities()),
+            ExportOperation::OpenSession { config_json } => {
+                let config =
+                    decode::<AudioProcessorSessionConfig>(config_json).map_err(|message| {
+                        audio_processor_failure(AudioProcessorError::payload_codec(message))
+                    })?;
+                validate_audio_session_config(&self.factory.capabilities(), &config)?;
+                let mut session = self
+                    .factory
+                    .open_session(&config)
+                    .map_err(audio_processor_failure)?;
+                if !session
+                    .capabilities()
+                    .supports_input_format(&config.input_metadata.format)
+                    || !session
+                        .capabilities()
+                        .supports_playback_policy(config.playback_policy)
+                {
+                    attempt_open_failure_cleanup(|| {
+                        let _ = session.close();
+                    });
+                    return Err(audio_processor_failure(
+                        AudioProcessorError::UnsupportedPlaybackPolicy,
+                    ));
+                }
+                match catch_unwind(AssertUnwindSafe(|| {
+                    session.configure(config.playback_policy)
+                })) {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        attempt_open_failure_cleanup(|| {
+                            let _ = session.close();
+                        });
+                        return Err(audio_processor_failure(error));
+                    }
+                    Err(panic) => {
+                        attempt_open_failure_cleanup(|| {
+                            let _ = session.close();
+                        });
+                        resume_unwind(panic);
+                    }
+                }
+                let session_info = match catch_unwind(AssertUnwindSafe(|| session.session_info())) {
+                    Ok(session_info) => session_info,
+                    Err(panic) => {
+                        attempt_open_failure_cleanup(|| {
+                            let _ = session.close();
+                        });
+                        resume_unwind(panic);
+                    }
+                };
+                let payload = match encode(&session_info) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        attempt_open_failure_cleanup(|| {
+                            let _ = session.close();
+                        });
+                        return Err(error);
+                    }
+                };
+                let session_id = match lock_registry(&self.sessions).insert(session) {
+                    Ok(session_id) => session_id,
+                    Err((error, mut session)) => {
+                        let _ = session.close();
+                        return Err(registry_failure(error));
+                    }
+                };
+                Ok(ExportInvocation::OpenSession {
+                    session_id,
+                    payload,
+                })
+            }
+            ExportOperation::AudioConfigure {
+                session_id,
+                policy_json,
+            } => {
+                let policy = decode::<AudioPlaybackPolicy>(policy_json).map_err(|message| {
+                    audio_processor_failure(AudioProcessorError::payload_codec(message))
+                })?;
+                policy.validate().map_err(audio_processor_failure)?;
+                let mut session = self.acquire(session_id)?;
+                let session = session.value_mut().ok_or_else(contract_failure)?;
+                if !session.capabilities().supports_playback_policy(policy) {
+                    return Err(audio_processor_failure(
+                        AudioProcessorError::UnsupportedPlaybackPolicy,
+                    ));
+                }
+                session.configure(policy).map_err(audio_processor_failure)?;
+                json_invocation(&AudioProcessorOperationStatus { completed: true })
+            }
+            ExportOperation::AudioProcess {
+                session_id,
+                metadata_json,
+                pcm_data,
+            } => {
+                if pcm_data.len() as u64 > VESPER_MAX_PCM_BYTES {
+                    return Err(audio_processor_failure(AudioProcessorError::InvalidPcm(
+                        format!(
+                            "PCM payload exceeds the {VESPER_MAX_PCM_BYTES}-byte protocol limit"
+                        ),
+                    )));
+                }
+                let metadata = decode(metadata_json).map_err(|message| {
+                    audio_processor_failure(AudioProcessorError::payload_codec(message))
+                })?;
+                let frame = DecoderPcmFrame {
+                    metadata,
+                    data: pcm_data.to_vec(),
+                };
+                frame.validate().map_err(|error| {
+                    audio_processor_failure(AudioProcessorError::InvalidPcm(error.to_string()))
+                })?;
+                let mut session = self.acquire(session_id)?;
+                let output = session
+                    .value_mut()
+                    .ok_or_else(contract_failure)?
+                    .process(frame)
+                    .map_err(audio_processor_failure)?;
+                output.validate().map_err(|error| {
+                    audio_processor_failure(AudioProcessorError::abi_violation(format!(
+                        "processor returned invalid PCM: {error}"
+                    )))
+                })?;
+                if output.data.len() as u64 > VESPER_MAX_PCM_BYTES {
+                    return Err(audio_processor_failure(AudioProcessorError::abi_violation(
+                        format!(
+                            "processor output exceeds the {VESPER_MAX_PCM_BYTES}-byte protocol limit"
+                        ),
+                    )));
+                }
+                Ok(ExportInvocation::PcmFrame {
+                    metadata: encode(&output.metadata)?,
+                    data: output.data,
+                })
+            }
+            ExportOperation::SessionFlush { session_id, .. } => {
+                let mut session = self.acquire(session_id)?;
+                session
+                    .value_mut()
+                    .ok_or_else(contract_failure)?
+                    .flush()
+                    .map_err(audio_processor_failure)?;
+                json_invocation(&AudioProcessorOperationStatus { completed: true })
+            }
+            ExportOperation::SessionClose { session_id, .. } => self.close(session_id),
+            _ => Err(unexpected_operation("audio processor")),
+        }
+    }
+}
+
+fn validate_audio_session_config(
+    capabilities: &crate::AudioProcessorCapabilities,
+    config: &AudioProcessorSessionConfig,
+) -> Result<(), ExportFailure> {
+    config.input_metadata.validate().map_err(|error| {
+        audio_processor_failure(AudioProcessorError::InvalidPcm(error.to_string()))
+    })?;
+    config
+        .playback_policy
+        .validate()
+        .map_err(audio_processor_failure)?;
+    if !capabilities.supports_input_format(&config.input_metadata.format)
+        || !capabilities.supports_playback_policy(config.playback_policy)
+    {
+        return Err(audio_processor_failure(
+            AudioProcessorError::UnsupportedPlaybackPolicy,
+        ));
+    }
+    Ok(())
+}
+
+fn audio_processor_failure(error: AudioProcessorError) -> ExportFailure {
+    let raw_status = match error {
+        AudioProcessorError::InvalidCapacity
+        | AudioProcessorError::InvalidPcm(_)
+        | AudioProcessorError::InvalidPlaybackRate { .. }
+        | AudioProcessorError::PayloadCodec(_) => status::INVALID_ARGUMENT,
+        AudioProcessorError::UnsupportedPlaybackPolicy => status::UNSUPPORTED,
+        AudioProcessorError::AbiViolation(_) => status::ABI_VIOLATION,
+        AudioProcessorError::Backpressure(_) => status::EXHAUSTED,
+        AudioProcessorError::Timeout(_) => status::TIMEOUT,
+        AudioProcessorError::Closed | AudioProcessorError::Processor(_) => status::FAILURE,
     };
     failure(raw_status, &error)
 }

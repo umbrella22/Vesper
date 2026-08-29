@@ -1,0 +1,16 @@
+[package]
+name = "vesper-audio-processor-diagnostic"
+version = "0.5.0"
+edition = "2024"
+rust-version = "1.98"
+license = "Apache-2.0"
+
+[lib]
+name = "vesper_audio_processor_diagnostic"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+player-plugin = { path = "../../crates/plugin/player-plugin" }
+wsola = "0.1.0"
+
+[workspace]

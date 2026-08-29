@@ -36,6 +36,7 @@ pub enum PluginCapability {
     BenchmarkSink,
     NativeDecoder,
     FrameProcessor,
+    AudioProcessor,
     SourceNormalizerPacket,
     SourceNormalizerResource,
 }
@@ -48,6 +49,7 @@ impl From<ExportInterfaceKind> for PluginCapability {
             ExportInterfaceKind::BenchmarkSink => Self::BenchmarkSink,
             ExportInterfaceKind::NativeDecoder => Self::NativeDecoder,
             ExportInterfaceKind::FrameProcessor => Self::FrameProcessor,
+            ExportInterfaceKind::AudioProcessor => Self::AudioProcessor,
             ExportInterfaceKind::SourceNormalizerPacket => Self::SourceNormalizerPacket,
             ExportInterfaceKind::SourceNormalizerResource => Self::SourceNormalizerResource,
         }
@@ -184,6 +186,25 @@ impl PluginBuilder {
             ExportInterfaceKind::FrameProcessor,
             instance_id.clone(),
             Arc::new(session_capabilities::FrameProcessorAdapter::new(
+                instance_id,
+                factory,
+            )),
+        )
+    }
+
+    pub fn with_audio_processor<F>(
+        self,
+        instance_id: impl Into<String>,
+        factory: F,
+    ) -> Result<Self, PluginBuildError>
+    where
+        F: crate::AudioProcessorPluginFactory + 'static,
+    {
+        let instance_id = instance_id.into();
+        self.with_interface(
+            ExportInterfaceKind::AudioProcessor,
+            instance_id.clone(),
+            Arc::new(session_capabilities::AudioProcessorAdapter::new(
                 instance_id,
                 factory,
             )),

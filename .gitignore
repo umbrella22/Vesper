@@ -144,3 +144,4 @@ dist/*
 
 # Vesper plugin build staging
 plugins/*/dist/
+plugins/*/target/

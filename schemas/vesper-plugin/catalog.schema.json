@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vesper-player.dev/schemas/plugin/catalog.schema.json",
+  "title": "Vesper Plugin Artifact Catalog",
+  "description": "Pure artifact metadata. Catalog records never contain a live plugin owner or session handle.",
+  "type": "array",
+  "maxItems": 1024,
+  "items": { "$ref": "#/$defs/record" },
+  "$defs": {
+    "reverseDns": {
+      "type": "string",
+      "pattern": "^[a-z](?:[a-z0-9-]*[a-z0-9])?\\.[a-z](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z](?:[a-z0-9-]*[a-z0-9])?)*$",
+      "maxLength": 255
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interface_id", "instance_id"],
+      "properties": {
+        "interface_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "instance_id": { "$ref": "#/$defs/reverseDns" }
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "requirement"],
+      "properties": {
+        "service": { "$ref": "#/$defs/reverseDns" },
+        "requirement": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "provision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "version"],
+      "properties": {
+        "service": { "$ref": "#/$defs/reverseDns" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "runtimeDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "linkage", "compatibility_key"],
+      "properties": {
+        "id": { "$ref": "#/$defs/reverseDns" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "linkage": { "enum": ["dynamic", "static", "system"] },
+        "compatibility_key": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "resourcePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_memory_bytes": { "type": "integer", "minimum": 1 },
+        "max_queue_depth": { "type": "integer", "minimum": 1 },
+        "max_call_micros": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "plugin_id",
+        "version",
+        "publisher",
+        "transport",
+        "target",
+        "format",
+        "architecture",
+        "abi_major",
+        "abi_minor_min",
+        "abi_minor_max",
+        "capabilities",
+        "requires",
+        "provides",
+        "runtime_dependencies",
+        "resource_policy",
+        "migration_version"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "plugin_id": { "$ref": "#/$defs/reverseDns" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "publisher": { "$ref": "#/$defs/reverseDns" },
+        "transport": { "enum": ["native", "wasm"] },
+        "target": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "format": { "enum": ["dylib", "aar", "xcframework", "wasm-component"] },
+        "architecture": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "abi_major": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "abi_minor_min": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "abi_minor_max": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/capability" }
+        },
+        "requires": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/requirement" }
+        },
+        "provides": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/provision" }
+        },
+        "runtime_dependencies": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/runtimeDependency" }
+        },
+        "resource_policy": { "$ref": "#/$defs/resourcePolicy" },
+        "migration_version": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "transport": { "const": "native" } } },
+          "then": {
+            "properties": {
+              "format": { "enum": ["dylib", "aar", "xcframework"] }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "transport": { "const": "wasm" } } },
+          "then": { "properties": { "format": { "const": "wasm-component" } } }
+        }
+      ]
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "descriptor",
+        "artifact_path",
+        "artifact_sha256",
+        "source",
+        "diagnostics"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "descriptor": { "$ref": "#/$defs/descriptor" },
+        "artifact_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "artifact_sha256": { "$ref": "#/$defs/sha256" },
+        "source": { "enum": ["package", "installed", "embedded", "development"] },
+        "diagnostics": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/diagnostic" }
+        }
+      }
+    }
+  }
+}

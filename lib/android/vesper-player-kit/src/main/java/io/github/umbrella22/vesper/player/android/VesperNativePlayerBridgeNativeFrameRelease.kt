@@ -176,6 +176,12 @@ internal fun VesperNativePlayerBridge.nativeFramePipelineCounters(): Map<String,
         ?: emptyMap()
 }
 
+internal fun nativeFramePipelineCountersFromStatus(status: Map<String, Any?>): Map<String, Any?> =
+    (status["counters"] as? Map<*, *>)
+        ?.mapNotNull { (key, value) -> key?.toString()?.let { it to value } }
+        ?.toMap()
+        ?: emptyMap()
+
 internal fun VesperNativePlayerBridge.nativeFramePipelineStringValue(key: String): String? =
     if (nativeFramePipelineLastStatus != null) {
         nativeFramePipelineLastStatus?.get(key)?.toString()

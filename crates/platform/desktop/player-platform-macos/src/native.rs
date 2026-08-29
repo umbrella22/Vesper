@@ -121,7 +121,7 @@ pub enum MacosNativeSessionUpdate {
     FirstFrameReady { position: Duration },
     InterruptionChanged { interrupted: bool },
     SeekCompleted { position: Duration },
-    Error(PlayerError),
+    Error(Box<PlayerError>),
 }
 
 #[derive(Debug, Clone)]
@@ -592,10 +592,10 @@ impl MacosManagedNativeSessionController {
     }
 
     pub fn report_error(&self, code: PlayerErrorCode, message: impl Into<String>) {
-        self.push_update(MacosNativeSessionUpdate::Error(PlayerError::new(
+        self.push_update(MacosNativeSessionUpdate::Error(Box::new(PlayerError::new(
             code,
             message.into(),
-        )));
+        ))));
     }
 
     pub fn push_update(&self, update: MacosNativeSessionUpdate) {
@@ -693,7 +693,7 @@ impl<C: MacosNativeCommandSink> MacosManagedNativeSession<C> {
                     push_runtime_event_bounded(
                         &mut self.events,
                         &mut self.dropped_events,
-                        PlayerRuntimeEvent::Error(error),
+                        PlayerRuntimeEvent::Error(*error),
                     );
                 }
             }

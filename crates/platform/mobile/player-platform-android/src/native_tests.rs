@@ -3513,6 +3513,7 @@ impl AndroidNativeFrameProcessorChain for TestProcessorChain {
         Ok(AndroidNativeFramePipelineProcessedFrame {
             decoder_frame: frame,
             presentation_frame: output.clone().into(),
+            used_processor_output: true,
             processor_outputs: vec![AndroidNativeFrameProcessorOwnedFrame {
                 processor_index: 0,
                 frame: output,

@@ -47,7 +47,7 @@ class ExampleDolbyCatalogPanel extends StatelessWidget {
       palette: palette,
       title: 'Dolby 验收',
       subtitle:
-          'Dolby Browser Test Kit 公开信号，只走 direct native 播放；不进入下载、预加载、外部投放或插件处理。',
+          'Dolby Vision Online Delivery Kit 公开信号，只走 direct native 播放；不进入下载、预加载、外部投放或插件处理。',
       accent: const Color(0xFF7A4DFF),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

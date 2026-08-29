@@ -678,7 +678,8 @@ impl DesktopPlayerApp {
         let width = self.render_config.width.max(1);
         let height = self.render_config.height.max(1);
         let mut bytes = vec![0; width as usize * height as usize * 4];
-        for chunk in bytes.chunks_exact_mut(4) {
+        let (chunks, _) = bytes.as_chunks_mut::<4>();
+        for chunk in chunks {
             chunk.copy_from_slice(&[8, 12, 18, 255]);
         }
         VideoFrameTexture::Rgba(RgbaVideoFrame {

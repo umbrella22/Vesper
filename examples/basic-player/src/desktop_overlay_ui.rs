@@ -3375,10 +3375,9 @@ mod tests {
             [255, 255, 255, 255],
         );
 
+        let (pixels, _) = frame.as_chunks::<4>();
         assert!(
-            frame
-                .chunks_exact(4)
-                .any(|pixel| pixel[3] > 0 && pixel[3] < 255),
+            pixels.iter().any(|pixel| pixel[3] > 0 && pixel[3] < 255),
             "rounded UI edges should keep fractional alpha for antialiasing"
         );
     }

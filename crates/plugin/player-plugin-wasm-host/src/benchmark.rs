@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -198,6 +199,7 @@ enum BenchmarkQueueMessage {
     Batch {
         batch_id: u64,
         batch: BenchmarkEventBatch,
+        completion: Option<SyncSender<WasmBenchmarkSinkBatchReport>>,
     },
     Flush(Arc<BenchmarkFlushReply>),
     Close,
@@ -383,7 +385,35 @@ impl WasmBenchmarkSinkQueue {
         batch: BenchmarkEventBatch,
     ) -> Result<WasmBenchmarkBatchEnqueueStatus, WasmPluginHostError> {
         validate_benchmark_batch(&batch)?;
-        enqueue_benchmark_batch(&self.inner.shared, batch)
+        enqueue_benchmark_batch(&self.inner.shared, batch, None)
+    }
+
+    /// Executes one batch through the bounded worker queue and waits for its
+    /// matching result for at most `timeout`.
+    pub fn submit(
+        &self,
+        batch: BenchmarkEventBatch,
+        timeout: Duration,
+    ) -> Result<WasmBenchmarkSinkBatchReport, WasmPluginHostError> {
+        validate_benchmark_batch(&batch)?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        match enqueue_benchmark_batch(&self.inner.shared, batch, Some(sender))? {
+            WasmBenchmarkBatchEnqueueStatus::Enqueued { .. } => {}
+            WasmBenchmarkBatchEnqueueStatus::Dropped { .. } => {
+                return Err(WasmPluginHostError::Queue(
+                    "WASM benchmark sink queue is full".to_owned(),
+                ));
+            }
+        }
+        match receiver.recv_timeout(timeout) {
+            Ok(report) => Ok(report),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(WasmPluginHostError::QueueTimeout(
+                "benchmark sink batch result".to_owned(),
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(WasmPluginHostError::Queue(
+                "WASM benchmark sink worker stopped before returning a batch result".to_owned(),
+            )),
+        }
     }
 
     pub fn flush(
@@ -463,7 +493,7 @@ impl WasmBenchmarkSinkQueue {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             match &*worker_state {
                 BenchmarkWorkerJoinState::Joined(result) => {
-                    return result.clone().map_err(WasmPluginHostError::Queue);
+                    return result.clone().map_err(WasmPluginHostError::Execution);
                 }
                 BenchmarkWorkerJoinState::Joining => {
                     let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
@@ -513,7 +543,7 @@ impl WasmBenchmarkSinkQueue {
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *worker_state = BenchmarkWorkerJoinState::Joined(result.clone());
                     self.inner.worker_changed.notify_all();
-                    return result.map_err(WasmPluginHostError::Queue);
+                    return result.map_err(WasmPluginHostError::Execution);
                 }
                 BenchmarkWorkerJoinState::Running(_) => {
                     let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
@@ -547,6 +577,7 @@ fn validate_benchmark_batch(batch: &BenchmarkEventBatch) -> Result<(), WasmPlugi
 fn enqueue_benchmark_batch(
     shared: &WasmBenchmarkSinkQueueShared,
     batch: BenchmarkEventBatch,
+    completion: Option<SyncSender<WasmBenchmarkSinkBatchReport>>,
 ) -> Result<WasmBenchmarkBatchEnqueueStatus, WasmPluginHostError> {
     let event_count = u64::try_from(batch.events.len()).unwrap_or(u64::MAX);
     let mut state = shared
@@ -564,9 +595,11 @@ fn enqueue_benchmark_batch(
         return Ok(WasmBenchmarkBatchEnqueueStatus::Dropped { batch_id });
     }
     state.queued_batches += 1;
-    state
-        .messages
-        .push_back(BenchmarkQueueMessage::Batch { batch_id, batch });
+    state.messages.push_back(BenchmarkQueueMessage::Batch {
+        batch_id,
+        batch,
+        completion,
+    });
     shared.message_available.notify_one();
     Ok(WasmBenchmarkBatchEnqueueStatus::Enqueued { batch_id })
 }
@@ -681,17 +714,25 @@ fn run_benchmark_queue_worker(
                 };
             };
             match message {
-                BenchmarkQueueMessage::Batch { batch_id, batch } => {
+                BenchmarkQueueMessage::Batch {
+                    batch_id,
+                    batch,
+                    completion,
+                } => {
                     let event_count = batch.events.len();
                     active_batch = Some((batch_id, event_count));
                     let result = call_benchmark_batch(&mut session, &batch);
                     let logs = session.take_logs();
-                    shared.reports.push(WasmBenchmarkSinkBatchReport {
+                    let report = WasmBenchmarkSinkBatchReport {
                         batch_id,
                         event_count,
                         result,
                         logs,
-                    });
+                    };
+                    if let Some(completion) = completion {
+                        let _ = completion.send(report.clone());
+                    }
+                    shared.reports.push(report);
                     active_batch = None;
                 }
                 BenchmarkQueueMessage::Flush(reply) => {
@@ -708,7 +749,7 @@ fn run_benchmark_queue_worker(
             session.quarantined = true;
             fail_benchmark_queue_after_worker_panic(&shared, active_batch.take());
             WasmBenchmarkSinkFlushReport {
-                result: Err(WasmPluginHostError::Queue(
+                result: Err(WasmPluginHostError::Execution(
                     "WASM benchmark sink worker panicked".to_owned(),
                 )),
                 logs: session.take_logs(),
@@ -748,7 +789,7 @@ fn call_benchmark_batch(
 ) -> Result<BenchmarkSinkStatus, WasmPluginHostError> {
     catch_unwind(AssertUnwindSafe(|| session.on_event_batch(batch))).unwrap_or_else(|_| {
         session.quarantined = true;
-        Err(WasmPluginHostError::Queue(
+        Err(WasmPluginHostError::Execution(
             "WASM benchmark sink batch worker panicked".to_owned(),
         ))
     })
@@ -757,7 +798,7 @@ fn call_benchmark_batch(
 fn flush_benchmark_session(session: &mut WasmBenchmarkSinkSession) -> WasmBenchmarkSinkFlushReport {
     let result = catch_unwind(AssertUnwindSafe(|| session.flush())).unwrap_or_else(|_| {
         session.quarantined = true;
-        Err(WasmPluginHostError::Queue(
+        Err(WasmPluginHostError::Execution(
             "WASM benchmark sink flush worker panicked".to_owned(),
         ))
     });
@@ -775,7 +816,7 @@ fn fail_benchmark_queue_after_worker_panic(
         shared.reports.push(WasmBenchmarkSinkBatchReport {
             batch_id,
             event_count,
-            result: Err(WasmPluginHostError::Queue(
+            result: Err(WasmPluginHostError::Execution(
                 "WASM benchmark sink worker panicked while processing the batch".to_owned(),
             )),
             logs: Vec::new(),
@@ -793,20 +834,28 @@ fn fail_benchmark_queue_after_worker_panic(
     };
     for message in pending {
         match message {
-            BenchmarkQueueMessage::Batch { batch_id, batch } => {
-                shared.reports.push(WasmBenchmarkSinkBatchReport {
+            BenchmarkQueueMessage::Batch {
+                batch_id,
+                batch,
+                completion,
+            } => {
+                let report = WasmBenchmarkSinkBatchReport {
                     batch_id,
                     event_count: batch.events.len(),
                     result: Err(WasmPluginHostError::Quarantined),
                     logs: Vec::new(),
-                });
+                };
+                if let Some(completion) = completion {
+                    let _ = completion.send(report.clone());
+                }
+                shared.reports.push(report);
             }
             BenchmarkQueueMessage::Flush(reply) => {
                 complete_benchmark_queue_flush(
                     shared,
                     &reply,
                     WasmBenchmarkSinkFlushReport {
-                        result: Err(WasmPluginHostError::Queue(
+                        result: Err(WasmPluginHostError::Execution(
                             "WASM benchmark sink worker panicked before flush".to_owned(),
                         )),
                         logs: Vec::new(),
@@ -1200,14 +1249,15 @@ mod tests {
 
         for expected_id in 1..=WASM_PLUGIN_BENCHMARK_BATCH_QUEUE_CAPACITY {
             assert_eq!(
-                enqueue_benchmark_batch(&shared, queue_test_batch(2)).expect("accepted batch"),
+                enqueue_benchmark_batch(&shared, queue_test_batch(2), None)
+                    .expect("accepted batch"),
                 WasmBenchmarkBatchEnqueueStatus::Enqueued {
                     batch_id: u64::try_from(expected_id).expect("batch id"),
                 }
             );
         }
         assert_eq!(
-            enqueue_benchmark_batch(&shared, queue_test_batch(3)).expect("dropped batch"),
+            enqueue_benchmark_batch(&shared, queue_test_batch(3), None).expect("dropped batch"),
             WasmBenchmarkBatchEnqueueStatus::Dropped { batch_id: 33 }
         );
 
@@ -1240,7 +1290,7 @@ mod tests {
     fn full_batch_queue_still_accepts_fifo_flush_and_close_controls() {
         let shared = WasmBenchmarkSinkQueueShared::default();
         for _ in 0..WASM_PLUGIN_BENCHMARK_BATCH_QUEUE_CAPACITY {
-            enqueue_benchmark_batch(&shared, queue_test_batch(1)).expect("accepted batch");
+            enqueue_benchmark_batch(&shared, queue_test_batch(1), None).expect("accepted batch");
         }
         let _flush_reply = match begin_benchmark_queue_flush(&shared).expect("flush control") {
             BenchmarkQueueFlushRequest::Pending(reply) => reply,
@@ -1429,10 +1479,12 @@ mod tests {
     #[test]
     fn worker_panic_reports_the_active_batch_and_quarantines_pending_batches() {
         let shared = WasmBenchmarkSinkQueueShared::default();
-        enqueue_benchmark_batch(&shared, queue_test_batch(1)).expect("first batch");
-        enqueue_benchmark_batch(&shared, queue_test_batch(2)).expect("second batch");
+        enqueue_benchmark_batch(&shared, queue_test_batch(1), None).expect("first batch");
+        enqueue_benchmark_batch(&shared, queue_test_batch(2), None).expect("second batch");
         let active = match take_benchmark_queue_message(&shared).expect("active batch") {
-            BenchmarkQueueMessage::Batch { batch_id, batch } => (batch_id, batch.events.len()),
+            BenchmarkQueueMessage::Batch {
+                batch_id, batch, ..
+            } => (batch_id, batch.events.len()),
             BenchmarkQueueMessage::Flush(_) | BenchmarkQueueMessage::Close => {
                 panic!("expected a batch message")
             }
@@ -1445,7 +1497,7 @@ mod tests {
         assert_eq!(reports[0].batch_id, 1);
         assert!(matches!(
             reports[0].result,
-            Err(WasmPluginHostError::Queue(_))
+            Err(WasmPluginHostError::Execution(_))
         ));
         assert_eq!(reports[1].batch_id, 2);
         assert!(matches!(

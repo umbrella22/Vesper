@@ -1,6 +1,16 @@
+<p align="center">
+  <img src="assets/branding/vesper-orbit-v5-lockup.svg" alt="Vesper Player SDK" width="520">
+</p>
+
 # Vesper Player SDK
 
-语言：[English](README.md)
+<p align="center"><strong>面向 Android、iOS、Flutter 与 Rust 宿主的原生优先播放 SDK。</strong></p>
+
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="lib/README.md">平台接入</a> ·
+  <a href="CHANGELOG.md">更新日志</a>
+</p>
 
 Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平台播放体验、
 同时又不想在每个端重复实现产品能力的应用。Android 通过 Media3 ExoPlayer
@@ -11,6 +21,14 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
 播放韧性策略、ABR policy、playlist 协调、preload 与 download 规划、DASH bridge，
 以及公开的 C ABI。各平台 host kit 负责渲染 surface、生命周期、原生媒体栈集成
 和平台能力上报。
+
+## 产品概览
+
+![原生优先的跨平台播放架构](assets/marketing/vesper-sdk-marketing-01-native-first.png)
+
+![Vesper Player SDK 能力概览](assets/marketing/vesper-sdk-marketing-02-capabilities.png)
+
+![Android、iOS 与 Flutter 接入路径](assets/marketing/vesper-sdk-marketing-03-integration.png)
 
 ## 从这里开始
 
@@ -40,8 +58,11 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
   以及面向带鉴权 headers、本地文件和 `content://` source 的本地 HTTP relay。
 - 在 Android、iOS 和 Flutter 移动端播放处于活动状态时，支持可配置的屏幕常亮处理。
 - 移动端使用平台原生 surface，而不是通过帧拷贝方式回传画面。
-- 可选 plugin 架构，覆盖更高级的媒体工作流：下载后 remux、native-frame
-  decoder 实验、内部 frame processor 诊断，以及桌面优先的 source normalization。
+- 类型化 plugin 架构，包含 catalog、依赖解析、调用计划、有界 runtime scope，
+  以及下载后 remux、native-frame decoder、FrameProcessor、SourceNormalizer 和
+  Native AudioProcessor 等稳定或实验能力。
+- Native AudioProcessor 支持保留音调与随速变调两种处理策略；WASM 仍只接收
+  有界结构化事件，不接收媒体字节。
 - 面向 FFI host 的 generation-checked C value handles。
 - Android、iOS、Flutter、Desktop Rust 和 C 的可运行 host 示例。
 
@@ -58,14 +79,17 @@ Vesper 是一个 native-first 的多平台播放器 SDK，面向需要真实平�
 | DASH (`.mpd`)          | ✅ 原生                           | ✅ 面向 VOD / live fMP4 的 DASH-to-HLS bridge | ⚠️ 取决于 backend 的 FFmpeg demuxer                                                                                                   | ✅ Android 原生 / iOS bridge                    |
 | 直播 / DVR             | ✅                                | ✅                                            | ✅                                                                                                                                    | ✅ Android / iOS                                |
 | 轨道选择               | ✅ 视频 / 音频 / 字幕             | ✅ 音频 / 字幕                                | ✅                                                                                                                                    | ✅ 遵循各平台语义                               |
+| 外部文本字幕           | ⚠️ Media3 SRT / WebVTT / SSA      | ⚠️ 有界 SRT / WebVTT / SSA 原生 overlay      | ❌ 不属于实验桌面契约                                                                                                                 | ✅ Android / iOS channel                        |
 | ABR `constrained` 策略 | ✅                                | ✅ HLS + DASH bridge 变体目录                 | ⚠️ 桌面 FFmpeg HLS 仅保留 policy DTO，不执行 ABR 切换                                                                                 | ✅ 遵循各平台语义                               |
 | ABR `fixedTrack` 策略  | ✅ 精确                           | ✅ iOS 15+ 上尽力进行 HLS/DASH 固定           | ⚠️ 桌面 FFmpeg HLS 仅保留 policy DTO，不执行 ABR 切换                                                                                 | ✅ 遵循各平台语义                               |
 | 韧性策略               | ✅                                | ✅                                            | ✅                                                                                                                                    | ✅ Android / iOS                                |
 | 预加载预算             | ✅                                | ✅                                            | ⚠️ 仅共享 policy / planner；`player-host-desktop` 当前仍是 noop executor，不做端到端 warmup                                             | ✅ Android / iOS                                |
 | 下载管理器             | ✅ VOD prepare + restore + export | ✅ VOD prepare + restore + export             | ✅ public `player-host-desktop::download` service                                                                                     | ✅ Android / iOS                                |
+| DRM 直接播放           | ✅ Media3 / Widevine              | ✅ AVPlayer / FairPlay                        | ⛔ 不支持                                                                                                                             | ✅ 仅 Android / iOS 原生路径                    |
 | 外部播放               | ✅ Cast / DLNA 可选               | ✅ AirPlay route picker                       | ❌                                                                                                                                    | ✅ Android Cast / DLNA、iOS AirPlay             |
 | 硬件解码探测           | `VesperDecoderBackend`            | `VesperCodecSupport`                          | macOS VideoToolbox native-frame 可选启用；Windows D3D11 roadmap；Linux 当前 software-only                                             | 通过移动端 capability 上报体现                  |
 | Plugin 启动诊断        | 内部 runtime diagnostics          | 内部 runtime diagnostics                      | macOS / Windows decoder diagnostics；macOS FrameProcessor chain；Linux 对已配置 plugin path 报告 unsupported diagnostics              | 在支持的平台通过 create-result diagnostics 暴露 |
+| Native 音频处理        | ⛔ Media3 直接路径                | ⛔ AVPlayer 直接路径                          | ⚠️ 实验 `AudioProcessor`，支持 preserve-pitch / follow-rate                                                                          | ⛔ 移动端未暴露                                 |
 
 Flutter 当前仅覆盖移动端；Flutter 桌面端目标暂不随包发布。产品 UI
 应以运行时能力标记为准，而不是假设上表能力在每个后端上都可用。
@@ -422,12 +446,13 @@ Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载
 
 ## 当前状态
 
-Vesper 仍在演进中，尚未作为稳定的 SDK 发布。Android 和 iOS host kits
-已经有可发布的打包路径；Flutter federated packages 目前仍从本仓库源码分发。
-Flutter 桌面端目标当前暂不随包发布；macOS native VideoToolbox native-frame decoder
-path 仍是可选启用的实验路径；Windows D3D11 native-frame 仍在 roadmap 中，且当前没有
-FrameProcessor chain；Linux 仍是 software-only，并在配置未接线 plugin path 时仅返回
-unsupported diagnostics。桌面端默认路径仍是 FFmpeg software fallback。
+当前源码与包元数据已冻结为 `0.5.0`。Android、iOS、Flutter、plugin archive 与可选
+FFmpeg-backed 产物均具备面向现代 arm64 平台的受检发布路径；只有推送对应 release tag
+后，`0.5.0` 远端坐标才会进入实际发布流程。
+
+移动端生产播放仍使用 Media3 与 AVPlayer。桌面播放、SDK-managed native-frame、Native
+AudioProcessor、decoder plugin、FrameProcessor 与 SourceNormalizer 仍属于实验或显式
+opt-in 能力。Flutter 桌面端不在当前发布集合内。
 
 ## 许可
 

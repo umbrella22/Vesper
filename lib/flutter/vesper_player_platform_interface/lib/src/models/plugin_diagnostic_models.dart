@@ -27,3 +27,11 @@ enum VesperPluginParticipation {
   bypassed,
   fallback,
 }
+
+/// Stable playback routes reported by plugin diagnostics.
+enum VesperPluginPlaybackRoute {
+  systemPlayer,
+  sdkManagedNativeFrame,
+  softwareDecoder,
+  unknown,
+}

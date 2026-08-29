@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use player_plugin::{PluginReference, PluginTransport};
+use player_plugin::{
+    PLUGIN_CATALOG_MIGRATION_VERSION, PluginCatalogError, PluginProvision, PluginReference,
+    PluginRequirement, PluginTransport, validate_plugin_provisions, validate_plugin_requirements,
+};
 use player_plugin_abi::{
     VESPER_MAX_CAPABILITY_INSTANCE_ID_BYTES, VESPER_PLUGIN_ABI_MAJOR, VESPER_PLUGIN_ABI_MINOR,
 };
@@ -31,6 +34,10 @@ pub struct PluginDescriptor {
     pub plugin: PluginIdentityDescriptor,
     pub compatibility: PluginCompatibilityDescriptor,
     pub capabilities: Vec<PluginCapabilityDescriptor>,
+    #[serde(default)]
+    pub requires: Vec<PluginRequirement>,
+    #[serde(default)]
+    pub provides: Vec<PluginProvision>,
     #[serde(default)]
     pub redistribution: Vec<PluginRedistributionDescriptor>,
 }
@@ -118,18 +125,38 @@ pub enum PluginDescriptorError {
         interface_id: String,
         instance_id: String,
     },
+    #[error(transparent)]
+    Catalog(#[from] PluginCatalogError),
     #[error("failed to serialize canonical plugin descriptor: {0}")]
     Json(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PluginCompatibilityError {
-    #[error("host SDK {actual} does not satisfy plugin requirement {required}")]
-    HostSdkMismatch { required: String, actual: Version },
-    #[error("host ABI major {actual} does not match plugin ABI major {required}")]
-    AbiMajorMismatch { required: u16, actual: u16 },
-    #[error("host ABI minor {actual} is outside the plugin-supported range {minimum}..={maximum}")]
+    #[error(
+        "plugin `{plugin_id}` does not support host SDK {actual}; required {required}; migration entry: {migration_version}"
+    )]
+    HostSdkMismatch {
+        plugin_id: String,
+        migration_version: String,
+        required: String,
+        actual: Version,
+    },
+    #[error(
+        "plugin `{plugin_id}` requires ABI major {required}, but the host provides ABI major {actual}; migration entry: {migration_version}"
+    )]
+    AbiMajorMismatch {
+        plugin_id: String,
+        migration_version: String,
+        required: u16,
+        actual: u16,
+    },
+    #[error(
+        "plugin `{plugin_id}` requires ABI minor {minimum}..={maximum}, but the host provides ABI minor {actual}; migration entry: {migration_version}"
+    )]
     AbiMinorMismatch {
+        plugin_id: String,
+        migration_version: String,
         minimum: u16,
         maximum: u16,
         actual: u16,
@@ -149,6 +176,8 @@ impl PluginDescriptor {
         descriptor.capabilities.sort_by(|left, right| {
             (&left.interface_id, &left.instance_id).cmp(&(&right.interface_id, &right.instance_id))
         });
+        descriptor.requires.sort();
+        descriptor.provides.sort();
         descriptor.redistribution.sort_by(|left, right| {
             (&left.component, &left.license).cmp(&(&right.component, &right.license))
         });
@@ -170,18 +199,24 @@ impl PluginDescriptor {
     ) -> Result<(), PluginCompatibilityError> {
         let requirement = VersionReq::parse(&self.compatibility.host_sdk).map_err(|_| {
             PluginCompatibilityError::HostSdkMismatch {
+                plugin_id: self.plugin.id.clone(),
+                migration_version: PLUGIN_CATALOG_MIGRATION_VERSION.to_owned(),
                 required: self.compatibility.host_sdk.clone(),
                 actual: host_sdk.clone(),
             }
         })?;
         if !requirement.matches(host_sdk) {
             return Err(PluginCompatibilityError::HostSdkMismatch {
+                plugin_id: self.plugin.id.clone(),
+                migration_version: PLUGIN_CATALOG_MIGRATION_VERSION.to_owned(),
                 required: self.compatibility.host_sdk.clone(),
                 actual: host_sdk.clone(),
             });
         }
         if self.compatibility.abi_major != host_abi_major {
             return Err(PluginCompatibilityError::AbiMajorMismatch {
+                plugin_id: self.plugin.id.clone(),
+                migration_version: PLUGIN_CATALOG_MIGRATION_VERSION.to_owned(),
                 required: self.compatibility.abi_major,
                 actual: host_abi_major,
             });
@@ -190,6 +225,8 @@ impl PluginDescriptor {
             .contains(&host_abi_minor)
         {
             return Err(PluginCompatibilityError::AbiMinorMismatch {
+                plugin_id: self.plugin.id.clone(),
+                migration_version: PLUGIN_CATALOG_MIGRATION_VERSION.to_owned(),
                 minimum: self.compatibility.abi_minor_min,
                 maximum: self.compatibility.abi_minor_max,
                 actual: host_abi_minor,
@@ -279,6 +316,9 @@ impl PluginDescriptor {
                 });
             }
         }
+
+        validate_plugin_requirements(&self.requires)?;
+        validate_plugin_provisions(&self.provides)?;
 
         if self.redistribution.len() > MAX_REDISTRIBUTION_ENTRIES {
             return invalid(
@@ -438,6 +478,49 @@ stability = "stable"
     }
 
     #[test]
+    fn canonical_descriptor_is_stable_across_requirement_and_provision_order() {
+        let first = r#"
+[[requires]]
+service = "dev.vesper.service.audio"
+requirement = ">=1.0.0"
+
+[[provides]]
+service = "dev.vesper.service.audio"
+version = "1.2.0"
+"#;
+        let second = r#"
+[[requires]]
+service = "dev.vesper.service.video"
+requirement = ">=2.0.0"
+
+[[provides]]
+service = "dev.vesper.service.video"
+version = "2.3.0"
+"#;
+        let left = PluginDescriptor::from_toml(&format!(
+            "{}{}{}",
+            descriptor_toml(&capability("dev.vesper.fixture.primary")),
+            first,
+            second
+        ))
+        .expect("valid descriptor")
+        .canonicalize()
+        .expect("canonical descriptor");
+        let right = PluginDescriptor::from_toml(&format!(
+            "{}{}{}",
+            descriptor_toml(&capability("dev.vesper.fixture.primary")),
+            second,
+            first
+        ))
+        .expect("valid descriptor")
+        .canonicalize()
+        .expect("canonical descriptor");
+
+        assert_eq!(left.json(), right.json());
+        assert_eq!(left.sha256(), right.sha256());
+    }
+
+    #[test]
     fn descriptor_rejects_unknown_fields_and_lossy_identity_forms() {
         let source = descriptor_toml(&capability("dev.vesper.fixture.primary"));
         let unknown = source.replace(
@@ -485,6 +568,8 @@ stability = "stable"
         assert_eq!(
             descriptor.evaluate_current_host_compatibility(&Version::new(0, 4, 0)),
             Err(PluginCompatibilityError::AbiMajorMismatch {
+                plugin_id: "dev.vesper.fixture".to_owned(),
+                migration_version: PLUGIN_CATALOG_MIGRATION_VERSION.to_owned(),
                 required: 2,
                 actual: VESPER_PLUGIN_ABI_MAJOR,
             })
@@ -562,10 +647,42 @@ stability = "stable"
             required.iter().any(|field| field == "redistribution"),
             "{relative_path}"
         );
+        assert!(
+            required.iter().any(|field| field == "requires"),
+            "{relative_path}"
+        );
+        assert!(
+            required.iter().any(|field| field == "provides"),
+            "{relative_path}"
+        );
         assert_eq!(redistribution["type"], "array", "{relative_path}");
         assert_eq!(
             redistribution["maxItems"], MAX_REDISTRIBUTION_ENTRIES,
             "{relative_path}"
+        );
+    }
+
+    #[test]
+    fn project_schema_keeps_dependency_arrays_optional_for_author_input() {
+        let Some(workspace) = source_checkout_root() else {
+            return;
+        };
+        let bytes = std::fs::read(workspace.join("schemas/vesper-plugin/project.schema.json"))
+            .expect("read project schema");
+        let schema: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("parse project schema");
+        let required = schema["required"]
+            .as_array()
+            .expect("project required fields");
+        assert!(!required.iter().any(|field| field == "requires"));
+        assert!(!required.iter().any(|field| field == "provides"));
+        assert_eq!(
+            schema["properties"]["requires"]["default"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            schema["properties"]["provides"]["default"],
+            serde_json::json!([])
         );
     }
 
@@ -632,6 +749,8 @@ stability = "stable"
         assert_eq!(
             descriptor.evaluate_host_compatibility(&Version::new(0, 4, 0), 1, 1),
             Err(PluginCompatibilityError::AbiMinorMismatch {
+                plugin_id: "dev.vesper.fixture".to_owned(),
+                migration_version: PLUGIN_CATALOG_MIGRATION_VERSION.to_owned(),
                 minimum: 0,
                 maximum: 0,
                 actual: 1,

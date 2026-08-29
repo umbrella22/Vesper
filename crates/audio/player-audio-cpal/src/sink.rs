@@ -9,8 +9,8 @@ use crossbeam_queue::ArrayQueue;
 use crate::ring::{AudioRingBlock, audio_ring_capacity_blocks, audio_ring_capacity_samples};
 use crate::stream::build_output_stream;
 use crate::timeline::{
-    AudioBufferWindowWaitResult, MAX_ACCOUNTED_AUDIO_SAMPLES, SharedPlaybackState,
-    sanitize_playback_rate,
+    AudioBufferWindowWaitResult, AudioPcmAppendStatus, MAX_ACCOUNTED_AUDIO_SAMPLES,
+    SharedPlaybackState, sanitize_playback_rate,
 };
 use crate::types::AudioOutputConfig;
 
@@ -24,6 +24,7 @@ pub struct AudioSink {
 #[derive(Debug, Clone)]
 pub struct AudioSinkController {
     state: Arc<SharedPlaybackState>,
+    sample_rate: u32,
     channels: u16,
 }
 
@@ -81,6 +82,7 @@ impl AudioSink {
     pub fn controller(&self) -> AudioSinkController {
         AudioSinkController {
             state: self.state.clone(),
+            sample_rate: self.sample_rate,
             channels: self.channels,
         }
     }
@@ -145,6 +147,38 @@ impl AudioSinkController {
         }
 
         self.state.append_samples(generation, samples)
+    }
+
+    pub fn append_samples_with_pts(
+        &self,
+        generation: u64,
+        pts: Option<Duration>,
+        samples: Vec<f32>,
+    ) -> Result<AudioPcmAppendStatus> {
+        if samples.is_empty() {
+            return Ok(if self.is_generation_active(generation) {
+                AudioPcmAppendStatus::Accepted
+            } else {
+                AudioPcmAppendStatus::StaleGeneration
+            });
+        }
+
+        let channels = usize::from(self.channels.max(1));
+        if !samples.len().is_multiple_of(channels) {
+            anyhow::bail!(
+                "audio sample buffer length {} is not divisible by channel count {}",
+                samples.len(),
+                self.channels
+            );
+        }
+
+        self.state.append_samples_with_pts(
+            generation,
+            pts,
+            samples,
+            self.sample_rate,
+            self.channels,
+        )
     }
 
     pub fn finish_generation(&self, generation: u64) {
