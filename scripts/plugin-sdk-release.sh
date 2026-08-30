@@ -23,6 +23,7 @@ readonly PACKAGES=(
 )
 
 PACKAGE_PATCH_ARGS=()
+ACTIVE_SNAPSHOT_ROOT=""
 
 usage() {
   cat <<'USAGE'
@@ -90,6 +91,24 @@ run_cargo() {
   rustup run "$RUST_TOOLCHAIN" cargo "$@"
 }
 
+cleanup_snapshot() {
+  local snapshot_root="${ACTIVE_SNAPSHOT_ROOT:-}"
+  local temporary_root="${TMPDIR:-/tmp}"
+  temporary_root="${temporary_root%/}"
+
+  [[ -n "$snapshot_root" ]] || return 0
+  case "$snapshot_root" in
+    "$temporary_root"/tmp.*) ;;
+    *)
+      echo "Refusing to remove unexpected snapshot path: $snapshot_root" >&2
+      return 2
+      ;;
+  esac
+
+  rm -rf -- "$snapshot_root"
+  ACTIVE_SNAPSHOT_ROOT=""
+}
+
 add_package_patch() {
   local package="$1"
   local path="$2"
@@ -137,8 +156,10 @@ create_snapshot() {
   local snapshot_root="$1"
 
   git -C "$REPO_ROOT" archive --format=tar HEAD | tar -xf - -C "$snapshot_root"
-  git -C "$REPO_ROOT" diff --binary HEAD -- . \
-    | (cd "$snapshot_root" && git apply --whitespace=nowarn)
+  if ! git -C "$REPO_ROOT" diff --quiet HEAD -- .; then
+    git -C "$REPO_ROOT" diff --binary HEAD -- . \
+      | (cd "$snapshot_root" && git apply --whitespace=nowarn)
+  fi
 
   while IFS= read -r -d '' path; do
     mkdir -p "$snapshot_root/$(dirname "$path")"
@@ -191,12 +212,11 @@ package_snapshot() {
 
 verify_release() {
   local version="$1"
-  local snapshot_root
-  snapshot_root="$(mktemp -d)"
-  trap 'rm -rf -- "$snapshot_root"' EXIT
-  create_snapshot "$snapshot_root"
-  verify_snapshot "$snapshot_root" "$version"
-  rm -rf -- "$snapshot_root"
+  ACTIVE_SNAPSHOT_ROOT="$(mktemp -d)"
+  trap cleanup_snapshot EXIT
+  create_snapshot "$ACTIVE_SNAPSHOT_ROOT"
+  verify_snapshot "$ACTIVE_SNAPSHOT_ROOT" "$version"
+  cleanup_snapshot
   trap - EXIT
 }
 
@@ -343,24 +363,23 @@ require_publish_checkout() {
 
 publish_release() {
   local version="$1"
-  local snapshot_root
   local package
   local result
 
   require_publish_checkout
-  snapshot_root="$(mktemp -d)"
-  trap 'rm -rf -- "$snapshot_root"' EXIT
-  git -C "$REPO_ROOT" archive --format=tar HEAD | tar -xf - -C "$snapshot_root"
-  verify_snapshot "$snapshot_root" "$version"
+  ACTIVE_SNAPSHOT_ROOT="$(mktemp -d)"
+  trap cleanup_snapshot EXIT
+  git -C "$REPO_ROOT" archive --format=tar HEAD | tar -xf - -C "$ACTIVE_SNAPSHOT_ROOT"
+  verify_snapshot "$ACTIVE_SNAPSHOT_ROOT" "$version"
 
   (
-    cd "$snapshot_root"
+    cd "$ACTIVE_SNAPSHOT_ROOT"
     for package in "${PACKAGES[@]}"; do
       if crate_version_status "$package" "$version"; then
         echo "Verifying existing crate $package $version before resuming."
-        CARGO_TARGET_DIR="$snapshot_root/target/plugin-sdk-release" \
+        CARGO_TARGET_DIR="$ACTIVE_SNAPSHOT_ROOT/target/plugin-sdk-release" \
           run_cargo package --locked --no-verify --package "$package"
-        verify_published_archive "$snapshot_root" "$package" "$version"
+        verify_published_archive "$ACTIVE_SNAPSHOT_ROOT" "$package" "$version"
         echo "Skipping byte-identical crate $package $version."
         continue
       else
@@ -371,15 +390,15 @@ publish_release() {
       fi
 
       echo "Publishing $package $version."
-      CARGO_TARGET_DIR="$snapshot_root/target/plugin-sdk-release" \
+      CARGO_TARGET_DIR="$ACTIVE_SNAPSHOT_ROOT/target/plugin-sdk-release" \
         run_cargo publish --locked --registry crates-io --package "$package"
       wait_for_registry "$package" "$version"
-      verify_published_archive "$snapshot_root" "$package" "$version"
+      verify_published_archive "$ACTIVE_SNAPSHOT_ROOT" "$package" "$version"
     done
   )
 
   check_registry_status "$version"
-  rm -rf -- "$snapshot_root"
+  cleanup_snapshot
   trap - EXIT
 }
 
