@@ -258,8 +258,34 @@ scripts/vesper ffi c-host-smoke
 ### Plugin authoring
 
 Create a Rust Native or Rust WASM plugin outside this workspace with the
-scaffold templates, then use the Rust CLI for the complete local workflow. The
-following cross-platform example creates a WASM EventHook plugin:
+scaffold templates, then use the Rust CLI for the complete local workflow.
+Install the versioned CLI from crates.io:
+
+```sh
+cargo install vesper-player-cli --version 0.5.0 --locked
+vesper --version
+```
+
+Native author crates use the branded crates.io package while retaining the
+short Rust dependency and import name:
+
+```toml
+[dependencies]
+player-plugin = { package = "vesper-player-plugin", version = "=0.5.0" }
+```
+
+```rust
+use player_plugin::{Plugin, PluginBuildError};
+```
+
+For a WASM Component guest, use
+`player-plugin-wasm = { package = "vesper-player-plugin-wasm", version =
+"=0.5.0" }`; its Rust import remains `player_plugin_wasm`. The dependency key
+on the left defines the Rust import name, while `package` selects the published
+crates.io identity. All Vesper plugin SDK crates are released at one version so
+author projects can pin the complete contract exactly.
+
+The following cross-platform example creates a WASM EventHook plugin:
 
 ```sh
 vesper plugin new \
@@ -291,13 +317,6 @@ vesper plugin verify analytics.vesper-plugin --trust-store trust-store.json
 Native scaffolds use the same workflow with `--transport native`; the generated
 plugin README and `artifacts[0].source` field provide the platform-specific
 dynamic-library path for `inspect` and `check`.
-
-This is the intended published author workflow. The `player-plugin` and
-`player-plugin-wasm` crates are not on crates.io yet, so a newly generated
-external project cannot currently resolve the SDK without a repository-local
-Cargo patch. Native and WASM scaffolds have passed that local patched
-acceptance path; public authoring availability begins after those SDK crates are
-published.
 
 `vesper-plugin.toml` is the author-owned source record. Packaging generates the
 canonical manifest, sorted `SHA256SUMS`, Ed25519 signature envelope, notices,
@@ -359,9 +378,9 @@ for desktop/tooling catalogs. It is not an Android or iOS application installer.
 Rust WASM Components use that desktop/tooling catalog and the Wasmtime host for
 bounded `PipelineEventHook` and `BenchmarkSink` workloads. They do not receive
 media bytes or FFmpeg handles, and mobile hosts currently reject the WASM
-transport. Frictionless external authoring also requires published
-`player-plugin` crates; until those crates are available from a public registry,
-an author project needs a repository or private-registry dependency override.
+transport. Release binaries and checksums for the `vesper` CLI are attached to
+the matching `plugin-sdk-v<version>` GitHub release; crates.io remains the
+canonical installation path for Rust users.
 
 ## Platform Packages
 

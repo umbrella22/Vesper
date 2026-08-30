@@ -274,35 +274,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
-name = "player-plugin"
-version = "0.5.0"
-dependencies = [
- "hex",
- "player-plugin-abi",
- "player-plugin-macros",
- "semver",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "player-plugin-abi"
-version = "0.5.0"
-
-[[package]]
-name = "player-plugin-macros"
-version = "0.5.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
-]
-
-[[package]]
 name = "potential_utf"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -521,8 +492,37 @@ dependencies = [
 name = "vesper-audio-processor-diagnostic"
 version = "0.5.0"
 dependencies = [
- "player-plugin",
+ "vesper-player-plugin",
  "wsola",
+]
+
+[[package]]
+name = "vesper-player-plugin"
+version = "0.5.0"
+dependencies = [
+ "hex",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "url",
+ "uuid",
+ "vesper-player-plugin-abi",
+ "vesper-player-plugin-macros",
+]
+
+[[package]]
+name = "vesper-player-plugin-abi"
+version = "0.5.0"
+
+[[package]]
+name = "vesper-player-plugin-macros"
+version = "0.5.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]

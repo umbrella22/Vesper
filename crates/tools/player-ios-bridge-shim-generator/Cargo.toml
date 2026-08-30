@@ -8,4 +8,4 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
-player-cli = { path = "../player-cli" }
+player-cli = { package = "vesper-player-cli", path = "../player-cli" }

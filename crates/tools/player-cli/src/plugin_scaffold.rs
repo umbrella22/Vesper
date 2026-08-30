@@ -876,7 +876,9 @@ mod tests {
         .expect("WASM scaffold");
         let cargo = fs::read_to_string(directory.join("Cargo.toml")).expect("Cargo.toml");
         let source = fs::read_to_string(directory.join("src/lib.rs")).expect("source");
-        assert!(cargo.contains(&format!("player-plugin-wasm = \"={VESPER_SDK_VERSION}\"")));
+        assert!(cargo.contains(&format!(
+            "player-plugin-wasm = {{ package = \"vesper-player-plugin-wasm\", version = \"={VESPER_SDK_VERSION}\" }}"
+        )));
         assert!(!cargo.contains("path ="));
         assert!(source.contains("#![deny(unsafe_code)]"));
         assert!(!source.contains("allow(unsafe_code)"));

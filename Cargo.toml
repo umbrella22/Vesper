@@ -21,6 +21,7 @@ resolver = "3"
 [workspace.package]
 authors = ["umbrella22"]
 edition = "2024"
+homepage = "https://github.com/umbrella22/Vesper"
 license = "Apache-2.0"
 repository = "https://github.com/umbrella22/Vesper"
 rust-version = "1.98"

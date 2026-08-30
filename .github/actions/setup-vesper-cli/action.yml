@@ -12,7 +12,7 @@ runs:
 
     - name: Build Vesper CLI
       shell: bash
-      run: cargo build --locked --release -p player-cli --bin vesper
+      run: cargo build --locked --release -p vesper-player-cli --bin vesper
 
     - name: Export VESPER_CLI
       shell: bash

@@ -10,7 +10,7 @@ player-model = { path = "../../model/player-model" }
 player-download = { path = "../player-download" }
 player-playlist = { path = "../player-playlist" }
 player-preload = { path = "../player-preload" }
-player-plugin = { path = "../../plugin/player-plugin" }
+player-plugin = { package = "vesper-player-plugin", path = "../../plugin/player-plugin" }
 serde.workspace = true
 tracing.workspace = true
 

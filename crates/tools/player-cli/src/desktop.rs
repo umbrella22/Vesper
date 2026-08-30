@@ -893,7 +893,7 @@ pub fn verify_decoder_d3d11(
         .args([
             "test",
             "-p",
-            "player-plugin-loader",
+            "vesper-player-plugin-loader",
             "tests::native_dynamic_tests::native_dynamic_loader_opens_d3d11_decoder",
             "--",
             "--ignored",
@@ -1070,7 +1070,7 @@ fn run_loader_test(root: &Path, plugin_path: &Path) -> Result<(), DesktopError> 
         .args([
             "test",
             "-p",
-            "player-plugin-loader",
+            "vesper-player-plugin-loader",
             "tests::native_dynamic_tests::native_dynamic_loader_opens_ffmpeg_post_download_processor",
             "--",
             "--ignored",
@@ -1118,7 +1118,7 @@ fn run_decoder_loader_test(root: &Path, plugin_path: &Path) -> Result<(), Deskto
         .args([
             "test",
             "-p",
-            "player-plugin-loader",
+            "vesper-player-plugin-loader",
             "tests::native_dynamic_tests::native_dynamic_loader_opens_decoder_fixture",
             "--",
             "--ignored",
@@ -1373,7 +1373,7 @@ struct VideoToolboxCargoTest {
 
 const VIDEOTOOLBOX_LOADER_TESTS: [VideoToolboxCargoTest; 6] = [
     VideoToolboxCargoTest {
-        package: "player-plugin-loader",
+        package: "vesper-player-plugin-loader",
         test: "tests::native_dynamic_tests::native_dynamic_loader_opens_videotoolbox_decoder",
         label: "VideoToolbox decoder loader verification",
         ignored: true,

@@ -14,9 +14,9 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 player-model = { path = "../../model/player-model" }
 player-dash-hls-bridge = { path = "../../core/player-dash-hls-bridge" }
 player-ffi-common = { path = "../player-ffi-common" }
-player-plugin = { path = "../../plugin/player-plugin" }
-player-plugin-abi = { path = "../../plugin/player-plugin-abi" }
-player-plugin-loader = { path = "../../plugin/player-plugin-loader" }
+player-plugin = { package = "vesper-player-plugin", path = "../../plugin/player-plugin" }
+player-plugin-abi = { package = "vesper-player-plugin-abi", path = "../../plugin/player-plugin-abi" }
+player-plugin-loader = { package = "vesper-player-plugin-loader", path = "../../plugin/player-plugin-loader" }
 player-platform-ios = { path = "../../platform/mobile/player-platform-ios" }
 player-platform-mobile = { path = "../../platform/common/player-platform-mobile" }
 player-runtime = { path = "../../core/player-runtime" }

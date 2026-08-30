@@ -6,6 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-player-plugin = { path = "../../../plugin/player-plugin" }
+player-plugin = { package = "vesper-player-plugin", path = "../../../plugin/player-plugin" }
 player-runtime = { path = "../../../core/player-runtime" }
 serde = { workspace = true, features = ["derive"] }

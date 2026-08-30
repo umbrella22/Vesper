@@ -77,7 +77,7 @@ jobs:
       - name: Prepare release version metadata
         run: |
           ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
-          cargo build --locked --release -p player-cli --bin vesper
+          cargo build --locked --release -p vesper-player-cli --bin vesper
 
       - name: Verify generated FFI header
         run: ./scripts/vesper ffi verify
@@ -85,7 +85,7 @@ jobs:
       - name: Verify FFmpeg source policy and profiles
         run: |
           ./scripts/vesper ffmpeg --platform all --profile default --dry-run
-          cargo test -p player-cli --bin vesper ffmpeg -- --test-threads=1
+          cargo test -p vesper-player-cli --bin vesper ffmpeg -- --test-threads=1
 
       - name: Check Rust workspace
         run: cargo check --workspace ${{ env.LINUX_WORKSPACE_EXCLUDES }}
@@ -151,7 +151,7 @@ jobs:
       - name: Prepare release version metadata
         run: |
           ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
-          cargo build --locked --release -p player-cli --bin vesper
+          cargo build --locked --release -p vesper-player-cli --bin vesper
 
       - name: Build VesperPlayerKit Android release asset
         run: ./scripts/vesper android stage-release release-assets/android ${{ matrix.abi }}
@@ -264,7 +264,7 @@ jobs:
       - name: Prepare release version metadata
         run: |
           ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
-          cargo build --locked --release -p player-cli --bin vesper
+          cargo build --locked --release -p vesper-player-cli --bin vesper
 
       - name: Configure local Flutter package overrides
         run: ./scripts/vesper flutter local-overrides
@@ -366,7 +366,7 @@ jobs:
       - name: Prepare release version metadata
         run: |
           ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
-          cargo build --locked --release -p player-cli --bin vesper
+          cargo build --locked --release -p vesper-player-cli --bin vesper
 
       - name: Configure retrying source downloads
         shell: bash
@@ -396,7 +396,7 @@ jobs:
         env:
           VESPER_IOS_CORE_RELEASE_FIXTURE: ${{ github.workspace }}/release-assets/ios
         run: >-
-          cargo test -p player-cli --test ios_release_regressions
+          cargo test -p vesper-player-cli --test ios_release_regressions
           ios_core_release_real_fixture_rejects_policy_drift
           -- --ignored --exact --nocapture --test-threads=1
 
@@ -404,7 +404,7 @@ jobs:
         env:
           VESPER_IOS_OPTIONAL_RELEASE_FIXTURE: ${{ github.workspace }}/release-assets/ios
         run: >-
-          cargo test -p player-cli --test ios_release_regressions
+          cargo test -p vesper-player-cli --test ios_release_regressions
           ios_optional_release_real_fixture_rejects_policy_drift
           -- --ignored --exact --nocapture --test-threads=1
 
@@ -457,7 +457,7 @@ jobs:
       - name: Prepare release version metadata
         run: |
           ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
-          cargo build --locked --release -p player-cli --bin vesper
+          cargo build --locked --release -p vesper-player-cli --bin vesper
 
       - name: Generate VesperPlayerKit release notes
         run: ./scripts/vesper release notes "${RELEASE_TAG}" release-assets/RELEASE_NOTES.md
@@ -753,7 +753,7 @@ jobs:
       - name: Prepare release version metadata
         run: |
           ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
-          cargo build --locked --release -p player-cli --bin vesper
+          cargo build --locked --release -p vesper-player-cli --bin vesper
 
       - name: Publish signed Maven Central deployment
         env:

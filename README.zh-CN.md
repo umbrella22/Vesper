@@ -223,6 +223,34 @@ range。HDR、Dolby Vision、wide-gamut，以及桌面 shader color-management �
 scripts/vesper ffi c-host-smoke
 ```
 
+### 插件开发
+
+插件 CLI 和 Rust author SDK 使用统一的 `0.5.0` 版本。CLI 可直接从 crates.io
+安装：
+
+```sh
+cargo install vesper-player-cli --version 0.5.0 --locked
+vesper --version
+```
+
+Native 插件的 Cargo 依赖写法如下：
+
+```toml
+[dependencies]
+player-plugin = { package = "vesper-player-plugin", version = "=0.5.0" }
+```
+
+其中 `vesper-player-plugin` 是 crates.io 上的分发包名，依赖 key
+`player-plugin` 继续对应 Rust 中的 `player_plugin` import，因此现有源码不需要采用
+更长的品牌化 import 名。WASM Component guest 同理使用
+`player-plugin-wasm = { package = "vesper-player-plugin-wasm", version =
+"=0.5.0" }`，Rust import 保持为 `player_plugin_wasm`。
+
+随后可用 `vesper plugin new` 创建 Native 或 WASM 项目，并通过 `build`、
+`inspect`、`check`、`package` 和 `verify` 完成构建与签名包验证。预编译 CLI 与
+`SHA256SUMS.txt` 发布在对应的 `plugin-sdk-v<version>` GitHub Release 中；Rust
+用户的规范安装来源仍是 crates.io。
+
 ## 平台包
 
 ### Android

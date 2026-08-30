@@ -15,6 +15,6 @@ ffmpeg-next = { workspace = true, features = [
     "software-scaling",
 ] }
 player-model = { path = "../../model/player-model" }
-player-plugin = { path = "../../plugin/player-plugin" }
+player-plugin = { package = "vesper-player-plugin", path = "../../plugin/player-plugin" }
 tracing.workspace = true
 url.workspace = true

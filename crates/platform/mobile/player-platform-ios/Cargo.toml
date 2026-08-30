@@ -7,8 +7,8 @@ rust-version.workspace = true
 
 [dependencies]
 player-model = { path = "../../../model/player-model" }
-player-plugin = { path = "../../../plugin/player-plugin" }
-player-plugin-loader = { path = "../../../plugin/player-plugin-loader" }
+player-plugin = { package = "vesper-player-plugin", path = "../../../plugin/player-plugin" }
+player-plugin-loader = { package = "vesper-player-plugin-loader", path = "../../../plugin/player-plugin-loader" }
 player-platform-mobile = { path = "../../common/player-platform-mobile" }
 player-runtime = { path = "../../../core/player-runtime" }
 tracing.workspace = true

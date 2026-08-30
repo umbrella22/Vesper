@@ -107,14 +107,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "player-plugin-wasm"
-version = "0.5.0"
-dependencies = [
- "dlmalloc",
- "wit-bindgen",
-]
-
-[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -219,10 +211,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
+name = "vesper-player-plugin-wasm"
+version = "0.5.0"
+dependencies = [
+ "dlmalloc",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "vesper-plugin-wasm-observer-diagnostic"
 version = "0.5.0"
 dependencies = [
- "player-plugin-wasm",
+ "vesper-player-plugin-wasm",
 ]
 
 [[package]]

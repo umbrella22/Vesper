@@ -12,5 +12,5 @@ name = "vesper_remux_ffmpeg"
 
 [dependencies]
 ffmpeg-next = { workspace = true, features = ["codec", "format"] }
-player-plugin = { path = "../../plugin/player-plugin" }
+player-plugin = { package = "vesper-player-plugin", path = "../../plugin/player-plugin" }
 thiserror.workspace = true

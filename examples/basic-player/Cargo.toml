@@ -12,9 +12,9 @@ pollster.workspace = true
 player-model = { path = "../../crates/model/player-model" }
 player-backend-ffmpeg = { path = "../../crates/backend/player-backend-ffmpeg" }
 player-host-desktop = { path = "../../crates/platform/desktop/player-host-desktop" }
-player-plugin = { path = "../../crates/plugin/player-plugin" }
-player-plugin-loader = { path = "../../crates/plugin/player-plugin-loader", features = ["installed-catalog", "wasm"] }
-player-plugin-package = { path = "../../crates/plugin/player-plugin-package" }
+player-plugin = { package = "vesper-player-plugin", path = "../../crates/plugin/player-plugin" }
+player-plugin-loader = { package = "vesper-player-plugin-loader", path = "../../crates/plugin/player-plugin-loader", features = ["installed-catalog", "wasm"] }
+player-plugin-package = { package = "vesper-player-plugin-package", path = "../../crates/plugin/player-plugin-package" }
 player-render-wgpu = { path = "../../crates/render/player-render-wgpu" }
 player-runtime = { path = "../../crates/core/player-runtime" }
 semver.workspace = true

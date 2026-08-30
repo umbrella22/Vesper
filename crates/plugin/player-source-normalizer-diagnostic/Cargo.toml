@@ -11,4 +11,4 @@ name = "vesper_source_normalizer_diagnostic"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-player-plugin = { path = "../player-plugin" }
+player-plugin = { package = "vesper-player-plugin", path = "../player-plugin" }

@@ -11,7 +11,7 @@ name = "vesper_decoder_d3d11"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-player-plugin = { path = "../../plugin/player-plugin" }
+player-plugin = { package = "vesper-player-plugin", path = "../../plugin/player-plugin" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62.2", features = [

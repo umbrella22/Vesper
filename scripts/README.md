@@ -1,14 +1,17 @@
 # scripts Directory
 
 `scripts/` contains the thin `scripts/vesper` launcher and checked-in data used by
-the Rust CLI. Build, verification, packaging, and release behavior live in the
-`player-cli` binary so local and CI execution share one implementation.
+the Rust CLI. Most build, verification, packaging, and release behavior lives in
+the `player-cli` binary so local and CI execution share one implementation. The
+credential-bound crates.io publisher remains a standalone shell entrypoint so it
+cannot accidentally expose registry credentials through CLI arguments.
 
 ## Layout
 
 ```text
 scripts/
   vesper      Unified task entrypoint
+  plugin-sdk-release.sh     Rust plugin SDK verification and crates.io publisher
   ffmpeg-profiles.toml       FFmpeg profile declarations
   ffmpeg-source-policy.toml  FFmpeg source and license policy
   ios/bridge-shim/            Generated C bridge fragments and manifest
@@ -47,7 +50,7 @@ VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper android stage-release
   --allow-provisioning-updates
 ./scripts/vesper ios verify-app-store-layout /path/to/App.app
 VESPER_IOS_OPTIONAL_RELEASE_FIXTURE=/tmp/vesper-ios-release \
-  cargo test -p player-cli --test ios_release_regressions \
+  cargo test -p vesper-player-cli --test ios_release_regressions \
   ios_optional_release_real_fixture_rejects_policy_drift \
   -- --ignored --exact --nocapture --test-threads=1
 ./scripts/vesper ios kit-xcframework
@@ -77,12 +80,45 @@ VESPER_FLUTTER_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper flutter pub-dry-run /
 ./scripts/vesper release tag-channel vMAJOR.MINOR.PATCH
 ./scripts/vesper release verify-current
 ./scripts/vesper release notes <tag> [output-path]
+
+./scripts/plugin-sdk-release.sh verify MAJOR.MINOR.PATCH
+./scripts/plugin-sdk-release.sh status MAJOR.MINOR.PATCH
+./scripts/plugin-sdk-release.sh publish MAJOR.MINOR.PATCH
 ```
 
 `release set-version` atomically aligns the Rust workspace, standalone
 first-party plugin Cargo manifests and lockfiles, plugin compatibility ranges,
 Android/iOS bundle metadata, Flutter packages, and changelog headings.
 `release verify-current` checks the same version surface.
+
+## Rust Plugin SDK Release
+
+The public Rust packages use `vesper-player-*` crates.io identities while their
+library targets and downstream dependency keys remain `player_*` / `player-*`.
+The standalone publisher encodes the dependency order from the raw ABI and
+macros through the author SDK, packaging and host layers, loader, and CLI.
+
+Run `plugin-sdk-release.sh verify` before pushing the release commit. The
+command tests all public packages and creates their `.crate` archives in an
+isolated source snapshot, so local Git submodule metadata and working-tree build
+artifacts cannot affect the package contents. The script invokes the exact Rust
+1.98.0 toolchain through `rustup`, independent of the caller's default or local
+directory override. Pre-publication archives resolve same-release dependencies
+through temporary Cargo config patches; those patches are not written into the
+source tree or published manifests. After the release commit is on `main` and
+its CI checks are green, configure Cargo's crates.io credential with an
+interactive `cargo login`, then run `plugin-sdk-release.sh publish`. The
+publisher does not accept a token argument, skips versions already visible on
+crates.io only when their registry checksums match the locally generated
+archives, waits for registry indexing between dependency layers, and can be
+rerun after an interrupted upload.
+
+Once `plugin-sdk-release.sh status` reports the complete package set, create and
+push the annotated `plugin-sdk-v<version>` tag on that same `main` commit. The
+dedicated workflow rebuilds the CLI on Linux x86_64, Apple Silicon macOS, and
+Windows x86_64, verifies the crates.io package set, and publishes an independent
+GitHub Release with `SHA256SUMS.txt`. Product tags such as `v0.5.0` are never
+moved or reused for this distribution.
 
 `ios bootstrap-bridge-shim` is an explicit migration/import command. It
 reconstructs the checked-in bridge manifest and C fragments from the current
@@ -304,7 +340,7 @@ verifier or its release regressions directly with:
 ./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope complete
 ./scripts/vesper ios verify-optional-plugins-release /tmp/vesper-ios-release
 VESPER_IOS_OPTIONAL_RELEASE_FIXTURE=/tmp/vesper-ios-release \
-  cargo test -p player-cli --test ios_release_regressions \
+  cargo test -p vesper-player-cli --test ios_release_regressions \
   ios_optional_release_real_fixture_rejects_policy_drift \
   -- --ignored --exact --nocapture --test-threads=1
 ```

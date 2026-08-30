@@ -7,7 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 player-model = { path = "../../model/player-model" }
-player-plugin = { path = "../../plugin/player-plugin" }
+player-plugin = { package = "vesper-player-plugin", path = "../../plugin/player-plugin" }
 quick-xml.workspace = true
 
 [dev-dependencies]

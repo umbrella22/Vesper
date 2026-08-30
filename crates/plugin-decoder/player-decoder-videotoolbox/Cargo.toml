@@ -11,4 +11,4 @@ name = "vesper_decoder_videotoolbox"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-player-plugin = { path = "../../plugin/player-plugin" }
+player-plugin = { package = "vesper-player-plugin", path = "../../plugin/player-plugin" }

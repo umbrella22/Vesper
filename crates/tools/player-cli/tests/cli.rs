@@ -15800,6 +15800,7 @@ fn desktop_videotoolbox_verification_preserves_loader_and_basic_player_contracts
     );
     let loader_commands = fs::read_to_string(&cargo_log).expect("read fake Cargo log");
     assert_eq!(loader_commands.lines().count(), 6);
+    assert!(loader_commands.contains("-p vesper-player-plugin-loader"));
     assert!(loader_commands.contains("native_dynamic_loader_opens_videotoolbox_decoder"));
     assert!(loader_commands.contains("macos_videotoolbox_decoder_flush_seek_and_eof_headless"));
     assert!(loader_commands.contains("source_normalizer_packet_source_drop_after_backpressure"));
@@ -16078,7 +16079,7 @@ fn plugin_new_creates_native_and_wasm_projects_without_path_dependencies() {
     let wasm_source = fs::read_to_string(wasm.join("src/lib.rs")).expect("WASM source");
     assert!(!wasm_cargo.contains("path ="));
     assert!(wasm_cargo.contains(&format!(
-        "player-plugin-wasm = \"={}\"",
+        "player-plugin-wasm = {{ package = \"vesper-player-plugin-wasm\", version = \"={}\" }}",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(wasm_source.contains("#![deny(unsafe_code)]"));

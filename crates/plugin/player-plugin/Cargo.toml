@@ -1,15 +1,25 @@
 [package]
-name = "player-plugin"
+name = "vesper-player-plugin"
 description = "Safe Rust author SDK for Vesper native plugins."
+authors.workspace = true
 version.workspace = true
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+documentation = "https://docs.rs/vesper-player-plugin"
+readme = "../../../README.md"
+keywords = ["vesper", "media", "plugin", "video", "audio"]
+categories = ["multimedia", "development-tools"]
+publish = ["crates-io"]
+
+[lib]
+name = "player_plugin"
 
 [dependencies]
-player-plugin-abi = { version = "0.5.0", path = "../player-plugin-abi" }
-player-plugin-macros = { version = "0.5.0", path = "../player-plugin-macros" }
+player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.5.0", path = "../player-plugin-abi" }
+player-plugin-macros = { package = "vesper-player-plugin-macros", version = "0.5.0", path = "../player-plugin-macros" }
 hex.workspace = true
 semver.workspace = true
 serde.workspace = true

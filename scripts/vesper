@@ -23,7 +23,7 @@ run_rust_cli() {
     echo "The Vesper Rust CLI is not installed and cargo is unavailable." >&2
     exit 4
   fi
-  if cargo run --quiet --locked --manifest-path "$REPO_ROOT/Cargo.toml" -p player-cli -- "$@"; then
+  if cargo run --quiet --locked --manifest-path "$REPO_ROOT/Cargo.toml" -p vesper-player-cli -- "$@"; then
     exit 0
   else
     normalize_rust_cli_status "$?"

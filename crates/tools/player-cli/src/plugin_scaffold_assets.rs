@@ -11,7 +11,7 @@ license = {{LICENSE}}
 crate-type = ["cdylib"]
 
 [dependencies]
-player-plugin = "={{VESPER_SDK_VERSION}}"
+player-plugin = { package = "vesper-player-plugin", version = "={{VESPER_SDK_VERSION}}" }
 
 [workspace]
 "#;
@@ -56,7 +56,7 @@ license = {{LICENSE}}
 crate-type = ["cdylib"]
 
 [dependencies]
-player-plugin-wasm = "={{VESPER_SDK_VERSION}}"
+player-plugin-wasm = { package = "vesper-player-plugin-wasm", version = "={{VESPER_SDK_VERSION}}" }
 
 [profile.release]
 panic = "abort"

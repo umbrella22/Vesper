@@ -1,11 +1,21 @@
 [package]
-name = "player-cli"
+name = "vesper-player-cli"
 description = "The vesper command-line tool for authoring, validating, and installing plugins."
+authors.workspace = true
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
+documentation = "https://docs.rs/vesper-player-cli"
+readme = "../../../README.md"
+keywords = ["vesper", "media", "plugin", "cli"]
+categories = ["command-line-utilities", "multimedia"]
+publish = ["crates-io"]
+
+[lib]
+name = "player_cli"
 
 [[bin]]
 name = "vesper"
@@ -21,11 +31,11 @@ getrandom.workspace = true
 hex.workspace = true
 indexmap.workspace = true
 md-5 = "0.11.0"
-player-plugin = { version = "0.5.0", path = "../../plugin/player-plugin" }
-player-plugin-abi = { version = "0.5.0", path = "../../plugin/player-plugin-abi" }
-player-plugin-loader = { version = "0.5.0", path = "../../plugin/player-plugin-loader" }
-player-plugin-package = { version = "0.5.0", path = "../../plugin/player-plugin-package" }
-player-plugin-wasm-host = { version = "0.5.0", path = "../../plugin/player-plugin-wasm-host" }
+player-plugin = { package = "vesper-player-plugin", version = "0.5.0", path = "../../plugin/player-plugin" }
+player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.5.0", path = "../../plugin/player-plugin-abi" }
+player-plugin-loader = { package = "vesper-player-plugin-loader", version = "0.5.0", path = "../../plugin/player-plugin-loader" }
+player-plugin-package = { package = "vesper-player-plugin-package", version = "0.5.0", path = "../../plugin/player-plugin-package" }
+player-plugin-wasm-host = { package = "vesper-player-plugin-wasm-host", version = "0.5.0", path = "../../plugin/player-plugin-wasm-host" }
 quick-xml.workspace = true
 regex.workspace = true
 semver.workspace = true
@@ -49,9 +59,9 @@ zip = { workspace = true, features = ["deflate-flate2-zlib-rs"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["fs"] }
-player-platform-process = { version = "0.5.0", path = "../../platform/common/player-platform-process" }
+player-platform-process = { package = "vesper-player-platform-process", version = "0.5.0", path = "../../platform/common/player-platform-process" }
 rustix.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-player-platform-process = { version = "0.5.0", path = "../../platform/common/player-platform-process" }
+player-platform-process = { package = "vesper-player-platform-process", version = "0.5.0", path = "../../platform/common/player-platform-process" }
 winapi-util = "0.1.11"

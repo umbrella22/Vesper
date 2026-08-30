@@ -34,11 +34,20 @@ fn packaged_cli_scaffolds_and_inspects_native_and_wasm_plugins() {
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(output.stderr.is_empty());
-        assert!(
-            !fs::read_to_string(directory.join("Cargo.toml"))
-                .expect("scaffold Cargo.toml")
-                .contains("path =")
-        );
+        let cargo = fs::read_to_string(directory.join("Cargo.toml")).expect("scaffold Cargo.toml");
+        assert!(!cargo.contains("path ="));
+        let published_sdk = if transport == "native" {
+            format!(
+                "player-plugin = {{ package = \"vesper-player-plugin\", version = \"={}\" }}",
+                env!("CARGO_PKG_VERSION")
+            )
+        } else {
+            format!(
+                "player-plugin-wasm = {{ package = \"vesper-player-plugin-wasm\", version = \"={}\" }}",
+                env!("CARGO_PKG_VERSION")
+            )
+        };
+        assert!(cargo.contains(&published_sdk), "Cargo.toml: {cargo}");
 
         let inspect = Command::new(env!("CARGO_BIN_EXE_vesper"))
             .args(["plugin", "inspect"])

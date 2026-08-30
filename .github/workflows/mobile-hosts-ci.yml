@@ -245,7 +245,7 @@ jobs:
         env:
           VESPER_IOS_OPTIONAL_RELEASE_FIXTURE: /tmp/vesper-ios-optional-plugins-release
         run: >-
-          cargo test -p player-cli --test ios_release_regressions
+          cargo test -p vesper-player-cli --test ios_release_regressions
           ios_optional_release_real_fixture_rejects_policy_drift
           -- --ignored --exact --nocapture --test-threads=1
 

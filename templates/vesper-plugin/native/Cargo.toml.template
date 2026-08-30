@@ -9,6 +9,6 @@ license = {{LICENSE}}
 crate-type = ["cdylib"]
 
 [dependencies]
-player-plugin = "={{VESPER_SDK_VERSION}}"
+player-plugin = { package = "vesper-player-plugin", version = "={{VESPER_SDK_VERSION}}" }
 
 [workspace]

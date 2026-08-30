@@ -10,7 +10,7 @@ name = "vesper_audio_processor_diagnostic"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-player-plugin = { path = "../../crates/plugin/player-plugin" }
+player-plugin = { package = "vesper-player-plugin", path = "../../crates/plugin/player-plugin" }
 wsola = "0.1.0"
 
 [workspace]

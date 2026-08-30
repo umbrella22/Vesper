@@ -1,13 +1,21 @@
 [package]
-name = "player-plugin-macros"
+name = "vesper-player-plugin-macros"
 description = "Procedural macros for exporting Vesper native plugin capabilities."
+authors.workspace = true
 version.workspace = true
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+documentation = "https://docs.rs/vesper-player-plugin-macros"
+readme = "../../../README.md"
+keywords = ["vesper", "plugin", "proc-macro"]
+categories = ["development-tools::procedural-macro-helpers"]
+publish = ["crates-io"]
 
 [lib]
+name = "player_plugin_macros"
 proc-macro = true
 
 [dependencies]

@@ -283,9 +283,6 @@ dependencies = [
  "player-host-desktop",
  "player-model",
  "player-platform-macos",
- "player-plugin",
- "player-plugin-loader",
- "player-plugin-package",
  "player-render-wgpu",
  "player-runtime",
  "pollster",
@@ -294,6 +291,9 @@ dependencies = [
  "serde_json",
  "tracing",
  "tracing-subscriber",
+ "vesper-player-plugin",
+ "vesper-player-plugin-loader",
+ "vesper-player-plugin-package",
  "winit",
 ]
 
@@ -2518,53 +2518,9 @@ dependencies = [
  "anyhow",
  "ffmpeg-next",
  "player-model",
- "player-plugin",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "player-cli"
-version = "0.5.0"
-dependencies = [
- "anyhow",
- "base64",
- "clap",
- "ed25519-dalek",
- "flate2",
- "getrandom 0.4.3",
- "hex",
- "indexmap",
- "md-5",
- "nix",
- "player-platform-process",
- "player-plugin",
- "player-plugin-abi",
- "player-plugin-loader",
- "player-plugin-package",
- "player-plugin-wasm-host",
- "quick-xml",
- "regex",
- "rustix 1.1.4",
- "semver",
- "serde",
- "serde_json",
- "sha1",
- "sha2 0.11.0",
- "signal-hook",
- "syn 3.0.3",
- "tar",
- "tempfile",
- "thiserror 2.0.19",
- "toml",
- "unicode-casefold",
- "unicode-normalization",
- "url",
- "uuid",
- "winapi-util",
- "x509-parser",
- "xz2",
- "zip",
+ "vesper-player-plugin",
 ]
 
 [[package]]
@@ -2581,7 +2537,7 @@ dependencies = [
 name = "player-decoder-d3d11"
 version = "0.5.0"
 dependencies = [
- "player-plugin",
+ "vesper-player-plugin",
  "windows",
 ]
 
@@ -2589,22 +2545,22 @@ dependencies = [
 name = "player-decoder-fixture"
 version = "0.5.0"
 dependencies = [
- "player-plugin",
+ "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-decoder-mediacodec"
 version = "0.5.0"
 dependencies = [
- "player-plugin",
  "tracing",
+ "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-decoder-videotoolbox"
 version = "0.5.0"
 dependencies = [
- "player-plugin",
+ "vesper-player-plugin",
 ]
 
 [[package]]
@@ -2612,9 +2568,9 @@ name = "player-download"
 version = "0.5.0"
 dependencies = [
  "player-model",
- "player-plugin",
  "quick-xml",
  "serde_json",
+ "vesper-player-plugin",
 ]
 
 [[package]]
@@ -2644,20 +2600,20 @@ dependencies = [
  "player-model",
  "player-platform-ios",
  "player-platform-mobile",
- "player-plugin",
- "player-plugin-abi",
- "player-plugin-loader",
  "player-runtime",
  "serde",
  "serde_json",
  "tempfile",
+ "vesper-player-plugin",
+ "vesper-player-plugin-abi",
+ "vesper-player-plugin-loader",
 ]
 
 [[package]]
 name = "player-frame-processor-diagnostic"
 version = "0.5.0"
 dependencies = [
- "player-plugin",
+ "vesper-player-plugin",
 ]
 
 [[package]]
@@ -2680,7 +2636,7 @@ name = "player-ios-bridge-shim-generator"
 version = "0.5.0"
 dependencies = [
  "anyhow",
- "player-cli",
+ "vesper-player-cli",
 ]
 
 [[package]]
@@ -2691,10 +2647,10 @@ dependencies = [
  "player-model",
  "player-platform-android",
  "player-platform-mobile",
- "player-plugin",
- "player-plugin-loader",
  "player-runtime",
  "serde_json",
+ "vesper-player-plugin",
+ "vesper-player-plugin-loader",
 ]
 
 [[package]]
@@ -2714,12 +2670,12 @@ dependencies = [
  "player-model",
  "player-platform-mobile",
  "player-platform-native-frame",
- "player-plugin",
- "player-plugin-loader",
  "player-runtime",
  "serde",
  "serde_json",
  "tracing",
+ "vesper-player-plugin",
+ "vesper-player-plugin-loader",
 ]
 
 [[package]]
@@ -2735,11 +2691,11 @@ dependencies = [
  "player-backend-ffmpeg",
  "player-download",
  "player-model",
- "player-plugin",
- "player-plugin-loader",
  "player-remux-ffmpeg",
  "player-runtime",
  "tracing",
+ "vesper-player-plugin",
+ "vesper-player-plugin-loader",
 ]
 
 [[package]]
@@ -2748,10 +2704,10 @@ version = "0.5.0"
 dependencies = [
  "player-model",
  "player-platform-mobile",
- "player-plugin",
- "player-plugin-loader",
  "player-runtime",
  "tracing",
+ "vesper-player-plugin",
+ "vesper-player-plugin-loader",
 ]
 
 [[package]]
@@ -2773,10 +2729,10 @@ dependencies = [
  "player-platform-apple",
  "player-platform-desktop",
  "player-platform-native-frame",
- "player-plugin",
- "player-plugin-loader",
  "player-runtime",
  "tracing",
+ "vesper-player-plugin",
+ "vesper-player-plugin-loader",
 ]
 
 [[package]]
@@ -2784,28 +2740,20 @@ name = "player-platform-mobile"
 version = "0.5.0"
 dependencies = [
  "player-model",
- "player-plugin",
- "player-plugin-loader",
  "player-runtime",
  "serde",
  "serde_json",
+ "vesper-player-plugin",
+ "vesper-player-plugin-loader",
 ]
 
 [[package]]
 name = "player-platform-native-frame"
 version = "0.5.0"
 dependencies = [
- "player-plugin",
  "player-runtime",
  "serde",
-]
-
-[[package]]
-name = "player-platform-process"
-version = "0.5.0"
-dependencies = [
- "nix",
- "windows-sys 0.61.2",
+ "vesper-player-plugin",
 ]
 
 [[package]]
@@ -2816,9 +2764,9 @@ dependencies = [
  "player-backend-ffmpeg",
  "player-model",
  "player-platform-desktop",
- "player-plugin",
- "player-plugin-loader",
  "player-runtime",
+ "vesper-player-plugin",
+ "vesper-player-plugin-loader",
  "windows",
 ]
 
@@ -2832,107 +2780,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "player-plugin"
-version = "0.5.0"
-dependencies = [
- "hex",
- "player-plugin-abi",
- "player-plugin-macros",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.19",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "player-plugin-abi"
-version = "0.5.0"
-
-[[package]]
 name = "player-plugin-fixture"
 version = "0.5.0"
 dependencies = [
- "player-plugin",
-]
-
-[[package]]
-name = "player-plugin-loader"
-version = "0.5.0"
-dependencies = [
- "hex",
- "libloading 0.9.0",
- "player-plugin",
- "player-plugin-abi",
- "player-plugin-package",
- "player-plugin-wasm-host",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.19",
- "tracing",
- "uuid",
- "wat",
- "wit-component",
- "wit-parser 0.254.0",
- "zip",
-]
-
-[[package]]
-name = "player-plugin-macros"
-version = "0.5.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.3",
-]
-
-[[package]]
-name = "player-plugin-package"
-version = "0.5.0"
-dependencies = [
- "ed25519-dalek",
- "getrandom 0.4.3",
- "hex",
- "player-plugin",
- "player-plugin-abi",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.19",
- "toml",
- "unicode-casefold",
- "unicode-normalization",
- "uuid",
- "zip",
-]
-
-[[package]]
-name = "player-plugin-wasm"
-version = "0.5.0"
-dependencies = [
- "dlmalloc",
- "wit-bindgen 0.60.0",
-]
-
-[[package]]
-name = "player-plugin-wasm-host"
-version = "0.5.0"
-dependencies = [
- "player-plugin",
- "thiserror 2.0.19",
- "tracing",
- "tracing-subscriber",
- "wasmtime",
- "wat",
- "wit-component",
- "wit-parser 0.254.0",
+ "vesper-player-plugin",
 ]
 
 [[package]]
@@ -2941,7 +2792,7 @@ version = "0.5.0"
 dependencies = [
  "player-download",
  "player-model",
- "player-plugin",
+ "vesper-player-plugin",
 ]
 
 [[package]]
@@ -2960,8 +2811,8 @@ name = "player-remux-ffmpeg"
 version = "0.5.0"
 dependencies = [
  "ffmpeg-next",
- "player-plugin",
  "thiserror 2.0.19",
+ "vesper-player-plugin",
 ]
 
 [[package]]
@@ -2980,11 +2831,11 @@ dependencies = [
  "player-download",
  "player-model",
  "player-playlist",
- "player-plugin",
  "player-preload",
  "serde",
  "serde_json",
  "tracing",
+ "vesper-player-plugin",
 ]
 
 [[package]]
@@ -3000,7 +2851,7 @@ dependencies = [
 name = "player-source-normalizer-diagnostic"
 version = "0.5.0"
 dependencies = [
- "player-plugin",
+ "vesper-player-plugin",
 ]
 
 [[package]]
@@ -3008,10 +2859,10 @@ name = "player-source-normalizer-ffmpeg"
 version = "0.5.0"
 dependencies = [
  "ffmpeg-next",
- "player-plugin",
  "player-source-normalizer",
  "toml",
  "url",
+ "vesper-player-plugin",
 ]
 
 [[package]]
@@ -4049,6 +3900,155 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vesper-player-cli"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "clap",
+ "ed25519-dalek",
+ "flate2",
+ "getrandom 0.4.3",
+ "hex",
+ "indexmap",
+ "md-5",
+ "nix",
+ "quick-xml",
+ "regex",
+ "rustix 1.1.4",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2 0.11.0",
+ "signal-hook",
+ "syn 3.0.3",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.19",
+ "toml",
+ "unicode-casefold",
+ "unicode-normalization",
+ "url",
+ "uuid",
+ "vesper-player-platform-process",
+ "vesper-player-plugin",
+ "vesper-player-plugin-abi",
+ "vesper-player-plugin-loader",
+ "vesper-player-plugin-package",
+ "vesper-player-plugin-wasm-host",
+ "winapi-util",
+ "x509-parser",
+ "xz2",
+ "zip",
+]
+
+[[package]]
+name = "vesper-player-platform-process"
+version = "0.5.0"
+dependencies = [
+ "nix",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "vesper-player-plugin"
+version = "0.5.0"
+dependencies = [
+ "hex",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.19",
+ "url",
+ "uuid",
+ "vesper-player-plugin-abi",
+ "vesper-player-plugin-macros",
+]
+
+[[package]]
+name = "vesper-player-plugin-abi"
+version = "0.5.0"
+
+[[package]]
+name = "vesper-player-plugin-loader"
+version = "0.5.0"
+dependencies = [
+ "hex",
+ "libloading 0.9.0",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tracing",
+ "uuid",
+ "vesper-player-plugin",
+ "vesper-player-plugin-abi",
+ "vesper-player-plugin-package",
+ "vesper-player-plugin-wasm-host",
+ "wat",
+ "wit-component",
+ "wit-parser 0.254.0",
+ "zip",
+]
+
+[[package]]
+name = "vesper-player-plugin-macros"
+version = "0.5.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "vesper-player-plugin-package"
+version = "0.5.0"
+dependencies = [
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "hex",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.19",
+ "toml",
+ "unicode-casefold",
+ "unicode-normalization",
+ "uuid",
+ "vesper-player-plugin",
+ "vesper-player-plugin-abi",
+ "zip",
+]
+
+[[package]]
+name = "vesper-player-plugin-wasm"
+version = "0.5.0"
+dependencies = [
+ "dlmalloc",
+ "wit-bindgen 0.60.0",
+]
+
+[[package]]
+name = "vesper-player-plugin-wasm-host"
+version = "0.5.0"
+dependencies = [
+ "thiserror 2.0.19",
+ "tracing",
+ "tracing-subscriber",
+ "vesper-player-plugin",
+ "wasmtime",
+ "wat",
+ "wit-component",
+ "wit-parser 0.254.0",
+]
 
 [[package]]
 name = "walkdir"

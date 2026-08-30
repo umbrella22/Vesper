@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ffmpeg-next = { workspace = true, features = ["codec", "format"] }
-player-plugin = { path = "../player-plugin" }
+player-plugin = { package = "vesper-player-plugin", path = "../player-plugin" }
 player-source-normalizer = { path = "../../core/player-source-normalizer" }
 toml.workspace = true
 url.workspace = true

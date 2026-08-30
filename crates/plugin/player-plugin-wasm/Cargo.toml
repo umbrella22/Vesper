@@ -1,11 +1,21 @@
 [package]
-name = "player-plugin-wasm"
+name = "vesper-player-plugin-wasm"
 description = "Safe guest runtime support for Vesper Rust WASM Component plugins."
+authors.workspace = true
 version.workspace = true
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+documentation = "https://docs.rs/vesper-player-plugin-wasm"
+readme = "../../../README.md"
+keywords = ["vesper", "media", "plugin", "wasm"]
+categories = ["wasm", "multimedia"]
+publish = ["crates-io"]
+
+[lib]
+name = "player_plugin_wasm"
 
 [dependencies]
 dlmalloc.workspace = true

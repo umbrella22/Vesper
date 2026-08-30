@@ -66,8 +66,8 @@ BenchmarkSink for desktop and tooling; mobile hosts do not run WASM plugins.
 Validate a rebuilt native artifact with the package and loader checks that match
 its target:
 
-    cargo check -p player-plugin-abi -p player-plugin -p player-plugin-loader
-    cargo test -p player-plugin-abi -p player-plugin -p player-plugin-loader
+    cargo check -p vesper-player-plugin-abi -p vesper-player-plugin -p vesper-player-plugin-loader
+    cargo test -p vesper-player-plugin-abi -p vesper-player-plugin -p vesper-player-plugin-loader
     ./scripts/vesper plugin check path/to/vesper-plugin.toml \
       --artifact path/to/plugin-artifact --transport native
 
@@ -196,7 +196,7 @@ Run the checks for every upgraded boundary:
     ./scripts/vesper ffi c-host-smoke
 
     # Native plugin ABI and loader
-    cargo test -p player-plugin-abi -p player-plugin -p player-plugin-loader
+    cargo test -p vesper-player-plugin-abi -p vesper-player-plugin -p vesper-player-plugin-loader
 
     # Host artifacts
     ./scripts/vesper android aar

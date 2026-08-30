@@ -10,8 +10,8 @@ anyhow.workspace = true
 player-backend-ffmpeg = { path = "../../../backend/player-backend-ffmpeg" }
 player-platform-apple = { path = "../../common/player-platform-apple" }
 player-model = { path = "../../../model/player-model" }
-player-plugin = { path = "../../../plugin/player-plugin" }
-player-plugin-loader = { path = "../../../plugin/player-plugin-loader" }
+player-plugin = { package = "vesper-player-plugin", path = "../../../plugin/player-plugin" }
+player-plugin-loader = { package = "vesper-player-plugin-loader", path = "../../../plugin/player-plugin-loader" }
 player-platform-desktop = { path = "../../common/player-platform-desktop" }
 player-platform-native-frame = { path = "../../common/player-platform-native-frame" }
 player-runtime = { path = "../../../core/player-runtime" }

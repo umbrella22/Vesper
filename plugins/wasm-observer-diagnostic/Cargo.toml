@@ -9,7 +9,7 @@ license = "Apache-2.0"
 crate-type = ["cdylib"]
 
 [dependencies]
-player-plugin-wasm = { path = "../../crates/plugin/player-plugin-wasm" }
+player-plugin-wasm = { package = "vesper-player-plugin-wasm", path = "../../crates/plugin/player-plugin-wasm" }
 
 [profile.release]
 panic = "abort"

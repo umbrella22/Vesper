@@ -1,8 +1,18 @@
 [package]
-name = "player-plugin-abi"
+name = "vesper-player-plugin-abi"
 description = "Stable raw ABI contracts for Vesper Rust and WASM plugins."
+authors.workspace = true
 version.workspace = true
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+documentation = "https://docs.rs/vesper-player-plugin-abi"
+readme = "../../../README.md"
+keywords = ["vesper", "media", "plugin", "abi"]
+categories = ["multimedia", "development-tools"]
+publish = ["crates-io"]
+
+[lib]
+name = "player_plugin_abi"

@@ -1,0 +1,307 @@
+name: Vesper Plugin SDK CI and Release
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/plugin-sdk-release.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "README.md"
+      - "README.zh-CN.md"
+      - "CHANGELOG.md"
+      - "crates/plugin/**"
+      - "crates/platform/common/player-platform-process/**"
+      - "crates/tools/player-cli/**"
+      - "schemas/**"
+      - "templates/**"
+      - "wit/**"
+      - "scripts/plugin-sdk-release.sh"
+  push:
+    branches:
+      - main
+      - "codex-*"
+    tags:
+      - "plugin-sdk-v*"
+    paths:
+      - ".github/workflows/plugin-sdk-release.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "README.md"
+      - "README.zh-CN.md"
+      - "CHANGELOG.md"
+      - "crates/plugin/**"
+      - "crates/platform/common/player-platform-process/**"
+      - "crates/tools/player-cli/**"
+      - "schemas/**"
+      - "templates/**"
+      - "wit/**"
+      - "scripts/plugin-sdk-release.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-sdk-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  validate:
+    name: Validate Rust packages
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Resolve and verify release identity
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(awk '
+            $0 == "[workspace.package]" { active = 1; next }
+            /^\[/ && active { exit }
+            active && $1 == "version" && $2 == "=" {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' Cargo.toml)"
+          if [[ -z "$version" ]]; then
+            echo "Unable to resolve the workspace version." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            expected_tag="plugin-sdk-v$version"
+            if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
+              echo "Expected tag $expected_tag, got $GITHUB_REF_NAME." >&2
+              exit 1
+            fi
+            git fetch --no-tags origin main:refs/remotes/origin/main
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "Plugin SDK tag is not reachable from origin/main." >&2
+              exit 1
+            fi
+          fi
+
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Verify package graph and archives
+        run: ./scripts/plugin-sdk-release.sh verify "${{ steps.version.outputs.version }}"
+
+      - name: Check patch formatting
+        run: git diff --check
+
+  build-cli:
+    name: Build CLI (${{ matrix.target }})
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            executable: vesper
+            archive: tar.gz
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            executable: vesper
+            archive: tar.gz
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            executable: vesper.exe
+            archive: zip
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release CLI
+        shell: bash
+        run: >-
+          cargo build --locked --release
+          --package vesper-player-cli
+          --bin vesper
+          --target "${{ matrix.target }}"
+
+      - name: Assemble release archive
+        shell: bash
+        env:
+          ARCHIVE_KIND: ${{ matrix.archive }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+          TARGET_TRIPLE: ${{ matrix.target }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          archive_base="vesper-v${VERSION}-${TARGET_TRIPLE}"
+          staging="release-assets/${archive_base}"
+          mkdir -p "$staging"
+          cp "target/${TARGET_TRIPLE}/release/${EXECUTABLE_NAME}" "$staging/"
+          cp README.md LICENSE NOTICE THIRD_PARTY_NOTICES.md "$staging/"
+
+          if [[ "$ARCHIVE_KIND" == "zip" ]]; then
+            (cd release-assets && 7z a -bd -tzip "${archive_base}.zip" "$archive_base" >/dev/null)
+          else
+            tar -C release-assets -czf "release-assets/${archive_base}.tar.gz" "$archive_base"
+          fi
+
+      - name: Upload CLI archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: vesper-cli-${{ matrix.target }}
+          path: release-assets/*.${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-release:
+    name: Publish plugin SDK GitHub release
+    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'plugin-sdk-v')
+    needs:
+      - validate
+      - build-cli
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Require published crates.io package set
+        run: ./scripts/plugin-sdk-release.sh status "${{ needs.validate.outputs.version }}"
+
+      - name: Download CLI archives
+        uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums and release notes
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd release-assets
+          shopt -s nullglob
+          archives=( *.tar.gz *.zip )
+          if (( ${#archives[@]} != 3 )); then
+            echo "Expected three CLI archives, found ${#archives[@]}." >&2
+            exit 1
+          fi
+          LC_ALL=C sha256sum "${archives[@]}" | LC_ALL=C sort -k2 > SHA256SUMS.txt
+          cat > RELEASE_NOTES.md <<EOF
+          Vesper Plugin SDK ${VERSION} is the first stable Rust plugin authoring and tooling release.
+
+          Install the CLI from crates.io:
+
+          \`\`\`sh
+          cargo install vesper-player-cli --version ${VERSION} --locked
+          \`\`\`
+
+          Native author projects depend on the \`vesper-player-plugin\` package while retaining the \`player_plugin\` Rust import name. WASM guest projects use \`vesper-player-plugin-wasm\` and \`player_plugin_wasm\` respectively.
+
+          This release also publishes the ABI, macro, packaging, loader, WASM host, and process-supervision support crates at the same version. Prebuilt \`vesper\` CLI archives for Linux x86_64, Apple Silicon macOS, and Windows x86_64 are attached with \`SHA256SUMS.txt\`.
+          EOF
+
+      - name: Reconcile immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+          expected_assets="$temp_dir/expected-assets.txt"
+          actual_assets="$temp_dir/actual-assets.txt"
+          release_json="$temp_dir/release.json"
+          remote_assets="$temp_dir/remote-assets"
+
+          shopt -s nullglob
+          assets=( release-assets/*.tar.gz release-assets/*.zip release-assets/SHA256SUMS.txt )
+          if (( ${#assets[@]} != 4 )); then
+            echo "Expected three archives and one checksum manifest." >&2
+            exit 1
+          fi
+          printf '%s\n' "${assets[@]##*/}" | LC_ALL=C sort > "$expected_assets"
+
+          verify_remote_assets() {
+            rm -rf "$remote_assets"
+            mkdir -p "$remote_assets"
+            gh release download "$GITHUB_REF_NAME" --dir "$remote_assets"
+            find "$remote_assets" -maxdepth 1 -type f -printf '%f\n' \
+              | LC_ALL=C sort > "$actual_assets"
+            diff -u "$expected_assets" "$actual_assets"
+            (cd "$remote_assets" && sha256sum --check SHA256SUMS.txt)
+          }
+
+          if gh release view "$GITHUB_REF_NAME" \
+            --json tagName,isDraft,isPrerelease,assets > "$release_json" 2>/dev/null; then
+            if [[ "$(jq -r '.tagName' "$release_json")" != "$GITHUB_REF_NAME" ]]; then
+              echo "GitHub returned a release for an unexpected tag." >&2
+              exit 1
+            fi
+            if [[ "$(jq -r '.isDraft' "$release_json")" == "false" ]]; then
+              if [[ "$(jq -r '.isPrerelease' "$release_json")" != "false" ]]; then
+                echo "Existing plugin SDK release is unexpectedly marked as a prerelease." >&2
+                exit 1
+              fi
+              verify_remote_assets
+              echo "Existing published plugin SDK release is complete and immutable."
+              exit 0
+            fi
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --draft \
+              --latest=false \
+              --title "Vesper Plugin SDK ${VERSION}" \
+              --notes-file release-assets/RELEASE_NOTES.md
+          fi
+
+          gh release edit "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --draft \
+            --latest=false \
+            --title "Vesper Plugin SDK ${VERSION}" \
+            --notes-file release-assets/RELEASE_NOTES.md
+          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          verify_remote_assets
+          gh release edit "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --draft=false \
+            --prerelease=false \
+            --latest=false

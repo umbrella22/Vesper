@@ -45,7 +45,7 @@ jobs:
       - name: Prepare release version metadata
         run: |
           ./scripts/vesper release prepare-from-tag "${RELEASE_TAG}"
-          cargo build --locked --release -p player-cli --bin vesper
+          cargo build --locked --release -p vesper-player-cli --bin vesper
 
       - name: Wait for hosted native dependencies
         shell: bash

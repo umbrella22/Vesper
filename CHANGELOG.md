@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added
+
+- Added crates.io distribution for the Rust plugin author SDK, ABI, macros,
+  package and loader layers, WASM guest and host support, bounded process
+  supervision, and the `vesper` CLI.
+- Added a resumable dependency-ordered plugin SDK publisher and a dedicated
+  `plugin-sdk-v<version>` workflow that verifies packages on `main` and attaches
+  Linux, Apple Silicon macOS, and Windows CLI archives with SHA-256 checksums.
+
+### Changed
+
+- Branded the public Cargo package identities as `vesper-player-*` while
+  preserving the existing `player_*` Rust library and import names through
+  explicit dependency aliases.
+
 ## 0.5.0 - 2026-08-29
 
 ### Breaking Changes

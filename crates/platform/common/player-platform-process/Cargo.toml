@@ -1,11 +1,21 @@
 [package]
-name = "player-platform-process"
+name = "vesper-player-platform-process"
 description = "Bounded cross-platform process supervision for Vesper tooling."
+authors.workspace = true
 edition.workspace = true
+homepage.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
+documentation = "https://docs.rs/vesper-player-platform-process"
+readme = "../../../../README.md"
+keywords = ["vesper", "process", "supervision", "cli"]
+categories = ["development-tools"]
+publish = ["crates-io"]
+
+[lib]
+name = "player_platform_process"
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["signal"] }
