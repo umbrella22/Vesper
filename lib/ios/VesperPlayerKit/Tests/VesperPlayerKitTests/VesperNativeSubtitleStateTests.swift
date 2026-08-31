@@ -551,15 +551,20 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
     ) async throws {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .milliseconds(250))
-        while clock.now < deadline {
+        while true {
             if let pending = bridge.pendingSubtitleSelection,
                expectedCommandId == nil || pending.commandId == expectedCommandId {
                 return
             }
+            guard clock.now < deadline else {
+                break
+            }
             try await clock.sleep(for: .milliseconds(1))
         }
         let pending = try XCTUnwrap(bridge.pendingSubtitleSelection)
-        XCTAssertEqual(pending.commandId, expectedCommandId)
+        if let expectedCommandId {
+            XCTAssertEqual(pending.commandId, expectedCommandId)
+        }
     }
 
     @MainActor
