@@ -8,8 +8,9 @@
   package and loader layers, WASM guest and host support, bounded process
   supervision, and the `vesper` CLI.
 - Added a resumable dependency-ordered plugin SDK publisher and a dedicated
-  `plugin-sdk-v<version>` workflow that verifies packages on `main` and attaches
-  Linux, Apple Silicon macOS, and Windows CLI archives with SHA-256 checksums.
+  `plugin-sdk-v<version>` workflow that publishes the crates through a protected
+  GitHub Environment and attaches Linux, Apple Silicon macOS, and Windows CLI
+  archives with SHA-256 checksums.
 
 ### Changed
 

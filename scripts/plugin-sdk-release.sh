@@ -34,9 +34,10 @@ Usage:
 
 verify builds, tests, and packages the public Rust plugin SDK and CLI from a
 temporary source snapshot. status checks that every package version is visible
-on crates.io. publish requires a clean main checkout synchronized with its
-upstream and uses Cargo's configured crates.io credential; it never accepts a
-token on the command line.
+on crates.io. publish requires a clean main checkout synchronized with
+origin/main, or the matching plugin SDK release tag reachable from origin/main.
+It uses Cargo's configured crates.io credential and never accepts a token on
+the command line.
 USAGE
 }
 
@@ -339,8 +340,9 @@ wait_for_registry() {
 }
 
 require_publish_checkout() {
+  local version="$1"
   local branch
-  local upstream
+  local expected_tag
 
   if [[ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=normal)" ]]; then
     echo "Publishing requires a clean checkout." >&2
@@ -348,15 +350,32 @@ require_publish_checkout() {
   fi
 
   branch="$(git -C "$REPO_ROOT" branch --show-current)"
-  if [[ "$branch" != "main" ]]; then
-    echo "Publishing requires the main branch; current branch is ${branch:-detached}." >&2
+  git -C "$REPO_ROOT" fetch --no-tags origin main:refs/remotes/origin/main
+
+  if [[ "$branch" == "main" ]]; then
+    if [[ "$(git -C "$REPO_ROOT" rev-parse HEAD)" != "$(git -C "$REPO_ROOT" rev-parse origin/main)" ]]; then
+      echo "Publishing requires HEAD to match origin/main after fetching it." >&2
+      exit 2
+    fi
+    return
+  fi
+
+  if [[ -n "$branch" ]]; then
+    echo "Publishing requires main or an exact plugin SDK release tag; current branch is $branch." >&2
     exit 2
   fi
 
-  upstream="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}')"
-  git -C "$REPO_ROOT" fetch --no-tags origin main
-  if [[ "$(git -C "$REPO_ROOT" rev-parse HEAD)" != "$(git -C "$REPO_ROOT" rev-parse "$upstream")" ]]; then
-    echo "Publishing requires HEAD to match $upstream after fetching origin/main." >&2
+  expected_tag="plugin-sdk-v$version"
+  if ! git -C "$REPO_ROOT" rev-parse --verify --quiet "refs/tags/$expected_tag^{commit}" >/dev/null; then
+    echo "Detached publishing requires the exact tag $expected_tag." >&2
+    exit 2
+  fi
+  if [[ "$(git -C "$REPO_ROOT" rev-parse HEAD)" != "$(git -C "$REPO_ROOT" rev-parse "refs/tags/$expected_tag^{commit}")" ]]; then
+    echo "Detached publishing requires HEAD to match $expected_tag." >&2
+    exit 2
+  fi
+  if ! git -C "$REPO_ROOT" merge-base --is-ancestor HEAD origin/main; then
+    echo "Publishing requires $expected_tag to be reachable from origin/main." >&2
     exit 2
   fi
 }
@@ -366,7 +385,7 @@ publish_release() {
   local package
   local result
 
-  require_publish_checkout
+  require_publish_checkout "$version"
   ACTIVE_SNAPSHOT_ROOT="$(mktemp -d)"
   trap cleanup_snapshot EXIT
   git -C "$REPO_ROOT" archive --format=tar HEAD | tar -xf - -C "$ACTIVE_SNAPSHOT_ROOT"

@@ -106,19 +106,23 @@ artifacts cannot affect the package contents. The script invokes the exact Rust
 directory override. Pre-publication archives resolve same-release dependencies
 through temporary Cargo config patches; those patches are not written into the
 source tree or published manifests. After the release commit is on `main` and
-its CI checks are green, configure Cargo's crates.io credential with an
-interactive `cargo login`, then run `plugin-sdk-release.sh publish`. The
-publisher does not accept a token argument, skips versions already visible on
-crates.io only when their registry checksums match the locally generated
-archives, waits for registry indexing between dependency layers, and can be
-rerun after an interrupted upload.
+its CI checks are green, create and push the annotated
+`plugin-sdk-v<version>` tag on that same commit. The dedicated workflow enters
+the protected `cargo.io` GitHub Environment, maps its `CARGOTOKEN` secret to
+Cargo's standard registry environment variable, and publishes the crates in
+dependency order. It also rebuilds the CLI on Linux x86_64, Apple Silicon
+macOS, and Windows x86_64. The independent GitHub Release is published with
+`SHA256SUMS.txt` only after both crates.io publication and all three CLI builds
+succeed.
 
-Once `plugin-sdk-release.sh status` reports the complete package set, create and
-push the annotated `plugin-sdk-v<version>` tag on that same `main` commit. The
-dedicated workflow rebuilds the CLI on Linux x86_64, Apple Silicon macOS, and
-Windows x86_64, verifies the crates.io package set, and publishes an independent
-GitHub Release with `SHA256SUMS.txt`. Product tags such as `v0.5.0` are never
-moved or reused for this distribution.
+The publisher does not accept a token argument, skips versions already visible
+on crates.io only when their registry checksums match the locally generated
+archives, waits for registry indexing between dependency layers, and can be
+rerun after an interrupted upload. For manual recovery, configure Cargo's
+credential with an interactive `cargo login`, run `plugin-sdk-release.sh
+publish`, and confirm the complete package set with `plugin-sdk-release.sh
+status`. Product tags such as `v0.5.0` are never moved or reused for this
+distribution.
 
 `ios bootstrap-bridge-shim` is an explicit migration/import command. It
 reconstructs the checked-in bridge manifest and C fragments from the current
