@@ -910,42 +910,31 @@ final class VesperDownloadManagerTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: baseDirectory) }
         let executor = VesperForegroundDownloadExecutor(baseDirectory: baseDirectory)
         defer { executor.dispose() }
-        let failure = expectation(description: "insecure media transfer should fail")
-        let reporter = DownloadReporterProbe(failureExpectation: failure)
-        let task = VesperDownloadTaskSnapshot(
-            taskId: 3,
-            assetId: "asset-http-transfer",
-            source: VesperDownloadSource(
-                source: .remoteUrl(URL(string: "https://example.com/video.mp4")!, label: "Video")
-            ),
-            profile: VesperDownloadProfile(),
-            state: .downloading,
-            progress: VesperDownloadProgressSnapshot(totalBytes: 4),
-            assetIndex: VesperDownloadAssetIndex(
-                contentFormat: .singleFile,
-                totalSizeBytes: 4,
-                resources: [
-                    VesperDownloadResourceRecord(
-                        resourceId: "video",
-                        uri:
-                            "http://viewer:password@cdn.example.com:8080/video.mp4?deadline=123&upsig=secret#fragment",
-                        relativePath: "video.mp4",
-                        sizeBytes: 4
-                    ),
-                ]
-            )
-        )
+        let destinationURL = baseDirectory.appendingPathComponent("video.mp4")
+        let sourceURL = URL(
+            string:
+                "http://viewer:password@cdn.example.com:8080/video.mp4?deadline=123&upsig=secret#fragment"
+        )!
 
-        executor.start(task: task, reporter: reporter)
-        await fulfillment(of: [failure], timeout: 2)
-
-        XCTAssertTrue(reporter.failure?.message.contains("App Transport Security") == true)
-        XCTAssertTrue(
-            reporter.failure?.message.contains("http://cdn.example.com:8080/video.mp4") == true
-        )
-        XCTAssertFalse(reporter.failure?.message.contains("password") == true)
-        XCTAssertFalse(reporter.failure?.message.contains("upsig") == true)
-        XCTAssertFalse(reporter.failure?.message.contains("secret") == true)
+        do {
+            _ = try await executor.fetch(
+                sourceURL,
+                byteRange: nil,
+                requestHeaders: [:],
+                expectedSizeBytes: 4,
+                resumeFromBytes: 0,
+                to: destinationURL
+            ) { _ in }
+            XCTFail("insecure media transfer should fail")
+        } catch {
+            let message = error.localizedDescription
+            XCTAssertTrue(message.contains("App Transport Security"))
+            XCTAssertTrue(message.contains("http://cdn.example.com:8080/video.mp4"))
+            XCTAssertFalse(message.contains("password"))
+            XCTAssertFalse(message.contains("upsig"))
+            XCTAssertFalse(message.contains("secret"))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destinationURL.path))
     }
 
     func testHTTPContentRangeParserHandlesConcreteAndUnsatisfiedRanges() throws {
