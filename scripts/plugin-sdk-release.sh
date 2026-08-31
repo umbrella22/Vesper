@@ -339,6 +339,42 @@ wait_for_registry() {
   return 1
 }
 
+publish_package_with_retry() {
+  local snapshot_root="$1"
+  local package="$2"
+  local attempt=1
+  local max_attempts=5
+  local retry_delay_seconds=60
+  local publish_output
+
+  while (( attempt <= max_attempts )); do
+    if publish_output="$(
+      CARGO_TARGET_DIR="$snapshot_root/target/plugin-sdk-release" \
+        run_cargo publish --locked --registry crates-io --package "$package" 2>&1
+    )"; then
+      printf '%s\n' "$publish_output"
+      return 0
+    fi
+
+    printf '%s\n' "$publish_output" >&2
+    if [[ "$publish_output" != *"429 Too Many Requests"* ]]; then
+      return 1
+    fi
+    if (( attempt == max_attempts )); then
+      echo "crates.io rate limiting persisted after $max_attempts attempts." >&2
+      return 1
+    fi
+
+    echo "crates.io rate limited $package; retrying in $retry_delay_seconds seconds." >&2
+    sleep "$retry_delay_seconds"
+    attempt=$((attempt + 1))
+    retry_delay_seconds=$((retry_delay_seconds * 2))
+    if (( retry_delay_seconds > 240 )); then
+      retry_delay_seconds=240
+    fi
+  done
+}
+
 require_publish_checkout() {
   local version="$1"
   local branch
@@ -409,9 +445,13 @@ publish_release() {
       fi
 
       echo "Publishing $package $version."
-      CARGO_TARGET_DIR="$ACTIVE_SNAPSHOT_ROOT/target/plugin-sdk-release" \
-        run_cargo publish --locked --registry crates-io --package "$package"
+      publish_package_with_retry "$ACTIVE_SNAPSHOT_ROOT" "$package"
       wait_for_registry "$package" "$version"
+      # cargo publish does not replace an archive created earlier with local
+      # dependency patches. Repackage against the indexed registry graph so
+      # the checksum comparison covers the bytes Cargo actually uploaded.
+      CARGO_TARGET_DIR="$ACTIVE_SNAPSHOT_ROOT/target/plugin-sdk-release" \
+        run_cargo package --locked --no-verify --package "$package"
       verify_published_archive "$ACTIVE_SNAPSHOT_ROOT" "$package" "$version"
     done
   )

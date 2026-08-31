@@ -117,12 +117,16 @@ succeed.
 
 The publisher does not accept a token argument, skips versions already visible
 on crates.io only when their registry checksums match the locally generated
-archives, waits for registry indexing between dependency layers, and can be
-rerun after an interrupted upload. For manual recovery, configure Cargo's
+archives, waits for registry indexing between dependency layers, retries only
+explicit crates.io HTTP 429 responses with bounded backoff, and can be rerun
+after an interrupted upload. For manual recovery, configure Cargo's
 credential with an interactive `cargo login`, run `plugin-sdk-release.sh
 publish`, and confirm the complete package set with `plugin-sdk-release.sh
-status`. Product tags such as `v0.5.0` are never moved or reused for this
-distribution.
+status`. A partially published tag can instead be resumed in the protected
+GitHub Environment by dispatching the release workflow from `main` with its
+existing `plugin-sdk-v<version>` tag. That recovery path refuses any diff from
+the tag outside the release workflow, publisher, and this script guide.
+Product tags such as `v0.5.0` are never moved or reused for this distribution.
 
 `ios bootstrap-bridge-shim` is an explicit migration/import command. It
 reconstructs the checked-in bridge manifest and C fragments from the current

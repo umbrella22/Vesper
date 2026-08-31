@@ -37,13 +37,18 @@ on:
       - "wit/**"
       - "scripts/plugin-sdk-release.sh"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing plugin SDK tag to resume publishing from
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: plugin-sdk-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  group: plugin-sdk-${{ inputs.release_tag != '' && inputs.release_tag || github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' && inputs.release_tag == '' }}
 
 jobs:
   validate:
@@ -110,6 +115,7 @@ jobs:
 
   build-cli:
     name: Build CLI (${{ matrix.target }})
+    if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
     needs: validate
     strategy:
       fail-fast: false
@@ -182,7 +188,9 @@ jobs:
 
   publish-crates:
     name: Publish Rust packages to crates.io
-    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'plugin-sdk-v')
+    if: >-
+      (github.ref_type == 'tag' && startsWith(github.ref_name, 'plugin-sdk-v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     needs: validate
     runs-on: ubuntu-latest
     environment: cargo.io
@@ -192,6 +200,45 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Verify manual recovery identity
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_tag="plugin-sdk-v${VERSION}"
+          if [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
+            echo "Expected recovery tag $expected_tag, got $RELEASE_TAG." >&2
+            exit 1
+          fi
+
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+            echo "Manual recovery requires the current origin/main commit." >&2
+            exit 1
+          fi
+
+          tag_commit="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
+          if ! git merge-base --is-ancestor "$tag_commit" HEAD; then
+            echo "$RELEASE_TAG is not an ancestor of the recovery commit." >&2
+            exit 1
+          fi
+
+          release_paths=(
+            .
+            ':(exclude).github/workflows/plugin-sdk-release.yml'
+            ':(exclude)scripts/plugin-sdk-release.sh'
+            ':(exclude)scripts/README.md'
+          )
+          if ! git diff --quiet "$tag_commit" HEAD -- "${release_paths[@]}"; then
+            echo "Manual recovery commit changes package-relevant files:" >&2
+            git diff --name-status "$tag_commit" HEAD -- "${release_paths[@]}" >&2
+            exit 1
+          fi
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.98.0
