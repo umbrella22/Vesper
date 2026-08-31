@@ -1081,26 +1081,26 @@ fn parse_instrumentation_xml(
     let mut active_case: Option<(InstrumentationCase, bool)> = None;
     loop {
         match reader.read_event() {
-            Ok(Event::Start(event)) if event.name().as_ref() == b"testcase" => {
+            Ok(Event::Start(event)) if event.name().as_ref() == "testcase" => {
                 if active_case.is_some() {
                     return Err(SubtitleError::conformance(format!(
                         "nested testcase in instrumentation XML '{}'",
                         path.display()
                     )));
                 }
-                active_case = Some((instrumentation_case(&reader, &event, path)?, false));
+                active_case = Some((instrumentation_case(&event, path)?, false));
             }
-            Ok(Event::Empty(event)) if event.name().as_ref() == b"testcase" => {
-                cases.push(instrumentation_case(&reader, &event, path)?);
+            Ok(Event::Empty(event)) if event.name().as_ref() == "testcase" => {
+                cases.push(instrumentation_case(&event, path)?);
             }
             Ok(Event::Start(event))
-                if matches!(event.name().as_ref(), b"failure" | b"error" | b"skipped") =>
+                if matches!(event.name().as_ref(), "failure" | "error" | "skipped") =>
             {
                 if let Some((_, failed)) = active_case.as_mut() {
                     *failed = true;
                 }
             }
-            Ok(Event::End(event)) if event.name().as_ref() == b"testcase" => {
+            Ok(Event::End(event)) if event.name().as_ref() == "testcase" => {
                 let (case, failed) = active_case.take().ok_or_else(|| {
                     SubtitleError::conformance(format!(
                         "unmatched testcase end in instrumentation XML '{}'",
@@ -1135,7 +1135,6 @@ fn parse_instrumentation_xml(
 }
 
 fn instrumentation_case(
-    reader: &Reader<&[u8]>,
     event: &quick_xml::events::BytesStart<'_>,
     path: &Path,
 ) -> Result<InstrumentationCase, SubtitleError> {
@@ -1149,7 +1148,7 @@ fn instrumentation_case(
             ))
         })?;
         let value = attribute
-            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+            .normalized_value(XmlVersion::Implicit1_0)
             .map_err(|error| {
                 SubtitleError::conformance(format!(
                     "invalid instrumentation XML value '{}': {error}",
@@ -1158,8 +1157,8 @@ fn instrumentation_case(
             })?
             .into_owned();
         match attribute.key.as_ref() {
-            b"name" => name = Some(value),
-            b"classname" => class_name = Some(value),
+            "name" => name = Some(value),
+            "classname" => class_name = Some(value),
             _ => {}
         }
     }

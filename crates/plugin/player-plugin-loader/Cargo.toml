@@ -24,10 +24,10 @@ wasm = ["dep:player-plugin-wasm-host"]
 [dependencies]
 hex.workspace = true
 libloading.workspace = true
-player-plugin = { package = "vesper-player-plugin", version = "0.5.0", path = "../player-plugin" }
-player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.5.0", path = "../player-plugin-abi" }
-player-plugin-package = { package = "vesper-player-plugin-package", version = "0.5.0", path = "../player-plugin-package", optional = true }
-player-plugin-wasm-host = { package = "vesper-player-plugin-wasm-host", version = "0.5.0", path = "../player-plugin-wasm-host", optional = true }
+player-plugin = { package = "vesper-player-plugin", version = "0.5.1", path = "../player-plugin" }
+player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.5.1", path = "../player-plugin-abi" }
+player-plugin-package = { package = "vesper-player-plugin-package", version = "0.5.1", path = "../player-plugin-package", optional = true }
+player-plugin-wasm-host = { package = "vesper-player-plugin-wasm-host", version = "0.5.1", path = "../player-plugin-wasm-host", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true

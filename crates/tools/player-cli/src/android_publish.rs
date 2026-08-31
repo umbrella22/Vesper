@@ -10,9 +10,9 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use md5::Md5;
-use quick_xml::Reader;
 use quick_xml::escape::unescape;
 use quick_xml::events::Event;
+use quick_xml::{Reader, XmlVersion};
 use serde::Deserialize;
 use sha1::{Digest, Sha1};
 use sha2::{Sha256, Sha512};
@@ -609,7 +609,7 @@ fn validate_pom(
     loop {
         match reader.read_event() {
             Ok(Event::Start(event)) => {
-                stack.push(String::from_utf8_lossy(event.name().as_ref()).into_owned());
+                stack.push(event.name().as_ref().to_owned());
                 if stack
                     .iter()
                     .map(String::as_str)
@@ -625,7 +625,7 @@ fn validate_pom(
                 }
             }
             Ok(Event::End(event)) => {
-                let name = String::from_utf8_lossy(event.name().as_ref()).into_owned();
+                let name = event.name().as_ref().to_owned();
                 if name == "dependency"
                     && stack.iter().map(String::as_str).eq([
                         "project",
@@ -648,12 +648,7 @@ fn validate_pom(
                 }
             }
             Ok(Event::Text(text)) => {
-                let decoded = text.decode().map_err(|error| {
-                    AndroidError::conformance(format!(
-                        "POM '{}' contains invalid text encoding: {error}",
-                        path.display()
-                    ))
-                })?;
+                let decoded = text.xml_content(XmlVersion::Implicit1_0);
                 let value = unescape(&decoded).map_err(|error| {
                     AndroidError::conformance(format!(
                         "POM '{}' contains invalid XML escaping: {error}",

@@ -21,8 +21,8 @@ name = "player_plugin_package"
 ed25519-dalek.workspace = true
 getrandom.workspace = true
 hex.workspace = true
-player-plugin = { package = "vesper-player-plugin", version = "0.5.0", path = "../player-plugin" }
-player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.5.0", path = "../player-plugin-abi" }
+player-plugin = { package = "vesper-player-plugin", version = "0.5.1", path = "../player-plugin" }
+player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.5.1", path = "../player-plugin-abi" }
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true

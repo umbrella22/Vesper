@@ -1074,9 +1074,7 @@ fn parse_dash_manifest(input: &str) -> PlayerResult<DashManifest> {
             )?,
             Ok(Event::Text(text)) => {
                 if let Some((_, value)) = base_url_capture.as_mut() {
-                    let decoded = text
-                        .decode()
-                        .map_err(|error| dash_xml_error(error.to_string()))?;
+                    let decoded = text.xml_content(XmlVersion::Implicit1_0);
                     let unescaped = quick_xml::escape::unescape(decoded.as_ref())
                         .map_err(|error| dash_xml_error(error.to_string()))?;
                     value.push_str(unescaped.as_ref());
@@ -1084,14 +1082,12 @@ fn parse_dash_manifest(input: &str) -> PlayerResult<DashManifest> {
             }
             Ok(Event::CData(text)) => {
                 if let Some((_, value)) = base_url_capture.as_mut() {
-                    let decoded = text
-                        .decode()
-                        .map_err(|error| dash_xml_error(error.to_string()))?;
+                    let decoded = text.xml_content(XmlVersion::Implicit1_0);
                     value.push_str(decoded.as_ref());
                 }
             }
             Ok(Event::End(end)) => match end.local_name().as_ref() {
-                b"BaseURL" => {
+                "BaseURL" => {
                     if let Some((target, value)) = base_url_capture.take() {
                         assign_dash_base_url(
                             target,
@@ -1103,7 +1099,7 @@ fn parse_dash_manifest(input: &str) -> PlayerResult<DashManifest> {
                         )?;
                     }
                 }
-                b"Representation" => {
+                "Representation" => {
                     let representation = current_representation.take().ok_or_else(|| {
                         dash_xml_error("unexpected closing Representation element")
                     })?;
@@ -1113,7 +1109,7 @@ fn parse_dash_manifest(input: &str) -> PlayerResult<DashManifest> {
                         .representations
                         .push(representation);
                 }
-                b"AdaptationSet" => {
+                "AdaptationSet" => {
                     let adaptation = current_adaptation.take().ok_or_else(|| {
                         dash_xml_error("unexpected closing AdaptationSet element")
                     })?;
@@ -1123,7 +1119,7 @@ fn parse_dash_manifest(input: &str) -> PlayerResult<DashManifest> {
                         .adaptation_sets
                         .push(adaptation);
                 }
-                b"Period" => {
+                "Period" => {
                     let period = current_period
                         .take()
                         .ok_or_else(|| dash_xml_error("unexpected closing Period element"))?;
@@ -1159,12 +1155,12 @@ fn process_dash_open_element(
     base_url_capture: &mut Option<(DashBaseUrlTarget, String)>,
 ) -> PlayerResult<()> {
     match start.local_name().as_ref() {
-        b"MPD" => {
-            manifest.mpd_type = dash_event_attribute(reader, start, b"type")?;
+        "MPD" => {
+            manifest.mpd_type = dash_event_attribute(reader, start, "type")?;
             manifest.duration_text =
-                dash_event_attribute(reader, start, b"mediaPresentationDuration")?;
+                dash_event_attribute(reader, start, "mediaPresentationDuration")?;
         }
-        b"Period" => {
+        "Period" => {
             if current_period.is_some() {
                 return Err(dash_xml_error(
                     "nested DASH Period elements are not supported",
@@ -1177,7 +1173,7 @@ fn process_dash_open_element(
                 *current_period = Some(period);
             }
         }
-        b"AdaptationSet" => {
+        "AdaptationSet" => {
             if current_adaptation.is_some() {
                 return Err(dash_xml_error(
                     "nested DASH AdaptationSet elements are not supported",
@@ -1187,9 +1183,9 @@ fn process_dash_open_element(
                 return Err(dash_xml_error("AdaptationSet is outside Period"));
             }
             let adaptation = DashAdaptationSet {
-                content_type: dash_event_attribute(reader, start, b"contentType")?,
-                mime_type: dash_event_attribute(reader, start, b"mimeType")?,
-                language: dash_event_attribute(reader, start, b"lang")?,
+                content_type: dash_event_attribute(reader, start, "contentType")?,
+                mime_type: dash_event_attribute(reader, start, "mimeType")?,
+                language: dash_event_attribute(reader, start, "lang")?,
                 ..DashAdaptationSet::default()
             };
             if is_empty {
@@ -1202,7 +1198,7 @@ fn process_dash_open_element(
                 *current_adaptation = Some(adaptation);
             }
         }
-        b"Representation" => {
+        "Representation" => {
             if current_representation.is_some() {
                 return Err(dash_xml_error(
                     "nested DASH Representation elements are not supported",
@@ -1214,11 +1210,11 @@ fn process_dash_open_element(
                 .representations
                 .len();
             let representation = DashRepresentation {
-                id: dash_event_attribute(reader, start, b"id")?
+                id: dash_event_attribute(reader, start, "id")?
                     .unwrap_or_else(|| representation_index.to_string()),
-                bandwidth: dash_event_attribute(reader, start, b"bandwidth")?,
-                mime_type: dash_event_attribute(reader, start, b"mimeType")?,
-                codecs: dash_event_attribute(reader, start, b"codecs")?,
+                bandwidth: dash_event_attribute(reader, start, "bandwidth")?,
+                mime_type: dash_event_attribute(reader, start, "mimeType")?,
+                codecs: dash_event_attribute(reader, start, "codecs")?,
                 ..DashRepresentation::default()
             };
             if is_empty {
@@ -1231,7 +1227,7 @@ fn process_dash_open_element(
                 *current_representation = Some(representation);
             }
         }
-        b"BaseURL" if !is_empty => {
+        "BaseURL" if !is_empty => {
             let target = if current_representation.is_some() {
                 DashBaseUrlTarget::Representation
             } else if current_adaptation.is_some() {
@@ -1243,13 +1239,13 @@ fn process_dash_open_element(
             };
             *base_url_capture = Some((target, String::new()));
         }
-        b"SegmentTemplate" => {
+        "SegmentTemplate" => {
             let fields = DashSegmentTemplateFields {
-                media: dash_event_attribute(reader, start, b"media")?,
-                initialization: dash_event_attribute(reader, start, b"initialization")?,
-                start_number: dash_u64_attribute(reader, start, b"startNumber")?,
-                timescale: dash_u64_attribute(reader, start, b"timescale")?,
-                duration: dash_u64_attribute(reader, start, b"duration")?,
+                media: dash_event_attribute(reader, start, "media")?,
+                initialization: dash_event_attribute(reader, start, "initialization")?,
+                start_number: dash_u64_attribute(reader, start, "startNumber")?,
+                timescale: dash_u64_attribute(reader, start, "timescale")?,
+                duration: dash_u64_attribute(reader, start, "duration")?,
             };
             if let Some(representation) = current_representation.as_mut() {
                 representation.segment_template = fields;
@@ -1261,7 +1257,7 @@ fn process_dash_open_element(
                 manifest.segment_template = fields;
             }
         }
-        b"SegmentBase" => {
+        "SegmentBase" => {
             if let Some(representation) = current_representation.as_mut() {
                 representation.has_segment_base = true;
             } else if let Some(adaptation) = current_adaptation.as_mut() {
@@ -1278,15 +1274,15 @@ fn process_dash_open_element(
 }
 
 fn dash_event_attribute(
-    reader: &Reader<&[u8]>,
+    _reader: &Reader<&[u8]>,
     start: &BytesStart<'_>,
-    name: &[u8],
+    name: &str,
 ) -> PlayerResult<Option<String>> {
     for attribute in start.attributes() {
         let attribute = attribute.map_err(|error| dash_xml_error(error.to_string()))?;
         if attribute.key.local_name().as_ref() == name {
             return attribute
-                .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                .normalized_value(XmlVersion::Implicit1_0)
                 .map(|value| Some(value.into_owned()))
                 .map_err(|error| dash_xml_error(error.to_string()));
         }
@@ -1297,15 +1293,14 @@ fn dash_event_attribute(
 fn dash_u64_attribute(
     reader: &Reader<&[u8]>,
     start: &BytesStart<'_>,
-    name: &[u8],
+    name: &str,
 ) -> PlayerResult<Option<u64>> {
     let Some(value) = dash_event_attribute(reader, start, name)? else {
         return Ok(None);
     };
     value.parse::<u64>().map(Some).map_err(|_| {
         dash_xml_error(format!(
-            "DASH {} attribute must be a non-negative integer",
-            String::from_utf8_lossy(name)
+            "DASH {name} attribute must be a non-negative integer"
         ))
     })
 }
@@ -2203,7 +2198,7 @@ mod tests {
             panic!("expected an empty representation element");
         };
 
-        let value = dash_event_attribute(&reader, &start, b"id").expect("decode id attribute");
+        let value = dash_event_attribute(&reader, &start, "id").expect("decode id attribute");
 
         assert_eq!(value.as_deref(), Some("video&main"));
     }

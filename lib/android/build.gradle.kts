@@ -12,7 +12,7 @@ plugins {
 
 val vesperMavenGroupId =
     providers.gradleProperty("vesper.maven.groupId").orElse("io.github.umbrella22.vesper")
-val vesperDefaultPublicationVersion = "0.5.0"
+val vesperDefaultPublicationVersion = "0.5.1"
 val vesperPublicationVersion =
     providers.gradleProperty("vesper.mavenVersion").orElse(vesperDefaultPublicationVersion)
 

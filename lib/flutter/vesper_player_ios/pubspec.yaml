@@ -1,6 +1,6 @@
 name: vesper_player_ios
 description: iOS federated implementation for Vesper Player Flutter plugin.
-version: 0.5.0
+version: 0.5.1
 homepage: https://github.com/umbrella22/Vesper
 repository: https://github.com/umbrella22/Vesper
 
@@ -11,7 +11,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  vesper_player_platform_interface: ^0.5.0
+  vesper_player_platform_interface: ^0.5.1
 
 dev_dependencies:
   flutter_test:

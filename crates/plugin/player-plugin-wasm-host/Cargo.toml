@@ -18,7 +18,7 @@ publish = ["crates-io"]
 name = "player_plugin_wasm_host"
 
 [dependencies]
-player-plugin = { package = "vesper-player-plugin", version = "0.5.0", path = "../player-plugin" }
+player-plugin = { package = "vesper-player-plugin", version = "0.5.1", path = "../player-plugin" }
 thiserror.workspace = true
 tracing.workspace = true
 wasmtime.workspace = true

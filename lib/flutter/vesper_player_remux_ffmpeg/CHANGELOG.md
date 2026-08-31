@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 - 2026-09-01
+
+- Prepared package metadata for the 0.5.1 release.
+
 ## 0.5.0 - 2026-08-29
 
 - Prepared package metadata for the 0.5.0 release.

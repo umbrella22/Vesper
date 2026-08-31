@@ -3,13 +3,13 @@ schema_version = 1
 [plugin]
 id = "dev.vesper.frame-processor-diagnostic"
 name = "Vesper Diagnostic Frame Processor"
-version = "0.5.0"
+version = "0.5.1"
 description = "Experimental diagnostic FrameProcessor plugin for native-frame conformance testing."
 license = "Apache-2.0"
 publisher = "io.github.umbrella22"
 
 [compatibility]
-host_sdk = ">=0.5.0, <0.6.0"
+host_sdk = ">=0.5.1, <0.6.0"
 abi_major = 1
 abi_minor_min = 0
 abi_minor_max = 0

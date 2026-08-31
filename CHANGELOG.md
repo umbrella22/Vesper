@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.1 - 2026-09-01
+
 ### Added
 
 - Added crates.io distribution for the Rust plugin author SDK, ABI, macros,
