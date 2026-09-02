@@ -10,9 +10,11 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -52,10 +54,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -72,6 +76,15 @@ import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+/**
+ * Renders the Vesper playback surface, Stage gestures, and playback controls.
+ *
+ * [contentOverlay] renders above video and below all Stage interaction. It is
+ * removed during Picture in Picture presentation. [landscapeControlBarLeading]
+ * is invoked as a direct row child after the landscape play button, so hosts
+ * can supply fixed or weighted content without an SDK-owned placeholder.
+ * [onNavigateBack] controls whether the leading top-bar action is present.
+ */
 @Composable
 fun VesperPlayerStage(
     controller: VesperPlayerController,
@@ -96,6 +109,10 @@ fun VesperPlayerStage(
     onSetBrightnessRatio: (Float) -> Float? = { null },
     currentVolumeRatio: () -> Float? = { null },
     onSetVolumeRatio: (Float) -> Float? = { null },
+    contentOverlay: (@Composable BoxScope.() -> Unit)? = null,
+    landscapeControlBarLeading: (@Composable RowScope.() -> Unit)? = null,
+    onNavigateBack: (() -> Unit)? = null,
+    navigateBackContentDescription: String? = null,
 ) {
     val currentRatio = uiState.timeline.displayedRatio ?: 0f
     val displayedRatio = pendingSeekRatio ?: currentRatio
@@ -158,6 +175,16 @@ fun VesperPlayerStage(
             modifier = Modifier.fillMaxSize(),
             manageControllerLifecycle = false,
         )
+
+        if (!pictureInPicturePresentation && contentOverlay != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer()
+                    .clearAndSetSemantics {},
+                content = contentOverlay,
+            )
+        }
 
         if (!pictureInPicturePresentation) {
             Box(
@@ -341,6 +368,9 @@ fun VesperPlayerStage(
                 speedLabel = speedLabel,
                 qualityLabel = qualityLabel,
                 playbackRateControlsEnabled = playbackRateControlsEnabled,
+                landscapeControlBarLeading = landscapeControlBarLeading,
+                onNavigateBack = onNavigateBack,
+                navigateBackContentDescription = navigateBackContentDescription,
                 onOpenSheet = onOpenSheet,
                 onTogglePlayback = onTogglePlayback,
                 onControlsVisibilityChange = onControlsVisibilityChange,

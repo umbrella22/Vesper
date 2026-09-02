@@ -24,10 +24,15 @@ void main() {
 
   Future<void> pumpStage(
     WidgetTester tester, {
+    Widget? contentOverlay,
+    Widget? landscapeControlBarLeading,
+    VoidCallback? onNavigateBack,
+    String? navigateBackSemanticLabel,
     Widget? topBarPrimaryAction,
     Widget? topBarSecondaryAction,
     VesperPlayerSnapshot? snapshot,
     VesperPlayerStageStrings strings = const VesperPlayerStageStrings(),
+    bool keepControlsVisible = false,
     bool pictureInPicturePresentation = false,
     bool isPortrait = true,
     bool insideVerticalScrollView = false,
@@ -47,8 +52,13 @@ void main() {
           snapshot: snapshot ?? _playingSnapshot,
           isPortrait: isPortrait,
           deviceControls: deviceControls,
+          contentOverlay: contentOverlay,
+          landscapeControlBarLeading: landscapeControlBarLeading,
+          onNavigateBack: onNavigateBack,
+          navigateBackSemanticLabel: navigateBackSemanticLabel,
           topBarPrimaryAction: topBarPrimaryAction,
           topBarSecondaryAction: topBarSecondaryAction,
+          keepControlsVisible: keepControlsVisible,
           pictureInPicturePresentation: pictureInPicturePresentation,
           strings: strings,
           onOpenSheet: openedSheets.add,
@@ -125,6 +135,150 @@ void main() {
     await pumpStage(tester);
 
     expect(find.byIcon(Icons.more_vert_rounded), findsOneWidget);
+  });
+
+  testWidgets('navigate back action is optional and uses the host label',
+      (tester) async {
+    var navigateBackCount = 0;
+    final semantics = tester.ensureSemantics();
+    try {
+      await pumpStage(
+        tester,
+        onNavigateBack: () {
+          navigateBackCount += 1;
+        },
+        navigateBackSemanticLabel: 'Exit listen mode',
+      );
+
+      expect(find.byTooltip('Exit listen mode'), findsOneWidget);
+      expect(find.bySemanticsLabel('Exit listen mode'), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+      expect(navigateBackCount, 1);
+
+      await pumpStage(tester);
+      expect(find.byIcon(Icons.arrow_back_rounded), findsNothing);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('content overlay cannot intercept stage or control input',
+      (tester) async {
+    var overlayTapCount = 0;
+    final semantics = tester.ensureSemantics();
+    try {
+      await pumpStage(
+        tester,
+        contentOverlay: Semantics(
+          label: 'Host overlay content',
+          child: GestureDetector(
+            key: const Key('content-overlay'),
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              overlayTapCount += 1;
+            },
+            child: const SizedBox.expand(),
+          ),
+        ),
+      );
+
+      expect(find.byKey(const Key('content-overlay')), findsOneWidget);
+      expect(find.bySemanticsLabel('Host overlay content'), findsNothing);
+      await tester.tapAt(const Offset(400, 300));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(overlayTapCount, 0);
+
+      await tester.tapAt(const Offset(400, 300));
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(find.byIcon(Icons.pause_rounded));
+      await tester.pump();
+
+      expect(overlayTapCount, 0);
+      expect(platform.togglePauseCount, 1);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('empty landscape slot does not move built-in controls',
+      (tester) async {
+    await pumpStage(tester, isPortrait: false);
+    final speedWithoutSlot =
+        tester.getRect(find.byType(VesperStagePillButton).first);
+
+    await pumpStage(
+      tester,
+      isPortrait: false,
+      landscapeControlBarLeading: const SizedBox.shrink(
+        key: Key('empty-landscape-slot'),
+      ),
+    );
+    final speedWithEmptySlot =
+        tester.getRect(find.byType(VesperStagePillButton).first);
+
+    expect(speedWithEmptySlot, speedWithoutSlot);
+  });
+
+  testWidgets('landscape slot accepts fixed and flexible host widths',
+      (tester) async {
+    await pumpStage(
+      tester,
+      isPortrait: false,
+      landscapeControlBarLeading: const SizedBox(
+        key: Key('fixed-landscape-slot'),
+        width: 72,
+        height: 38,
+      ),
+    );
+
+    expect(
+      tester.getSize(find.byKey(const Key('fixed-landscape-slot'))).width,
+      72,
+    );
+    expect(
+      tester.getTopLeft(find.byKey(const Key('fixed-landscape-slot'))).dx,
+      greaterThan(tester.getTopLeft(find.byIcon(Icons.pause_rounded)).dx),
+    );
+
+    await pumpStage(
+      tester,
+      isPortrait: false,
+      landscapeControlBarLeading: const Expanded(
+        child: SizedBox(
+          key: Key('flex-landscape-slot'),
+          height: 38,
+        ),
+      ),
+    );
+
+    expect(
+      tester.getSize(find.byKey(const Key('flex-landscape-slot'))).width,
+      greaterThan(72),
+    );
+  });
+
+  testWidgets('keepControlsVisible restarts auto-hide after release',
+      (tester) async {
+    bool controlsIgnoreInput() {
+      return tester
+          .widgetList<IgnorePointer>(
+            find.ancestor(
+              of: find.byIcon(Icons.pause_rounded),
+              matching: find.byType(IgnorePointer),
+            ),
+          )
+          .any((widget) => widget.ignoring);
+    }
+
+    await pumpStage(tester, keepControlsVisible: true);
+    await tester.pump(const Duration(seconds: 4));
+    expect(controlsIgnoreInput(), isFalse);
+
+    await pumpStage(tester);
+    await tester.pump(const Duration(milliseconds: 2900));
+    expect(controlsIgnoreInput(), isFalse);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(controlsIgnoreInput(), isTrue);
   });
 
   testWidgets('stage uses supplied visible strings', (tester) async {
@@ -402,6 +556,7 @@ void main() {
       (tester) async {
     await pumpStage(
       tester,
+      contentOverlay: const SizedBox(key: Key('picture-overlay')),
       pictureInPicturePresentation: true,
       snapshot: _playingSnapshot.copyWith(isBuffering: true),
     );
@@ -411,6 +566,7 @@ void main() {
     expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
     expect(find.byIcon(Icons.pause_rounded), findsNothing);
     expect(find.byType(VesperTimelineScrubber), findsNothing);
+    expect(find.byKey(const Key('picture-overlay')), findsNothing);
 
     await tester.tapAt(const Offset(400, 300));
     await tester.pump(const Duration(milliseconds: 400));

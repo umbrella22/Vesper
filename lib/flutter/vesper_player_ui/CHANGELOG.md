@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- Added `contentOverlay`, `landscapeControlBarLeading`, `onNavigateBack`, and
+  `keepControlsVisible` Stage integration points.
+
+### Changed
+
+- Host content overlays are clipped, repaint-isolated, non-interactive, below
+  Stage controls, and hidden during Picture in Picture presentation.
+
 ## 0.5.1 - 2026-09-01
 
 ## 0.5.0 - 2026-08-29

@@ -19,7 +19,8 @@ Exported from `package:vesper_player_ui/vesper_player_ui.dart`:
   gestures (double-tap play / pause, drag scrub), fullscreen toggle, and sheet entry
   points. Hosts can pass `topBarPrimaryAction` and `topBarSecondaryAction` for
   Cast, AirPlay, DLNA, or custom menu buttons that should follow the stage
-  overlay
+  overlay. `contentOverlay`, `landscapeControlBarLeading`, and
+  `onNavigateBack` provide content, control-row, and navigation extension points
 - Stage helpers: bottom-sheet entry types, formatting helpers
 - Stage models: presentation-layer DTOs consumed by `VesperPlayerStage`
 - Stage device controls: brightness / volume gesture wiring helpers
@@ -59,6 +60,22 @@ can depend on `vesper_player` directly and skip this package.
 empty video-space gestures continue to work while controls are visible. Only
 the actual buttons, sheet entries, and timeline receive pointer events.
 
+`contentOverlay` renders above the player view and below Stage gestures and
+controls. The Stage wraps it in `IgnorePointer` and `RepaintBoundary`, clips it
+to the player area, and removes it from Picture in Picture presentation. Hosts
+remain responsible for bounding the overlay's parsing, layout, cache, and paint
+cost.
+
+`landscapeControlBarLeading` is inserted directly after the landscape play
+button. `null` adds no spacing. A host can pass fixed-size content or a direct
+`Expanded`/`Flexible` child. Controls that are unavailable should pass `null`
+so the remaining built-in controls retain their order.
+
+`onNavigateBack` controls whether the top-left back action exists. Supply
+`navigateBackSemanticLabel` for the current mode. Set `keepControlsVisible`
+while a host input or drawer is active; changing it back to `false` restarts the
+normal auto-hide interval.
+
 `VesperAirPlayRouteButton` is an iOS-only route picker. It renders an empty box
 on non-iOS platforms so shared control rows can keep a stable layout.
 
@@ -78,6 +95,11 @@ VesperPlayerStage(
   controller: controller,
   snapshot: snapshot,
   isPortrait: isPortrait,
+  contentOverlay: const HostContentOverlay(),
+  landscapeControlBarLeading: const HostLandscapeControls(),
+  onNavigateBack: exitCurrentPresentation,
+  navigateBackSemanticLabel: 'Exit fullscreen',
+  keepControlsVisible: activeDrawer != null || composerHasFocus,
   strings: const VesperPlayerStageStrings.zhHans(),
   onOpenSheet: onOpenSheet,
   onToggleFullscreen: onToggleFullscreen,

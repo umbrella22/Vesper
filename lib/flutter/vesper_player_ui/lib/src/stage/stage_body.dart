@@ -35,6 +35,8 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
     final bufferingChanged =
         oldWidget.snapshot.isBuffering != widget.snapshot.isBuffering;
     final sheetChanged = oldWidget.sheetOpen != widget.sheetOpen;
+    final keepControlsVisibleChanged =
+        oldWidget.keepControlsVisible != widget.keepControlsVisible;
     final pictureInPicturePresentationChanged =
         oldWidget.pictureInPicturePresentation !=
             widget.pictureInPicturePresentation;
@@ -45,14 +47,15 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
     }
 
     if (!widget.pictureInPicturePresentation &&
-        sheetChanged &&
-        widget.sheetOpen) {
-      _showControls();
+        ((sheetChanged && widget.sheetOpen) ||
+            (keepControlsVisibleChanged && widget.keepControlsVisible))) {
+      _controlsVisible = true;
     }
 
     if (playbackChanged ||
         bufferingChanged ||
         sheetChanged ||
+        keepControlsVisibleChanged ||
         pictureInPicturePresentationChanged) {
       _syncAutoHide();
     }
@@ -76,7 +79,8 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
     final showControls = !pictureInPicturePresentation &&
         (_controlsVisible ||
             snapshot.playbackState != VesperPlaybackState.playing ||
-            widget.sheetOpen);
+            widget.sheetOpen ||
+            widget.keepControlsVisible);
     final stageRadius = BorderRadius.circular(widget.isPortrait ? 20 : 0);
     final title =
         snapshot.sourceLabel.isEmpty ? snapshot.title : snapshot.sourceLabel;
@@ -96,6 +100,16 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
             Positioned.fill(
               child: _playerView,
             ),
+            if (!pictureInPicturePresentation && widget.contentOverlay != null)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: ExcludeSemantics(
+                    child: RepaintBoundary(
+                      child: widget.contentOverlay!,
+                    ),
+                  ),
+                ),
+              ),
             if (!pictureInPicturePresentation)
               _buildStageGestureLayer(showControls: showControls),
             if (!pictureInPicturePresentation)
@@ -223,6 +237,18 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
+        if (widget.onNavigateBack != null) ...<Widget>[
+          VesperStageIconButton(
+            icon: Icons.arrow_back_rounded,
+            label:
+                widget.navigateBackSemanticLabel ?? widget.strings.navigateBack,
+            size: 38,
+            iconSize: 23,
+            containerAlpha: 0,
+            onPressed: widget.onNavigateBack!,
+          ),
+          const SizedBox(width: 8),
+        ],
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -394,6 +420,8 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
               containerAlpha: 0,
               onPressed: _togglePause,
             ),
+            if (widget.landscapeControlBarLeading != null)
+              widget.landscapeControlBarLeading!,
             const Spacer(),
             if (snapshot.timeline.kind ==
                 VesperTimelineKind.liveDvr) ...<Widget>[
@@ -466,6 +494,10 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
 
   void _handleTap() {
     if (!mounted || widget.pictureInPicturePresentation) {
+      return;
+    }
+    if (widget.keepControlsVisible) {
+      _showControls();
       return;
     }
     setState(() {
@@ -800,6 +832,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
             !snapshot.isBuffering &&
             _controlsVisible &&
             !widget.sheetOpen &&
+            !widget.keepControlsVisible &&
             _pendingSeekRatio == null;
 
     if (!shouldAutoHide) {
@@ -813,6 +846,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
       if (widget.snapshot.playbackState != VesperPlaybackState.playing ||
           widget.snapshot.isBuffering ||
           widget.sheetOpen ||
+          widget.keepControlsVisible ||
           _pendingSeekRatio != null) {
         return;
       }

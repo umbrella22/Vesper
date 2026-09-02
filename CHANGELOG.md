@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- Added host content overlays, landscape control-row slots, and optional
+  state-labelled navigation actions to the Flutter, Compose, and SwiftUI Stage
+  packages.
+- Added Flutter control visibility retention for focused host inputs and open
+  host drawers.
+
+### Changed
+
+- Defined the Stage layer order so host content remains below gestures and
+  playback controls, receives no input, and is removed from Picture in Picture
+  presentation.
+
 ## 0.5.1 - 2026-09-01
 
 ### Added

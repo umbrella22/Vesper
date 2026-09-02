@@ -3,6 +3,7 @@
     <string name="vesper_player_stage_more">More</string>
     <string name="vesper_player_stage_pause">Pause</string>
     <string name="vesper_player_stage_play">Play</string>
+    <string name="vesper_player_stage_navigate_back">Back</string>
     <string name="vesper_player_stage_fullscreen">Fullscreen</string>
     <string name="vesper_player_stage_exit_fullscreen">Exit fullscreen</string>
     <string name="vesper_player_stage_rate">%1$sx</string>

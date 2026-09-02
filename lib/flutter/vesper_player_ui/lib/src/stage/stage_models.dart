@@ -17,6 +17,7 @@ final class VesperPlayerStageStrings {
     this.more = 'More',
     this.play = 'Play',
     this.pause = 'Pause',
+    this.navigateBack = 'Back',
     this.fullscreen = 'Fullscreen',
     this.exitFullscreen = 'Exit fullscreen',
     this.quality = 'Quality',
@@ -38,6 +39,7 @@ final class VesperPlayerStageStrings {
         more = '更多',
         play = '播放',
         pause = '暂停',
+        navigateBack = '返回',
         fullscreen = '全屏',
         exitFullscreen = '退出全屏',
         quality = '画质',
@@ -57,6 +59,7 @@ final class VesperPlayerStageStrings {
   final String more;
   final String play;
   final String pause;
+  final String navigateBack;
   final String fullscreen;
   final String exitFullscreen;
   final String quality;

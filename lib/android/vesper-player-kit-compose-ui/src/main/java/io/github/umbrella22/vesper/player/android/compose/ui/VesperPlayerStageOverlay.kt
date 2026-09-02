@@ -8,10 +8,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.MoreVert
@@ -43,6 +47,9 @@ internal fun StageControlsOverlay(
     speedLabel: String,
     qualityLabel: String,
     playbackRateControlsEnabled: Boolean,
+    landscapeControlBarLeading: (@Composable RowScope.() -> Unit)?,
+    onNavigateBack: (() -> Unit)?,
+    navigateBackContentDescription: String?,
     onOpenSheet: (VesperPlayerStageSheet) -> Unit,
     onTogglePlayback: () -> Unit,
     onControlsVisibilityChange: (Boolean) -> Unit,
@@ -77,6 +84,19 @@ internal fun StageControlsOverlay(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Top,
             ) {
+                if (onNavigateBack != null) {
+                    StageIconButton(
+                        icon = Icons.AutoMirrored.Rounded.ArrowBack,
+                        label =
+                            navigateBackContentDescription
+                                ?: stringResource(R.string.vesper_player_stage_navigate_back),
+                        size = 38.dp,
+                        iconSize = 23.dp,
+                        containerAlpha = 0f,
+                        onClick = onNavigateBack,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
                 Column(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -223,7 +243,6 @@ internal fun StageControlsOverlay(
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         StageIconButton(
@@ -242,6 +261,8 @@ internal fun StageControlsOverlay(
                                 onControlsVisibilityChange(true)
                             },
                         )
+                        landscapeControlBarLeading?.invoke(this)
+                        Spacer(modifier = Modifier.weight(1f))
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
