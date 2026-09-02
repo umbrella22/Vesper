@@ -117,6 +117,10 @@ extension VesperPlayerStage {
                 }
                 .accessibilityLabel(Text(playButtonLabel))
 
+                if let landscapeControlBarLeading {
+                    landscapeControlBarLeading
+                }
+
                 Spacer(minLength: 12)
 
                 if uiState.timeline.kind == .liveDvr {

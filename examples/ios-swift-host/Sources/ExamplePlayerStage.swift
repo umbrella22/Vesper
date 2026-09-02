@@ -14,12 +14,16 @@ struct ExamplePlayerStage: View {
     let isCompactLayout: Bool
     let isFullscreen: Bool
     let pictureInPicturePresentation: Bool
+    let contentOverlay: AnyView?
+    let landscapeControlBarLeading: AnyView?
     let onSeekBy: (Int64) -> Void
     let onTogglePause: () -> Void
     let onSeekToRatio: (Double) -> Void
     let onSeekToLiveEdge: () -> Void
     let onSetPlaybackRate: (Float) -> Void
     let onToggleFullscreen: () -> Void
+    let onNavigateBack: (() -> Void)?
+    let navigateBackAccessibilityLabel: String?
     let onOpenSheet: (ExamplePlayerSheet) -> Void
     let currentBrightnessRatio: () -> Double?
     let onSetBrightnessRatio: (Double) -> Double?
@@ -50,6 +54,10 @@ struct ExamplePlayerStage: View {
         onSetBrightnessRatio: @escaping (Double) -> Double? = { _ in nil },
         currentVolumeRatio: @escaping () -> Double? = { nil },
         onSetVolumeRatio: @escaping (Double) -> Double? = { _ in nil },
+        contentOverlay: AnyView? = nil,
+        landscapeControlBarLeading: AnyView? = nil,
+        onNavigateBack: (() -> Void)? = nil,
+        navigateBackAccessibilityLabel: String? = nil,
         airPlayRouteButton: AnyView? = nil
     ) {
         self.surface = surface
@@ -63,12 +71,16 @@ struct ExamplePlayerStage: View {
         self.isCompactLayout = isCompactLayout
         self.isFullscreen = isFullscreen
         self.pictureInPicturePresentation = pictureInPicturePresentation
+        self.contentOverlay = contentOverlay
+        self.landscapeControlBarLeading = landscapeControlBarLeading
         self.onSeekBy = onSeekBy
         self.onTogglePause = onTogglePause
         self.onSeekToRatio = onSeekToRatio
         self.onSeekToLiveEdge = onSeekToLiveEdge
         self.onSetPlaybackRate = onSetPlaybackRate
         self.onToggleFullscreen = onToggleFullscreen
+        self.onNavigateBack = onNavigateBack
+        self.navigateBackAccessibilityLabel = navigateBackAccessibilityLabel
         self.onOpenSheet = onOpenSheet
         self.currentBrightnessRatio = currentBrightnessRatio
         self.onSetBrightnessRatio = onSetBrightnessRatio
@@ -101,7 +113,11 @@ struct ExamplePlayerStage: View {
                 currentBrightnessRatio: currentBrightnessRatio,
                 onSetBrightnessRatio: onSetBrightnessRatio,
                 currentVolumeRatio: currentVolumeRatio,
-                onSetVolumeRatio: onSetVolumeRatio
+                onSetVolumeRatio: onSetVolumeRatio,
+                contentOverlay: contentOverlay,
+                landscapeControlBarLeading: landscapeControlBarLeading,
+                onNavigateBack: onNavigateBack,
+                navigateBackAccessibilityLabel: navigateBackAccessibilityLabel
             )
 
             if !pictureInPicturePresentation,

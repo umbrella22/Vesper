@@ -168,6 +168,35 @@ corresponding gesture. `pictureInPicturePresentation` hides the custom overlay
 and disables Stage gestures while system Picture in Picture controls are
 active.
 
+### Host Layer And Control Contract
+
+The Stage paint order is the playback surface, `contentOverlay`, Stage
+gestures, control chrome, and host drawers or dialogs. `contentOverlay` is
+clipped to the Stage, excluded from pointer and accessibility input, and hidden
+during `pictureInPicturePresentation`. It is suitable for captions, annotations,
+and normal or advanced danmaku that must remain below playback controls.
+
+`landscapeControlBarLeading` renders immediately after the landscape play
+button and before live, speed, quality, and fullscreen controls. A missing slot
+adds no child, spacing, or semantics. The slot is a direct row child, so the
+host can provide a fixed width or participate in the row's flexible layout.
+Controls that are not available should return no slot content.
+
+`onNavigateBack` adds a leading top-bar action. A missing callback removes the
+button. The host supplies a state-specific accessibility label and implements
+navigation, fullscreen exit, or mode exit behavior.
+
+Flutter hosts set `keepControlsVisible` while an input field is focused or a
+host drawer is open. Releasing it restarts the Stage auto-hide interval. Compose
+and SwiftUI hosts apply the same rule through their existing
+`controlsVisible` state binding. Host drawers and dialogs render outside the
+Stage so they remain above all Stage layers.
+
+The UI packages isolate the host content layer from Stage repaint work. The
+host bounds parsing, layout, caching, animation, and drawing cost for its
+content. Performance telemetry may report frame pressure while the layer is
+active; that overlap does not identify the layer as the cause.
+
 ### Android Stage
 
 The UI module depends on the Compose adapter, which depends on the core kit.
@@ -204,6 +233,10 @@ VesperPlayerStage(
     onSetBrightnessRatio = { deviceControls.setBrightnessRatio(it) },
     currentVolumeRatio = { deviceControls.currentVolumeRatio() },
     onSetVolumeRatio = { deviceControls.setVolumeRatio(it) },
+    contentOverlay = { HostContentOverlay() },
+    landscapeControlBarLeading = { HostLandscapeControls() },
+    onNavigateBack = { exitCurrentPresentation() },
+    navigateBackContentDescription = "Exit fullscreen",
 )
 ```
 
@@ -252,7 +285,11 @@ VesperPlayerStage(
     currentBrightnessRatio: deviceControls.currentBrightnessRatio,
     onSetBrightnessRatio: deviceControls.setBrightnessRatio,
     currentVolumeRatio: deviceControls.currentVolumeRatio,
-    onSetVolumeRatio: deviceControls.setVolumeRatio
+    onSetVolumeRatio: deviceControls.setVolumeRatio,
+    contentOverlay: AnyView(HostContentOverlay()),
+    landscapeControlBarLeading: AnyView(HostLandscapeControls()),
+    onNavigateBack: { exitCurrentPresentation() },
+    navigateBackAccessibilityLabel: "Exit fullscreen"
 )
 ```
 
@@ -292,6 +329,11 @@ VesperPlayerStage(
   snapshot: snapshot,
   isPortrait: isPortrait,
   sheetOpen: activeSheet != null,
+  keepControlsVisible: activeSheet != null || composerHasFocus,
+  contentOverlay: const HostContentOverlay(),
+  landscapeControlBarLeading: const HostLandscapeControls(),
+  onNavigateBack: exitCurrentPresentation,
+  navigateBackSemanticLabel: 'Exit fullscreen',
   onOpenSheet: (sheet) => activeSheet = sheet,
   onToggleFullscreen: toggleFullscreen,
   deviceControls: deviceControls,

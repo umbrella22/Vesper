@@ -4,6 +4,8 @@ import VesperPlayerKit
 @MainActor
 public struct VesperPlayerStage: View {
     let surface: AnyView
+    let contentOverlay: AnyView?
+    let landscapeControlBarLeading: AnyView?
     let uiState: PlayerHostUiState
     let trackCatalog: VesperTrackCatalog
     let trackSelection: VesperTrackSelectionSnapshot
@@ -20,6 +22,8 @@ public struct VesperPlayerStage: View {
     let onSeekToLiveEdge: () -> Void
     let onSetPlaybackRate: (Float) -> Void
     let onToggleFullscreen: () -> Void
+    let onNavigateBack: (() -> Void)?
+    let navigateBackAccessibilityLabel: String?
     let onOpenSheet: (VesperPlayerStageSheet) -> Void
     let currentBrightnessRatio: () -> Double?
     let onSetBrightnessRatio: (Double) -> Double?
@@ -32,6 +36,8 @@ public struct VesperPlayerStage: View {
     @State var gestureFeedbackTask: Task<Void, Never>?
     @State var speedGestureRestoreRate: Float?
 
+    /// Creates a Stage with optional host content, landscape controls, and a
+    /// state-labelled navigation action.
     public init(
         surface: AnyView,
         uiState: PlayerHostUiState,
@@ -54,9 +60,15 @@ public struct VesperPlayerStage: View {
         currentBrightnessRatio: @escaping () -> Double? = { nil },
         onSetBrightnessRatio: @escaping (Double) -> Double? = { _ in nil },
         currentVolumeRatio: @escaping () -> Double? = { nil },
-        onSetVolumeRatio: @escaping (Double) -> Double? = { _ in nil }
+        onSetVolumeRatio: @escaping (Double) -> Double? = { _ in nil },
+        contentOverlay: AnyView? = nil,
+        landscapeControlBarLeading: AnyView? = nil,
+        onNavigateBack: (() -> Void)? = nil,
+        navigateBackAccessibilityLabel: String? = nil
     ) {
         self.surface = surface
+        self.contentOverlay = contentOverlay
+        self.landscapeControlBarLeading = landscapeControlBarLeading
         self.uiState = uiState
         self.trackCatalog = trackCatalog
         self.trackSelection = trackSelection
@@ -73,6 +85,8 @@ public struct VesperPlayerStage: View {
         self.onSeekToLiveEdge = onSeekToLiveEdge
         self.onSetPlaybackRate = onSetPlaybackRate
         self.onToggleFullscreen = onToggleFullscreen
+        self.onNavigateBack = onNavigateBack
+        self.navigateBackAccessibilityLabel = navigateBackAccessibilityLabel
         self.onOpenSheet = onOpenSheet
         self.currentBrightnessRatio = currentBrightnessRatio
         self.onSetBrightnessRatio = onSetBrightnessRatio

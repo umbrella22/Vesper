@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- Added SwiftUI Stage slots for non-interactive host content and landscape
+  controls, plus an optional state-labelled top-bar navigation action.
+
+### Changed
+
+- Host content renders between the player surface and Stage gestures, does not
+  participate in hit testing or accessibility, and is omitted during Picture
+  in Picture presentation.
+
 ## 0.5.1 - 2026-09-01
 
 ## 0.5.0 - 2026-08-29

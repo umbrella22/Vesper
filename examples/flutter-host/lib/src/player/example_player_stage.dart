@@ -15,8 +15,13 @@ class ExamplePlayerStage extends StatelessWidget {
     required this.onToggleFullscreen,
     this.sheetOpen = false,
     this.deviceControls,
+    this.contentOverlay,
+    this.landscapeControlBarLeading,
+    this.onNavigateBack,
+    this.navigateBackSemanticLabel,
     this.topBarPrimaryAction,
     this.topBarSecondaryAction,
+    this.keepControlsVisible = false,
     this.pictureInPicturePresentation = false,
   });
 
@@ -25,8 +30,13 @@ class ExamplePlayerStage extends StatelessWidget {
   final bool isPortrait;
   final bool sheetOpen;
   final ExampleDeviceControls? deviceControls;
+  final Widget? contentOverlay;
+  final Widget? landscapeControlBarLeading;
+  final VoidCallback? onNavigateBack;
+  final String? navigateBackSemanticLabel;
   final Widget? topBarPrimaryAction;
   final Widget? topBarSecondaryAction;
+  final bool keepControlsVisible;
   final bool pictureInPicturePresentation;
   final ValueChanged<ExamplePlayerSheet> onOpenSheet;
   final VoidCallback onToggleFullscreen;
@@ -39,8 +49,13 @@ class ExamplePlayerStage extends StatelessWidget {
       isPortrait: isPortrait,
       sheetOpen: sheetOpen,
       deviceControls: deviceControls,
+      contentOverlay: contentOverlay,
+      landscapeControlBarLeading: landscapeControlBarLeading,
+      onNavigateBack: onNavigateBack,
+      navigateBackSemanticLabel: navigateBackSemanticLabel,
       topBarPrimaryAction: topBarPrimaryAction,
       topBarSecondaryAction: topBarSecondaryAction,
+      keepControlsVisible: keepControlsVisible,
       pictureInPicturePresentation: pictureInPicturePresentation,
       onOpenSheet: (sheet) => onOpenSheet(sheet.toExamplePlayerSheet()),
       onToggleFullscreen: onToggleFullscreen,

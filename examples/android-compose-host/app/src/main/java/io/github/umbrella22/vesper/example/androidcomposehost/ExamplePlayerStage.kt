@@ -4,7 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -51,6 +53,10 @@ internal fun ExamplePlayerStage(
     onSetBrightnessRatio: (Float) -> Float? = { null },
     currentVolumeRatio: () -> Float? = { null },
     onSetVolumeRatio: (Float) -> Float? = { null },
+    contentOverlay: (@Composable BoxScope.() -> Unit)? = null,
+    landscapeControlBarLeading: (@Composable RowScope.() -> Unit)? = null,
+    onNavigateBack: (() -> Unit)? = null,
+    navigateBackContentDescription: String? = null,
 ) {
     Box(modifier = modifier) {
         VesperPlayerStage(
@@ -76,6 +82,10 @@ internal fun ExamplePlayerStage(
             onSetBrightnessRatio = onSetBrightnessRatio,
             currentVolumeRatio = currentVolumeRatio,
             onSetVolumeRatio = onSetVolumeRatio,
+            contentOverlay = contentOverlay,
+            landscapeControlBarLeading = landscapeControlBarLeading,
+            onNavigateBack = onNavigateBack,
+            navigateBackContentDescription = navigateBackContentDescription,
         )
         uiState.lastError?.let { error ->
             ExampleStageTerminalError(

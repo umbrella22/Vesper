@@ -7,6 +7,14 @@ extension VesperPlayerStage {
             surface
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            if !pictureInPicturePresentation, let contentOverlay {
+                contentOverlay
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .compositingGroup()
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+
             if !pictureInPicturePresentation {
                 GeometryReader { proxy in
                     Color.clear
@@ -52,6 +60,22 @@ extension VesperPlayerStage {
 
                     VStack(spacing: 0) {
                         HStack(alignment: .top) {
+                            if let onNavigateBack {
+                                StageIconButton(
+                                    systemName: "chevron.left",
+                                    size: 38,
+                                    iconSize: 19,
+                                    backgroundOpacity: 0.0,
+                                    action: onNavigateBack
+                                )
+                                .accessibilityLabel(
+                                    Text(
+                                        navigateBackAccessibilityLabel
+                                            ?? VesperPlayerStageStrings.navigateBack
+                                    )
+                                )
+                            }
+
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(spacing: 8) {
                                     Text(uiState.sourceLabel)
