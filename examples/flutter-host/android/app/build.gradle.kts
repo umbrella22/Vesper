@@ -1,5 +1,4 @@
 import com.android.build.api.dsl.ApplicationExtension
-import com.android.build.api.dsl.LibraryExtension
 import java.io.File
 import org.gradle.api.tasks.Delete
 
@@ -390,12 +389,6 @@ frameProcessorPluginProject.plugins.withId("com.android.library") {
 val performanceDiagnosticsPluginProject =
     rootProject.project(":vesper-player-kit-performance-diagnostics")
 performanceDiagnosticsPluginProject.plugins.withId("com.android.library") {
-    performanceDiagnosticsPluginProject.extensions.configure<LibraryExtension>("android") {
-        sourceSets.getByName("main").jniLibs.directories.apply {
-            clear()
-            add(playerPerformanceDiagnosticsPluginJniLibsDirFile.absolutePath)
-        }
-    }
     performanceDiagnosticsPluginProject.tasks.matching { task ->
         (task.name.startsWith("merge") && task.name.endsWith("JniLibFolders")) ||
             (task.name.startsWith("generate") &&

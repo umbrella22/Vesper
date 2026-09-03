@@ -243,6 +243,7 @@ jobs:
           vesper.player.android.remuxJniLibs=../../../examples/flutter-host/build/app/generated/playerFfmpeg/jniLibs
           vesper.player.android.sourceNormalizerJniLibs=../../../examples/flutter-host/build/app/generated/playerSourceNormalizerFfmpeg/jniLibs
           vesper.player.android.frameProcessorDiagnosticJniLibs=../../../examples/flutter-host/build/app/generated/playerFrameProcessorDiagnostic/jniLibs
+          vesper.player.android.performanceDiagnosticsJniLibs=../../../examples/flutter-host/build/app/generated/playerPerformanceDiagnostics/jniLibs
           vesper.player.android.ffmpegProfile=default
           vesper.player.android.external.ffmpegProfile=default
           EOF
