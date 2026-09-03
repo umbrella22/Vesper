@@ -1,6 +1,6 @@
 #![deny(unsafe_code)]
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use player_plugin::{
@@ -12,7 +12,10 @@ use player_plugin::{
 const PLUGIN_ID: &str = "io.github.umbrella22.vesper.performance-diagnostics";
 const INSTANCE_ID: &str = "io.github.umbrella22.vesper.performance-diagnostics.benchmark";
 const PLUGIN_NAME: &str = "Vesper Performance Diagnostics";
-const MAX_SAMPLES_PER_COHORT: usize = 2_048;
+// Percentiles use a bounded uniform reservoir over the complete run. Counts and
+// extrema remain exact, while memory use stays independent of run duration.
+const MAX_QUANTILE_SAMPLES_PER_COHORT: usize = 2_048;
+const QUANTILE_RESERVOIR_SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const NANOS_PER_MILLISECOND: u64 = 1_000_000;
 const STALL_THRESHOLD_NS: u64 = 500 * NANOS_PER_MILLISECOND;
 
@@ -54,7 +57,10 @@ impl CohortKind {
 #[derive(Debug, Default)]
 struct FrameCohort {
     total_samples: u64,
-    retained_samples: VecDeque<u64>,
+    quantile_samples: Vec<u64>,
+    quantile_rng_state: u64,
+    minimum_load_ns: Option<u64>,
+    maximum_load_ns: Option<u64>,
     jank_count: u64,
     severe_jank_count: u64,
 }
@@ -62,34 +68,46 @@ struct FrameCohort {
 impl FrameCohort {
     fn push(&mut self, load_ns: u64, budget_ns: u64) {
         self.total_samples = self.total_samples.saturating_add(1);
+        self.minimum_load_ns = Some(
+            self.minimum_load_ns
+                .map_or(load_ns, |minimum| minimum.min(load_ns)),
+        );
+        self.maximum_load_ns = Some(
+            self.maximum_load_ns
+                .map_or(load_ns, |maximum| maximum.max(load_ns)),
+        );
         if load_ns > budget_ns {
             self.jank_count = self.jank_count.saturating_add(1);
         }
         if load_ns > budget_ns.saturating_mul(2) {
             self.severe_jank_count = self.severe_jank_count.saturating_add(1);
         }
-        if self.retained_samples.len() == MAX_SAMPLES_PER_COHORT {
-            self.retained_samples.pop_front();
+        if self.quantile_samples.len() < MAX_QUANTILE_SAMPLES_PER_COHORT {
+            self.quantile_samples.push(load_ns);
+            return;
         }
-        self.retained_samples.push_back(load_ns);
+        let replacement = uniform_index(&mut self.quantile_rng_state, self.total_samples);
+        if replacement < MAX_QUANTILE_SAMPLES_PER_COHORT as u64 {
+            self.quantile_samples[replacement as usize] = load_ns;
+        }
     }
 
     fn percentile(&self, percentile: f64) -> u64 {
-        if self.retained_samples.is_empty() {
+        if self.quantile_samples.is_empty() {
             return 0;
         }
-        let mut sorted = self.retained_samples.iter().copied().collect::<Vec<_>>();
+        let mut sorted = self.quantile_samples.clone();
         sorted.sort_unstable();
         let index = ((sorted.len() - 1) as f64 * percentile).ceil() as usize;
         sorted[index.min(sorted.len() - 1)]
     }
 
     fn minimum(&self) -> u64 {
-        self.retained_samples.iter().copied().min().unwrap_or(0)
+        self.minimum_load_ns.unwrap_or(0)
     }
 
     fn maximum(&self) -> u64 {
-        self.retained_samples.iter().copied().max().unwrap_or(0)
+        self.maximum_load_ns.unwrap_or(0)
     }
 
     fn jank_ratio(&self) -> f64 {
@@ -107,6 +125,21 @@ impl FrameCohort {
             self.severe_jank_count as f64 / self.total_samples as f64
         }
     }
+}
+
+fn uniform_index(state: &mut u64, upper_bound: u64) -> u64 {
+    debug_assert!(upper_bound > 0);
+    let mut value = if *state == 0 {
+        QUANTILE_RESERVOIR_SEED
+    } else {
+        *state
+    };
+    value ^= value >> 12;
+    value ^= value << 25;
+    value ^= value >> 27;
+    *state = value;
+    let random = value.wrapping_mul(2_685_821_657_736_338_717);
+    ((random as u128 * upper_bound as u128) >> 64) as u64
 }
 
 #[derive(Debug, Default)]
@@ -855,7 +888,7 @@ mod tests {
     }
 
     #[test]
-    fn retains_only_a_bounded_frame_window() {
+    fn retains_a_bounded_quantile_reservoir_for_the_complete_cohort() {
         let sink = PerformanceDiagnosticsSink::default();
         feed(&sink, vec![frame(false, 8_000_000); 512]);
         for _ in 0..4 {
@@ -868,8 +901,24 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(state.inactive.total_samples, 2_561);
         assert_eq!(
-            state.inactive.retained_samples.len(),
-            MAX_SAMPLES_PER_COHORT
+            state.inactive.quantile_samples.len(),
+            MAX_QUANTILE_SAMPLES_PER_COHORT
         );
+    }
+
+    #[test]
+    fn long_run_percentiles_are_not_biased_to_the_latest_frame_window() {
+        let sink = PerformanceDiagnosticsSink::default();
+        feed(&sink, vec![frame(false, 40_000_000); 4_096]);
+        feed(&sink, vec![frame(false, 8_000_000); 4_096]);
+
+        let state = sink
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(state.inactive.total_samples, 8_192);
+        assert_eq!(state.inactive.minimum(), 8_000_000);
+        assert_eq!(state.inactive.maximum(), 40_000_000);
+        assert_eq!(state.inactive.percentile(0.95), 40_000_000);
     }
 }

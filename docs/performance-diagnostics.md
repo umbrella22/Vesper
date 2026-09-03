@@ -113,6 +113,11 @@ Each cohort contains `sampleCount`, `jankCount`, `severeJankCount`,
 `droppedVideoFrames`, `bufferingCount`, `bufferingDurationNs`, and
 `stallCount`.
 
+Counts, ratios, and min/max values cover the complete diagnostics run. To keep
+memory bounded independently of run duration, p50 and p95 are estimates from a
+uniform reservoir of at most 2048 frame loads per cohort, sampled across the
+complete run rather than from a trailing time window.
+
 The diagnosis contains `kind`, `confidence`, and `evidenceCodes`. Probe,
 diagnosis, confidence, and diagnostic severity are raw-string value objects in
 the host APIs. Decoders preserve unknown values and unknown top-level report

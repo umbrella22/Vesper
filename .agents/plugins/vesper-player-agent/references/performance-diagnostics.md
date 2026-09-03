@@ -58,8 +58,10 @@ All wire durations and timestamps use integer nanoseconds. A report contains:
 - diagnostics and an optional bounded raw-event list
 
 Each cohort contains sample, jank, and severe-jank counts and ratios plus
-`minLoadNs`, `p50LoadNs`, `p95LoadNs`, and `maxLoadNs`. Jank is over one frame
-budget; severe jank is over two budgets.
+`minLoadNs`, `p50LoadNs`, `p95LoadNs`, and `maxLoadNs`. Counts, ratios, and
+extrema cover the complete run; p50 and p95 are bounded-reservoir estimates
+sampled across the complete run. Jank is over one frame budget; severe jank is
+over two budgets.
 
 Known probes are:
 

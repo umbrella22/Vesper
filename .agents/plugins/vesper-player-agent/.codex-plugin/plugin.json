@@ -1,6 +1,6 @@
 {
   "name": "vesper-player-agent",
-  "version": "0.1.0+codex.20260903124554",
+  "version": "0.1.0+codex.20260903164929",
   "description": "Vesper Player SDK maintainer agent for Rust streaming, typed plugin ABI, performance diagnostics, mobile hosts, FFmpeg packaging, and validation.",
   "author": {
     "name": "Vesper Player SDK maintainers",
