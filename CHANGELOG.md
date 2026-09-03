@@ -21,6 +21,12 @@
   playback controls, receives no input, and is removed from Picture in Picture
   presentation.
 
+### Fixed
+
+- Avoided `MediaCodec.setOutputSurface` on affected MediaTek OMX decoders through
+  Android 10, allowing delayed or replaced video surfaces to recreate the codec
+  instead of failing playback.
+
 ## 0.5.1 - 2026-09-01
 
 ### Added

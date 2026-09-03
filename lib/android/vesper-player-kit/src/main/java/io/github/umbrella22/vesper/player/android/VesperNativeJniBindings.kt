@@ -40,12 +40,14 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.text.TextOutput
 import androidx.media3.exoplayer.text.TextRenderer
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
+import androidx.media3.exoplayer.video.VideoRendererEventListener
 import java.io.File
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
@@ -1124,6 +1126,42 @@ internal class VesperNativeJniBindings(
 internal class VesperExternalSubtitleRenderersFactory(
     context: Context,
 ) : DefaultRenderersFactory(context) {
+    override fun buildVideoRenderers(
+        context: Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        eventHandler: Handler,
+        eventListener: VideoRendererEventListener,
+        allowedVideoJoiningTimeMs: Long,
+        out: ArrayList<Renderer>,
+    ) {
+        val primaryRendererIndex = out.size
+        super.buildVideoRenderers(
+            context,
+            extensionRendererMode,
+            mediaCodecSelector,
+            enableDecoderFallback,
+            eventHandler,
+            eventListener,
+            allowedVideoJoiningTimeMs,
+            out,
+        )
+        check(out.getOrNull(primaryRendererIndex) is androidx.media3.exoplayer.video.MediaCodecVideoRenderer) {
+            "Media3 did not install its primary video renderer at the expected index"
+        }
+        out[primaryRendererIndex] =
+            VesperMediaCodecVideoRenderer(
+                context = context,
+                codecAdapterFactory = getCodecAdapterFactory(),
+                mediaCodecSelector = mediaCodecSelector,
+                allowedVideoJoiningTimeMs = allowedVideoJoiningTimeMs,
+                enableDecoderFallback = enableDecoderFallback,
+                eventHandler = eventHandler,
+                eventListener = eventListener,
+            )
+    }
+
     @Suppress("DEPRECATION")
     override fun buildTextRenderers(
         context: Context,
