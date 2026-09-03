@@ -8,6 +8,15 @@ import org.junit.Test
 
 class VesperBundledPluginResolverTest {
     @Test
+    fun classLoaderApkLibraryLocatorRemainsUsable() {
+        val locator =
+            "/data/app/dev.example/base.apk!/lib/arm64-v8a/libvesper_performance_diagnostics.so"
+
+        assertEquals(locator, nonBlankClassLoaderLibraryPath(locator))
+        assertEquals(null, nonBlankClassLoaderLibraryPath(""))
+    }
+
+    @Test
     fun emptyReferencesDoNotImplicitlySelectBundledPlugins() {
         val resolved = resolve()
 

@@ -135,7 +135,7 @@ internal object VesperBundledPluginResolver {
             val classLoaderPath =
                 (context.classLoader as? BaseDexClassLoader)
                     ?.findLibrary(libraryName)
-                    ?.takeIf { it.isNotBlank() && File(it).isFile }
+                    ?.let(::nonBlankClassLoaderLibraryPath)
             if (classLoaderPath != null) {
                 return classLoaderPath
             }
@@ -146,3 +146,6 @@ internal object VesperBundledPluginResolver {
         }
     }
 }
+
+internal fun nonBlankClassLoaderLibraryPath(path: String): String? =
+    path.takeIf(String::isNotBlank)

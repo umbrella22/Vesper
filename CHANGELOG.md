@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- Accepted Android native-library locators returned by the application class
+  loader, including modern uncompressed `base.apk!/lib/...` entries, so optional
+  plugins no longer require legacy JNI packaging in host applications.
+
 ## 0.5.2 - 2026-09-03
 
 ### Added
