@@ -51,6 +51,7 @@ class RunnerTests: XCTestCase {
       "VesperPlayerSourceNormalizerFfmpegPlugin",
       "VesperPlayerDecoderVideoToolboxPlugin",
       "VesperPlayerFrameProcessorDiagnosticPlugin",
+      "VesperPlayerPerformanceDiagnosticsPlugin",
     ] {
       let binaryURL = frameworksURL
         .appendingPathComponent("\(frameworkName).framework", isDirectory: true)
@@ -73,6 +74,39 @@ class RunnerTests: XCTestCase {
         continue
       }
     }
+  }
+
+  func testPerformanceDiagnosticsBooleanMappingRejectsNumericNSNumber() throws {
+    XCTAssertThrowsError(
+      try ["includeRawEvents": NSNumber(value: 1)].toPerformanceDiagnosticsConfiguration()
+    ) { error in
+      XCTAssertEqual(
+        (error as? VesperPerformanceDiagnosticsError)?.code,
+        .invalidConfiguration
+      )
+    }
+
+    XCTAssertThrowsError(
+      try ["expectedOverlayActive": NSNumber(value: 1)]
+        .optionalPerformanceExpectedOverlayActive()
+    ) { error in
+      XCTAssertEqual(
+        (error as? VesperPerformanceDiagnosticsError)?.code,
+        .protocolViolation
+      )
+    }
+  }
+
+  func testPerformanceDiagnosticsBooleanMappingAcceptsCfBoolean() throws {
+    let configuration = try ["includeRawEvents": NSNumber(value: true)]
+      .toPerformanceDiagnosticsConfiguration()
+    XCTAssertTrue(configuration.includeRawEvents)
+
+    XCTAssertEqual(
+      try ["expectedOverlayActive": NSNumber(value: false)]
+        .optionalPerformanceExpectedOverlayActive(),
+      false
+    )
   }
 
   private func dynamicLoaderMessage() -> String {

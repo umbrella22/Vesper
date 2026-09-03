@@ -120,6 +120,7 @@ check before exposing advanced controls.
 | DRM direct playback        | ✅ Widevine through Media3 direct paths | ✅ FairPlay through AVPlayer direct paths | ⛔ not supported                                                                                                                                    | ✅ Android / iOS direct native paths only           |
 | Hardware decode probe      | `VesperDecoderBackend`            | `VesperCodecSupport`                       | macOS VideoToolbox native-frame opt-in; Windows D3D11 roadmap; Linux software-only today                                                            | Reflected through mobile capabilities                |
 | Plugin startup diagnostics | Internal runtime diagnostics      | Internal runtime diagnostics               | macOS / Windows decoder diagnostics; macOS frame processor chain; Linux reports unsupported diagnostics for configured plugin paths                | Exposed as create-result diagnostics where supported |
+| Performance diagnostics    | Optional FrameMetrics BenchmarkSink | Optional DisplayLink BenchmarkSink        | Rust diagnostics plugin compiles portably; no desktop UI probe                                                                                      | Optional Flutter FrameTiming facade                  |
 | Native audio processing    | ⛔ direct Media3 path              | ⛔ direct AVPlayer path                     | ⚠️ experimental `AudioProcessor` with preserve-pitch and follow-rate modes                                                                         | ⛔ not exposed on mobile                              |
 
 Flutter support is mobile-only for now. Desktop Flutter targets are intentionally
@@ -623,8 +624,9 @@ name:
   `VesperFFmpegAVUtil.xcframework.zip`
 - iOS optional plugins: `VesperPlayerRemuxFfmpegPlugin.xcframework.zip`,
   `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`,
-  `VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip`, and
-  `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip`
+  `VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip`,
+  `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip`, and
+  `VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip`
 - iOS FFmpeg redistribution materials:
   `VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip` and
   `VesperPlayerOptionalPlugins-FFmpeg-<version>-source.tar.xz`

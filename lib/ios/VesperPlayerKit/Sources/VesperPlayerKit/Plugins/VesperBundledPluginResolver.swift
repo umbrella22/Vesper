@@ -53,6 +53,8 @@ enum VesperBundledPluginResolver {
             "VesperPlayerDecoderVideoToolboxPlugin",
         "dev.vesper.frame-processor-diagnostic":
             "VesperPlayerFrameProcessorDiagnosticPlugin",
+        "io.github.umbrella22.vesper.performance-diagnostics":
+            "VesperPlayerPerformanceDiagnosticsPlugin",
     ]
 
     static func resolvePluginArtifacts(

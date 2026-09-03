@@ -56,7 +56,7 @@ internal object PlayerBridgeFactory {
                         }
                 try {
                     val benchmarkRecorder =
-                        VesperBenchmarkRecorder(
+                        VesperBenchmarkCoordinator(
                             configuration = benchmarkConfiguration,
                             context = appContext,
                         )

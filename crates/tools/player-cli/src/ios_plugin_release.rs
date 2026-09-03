@@ -6702,6 +6702,7 @@ mod implementation {
             "source-normalizer-ffmpeg" => Ok(IosPluginId::SourceNormalizerFfmpeg),
             "decoder-videotoolbox" => Ok(IosPluginId::DecoderVideoToolbox),
             "frame-processor-diagnostic" => Ok(IosPluginId::FrameProcessorDiagnostic),
+            "performance-diagnostics" => Ok(IosPluginId::PerformanceDiagnostics),
             _ => Err(IosError::storage(format!(
                 "iOS plugin release journal contains an unknown plugin ID: {value}"
             ))),

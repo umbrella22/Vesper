@@ -64,6 +64,7 @@ jobs:
             vesper-player-kit-external-playback
             vesper-player-kit-source-normalizer-ffmpeg
             vesper-player-kit-remux-ffmpeg
+            vesper-player-kit-performance-diagnostics
           )
 
           for attempt in $(seq 1 540); do

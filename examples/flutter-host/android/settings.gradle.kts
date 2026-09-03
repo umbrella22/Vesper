@@ -46,6 +46,7 @@ include(":vesper-player-kit-external-playback")
 include(":vesper-player-kit-remux-ffmpeg")
 include(":vesper-player-kit-source-normalizer-ffmpeg")
 include(":vesper-player-kit-frame-processor-diagnostic")
+include(":vesper-player-kit-performance-diagnostics")
 
 project(":vesper-player-kit").projectDir = file("../../../lib/android/vesper-player-kit")
 project(":vesper-player-kit-ffmpeg-runtime").projectDir = file("../../../lib/android/vesper-player-kit-ffmpeg-runtime")
@@ -56,3 +57,5 @@ project(":vesper-player-kit-source-normalizer-ffmpeg").projectDir =
     file("../../../lib/android/vesper-player-kit-source-normalizer-ffmpeg")
 project(":vesper-player-kit-frame-processor-diagnostic").projectDir =
     file("../../../lib/android/vesper-player-kit-frame-processor-diagnostic")
+project(":vesper-player-kit-performance-diagnostics").projectDir =
+    file("../../../lib/android/vesper-player-kit-performance-diagnostics")

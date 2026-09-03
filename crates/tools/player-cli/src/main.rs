@@ -156,6 +156,9 @@ enum IosCommand {
     /// Builds the diagnostic frame processor plugin libraries.
     #[command(name = "frame-processor-plugin")]
     FrameProcessorPlugin(IosPluginBuildArgs),
+    /// Builds the performance diagnostics BenchmarkSink plugin libraries.
+    #[command(name = "performance-diagnostics-plugin")]
+    PerformanceDiagnosticsPlugin(IosPluginBuildArgs),
     /// Builds the internal VideoToolbox decoder plugin libraries.
     #[command(name = "decoder-videotoolbox-plugin", hide = true)]
     DecoderVideoToolboxPlugin(IosPluginBuildArgs),
@@ -168,6 +171,9 @@ enum IosCommand {
     /// Builds and stages the diagnostic frame processor XCFramework release.
     #[command(name = "stage-frame-processor-plugin-release")]
     StageFrameProcessorPluginRelease(IosPluginReleaseArgs),
+    /// Builds and stages the performance diagnostics XCFramework release.
+    #[command(name = "stage-performance-diagnostics-plugin-release")]
+    StagePerformanceDiagnosticsPluginRelease(IosPluginReleaseArgs),
     /// Builds and stages the internal VideoToolbox decoder XCFramework release.
     #[command(name = "stage-decoder-videotoolbox-plugin-release", hide = true)]
     StageDecoderVideoToolboxPluginRelease(IosPluginReleaseArgs),
@@ -455,6 +461,9 @@ enum AndroidCommand {
     /// Builds the Android diagnostic FrameProcessor plugin.
     #[command(name = "frame-processor-plugin")]
     FrameProcessorPlugin(AndroidWorkerArgs),
+    /// Builds the Android performance diagnostics BenchmarkSink plugin.
+    #[command(name = "performance-diagnostics-plugin")]
+    PerformanceDiagnosticsPlugin(AndroidWorkerArgs),
     /// Stages Android host-kit release artifacts.
     #[command(name = "stage-release")]
     StageRelease(AndroidStageReleaseArgs),
@@ -1488,6 +1497,12 @@ fn run_ios(arguments: IosArgs) -> CliResult<()> {
             arguments,
             &mut output,
         ),
+        IosCommand::PerformanceDiagnosticsPlugin(arguments) => run_ios_plugin_build(
+            requested_root.as_deref(),
+            ios_plugin::IosPluginId::PerformanceDiagnostics,
+            arguments,
+            &mut output,
+        ),
         IosCommand::DecoderVideoToolboxPlugin(arguments) => run_ios_plugin_build(
             requested_root.as_deref(),
             ios_plugin::IosPluginId::DecoderVideoToolbox,
@@ -1509,6 +1524,12 @@ fn run_ios(arguments: IosArgs) -> CliResult<()> {
         IosCommand::StageFrameProcessorPluginRelease(arguments) => run_ios_plugin_release(
             requested_root.as_deref(),
             ios_plugin::IosPluginId::FrameProcessorDiagnostic,
+            arguments,
+            &mut output,
+        ),
+        IosCommand::StagePerformanceDiagnosticsPluginRelease(arguments) => run_ios_plugin_release(
+            requested_root.as_deref(),
+            ios_plugin::IosPluginId::PerformanceDiagnostics,
             arguments,
             &mut output,
         ),
@@ -1822,6 +1843,17 @@ fn run_android(arguments: AndroidArgs) -> CliResult<()> {
             android::build_runtime_free_plugin(
                 &root,
                 "frame-processor-diagnostic",
+                &arguments.arguments,
+                &mut output,
+            )
+            .map_err(map_android_error)
+        }
+        AndroidCommand::PerformanceDiagnosticsPlugin(arguments) => {
+            let stdout = io::stdout();
+            let mut output = stdout.lock();
+            android::build_runtime_free_plugin(
+                &root,
+                "performance-diagnostics",
                 &arguments.arguments,
                 &mut output,
             )

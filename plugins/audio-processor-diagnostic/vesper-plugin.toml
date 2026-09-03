@@ -3,13 +3,13 @@ schema_version = 1
 [plugin]
 id = "dev.vesper.audio-processor-diagnostic"
 name = "Vesper Audio Processor Diagnostic"
-version = "0.5.1"
+version = "0.5.2"
 description = "Experimental Native AudioProcessor conformance fixture with pitch-aware playback-rate processing."
 license = "Apache-2.0"
 publisher = "io.github.umbrella22"
 
 [compatibility]
-host_sdk = ">=0.5.1, <0.6.0"
+host_sdk = ">=0.5.2, <0.6.0"
 abi_major = 1
 abi_minor_min = 0
 abi_minor_max = 0

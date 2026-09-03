@@ -2,6 +2,7 @@ package io.github.umbrella22.vesper.player.android
 
 import android.content.Context
 import android.view.ViewGroup
+import android.view.Window
 import android.widget.FrameLayout
 import androidx.core.view.isEmpty
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,7 +24,7 @@ internal class FakePlayerBridge(
     private var attachedHost: ViewGroup? = null
     private val i18n = VesperPlayerI18n.fromContext(appContext)
     private val benchmarkRecorder =
-        VesperBenchmarkRecorder(
+        VesperBenchmarkCoordinator(
             configuration = benchmarkConfiguration,
             context = appContext,
         )
@@ -357,6 +358,48 @@ internal class FakePlayerBridge(
 
     override fun awaitBenchmarkSinkShutdown(timeoutMs: Long): Boolean =
         benchmarkRecorder.awaitSinkShutdown(timeoutMs)
+
+    override fun startPerformanceDiagnostics(
+        configuration: VesperPerformanceDiagnosticsConfiguration,
+        probe: VesperPerformanceProbe,
+        window: Window?,
+    ): String = benchmarkRecorder.startPerformance(
+        configuration,
+        probe,
+        window,
+        initialPlaybackActive = _uiState.value.playbackState == PlaybackStateUi.Playing &&
+            !_uiState.value.isBuffering,
+    )
+
+    override fun updatePerformanceOverlayState(
+        runId: String,
+        state: VesperPerformanceOverlayState,
+    ) = benchmarkRecorder.updateOverlayState(runId, state)
+
+    override fun recordPerformanceMarker(
+        runId: String,
+        name: String,
+        value: Double?,
+        sequenceIndex: Int?,
+        expectedOverlayActive: Boolean?,
+    ) = benchmarkRecorder.recordMarker(
+        runId,
+        name,
+        value,
+        sequenceIndex,
+        expectedOverlayActive,
+    )
+
+    override fun submitPerformanceFrameSamples(
+        runId: String,
+        samples: List<VesperPerformanceFrameSample>,
+    ) = benchmarkRecorder.recordPerformanceFrames(runId, samples)
+
+    override fun performanceDiagnosticsSnapshot(runId: String): VesperPerformanceDiagnosticsReport =
+        benchmarkRecorder.snapshot(runId)
+
+    override fun stopPerformanceDiagnostics(runId: String): VesperPerformanceDiagnosticsReport =
+        benchmarkRecorder.stop(runId)
 
     private inline fun updateState(transform: PlayerHostUiState.() -> PlayerHostUiState) {
         _uiState.value = _uiState.value.transform()

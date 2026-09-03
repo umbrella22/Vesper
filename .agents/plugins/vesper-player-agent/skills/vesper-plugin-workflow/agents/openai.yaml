@@ -1,0 +1,6 @@
+interface:
+  display_name: "Vesper Plugin Workflow"
+  short_description: "Checked ABI and plugin workflow rules"
+  default_prompt: "Use $vesper-plugin-workflow to add this Vesper extension point safely."
+policy:
+  allow_implicit_invocation: true

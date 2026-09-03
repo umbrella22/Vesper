@@ -1,0 +1,41 @@
+schema_version = 1
+
+[plugin]
+id = "io.github.umbrella22.vesper.performance-diagnostics"
+name = "Vesper Performance Diagnostics"
+version = "0.5.2"
+description = "Optional Native BenchmarkSink for bounded playback and overlay-correlated UI performance diagnostics."
+license = "Apache-2.0"
+publisher = "io.github.umbrella22"
+
+[compatibility]
+host_sdk = ">=0.5.2, <0.6.0"
+abi_major = 1
+abi_minor_min = 0
+abi_minor_max = 0
+
+[[capabilities]]
+interface_id = "2d8e5be8-b1de-5e83-8fe0-6118aabc5118"
+instance_id = "io.github.umbrella22.vesper.performance-diagnostics.benchmark"
+interface_major = 1
+interface_minor = 0
+stability = "stable"
+
+[[artifacts]]
+transport = "native"
+target = "aarch64-apple-darwin"
+format = "dylib"
+source = "dist/libvesper_performance_diagnostics.dylib"
+path = "artifacts/aarch64-apple-darwin/libvesper_performance_diagnostics.dylib"
+architecture = "arm64"
+capabilities = [{ interface_id = "2d8e5be8-b1de-5e83-8fe0-6118aabc5118", instance_id = "io.github.umbrella22.vesper.performance-diagnostics.benchmark" }]
+
+[[package_files]]
+source = "../../LICENSE"
+path = "licenses/LICENSE"
+kind = "license"
+
+[[package_files]]
+source = "THIRD_PARTY_NOTICES.md"
+path = "notices/THIRD_PARTY_NOTICES.md"
+kind = "notice"

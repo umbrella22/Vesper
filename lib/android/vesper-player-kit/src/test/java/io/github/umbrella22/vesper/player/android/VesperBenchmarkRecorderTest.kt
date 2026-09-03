@@ -85,6 +85,31 @@ class VesperBenchmarkRecorderTest {
     }
 
     @Test
+    fun readinessReportsOpenFailureBeforeDisposal() {
+        val runtime =
+            object : VesperBenchmarkSinkRuntime {
+                override fun open(
+                    context: Context?,
+                    references: List<VesperPluginReference>,
+                ): VesperBenchmarkSinkConnection = throw IllegalStateException("registry rejected")
+
+                override fun submit(sessionHandle: Long, batchJson: String) = error("unexpected submit")
+
+                override fun flush(sessionHandle: Long) = error("unexpected flush")
+
+                override fun dispose(sessionHandle: Long) = error("unexpected dispose")
+            }
+        val recorder = VesperBenchmarkRecorder(configuration(), sinkRuntime = runtime)
+
+        assertEquals(
+            VesperBenchmarkSinkReadiness.OpenFailed,
+            recorder.awaitSinkReadiness(2_000),
+        )
+        recorder.dispose()
+        assertTrue(recorder.awaitSinkShutdown(2_000))
+    }
+
+    @Test
     fun registryClosesWhenNativeSessionDisposeFails() {
         val operations = mutableListOf<String>()
         val runtime = RecordingBenchmarkSinkRuntime(operations, failDispose = true)
@@ -173,19 +198,19 @@ class VesperBenchmarkRecorderTest {
                     sessionHandle: Long,
                     batchJson: String,
                 ): String {
-                    val eventName =
-                        JSONObject(batchJson)
-                            .getJSONArray("events")
-                            .getJSONObject(0)
-                            .getString("eventName")
-                    submittedEventNames += eventName
+                    val events = JSONObject(batchJson).getJSONArray("events")
+                    val eventNames =
+                        List(events.length()) { index ->
+                            events.getJSONObject(index).getString("eventName")
+                        }
+                    submittedEventNames += eventNames
                     if (firstSubmit.compareAndSet(true, false)) {
                         firstSubmitStarted.countDown()
                         check(allowFirstSubmit.await(2, TimeUnit.SECONDS)) {
                             "first submit was not released"
                         }
                     }
-                    return emptyBenchmarkReportJson(acceptedEvents = 1)
+                    return emptyBenchmarkReportJson(acceptedEvents = eventNames.size.toLong())
                 }
             }
         val recorder = VesperBenchmarkRecorder(configuration(), sinkRuntime = runtime)
@@ -241,6 +266,50 @@ class VesperBenchmarkRecorderTest {
         assertEquals(2L, recorder.summary().pluginDroppedEvents)
         assertEquals(1_022L, recorder.summary().pluginAcceptedEvents)
         assertEquals(listOf("flush", "flush", "dispose", "close"), operations.takeLast(4))
+    }
+
+    @Test
+    fun concurrentFlushWaitersShareOnePendingControl() {
+        val operations = Collections.synchronizedList(mutableListOf<String>())
+        val openStarted = CountDownLatch(1)
+        val allowOpen = CountDownLatch(1)
+        val runtime =
+            object : RecordingBenchmarkSinkRuntime(operations) {
+                override fun open(
+                    context: Context?,
+                    references: List<VesperPluginReference>,
+                ): VesperBenchmarkSinkConnection {
+                    operations += "open"
+                    openStarted.countDown()
+                    check(allowOpen.await(2, TimeUnit.SECONDS)) { "open was not released" }
+                    return connection(operations)
+                }
+            }
+        val recorder = VesperBenchmarkRecorder(configuration(), sinkRuntime = runtime)
+        assertTrue(openStarted.await(2, TimeUnit.SECONDS))
+        val startGate = CountDownLatch(1)
+        val entered = CountDownLatch(32)
+        val results = Collections.synchronizedList(mutableListOf<Boolean>())
+        val threads = List(32) {
+            Thread {
+                startGate.await(2, TimeUnit.SECONDS)
+                entered.countDown()
+                results += recorder.flushSinksAndAwait(2_000)
+            }.apply { start() }
+        }
+
+        startGate.countDown()
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+        Thread.sleep(100)
+        allowOpen.countDown()
+        threads.forEach { it.join(2_000) }
+        recorder.dispose()
+        assertTrue(recorder.awaitSinkShutdown(2_000))
+
+        assertEquals(32, results.size)
+        assertTrue(results.all { it })
+        assertEquals(2, operations.count { it == "flush" })
+        assertEquals(1, operations.count { it == "dispose" })
     }
 
     @Test
@@ -368,7 +437,8 @@ class VesperBenchmarkRecorderTest {
             batchJson: String,
         ): String {
             operations += "submit"
-            return emptyBenchmarkReportJson(acceptedEvents = 1)
+            val eventCount = JSONObject(batchJson).getJSONArray("events").length().toLong()
+            return emptyBenchmarkReportJson(acceptedEvents = eventCount)
         }
 
         override fun flush(sessionHandle: Long): String {

@@ -93,6 +93,15 @@ object VesperBundledPluginReferences {
             pluginId = "dev.vesper.frame-processor-diagnostic",
             transport = VesperPluginTransport.Native,
         )
+
+    @JvmField
+    val performanceDiagnostics =
+        VesperPluginReference(
+            pluginId = "io.github.umbrella22.vesper.performance-diagnostics",
+            capabilityInstanceId =
+                "io.github.umbrella22.vesper.performance-diagnostics.benchmark",
+            transport = VesperPluginTransport.Native,
+        )
 }
 
 internal fun isValidPluginIdentity(value: String): Boolean {

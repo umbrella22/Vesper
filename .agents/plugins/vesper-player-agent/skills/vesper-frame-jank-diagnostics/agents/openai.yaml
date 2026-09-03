@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vesper Frame Jank Diagnostics"
+  short_description: "Analyze Vesper performance diagnostics reports"
+  default_prompt: "Use $vesper-frame-jank-diagnostics to validate and interpret this Vesper schema v1 diagnostics report without claiming causation."

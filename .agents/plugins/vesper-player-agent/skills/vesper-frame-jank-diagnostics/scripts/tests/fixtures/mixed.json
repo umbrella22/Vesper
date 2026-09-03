@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "runId": "run-mixed",
+  "sessionId": "session-1",
+  "platform": "android",
+  "probe": "androidFrameMetrics",
+  "durationNs": 55000000000,
+  "frameBudgetNs": 16666667,
+  "cohorts": {
+    "overlayInactive": {"sampleCount": 300, "jankCount": 6, "severeJankCount": 0, "jankRatio": 0.02, "severeJankRatio": 0.0, "minLoadNs": 2000000, "p50LoadNs": 5000000, "p95LoadNs": 12000000, "maxLoadNs": 24000000},
+    "overlayActive": {"sampleCount": 300, "jankCount": 30, "severeJankCount": 3, "jankRatio": 0.1, "severeJankRatio": 0.01, "minLoadNs": 3000000, "p50LoadNs": 9000000, "p95LoadNs": 25000000, "maxLoadNs": 44000000},
+    "transition": {"sampleCount": 8, "jankCount": 1, "severeJankCount": 0, "jankRatio": 0.125, "severeJankRatio": 0.0, "minLoadNs": 3000000, "p50LoadNs": 7000000, "p95LoadNs": 19000000, "maxLoadNs": 24000000},
+    "excluded": {"sampleCount": 0, "jankCount": 0, "severeJankCount": 0, "jankRatio": 0.0, "severeJankRatio": 0.0, "minLoadNs": 0, "p50LoadNs": 0, "p95LoadNs": 0, "maxLoadNs": 0}
+  },
+  "playback": {"activeDurationNs": 48000000000, "droppedVideoFrames": 0, "bufferingCount": 1, "bufferingDurationNs": 500000000, "stallCount": 1},
+  "diagnosis": {"kind": "mixedPressure", "confidence": "medium", "evidenceCodes": ["overlay_steady_cohort_delta", "native_playback_pressure"]},
+  "acceptedEvents": 610,
+  "droppedEvents": 0,
+  "rawEventsDropped": 0,
+  "diagnostics": [{"code": "performance.diagnosis", "severity": "info", "message": "Performance diagnosis reports correlation, not causation.", "attributes": {"kind": "mixedPressure"}}],
+  "rawEvents": []
+}

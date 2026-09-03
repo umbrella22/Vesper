@@ -85,9 +85,12 @@ public struct VesperPluginReference: Equatable, Sendable {
         )
     }
 
-    fileprivate init(knownValidPluginId pluginId: String) {
+    fileprivate init(
+        knownValidPluginId pluginId: String,
+        capabilityInstanceId: String? = nil
+    ) {
         self.pluginId = pluginId
-        self.capabilityInstanceId = nil
+        self.capabilityInstanceId = capabilityInstanceId
         self.transport = .native
     }
 }
@@ -105,6 +108,11 @@ public enum VesperBundledPluginReferences {
     )
     public static let frameProcessorDiagnostic = VesperPluginReference(
         knownValidPluginId: "dev.vesper.frame-processor-diagnostic"
+    )
+    public static let performanceDiagnostics = VesperPluginReference(
+        knownValidPluginId: "io.github.umbrella22.vesper.performance-diagnostics",
+        capabilityInstanceId:
+            "io.github.umbrella22.vesper.performance-diagnostics.benchmark"
     )
 }
 

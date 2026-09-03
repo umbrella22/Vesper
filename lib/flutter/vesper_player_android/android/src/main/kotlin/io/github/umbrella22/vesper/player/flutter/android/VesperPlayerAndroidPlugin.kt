@@ -36,6 +36,7 @@ import io.github.umbrella22.vesper.player.android.VesperBenchmarkConfiguration
 import io.github.umbrella22.vesper.player.android.VesperBenchmarkEvent
 import io.github.umbrella22.vesper.player.android.VesperBenchmarkMetricSummary
 import io.github.umbrella22.vesper.player.android.VesperBenchmarkSummary
+import io.github.umbrella22.vesper.player.android.VesperPerformanceProbe
 import io.github.umbrella22.vesper.player.android.VesperBufferingPolicy
 import io.github.umbrella22.vesper.player.android.VesperBufferingPreset
 import io.github.umbrella22.vesper.player.android.VesperCachePolicy
@@ -304,6 +305,65 @@ class VesperPlayerAndroidPlugin :
             }
             "drainPipelineEventHookReports" -> handleSessionCommand(call, result) { session ->
                 session.controller.drainPipelineEventHookReports().toPipelineEventHookReportMap()
+            }
+            "startPerformanceDiagnostics" -> handleSessionCommandAsync(call, result) { session ->
+                val arguments = call.argumentMap()
+                val configuration =
+                    (arguments["configuration"] as? Map<*, *>)?.stringMap()
+                        ?.toPerformanceDiagnosticsConfiguration()
+                        ?: io.github.umbrella22.vesper.player.android.VesperPerformanceDiagnosticsConfiguration()
+                val probe = VesperPerformanceProbe(
+                    arguments["probe"] as? String ?: "flutterFrameTiming",
+                )
+                val diagnostics = session.controller.startPerformanceDiagnostics(
+                    probe = probe,
+                    configuration = configuration,
+                )
+                session.performanceDiagnosticsSession = diagnostics
+                diagnostics.runId
+            }
+            "updatePerformanceOverlayState" -> handleSessionCommandAsync(call, result) { session ->
+                val arguments = call.argumentMap()
+                val diagnostics = session.requirePerformanceDiagnostics(arguments)
+                val state = requireNestedMap(arguments, "state").toPerformanceOverlayState()
+                diagnostics.updateOverlayState(state)
+                null
+            }
+            "recordPerformanceMarker" -> handleSessionCommandAsync(call, result) { session ->
+                val arguments = call.argumentMap()
+                val diagnostics = session.requirePerformanceDiagnostics(arguments)
+                val name = arguments["name"] as? String
+                    ?: throw IllegalArgumentException("Missing performance marker name.")
+                diagnostics.recordMarker(
+                    name,
+                    value = arguments.optionalPerformanceMarkerValue(),
+                    sequenceIndex = arguments.optionalPerformanceSequenceIndex(),
+                    expectedOverlayActive =
+                        arguments.optionalPerformanceExpectedOverlayActive(),
+                )
+                null
+            }
+            "submitPerformanceFrameSamples" -> handleSessionCommandAsync(call, result) { session ->
+                val arguments = call.argumentMap()
+                val diagnostics = session.requirePerformanceDiagnostics(arguments)
+                val rawSamples = arguments["samples"] as? List<*>
+                    ?: throw IllegalArgumentException("Missing performance frame samples.")
+                require(rawSamples.size <= 120) { "Performance frame batches are limited to 120 samples." }
+                diagnostics.submitFrameSamples(
+                    rawSamples.map { sample ->
+                        require(sample is Map<*, *>) { "Performance frame sample must be a map." }
+                        sample.stringMap().toPerformanceFrameSample()
+                    },
+                )
+                null
+            }
+            "performanceDiagnosticsSnapshot" -> handleSessionCommandAsync(call, result) { session ->
+                val diagnostics = session.requirePerformanceDiagnostics(call.argumentMap())
+                diagnostics.snapshot().toMap()
+            }
+            "stopPerformanceDiagnostics" -> handleSessionCommandAsync(call, result) { session ->
+                val diagnostics = session.requirePerformanceDiagnostics(call.argumentMap())
+                diagnostics.stop().toMap()
             }
             "sampleTimeline" -> handleTimelineSample(call, result)
             "refreshDownloadManager" -> handleDownloadSessionCommand(call, result) { session ->

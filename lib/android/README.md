@@ -14,11 +14,13 @@ artifacts and consumable from any Android app or library.
 | `vesper-player-kit-source-normalizer-ffmpeg` | Optional SourceNormalizer FFmpeg plugin AAR for diagnostics, source preflight, and opt-in normalized-resource playback; depends on the shared FFmpeg runtime |
 | `vesper-player-kit-remux-ffmpeg` | Optional FFmpeg-backed post-download MP4 remux plugin AAR; depends on the core kit and shared FFmpeg runtime and does not bundle `libav*` |
 | `vesper-player-kit-frame-processor-diagnostic` | Optional FrameProcessor diagnostic plugin AAR for capability probing and opt-in SDK-managed native-frame processing; it does not bundle FFmpeg runtime libraries |
+| `vesper-player-kit-performance-diagnostics` | Optional BenchmarkSink plugin AAR for bounded playback and overlay-correlated UI performance reports |
 | `vesper-player-kit-compose`    | Optional Jetpack Compose adapter: `VesperPlayerSurface`, `rememberVesperPlayerController`, `rememberVesperPlayerUiState`, lifecycle-scoped progress refresh                         |
 | `vesper-player-kit-compose-ui` | Optional opinionated Compose UI: `VesperPlayerStage` and stage helpers built on top of the Compose adapter                                                                          |
 
 The external playback, FFmpeg runtime, MediaCodec decoder plugin,
 SourceNormalizer plugin, remux plugin, FrameProcessor diagnostic plugin,
+performance diagnostics plugin,
 Compose adapter, and higher-level Compose UI modules are
 optional. View-based or non-Compose hosts can depend on `vesper-player-kit`
 alone without pulling in Google Play Services, Cast Framework, DLNA discovery,
@@ -64,6 +66,11 @@ dependencies {
 
     // Optional post-download MP4 remux. Core and FFmpeg runtime resolve transitively.
     implementation("io.github.umbrella22.vesper:vesper-player-kit-remux-ffmpeg:<version>")
+
+    // Optional diagnostics. Prefer debugImplementation/profileImplementation
+    // when Release packages must not contain the plugin binary.
+    debugImplementation("io.github.umbrella22.vesper:vesper-player-kit-performance-diagnostics:<version>")
+    profileImplementation("io.github.umbrella22.vesper:vesper-player-kit-performance-diagnostics:<version>")
 }
 ```
 
@@ -83,8 +90,9 @@ Android packaging is `arm64-v8a` only. Use an arm64 device or arm64 Android
 emulator. See [Release Downloads](../../README.md#release-downloads) for the
 public package names and artifact-selection notes.
 
-Maven releases publish seven coordinates: core, both Compose modules, external
-playback, the shared FFmpeg runtime, SourceNormalizer, and post-download remux.
+Maven releases publish eight coordinates: core, both Compose modules, external
+playback, the shared FFmpeg runtime, SourceNormalizer, post-download remux, and
+performance diagnostics.
 The two FFmpeg-backed plugin coordinates remain direct opt-ins. Default
 standalone GitHub Release staging remains core-only. Use the dedicated plugin
 build commands, or set `VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1` for release
@@ -101,8 +109,8 @@ Stable tags publish the matching stable coordinates.
 ### Maven Central Publishing
 
 The `publish-maven-central` release job builds, signs, validates, and uploads one
-Central Portal bundle containing all seven coordinates, including the two
-opt-in FFmpeg-backed plugin AARs. The Maven
+Central Portal bundle containing all eight coordinates, including the two
+opt-in FFmpeg-backed plugin AARs and the diagnostics AAR. The Maven
 `groupId` remains `io.github.umbrella22.vesper`; the Portal namespace controls
 publishing permission and may be that value or one of its parent prefixes. The
 job requires:
@@ -173,6 +181,7 @@ Optional plugin and extension modules can still be assembled explicitly:
 - `:vesper-player-kit-decoder-mediacodec:assembleRelease`
 - `:vesper-player-kit-source-normalizer-ffmpeg:assembleRelease`
 - `:vesper-player-kit-frame-processor-diagnostic:assembleRelease`
+- `:vesper-player-kit-performance-diagnostics:assembleRelease`
 
 ## Subtitle Baseline
 

@@ -182,8 +182,9 @@ The workflow split is intentional:
 - `mobile-lib-release.yml` stages and verifies tagged Android/iOS release
   assets, publishes the GitHub Release, then publishes stable or prerelease
   Android coordinates to Maven Central and the matching iOS binary package
-  through its SwiftPM index repository. The Maven set contains seven
-  coordinates, including the opt-in SourceNormalizer and remux plugins.
+  through its SwiftPM index repository. The Maven set contains eight
+  coordinates, including the opt-in SourceNormalizer, remux, and performance
+  diagnostics plugins.
 - `flutter-pub-release.yml` publishes stable or prerelease Flutter packages
   after applying tag-derived version metadata and waiting for all hosted Maven
   and SwiftPM dependencies.

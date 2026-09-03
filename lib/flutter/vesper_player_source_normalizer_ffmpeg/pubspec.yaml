@@ -1,6 +1,6 @@
 name: vesper_player_source_normalizer_ffmpeg
 description: Optional FFmpeg SourceNormalizer native artifacts for Vesper Player Flutter hosts.
-version: 0.5.1
+version: 0.5.2
 homepage: https://github.com/umbrella22/Vesper
 repository: https://github.com/umbrella22/Vesper
 

@@ -24,7 +24,7 @@ const CORE_RELEASE_ASSETS: [&str; 3] = [
     "VesperPlayerKit-ios-simulator-arm64.framework.zip",
     "VesperPlayerKit.xcframework.zip",
 ];
-const OPTIONAL_RELEASE_FRAMEWORKS: [&str; 7] = [
+const OPTIONAL_RELEASE_FRAMEWORKS: [&str; 8] = [
     "VesperFFmpegAVCodec",
     "VesperFFmpegAVFormat",
     "VesperFFmpegAVUtil",
@@ -32,6 +32,7 @@ const OPTIONAL_RELEASE_FRAMEWORKS: [&str; 7] = [
     "VesperPlayerSourceNormalizerFfmpegPlugin",
     "VesperPlayerDecoderVideoToolboxPlugin",
     "VesperPlayerFrameProcessorDiagnosticPlugin",
+    "VesperPlayerPerformanceDiagnosticsPlugin",
 ];
 const OPTIONAL_COMPLIANCE_ASSET: &str = "VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip";
 const LEGACY_OPTIONAL_RUNTIME_ASSET: &str = "VesperPlayerFfmpegRuntime.xcframework.zip";

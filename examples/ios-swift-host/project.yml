@@ -44,6 +44,10 @@ targets:
         embed: true
         link: false
         codeSign: true
+      - framework: ../../lib/ios/VesperPlayerOptionalPlugins/Artifacts/VesperPlayerPerformanceDiagnosticsPlugin.xcframework
+        embed: true
+        link: false
+        codeSign: true
     settings:
       base:
         CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES

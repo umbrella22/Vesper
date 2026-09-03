@@ -36,7 +36,7 @@ const EMBEDDED_PLUGIN_REGISTRY_FILE: &str = "vesper-plugin-registry.json";
 const IOS_DEVICE_PLUGIN_TARGET: &str = "aarch64-apple-ios";
 const IOS_PLUGIN_ARCHITECTURE: &str = "arm64";
 
-const APP_STORE_FRAMEWORKS: [&str; 7] = [
+const APP_STORE_FRAMEWORKS: [&str; 8] = [
     "VesperFFmpegAVCodec",
     "VesperFFmpegAVFormat",
     "VesperFFmpegAVUtil",
@@ -44,6 +44,7 @@ const APP_STORE_FRAMEWORKS: [&str; 7] = [
     "VesperPlayerSourceNormalizerFfmpegPlugin",
     "VesperPlayerDecoderVideoToolboxPlugin",
     "VesperPlayerFrameProcessorDiagnosticPlugin",
+    "VesperPlayerPerformanceDiagnosticsPlugin",
 ];
 
 const APP_STORE_FFMPEG_FRAMEWORKS: [&str; 5] = [
@@ -54,11 +55,12 @@ const APP_STORE_FFMPEG_FRAMEWORKS: [&str; 5] = [
     "VesperPlayerSourceNormalizerFfmpegPlugin",
 ];
 
-const APP_STORE_PLUGIN_FRAMEWORKS: [&str; 4] = [
+const APP_STORE_PLUGIN_FRAMEWORKS: [&str; 5] = [
     "VesperPlayerRemuxFfmpegPlugin",
     "VesperPlayerSourceNormalizerFfmpegPlugin",
     "VesperPlayerDecoderVideoToolboxPlugin",
     "VesperPlayerFrameProcessorDiagnosticPlugin",
+    "VesperPlayerPerformanceDiagnosticsPlugin",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]

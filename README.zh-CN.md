@@ -442,18 +442,19 @@ GitHub Releases 会以 `VesperPlayerKit` 产品名发布移动端下载产物：
 - iOS 可选 plugins：`VesperPlayerRemuxFfmpegPlugin.xcframework.zip`、
   `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`、
   `VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip`、
-  `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip`
+  `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip`、
+  `VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip`
 - iOS FFmpeg 合规与源码：`VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip`、
   `VesperPlayerOptionalPlugins-FFmpeg-<version>-source.tar.xz`
 - 用于校验 release artifact 的 `SHA256SUMS.txt`
 
 Android 打包当前仅提供 `arm64-v8a`。iOS 二进制打包仅提供 arm64 iPhoneOS
-device 与 Apple Silicon Simulator。Tagged Release 会把七个 iOS 可选 framework
+device 与 Apple Silicon Simulator。Tagged Release 会把八个 iOS 可选 framework
 与 FFmpeg 合规包、唯一一份精确对应源码作为一个通过校验的完整集合发布；额外顶层
 asset、额外 XCFramework slice 或与源码不一致的许可材料都会使发布失败。同一 tag
 重跑时会对账 GitHub Release asset 并移除已经退役的产物。
 iOS 核心 `VesperPlayerKit.xcframework` 不嵌入 FFmpeg；可选 package 由 App
-target 将三个 FFmpeg component framework 与四个 plugin framework 签名并平铺为
+target 将三个 FFmpeg component framework 与五个 plugin framework 签名并平铺为
 `Frameworks/` 下的兄弟项。plugin library path 只传 plugin framework
 executable，不传 FFmpeg component。所有 FFmpeg-backed 兄弟 framework 必须
 来自同一个 FFmpeg profile，保证 `profile-hash.txt` 一致。

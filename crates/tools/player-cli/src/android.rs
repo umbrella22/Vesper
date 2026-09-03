@@ -27,6 +27,7 @@ const ANDROID_DECODER_LIBRARY: &str = "libvesper_decoder_mediacodec.so";
 const ANDROID_SOURCE_NORMALIZER_LIBRARY: &str = "libvesper_source_normalizer_ffmpeg.so";
 const ANDROID_REMUX_LIBRARY: &str = "libvesper_remux_ffmpeg.so";
 const ANDROID_FRAME_PROCESSOR_LIBRARY: &str = "libvesper_frame_processor_diagnostic.so";
+const ANDROID_PERFORMANCE_DIAGNOSTICS_LIBRARY: &str = "libvesper_performance_diagnostics.so";
 const ANDROID_RELAY_LIBRARY: &str = "libvesper_player_relay_ffmpeg.so";
 const FFMPEG_PROFILE_HASH: &str = "profile-hash.txt";
 const SOURCE_NORMALIZER_PROFILE_METADATA: &str = "source-normalizer-profile.txt";
@@ -59,6 +60,8 @@ const SOURCE_NORMALIZER_ASSETS_STAGING_ENV: &str = "VESPER_ANDROID_SOURCE_NORMAL
 const REMUX_JNI_STAGING_ENV: &str = "VESPER_ANDROID_REMUX_JNI_LIBS";
 const REMUX_ASSETS_STAGING_ENV: &str = "VESPER_ANDROID_REMUX_ASSETS";
 const FRAME_PROCESSOR_JNI_STAGING_ENV: &str = "VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS";
+const PERFORMANCE_DIAGNOSTICS_JNI_STAGING_ENV: &str =
+    "VESPER_ANDROID_PERFORMANCE_DIAGNOSTICS_JNI_LIBS";
 const FFMPEG_RUNTIME_JNI_STAGING_ENV: &str = "VESPER_ANDROID_FFMPEG_RUNTIME_JNI_LIBS";
 const FFMPEG_RUNTIME_ASSETS_STAGING_ENV: &str = "VESPER_ANDROID_FFMPEG_RUNTIME_ASSETS";
 const EXTERNAL_RELAY_JNI_STAGING_ENV: &str = "VESPER_ANDROID_EXTERNAL_RELAY_JNI_LIBS";
@@ -180,6 +183,7 @@ impl AndroidFfmpegReleaseLock {
 enum RuntimeFreePlugin {
     DecoderMediaCodec,
     FrameProcessorDiagnostic,
+    PerformanceDiagnostics,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -248,6 +252,7 @@ impl RuntimeFreePlugin {
         match value {
             "decoder-mediacodec" => Ok(Self::DecoderMediaCodec),
             "frame-processor-diagnostic" => Ok(Self::FrameProcessorDiagnostic),
+            "performance-diagnostics" => Ok(Self::PerformanceDiagnostics),
             _ => Err(AndroidError::conformance(format!(
                 "unsupported internal Android runtime-free plugin: {value}"
             ))),
@@ -258,6 +263,7 @@ impl RuntimeFreePlugin {
         match self {
             Self::DecoderMediaCodec => "player-decoder-mediacodec",
             Self::FrameProcessorDiagnostic => "player-frame-processor-diagnostic",
+            Self::PerformanceDiagnostics => "player-performance-diagnostics",
         }
     }
 
@@ -265,6 +271,7 @@ impl RuntimeFreePlugin {
         match self {
             Self::DecoderMediaCodec => ANDROID_DECODER_LIBRARY,
             Self::FrameProcessorDiagnostic => ANDROID_FRAME_PROCESSOR_LIBRARY,
+            Self::PerformanceDiagnostics => ANDROID_PERFORMANCE_DIAGNOSTICS_LIBRARY,
         }
     }
 
@@ -272,6 +279,7 @@ impl RuntimeFreePlugin {
         match self {
             Self::DecoderMediaCodec => "decoder-mediacodec-plugin",
             Self::FrameProcessorDiagnostic => "frame-processor-plugin",
+            Self::PerformanceDiagnostics => "performance-diagnostics-plugin",
         }
     }
 }
@@ -2573,6 +2581,20 @@ fn android_release_artifacts(
                     profile_receipt: None,
                 },
             },
+            AndroidReleaseArtifact {
+                source: project.join(
+                    "vesper-player-kit-performance-diagnostics/build/outputs/aar/vesper-player-kit-performance-diagnostics-release.aar",
+                ),
+                file_name: format!(
+                    "VesperPlayerKitPerformanceDiagnostics-android-{abi}.aar"
+                ),
+                kind: AndroidReleaseArtifactKind::Plugin {
+                    plugin_id: "io.github.umbrella22.vesper.performance-diagnostics",
+                    library_name: "vesper_performance_diagnostics",
+                    manifest: "plugins/performance-diagnostics/vesper-plugin.toml",
+                    profile_receipt: None,
+                },
+            },
         ]);
     }
     artifacts
@@ -3430,20 +3452,12 @@ fn build_aar_stages(
             ffmpeg_release_lock,
             cancellation,
         )?;
-        tasks.push(format!(":vesper-player-kit-ffmpeg-runtime:{module_task}"));
-        tasks.push(format!(
-            ":vesper-player-kit-external-playback:{module_task}"
-        ));
-        tasks.push(format!(
-            ":vesper-player-kit-source-normalizer-ffmpeg:{module_task}"
-        ));
-        tasks.push(format!(":vesper-player-kit-remux-ffmpeg:{module_task}"));
-        if include_optional {
-            tasks.extend([
-                format!(":vesper-player-kit-decoder-mediacodec:{module_task}"),
-                format!(":vesper-player-kit-frame-processor-diagnostic:{module_task}"),
-            ]);
-        }
+        append_optional_distribution_tasks(
+            &mut tasks,
+            module_task,
+            include_optional,
+            needs_external_playback_distribution,
+        );
         Some(optional_build)
     } else {
         None
@@ -3494,7 +3508,7 @@ fn build_aar_stages(
     }
     require_success_in_deferral(&mut command, "Android AAR Gradle build", cancellation)?;
     validate_staged_host_jni(&host_stage, &selected_abis)?;
-    let mut stages = Vec::with_capacity(if optional_build.is_some() { 11 } else { 1 });
+    let mut stages = Vec::with_capacity(if optional_build.is_some() { 12 } else { 1 });
     stages.push(host_stage);
     if let Some(build) = optional_build {
         validate_required_staged_file(
@@ -3514,6 +3528,31 @@ fn build_aar_stages(
         stage.validate()?;
     }
     Ok(stages)
+}
+
+fn append_optional_distribution_tasks(
+    tasks: &mut Vec<String>,
+    module_task: &str,
+    include_optional: bool,
+    publish_maven: bool,
+) {
+    tasks.extend([
+        format!(":vesper-player-kit-ffmpeg-runtime:{module_task}"),
+        format!(":vesper-player-kit-external-playback:{module_task}"),
+        format!(":vesper-player-kit-source-normalizer-ffmpeg:{module_task}"),
+        format!(":vesper-player-kit-remux-ffmpeg:{module_task}"),
+    ]);
+    if include_optional {
+        tasks.extend([
+            format!(":vesper-player-kit-decoder-mediacodec:{module_task}"),
+            format!(":vesper-player-kit-frame-processor-diagnostic:{module_task}"),
+        ]);
+    }
+    if include_optional || publish_maven {
+        tasks.push(format!(
+            ":vesper-player-kit-performance-diagnostics:{module_task}"
+        ));
+    }
 }
 
 fn validate_staged_host_jni(
@@ -3537,6 +3576,7 @@ struct OptionalAndroidBuild {
     remux: StagedGeneratedDirectory,
     remux_assets: StagedGeneratedDirectory,
     frame_processor: StagedGeneratedDirectory,
+    performance_diagnostics: StagedGeneratedDirectory,
     ffmpeg_runtime: StagedGeneratedDirectory,
     ffmpeg_runtime_assets: StagedGeneratedDirectory,
     external_relay: StagedGeneratedDirectory,
@@ -3568,6 +3608,10 @@ fn configure_optional_android_build_environment(
             FRAME_PROCESSOR_JNI_STAGING_ENV,
             build.frame_processor.path(),
         )
+        .env(
+            PERFORMANCE_DIAGNOSTICS_JNI_STAGING_ENV,
+            build.performance_diagnostics.path(),
+        )
         .env(FFMPEG_RUNTIME_JNI_STAGING_ENV, build.ffmpeg_runtime.path())
         .env(
             FFMPEG_RUNTIME_ASSETS_STAGING_ENV,
@@ -3593,6 +3637,7 @@ impl OptionalAndroidBuild {
             self.remux,
             self.remux_assets,
             self.frame_processor,
+            self.performance_diagnostics,
             self.ffmpeg_runtime,
             self.ffmpeg_runtime_assets,
             self.external_relay,
@@ -3613,6 +3658,7 @@ fn build_optional_android_plugins(
     let source_normalizer_module = project.join("vesper-player-kit-source-normalizer-ffmpeg");
     let remux_module = project.join("vesper-player-kit-remux-ffmpeg");
     let frame_processor_module = project.join("vesper-player-kit-frame-processor-diagnostic");
+    let performance_diagnostics_module = project.join("vesper-player-kit-performance-diagnostics");
     let decoder = StagedGeneratedDirectory::new(
         root,
         decoder_module.join("src/main/jniLibs"),
@@ -3648,6 +3694,12 @@ fn build_optional_android_plugins(
         frame_processor_module.join("src/main/jniLibs"),
         ".vesper-android-frame-processor-stage-",
         "Android FrameProcessor plugin output",
+    )?;
+    let performance_diagnostics = StagedGeneratedDirectory::new(
+        root,
+        performance_diagnostics_module.join("src/main/jniLibs"),
+        ".vesper-android-performance-diagnostics-stage-",
+        "Android performance diagnostics plugin output",
     )?;
     let ffmpeg_runtime = StagedGeneratedDirectory::new(
         root,
@@ -3757,6 +3809,18 @@ fn build_optional_android_plugins(
                 OsString::from("android"),
                 OsString::from("--root"),
                 root.as_os_str().to_owned(),
+                OsString::from("__runtime-free-plugin"),
+                OsString::from("performance-diagnostics"),
+                performance_diagnostics.path().as_os_str().to_owned(),
+                OsString::from("release"),
+            ],
+            "Android performance diagnostics plugin build",
+        ),
+        (
+            vec![
+                OsString::from("android"),
+                OsString::from("--root"),
+                root.as_os_str().to_owned(),
                 OsString::from("external-playback-jni"),
                 external_relay.path().as_os_str().to_owned(),
                 OsString::from("--assets-directory"),
@@ -3805,6 +3869,7 @@ fn build_optional_android_plugins(
         remux,
         remux_assets,
         frame_processor,
+        performance_diagnostics,
         ffmpeg_runtime,
         ffmpeg_runtime_assets,
         external_relay,
@@ -3820,6 +3885,7 @@ fn build_optional_android_plugins(
         &build.remux,
         &build.remux_assets,
         &build.frame_processor,
+        &build.performance_diagnostics,
         &build.ffmpeg_runtime,
         &build.ffmpeg_runtime_assets,
         &build.external_relay,
@@ -3856,6 +3922,11 @@ fn validate_optional_android_artifacts(
             &build.frame_processor,
             Path::new(abi).join(ANDROID_FRAME_PROCESSOR_LIBRARY),
             "FrameProcessor plugin library",
+        )?;
+        validate_required_staged_file(
+            &build.performance_diagnostics,
+            Path::new(abi).join(ANDROID_PERFORMANCE_DIAGNOSTICS_LIBRARY),
+            "performance diagnostics plugin library",
         )?;
         for library in ["libavcodec.so", "libavformat.so", "libavutil.so"] {
             validate_required_staged_file(
@@ -5207,6 +5278,23 @@ mod tests {
     use zip::write::SimpleFileOptions;
     use zip::{CompressionMethod, ZipWriter};
 
+    #[test]
+    fn maven_distribution_includes_diagnostics_without_experimental_plugins() {
+        let mut tasks = Vec::new();
+
+        append_optional_distribution_tasks(&mut tasks, "publishRelease", false, true);
+
+        assert!(
+            tasks.contains(&":vesper-player-kit-performance-diagnostics:publishRelease".to_owned())
+        );
+        assert!(!tasks.iter().any(|task| task.contains("decoder-mediacodec")));
+        assert!(
+            !tasks
+                .iter()
+                .any(|task| task.contains("frame-processor-diagnostic"))
+        );
+    }
+
     #[cfg(vesper_source_checkout)]
     #[test]
     fn optional_android_generated_targets_preflight_in_clean_checkout() {
@@ -5217,6 +5305,7 @@ mod tests {
             "lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/jniLibs",
             "lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/assets/vesper-source-normalizer-ffmpeg",
             "lib/android/vesper-player-kit-frame-processor-diagnostic/src/main/jniLibs",
+            "lib/android/vesper-player-kit-performance-diagnostics/src/main/jniLibs",
             "lib/android/vesper-player-kit-ffmpeg-runtime/src/main/jniLibs",
             "lib/android/vesper-player-kit-ffmpeg-runtime/src/main/assets/vesper-ffmpeg-runtime",
             "lib/android/vesper-player-kit-external-playback/src/main/jniLibs",

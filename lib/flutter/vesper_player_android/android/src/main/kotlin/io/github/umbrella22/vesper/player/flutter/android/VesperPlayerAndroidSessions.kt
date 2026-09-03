@@ -8,6 +8,7 @@ import io.github.umbrella22.vesper.player.android.VesperPlaybackSequence
 import io.github.umbrella22.vesper.player.android.VesperPlaybackCapabilityProbeRequest
 import io.github.umbrella22.vesper.player.android.VesperPlaybackCapabilityProbeResult
 import io.github.umbrella22.vesper.player.android.VesperPlayerController
+import io.github.umbrella22.vesper.player.android.VesperPerformanceDiagnosticsSession
 import kotlinx.coroutines.Job
 
 internal data class SourceBoundCapabilityProbe(
@@ -41,6 +42,7 @@ internal data class PlayerSession(
         FlutterPictureInPictureConfiguration(),
     var pictureInPictureState: String = "inactive",
     var pictureInPictureActive: Boolean = false,
+    var performanceDiagnosticsSession: VesperPerformanceDiagnosticsSession? = null,
 ) {
     fun hasAttachedHost(): Boolean = hostView != null
 

@@ -297,6 +297,7 @@ extension VesperNativePlayerBridge {
         recordBenchmark(
             "playback_error",
             attributes: [
+                "code": enrichedError.code.rawValue,
                 "category": enrichedError.category.rawValue,
                 "retriable": "\(enrichedError.retriable)",
             ]

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
+import 'vesper_performance_diagnostics_session.dart';
+
 const Duration _progressRefreshInterval = Duration(seconds: 1);
 const Duration _maxProgressRefreshBackoff = Duration(seconds: 8);
 
@@ -93,6 +95,7 @@ class VesperPlayerController {
 
   StreamSubscription<VesperPlayerEvent>? _platformSubscription;
   Timer? _progressRefreshTimer;
+  VesperPerformanceDiagnosticsSession? _performanceDiagnosticsSession;
   bool _refreshInFlight = false;
   bool _disposed = false;
   int _timelineRevision = 0;
@@ -118,6 +121,36 @@ class VesperPlayerController {
   Future<void> initialize() =>
       _runVoidOperation(() => _platform.initialize(playerId));
 
+  Future<VesperPerformanceDiagnosticsSession> startPerformanceDiagnostics({
+    VesperPerformanceDiagnosticsConfiguration configuration =
+        const VesperPerformanceDiagnosticsConfiguration(),
+  }) async {
+    _ensureActive();
+    final existing = _performanceDiagnosticsSession;
+    if (existing != null && !existing.isStopped) {
+      throw const VesperPerformanceDiagnosticsException(
+        code: 'alreadyActive',
+        message: 'A performance diagnostics run is already active.',
+      );
+    }
+    final session = await VesperPerformanceDiagnosticsSession.start(
+      this,
+      configuration: configuration,
+    );
+    if (_disposed) {
+      await _guardDisposeCleanup(
+        session.stop,
+        context: 'stop performance diagnostics started during disposal',
+      );
+      throw const VesperPerformanceDiagnosticsException(
+        code: 'controllerDisposed',
+        message: 'The player controller was disposed while diagnostics started.',
+      );
+    }
+    _performanceDiagnosticsSession = session;
+    return session;
+  }
+
   Future<void> dispose() async {
     if (_disposed) {
       return;
@@ -126,6 +159,14 @@ class VesperPlayerController {
     _advanceTimelineRevision();
     _progressRefreshTimer?.cancel();
     _progressRefreshTimer = null;
+
+    final diagnosticsSession = _performanceDiagnosticsSession;
+    if (diagnosticsSession != null && !diagnosticsSession.isStopped) {
+      await _guardDisposeCleanup(
+        diagnosticsSession.stop,
+        context: 'stop performance diagnostics',
+      );
+    }
 
     Object? platformError;
     StackTrace? platformStackTrace;

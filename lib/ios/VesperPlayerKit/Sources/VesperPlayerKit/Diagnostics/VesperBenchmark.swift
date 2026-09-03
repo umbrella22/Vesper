@@ -177,7 +177,7 @@ protocol VesperBenchmarkSinkSessionProtocol: AnyObject, Sendable {
 typealias VesperBenchmarkSinkSessionFactory =
     @Sendable ([VesperPluginReference]) throws -> any VesperBenchmarkSinkSessionProtocol
 
-private final class VesperBenchmarkShutdownWaiter: @unchecked Sendable {
+private final class VesperBenchmarkAsyncWaiter: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Bool, Never>?
 
@@ -192,6 +192,12 @@ private final class VesperBenchmarkShutdownWaiter: @unchecked Sendable {
         lock.unlock()
         pending?.resume(returning: value)
     }
+}
+
+enum VesperBenchmarkSinkReadiness: Equatable, Sendable {
+    case ready
+    case openFailed
+    case timedOut
 }
 
 private struct VesperBenchmarkSinkStatsSnapshot {
@@ -211,7 +217,7 @@ private struct VesperBenchmarkSinkStatsSnapshot {
 private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
     private enum Command {
         case submit(VesperBenchmarkEvent)
-        case flush
+        case flush([VesperBenchmarkAsyncWaiter])
         case dispose
     }
 
@@ -221,6 +227,9 @@ private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
     private let condition = NSCondition()
     private var commands: [Command] = []
     private var accepting = true
+    private let readinessGroup = DispatchGroup()
+    private let readinessLock = NSLock()
+    private var readiness: VesperBenchmarkSinkReadiness?
     private let statsLock = NSLock()
     private var acceptedEvents: UInt64 = 0
     private var droppedEvents: UInt64 = 0
@@ -246,6 +255,7 @@ private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
     ) {
         self.pluginReferences = pluginReferences
         self.sessionFactory = sessionFactory
+        readinessGroup.enter()
         shutdownGroup.enter()
         workerQueue.async { [self] in
             defer { shutdownGroup.leave() }
@@ -279,8 +289,55 @@ private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
             condition.unlock()
             return
         }
-        enqueueControlLocked(.flush)
+        _ = enqueueControlLocked(.flush([]))
         condition.unlock()
+    }
+
+    func flushAndAwait(timeout: TimeInterval) async -> Bool {
+        guard timeout >= 0 else { return false }
+        return await withCheckedContinuation { continuation in
+            let waiter = VesperBenchmarkAsyncWaiter(continuation: continuation)
+            condition.lock()
+            guard accepting else {
+                condition.unlock()
+                waiter.resume(returning: true)
+                return
+            }
+            let enqueued: Bool
+            if let flushIndex = commands.firstIndex(where: { command in
+                if case .flush = command { return true }
+                return false
+            }), case var .flush(waiters) = commands[flushIndex] {
+                waiters.append(waiter)
+                commands[flushIndex] = .flush(waiters)
+                enqueued = true
+            } else {
+                enqueued = enqueueControlLocked(.flush([waiter]))
+            }
+            condition.unlock()
+            guard enqueued else {
+                waiter.resume(returning: false)
+                return
+            }
+            Self.shutdownNotificationQueue.asyncAfter(deadline: .now() + timeout) {
+                waiter.resume(returning: false)
+            }
+        }
+    }
+
+    func awaitReadiness(timeout: TimeInterval) async -> VesperBenchmarkSinkReadiness {
+        guard timeout >= 0 else { return .timedOut }
+        let completed = await withCheckedContinuation { continuation in
+            let waiter = VesperBenchmarkAsyncWaiter(continuation: continuation)
+            readinessGroup.notify(queue: Self.shutdownNotificationQueue) {
+                waiter.resume(returning: true)
+            }
+            Self.shutdownNotificationQueue.asyncAfter(deadline: .now() + timeout) {
+                waiter.resume(returning: false)
+            }
+        }
+        guard completed else { return .timedOut }
+        return readinessSnapshot() ?? .timedOut
     }
 
     func dispose() {
@@ -290,7 +347,7 @@ private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
             return
         }
         accepting = false
-        enqueueControlLocked(.dispose)
+        _ = enqueueControlLocked(.dispose)
         condition.unlock()
     }
 
@@ -308,7 +365,7 @@ private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
     func awaitShutdown(timeout: TimeInterval) async -> Bool {
         let boundedTimeout = max(timeout, 0)
         return await withCheckedContinuation { continuation in
-            let waiter = VesperBenchmarkShutdownWaiter(continuation: continuation)
+            let waiter = VesperBenchmarkAsyncWaiter(continuation: continuation)
             shutdownGroup.notify(queue: Self.shutdownNotificationQueue) {
                 waiter.resume(returning: true)
             }
@@ -331,7 +388,8 @@ private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
         statsLock.unlock()
     }
 
-    private func enqueueControlLocked(_ command: Command) {
+    @discardableResult
+    private func enqueueControlLocked(_ command: Command) -> Bool {
         if commands.count >= commandCapacity,
            let eventIndex = commands.lastIndex(where: { pending in
                if case .submit = pending { return true }
@@ -343,19 +401,22 @@ private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
         }
         guard commands.count < commandCapacity else {
             recordError("benchmark sink control queue is unavailable")
-            return
+            return false
         }
         commands.append(command)
         condition.signal()
+        return true
     }
 
     private func run() {
         let session: (any VesperBenchmarkSinkSessionProtocol)?
         do {
             session = try sessionFactory(pluginReferences)
+            publishReadiness(.ready)
         } catch {
             session = nil
             recordError(error.localizedDescription)
+            publishReadiness(.openFailed)
         }
         defer { session?.dispose() }
 
@@ -364,10 +425,13 @@ private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
             switch command {
             case let .submit(event):
                 guard let session else { continue }
-                executeSubmit { try session.submit([event]) }
-            case .flush:
-                guard let session else { continue }
-                executeFlush { try session.flush() }
+                let events = drainBatch(startingWith: event)
+                executeSubmit { try session.submit(events) }
+            case let .flush(waiters):
+                if let session {
+                    executeFlush { try session.flush() }
+                }
+                waiters.forEach { $0.resume(returning: session != nil) }
             case .dispose:
                 if let session {
                     executeFlush { try session.flush() }
@@ -375,6 +439,19 @@ private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
                 return
             }
         }
+    }
+
+    private func publishReadiness(_ value: VesperBenchmarkSinkReadiness) {
+        readinessLock.lock()
+        readiness = value
+        readinessLock.unlock()
+        readinessGroup.leave()
+    }
+
+    private func readinessSnapshot() -> VesperBenchmarkSinkReadiness? {
+        readinessLock.lock()
+        defer { readinessLock.unlock() }
+        return readiness
     }
 
     private func nextCommand() -> Command {
@@ -387,6 +464,19 @@ private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
         let command = commands.removeFirst()
         condition.unlock()
         return command
+    }
+
+    private func drainBatch(startingWith first: VesperBenchmarkEvent) -> [VesperBenchmarkEvent] {
+        condition.lock()
+        defer { condition.unlock() }
+        var events = [first]
+        events.reserveCapacity(120)
+        while events.count < 120, let command = commands.first {
+            guard case let .submit(event) = command else { break }
+            commands.removeFirst()
+            events.append(event)
+        }
+        return events
     }
 
     private func executeSubmit(
@@ -443,7 +533,32 @@ private final class VesperBenchmarkSinkWorker: @unchecked Sendable {
 }
 
 @MainActor
-final class VesperBenchmarkRecorder {
+protocol VesperBenchmarkRecording: AnyObject {
+    var isEnabled: Bool { get }
+    func record(
+        _ eventName: String,
+        sourceProtocol: VesperPlayerSourceProtocol?,
+        attributes: [String: String]
+    )
+    func drainEvents() -> [VesperBenchmarkEvent]
+    func snapshotEvents() -> [VesperBenchmarkEvent]
+    func summary() -> VesperBenchmarkSummary
+    func flushSinks()
+    func flushSinksAndAwait(timeout: TimeInterval) async -> Bool
+    func awaitSinkReadiness(timeout: TimeInterval) async -> VesperBenchmarkSinkReadiness
+    func dispose()
+    func awaitSinkShutdown(timeout: TimeInterval) async -> Bool
+    func durationNs() -> UInt64
+}
+
+extension VesperBenchmarkRecording {
+    func awaitSinkReadiness(timeout: TimeInterval) async -> VesperBenchmarkSinkReadiness {
+        .ready
+    }
+}
+
+@MainActor
+final class VesperBenchmarkRecorder: VesperBenchmarkRecording {
     private let configuration: VesperBenchmarkConfiguration
     private let runId = UUID().uuidString
     private let sessionId = UUID().uuidString
@@ -522,6 +637,30 @@ final class VesperBenchmarkRecorder {
         let events = rawEvents
         rawEvents.removeAll(keepingCapacity: true)
         return events
+    }
+
+    func snapshotEvents() -> [VesperBenchmarkEvent] {
+        rawEvents
+    }
+
+    func flushSinks() {
+        guard !disposed else { return }
+        sinkWorker?.flush()
+    }
+
+    func flushSinksAndAwait(timeout: TimeInterval) async -> Bool {
+        guard !disposed, let sinkWorker else { return true }
+        return await sinkWorker.flushAndAwait(timeout: timeout)
+    }
+
+    func awaitSinkReadiness(timeout: TimeInterval) async -> VesperBenchmarkSinkReadiness {
+        guard let sinkWorker else { return .ready }
+        return await sinkWorker.awaitReadiness(timeout: timeout)
+    }
+
+    func durationNs() -> UInt64 {
+        let now = DispatchTime.now().uptimeNanoseconds
+        return now >= baseTimestampNs ? now - baseTimestampNs : 0
     }
 
     func summary() -> VesperBenchmarkSummary {

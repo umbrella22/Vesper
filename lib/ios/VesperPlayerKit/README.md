@@ -20,7 +20,7 @@ Tagged GitHub Releases publish the following core artifacts via
 - `VesperPlayerKit-ios-simulator-arm64.framework.zip` — Apple Silicon Simulator
 - `VesperPlayerKit.xcframework.zip` — combined device + Apple Silicon Simulator
 
-The same release also publishes three FFmpeg component XCFrameworks and four
+The same release also publishes three FFmpeg component XCFrameworks and five
 plugin XCFrameworks as an optional sibling set:
 
 - `VesperFFmpegAVCodec.xcframework.zip`
@@ -30,6 +30,7 @@ plugin XCFrameworks as an optional sibling set:
 - `VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip`
 - `VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip`
 - `VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip`
+- `VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip`
 
 The optional set is released only with both mandatory redistribution assets:
 
@@ -76,9 +77,10 @@ Add that URL in Xcode's package dependency editor and select the exact release
 version, including a suffix such as `0.5.0-rc.1` when testing a prerelease. Link
 the `VesperPlayerKit` product for the binary host kit. Link
 `VesperPlayerKitUI` as well when the app uses the version-matched SwiftUI stage
-and controls. Optional apps link `VesperPlayerSourceNormalizerFfmpeg` or
-`VesperPlayerRemuxFfmpeg`; each capability product includes only its plugin and
-the three matching FFmpeg component targets.
+and controls. Optional apps link `VesperPlayerSourceNormalizerFfmpeg`,
+`VesperPlayerRemuxFfmpeg`, or `VesperPlayerPerformanceDiagnostics`. The FFmpeg
+products include their plugin and three matching FFmpeg component targets;
+performance diagnostics contains only its BenchmarkSink plugin target.
 
 The package repository contains the manifest, license, and
 `VesperPlayerKitUI` sources. Its binary targets reference the matching GitHub
@@ -419,14 +421,16 @@ host-provided path and keeps the original offline file in place.
 ## Optional iOS Plugin Package
 
 FFmpeg is not embedded in the core `VesperPlayerKit.xcframework`. Remote
-consumers add one or both capability-level products:
+consumers add the capability-level products they need:
 
 - `VesperPlayerSourceNormalizerFfmpeg`
 - `VesperPlayerRemuxFfmpeg`
+- `VesperPlayerPerformanceDiagnostics`
 
-Each product closes over its plugin and the three shared FFmpeg component
-targets. Repository examples and archive verification instead stage the local
-seven-product package before SwiftPM resolution:
+The FFmpeg products close over their plugin and three shared FFmpeg component
+targets. Performance diagnostics closes over only its plugin. Repository
+examples and archive verification stage the local eight-product package before
+SwiftPM resolution:
 
 ```sh
 ./scripts/vesper ios stage-optional-plugins-release \
@@ -436,7 +440,7 @@ seven-product package before SwiftPM resolution:
 ```
 
 The repository App targets depend on the local
-`VesperPlayerOptionalPlugins` Swift package and embed its seven same-named
+`VesperPlayerOptionalPlugins` Swift package and embed its eight same-named
 binary products with Embed & Sign. Hosted consumers let the selected capability
 products embed only the required closure. SwiftPM places the selected FFmpeg
 component and plugin frameworks as top-level siblings under

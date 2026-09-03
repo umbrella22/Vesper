@@ -1056,6 +1056,13 @@ func downloadErrorMap(from error: Error) -> [String: Any] {
 }
 
 func asFlutterError(_ error: Error, code: String) -> FlutterError {
+    if let diagnosticsError = error as? VesperPerformanceDiagnosticsError {
+        return FlutterError(
+            code: diagnosticsError.code.rawValue,
+            message: diagnosticsError.message,
+            details: ["performanceDiagnosticsCode": diagnosticsError.code.rawValue]
+        )
+    }
     let details = errorMap(from: error)
     let flutterCode: String
     switch details["domain"] as? String {

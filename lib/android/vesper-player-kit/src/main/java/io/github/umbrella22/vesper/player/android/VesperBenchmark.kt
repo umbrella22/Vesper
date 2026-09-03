@@ -157,11 +157,38 @@ private object JniVesperBenchmarkSinkRuntime : VesperBenchmarkSinkRuntime {
     }
 }
 
+internal interface VesperBenchmarkRecording {
+    val isEnabled: Boolean
+    fun record(
+        eventName: String,
+        sourceProtocol: VesperPlayerSourceProtocol?,
+        attributes: Map<String, String> = emptyMap(),
+    )
+    fun drainEvents(): List<VesperBenchmarkEvent>
+    fun snapshotEvents(): List<VesperBenchmarkEvent>
+    fun summary(): VesperBenchmarkSummary
+    fun flushSinks()
+    fun flushSinksAndAwait(timeoutMs: Long): Boolean
+    fun awaitSinkReadiness(timeoutMs: Long): VesperBenchmarkSinkReadiness =
+        VesperBenchmarkSinkReadiness.Ready
+    fun dispose()
+    fun awaitSinkShutdown(timeoutMs: Long): Boolean
+    fun durationNs(): Long
+}
+
+internal sealed interface VesperBenchmarkSinkReadiness {
+    data object Ready : VesperBenchmarkSinkReadiness
+
+    data object OpenFailed : VesperBenchmarkSinkReadiness
+
+    data object TimedOut : VesperBenchmarkSinkReadiness
+}
+
 internal class VesperBenchmarkRecorder(
     private val configuration: VesperBenchmarkConfiguration = VesperBenchmarkConfiguration.Disabled,
     context: Context? = null,
     private val sinkRuntime: VesperBenchmarkSinkRuntime = JniVesperBenchmarkSinkRuntime,
-) {
+) : VesperBenchmarkRecording {
     private val lock = Any()
     private val runId = UUID.randomUUID().toString()
     private val sessionId = UUID.randomUUID().toString()
@@ -178,7 +205,7 @@ internal class VesperBenchmarkRecorder(
     private val pluginErrors = ArrayList<String>()
     private val sinkShutdownTimeoutRecorded = AtomicBoolean(false)
 
-    val isEnabled: Boolean
+    override val isEnabled: Boolean
         get() = configuration.enabled
 
     init {
@@ -198,10 +225,10 @@ internal class VesperBenchmarkRecorder(
             }
     }
 
-    fun record(
+    override fun record(
         eventName: String,
         sourceProtocol: VesperPlayerSourceProtocol?,
-        attributes: Map<String, String> = emptyMap(),
+        attributes: Map<String, String>,
     ) {
         if (!configuration.enabled || disposed.get()) {
             return
@@ -241,14 +268,21 @@ internal class VesperBenchmarkRecorder(
         sinkWorker?.offer(event)
     }
 
-    fun drainEvents(): List<VesperBenchmarkEvent> =
+    override fun drainEvents(): List<VesperBenchmarkEvent> =
         synchronized(lock) {
             val events = rawEvents.toList()
             rawEvents.clear()
             events
         }
 
-    fun summary(): VesperBenchmarkSummary =
+    override fun snapshotEvents(): List<VesperBenchmarkEvent> =
+        synchronized(lock) {
+            rawEvents.toList()
+        }
+
+    override fun durationNs(): Long = (System.nanoTime() - baseTimestampNs).coerceAtLeast(0L)
+
+    override fun summary(): VesperBenchmarkSummary =
         synchronized(lock) {
             VesperBenchmarkSummary(
                 runId = runId,
@@ -266,21 +300,31 @@ internal class VesperBenchmarkRecorder(
             )
         }
 
-    fun flushSinks() {
+    override fun flushSinks() {
         if (disposed.get()) {
             return
         }
         sinkWorker?.flush()
     }
 
-    fun dispose() {
+    override fun flushSinksAndAwait(timeoutMs: Long): Boolean {
+        if (disposed.get()) {
+            return true
+        }
+        return sinkWorker?.flushAndAwait(timeoutMs) ?: true
+    }
+
+    override fun awaitSinkReadiness(timeoutMs: Long): VesperBenchmarkSinkReadiness =
+        sinkWorker?.awaitReadiness(timeoutMs) ?: VesperBenchmarkSinkReadiness.Ready
+
+    override fun dispose() {
         if (!disposed.compareAndSet(false, true)) {
             return
         }
         sinkWorker?.dispose()
     }
 
-    internal fun awaitSinkShutdown(timeoutMs: Long): Boolean {
+    override fun awaitSinkShutdown(timeoutMs: Long): Boolean {
         val completed = sinkWorker?.awaitShutdown(timeoutMs) ?: true
         if (!completed && sinkShutdownTimeoutRecorded.compareAndSet(false, true)) {
             recordPluginError("benchmark sink shutdown timed out")
@@ -348,7 +392,9 @@ internal class VesperBenchmarkRecorder(
 private sealed interface BenchmarkSinkCommand {
     data class Submit(val event: VesperBenchmarkEvent) : BenchmarkSinkCommand
 
-    data object Flush : BenchmarkSinkCommand
+    class Flush(
+        val completions: MutableList<CountDownLatch> = ArrayList(),
+    ) : BenchmarkSinkCommand
 
     data object Dispose : BenchmarkSinkCommand
 }
@@ -369,6 +415,8 @@ private class BenchmarkSinkWorker(
 ) {
     private val queue = LinkedBlockingDeque<BenchmarkSinkCommand>(BENCHMARK_SINK_QUEUE_CAPACITY)
     private val accepting = AtomicBoolean(true)
+    private val readiness = CountDownLatch(1)
+    @Volatile private var openFailed = false
     private val shutdown = CountDownLatch(1)
     private val thread =
         Thread(::run, "vesper-benchmark-sink").apply {
@@ -398,10 +446,41 @@ private class BenchmarkSinkWorker(
 
     fun flush() {
         synchronized(queue) {
-            if (!accepting.get() || queue.any { it === BenchmarkSinkCommand.Flush }) {
+            if (!accepting.get() || queue.any { it is BenchmarkSinkCommand.Flush }) {
                 return
             }
-            enqueueControlLocked(BenchmarkSinkCommand.Flush)
+            enqueueControlLocked(BenchmarkSinkCommand.Flush())
+        }
+    }
+
+    fun flushAndAwait(timeoutMs: Long): Boolean {
+        if (!accepting.get()) {
+            return true
+        }
+        val completion = CountDownLatch(1)
+        synchronized(queue) {
+            if (!accepting.get()) {
+                return true
+            }
+            val pendingFlush = queue.firstOrNull { it is BenchmarkSinkCommand.Flush }
+                as? BenchmarkSinkCommand.Flush
+            if (pendingFlush != null) {
+                pendingFlush.completions += completion
+            } else if (!enqueueControlLocked(BenchmarkSinkCommand.Flush(mutableListOf(completion)))) {
+                return false
+            }
+        }
+        return completion.await(timeoutMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+    }
+
+    fun awaitReadiness(timeoutMs: Long): VesperBenchmarkSinkReadiness {
+        if (!readiness.await(timeoutMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)) {
+            return VesperBenchmarkSinkReadiness.TimedOut
+        }
+        return if (openFailed) {
+            VesperBenchmarkSinkReadiness.OpenFailed
+        } else {
+            VesperBenchmarkSinkReadiness.Ready
         }
     }
 
@@ -417,9 +496,9 @@ private class BenchmarkSinkWorker(
     fun awaitShutdown(timeoutMs: Long): Boolean =
         shutdown.await(timeoutMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
 
-    private fun enqueueControlLocked(command: BenchmarkSinkCommand) {
+    private fun enqueueControlLocked(command: BenchmarkSinkCommand): Boolean {
         if (queue.offerLast(command)) {
-            return
+            return true
         }
         val newestPendingEvent = queue.toList().lastOrNull { it is BenchmarkSinkCommand.Submit }
         if (newestPendingEvent != null && queue.removeLastOccurrence(newestPendingEvent)) {
@@ -429,7 +508,9 @@ private class BenchmarkSinkWorker(
             // Controls are never discarded. Reaching this branch means the
             // bounded queue contains only controls, which violates the worker contract.
             onError("benchmark sink control queue is unavailable")
+            return false
         }
+        return true
     }
 
     private fun run() {
@@ -438,8 +519,11 @@ private class BenchmarkSinkWorker(
             connection = try {
                 runtime.open(context, references)
             } catch (error: Throwable) {
+                openFailed = true
                 onError(error.message ?: "benchmark sink session create failed")
                 null
+            } finally {
+                readiness.countDown()
             }
 
             var disposing = false
@@ -453,10 +537,14 @@ private class BenchmarkSinkWorker(
                 when (command) {
                     is BenchmarkSinkCommand.Submit -> {
                         val activeConnection = connection ?: continue
-                        submit(activeConnection, command.event)
+                        submit(activeConnection, drainBatch(command.event))
                     }
-                    BenchmarkSinkCommand.Flush -> {
-                        connection?.let(::flush)
+                    is BenchmarkSinkCommand.Flush -> {
+                        try {
+                            connection?.let(::flush)
+                        } finally {
+                            command.completions.forEach(CountDownLatch::countDown)
+                        }
                     }
                     BenchmarkSinkCommand.Dispose -> disposing = true
                 }
@@ -469,9 +557,15 @@ private class BenchmarkSinkWorker(
                 when (command) {
                     is BenchmarkSinkCommand.Submit -> {
                         val activeConnection = connection ?: continue
-                        submit(activeConnection, command.event)
+                        submit(activeConnection, drainBatch(command.event))
                     }
-                    BenchmarkSinkCommand.Flush -> connection?.let(::flush)
+                    is BenchmarkSinkCommand.Flush -> {
+                        try {
+                            connection?.let(::flush)
+                        } finally {
+                            command.completions.forEach(CountDownLatch::countDown)
+                        }
+                    }
                     BenchmarkSinkCommand.Dispose -> Unit
                 }
             }
@@ -495,20 +589,33 @@ private class BenchmarkSinkWorker(
 
     private fun submit(
         connection: VesperBenchmarkSinkConnection,
-        event: VesperBenchmarkEvent,
+        events: List<VesperBenchmarkEvent>,
     ) {
         try {
             onSubmitReport(
                 parseSinkReport(
                     runtime.submit(
                         connection.sessionHandle,
-                        benchmarkBatchJson(listOf(event)),
+                        benchmarkBatchJson(events),
                     ),
                 ),
             )
         } catch (error: Throwable) {
             onError(error.message ?: "benchmark sink submit failed")
         }
+    }
+
+    private fun drainBatch(first: VesperBenchmarkEvent): List<VesperBenchmarkEvent> {
+        val events = ArrayList<VesperBenchmarkEvent>(120)
+        events += first
+        synchronized(queue) {
+            while (events.size < 120) {
+                val next = queue.peekFirst() as? BenchmarkSinkCommand.Submit ?: break
+                queue.removeFirst()
+                events += next.event
+            }
+        }
+        return events
     }
 
     private fun flush(connection: VesperBenchmarkSinkConnection) {

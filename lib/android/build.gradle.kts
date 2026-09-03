@@ -12,7 +12,7 @@ plugins {
 
 val vesperMavenGroupId =
     providers.gradleProperty("vesper.maven.groupId").orElse("io.github.umbrella22.vesper")
-val vesperDefaultPublicationVersion = "0.5.1"
+val vesperDefaultPublicationVersion = "0.5.2"
 val vesperPublicationVersion =
     providers.gradleProperty("vesper.mavenVersion").orElse(vesperDefaultPublicationVersion)
 
@@ -84,6 +84,14 @@ val vesperAndroidExternalPlaybackPublications =
 
 val vesperAndroidOptionalPluginPublications =
     mapOf(
+        "vesper-player-kit-performance-diagnostics" to
+            AndroidPublicationMetadata(
+                pomName = "Vesper Player Android Performance Diagnostics Plugin",
+                description =
+                    "Optional Android BenchmarkSink plugin for bounded playback and " +
+                        "overlay-correlated UI performance diagnostics.",
+                licenses = listOf(apacheLicense),
+            ),
         "vesper-player-kit-source-normalizer-ffmpeg" to
             AndroidPublicationMetadata(
                 pomName = "Vesper Player Android SourceNormalizer FFmpeg Plugin",
@@ -136,6 +144,13 @@ val vesperAndroidPluginRegistries =
                 pluginId = "dev.vesper.frame-processor-diagnostic",
                 variants = setOf("profile", "release"),
             ),
+        "vesper-player-kit-performance-diagnostics" to
+            AndroidPluginRegistryMetadata(
+                manifestPath = "plugins/performance-diagnostics/vesper-plugin.toml",
+                libraryName = "vesper_performance_diagnostics",
+                pluginId = "io.github.umbrella22.vesper.performance-diagnostics",
+                variants = setOf("profile", "release"),
+            ),
     )
 
 val vesperAndroidNativeLibraryEnvironmentVariables =
@@ -147,6 +162,8 @@ val vesperAndroidNativeLibraryEnvironmentVariables =
         "vesper-player-kit-remux-ffmpeg" to "VESPER_ANDROID_REMUX_JNI_LIBS",
         "vesper-player-kit-frame-processor-diagnostic" to
             "VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS",
+        "vesper-player-kit-performance-diagnostics" to
+            "VESPER_ANDROID_PERFORMANCE_DIAGNOSTICS_JNI_LIBS",
     )
 
 val vesperRepoRoot = rootProject.file("../..").canonicalFile
@@ -168,7 +185,7 @@ val buildVesperPluginCli =
         description = "Builds the Rust CLI used to generate embedded plugin registry fragments."
         onlyIf { !configuredVesperCli.isPresent }
         workingDir = vesperRepoRoot
-        commandLine("cargo", "build", "-p", "player-cli", "--bin", "vesper", "--release")
+        commandLine("cargo", "build", "-p", "vesper-player-cli", "--bin", "vesper", "--release")
         outputs.file(defaultVesperCli)
         outputs.upToDateWhen { false }
     }

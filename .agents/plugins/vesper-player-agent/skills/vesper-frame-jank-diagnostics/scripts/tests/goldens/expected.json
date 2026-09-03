@@ -1,0 +1,11 @@
+{
+  "healthy": {"status": "valid", "diagnosis": "noSignificantPressure", "sampleSufficient": true, "unknownValues": 0, "sensitiveWarnings": 0},
+  "overlay-correlated": {"status": "valid", "diagnosis": "overlayCorrelatedUiPressure", "sampleSufficient": true, "unknownValues": 0, "sensitiveWarnings": 0},
+  "playback-pressure": {"status": "valid", "diagnosis": "playbackPressure", "sampleSufficient": true, "unknownValues": 0, "sensitiveWarnings": 0},
+  "mixed": {"status": "valid", "diagnosis": "mixedPressure", "sampleSufficient": true, "unknownValues": 0, "sensitiveWarnings": 0},
+  "insufficient": {"status": "valid", "diagnosis": "insufficientEvidence", "sampleSufficient": false, "unknownValues": 0, "sensitiveWarnings": 0},
+  "unknown-value": {"status": "valid", "diagnosis": "futureDiagnosis", "sampleSufficient": true, "unknownValues": 4, "sensitiveWarnings": 0},
+  "sensitive": {"status": "valid", "diagnosis": "noSignificantPressure", "sampleSufficient": true, "unknownValues": 0, "sensitiveWarnings": 2},
+  "malformed": {"status": "inputError"},
+  "oversized": {"status": "inputError"}
+}

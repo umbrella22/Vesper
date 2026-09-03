@@ -167,7 +167,7 @@ mod implementation {
     const COMPLIANCE_ASSET: &str = "VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip";
     const COMPLIANCE_ROOT: &str = "VesperPlayerOptionalPlugins-FFmpeg-Compliance";
 
-    pub(super) const OPTIONAL_FRAMEWORKS: [&str; 7] = [
+    pub(super) const OPTIONAL_FRAMEWORKS: [&str; 8] = [
         "VesperFFmpegAVCodec",
         "VesperFFmpegAVFormat",
         "VesperFFmpegAVUtil",
@@ -175,6 +175,7 @@ mod implementation {
         "VesperPlayerSourceNormalizerFfmpegPlugin",
         "VesperPlayerDecoderVideoToolboxPlugin",
         "VesperPlayerFrameProcessorDiagnosticPlugin",
+        "VesperPlayerPerformanceDiagnosticsPlugin",
     ];
     const FFMPEG_FRAMEWORKS: [&str; 5] = [
         "VesperFFmpegAVCodec",
@@ -722,7 +723,7 @@ mod implementation {
                 "`{}`.\n\n",
                 "The FFmpeg redistribution boundary covers the three `VesperFFmpegAV*`\n",
                 "component frameworks plus the Remux and SourceNormalizer FFmpeg plugins. The\n",
-                "VideoToolbox Decoder and diagnostic FrameProcessor plugins do not bundle or\n",
+                "VideoToolbox Decoder, diagnostic FrameProcessor, and performance diagnostics plugins do not bundle or\n",
                 "link FFmpeg.\n"
             ),
             framework.profile_hash, release_source.source_asset,

@@ -3,13 +3,13 @@ schema_version = 1
 [plugin]
 id = "io.github.umbrella22.vesper.decoder-videotoolbox"
 name = "Vesper VideoToolbox Decoder"
-version = "0.5.1"
+version = "0.5.2"
 description = "Experimental Apple VideoToolbox native-frame decoder plugin."
 license = "Apache-2.0"
 publisher = "io.github.umbrella22"
 
 [compatibility]
-host_sdk = ">=0.5.1, <0.6.0"
+host_sdk = ">=0.5.2, <0.6.0"
 abi_major = 1
 abi_minor_min = 0
 abi_minor_max = 0

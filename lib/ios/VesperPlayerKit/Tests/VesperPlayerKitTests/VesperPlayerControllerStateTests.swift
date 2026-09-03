@@ -3366,6 +3366,61 @@ private final class TestObservablePlayerBridge: ObservableObject, ObservablePlay
     func setResiliencePolicy(_ policy: VesperPlaybackResiliencePolicy) {}
     func setAudioSessionInterrupted(_ interrupted: Bool) {}
     func drainBenchmarkEvents() -> [VesperBenchmarkEvent] { [] }
+    func startPerformanceDiagnostics(
+        configuration: VesperPerformanceDiagnosticsConfiguration,
+        probe: VesperPerformanceProbe
+    ) async throws -> String {
+        throw VesperPerformanceDiagnosticsError(
+            code: .artifactUnavailable,
+            message: "Performance diagnostics are unavailable in this test bridge."
+        )
+    }
+    func updatePerformanceOverlayState(
+        runId: String,
+        state: VesperPerformanceOverlayState
+    ) throws {
+        throw VesperPerformanceDiagnosticsError(
+            code: .controllerDisposed,
+            message: "No performance diagnostics run is active."
+        )
+    }
+    func recordPerformanceMarker(
+        runId: String,
+        name: String,
+        value: Double?,
+        sequenceIndex: Int?,
+        expectedOverlayActive: Bool?
+    ) throws {
+        throw VesperPerformanceDiagnosticsError(
+            code: .controllerDisposed,
+            message: "No performance diagnostics run is active."
+        )
+    }
+    func submitPerformanceFrameSamples(
+        runId: String,
+        samples: [VesperPerformanceFrameSample]
+    ) throws {
+        throw VesperPerformanceDiagnosticsError(
+            code: .controllerDisposed,
+            message: "No performance diagnostics run is active."
+        )
+    }
+    func performanceDiagnosticsSnapshot(
+        runId: String
+    ) async throws -> VesperPerformanceDiagnosticsReport {
+        throw VesperPerformanceDiagnosticsError(
+            code: .controllerDisposed,
+            message: "No performance diagnostics run is active."
+        )
+    }
+    func stopPerformanceDiagnostics(
+        runId: String
+    ) async throws -> VesperPerformanceDiagnosticsReport {
+        throw VesperPerformanceDiagnosticsError(
+            code: .controllerDisposed,
+            message: "No performance diagnostics run is active."
+        )
+    }
     func benchmarkSummary() -> VesperBenchmarkSummary {
         VesperBenchmarkSummary(
             runId: "test-run",

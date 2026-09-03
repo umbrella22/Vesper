@@ -1,0 +1,15 @@
+[package]
+name = "player-performance-diagnostics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[lib]
+name = "vesper_performance_diagnostics"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+player-plugin = { package = "vesper-player-plugin", path = "../player-plugin" }

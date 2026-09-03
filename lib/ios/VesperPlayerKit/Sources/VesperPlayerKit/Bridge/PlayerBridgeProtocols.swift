@@ -67,6 +67,31 @@ protocol PlayerBridge: AnyObject {
     func drainPipelineEventHookReports() -> VesperPipelineEventHookReportBatch
     func benchmarkSummary() -> VesperBenchmarkSummary
     func awaitBenchmarkSinkShutdown(timeout: TimeInterval) async -> Bool
+    func startPerformanceDiagnostics(
+        configuration: VesperPerformanceDiagnosticsConfiguration,
+        probe: VesperPerformanceProbe
+    ) async throws -> String
+    func updatePerformanceOverlayState(
+        runId: String,
+        state: VesperPerformanceOverlayState
+    ) throws
+    func recordPerformanceMarker(
+        runId: String,
+        name: String,
+        value: Double?,
+        sequenceIndex: Int?,
+        expectedOverlayActive: Bool?
+    ) throws
+    func submitPerformanceFrameSamples(
+        runId: String,
+        samples: [VesperPerformanceFrameSample]
+    ) throws
+    func performanceDiagnosticsSnapshot(
+        runId: String
+    ) async throws -> VesperPerformanceDiagnosticsReport
+    func stopPerformanceDiagnostics(
+        runId: String
+    ) async throws -> VesperPerformanceDiagnosticsReport
 }
 
 @MainActor

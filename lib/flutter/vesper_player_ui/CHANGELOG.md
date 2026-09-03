@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.2 - 2026-09-03
+
 ### Added
 
 - Added `contentOverlay`, `landscapeControlBarLeading`, `onNavigateBack`, and

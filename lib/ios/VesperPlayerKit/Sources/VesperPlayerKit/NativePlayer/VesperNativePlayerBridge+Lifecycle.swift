@@ -78,7 +78,7 @@ extension VesperNativePlayerBridge {
         pendingNativeFrameSeek = nil
         tearDownActivePlayback(cancelSourceCommand: false)
         deactivateAudioSessionIfNeeded()
-        benchmarkRecorder.dispose()
+        benchmarkRecorder.dispose(player: player)
         _ = pipelineEventHookSession?.flush()
         let reportBatch = pipelineEventHookSession?.drainReports() ?? VesperPipelineEventHookReportBatch()
         if !reportBatch.isEmpty {

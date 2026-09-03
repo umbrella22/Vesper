@@ -18,7 +18,7 @@ const INITIAL_RELEASE_EN: &str = r#"## Fixes
 ## New Capabilities
 
 - Android ships a core host-kit AAR, Compose binding, Compose UI package, external playback extension, and split FFmpeg runtime package for arm64-v8a devices.
-- iOS ships a device framework, Apple Silicon simulator framework, combined XCFramework, and seven optional sibling XCFrameworks covering the three FFmpeg runtime components, two FFmpeg-backed plugins, the VideoToolbox decoder plugin, and the diagnostic FrameProcessor plugin.
+- iOS ships a device framework, Apple Silicon simulator framework, combined XCFramework, and eight optional sibling XCFrameworks covering the three FFmpeg runtime components, two FFmpeg-backed plugins, the VideoToolbox decoder plugin, the diagnostic FrameProcessor plugin, and the performance diagnostics BenchmarkSink plugin.
 - Flutter and Android Compose sample apps are published with the release for quick integration checks.
 - Core capabilities include DASH / HLS bridging, offline download and export, remote media references, request-header forwarding, SegmentBase / byte-range handling, DLNA / AirPlay external playback, and FFmpeg remux post-processing.
 
@@ -37,7 +37,7 @@ const INITIAL_RELEASE_ZH: &str = r#"## 修复问题
 ## 新增功能
 
 - Android 提供核心 Host Kit AAR、Compose 绑定、Compose UI 包、外部播放扩展和 FFmpeg Runtime 拆分包，面向 arm64-v8a 设备发布。
-- iOS 提供真机 framework、Apple Silicon 模拟器 framework、合并 XCFramework，以及由三个 FFmpeg runtime component、两个 FFmpeg-backed 插件、VideoToolbox decoder 插件和 diagnostic FrameProcessor 插件组成的七个可选同级 XCFramework。
+- iOS 提供真机 framework、Apple Silicon 模拟器 framework、合并 XCFramework，以及由三个 FFmpeg runtime component、两个 FFmpeg-backed 插件、VideoToolbox decoder 插件、diagnostic FrameProcessor 插件和性能诊断 BenchmarkSink 插件组成的八个可选同级 XCFramework。
 - Flutter 示例和 Android Compose 示例随 release 一起提供，方便快速验证接入效果。
 - 核心能力覆盖 DASH / HLS 桥接、离线下载与导出、远程媒体引用、请求头透传、SegmentBase / byte-range 处理、DLNA / AirPlay 外部播放，以及 FFmpeg remux 后处理。
 
@@ -395,6 +395,10 @@ fn render_notes(input: NotesInput<'_>) -> String {
             "VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip",
             "Optional diagnostic FrameProcessor plugin XCFramework",
         ),
+        (
+            "VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip",
+            "Optional performance diagnostics BenchmarkSink plugin XCFramework",
+        ),
     ] {
         download(&mut output, input.download_base, asset, label);
     }
@@ -422,7 +426,7 @@ fn render_notes(input: NotesInput<'_>) -> String {
     blank(&mut output);
     line(
         &mut output,
-        "Tagged releases include the seven optional iOS plugin/runtime XCFrameworks only together with the FFmpeg compliance bundle and exact corresponding source asset. FFmpeg remains separately licensed; its notices, configure metadata, source, and LGPL relinking boundary are not covered by Vesper's Apache-2.0 source license.",
+        "Tagged releases include the eight optional iOS plugin/runtime XCFrameworks only together with the FFmpeg compliance bundle and exact corresponding source asset. FFmpeg remains separately licensed; its notices, configure metadata, source, and LGPL relinking boundary are not covered by Vesper's Apache-2.0 source license.",
     );
     blank(&mut output);
     line(&mut output, "## Release Contributors");

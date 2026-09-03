@@ -20,6 +20,7 @@ final class PlayerSession {
     var pictureInPictureCoordinator: VesperIosPictureInPictureCoordinator?
     var pictureInPictureState = "inactive"
     var pictureInPictureActive = false
+    var performanceDiagnosticsSession: VesperPerformanceDiagnosticsSession?
 
     init(
         id: String,

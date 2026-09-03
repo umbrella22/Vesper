@@ -20,6 +20,7 @@ const FLUTTER_PACKAGES: &[&str] = &[
     "vesper_player_external_playback",
     "vesper_player_ios",
     "vesper_player_macos",
+    "vesper_player_performance_diagnostics",
     "vesper_player_platform_interface",
     "vesper_player_remux_ffmpeg",
     "vesper_player_source_normalizer_ffmpeg",
@@ -29,12 +30,14 @@ const FLUTTER_PACKAGES: &[&str] = &[
 const FLUTTER_ANDROID_GRADLE_FILES: &[&str] = &[
     "lib/flutter/vesper_player_android/android/build.gradle",
     "lib/flutter/vesper_player_external_playback/android/build.gradle",
+    "lib/flutter/vesper_player_performance_diagnostics/android/build.gradle",
     "lib/flutter/vesper_player_source_normalizer_ffmpeg/android/build.gradle",
     "lib/flutter/vesper_player_remux_ffmpeg/android/build.gradle",
 ];
 
 const FLUTTER_IOS_PACKAGE_FILES: &[&str] = &[
     "lib/flutter/vesper_player_ios/ios/vesper_player_ios/Package.swift",
+    "lib/flutter/vesper_player_performance_diagnostics/ios/vesper_player_performance_diagnostics/Package.swift",
     "lib/flutter/vesper_player_source_normalizer_ffmpeg/ios/vesper_player_source_normalizer_ffmpeg/Package.swift",
     "lib/flutter/vesper_player_remux_ffmpeg/ios/vesper_player_remux_ffmpeg/Package.swift",
 ];
@@ -51,6 +54,7 @@ const FLUTTER_CHANGELOG_FILES: &[&str] = &[
     "lib/flutter/vesper_player_external_playback/CHANGELOG.md",
     "lib/flutter/vesper_player_platform_interface/CHANGELOG.md",
     "lib/flutter/vesper_player_ios/CHANGELOG.md",
+    "lib/flutter/vesper_player_performance_diagnostics/CHANGELOG.md",
     "lib/flutter/vesper_player_ui/CHANGELOG.md",
     "lib/flutter/vesper_player_source_normalizer_ffmpeg/CHANGELOG.md",
     "lib/flutter/vesper_player_remux_ffmpeg/CHANGELOG.md",
@@ -1187,7 +1191,7 @@ fn replace_cargo_lock_versions(source: &str, version: &str) -> ReleaseResult<Str
     replace_cargo_lock_versions_matching(
         source,
         version,
-        |name| name == "basic-player" || name.starts_with("player-"),
+        is_versioned_workspace_package,
         "Cargo.lock does not contain Vesper workspace packages",
     )
 }
@@ -1200,9 +1204,13 @@ fn replace_plugin_cargo_lock_versions(
     replace_cargo_lock_versions_matching(
         source,
         version,
-        |name| name == package_name || name.starts_with("player-"),
+        |name| name == package_name || is_versioned_workspace_package(name),
         "plugin Cargo.lock does not contain its package or Vesper path dependencies",
     )
+}
+
+fn is_versioned_workspace_package(name: &str) -> bool {
+    name == "basic-player" || name.starts_with("player-") || name.starts_with("vesper-player-")
 }
 
 fn replace_cargo_lock_versions_matching(
@@ -1825,7 +1833,7 @@ fn verify_cargo_lock(root: &Path, version: &str, issues: &mut Vec<String>) -> Re
             let name = package.get("name").and_then(toml::Value::as_str);
             let package_version = package.get("version").and_then(toml::Value::as_str);
             if let (Some(name), Some(package_version)) = (name, package_version)
-                && (name == "basic-player" || name.starts_with("player-"))
+                && is_versioned_workspace_package(name)
                 && package_version != version
             {
                 mismatches.push(format!("{name} {package_version}"));
@@ -1917,7 +1925,7 @@ fn verify_plugin_cargo_versions(
                 let name = package.get("name").and_then(toml::Value::as_str);
                 let package_version = package.get("version").and_then(toml::Value::as_str);
                 if let (Some(name), Some(package_version)) = (name, package_version)
-                    && (name == package_name || name.starts_with("player-"))
+                    && (name == package_name || is_versioned_workspace_package(name))
                     && package_version != version
                 {
                     issues.push(format!(
@@ -2159,6 +2167,10 @@ mod tests {
                 "[[package]]\n",
                 "name = \"player-fixture\"\n",
                 "version = \"0.4.0\"\n",
+                "\n",
+                "[[package]]\n",
+                "name = \"vesper-player-plugin\"\n",
+                "version = \"0.4.0\"\n",
             ),
         );
         write_fixture(
@@ -2214,6 +2226,9 @@ mod tests {
                 "name = \"player-plugin\"\n",
                 "version = \"0.4.0\"\n\n",
                 "[[package]]\n",
+                "name = \"vesper-player-plugin\"\n",
+                "version = \"0.4.0\"\n\n",
+                "[[package]]\n",
                 "name = \"vesper-plugin-fixture\"\n",
                 "version = \"0.4.0\"\n",
             ),
@@ -2232,6 +2247,7 @@ mod tests {
             "vesper_player_android",
             "vesper_player_external_playback",
             "vesper_player_ios",
+            "vesper_player_performance_diagnostics",
             "vesper_player_platform_interface",
             "vesper_player_remux_ffmpeg",
             "vesper_player_source_normalizer_ffmpeg",
@@ -2520,7 +2536,10 @@ mod tests {
         assert!(plugin_cargo.contains("player-plugin = { version = \"0.4.1\""));
         let plugin_lock = fs::read_to_string(directory.path().join("plugins/fixture/Cargo.lock"))
             .expect("plugin Cargo lock");
-        assert_eq!(plugin_lock.matches("version = \"0.4.1\"").count(), 2);
+        assert_eq!(plugin_lock.matches("version = \"0.4.1\"").count(), 3);
+        let workspace_lock =
+            fs::read_to_string(directory.path().join("Cargo.lock")).expect("workspace Cargo lock");
+        assert_eq!(workspace_lock.matches("version = \"0.4.1\"").count(), 2);
     }
 
     #[test]
@@ -2607,6 +2626,41 @@ mod tests {
             error
                 .to_string()
                 .contains("Plugin host SDK requirement mismatch")
+        );
+    }
+
+    #[test]
+    fn verification_rejects_optional_diagnostics_native_version_drift() {
+        let directory = release_fixture();
+        write_fixture(
+            directory.path(),
+            "lib/flutter/vesper_player_performance_diagnostics/android/build.gradle",
+            "version = \"0.3.9\"\n",
+        );
+        write_fixture(
+            directory.path(),
+            "lib/flutter/vesper_player_performance_diagnostics/ios/vesper_player_performance_diagnostics/Package.swift",
+            "private let vesperPlayerKitVersion: Version = \"0.3.9\"\n",
+        );
+        let context = ReleaseContext::new(
+            directory.path().to_path_buf(),
+            ReleaseEnvironment::default(),
+        );
+
+        let error = context
+            .verify_version("0.4.0", Some("400".to_owned()), Some("400".to_owned()))
+            .expect_err("diagnostics native dependency drift must fail verification");
+
+        assert_eq!(error.kind(), ReleaseErrorKind::Verification);
+        assert!(
+            error
+                .to_string()
+                .contains("Flutter Android plugin Gradle version mismatch")
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("Flutter iOS native dependency version mismatch")
         );
     }
 

@@ -105,7 +105,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var retryAttemptCount = 0
     let cachePolicyToken = UUID()
     let preloadCoordinator: VesperNativePreloadCoordinator
-    let benchmarkRecorder: VesperBenchmarkRecorder
+    let benchmarkRecorder: VesperBenchmarkCoordinator
     let sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration
     let frameProcessorConfiguration: VesperFrameProcessorConfiguration
     let nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration
@@ -296,7 +296,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         self.sourceLoadAttemptOverride = sourceLoadAttemptOverride
         self.systemPlayerSeekSubmitter = systemPlayerSeekSubmitter
         currentPluginDiagnostics = []
-        benchmarkRecorder = VesperBenchmarkRecorder(configuration: benchmarkConfiguration)
+        benchmarkRecorder = VesperBenchmarkCoordinator(configuration: benchmarkConfiguration)
         preloadCoordinator = VesperNativePreloadCoordinator(
             budgetPolicy: preloadBudgetPolicy.resolvedForRuntime()
         )

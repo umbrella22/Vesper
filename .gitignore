@@ -12,6 +12,10 @@ devnotes/
 
 # Local upstream checkouts used to refresh repository Codex plugins
 /.agents/*
+!/.agents/plugins/
+/.agents/plugins/*
+!/.agents/plugins/vesper-player-agent/
+!/.agents/plugins/vesper-player-agent/**
 
 # Rust iOS FFI build lock
 /.vesper-ios-ffi.lock
@@ -20,6 +24,8 @@ devnotes/
 
 # macOS / editor junk
 .DS_Store
+__pycache__/
+*.py[cod]
 *.swp
 *.swo
 *.tmp
@@ -57,6 +63,8 @@ lib/android/vesper-player-kit-remux-ffmpeg/src/main/jniLibs/*
 lib/android/vesper-player-kit-remux-ffmpeg/src/main/assets/vesper-remux-ffmpeg/*
 lib/android/vesper-player-kit-frame-processor-diagnostic/build/
 lib/android/vesper-player-kit-frame-processor-diagnostic/src/main/jniLibs/*
+lib/android/vesper-player-kit-performance-diagnostics/build/
+lib/android/vesper-player-kit-performance-diagnostics/src/main/jniLibs/*
 lib/android/vesper-player-kit-external-playback/build/
 lib/android/vesper-player-kit-external-playback/src/main/jniLibs/*
 lib/android/vesper-player-kit-relay-ffmpeg/build/

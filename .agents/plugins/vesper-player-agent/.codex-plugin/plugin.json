@@ -1,0 +1,43 @@
+{
+  "name": "vesper-player-agent",
+  "version": "0.1.0+codex.20260903124554",
+  "description": "Vesper Player SDK maintainer agent for Rust streaming, typed plugin ABI, performance diagnostics, mobile hosts, FFmpeg packaging, and validation.",
+  "author": {
+    "name": "Vesper Player SDK maintainers",
+    "url": "https://github.com/umbrella22/Vesper"
+  },
+  "homepage": "https://github.com/umbrella22/Vesper",
+  "repository": "https://github.com/umbrella22/Vesper",
+  "license": "Apache-2.0",
+  "keywords": [
+    "vesper",
+    "rust",
+    "streaming",
+    "media",
+    "ffmpeg",
+    "flutter",
+    "android",
+    "ios",
+    "plugin"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Vesper Player Agent",
+    "shortDescription": "Vesper runtime and plugin maintainer skills.",
+    "longDescription": "A repository-specific Codex plugin for maintaining the Vesper Player SDK. It covers Rust streaming architecture; the typed Native and bounded WASM plugin contract; metadata catalogs, deterministic resolution, immutable plans, scoped lifecycle; Performance Diagnostics schema v1 and frame-jank A/B analysis; AudioProcessor and FrameProcessor boundaries; mobile and Flutter host kits; FFmpeg packaging; defensive programming; and evidence-aware validation.",
+    "developerName": "Vesper Player SDK maintainers",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/umbrella22/Vesper",
+    "defaultPrompt": [
+      "Add a Vesper feature in the correct runtime or host layer.",
+      "Implement or review a Vesper plugin from catalog and plan through scoped runtime participation.",
+      "Validate and interpret a Vesper Performance Diagnostics report without claiming causation."
+    ],
+    "brandColor": "#1F7A64"
+  }
+}

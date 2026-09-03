@@ -1,0 +1,6 @@
+interface:
+  display_name: "Vesper Mobile Flutter Hosts"
+  short_description: "Android, iOS, and Flutter host rules"
+  default_prompt: "Use $vesper-mobile-flutter-hosts to update this Vesper host integration."
+policy:
+  allow_implicit_invocation: true

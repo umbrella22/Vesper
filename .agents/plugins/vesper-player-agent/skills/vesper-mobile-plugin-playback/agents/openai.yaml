@@ -1,0 +1,6 @@
+interface:
+  display_name: "Vesper Mobile Plugin Playback"
+  short_description: "SourceNormalizer and mobile plugin playback boundaries"
+  default_prompt: "Use $vesper-mobile-plugin-playback to change mobile SourceNormalizer or plugin playback behavior safely."
+policy:
+  allow_implicit_invocation: true

@@ -113,7 +113,8 @@ jobs:
             lib/flutter/vesper_player \
             lib/flutter/vesper_player_ui \
             lib/flutter/vesper_player_source_normalizer_ffmpeg \
-            lib/flutter/vesper_player_remux_ffmpeg
+            lib/flutter/vesper_player_remux_ffmpeg \
+            lib/flutter/vesper_player_performance_diagnostics
           do
             echo "::group::$pkg_dir"
             (
@@ -421,7 +422,8 @@ jobs:
           ./scripts/vesper flutter stage-pub "$stage" --include-optional-plugins
           for package in \
             vesper_player_source_normalizer_ffmpeg \
-            vesper_player_remux_ffmpeg
+            vesper_player_remux_ffmpeg \
+            vesper_player_performance_diagnostics
           do
             (
               cd "$stage/$package"

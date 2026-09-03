@@ -408,6 +408,27 @@ final controller = await VesperPlayerController.create(
 off by default; keep it disabled in normal app builds unless you are actively
 tracing startup or playback behavior.
 
+### Performance Diagnostics Session
+
+The optional `vesper_player_performance_diagnostics` package supplies the
+native BenchmarkSink artifact. The session API remains in `vesper_player` so
+apps can exclude that artifact from selected native build configurations:
+
+```dart
+final diagnostics = await controller.startPerformanceDiagnostics();
+await diagnostics.updateOverlayState(
+  const VesperPerformanceOverlayState(active: true),
+);
+final snapshot = await diagnostics.snapshot();
+final report = await diagnostics.stop();
+```
+
+Flutter submits `FrameTiming` samples in bounded batches and captures overlay
+state with each sample. The plugin performs no upload and reports correlation,
+not causation. The complete schema, thresholds, error codes, and native probe
+differences are defined in
+[`docs/performance-diagnostics.md`](../../../docs/performance-diagnostics.md).
+
 ## Track Selection And ABR
 
 ```dart
@@ -808,3 +829,4 @@ if (caps.isExperimental) {
 | `vesper_player_platform_interface` | Shared platform contract and DTOs         |
 | `vesper_player_android`            | Android implementation built on ExoPlayer |
 | `vesper_player_ios`                | iOS implementation built on AVPlayer      |
+| `vesper_player_performance_diagnostics` | Optional native BenchmarkSink artifact |

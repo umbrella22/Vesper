@@ -210,6 +210,92 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             handleSessionCommand(call, result: result) { session in
                 session.controller.drainPipelineEventHookReports().toMap()
             }
+        case "startPerformanceDiagnostics":
+            handleAsyncSessionCommand(call, result: result) { session in
+                let arguments = arguments(of: call)
+                let configuration = try nestedMap(arguments["configuration"])?
+                    .toPerformanceDiagnosticsConfiguration()
+                    ?? VesperPerformanceDiagnosticsConfiguration()
+                let probe = VesperPerformanceProbe(
+                    rawValue: arguments["probe"] as? String ?? "flutterFrameTiming"
+                )
+                let diagnostics = try await session.controller.startPerformanceDiagnostics(
+                    probe: probe,
+                    configuration: configuration
+                )
+                session.performanceDiagnosticsSession = diagnostics
+                return diagnostics.runId
+            }
+        case "updatePerformanceOverlayState":
+            handleSessionCommand(call, result: result) { session in
+                let arguments = arguments(of: call)
+                let diagnostics = try session.requirePerformanceDiagnostics(
+                    arguments: arguments
+                )
+                let state = try requireNestedMap(arguments: arguments, key: "state")
+                    .toPerformanceOverlayState()
+                try diagnostics.updateOverlayState(state)
+                return nil
+            }
+        case "recordPerformanceMarker":
+            handleSessionCommand(call, result: result) { session in
+                let arguments = arguments(of: call)
+                let diagnostics = try session.requirePerformanceDiagnostics(
+                    arguments: arguments
+                )
+                guard let name = arguments["name"] as? String else {
+                    throw PluginError.missingArgument("name")
+                }
+                try diagnostics.recordMarker(
+                    name,
+                    value: try arguments.optionalPerformanceMarkerValue(),
+                    sequenceIndex: try arguments.optionalPerformanceSequenceIndex(),
+                    expectedOverlayActive:
+                        try arguments.optionalPerformanceExpectedOverlayActive()
+                )
+                return nil
+            }
+        case "submitPerformanceFrameSamples":
+            handleSessionCommand(call, result: result) { session in
+                let arguments = arguments(of: call)
+                let diagnostics = try session.requirePerformanceDiagnostics(
+                    arguments: arguments
+                )
+                guard let rawSamples = arguments["samples"] as? [Any] else {
+                    throw PluginError.missingArgument("samples")
+                }
+                guard rawSamples.count <= 120 else {
+                    throw VesperPerformanceDiagnosticsError(
+                        code: .protocolViolation,
+                        message: "Performance frame batches are limited to 120 samples."
+                    )
+                }
+                let samples = try rawSamples.map { rawSample in
+                    guard let sample = stringKeyedMap(rawSample) else {
+                        throw VesperPerformanceDiagnosticsError(
+                            code: .protocolViolation,
+                            message: "A performance frame sample must be a map."
+                        )
+                    }
+                    return try sample.toPerformanceFrameSample()
+                }
+                try diagnostics.submitFrameSamples(samples)
+                return nil
+            }
+        case "performanceDiagnosticsSnapshot":
+            handleAsyncSessionCommand(call, result: result) { session in
+                let diagnostics = try session.requirePerformanceDiagnostics(
+                    arguments: arguments(of: call)
+                )
+                return try await diagnostics.snapshot().toFlutterMap()
+            }
+        case "stopPerformanceDiagnostics":
+            handleAsyncSessionCommand(call, result: result) { session in
+                let diagnostics = try session.requirePerformanceDiagnostics(
+                    arguments: arguments(of: call)
+                )
+                return try await diagnostics.stop().toFlutterMap()
+            }
         case "sampleTimeline":
             handleTimelineSample(call, result: result)
         case "refreshDownloadManager":

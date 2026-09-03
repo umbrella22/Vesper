@@ -115,12 +115,13 @@ source is loaded.
 4. Open `VesperPlayerHostDemo.xcodeproj` in Xcode and run on an arm64
    Simulator or device.
 
-The generated App target directly embeds and signs seven top-level sibling
+The generated App target directly embeds and signs eight top-level sibling
 frameworks: `VesperFFmpegAVCodec`, `VesperFFmpegAVFormat`,
 `VesperFFmpegAVUtil`, and the Remux, SourceNormalizer, VideoToolbox Decoder,
-and diagnostic FrameProcessor plugin frameworks. The optional Swift package
-exposes one same-named product for each framework. The project has no custom
-flat-dylib embedding phase and does not use the legacy umbrella runtime.
+diagnostic FrameProcessor, and Performance Diagnostics plugin frameworks. The
+optional Swift package exposes one same-named product for each framework. The
+project has no custom flat-dylib embedding phase and does not use the legacy
+umbrella runtime.
 
 ## Optional Plugin Diagnostics
 

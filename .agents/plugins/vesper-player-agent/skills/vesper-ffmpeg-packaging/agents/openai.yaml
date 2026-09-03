@@ -1,0 +1,6 @@
+interface:
+  display_name: "Vesper FFmpeg Packaging"
+  short_description: "FFmpeg profile, runtime, and license rules"
+  default_prompt: "Use $vesper-ffmpeg-packaging to check this FFmpeg-backed change."
+policy:
+  allow_implicit_invocation: true

@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
+import android.view.Window
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -31,7 +32,7 @@ internal class VesperNativePlayerBridge(
     internal var trackPreferencePolicy: VesperTrackPreferencePolicy = VesperTrackPreferencePolicy(),
     internal val preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     internal val decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
-    internal val benchmarkRecorder: VesperBenchmarkRecorder = VesperBenchmarkRecorder(),
+    internal val benchmarkRecorder: VesperBenchmarkRecording = VesperBenchmarkCoordinator(),
     internal var keepScreenOnDuringPlayback: Boolean = true,
     appContext: Context? = null,
     internal val surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
@@ -352,6 +353,55 @@ internal class VesperNativePlayerBridge(
 
     override fun awaitBenchmarkSinkShutdown(timeoutMs: Long): Boolean =
         benchmarkRecorder.awaitSinkShutdown(timeoutMs)
+
+    override fun startPerformanceDiagnostics(
+        configuration: VesperPerformanceDiagnosticsConfiguration,
+        probe: VesperPerformanceProbe,
+        window: Window?,
+    ): String = performanceCoordinator().startPerformance(
+        configuration,
+        probe,
+        window,
+        initialPlaybackActive = _uiState.value.playbackState == PlaybackStateUi.Playing &&
+            !_uiState.value.isBuffering,
+    )
+
+    override fun updatePerformanceOverlayState(
+        runId: String,
+        state: VesperPerformanceOverlayState,
+    ) = performanceCoordinator().updateOverlayState(runId, state)
+
+    override fun recordPerformanceMarker(
+        runId: String,
+        name: String,
+        value: Double?,
+        sequenceIndex: Int?,
+        expectedOverlayActive: Boolean?,
+    ) = performanceCoordinator().recordMarker(
+        runId,
+        name,
+        value,
+        sequenceIndex,
+        expectedOverlayActive,
+    )
+
+    override fun submitPerformanceFrameSamples(
+        runId: String,
+        samples: List<VesperPerformanceFrameSample>,
+    ) = performanceCoordinator().recordPerformanceFrames(runId, samples)
+
+    override fun performanceDiagnosticsSnapshot(runId: String): VesperPerformanceDiagnosticsReport =
+        performanceCoordinator().snapshot(runId)
+
+    override fun stopPerformanceDiagnostics(runId: String): VesperPerformanceDiagnosticsReport =
+        performanceCoordinator().stop(runId)
+
+    private fun performanceCoordinator(): VesperBenchmarkCoordinator =
+        benchmarkRecorder as? VesperBenchmarkCoordinator
+            ?: throw VesperPerformanceDiagnosticsException(
+                VesperPerformanceDiagnosticsErrorCode.ArtifactUnavailable,
+                "The injected benchmark recorder does not support performance diagnostics.",
+            )
 
 }
 

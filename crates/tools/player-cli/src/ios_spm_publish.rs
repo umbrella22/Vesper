@@ -26,12 +26,13 @@ const SWIFT_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_TIMEOUT: Duration = Duration::from_secs(300);
 const MANAGED_FILES: [&str; 3] = ["Package.swift", "README.md", "LICENSE"];
 const UI_SOURCE_PATH: &str = "Sources/VesperPlayerKitUI";
-const OPTIONAL_BINARY_TARGETS: [&str; 5] = [
+const OPTIONAL_BINARY_TARGETS: [&str; 6] = [
     "VesperFFmpegAVCodec",
     "VesperFFmpegAVFormat",
     "VesperFFmpegAVUtil",
     "VesperPlayerRemuxFfmpegPlugin",
     "VesperPlayerSourceNormalizerFfmpegPlugin",
+    "VesperPlayerPerformanceDiagnosticsPlugin",
 ];
 
 struct PublishedBinaryArtifact {
@@ -368,6 +369,10 @@ let package = Package(
                 "VesperFFmpegAVUtil",
             ]
         ),
+        .library(
+            name: "VesperPlayerPerformanceDiagnostics",
+            targets: ["VesperPlayerPerformanceDiagnosticsPlugin"]
+        ),
     ],
     targets: [
 {binary_targets},
@@ -382,7 +387,7 @@ let package = Package(
     );
     write_file(&destination.join("Package.swift"), package.as_bytes())?;
     let readme = format!(
-        "# VesperPlayerKit\n\nBinary Swift package distribution for [Vesper](https://github.com/{source_repository}).\n\nThe `VesperPlayerKit` product contains the released binary host kit. The `VesperPlayerKitUI` product layers the version-matched SwiftUI controls on top. `VesperPlayerSourceNormalizerFfmpeg` and `VesperPlayerRemuxFfmpeg` are opt-in capability products; each embeds its plugin plus the matching AVCodec, AVFormat, and AVUtil runtime components. Decoder and FrameProcessor plugins are not part of these products.\n"
+        "# VesperPlayerKit\n\nBinary Swift package distribution for [Vesper](https://github.com/{source_repository}).\n\nThe `VesperPlayerKit` product contains the released binary host kit. The `VesperPlayerKitUI` product layers the version-matched SwiftUI controls on top. `VesperPlayerSourceNormalizerFfmpeg` and `VesperPlayerRemuxFfmpeg` are opt-in capability products; each embeds its plugin plus the matching AVCodec, AVFormat, and AVUtil runtime components. `VesperPlayerPerformanceDiagnostics` is the opt-in BenchmarkSink diagnostics product. Decoder and FrameProcessor plugins are not part of these products.\n"
     );
     write_file(&destination.join("README.md"), readme.as_bytes())?;
     copy_regular_file(
@@ -1128,6 +1133,7 @@ mod tests {
             "VesperPlayerKitUI",
             "VesperPlayerSourceNormalizerFfmpeg",
             "VesperPlayerRemuxFfmpeg",
+            "VesperPlayerPerformanceDiagnostics",
         ] {
             assert!(manifest.contains(&format!("name: \"{product}\"")));
         }

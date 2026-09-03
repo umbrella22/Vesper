@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+## 0.5.2 - 2026-09-03
+
 ### Added
 
+- Added per-player hot performance diagnostics sessions, Android FrameMetrics
+  sampling, and the optional
+  `vesper-player-kit-performance-diagnostics` Maven artifact.
 - Added Compose Stage slots for non-interactive host content and landscape
   controls, plus an optional state-labelled top-bar navigation action.
 

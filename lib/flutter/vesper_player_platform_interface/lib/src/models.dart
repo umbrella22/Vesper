@@ -9,6 +9,7 @@ part 'models/resilience_models.dart';
 part 'models/runtime_warning_models.dart';
 part 'models/diagnostics/capability_warning_models.dart';
 part 'models/diagnostics/runtime_warning_helpers.dart';
+part 'models/diagnostics/performance_diagnostics_models.dart';
 part 'models/plugin_diagnostic_models.dart';
 part 'models/plugins/plugin_capability_models.dart';
 part 'models/plugins/plugin_diagnostic_helpers.dart';

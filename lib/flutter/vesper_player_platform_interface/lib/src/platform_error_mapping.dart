@@ -3,10 +3,15 @@ import 'package:flutter/services.dart';
 import 'models.dart';
 import 'fixed_track_exception.dart';
 import 'player_command_exception.dart';
+import 'performance_diagnostics_exception.dart';
 import 'subtitle_exception.dart';
 import 'vesper_player_platform.dart' show VesperUnsupportedError;
 
 Object vesperMapPlatformException(PlatformException error) {
+  final rawDetails = error.details;
+  if (rawDetails is Map && rawDetails['performanceDiagnosticsCode'] is String) {
+    return VesperPerformanceDiagnosticsException.fromPlatformException(error);
+  }
   final subtitleError = VesperSubtitleException.tryFromPlatformException(error);
   if (subtitleError != null) {
     return subtitleError;

@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+## 0.5.2 - 2026-09-03
+
 ### Added
 
+- Added the optional official performance diagnostics `BenchmarkSink`, hot
+  session APIs for Flutter, Android, and iOS, bounded schema-v1 reports, and
+  independently published Maven, SwiftPM, XCFramework, and Flutter artifacts.
 - Added host content overlays, landscape control-row slots, and optional
   state-labelled navigation actions to the Flutter, Compose, and SwiftUI Stage
   packages.

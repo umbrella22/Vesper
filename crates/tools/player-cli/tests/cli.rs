@@ -1016,6 +1016,7 @@ fn ios_plugin_fixture() -> IosPluginFixture {
         "source-normalizer-ffmpeg",
         "decoder-videotoolbox",
         "frame-processor-diagnostic",
+        "performance-diagnostics",
     ] {
         let destination = root.join("plugins").join(plugin);
         fs::create_dir_all(&destination).expect("create plugin project fixture directory");
@@ -2837,9 +2838,11 @@ fn ios_plugin_build_commands_are_public_but_videotoolbox_remains_internal() {
         "remux-plugin",
         "source-normalizer-plugin",
         "frame-processor-plugin",
+        "performance-diagnostics-plugin",
         "stage-remux-plugin-release",
         "stage-source-normalizer-plugin-release",
         "stage-frame-processor-plugin-release",
+        "stage-performance-diagnostics-plugin-release",
     ] {
         assert!(help.contains(command), "missing iOS command {command}");
     }
@@ -2939,6 +2942,11 @@ fn ios_plugin_release_dry_run_preserves_declared_profiles_and_does_not_write() {
             "stage-frame-processor-plugin-release",
             None,
             "VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip",
+        ),
+        (
+            "stage-performance-diagnostics-plugin-release",
+            None,
+            "VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip",
         ),
     ];
     for (index, (command, declared_profile, archive)) in cases.into_iter().enumerate() {
@@ -5827,6 +5835,7 @@ fn write_invalid_optional_ios_release_assets(release: &std::path::Path) {
         "VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip",
         "VesperPlayerDecoderVideoToolboxPlugin.xcframework.zip",
         "VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip",
+        "VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip",
         "VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip",
         "VesperPlayerOptionalPlugins-FFmpeg-8.1.2-source.tar.xz",
     ] {
@@ -5845,8 +5854,12 @@ const FLUTTER_CORE_PACKAGES: [&str; 6] = [
 ];
 const FLUTTER_SOURCE_NORMALIZER_PACKAGE: &str = "vesper_player_source_normalizer_ffmpeg";
 const FLUTTER_REMUX_PACKAGE: &str = "vesper_player_remux_ffmpeg";
-const FLUTTER_OPTIONAL_PACKAGES: [&str; 2] =
-    [FLUTTER_SOURCE_NORMALIZER_PACKAGE, FLUTTER_REMUX_PACKAGE];
+const FLUTTER_PERFORMANCE_DIAGNOSTICS_PACKAGE: &str = "vesper_player_performance_diagnostics";
+const FLUTTER_OPTIONAL_PACKAGES: [&str; 3] = [
+    FLUTTER_SOURCE_NORMALIZER_PACKAGE,
+    FLUTTER_REMUX_PACKAGE,
+    FLUTTER_PERFORMANCE_DIAGNOSTICS_PACKAGE,
+];
 
 fn flutter_fixture(include_example: bool) -> tempfile::TempDir {
     let parent = tempfile::tempdir().expect("temporary Flutter fixture parent");
@@ -5906,7 +5919,7 @@ fn prepare_flutter_pub_fixture(root: &std::path::Path) {
 }
 
 fn prepare_optional_ios_pub_fixture(root: &std::path::Path) {
-    const ARTIFACTS: [&str; 7] = [
+    const ARTIFACTS: [&str; 8] = [
         "VesperFFmpegAVCodec",
         "VesperFFmpegAVFormat",
         "VesperFFmpegAVUtil",
@@ -5914,6 +5927,7 @@ fn prepare_optional_ios_pub_fixture(root: &std::path::Path) {
         "VesperPlayerSourceNormalizerFfmpegPlugin",
         "VesperPlayerDecoderVideoToolboxPlugin",
         "VesperPlayerFrameProcessorDiagnosticPlugin",
+        "VesperPlayerPerformanceDiagnosticsPlugin",
     ];
     let package = root.join("lib/ios/VesperPlayerOptionalPlugins");
     fs::create_dir_all(package.join("Sources/FixtureProduct"))
@@ -6041,7 +6055,7 @@ fn sync_ios_bridge_fixture(root: &std::path::Path, tools: &std::path::Path) {
 }
 
 #[cfg(unix)]
-const IOS_APP_STORE_FRAMEWORKS: [&str; 7] = [
+const IOS_APP_STORE_FRAMEWORKS: [&str; 8] = [
     "VesperFFmpegAVCodec",
     "VesperFFmpegAVFormat",
     "VesperFFmpegAVUtil",
@@ -6049,6 +6063,7 @@ const IOS_APP_STORE_FRAMEWORKS: [&str; 7] = [
     "VesperPlayerSourceNormalizerFfmpegPlugin",
     "VesperPlayerDecoderVideoToolboxPlugin",
     "VesperPlayerFrameProcessorDiagnosticPlugin",
+    "VesperPlayerPerformanceDiagnosticsPlugin",
 ];
 
 #[cfg(unix)]
@@ -6114,6 +6129,17 @@ fn ios_app_store_plugin_descriptor(
                 interface_major: 1,
                 interface_minor: 0,
                 stability: player_cli::PluginStability::Experimental,
+            }],
+        ),
+        "VesperPlayerPerformanceDiagnosticsPlugin" => (
+            "io.github.umbrella22.vesper.performance-diagnostics",
+            vec![player_cli::PluginCapabilityDescriptor {
+                interface_id: "2d8e5be8-b1de-5e83-8fe0-6118aabc5118".to_owned(),
+                instance_id: "io.github.umbrella22.vesper.performance-diagnostics.benchmark"
+                    .to_owned(),
+                interface_major: 1,
+                interface_minor: 0,
+                stability: player_cli::PluginStability::Stable,
             }],
         ),
         _ => return None,
@@ -6367,7 +6393,7 @@ fn ios_app_store_command(
 }
 
 #[cfg(target_os = "macos")]
-const IOS_RELEASE_OPTIONAL_FRAMEWORKS: [&str; 7] = [
+const IOS_RELEASE_OPTIONAL_FRAMEWORKS: [&str; 8] = [
     "VesperFFmpegAVCodec",
     "VesperFFmpegAVFormat",
     "VesperFFmpegAVUtil",
@@ -6375,6 +6401,7 @@ const IOS_RELEASE_OPTIONAL_FRAMEWORKS: [&str; 7] = [
     "VesperPlayerSourceNormalizerFfmpegPlugin",
     "VesperPlayerDecoderVideoToolboxPlugin",
     "VesperPlayerFrameProcessorDiagnosticPlugin",
+    "VesperPlayerPerformanceDiagnosticsPlugin",
 ];
 
 #[cfg(target_os = "macos")]
@@ -6437,6 +6464,7 @@ fn ios_stage_release_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
         "source-normalizer-ffmpeg",
         "decoder-videotoolbox",
         "frame-processor-diagnostic",
+        "performance-diagnostics",
     ] {
         let destination = root.join("plugins").join(plugin);
         fs::create_dir_all(&destination).expect("create iOS release plugin fixture directory");
@@ -6572,6 +6600,7 @@ case "$package" in
   player-source-normalizer-ffmpeg) dylib=libvesper_source_normalizer_ffmpeg.dylib ;;
   player-decoder-videotoolbox) dylib=libvesper_decoder_videotoolbox.dylib ;;
   player-frame-processor-diagnostic) dylib=libvesper_frame_processor_diagnostic.dylib ;;
+  player-performance-diagnostics) dylib=libvesper_performance_diagnostics.dylib ;;
   *) exit 91 ;;
 esac
 artifact="$CARGO_TARGET_DIR/$target/$profile/$dylib"
@@ -6866,7 +6895,7 @@ exit "${ANDROID_SAMPLE_GRADLE_STATUS:-0}"
 }
 
 #[cfg(unix)]
-fn android_optional_output_paths(root: &std::path::Path) -> [PathBuf; 10] {
+fn android_optional_output_paths(root: &std::path::Path) -> [PathBuf; 11] {
     [
         root.join("lib/android/vesper-player-kit-decoder-mediacodec/src/main/jniLibs"),
         root.join("lib/android/vesper-player-kit-source-normalizer-ffmpeg/src/main/jniLibs"),
@@ -6880,6 +6909,7 @@ fn android_optional_output_paths(root: &std::path::Path) -> [PathBuf; 10] {
         root.join(
             "lib/android/vesper-player-kit-frame-processor-diagnostic/src/main/jniLibs",
         ),
+        root.join("lib/android/vesper-player-kit-performance-diagnostics/src/main/jniLibs"),
         root.join("lib/android/vesper-player-kit-ffmpeg-runtime/src/main/jniLibs"),
         root.join(
             "lib/android/vesper-player-kit-ffmpeg-runtime/src/main/assets/vesper-ffmpeg-runtime",
@@ -6892,7 +6922,7 @@ fn android_optional_output_paths(root: &std::path::Path) -> [PathBuf; 10] {
 }
 
 #[cfg(unix)]
-fn prepare_android_optional_project_fixture(root: &std::path::Path) -> [PathBuf; 10] {
+fn prepare_android_optional_project_fixture(root: &std::path::Path) -> [PathBuf; 11] {
     let outputs = android_optional_output_paths(root);
     for output in &outputs {
         fs::create_dir_all(output.parent().expect("optional Android output parent"))
@@ -6933,6 +6963,7 @@ case "$crate" in
   player-decoder-mediacodec) library=libvesper_decoder_mediacodec.so ;;
   player-source-normalizer-ffmpeg) library=libvesper_source_normalizer_ffmpeg.so ;;
   player-frame-processor-diagnostic) library=libvesper_frame_processor_diagnostic.so ;;
+  player-performance-diagnostics) library=libvesper_performance_diagnostics.so ;;
   player-relay-ffmpeg-android) library=libvesper_player_relay_ffmpeg.so ;;
   player-remux-ffmpeg) library=libvesper_remux_ffmpeg.so ;;
   *) exit 97 ;;
@@ -6975,7 +7006,7 @@ fn prepare_android_optional_toolchain(root: &std::path::Path, tools: &std::path:
 }
 
 #[cfg(unix)]
-fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 9] {
+fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 10] {
     let _ = prepare_android_optional_project_fixture(root);
     fs::create_dir_all(root.join("scripts")).expect("create Android release script directory");
     fs::copy(
@@ -6988,6 +7019,7 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 9] 
         "source-normalizer-ffmpeg",
         "remux-ffmpeg",
         "frame-processor-diagnostic",
+        "performance-diagnostics",
     ] {
         let source = workspace_root()
             .join("plugins")
@@ -7012,6 +7044,7 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 9] 
             "frame-processor-diagnostic",
             "vesper_frame_processor_diagnostic",
         ),
+        ("performance-diagnostics", "vesper_performance_diagnostics"),
     ];
 
     let artifacts = [
@@ -7024,6 +7057,7 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 9] 
         "VesperPlayerKitSourceNormalizerFfmpeg-android-arm64-v8a.aar".to_owned(),
         "VesperPlayerKitRemuxFfmpeg-android-arm64-v8a.aar".to_owned(),
         "VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar".to_owned(),
+        "VesperPlayerKitPerformanceDiagnostics-android-arm64-v8a.aar".to_owned(),
     ];
     let aar_root = root.join("lib/android");
     let core = [
@@ -7123,6 +7157,7 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 9] 
             "frame-processor-diagnostic" => {
                 "vesper-player-kit-frame-processor-diagnostic-release.aar"
             }
+            "performance-diagnostics" => "vesper-player-kit-performance-diagnostics-release.aar",
             _ => unreachable!("known Android plugin fixture"),
         };
         let module = match plugin {
@@ -7130,6 +7165,7 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 9] 
             "source-normalizer-ffmpeg" => "vesper-player-kit-source-normalizer-ffmpeg",
             "remux-ffmpeg" => "vesper-player-kit-remux-ffmpeg",
             "frame-processor-diagnostic" => "vesper-player-kit-frame-processor-diagnostic",
+            "performance-diagnostics" => "vesper-player-kit-performance-diagnostics",
             _ => unreachable!("known Android plugin fixture"),
         };
         let mut entries = vec![
@@ -13868,6 +13904,7 @@ test -f "$VESPER_ANDROID_REMUX_ASSETS/vesper-remux-ffmpeg/profile-hash.txt" || e
 test -f "$VESPER_ANDROID_REMUX_ASSETS/vesper-remux-ffmpeg/remux-profile.txt" || exit 88
 test -f "$VESPER_ANDROID_REMUX_ASSETS/vesper-remux-ffmpeg/arm64-v8a-vesper-ffmpeg-build-metadata.txt" || exit 89
 test -f "$VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS/arm64-v8a/libvesper_frame_processor_diagnostic.so" || exit 90
+test -f "$VESPER_ANDROID_PERFORMANCE_DIAGNOSTICS_JNI_LIBS/arm64-v8a/libvesper_performance_diagnostics.so" || exit 91
 /bin/mkdir -p "$VESPER_ANDROID_EXTERNAL_RELAY_JNI_LIBS/arm64-v8a"
 printf 'relay\n' > "$VESPER_ANDROID_EXTERNAL_RELAY_JNI_LIBS/arm64-v8a/libvesper_player_relay_ffmpeg.so"
 /bin/mkdir -p "$VESPER_ANDROID_EXTERNAL_RELAY_ASSETS/vesper-relay-ffmpeg"
@@ -13884,6 +13921,7 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
   printf 'remux_jni=%s\n' "$VESPER_ANDROID_REMUX_JNI_LIBS"
   printf 'remux_assets=%s\n' "$VESPER_ANDROID_REMUX_ASSETS"
   printf 'frame_jni=%s\n' "$VESPER_ANDROID_FRAME_PROCESSOR_JNI_LIBS"
+  printf 'performance_diagnostics_jni=%s\n' "$VESPER_ANDROID_PERFORMANCE_DIAGNOSTICS_JNI_LIBS"
   printf 'runtime_jni=%s\n' "$VESPER_ANDROID_FFMPEG_RUNTIME_JNI_LIBS"
   printf 'runtime_assets=%s\n' "$VESPER_ANDROID_FFMPEG_RUNTIME_ASSETS"
   printf 'relay_jni=%s\n' "$VESPER_ANDROID_EXTERNAL_RELAY_JNI_LIBS"
@@ -13958,22 +13996,27 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
         "player-frame-processor-diagnostic\n"
     );
     assert_eq!(
-        fs::read_to_string(outputs[6].join("arm64-v8a/libavcodec.so"))
+        fs::read_to_string(outputs[6].join("arm64-v8a/libvesper_performance_diagnostics.so"))
+            .expect("read staged performance diagnostics output"),
+        "player-performance-diagnostics\n"
+    );
+    assert_eq!(
+        fs::read_to_string(outputs[7].join("arm64-v8a/libavcodec.so"))
             .expect("read staged FFmpeg runtime output"),
         "fixture ffmpeg runtime avcodec\n"
     );
     assert_eq!(
-        fs::read_to_string(outputs[7].join("profile-hash.txt"))
+        fs::read_to_string(outputs[8].join("profile-hash.txt"))
             .expect("read staged FFmpeg runtime metadata"),
         profile_hash
     );
     assert_eq!(
-        fs::read_to_string(outputs[8].join("arm64-v8a/libvesper_player_relay_ffmpeg.so"))
+        fs::read_to_string(outputs[9].join("arm64-v8a/libvesper_player_relay_ffmpeg.so"))
             .expect("read staged relay output"),
         "relay\n"
     );
     assert_eq!(
-        fs::read_to_string(outputs[9].join("profile-hash.txt"))
+        fs::read_to_string(outputs[10].join("profile-hash.txt"))
             .expect("read staged relay metadata"),
         profile_hash
     );
@@ -14007,6 +14050,9 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
     let frame = log
         .find("cargo-ndk crate=player-frame-processor-diagnostic")
         .expect("frame processor plugin log");
+    let performance_diagnostics = log
+        .find("cargo-ndk crate=player-performance-diagnostics")
+        .expect("performance diagnostics plugin log");
     let relay = log
         .find("cargo-ndk crate=player-relay-ffmpeg-android")
         .expect("external playback relay log");
@@ -14016,11 +14062,13 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
             && decoder < source
             && source < remux
             && remux < frame
-            && frame < relay
+            && frame < performance_diagnostics
+            && performance_diagnostics < relay
             && relay < gradle
     );
     assert!(log.contains("remux_jni=") && log.contains("remux_assets="));
     assert!(log.contains("runtime_jni=") && log.contains("runtime_assets="));
+    assert!(log.contains("performance_diagnostics_jni="));
     assert!(log.contains("relay_jni=") && log.contains("relay_assets="));
     assert!(log.contains("arg=:vesper-player-kit:assembleFixture\n"));
     assert!(log.contains("arg=:vesper-player-kit-external-playback:assembleFixture\n"));
@@ -14100,6 +14148,7 @@ exit "${ANDROID_STAGE_RELEASE_GRADLE_STATUS:-0}"
             "VesperPlayerKitExternalPlayback-android-arm64-v8a.aar",
             "VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar",
             "VesperPlayerKitFrameProcessorDiagnostic-android-arm64-v8a.aar",
+            "VesperPlayerKitPerformanceDiagnostics-android-arm64-v8a.aar",
             "VesperPlayerKitRemuxFfmpeg-android-arm64-v8a.aar",
             "VesperPlayerKitSourceNormalizerFfmpeg-android-arm64-v8a.aar",
         ]
@@ -15271,7 +15320,9 @@ fn flutter_android_verification_uses_matching_local_gradle_and_exact_tasks() {
         "gradle_user_home={}\n",
         custom_gradle_home.display()
     )));
-    assert!(optional_log.ends_with("arg=:vesper_player_remux_ffmpeg:compileDebugKotlin\n"));
+    assert!(
+        optional_log.ends_with("arg=:vesper_player_performance_diagnostics:compileDebugKotlin\n")
+    );
 }
 
 #[cfg(unix)]
@@ -17101,4 +17152,78 @@ fn json_path_preflight_rejects_non_utf8_before_mutating_state() {
     );
     assert!(!invalid_signing_key_path.exists());
     assert!(!trust_store_path.exists());
+}
+
+#[test]
+fn mobile_release_downloads_every_published_swift_package_binary() {
+    let workflow =
+        fs::read_to_string(workspace_root().join(".github/workflows/mobile-lib-release.yml"))
+            .expect("read mobile release workflow");
+
+    for asset in [
+        "VesperPlayerKit.xcframework.zip",
+        "VesperFFmpegAVCodec.xcframework.zip",
+        "VesperFFmpegAVFormat.xcframework.zip",
+        "VesperFFmpegAVUtil.xcframework.zip",
+        "VesperPlayerRemuxFfmpegPlugin.xcframework.zip",
+        "VesperPlayerSourceNormalizerFfmpegPlugin.xcframework.zip",
+        "VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip",
+    ] {
+        assert!(
+            workflow.contains(&format!("--pattern {asset}")),
+            "mobile release workflow does not download {asset} before publishing SwiftPM",
+        );
+    }
+}
+
+#[test]
+fn gradle_build_tasks_reference_the_published_cli_package_name() {
+    for relative in [
+        "lib/android/build.gradle.kts",
+        "examples/android-compose-host/app/build.gradle.kts",
+        "examples/flutter-host/android/app/build.gradle.kts",
+    ] {
+        let source = fs::read_to_string(workspace_root().join(relative))
+            .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+        assert!(
+            source.contains("\"-p\", \"vesper-player-cli\""),
+            "{relative} must build vesper-player-cli",
+        );
+        assert!(
+            !source.contains("\"-p\", \"player-cli\""),
+            "{relative} still references the obsolete player-cli package ID",
+        );
+    }
+}
+
+#[test]
+fn sample_hosts_build_and_register_the_performance_diagnostics_plugin() {
+    for relative in [
+        "examples/android-compose-host/app/build.gradle.kts",
+        "examples/flutter-host/android/app/build.gradle.kts",
+    ] {
+        let source = fs::read_to_string(workspace_root().join(relative))
+            .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+        for required in [
+            "buildPlayerPerformanceDiagnosticsAndroidPlugin",
+            "performance-diagnostics-plugin",
+            "plugins/performance-diagnostics/vesper-plugin.toml",
+            "io.github.umbrella22.vesper.performance-diagnostics",
+            "vesper_performance_diagnostics",
+            ":vesper-player-kit-performance-diagnostics",
+        ] {
+            assert!(
+                source.contains(required),
+                "{relative} does not wire performance diagnostics token {required}",
+            );
+        }
+    }
+
+    let ios_project =
+        fs::read_to_string(workspace_root().join("examples/ios-swift-host/project.yml"))
+            .expect("read iOS Swift host project");
+    assert!(
+        ios_project.contains("VesperPlayerOptionalPlugins/Artifacts/VesperPlayerPerformanceDiagnosticsPlugin.xcframework"),
+        "iOS Swift host does not embed the performance diagnostics framework",
+    );
 }

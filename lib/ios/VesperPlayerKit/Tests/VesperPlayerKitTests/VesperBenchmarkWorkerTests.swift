@@ -152,12 +152,70 @@ final class VesperBenchmarkWorkerTests: XCTestCase {
             sinkSessionFactory: { _ in throw BenchmarkWorkerProbeError.open }
         )
 
+        let readiness = await recorder.awaitSinkReadiness(timeout: 2)
+        XCTAssertEqual(readiness, .openFailed)
         recorder.record("ignored-by-missing-session", sourceProtocol: nil)
         recorder.dispose()
         let completed = await awaitShutdown(of: recorder, timeout: 2)
         XCTAssertTrue(completed)
 
         XCTAssertEqual(recorder.summary().pluginErrors, ["benchmark sink open failed"])
+    }
+
+    func testReadinessTimeoutDoesNotPreventLaterDisposal() async throws {
+        let probe = BenchmarkWorkerProbe(blockOpen: true)
+        let recorder = VesperBenchmarkRecorder(
+            configuration: try configuration(),
+            sinkSessionFactory: { references in probe.makeSession(references) }
+        )
+        await fulfillment(of: [probe.openStarted], timeout: 2)
+
+        let readiness = await recorder.awaitSinkReadiness(timeout: 0.01)
+        XCTAssertEqual(readiness, .timedOut)
+        recorder.dispose()
+        probe.allowOpen.signal()
+
+        let didShutdown = await recorder.awaitSinkShutdown(timeout: 2)
+        XCTAssertTrue(didShutdown)
+        XCTAssertEqual(
+            probe.operationsSnapshot().filter { $0.name == "dispose" }.count,
+            1
+        )
+    }
+
+    func testConcurrentFlushWaitersShareOnePendingControl() async throws {
+        let probe = BenchmarkWorkerProbe(blockOpen: true)
+        let recorder = VesperBenchmarkRecorder(
+            configuration: try configuration(),
+            sinkSessionFactory: { references in probe.makeSession(references) }
+        )
+        await fulfillment(of: [probe.openStarted], timeout: 2)
+        let tasks = (0..<32).map { _ in
+            Task { @MainActor in
+                await recorder.flushSinksAndAwait(timeout: 2)
+            }
+        }
+        for _ in 0..<10 { await Task.yield() }
+
+        probe.allowOpen.signal()
+        var results: [Bool] = []
+        for task in tasks {
+            results.append(await task.value)
+        }
+        recorder.dispose()
+        let didShutdown = await recorder.awaitSinkShutdown(timeout: 2)
+        XCTAssertTrue(didShutdown)
+
+        XCTAssertEqual(results.count, 32)
+        XCTAssertTrue(results.allSatisfy { $0 })
+        XCTAssertLessThanOrEqual(
+            probe.operationsSnapshot().filter { $0.name == "flush" }.count,
+            3
+        )
+        XCTAssertEqual(
+            probe.operationsSnapshot().filter { $0.name == "dispose" }.count,
+            1
+        )
     }
 
     func testFlushFailureStillDisposesSessionOnce() async throws {
@@ -188,6 +246,8 @@ final class VesperBenchmarkWorkerTests: XCTestCase {
 
         for index in 0..<130 {
             recorder.record("event-\(index)", sourceProtocol: nil)
+            let flushed = await recorder.flushSinksAndAwait(timeout: 2)
+            XCTAssertTrue(flushed)
         }
         recorder.dispose()
         let completed = await awaitShutdown(of: recorder, timeout: 2)
@@ -311,7 +371,7 @@ private final class BenchmarkWorkerProbe: @unchecked Sendable {
     func submit(_ events: [VesperBenchmarkEvent]) throws -> VesperBenchmarkSinkReportPayload {
         let eventName = events.first?.eventName ?? "missing"
         lock.lock()
-        submittedEventNames.append(eventName)
+        submittedEventNames.append(contentsOf: events.map(\.eventName))
         operations.append(Operation(name: "submit:\(eventName)", wasMainThread: Thread.isMainThread))
         let shouldBlock = blockFirstSubmit && isFirstSubmit
         isFirstSubmit = false

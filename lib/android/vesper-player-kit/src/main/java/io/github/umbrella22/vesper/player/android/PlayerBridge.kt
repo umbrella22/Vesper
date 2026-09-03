@@ -1,6 +1,7 @@
 package io.github.umbrella22.vesper.player.android
 
 import android.view.ViewGroup
+import android.view.Window
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.absoluteValue
 
@@ -350,4 +351,23 @@ internal interface PlayerBridge {
     fun drainPipelineEventHookReports(): VesperPipelineEventHookReportBatch
     fun benchmarkSummary(): VesperBenchmarkSummary
     fun awaitBenchmarkSinkShutdown(timeoutMs: Long): Boolean
+    fun startPerformanceDiagnostics(
+        configuration: VesperPerformanceDiagnosticsConfiguration,
+        probe: VesperPerformanceProbe,
+        window: Window?,
+    ): String
+    fun updatePerformanceOverlayState(runId: String, state: VesperPerformanceOverlayState)
+    fun recordPerformanceMarker(
+        runId: String,
+        name: String,
+        value: Double?,
+        sequenceIndex: Int?,
+        expectedOverlayActive: Boolean?,
+    )
+    fun submitPerformanceFrameSamples(
+        runId: String,
+        samples: List<VesperPerformanceFrameSample>,
+    )
+    fun performanceDiagnosticsSnapshot(runId: String): VesperPerformanceDiagnosticsReport
+    fun stopPerformanceDiagnostics(runId: String): VesperPerformanceDiagnosticsReport
 }

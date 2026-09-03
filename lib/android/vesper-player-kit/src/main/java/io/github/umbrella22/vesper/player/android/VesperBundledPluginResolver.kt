@@ -20,6 +20,18 @@ internal object VesperBundledPluginResolver {
     private const val SOURCE_NORMALIZER_FFMPEG_LIBRARY_NAME = "vesper_source_normalizer_ffmpeg"
     private const val DECODER_MEDIACODEC_LIBRARY_NAME = "vesper_decoder_mediacodec"
     private const val FRAME_PROCESSOR_DIAGNOSTIC_LIBRARY_NAME = "vesper_frame_processor_diagnostic"
+    private const val PERFORMANCE_DIAGNOSTICS_LIBRARY_NAME = "vesper_performance_diagnostics"
+
+    fun requirePerformanceDiagnostics(context: Context) {
+        resolveKnownNativeReferences(
+            listOf(VesperBundledPluginReferences.performanceDiagnostics),
+            mapOf(
+                VesperBundledPluginReferences.performanceDiagnostics.pluginId to
+                    PERFORMANCE_DIAGNOSTICS_LIBRARY_NAME,
+            ),
+            AndroidLibraryPathLookup(context.applicationContext),
+        )
+    }
 
     fun resolve(
         context: Context,

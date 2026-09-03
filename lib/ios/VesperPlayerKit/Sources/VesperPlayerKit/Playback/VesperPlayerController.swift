@@ -186,6 +186,31 @@ public final class VesperPlayerController: ObservableObject {
     private let drainPipelineEventHookReportsImpl: () -> VesperPipelineEventHookReportBatch
     private let benchmarkSummaryImpl: () -> VesperBenchmarkSummary
     private let awaitBenchmarkSinkShutdownImpl: (TimeInterval) async -> Bool
+    private let startPerformanceDiagnosticsImpl: (
+        VesperPerformanceDiagnosticsConfiguration,
+        VesperPerformanceProbe
+    ) async throws -> String
+    private let updatePerformanceOverlayStateImpl: (
+        String,
+        VesperPerformanceOverlayState
+    ) throws -> Void
+    private let recordPerformanceMarkerImpl: (
+        String,
+        String,
+        Double?,
+        Int?,
+        Bool?
+    ) throws -> Void
+    private let submitPerformanceFrameSamplesImpl: (
+        String,
+        [VesperPerformanceFrameSample]
+    ) throws -> Void
+    private let performanceDiagnosticsSnapshotImpl: (
+        String
+    ) async throws -> VesperPerformanceDiagnosticsReport
+    private let stopPerformanceDiagnosticsImpl: (
+        String
+    ) async throws -> VesperPerformanceDiagnosticsReport
     private let routePickerPlayerImpl: () -> AVPlayer?
     private let screenSleepToken = VesperScreenSleepToken()
     private var keepScreenOnDuringPlayback: Bool
@@ -287,6 +312,12 @@ public final class VesperPlayerController: ObservableObject {
         drainPipelineEventHookReportsImpl = bridge.drainPipelineEventHookReports
         benchmarkSummaryImpl = bridge.benchmarkSummary
         awaitBenchmarkSinkShutdownImpl = bridge.awaitBenchmarkSinkShutdown
+        startPerformanceDiagnosticsImpl = bridge.startPerformanceDiagnostics
+        updatePerformanceOverlayStateImpl = bridge.updatePerformanceOverlayState
+        recordPerformanceMarkerImpl = bridge.recordPerformanceMarker
+        submitPerformanceFrameSamplesImpl = bridge.submitPerformanceFrameSamples
+        performanceDiagnosticsSnapshotImpl = bridge.performanceDiagnosticsSnapshot
+        stopPerformanceDiagnosticsImpl = bridge.stopPerformanceDiagnostics
         routePickerPlayerImpl = { bridge.routePickerPlayer }
         bridgeObservation = bridge.objectWillChange.sink { [weak self] _ in
             guard let self else { return }
@@ -637,9 +668,85 @@ public final class VesperPlayerController: ObservableObject {
         benchmarkSummaryImpl()
     }
 
+    public func startPerformanceDiagnostics(
+        configuration: VesperPerformanceDiagnosticsConfiguration =
+            VesperPerformanceDiagnosticsConfiguration()
+    ) async throws -> VesperPerformanceDiagnosticsSession {
+        try await startPerformanceDiagnostics(
+            probe: .iosDisplayLink,
+            configuration: configuration
+        )
+    }
+
+    public func startPerformanceDiagnostics(
+        probe: VesperPerformanceProbe,
+        configuration: VesperPerformanceDiagnosticsConfiguration =
+            VesperPerformanceDiagnosticsConfiguration()
+    ) async throws -> VesperPerformanceDiagnosticsSession {
+        try ensurePerformanceDiagnosticsControllerActive()
+        let runId = try await startPerformanceDiagnosticsImpl(configuration, probe)
+        try ensurePerformanceDiagnosticsControllerActive()
+        return VesperPerformanceDiagnosticsSession(controller: self, runId: runId)
+    }
+
+    func updatePerformanceOverlayState(
+        runId: String,
+        state: VesperPerformanceOverlayState
+    ) throws {
+        try ensurePerformanceDiagnosticsControllerActive()
+        try updatePerformanceOverlayStateImpl(runId, state)
+    }
+
+    func recordPerformanceMarker(
+        runId: String,
+        name: String,
+        value: Double?,
+        sequenceIndex: Int?,
+        expectedOverlayActive: Bool?
+    ) throws {
+        try ensurePerformanceDiagnosticsControllerActive()
+        try recordPerformanceMarkerImpl(
+            runId,
+            name,
+            value,
+            sequenceIndex,
+            expectedOverlayActive
+        )
+    }
+
+    func submitPerformanceFrameSamples(
+        runId: String,
+        samples: [VesperPerformanceFrameSample]
+    ) throws {
+        try ensurePerformanceDiagnosticsControllerActive()
+        try submitPerformanceFrameSamplesImpl(runId, samples)
+    }
+
+    func performanceDiagnosticsSnapshot(
+        runId: String
+    ) async throws -> VesperPerformanceDiagnosticsReport {
+        try ensurePerformanceDiagnosticsControllerActive()
+        return try await performanceDiagnosticsSnapshotImpl(runId)
+    }
+
+    func stopPerformanceDiagnostics(
+        runId: String
+    ) async throws -> VesperPerformanceDiagnosticsReport {
+        try await stopPerformanceDiagnosticsImpl(runId)
+    }
+
     @_spi(VesperFlutter)
     public func awaitBenchmarkSinkShutdown(timeout: TimeInterval) async -> Bool {
         await awaitBenchmarkSinkShutdownImpl(timeout)
+    }
+
+    private func ensurePerformanceDiagnosticsControllerActive() throws {
+        guard !isDisposed else {
+            throw VesperPerformanceDiagnosticsError(
+                code: .controllerDisposed,
+                message: "The player controller has been disposed."
+            )
+        }
     }
 
     /// Playback rates exposed by the current iOS host surface.

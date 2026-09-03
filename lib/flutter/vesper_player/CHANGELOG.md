@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.2 - 2026-09-03
+
+- Added `VesperPerformanceDiagnosticsSession`, bounded Flutter FrameTiming
+  batching, overlay-state capture, markers, snapshots, and idempotent stop.
+
 ## 0.5.1 - 2026-09-01
 
 - Prepared package metadata for the 0.5.1 release.

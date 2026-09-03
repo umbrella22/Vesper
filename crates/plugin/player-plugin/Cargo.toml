@@ -18,8 +18,8 @@ publish = ["crates-io"]
 name = "player_plugin"
 
 [dependencies]
-player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.5.1", path = "../player-plugin-abi" }
-player-plugin-macros = { package = "vesper-player-plugin-macros", version = "0.5.1", path = "../player-plugin-macros" }
+player-plugin-abi = { package = "vesper-player-plugin-abi", version = "0.5.2", path = "../player-plugin-abi" }
+player-plugin-macros = { package = "vesper-player-plugin-macros", version = "0.5.2", path = "../player-plugin-macros" }
 hex.workspace = true
 semver.workspace = true
 serde.workspace = true

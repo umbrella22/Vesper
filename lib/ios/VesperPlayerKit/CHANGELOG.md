@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+## 0.5.2 - 2026-09-03
+
 ### Added
 
+- Added per-player hot performance diagnostics sessions, CADisplayLink and
+  AVPlayer pressure sampling, and the optional
+  `VesperPlayerPerformanceDiagnostics` SwiftPM product.
 - Added SwiftUI Stage slots for non-interactive host content and landscape
   controls, plus an optional state-labelled top-bar navigation action.
 

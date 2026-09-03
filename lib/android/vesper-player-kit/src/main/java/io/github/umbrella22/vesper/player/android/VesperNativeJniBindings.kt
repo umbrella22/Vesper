@@ -59,7 +59,7 @@ internal class VesperNativeJniBindings(
     context: Context,
     preloadBudgetPolicy: VesperPreloadBudgetPolicy = VesperPreloadBudgetPolicy(),
     internal val decoderBackend: VesperDecoderBackend = VesperDecoderBackend.SystemOnly,
-    internal val benchmarkRecorder: VesperBenchmarkRecorder = VesperBenchmarkRecorder(),
+    internal val benchmarkRecorder: VesperBenchmarkRecording = VesperBenchmarkCoordinator(),
     internal val sourceNormalizerConfiguration: VesperSourceNormalizerConfiguration =
         VesperSourceNormalizerConfiguration(),
     internal val resolvedPluginArtifacts: VesperResolvedMobilePluginArtifacts =

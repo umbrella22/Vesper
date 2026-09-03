@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "runId": "run-insufficient",
+  "sessionId": "session-1",
+  "platform": "android",
+  "probe": "flutterFrameTiming",
+  "durationNs": 12000000000,
+  "frameBudgetNs": 16666667,
+  "cohorts": {
+    "overlayInactive": {"sampleCount": 119, "jankCount": 0, "severeJankCount": 0, "jankRatio": 0.0, "severeJankRatio": 0.0, "minLoadNs": 2000000, "p50LoadNs": 4000000, "p95LoadNs": 8000000, "maxLoadNs": 12000000},
+    "overlayActive": {"sampleCount": 120, "jankCount": 0, "severeJankCount": 0, "jankRatio": 0.0, "severeJankRatio": 0.0, "minLoadNs": 2500000, "p50LoadNs": 4500000, "p95LoadNs": 9000000, "maxLoadNs": 13000000},
+    "transition": {"sampleCount": 2, "jankCount": 0, "severeJankCount": 0, "jankRatio": 0.0, "severeJankRatio": 0.0, "minLoadNs": 3000000, "p50LoadNs": 5000000, "p95LoadNs": 10000000, "maxLoadNs": 11000000},
+    "excluded": {"sampleCount": 0, "jankCount": 0, "severeJankCount": 0, "jankRatio": 0.0, "severeJankRatio": 0.0, "minLoadNs": 0, "p50LoadNs": 0, "p95LoadNs": 0, "maxLoadNs": 0}
+  },
+  "playback": {"activeDurationNs": 10000000000, "droppedVideoFrames": 0, "bufferingCount": 0, "bufferingDurationNs": 0, "stallCount": 0},
+  "diagnosis": {"kind": "insufficientEvidence", "confidence": "low", "evidenceCodes": ["steady_cohorts_below_120"]},
+  "acceptedEvents": 241,
+  "droppedEvents": 0,
+  "rawEventsDropped": 0,
+  "diagnostics": [{"code": "performance.diagnosis", "severity": "warning", "message": "Performance diagnosis reports correlation, not causation.", "attributes": {"kind": "insufficientEvidence"}}],
+  "rawEvents": []
+}

@@ -2,6 +2,7 @@ package io.github.umbrella22.vesper.player.android
 
 import android.content.Context
 import android.view.ViewGroup
+import android.view.Window
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -265,6 +266,85 @@ class VesperPlayerController internal constructor(
         withContext(Dispatchers.IO) {
             bridge.awaitBenchmarkSinkShutdown(timeoutMs)
         }
+
+    suspend fun startPerformanceDiagnostics(
+        window: Window,
+        configuration: VesperPerformanceDiagnosticsConfiguration =
+            VesperPerformanceDiagnosticsConfiguration(),
+    ): VesperPerformanceDiagnosticsSession =
+        startPerformanceDiagnostics(
+            probe = VesperPerformanceProbe.AndroidFrameMetrics,
+            configuration = configuration,
+            window = window,
+        )
+
+    suspend fun startPerformanceDiagnostics(
+        probe: VesperPerformanceProbe,
+        configuration: VesperPerformanceDiagnosticsConfiguration =
+            VesperPerformanceDiagnosticsConfiguration(),
+        window: Window? = null,
+    ): VesperPerformanceDiagnosticsSession {
+        ensurePerformanceDiagnosticsActiveController()
+        val runId = withContext(Dispatchers.IO) {
+            bridge.startPerformanceDiagnostics(configuration, probe, window)
+        }
+        ensurePerformanceDiagnosticsActiveController()
+        return VesperPerformanceDiagnosticsSession(this, runId)
+    }
+
+    internal fun updatePerformanceOverlayState(
+        runId: String,
+        state: VesperPerformanceOverlayState,
+    ) {
+        ensurePerformanceDiagnosticsActiveController()
+        bridge.updatePerformanceOverlayState(runId, state)
+    }
+
+    internal fun recordPerformanceMarker(
+        runId: String,
+        name: String,
+        value: Double?,
+        sequenceIndex: Int?,
+        expectedOverlayActive: Boolean?,
+    ) {
+        ensurePerformanceDiagnosticsActiveController()
+        bridge.recordPerformanceMarker(
+            runId,
+            name,
+            value,
+            sequenceIndex,
+            expectedOverlayActive,
+        )
+    }
+
+    internal fun submitPerformanceFrameSamples(
+        runId: String,
+        samples: List<VesperPerformanceFrameSample>,
+    ) {
+        ensurePerformanceDiagnosticsActiveController()
+        bridge.submitPerformanceFrameSamples(runId, samples)
+    }
+
+    internal suspend fun performanceDiagnosticsSnapshot(
+        runId: String,
+    ): VesperPerformanceDiagnosticsReport = withContext(Dispatchers.IO) {
+        bridge.performanceDiagnosticsSnapshot(runId)
+    }
+
+    internal suspend fun stopPerformanceDiagnostics(
+        runId: String,
+    ): VesperPerformanceDiagnosticsReport = withContext(Dispatchers.IO) {
+        bridge.stopPerformanceDiagnostics(runId)
+    }
+
+    private fun ensurePerformanceDiagnosticsActiveController() {
+        if (isDisposed.get()) {
+            throw VesperPerformanceDiagnosticsException(
+                VesperPerformanceDiagnosticsErrorCode.ControllerDisposed,
+                "The player controller has been disposed.",
+            )
+        }
+    }
 
     companion object {
         val supportedPlaybackRates: List<Float> = listOf(0.5f, 1.0f, 1.5f, 2.0f, 3.0f)
