@@ -47,6 +47,7 @@ import androidx.media3.exoplayer.text.TextOutput
 import androidx.media3.exoplayer.text.TextRenderer
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
+import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import java.io.File
 import java.net.URI
@@ -1136,7 +1137,7 @@ internal class VesperExternalSubtitleRenderersFactory(
         allowedVideoJoiningTimeMs: Long,
         out: ArrayList<Renderer>,
     ) {
-        val primaryRendererIndex = out.size
+        val rendererStartIndex = out.size
         super.buildVideoRenderers(
             context,
             extensionRendererMode,
@@ -1147,8 +1148,12 @@ internal class VesperExternalSubtitleRenderersFactory(
             allowedVideoJoiningTimeMs,
             out,
         )
-        check(out.getOrNull(primaryRendererIndex) is androidx.media3.exoplayer.video.MediaCodecVideoRenderer) {
-            "Media3 did not install its primary video renderer at the expected index"
+        val primaryRendererIndex =
+            (rendererStartIndex until out.size).firstOrNull { index ->
+                out[index]::class.java == MediaCodecVideoRenderer::class.java
+            }
+        checkNotNull(primaryRendererIndex) {
+            "Media3 did not install its primary MediaCodec video renderer"
         }
         out[primaryRendererIndex] =
             VesperMediaCodecVideoRenderer(
