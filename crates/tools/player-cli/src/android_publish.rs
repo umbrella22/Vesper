@@ -53,7 +53,7 @@ const MAX_POM_BYTES: u64 = 1024 * 1024;
 const MAX_CHECKSUM_BYTES: u64 = 1024;
 const MAX_CURL_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 const CENTRAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(240);
-const CENTRAL_POLL_ATTEMPTS: usize = 90;
+const CENTRAL_POLL_ATTEMPTS: usize = 180;
 const CENTRAL_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const BUNDLE_NAME: &str = "VesperPlayerKit-maven-central.zip";
 
