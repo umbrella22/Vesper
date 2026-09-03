@@ -318,6 +318,10 @@ fn android_release_apk_entries(
             b"\x7fELF frame processor".as_slice(),
         ),
         (
+            "lib/arm64-v8a/libvesper_performance_diagnostics.so",
+            b"\x7fELF performance diagnostics".as_slice(),
+        ),
+        (
             "lib/arm64-v8a/libvesper_player_relay_ffmpeg.so",
             b"\x7fELF relay".as_slice(),
         ),
@@ -337,6 +341,10 @@ fn android_release_apk_entries(
         ),
         (
             "assets/vesper/plugins/arm64-v8a/dev.vesper.frame-processor-diagnostic.json",
+            b"{}".as_slice(),
+        ),
+        (
+            "assets/vesper/plugins/arm64-v8a/io.github.umbrella22.vesper.performance-diagnostics.json",
             b"{}".as_slice(),
         ),
         (

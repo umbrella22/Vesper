@@ -2208,6 +2208,7 @@ fn validate_android_sample_registry_entries(
     let mut plugin_ids = vec![
         "io.github.umbrella22.vesper.remux-ffmpeg",
         "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
+        "io.github.umbrella22.vesper.performance-diagnostics",
         "dev.vesper.frame-processor-diagnostic",
     ];
     if !require_flutter_aot {
@@ -5448,6 +5449,7 @@ mod tests {
         let mut registries = [
             "dev.vesper.frame-processor-diagnostic",
             "io.github.umbrella22.vesper.decoder-mediacodec",
+            "io.github.umbrella22.vesper.performance-diagnostics",
             "io.github.umbrella22.vesper.remux-ffmpeg",
             "io.github.umbrella22.vesper.source-normalizer-ffmpeg",
         ]
