@@ -189,7 +189,7 @@ Notes: <additional attribution, patent, or platform-specific details>
 The optional `vesper-player-kit-external-playback` Android artifact uses the
 following libraries for its private relay HTTP transport:
 
-- OkHttp 5.5.0, Copyright 2019 Square, Inc., Apache License 2.0,
+- OkHttp 5.4.0, Copyright 2019 Square, Inc., Apache License 2.0,
   <https://square.github.io/okhttp/>.
 - Okio 3.17.0, Copyright 2013 Square, Inc., Apache License 2.0,
   <https://square.github.io/okio/>.

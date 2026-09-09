@@ -11,7 +11,8 @@
 
 ### Changed
 
-- Aligned Compose tooling on Kotlin 2.4.10, upgraded OkHttp to 5.5.0, and moved
+- Aligned Compose tooling on Kotlin 2.4.10, retained the SDK 36-compatible
+  OkHttp 5.4.0 release, and moved
   optional FFmpeg-backed artifacts to the 9.0.1 source lock.
 
 ### Fixed

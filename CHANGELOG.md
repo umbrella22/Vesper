@@ -19,7 +19,8 @@
   wgpu 30.0.1, and syn 3.0.5.
 - Upgraded the optional FFmpeg build and redistribution source lock to 9.0.1,
   and cached source archives across Android, iOS, and Flutter CI jobs.
-- Aligned Android Compose tooling on Kotlin 2.4.10 and upgraded OkHttp to 5.5.0.
+- Aligned Android Compose tooling on Kotlin 2.4.10 and retained OkHttp 5.4.0 as
+  the latest release compatible with the Android SDK 36 build boundary.
 - Split the shared runtime command, media, option, event-queue, and resilience
   policy types into focused modules while preserving their public re-exports.
 

@@ -254,6 +254,8 @@ jobs:
           android.useAndroidX=true
           # Flutter 3.47 still casts AGP's Android extension to the legacy DSL type.
           android.newDsl=false
+          # Flutter 3.47 still applies the standalone Kotlin Gradle plugin.
+          android.builtInKotlin=false
           vesper.player.android.abis=${{ matrix.abi }}
           vesper.player.android.app.abis=${{ matrix.abi }}
           vesper.player.android.remuxJniLibs=../../../examples/flutter-host/build/app/generated/playerFfmpeg/jniLibs
