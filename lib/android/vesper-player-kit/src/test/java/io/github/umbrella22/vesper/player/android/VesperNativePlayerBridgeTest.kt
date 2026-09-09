@@ -5770,7 +5770,13 @@ class VesperNativePlayerBridgeTest {
         }
 
         bridge.setResiliencePolicy(VesperPlaybackResiliencePolicy.resilient())
-        runBlocking { bridge.initializeAsync() }
+        assertTrue(
+            "resilience reinitialization did not complete",
+            waitUntil {
+                bindings.currentUpdateListener() !== staleListener &&
+                    bridge.trackCatalog.value == reinitTrackCatalog
+            },
+        )
 
         val expectedUiState = bridge.uiState.value
         assertEquals(reinitTrackCatalog, bridge.trackCatalog.value)
