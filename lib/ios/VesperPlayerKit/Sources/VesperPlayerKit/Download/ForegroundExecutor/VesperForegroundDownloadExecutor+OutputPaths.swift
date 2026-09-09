@@ -60,9 +60,11 @@ extension VesperForegroundDownloadExecutor {
     }
 
     func defaultAssetDirectory(for task: VesperDownloadTaskSnapshot) -> URL {
-        let root = baseDirectory
-            ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
-                .appendingPathComponent("vesper-downloads", isDirectory: true)
+        let root = resolvedVesperDownloadDirectory(
+            baseDirectory: baseDirectory,
+            documentDirectory: fileManager.urls(for: .documentDirectory, in: .userDomainMask).first,
+            temporaryDirectory: fileManager.temporaryDirectory
+        )
         return root.appendingPathComponent(task.assetId.isEmpty ? String(task.taskId) : task.assetId)
     }
 }

@@ -22,6 +22,7 @@ mod ios_kit;
 mod ios_native_frame;
 mod ios_optional_device;
 mod ios_optional_release;
+mod ios_playback_device;
 mod ios_plugin;
 mod ios_plugin_release;
 mod ios_release;
@@ -194,6 +195,8 @@ enum IosCommand {
     VerifyOptionalPluginsRelease(IosVerifyOptionalPluginsReleaseArgs),
     /// Runs the Release optional-plugin acceptance suite on a physical iOS device.
     VerifyOptionalPluginsDevice(IosVerifyOptionalPluginsDeviceArgs),
+    /// Runs the short Release playback lifecycle suite on a physical iOS device.
+    VerifyPlaybackLifecycleDevice(IosVerifyPlaybackLifecycleDeviceArgs),
     /// Verifies core or complete iOS release archives.
     VerifyRelease(IosVerifyReleaseArgs),
     /// Builds and stages VesperPlayerKit release archives.
@@ -325,6 +328,22 @@ struct IosVerifyOptionalPluginsReleaseArgs {
 struct IosVerifyOptionalPluginsDeviceArgs {
     /// Release directory whose verified optional-plugin archives are tested.
     release_directory: PathBuf,
+    /// Physical iOS device UDID used by xcodebuild.
+    #[arg(long)]
+    device: String,
+    /// Apple Development Team identifier used for automatic code signing.
+    #[arg(long)]
+    development_team: String,
+    /// New directory that receives DerivedData and the XCResult bundle.
+    #[arg(long)]
+    output_directory: PathBuf,
+    /// Allows Xcode to update provisioning profiles for the connected device.
+    #[arg(long)]
+    allow_provisioning_updates: bool,
+}
+
+#[derive(Debug, Args)]
+struct IosVerifyPlaybackLifecycleDeviceArgs {
     /// Physical iOS device UDID used by xcodebuild.
     #[arg(long)]
     device: String,
@@ -1608,6 +1627,25 @@ fn run_ios(arguments: IosArgs) -> CliResult<()> {
                 &root,
                 ios_optional_device::IosOptionalPluginDeviceRequest {
                     release_directory: arguments.release_directory,
+                    device: arguments.device,
+                    development_team: arguments.development_team,
+                    output_directory: arguments.output_directory,
+                    allow_provisioning_updates: arguments.allow_provisioning_updates,
+                },
+                &mut output,
+                &mut diagnostics,
+            )
+            .map_err(map_ios_error)
+        }
+        IosCommand::VerifyPlaybackLifecycleDevice(arguments) => {
+            ios_playback_device::ensure_supported_host().map_err(map_ios_error)?;
+            let root = contract::resolve_repository_root(requested_root.as_deref())
+                .map_err(|error| CliError::manifest_or_package(error.to_string()))?;
+            let stderr = io::stderr();
+            let mut diagnostics = stderr.lock();
+            ios_playback_device::verify(
+                &root,
+                ios_playback_device::IosPlaybackDeviceRequest {
                     device: arguments.device,
                     development_team: arguments.development_team,
                     output_directory: arguments.output_directory,

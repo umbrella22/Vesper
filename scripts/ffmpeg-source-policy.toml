@@ -1,10 +1,10 @@
 schema_version = 1
 
 [compatibility]
-requirement = ">=8.1.0, <8.2.0"
-default_series = "8.1"
+requirement = ">=9.0.0, <9.1.0"
+default_series = "9.0"
 
 [release]
-version = "8.1.2"
-source_url = "https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz"
-source_sha256 = "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
+version = "9.0.1"
+source_url = "https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz"
+source_sha256 = "cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635"

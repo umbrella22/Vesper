@@ -98,7 +98,7 @@ pub(crate) fn resolve(
         "No local cached Gradle distribution was found for local Android work.\n\n\
          Project wrapper version:\n  {displayed_version}\n\n\
          Checked local distributions under:\n{checked_distributions}\n\n\
-         Do not use gradlew for local agent work because it may download Gradle.\n\
+         Do not use gradlew for local development because it may download Gradle.\n\
          Seed the project-local wrapper cache, or run in CI with setup-gradle and CI=true.\n\n\
          Project wrapper intentionally not invoked:\n  {}",
         project_directory.join("gradlew").display()

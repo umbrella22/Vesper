@@ -3,6 +3,35 @@ import XCTest
 @testable import VesperPlayerKit
 
 final class VesperDashBridgeSessionTests: XCTestCase {
+    func testSegmentTemplateRedirectRequestTargetsOriginalHttpsResourceAndPreservesHeaders() async throws {
+        let manifestURL = URL(
+            string: "https://cdn.example.com/path/manifest.mpd"
+        )!
+        let networkClient = CountingDashNetworkClient(
+            dataByURL: [manifestURL: Data(sampleSegmentTemplateMpd.utf8)],
+            headers: ["Authorization": "Bearer device-fixture"]
+        )
+        let session = VesperDashSession(
+            sourceURL: manifestURL,
+            networkClient: networkClient,
+            videoDecodeCapabilityProvider: testHardwareVideoDecodeCapabilityProvider
+        )
+
+        let request = try await session.segmentRedirectRequest(
+            renditionId: "v4_258",
+            segment: .media(0)
+        )
+
+        XCTAssertEqual(
+            request.url,
+            URL(string: "https://cdn.example.com/path/v4_258-270146-i-1.m4s")
+        )
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Authorization"),
+            "Bearer device-fixture"
+        )
+    }
+
     func testSegmentTemplateRedirectWritesLocalMediaFileVerbatim() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

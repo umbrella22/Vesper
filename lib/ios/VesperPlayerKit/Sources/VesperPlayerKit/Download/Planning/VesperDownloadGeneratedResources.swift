@@ -71,9 +71,11 @@ struct VesperGeneratedDownloadResourceMaterializer {
         if let targetDirectory = profile.targetDirectory {
             return targetDirectory
         }
-        let root = baseDirectory
-            ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
-                .appendingPathComponent("vesper-downloads", isDirectory: true)
+        let root = resolvedVesperDownloadDirectory(
+            baseDirectory: baseDirectory,
+            documentDirectory: fileManager.urls(for: .documentDirectory, in: .userDomainMask).first,
+            temporaryDirectory: fileManager.temporaryDirectory
+        )
         let assetComponent = assetId.isEmpty ? taskId.map(String.init) ?? "asset" : assetId
         return root.appendingPathComponent(assetComponent, isDirectory: true)
     }

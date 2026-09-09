@@ -87,6 +87,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Cache third-party source archives
+        uses: actions/cache@v4
+        with:
+          path: third_party/_cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vesper-source-${{ hashFiles('scripts/ffmpeg-source-policy.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vesper-source-
+
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
 
@@ -211,6 +219,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Cache third-party source archives
+        uses: actions/cache@v4
+        with:
+          path: third_party/_cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vesper-source-${{ hashFiles('scripts/ffmpeg-source-policy.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vesper-source-
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli

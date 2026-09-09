@@ -23,6 +23,9 @@ typedef enum PlayerFfiMediaSourceProtocol {
   PlayerFfiMediaSourceProtocolProgressive = 3,
   PlayerFfiMediaSourceProtocolHls = 4,
   PlayerFfiMediaSourceProtocolDash = 5,
+  PlayerFfiMediaSourceProtocolRtmp = 6,
+  PlayerFfiMediaSourceProtocolRtsp = 7,
+  PlayerFfiMediaSourceProtocolFlv = 8,
 } PlayerFfiMediaSourceProtocol;
 
 typedef enum PlayerFfiBufferingPreset {

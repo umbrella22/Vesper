@@ -134,6 +134,8 @@ class VesperSurfaceLayoutTestActivity : Activity() {
         }
 }
 
+class VesperLifecycleCoverTestActivity : Activity()
+
 private fun ViewGroup.findSurfaceView(): SurfaceView? {
     repeat(childCount) { index ->
         when (val child = getChildAt(index)) {

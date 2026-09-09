@@ -42,6 +42,18 @@ func sanitizedOutputFileName(_ value: String) -> String {
     return sanitized.isEmpty || sanitized == ".." ? "vesper-download" : sanitized
 }
 
+func resolvedVesperDownloadDirectory(
+    baseDirectory: URL?,
+    documentDirectory: URL?,
+    temporaryDirectory: URL
+) -> URL {
+    if let baseDirectory {
+        return baseDirectory
+    }
+    return (documentDirectory ?? temporaryDirectory)
+        .appendingPathComponent("vesper-downloads", isDirectory: true)
+}
+
 func excludeDownloadItemFromBackup(_ url: URL, fileManager: FileManager = .default) {
     guard fileManager.fileExists(atPath: url.path) else {
         return

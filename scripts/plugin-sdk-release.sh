@@ -8,7 +8,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
 readonly CRATES_IO_API="https://crates.io/api/v1/crates"
 readonly CRATES_IO_USER_AGENT="vesper-player-sdk-release (https://github.com/umbrella22/Vesper)"
-readonly RUST_TOOLCHAIN="1.98.0"
+readonly RUST_TOOLCHAIN="1.98.1"
 
 readonly PACKAGES=(
   vesper-player-plugin-abi

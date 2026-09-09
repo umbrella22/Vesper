@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.5.3 - 2026-09-09
+
+### Added
+
+- Added physical-device lifecycle, background, process-recovery, Live-DVR, and
+  bounded video-frame metadata diagnostics coverage.
+
+### Changed
+
+- Aligned Compose tooling on Kotlin 2.4.10, upgraded OkHttp to 5.5.0, and moved
+  optional FFmpeg-backed artifacts to the 9.0.1 source lock.
+
+### Fixed
+
+- Bypassed the media cache for live HLS manifest reloads and added bounded
+  recovery when playback falls behind the live window.
+- Persisted source, protocol, and download format values through explicit wire
+  numbers instead of Kotlin enum ordinals.
+
 ## 0.5.2 - 2026-09-03
 
 ### Added

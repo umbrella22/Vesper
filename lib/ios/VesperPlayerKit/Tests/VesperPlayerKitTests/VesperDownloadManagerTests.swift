@@ -5,6 +5,45 @@ import VesperPlayerKitBridgeShim
 
 @MainActor
 final class VesperDownloadManagerTests: XCTestCase {
+    func testResolvedDownloadDirectoryUsesConfiguredBaseDirectory() {
+        let configured = URL(fileURLWithPath: "/configured-downloads", isDirectory: true)
+
+        XCTAssertEqual(
+            resolvedVesperDownloadDirectory(
+                baseDirectory: configured,
+                documentDirectory: URL(fileURLWithPath: "/documents", isDirectory: true),
+                temporaryDirectory: URL(fileURLWithPath: "/temporary", isDirectory: true)
+            ),
+            configured
+        )
+    }
+
+    func testResolvedDownloadDirectoryFallsBackToTemporaryDirectory() {
+        let temporary = URL(fileURLWithPath: "/temporary", isDirectory: true)
+
+        XCTAssertEqual(
+            resolvedVesperDownloadDirectory(
+                baseDirectory: nil,
+                documentDirectory: nil,
+                temporaryDirectory: temporary
+            ),
+            temporary.appendingPathComponent("vesper-downloads", isDirectory: true)
+        )
+    }
+
+    func testResolvedDownloadDirectoryUsesDocumentDirectoryByDefault() {
+        let documents = URL(fileURLWithPath: "/documents", isDirectory: true)
+
+        XCTAssertEqual(
+            resolvedVesperDownloadDirectory(
+                baseDirectory: nil,
+                documentDirectory: documents,
+                temporaryDirectory: URL(fileURLWithPath: "/temporary", isDirectory: true)
+            ),
+            documents.appendingPathComponent("vesper-downloads", isDirectory: true)
+        )
+    }
+
     func testDownloadErrorCodableRequiresTypedFields() throws {
         let error = VesperDownloadError(
             code: .backendFailure,

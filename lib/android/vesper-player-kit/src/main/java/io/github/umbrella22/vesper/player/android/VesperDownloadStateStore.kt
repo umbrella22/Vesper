@@ -151,14 +151,17 @@ private fun JSONObject.toDownloadSnapshot(): VesperDownloadSnapshot =
 private fun VesperDownloadSource.toJson(): JSONObject =
     JSONObject().apply {
         put("source", source.toJson())
-        put("contentFormat", contentFormat.ordinal)
+        put("contentFormat", contentFormat.wireValue)
         put("manifestUri", manifestUri)
     }
 
 private fun JSONObject.toDownloadSource(): VesperDownloadSource =
     VesperDownloadSource(
         source = optJSONObject("source")?.toPlayerSource() ?: VesperPlayerSource.remote("", ""),
-        contentFormat = enumValue(optInt("contentFormat", VesperDownloadContentFormat.Unknown.ordinal)),
+        contentFormat =
+            VesperDownloadContentFormat.fromWireValue(
+                optInt("contentFormat", VesperDownloadContentFormat.Unknown.wireValue),
+            ),
         manifestUri = optStringOrNull("manifestUri"),
     )
 
@@ -166,8 +169,8 @@ private fun VesperPlayerSource.toJson(): JSONObject =
     JSONObject().apply {
         put("uri", uri)
         put("label", label)
-        put("kind", kind.ordinal)
-        put("protocol", protocol.ordinal)
+        put("kind", kind.wireValue)
+        put("protocol", protocol.wireValue)
         put(
             "headers",
             JSONObject().apply {
@@ -180,8 +183,14 @@ private fun JSONObject.toPlayerSource(): VesperPlayerSource =
     VesperPlayerSource(
         uri = optString("uri", ""),
         label = optString("label", ""),
-        kind = enumValue(optInt("kind", VesperPlayerSourceKind.Remote.ordinal)),
-        protocol = enumValue(optInt("protocol", VesperPlayerSourceProtocol.Unknown.ordinal)),
+        kind =
+            VesperPlayerSourceKind.fromWireValue(
+                optInt("kind", VesperPlayerSourceKind.Remote.wireValue),
+            ),
+        protocol =
+            VesperPlayerSourceProtocol.fromWireValue(
+                optInt("protocol", VesperPlayerSourceProtocol.Unknown.wireValue),
+            ),
         headers =
             optJSONObject("headers")
                 ?.keys()
@@ -233,7 +242,7 @@ private fun JSONObject.toDownloadProgress(): VesperDownloadProgressSnapshot =
 
 private fun VesperDownloadAssetIndex.toJson(): JSONObject =
     JSONObject().apply {
-        put("contentFormat", contentFormat.ordinal)
+        put("contentFormat", contentFormat.wireValue)
         put("version", version)
         put("etag", etag)
         put("checksum", checksum)
@@ -246,7 +255,10 @@ private fun VesperDownloadAssetIndex.toJson(): JSONObject =
 
 private fun JSONObject.toDownloadAssetIndex(): VesperDownloadAssetIndex =
     VesperDownloadAssetIndex(
-        contentFormat = enumValue(optInt("contentFormat", VesperDownloadContentFormat.Unknown.ordinal)),
+        contentFormat =
+            VesperDownloadContentFormat.fromWireValue(
+                optInt("contentFormat", VesperDownloadContentFormat.Unknown.wireValue),
+            ),
         version = optStringOrNull("version"),
         etag = optStringOrNull("etag"),
         checksum = optStringOrNull("checksum"),

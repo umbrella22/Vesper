@@ -1,8 +1,8 @@
 [package]
 name = "vesper-audio-processor-diagnostic"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2024"
-rust-version = "1.98"
+rust-version = "1.98.1"
 license = "Apache-2.0"
 
 [lib]

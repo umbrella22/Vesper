@@ -34,7 +34,9 @@ import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.hls.HlsDataSourceFactory
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
+import androidx.media3.exoplayer.source.BehindLiveWindowException
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
@@ -69,9 +71,8 @@ internal fun Int.toRuntimeColorTransferName(): String =
         else -> "unknown($this)"
     }
 
-internal fun buildDataSourceFactory(
+internal fun buildUpstreamDataSourceFactory(
     appContext: Context,
-    cachePolicy: NativeCachePolicy,
     headers: Map<String, String> = emptyMap(),
 ): androidx.media3.datasource.DataSource.Factory {
     // Each resource owner receives its own factory. Main-media headers never
@@ -83,7 +84,15 @@ internal fun buildDataSourceFactory(
                 setDefaultRequestProperties(headers)
             }
         }
-    val upstreamFactory = DefaultDataSource.Factory(appContext, httpFactory)
+    return DefaultDataSource.Factory(appContext, httpFactory)
+}
+
+internal fun buildDataSourceFactory(
+    appContext: Context,
+    cachePolicy: NativeCachePolicy,
+    headers: Map<String, String> = emptyMap(),
+): androidx.media3.datasource.DataSource.Factory {
+    val upstreamFactory = buildUpstreamDataSourceFactory(appContext, headers)
     val resolvedCachePolicy = resolveCachePolicy(cachePolicy)
     val baseFactory =
         if (!resolvedCachePolicy.enabled) {
@@ -101,6 +110,16 @@ internal fun buildDataSourceFactory(
         }
     return baseFactory
 }
+
+internal fun buildHlsPlaybackDataSourceFactory(
+    manifestFactory: androidx.media3.datasource.DataSource.Factory,
+    mediaFactory: androidx.media3.datasource.DataSource.Factory,
+): HlsDataSourceFactory =
+    HlsDataSourceFactory { dataType ->
+        // A live playlist keeps the same URI across reloads, so manifests must reach upstream.
+        val factory = if (dataType == C.DATA_TYPE_MANIFEST) manifestFactory else mediaFactory
+        factory.createDataSource()
+    }
 
 internal enum class NativeResourceRequestRole {
     Media,
@@ -218,8 +237,8 @@ internal fun resolveResiliencePolicy(
     resiliencePolicy: VesperPlaybackResiliencePolicy,
 ): NativeResolvedResiliencePolicy =
     VesperNativeJni.resolveResiliencePolicy(
-        sourceKindOrdinal = source.kind.ordinal,
-        sourceProtocolOrdinal = source.protocol.ordinal,
+        sourceKindOrdinal = source.kind.wireValue,
+        sourceProtocolOrdinal = source.protocol.wireValue,
         bufferingPolicy = resiliencePolicy.buffering.toNativePayload(),
         retryPolicy = resiliencePolicy.retry.toNativePayload(),
         cachePolicy = resiliencePolicy.cache.toNativePayload(),
@@ -298,6 +317,116 @@ internal data class NativePlaybackError(
     val capabilityFailureAxis: AndroidCapabilityFailureAxis? = null,
     val causeEvidence: AndroidPlaybackFailureCauseEvidence? = null,
 )
+
+internal data class BehindLiveWindowRecoveryDecision(
+    val shouldRecover: Boolean,
+    val observedFailure: Int,
+    val maxAttempts: Int,
+)
+
+internal class BehindLiveWindowRecoveryState(
+    private val maxAttempts: Int,
+) {
+    init {
+        require(maxAttempts > 0) { "maxAttempts must be positive" }
+    }
+
+    private var sourceEpoch: Long? = null
+    private var consecutiveAttempts = 0
+
+    fun onBehindLiveWindow(sourceEpoch: Long): BehindLiveWindowRecoveryDecision {
+        resetIfSourceChanged(sourceEpoch)
+        val observedFailure = consecutiveAttempts + 1
+        if (consecutiveAttempts >= maxAttempts) {
+            return BehindLiveWindowRecoveryDecision(
+                shouldRecover = false,
+                observedFailure = observedFailure,
+                maxAttempts = maxAttempts,
+            )
+        }
+        consecutiveAttempts += 1
+        return BehindLiveWindowRecoveryDecision(
+            shouldRecover = true,
+            observedFailure = consecutiveAttempts,
+            maxAttempts = maxAttempts,
+        )
+    }
+
+    fun hasPendingRecovery(sourceEpoch: Long): Boolean =
+        this.sourceEpoch == sourceEpoch && consecutiveAttempts > 0
+
+    fun markStable(sourceEpoch: Long): Int? {
+        if (this.sourceEpoch != sourceEpoch || consecutiveAttempts == 0) return null
+        val completedAttempts = consecutiveAttempts
+        consecutiveAttempts = 0
+        return completedAttempts
+    }
+
+    fun resetForSource(sourceEpoch: Long) {
+        this.sourceEpoch = sourceEpoch
+        consecutiveAttempts = 0
+    }
+
+    private fun resetIfSourceChanged(sourceEpoch: Long) {
+        if (this.sourceEpoch != sourceEpoch) {
+            resetForSource(sourceEpoch)
+        }
+    }
+}
+
+internal class BehindLiveWindowInternalSeekSuppression(
+    private val timeoutMs: Long,
+) {
+    init {
+        require(timeoutMs > 0L) { "timeoutMs must be positive" }
+    }
+
+    private var sourceEpoch: Long? = null
+    private var expiresAtElapsedRealtimeMs = 0L
+    private var pending = false
+
+    fun arm(
+        sourceEpoch: Long,
+        nowElapsedRealtimeMs: Long,
+    ) {
+        this.sourceEpoch = sourceEpoch
+        expiresAtElapsedRealtimeMs = nowElapsedRealtimeMs + timeoutMs
+        pending = true
+    }
+
+    fun consumeIfPending(
+        sourceEpoch: Long,
+        nowElapsedRealtimeMs: Long,
+    ): Boolean {
+        val shouldSuppress =
+            pending &&
+                this.sourceEpoch == sourceEpoch &&
+                nowElapsedRealtimeMs <= expiresAtElapsedRealtimeMs
+        pending = false
+        return shouldSuppress
+    }
+
+    fun resetForSource(sourceEpoch: Long) {
+        this.sourceEpoch = sourceEpoch
+        expiresAtElapsedRealtimeMs = 0L
+        pending = false
+    }
+}
+
+internal fun PlaybackException.isBehindLiveWindowError(): Boolean =
+    errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW ||
+        hasCause(BehindLiveWindowException::class.java)
+
+internal fun behindLiveWindowRecoveryDecision(
+    error: PlaybackException,
+    sourceEpoch: Long,
+    state: BehindLiveWindowRecoveryState,
+): BehindLiveWindowRecoveryDecision? =
+    if (error.isBehindLiveWindowError()) {
+        state.onBehindLiveWindow(sourceEpoch)
+    } else {
+        null
+    }
 
 internal data class AndroidPlaybackFailureCauseEvidence(
     val causeClass: String?,
@@ -457,14 +586,20 @@ internal object VesperMediaCacheStore {
 internal fun classifyPlaybackException(error: PlaybackException): NativePlaybackError {
     val causeEvidence = error.playbackFailureCauseEvidence()
     val classified =
-        if (error.hasCause(HlsPlaylistTracker.PlaylistStuckException::class.java)) {
-        NativePlaybackError(
-            codeOrdinal = BACKEND_FAILURE_ORDINAL,
-            categoryOrdinal = NETWORK_CATEGORY_ORDINAL,
-            retriable = true,
-        )
-    } else {
-        when (error.errorCode) {
+        if (error.isBehindLiveWindowError()) {
+            NativePlaybackError(
+                codeOrdinal = BACKEND_FAILURE_ORDINAL,
+                categoryOrdinal = PLAYBACK_CATEGORY_ORDINAL,
+                retriable = true,
+            )
+        } else if (error.hasCause(HlsPlaylistTracker.PlaylistStuckException::class.java)) {
+            NativePlaybackError(
+                codeOrdinal = BACKEND_FAILURE_ORDINAL,
+                categoryOrdinal = NETWORK_CATEGORY_ORDINAL,
+                retriable = true,
+            )
+        } else {
+            when (error.errorCode) {
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
             PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
@@ -603,8 +738,8 @@ internal fun classifyPlaybackException(error: PlaybackException): NativePlayback
                     categoryOrdinal = PLATFORM_CATEGORY_ORDINAL,
                     retriable = false,
                 )
+            }
         }
-    }
     return classified.copy(causeEvidence = causeEvidence)
 }
 
@@ -713,6 +848,7 @@ internal const val SOURCE_CATEGORY_ORDINAL = 1
 internal const val NETWORK_CATEGORY_ORDINAL = 2
 internal const val DECODE_CATEGORY_ORDINAL = 3
 internal const val AUDIO_OUTPUT_CATEGORY_ORDINAL = 4
+internal const val PLAYBACK_CATEGORY_ORDINAL = 5
 internal const val CAPABILITY_CATEGORY_ORDINAL = 6
 internal const val PLATFORM_CATEGORY_ORDINAL = 7
 internal const val NATIVE_JNI_BINDINGS_TAG = "VesperPlayerAndroidHost"

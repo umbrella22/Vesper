@@ -54,24 +54,34 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
                         )
                     )
                 case let .segment(renditionId, segment):
-                    // Both initialization and media segments route through
-                    // `segmentResourcePayload(...).localResourceBody`, which
-                    // applies `dashSegmentContentType` + `avResourceContentType`.
-                    // This ensures subtitle init/media segments receive
-                    // `public.webvtt` rather than the hardcoded
-                    // `public.mpeg-4` previously applied to init only.
-                    let payload = try await session.segmentResourcePayload(
-                        renditionId: renditionId,
-                        segment: segment
-                    )
+                    // AVFoundation requires DASH-derived fMP4 resources that
+                    // use a custom scheme to redirect to a network URL. A
+                    // byte response, and a redirect to file://, both fail on
+                    // physical devices with CoreMediaErrorDomain -12881
+                    // ("custom url not redirect"). WebVTT remains a byte
+                    // response so the custom route can preserve its MIME
+                    // classification.
+                    if await session.isSubtitleRendition(renditionId: renditionId) {
+                        let payload = try await session.segmentResourcePayload(
+                            renditionId: renditionId,
+                            segment: segment
+                        )
 #if DEBUG
-                    if segment == .initialization {
-                        iosHostLog(
-                            "dashResourceInit rendition=\(renditionId) bytes=\(payload.size)"
+                        if segment == .initialization {
+                            iosHostLog(
+                                "dashResourceInit rendition=\(renditionId) bytes=\(payload.size)"
+                            )
+                        }
+#endif
+                        response = .resource(payload.localResourceBody)
+                    } else {
+                        response = .redirect(
+                            try await session.segmentRedirectRequest(
+                                renditionId: renditionId,
+                                segment: segment
+                            )
                         )
                     }
-#endif
-                    response = .resource(payload.localResourceBody)
                 }
                 self?.finish(loadingRequest, requestId: requestId, response: response)
             } catch {
@@ -117,20 +127,28 @@ final class VesperDashResourceLoaderDelegate: NSObject, AVAssetResourceLoaderDel
             switch response {
             case let .resource(body):
                 VesperLocalResourceResponder.finish(loadingRequest, body: body)
-            case let .redirect(url):
-                var request = URLRequest(url: url)
+            case var .redirect(request):
+                guard let redirectURL = request.url else {
+                    VesperLocalResourceResponder.finish(
+                        loadingRequest,
+                        error: VesperDashBridgeError.network(
+                            "DASH segment redirect request is missing its URL"
+                        )
+                    )
+                    return
+                }
                 request.cachePolicy = .returnCacheDataElseLoad
                 loadingRequest.redirect = request
 #if DEBUG
                 iosHostLog(
-                    "dashResourceRedirect from=\(diagnosticURLDescription(loadingRequest.request.url?.absoluteString)) to=\(diagnosticURLDescription(url.absoluteString))"
+                    "dashResourceRedirect from=\(diagnosticURLDescription(loadingRequest.request.url?.absoluteString)) to=\(diagnosticURLDescription(redirectURL.absoluteString))"
                 )
 #endif
                 loadingRequest.response = HTTPURLResponse(
-                    url: loadingRequest.request.url ?? url,
+                    url: loadingRequest.request.url ?? redirectURL,
                     statusCode: 302,
                     httpVersion: nil,
-                    headerFields: ["Location": url.absoluteString]
+                    headerFields: ["Location": redirectURL.absoluteString]
                 )
                 loadingRequest.finishLoading()
             }

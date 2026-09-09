@@ -150,7 +150,7 @@ Android versions, without a separate product-direction change.
 - Android Gradle Plugin `9.1.0`
 - Gradle runtime JDK `21`
 - Java / Kotlin bytecode target `17`
-- Kotlin `2.2.10`
+- Kotlin `2.4.10`
 - Android SDK `36` with Build Tools `36.0.0`
 - Android NDK `29.0.14206865`
 
@@ -551,7 +551,8 @@ series, resolve the highest matching patch from `third_party/_cache` first, and
 rebuild stale local prebuilts when their recorded version differs from the
 selected version. See
 [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) before publishing such an
-artifact.
+artifact. The current shared FFmpeg source lock is 9.0.1; the exact URL and
+checksum are recorded in the repository policy and third-party notices.
 
 ## JNI Artifacts
 

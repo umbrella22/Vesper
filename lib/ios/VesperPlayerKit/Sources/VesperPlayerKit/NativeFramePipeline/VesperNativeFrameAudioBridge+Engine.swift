@@ -18,6 +18,7 @@ extension VesperNativeFrameAudioOutput {
         let engine = AVAudioEngine()
         let playerNode = AVAudioPlayerNode()
         let timePitch = AVAudioUnitTimePitch()
+        playerNode.volume = outputVolume
         timePitch.rate = playbackRate
         engine.attach(playerNode)
         engine.attach(timePitch)

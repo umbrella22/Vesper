@@ -9,14 +9,18 @@ class VesperDashNetworkClient {
         self.headers = headers
     }
 
+    func request(for url: URL) throws -> URLRequest {
+        try rejectInsecureHTTPURL(url)
+        var request = URLRequest(url: url)
+        applyHttpHeaders(headers, to: &request)
+        return request
+    }
+
     func data(for url: URL, byteRange: VesperDashByteRange? = nil) async throws -> Data {
         if url.isFileURL {
             return try readLocalFile(url: url, byteRange: byteRange)
         }
-        try rejectInsecureHTTPURL(url)
-
-        var request = URLRequest(url: url)
-        applyHttpHeaders(headers, to: &request)
+        var request = try request(for: url)
         if let byteRange {
             request.setValue("bytes=\(byteRange.start)-\(byteRange.end)", forHTTPHeaderField: "Range")
         }
@@ -50,8 +54,7 @@ class VesperDashNetworkClient {
             return try copyLocalFile(url: url, byteRange: byteRange, to: destinationURL)
         }
 
-        var request = URLRequest(url: url)
-        applyHttpHeaders(headers, to: &request)
+        var request = try request(for: url)
         if let byteRange {
             request.setValue("bytes=\(byteRange.start)-\(byteRange.end)", forHTTPHeaderField: "Range")
         }

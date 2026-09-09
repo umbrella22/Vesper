@@ -19,6 +19,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -27,6 +28,100 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VesperDownloadManagerTest {
+    @Test
+    fun downloadContentFormatWireValuesStayStableAndRejectUnknownValues() {
+        assertEquals(0, VesperDownloadContentFormat.HlsSegments.wireValue)
+        assertEquals(1, VesperDownloadContentFormat.DashSegments.wireValue)
+        assertEquals(2, VesperDownloadContentFormat.FlvSegments.wireValue)
+        assertEquals(3, VesperDownloadContentFormat.SingleFile.wireValue)
+        assertEquals(4, VesperDownloadContentFormat.Unknown.wireValue)
+
+        assertEquals(
+            VesperDownloadContentFormat.DashSegments,
+            VesperDownloadContentFormat.fromWireValue(1),
+        )
+        assertEquals(
+            VesperDownloadContentFormat.Unknown,
+            VesperDownloadContentFormat.fromWireValue(Int.MAX_VALUE),
+        )
+    }
+
+    @Test
+    fun downloadContentFormatWireValuesDriveNativePayloads() {
+        val source =
+            VesperDownloadSource(
+                source = VesperPlayerSource.remote("https://example.com/video.m3u8", "Video"),
+                contentFormat = VesperDownloadContentFormat.HlsSegments,
+            )
+        val assetIndex =
+            VesperDownloadAssetIndex(contentFormat = VesperDownloadContentFormat.DashSegments)
+        val unknownNativeSource =
+            NativeDownloadSource(
+                sourceUri = "https://example.com/video.bin",
+                contentFormatOrdinal = Int.MAX_VALUE,
+                manifestUri = null,
+                headerNames = emptyArray(),
+                headerValues = emptyArray(),
+            )
+
+        assertEquals(0, source.toNativePayload().contentFormatOrdinal)
+        assertEquals(1, assetIndex.toNativePayload().contentFormatOrdinal)
+        assertEquals(
+            VesperDownloadContentFormat.Unknown,
+            unknownNativeSource.toPublic().contentFormat,
+        )
+    }
+
+    @Test
+    fun downloadStateStoreUsesStableWireValuesAndRejectsUnknownValues() {
+        val directory = Files.createTempDirectory("vesper-content-format-wire").toFile()
+        val file = directory.resolve("download-state.json")
+        val store = VesperDownloadStateStore(file)
+        val task =
+            VesperDownloadTaskSnapshot(
+                taskId = 7L,
+                assetId = "asset-wire",
+                source =
+                    VesperDownloadSource(
+                        source = VesperPlayerSource.remote("https://example.com/video.mpd", "Video"),
+                        contentFormat = VesperDownloadContentFormat.DashSegments,
+                    ),
+                profile = VesperDownloadProfile(),
+                state = VesperDownloadState.Paused,
+                progress = VesperDownloadProgressSnapshot(),
+                assetIndex =
+                    VesperDownloadAssetIndex(
+                        contentFormat = VesperDownloadContentFormat.SingleFile,
+                    ),
+            )
+
+        try {
+            store.save(VesperDownloadSnapshot(listOf(task)))
+            val root = JSONObject(file.readText())
+            val persistedTask = root.getJSONArray("tasks").getJSONObject(0)
+            val persistedDownloadSource = persistedTask.getJSONObject("source")
+            val persistedPlayerSource = persistedDownloadSource.getJSONObject("source")
+            assertEquals(1, persistedDownloadSource.getInt("contentFormat"))
+            assertEquals(1, persistedPlayerSource.getInt("kind"))
+            assertEquals(5, persistedPlayerSource.getInt("protocol"))
+            assertEquals(3, persistedTask.getJSONObject("assetIndex").getInt("contentFormat"))
+
+            persistedDownloadSource.put("contentFormat", 99)
+            persistedPlayerSource.put("kind", 99)
+            persistedPlayerSource.put("protocol", 99)
+            persistedTask.getJSONObject("assetIndex").put("contentFormat", 99)
+            file.writeText(root.toString())
+
+            val restored = store.load()?.tasks?.single()
+            assertEquals(VesperDownloadContentFormat.Unknown, restored?.source?.contentFormat)
+            assertEquals(VesperPlayerSourceKind.Remote, restored?.source?.source?.kind)
+            assertEquals(VesperPlayerSourceProtocol.Unknown, restored?.source?.source?.protocol)
+            assertEquals(VesperDownloadContentFormat.Unknown, restored?.assetIndex?.contentFormat)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     @Test
     fun sharedDownloadTaskContractKeepsStableFields() {
         val payload = contractText("download_task_snapshot.json")

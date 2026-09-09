@@ -11,6 +11,10 @@ import UniformTypeIdentifiers
 import VesperPlayerKit
 import VesperPlayerKitUI
 
+private var isRunningInXCTestHost: Bool {
+    ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+}
+
 @MainActor
 private func makeExampleController(
     sourceNormalizerSetting: ExampleSourceNormalizerSetting,
@@ -332,7 +336,7 @@ struct PlayerHostView: View {
         .persistentSystemOverlays(isFullscreen ? .hidden : .visible)
         .onAppear {
             controller.initialize()
-            if playlistSnapshot.queue.isEmpty {
+            if !isRunningInXCTestHost && playlistSnapshot.queue.isEmpty {
                 applyPlaylistQueue(focusItemId: IOS_HLS_PLAYLIST_ITEM_ID)
             }
             scheduleControlsAutoHide(for: uiState)

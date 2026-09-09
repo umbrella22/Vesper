@@ -316,6 +316,7 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            updateBehindLiveWindowRecoveryStability(playbackState, callbackGeneration)
             Log.d(
                 NATIVE_JNI_BINDINGS_TAG,
                 "onPlaybackStateChanged state=${exoPlaybackStateName(playbackState)} playWhenReady=${player?.playWhenReady}",
@@ -424,15 +425,30 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
         ) {
             if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             if (reason == Player.DISCONTINUITY_REASON_SEEK) {
-                sessionHandle?.let { handle ->
-                    val completedPositionMs =
-                        player?.timelinePositionForWindowPosition(newPosition.positionMs)
-                            ?: newPosition.positionMs
-                    recordBenchmark(
-                        "seek_completed",
-                        mapOf("positionMs" to completedPositionMs.toString()),
+                val internalRecoverySeek =
+                    behindLiveWindowInternalSeekSuppression.consumeIfPending(
+                        sourceEpoch = callbackGeneration,
+                        nowElapsedRealtimeMs = SystemClock.elapsedRealtime(),
                     )
-                    VesperNativeJni.reportSeekCompleted(handle, completedPositionMs)
+                if (internalRecoverySeek) {
+                    recordBenchmark(
+                        "behind_live_window_internal_seek_completed",
+                        mapOf(
+                            "sourceEpoch" to callbackGeneration.toString(),
+                            "windowPositionMs" to newPosition.positionMs.toString(),
+                        ),
+                    )
+                } else {
+                    sessionHandle?.let { handle ->
+                        val completedPositionMs =
+                            player?.timelinePositionForWindowPosition(newPosition.positionMs)
+                                ?: newPosition.positionMs
+                        recordBenchmark(
+                            "seek_completed",
+                            mapOf("positionMs" to completedPositionMs.toString()),
+                        )
+                        VesperNativeJni.reportSeekCompleted(handle, completedPositionMs)
+                    }
                 }
             }
             Log.d(
@@ -445,6 +461,7 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
 
         override fun onPlayerError(error: PlaybackException) {
             if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            cancelBehindLiveWindowStableReset()
             Log.e(NATIVE_JNI_BINDINGS_TAG, "onPlayerError ${error.errorCodeName}: ${error.message}", error)
             recordBenchmark(
                 "playback_error",
@@ -455,6 +472,11 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
             )
             val classified = classifyPlaybackException(error)
             if (handleRuntimeFixedTrackCapabilityFailure(error, classified, callbackGeneration)) {
+                pushSnapshotToRust()
+                notifyNativeUpdate()
+                return
+            }
+            if (handleBehindLiveWindowError(error, callbackGeneration)) {
                 pushSnapshotToRust()
                 notifyNativeUpdate()
                 return
@@ -480,6 +502,137 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
             notifyNativeUpdate()
         }
     }
+
+internal fun VesperNativeJniBindings.handleBehindLiveWindowError(
+    error: PlaybackException,
+    callbackGeneration: Long,
+): Boolean {
+    val exoPlayer = player ?: return false
+    if (!isCurrentSystemPlaybackCallback(callbackGeneration) ||
+        terminalErrorReportedForCurrentSource ||
+        sessionHandle == null
+    ) {
+        return false
+    }
+    val decision =
+        behindLiveWindowRecoveryDecision(
+            error = error,
+            sourceEpoch = callbackGeneration,
+            state = behindLiveWindowRecoveryState,
+        ) ?: return false
+    val attributes =
+        mapOf(
+            "attempt" to decision.observedFailure.toString(),
+            "maxAttempts" to decision.maxAttempts.toString(),
+            "sourceEpoch" to callbackGeneration.toString(),
+            "errorCode" to error.errorCode.toString(),
+            "errorCodeName" to error.errorCodeName,
+            "matchedByErrorCode" to
+                (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW).toString(),
+        )
+    if (!decision.shouldRecover) {
+        recordBenchmark("behind_live_window_recovery_exhausted", attributes)
+        Log.e(
+            NATIVE_JNI_BINDINGS_TAG,
+            "behind-live-window recovery exhausted attempt=${decision.observedFailure} " +
+                "maxAttempts=${decision.maxAttempts} sourceEpoch=$callbackGeneration " +
+                "errorCode=${error.errorCodeName}",
+        )
+        return false
+    }
+
+    val playWhenReady = exoPlayer.playWhenReady
+    recordBenchmark(
+        "behind_live_window_recovery_started",
+        attributes + ("playWhenReady" to playWhenReady.toString()),
+    )
+    Log.w(
+        NATIVE_JNI_BINDINGS_TAG,
+        "recovering behind live window attempt=${decision.observedFailure} " +
+            "maxAttempts=${decision.maxAttempts} sourceEpoch=$callbackGeneration " +
+            "errorCode=${error.errorCodeName} playWhenReady=$playWhenReady",
+    )
+    return runCatching {
+        check(isCurrentSystemPlaybackCallback(callbackGeneration) && player === exoPlayer) {
+            "player source changed before behind-live-window recovery"
+        }
+        behindLiveWindowInternalSeekSuppression.arm(
+            sourceEpoch = callbackGeneration,
+            nowElapsedRealtimeMs = SystemClock.elapsedRealtime(),
+        )
+        exoPlayer.seekToDefaultPosition()
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = playWhenReady
+        recordBenchmark(
+            "behind_live_window_recovery_prepared",
+            attributes + ("playWhenReady" to playWhenReady.toString()),
+        )
+    }.fold(
+        onSuccess = { true },
+        onFailure = { recoveryError ->
+            recordBenchmark(
+                "behind_live_window_recovery_failed",
+                attributes +
+                    mapOf(
+                        "recoveryErrorClass" to recoveryError::class.java.name,
+                        "recoveryErrorMessage" to (recoveryError.message ?: ""),
+                    ),
+            )
+            Log.e(
+                NATIVE_JNI_BINDINGS_TAG,
+                "behind-live-window recovery action failed attempt=${decision.observedFailure} " +
+                    "sourceEpoch=$callbackGeneration",
+                recoveryError,
+            )
+            false
+        },
+    )
+}
+
+internal fun VesperNativeJniBindings.updateBehindLiveWindowRecoveryStability(
+    playbackState: Int,
+    callbackGeneration: Long,
+) {
+    cancelBehindLiveWindowStableReset()
+    if (playbackState != Player.STATE_READY ||
+        !behindLiveWindowRecoveryState.hasPendingRecovery(callbackGeneration)
+    ) {
+        return
+    }
+    val expectedPlayer = player ?: return
+    val runnable =
+        Runnable {
+            behindLiveWindowStableResetRunnable = null
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration) ||
+                player !== expectedPlayer ||
+                expectedPlayer.playbackState != Player.STATE_READY
+            ) {
+                return@Runnable
+            }
+            val completedAttempts =
+                behindLiveWindowRecoveryState.markStable(callbackGeneration) ?: return@Runnable
+            recordBenchmark(
+                "behind_live_window_recovery_stable",
+                mapOf(
+                    "attemptsBeforeReset" to completedAttempts.toString(),
+                    "sourceEpoch" to callbackGeneration.toString(),
+                    "stableReadyMs" to BEHIND_LIVE_WINDOW_STABLE_READY_MS.toString(),
+                ),
+            )
+            Log.i(
+                NATIVE_JNI_BINDINGS_TAG,
+                "behind-live-window recovery stable attemptsBeforeReset=$completedAttempts " +
+                    "sourceEpoch=$callbackGeneration",
+            )
+        }
+    behindLiveWindowStableResetRunnable = runnable
+    mainHandler.postDelayed(runnable, BEHIND_LIVE_WINDOW_STABLE_READY_MS)
+}
+
+internal fun VesperNativeJniBindings.cancelBehindLiveWindowStableReset() {
+    behindLiveWindowStableResetRunnable?.let(mainHandler::removeCallbacks)
+    behindLiveWindowStableResetRunnable = null
+}
 
 internal fun VesperNativeJniBindings.handleRuntimeFixedTrackCapabilityFailure(
     error: PlaybackException,
@@ -1120,23 +1273,31 @@ internal fun VesperNativeJniBindings.terminalPlaybackErrorDetails(
 }
 
 internal fun PlaybackException.terminalPlaybackErrorReason(): String =
-    when (errorCode) {
-        PlaybackException.ERROR_CODE_DRM_PROVISIONING_FAILED -> "drmProvisioningFailed"
-        PlaybackException.ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED -> "drmLicenseAcquisitionFailed"
-        PlaybackException.ERROR_CODE_DRM_SYSTEM_ERROR -> "drmSystemError"
-        PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED -> "drmLicenseExpired"
-        PlaybackException.ERROR_CODE_DRM_CONTENT_ERROR -> "drmContentError"
-        PlaybackException.ERROR_CODE_DRM_UNSPECIFIED -> "drmRuntimeError"
-        PlaybackException.ERROR_CODE_DRM_SCHEME_UNSUPPORTED -> "drmUnsupportedKeySystem"
-        PlaybackException.ERROR_CODE_DRM_DISALLOWED_OPERATION -> "drmDisallowedOperation"
-        PlaybackException.ERROR_CODE_DRM_DEVICE_REVOKED -> "drmDeviceRevoked"
-        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "decoderInit"
-        PlaybackException.ERROR_CODE_DECODING_FAILED -> "decodeFailed"
-        PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "unsupportedFormat"
-        PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES -> "formatExceedsCapabilities"
-        else -> "playbackError"
+    if (isBehindLiveWindowError()) {
+        "behindLiveWindow"
+    } else {
+        when (errorCode) {
+            PlaybackException.ERROR_CODE_DRM_PROVISIONING_FAILED -> "drmProvisioningFailed"
+            PlaybackException.ERROR_CODE_DRM_LICENSE_ACQUISITION_FAILED -> "drmLicenseAcquisitionFailed"
+            PlaybackException.ERROR_CODE_DRM_SYSTEM_ERROR -> "drmSystemError"
+            PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED -> "drmLicenseExpired"
+            PlaybackException.ERROR_CODE_DRM_CONTENT_ERROR -> "drmContentError"
+            PlaybackException.ERROR_CODE_DRM_UNSPECIFIED -> "drmRuntimeError"
+            PlaybackException.ERROR_CODE_DRM_SCHEME_UNSUPPORTED -> "drmUnsupportedKeySystem"
+            PlaybackException.ERROR_CODE_DRM_DISALLOWED_OPERATION -> "drmDisallowedOperation"
+            PlaybackException.ERROR_CODE_DRM_DEVICE_REVOKED -> "drmDeviceRevoked"
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "decoderInit"
+            PlaybackException.ERROR_CODE_DECODING_FAILED -> "decodeFailed"
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> "unsupportedFormat"
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ->
+                "formatExceedsCapabilities"
+            else -> "playbackError"
+        }
     }
 
+internal const val MAX_CONSECUTIVE_BEHIND_LIVE_WINDOW_RECOVERY_ATTEMPTS = 2
+internal const val BEHIND_LIVE_WINDOW_STABLE_READY_MS = 10_000L
+internal const val BEHIND_LIVE_WINDOW_INTERNAL_SEEK_TIMEOUT_MS = 2_000L
 internal const val FIRST_FRAME_WATCHDOG_DELAY_MS = 15_000L
 
 internal data class ExoTimelineSample(

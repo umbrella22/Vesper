@@ -164,6 +164,8 @@ extension VesperNativePlayerBridge {
         let bufferingPolicy = resolvedBufferingPolicy(resolvedResiliencePolicy.buffering)
         item.preferredForwardBufferDuration = bufferingPolicy.preferredForwardBufferDuration
         let player = AVPlayer(playerItem: item)
+        player.volume = systemPlayerVolume
+        player.isMuted = systemPlayerIsMuted
         player.allowsExternalPlayback = true
         player.automaticallyWaitsToMinimizeStalling =
             bufferingPolicy.automaticallyWaitsToMinimizeStalling

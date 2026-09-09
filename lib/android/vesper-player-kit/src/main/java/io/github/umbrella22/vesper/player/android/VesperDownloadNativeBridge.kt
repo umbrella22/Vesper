@@ -276,7 +276,7 @@ internal fun VesperDownloadSource.toNativePayload(): NativeDownloadSource =
     sanitizeDownloadRequestHeaders(source.headers).let { headers ->
         NativeDownloadSource(
             sourceUri = source.uri,
-            contentFormatOrdinal = contentFormat.ordinal,
+            contentFormatOrdinal = contentFormat.wireValue,
             manifestUri = manifestUri,
             headerNames = headers.keys.toTypedArray(),
             headerValues = headers.values.toTypedArray(),
@@ -296,7 +296,7 @@ internal fun VesperDownloadProfile.toNativePayload(): NativeDownloadProfile =
 
 internal fun VesperDownloadAssetIndex.toNativePayload(): NativeDownloadAssetIndex =
     NativeDownloadAssetIndex(
-        contentFormatOrdinal = contentFormat.ordinal,
+        contentFormatOrdinal = contentFormat.wireValue,
         version = version,
         etag = etag,
         checksum = checksum,
@@ -435,14 +435,7 @@ internal fun NativeDownloadSource.toPublic(): VesperDownloadSource =
                         VesperPlayerSource.remote(uri = sourceUri, label = sourceUri, headers = headers)
                     }
                 },
-            contentFormat =
-                when (contentFormatOrdinal) {
-                    0 -> VesperDownloadContentFormat.HlsSegments
-                    1 -> VesperDownloadContentFormat.DashSegments
-                    2 -> VesperDownloadContentFormat.FlvSegments
-                    3 -> VesperDownloadContentFormat.SingleFile
-                    else -> VesperDownloadContentFormat.Unknown
-                },
+            contentFormat = VesperDownloadContentFormat.fromWireValue(contentFormatOrdinal),
             manifestUri = manifestUri,
         )
     }
@@ -466,14 +459,7 @@ internal fun NativeDownloadProfile.toPublic(): VesperDownloadProfile =
 
 internal fun NativeDownloadAssetIndex.toPublic(): VesperDownloadAssetIndex =
     VesperDownloadAssetIndex(
-        contentFormat =
-            when (contentFormatOrdinal) {
-                0 -> VesperDownloadContentFormat.HlsSegments
-                1 -> VesperDownloadContentFormat.DashSegments
-                2 -> VesperDownloadContentFormat.FlvSegments
-                3 -> VesperDownloadContentFormat.SingleFile
-                else -> VesperDownloadContentFormat.Unknown
-            },
+        contentFormat = VesperDownloadContentFormat.fromWireValue(contentFormatOrdinal),
         version = version,
         etag = etag,
         checksum = checksum,

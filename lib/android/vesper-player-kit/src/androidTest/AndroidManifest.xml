@@ -1,9 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application>
+    <application android:usesCleartextTraffic="true">
         <activity
             android:name="io.github.umbrella22.vesper.player.android.VesperSurfaceLayoutTestActivity"
             android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <activity
+            android:name="io.github.umbrella22.vesper.player.android.VesperLifecycleCoverTestActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <activity
+            android:name="io.github.umbrella22.vesper.player.android.VesperProcessRecoveryTestActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
     </application>
 </manifest>

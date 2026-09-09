@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.5.3 - 2026-09-09
+
+### Added
+
+- Added a signed physical-device lifecycle target covering local 720p/1080p,
+  network HLS/DASH, Live-DVR, source replacement, and surface recreation.
+
+### Changed
+
+- Moved optional FFmpeg-backed artifacts to the 9.0.1 source lock.
+
+### Fixed
+
+- Redirected DASH fMP4 resources to their HTTPS origins with source headers,
+  avoiding AVFoundation custom-URL failures on physical devices.
+- Fell back to the temporary directory when the Documents directory is
+  unavailable while resolving download state and output paths.
+
 ## 0.5.2 - 2026-09-03
 
 ### Added

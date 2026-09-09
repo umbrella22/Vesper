@@ -67,6 +67,26 @@ extension VesperDashSession {
         )
     }
 
+    func segmentRedirectRequest(
+        renditionId: String,
+        segment: VesperDashSegmentRequest
+    ) async throws -> URLRequest {
+        let manifest = try await loadManifest()
+        let playable = try await playableRepresentation(renditionId: renditionId)
+        guard let segmentTemplate = playable.representation.segmentTemplate else {
+            throw VesperDashBridgeError.unsupportedManifest(
+                "Representation \(playable.representation.id) does not use SegmentTemplate"
+            )
+        }
+        let url = try templateSegmentURL(
+            manifest: manifest,
+            playable: playable,
+            segmentTemplate: segmentTemplate,
+            segment: segment
+        )
+        return try networkClient.request(for: url)
+    }
+
     func segmentPayload(
         renditionId: String,
         segment: VesperDashSegmentRequest,

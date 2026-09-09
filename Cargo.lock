@@ -253,7 +253,7 @@ checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -276,7 +276,7 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "basic-player"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -404,7 +404,7 @@ checksum = "fc0e56a716f1e132ff6bf4bdac1c944a3fcdc1cae65f70a4a2a1ac3b401d2d1f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -514,7 +514,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -990,7 +990,7 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -1193,7 +1193,7 @@ checksum = "ea5190182e6915eb873ddbc16e23b711b6eb1f9c00a0d0a3a91b5f6228475225"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -2505,7 +2505,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "player-audio-cpal"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "cpal",
@@ -2514,7 +2514,7 @@ dependencies = [
 
 [[package]]
 name = "player-backend-ffmpeg"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "ffmpeg-next",
@@ -2526,7 +2526,7 @@ dependencies = [
 
 [[package]]
 name = "player-dash-hls-bridge"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "player-model",
  "serde",
@@ -2536,7 +2536,7 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-d3d11"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "vesper-player-plugin",
  "windows",
@@ -2544,14 +2544,14 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-fixture"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-decoder-mediacodec"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "tracing",
  "vesper-player-plugin",
@@ -2559,14 +2559,14 @@ dependencies = [
 
 [[package]]
 name = "player-decoder-videotoolbox"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-download"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "player-model",
  "quick-xml 0.42.0",
@@ -2576,7 +2576,7 @@ dependencies = [
 
 [[package]]
 name = "player-ffi"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "player-backend-ffmpeg",
  "player-ffi-common",
@@ -2590,11 +2590,11 @@ dependencies = [
 
 [[package]]
 name = "player-ffi-common"
-version = "0.5.2"
+version = "0.5.3"
 
 [[package]]
 name = "player-ffi-ios"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "player-dash-hls-bridge",
  "player-ffi-common",
@@ -2612,14 +2612,14 @@ dependencies = [
 
 [[package]]
 name = "player-frame-processor-diagnostic"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-host-desktop"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "player-model",
@@ -2634,7 +2634,7 @@ dependencies = [
 
 [[package]]
 name = "player-ios-bridge-shim-generator"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "vesper-player-cli",
@@ -2642,7 +2642,7 @@ dependencies = [
 
 [[package]]
 name = "player-jni-android"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "jni",
  "player-model",
@@ -2656,7 +2656,7 @@ dependencies = [
 
 [[package]]
 name = "player-model"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -2666,14 +2666,14 @@ dependencies = [
 
 [[package]]
 name = "player-performance-diagnostics"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-platform-android"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "player-model",
  "player-platform-mobile",
@@ -2688,11 +2688,11 @@ dependencies = [
 
 [[package]]
 name = "player-platform-apple"
-version = "0.5.2"
+version = "0.5.3"
 
 [[package]]
 name = "player-platform-desktop"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "player-audio-cpal",
@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-ios"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "player-model",
  "player-platform-mobile",
@@ -2720,7 +2720,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-linux"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "player-model",
  "player-platform-desktop",
@@ -2729,7 +2729,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-macos"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -2745,7 +2745,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-mobile"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "player-model",
  "player-runtime",
@@ -2757,7 +2757,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-native-frame"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "player-runtime",
  "serde",
@@ -2766,7 +2766,7 @@ dependencies = [
 
 [[package]]
 name = "player-platform-windows"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "player-backend-ffmpeg",
@@ -2780,7 +2780,7 @@ dependencies = [
 
 [[package]]
 name = "player-playlist"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "player-download",
  "player-model",
@@ -2789,14 +2789,14 @@ dependencies = [
 
 [[package]]
 name = "player-plugin-fixture"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-preload"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "player-download",
  "player-model",
@@ -2805,7 +2805,7 @@ dependencies = [
 
 [[package]]
 name = "player-relay-ffmpeg-android"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ffmpeg-next",
  "jni",
@@ -2816,7 +2816,7 @@ dependencies = [
 
 [[package]]
 name = "player-remux-ffmpeg"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ffmpeg-next",
  "thiserror 2.0.20",
@@ -2825,7 +2825,7 @@ dependencies = [
 
 [[package]]
 name = "player-render-wgpu"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "wgpu",
@@ -2834,7 +2834,7 @@ dependencies = [
 
 [[package]]
 name = "player-runtime"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "player-download",
  "player-model",
@@ -2848,7 +2848,7 @@ dependencies = [
 
 [[package]]
 name = "player-source-normalizer"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -2857,14 +2857,14 @@ dependencies = [
 
 [[package]]
 name = "player-source-normalizer-diagnostic"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "vesper-player-plugin",
 ]
 
 [[package]]
 name = "player-source-normalizer-ffmpeg"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ffmpeg-next",
  "player-source-normalizer",
@@ -3277,7 +3277,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -3514,9 +3514,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.4"
+version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
+checksum = "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3610,7 +3610,7 @@ checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -3920,7 +3920,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vesper-player-cli"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "base64",
@@ -3941,7 +3941,7 @@ dependencies = [
  "sha1",
  "sha2 0.11.0",
  "signal-hook",
- "syn 3.0.4",
+ "syn 3.0.5",
  "tar",
  "tempfile",
  "thiserror 2.0.20",
@@ -3964,7 +3964,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-platform-process"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "nix",
  "windows-sys 0.61.2",
@@ -3972,7 +3972,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "hex",
  "semver",
@@ -3988,11 +3988,11 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin-abi"
-version = "0.5.2"
+version = "0.5.3"
 
 [[package]]
 name = "vesper-player-plugin-loader"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "hex",
  "libloading 0.9.0",
@@ -4016,16 +4016,16 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin-macros"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
 name = "vesper-player-plugin-package"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
@@ -4047,7 +4047,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin-wasm"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "dlmalloc",
  "wit-bindgen 0.61.1",
@@ -4055,7 +4055,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin-wasm-host"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "thiserror 2.0.20",
  "tracing",
@@ -5357,7 +5357,7 @@ checksum = "34df6fc39dbd26ddc9c10e6a2984476e13acce22e64e4487636ef494369225da"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]

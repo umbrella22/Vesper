@@ -43,6 +43,14 @@ jobs:
           fetch-depth: 0
           ref: refs/tags/${{ env.RELEASE_TAG }}
 
+      - name: Cache third-party source archives
+        uses: actions/cache@v4
+        with:
+          path: third_party/_cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vesper-source-${{ hashFiles('scripts/ffmpeg-source-policy.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vesper-source-
+
       - name: Verify release tag is on main
         shell: bash
         run: |
@@ -63,7 +71,7 @@ jobs:
         run: ./scripts/vesper release tag-channel "${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.98.1
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -108,11 +116,19 @@ jobs:
           fetch-depth: 0
           ref: refs/tags/${{ env.RELEASE_TAG }}
 
+      - name: Cache third-party source archives
+        uses: actions/cache@v4
+        with:
+          path: third_party/_cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vesper-source-${{ hashFiles('scripts/ffmpeg-source-policy.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vesper-source-
+
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: aarch64-linux-android
 
@@ -215,11 +231,19 @@ jobs:
           fetch-depth: 0
           ref: refs/tags/${{ env.RELEASE_TAG }}
 
+      - name: Cache third-party source archives
+        uses: actions/cache@v4
+        with:
+          path: third_party/_cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vesper-source-${{ hashFiles('scripts/ffmpeg-source-policy.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vesper-source-
+
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: aarch64-linux-android
 
@@ -343,11 +367,19 @@ jobs:
           fetch-depth: 0
           ref: refs/tags/${{ env.RELEASE_TAG }}
 
+      - name: Cache third-party source archives
+        uses: actions/cache@v4
+        with:
+          path: third_party/_cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vesper-source-${{ hashFiles('scripts/ffmpeg-source-policy.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vesper-source-
+
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
@@ -433,6 +465,14 @@ jobs:
         with:
           fetch-depth: 0
           ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - name: Cache third-party source archives
+        uses: actions/cache@v4
+        with:
+          path: third_party/_cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vesper-source-${{ hashFiles('scripts/ffmpeg-source-policy.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vesper-source-
 
       - name: Verify release tag is on main
         shell: bash
@@ -696,6 +736,14 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && github.event.repository.default_branch || format('refs/tags/{0}', env.RELEASE_TAG) }}
 
+      - name: Cache third-party source archives
+        uses: actions/cache@v4
+        with:
+          path: third_party/_cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vesper-source-${{ hashFiles('scripts/ffmpeg-source-policy.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vesper-source-
+
       - name: Verify manual Maven publisher repair scope
         if: github.event_name == 'workflow_dispatch'
         shell: bash
@@ -718,7 +766,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
           targets: aarch64-linux-android
 
@@ -892,6 +940,14 @@ jobs:
         with:
           fetch-depth: 0
           ref: refs/tags/${{ env.RELEASE_TAG }}
+
+      - name: Cache third-party source archives
+        uses: actions/cache@v4
+        with:
+          path: third_party/_cache
+          key: ${{ runner.os }}-${{ runner.arch }}-vesper-source-${{ hashFiles('scripts/ffmpeg-source-policy.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-vesper-source-
 
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli

@@ -2,11 +2,41 @@
 
 ## Unreleased
 
+## 0.5.3 - 2026-09-09
+
+### Added
+
+- Added Android and iOS physical-device lifecycle suites for local 720p/1080p
+  playback, network HLS/DASH, Live-DVR, surface recreation, backgrounding, and
+  recovery evidence.
+- Added bounded Android video-frame metadata windows for frame pacing and
+  missing-frame diagnostics.
+
+### Changed
+
+- Raised the workspace, plugin templates, release tooling, and CI minimum Rust
+  version to 1.98.1; refreshed direct Rust dependencies including CPAL 0.18.2,
+  wgpu 30.0.1, and syn 3.0.5.
+- Upgraded the optional FFmpeg build and redistribution source lock to 9.0.1,
+  and cached source archives across Android, iOS, and Flutter CI jobs.
+- Aligned Android Compose tooling on Kotlin 2.4.10 and upgraded OkHttp to 5.5.0.
+- Split the shared runtime command, media, option, event-queue, and resilience
+  policy types into focused modules while preserving their public re-exports.
+
 ### Fixed
 
 - Accepted Android native-library locators returned by the application class
   loader, including modern uncompressed `base.apk!/lib/...` entries, so optional
   plugins no longer require legacy JNI packaging in host applications.
+- Kept live HLS manifests out of the media cache and added bounded
+  behind-live-window recovery on Android.
+- Replaced Android enum ordinals in persisted and JNI payloads with explicit
+  wire values so declaration reordering cannot corrupt stored playback state.
+- Redirected iOS DASH fMP4 segment requests to their HTTPS origins while
+  preserving request headers, fixing physical-device playback failures from
+  custom-scheme byte responses.
+- Removed force-unwrapped iOS Documents-directory assumptions from download
+  state and output path resolution.
 
 ## 0.5.2 - 2026-09-03
 

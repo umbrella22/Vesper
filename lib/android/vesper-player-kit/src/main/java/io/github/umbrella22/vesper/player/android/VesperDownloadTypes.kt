@@ -5,12 +5,18 @@ import java.io.File
 typealias VesperDownloadAssetId = String
 typealias VesperDownloadTaskId = Long
 
-enum class VesperDownloadContentFormat {
-    HlsSegments,
-    DashSegments,
-    FlvSegments,
-    SingleFile,
-    Unknown,
+enum class VesperDownloadContentFormat(internal val wireValue: Int) {
+    HlsSegments(0),
+    DashSegments(1),
+    FlvSegments(2),
+    SingleFile(3),
+    Unknown(4),
+    ;
+
+    companion object {
+        internal fun fromWireValue(value: Int): VesperDownloadContentFormat =
+            entries.firstOrNull { it.wireValue == value } ?: Unknown
+    }
 }
 
 enum class VesperDownloadOutputFormat {

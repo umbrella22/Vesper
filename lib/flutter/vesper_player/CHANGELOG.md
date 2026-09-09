@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.5.3 - 2026-09-09
+
+- Prepared package metadata and native package constraints for the 0.5.3
+  Android and iOS host-kit release.
+
 ## 0.5.2 - 2026-09-03
 
 - Added `VesperPerformanceDiagnosticsSession`, bounded Flutter FrameTiming

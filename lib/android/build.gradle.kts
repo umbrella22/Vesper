@@ -7,12 +7,12 @@ import com.android.build.api.dsl.LibraryExtension
 
 plugins {
     id("com.android.library") version "9.1.0" apply false
-    id("org.jetbrains.kotlin.plugin.compose") version "2.2.10" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.4.10" apply false
 }
 
 val vesperMavenGroupId =
     providers.gradleProperty("vesper.maven.groupId").orElse("io.github.umbrella22.vesper")
-val vesperDefaultPublicationVersion = "0.5.2"
+val vesperDefaultPublicationVersion = "0.5.3"
 val vesperPublicationVersion =
     providers.gradleProperty("vesper.mavenVersion").orElse(vesperDefaultPublicationVersion)
 

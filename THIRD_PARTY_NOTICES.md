@@ -17,6 +17,14 @@ At the source-repository level, Vesper does not currently ship generated
 FFmpeg binaries or any other vendored third-party binary bundle inside the
 repository root.
 
+The checked-in FFmpeg source policy currently locks the optional build inputs
+to FFmpeg **9.0.1** from
+<https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz>. The archive SHA-256 is
+`cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635`; local
+source-build helpers reuse `third_party/_cache/ffmpeg-9.0.1.tar.xz` when it is
+present. This source lock does not by itself constitute a redistributed FFmpeg
+binary or satisfy the release obligations below.
+
 Release gate:
 
 - if any Android, iOS, desktop, Flutter, or other shipped artifact bundles
@@ -181,7 +189,7 @@ Notes: <additional attribution, patent, or platform-specific details>
 The optional `vesper-player-kit-external-playback` Android artifact uses the
 following libraries for its private relay HTTP transport:
 
-- OkHttp 5.4.0, Copyright 2019 Square, Inc., Apache License 2.0,
+- OkHttp 5.5.0, Copyright 2019 Square, Inc., Apache License 2.0,
   <https://square.github.io/okhttp/>.
 - Okio 3.17.0, Copyright 2013 Square, Inc., Apache License 2.0,
   <https://square.github.io/okio/>.

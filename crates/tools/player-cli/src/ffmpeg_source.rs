@@ -616,8 +616,21 @@ mod tests {
             return;
         };
         let policy = FfmpegSourcePolicy::load(&root).expect("load checked-in policy");
-        assert_eq!(policy.default_series(), "8.1");
-        assert_eq!(policy.release().version(), &Version::new(8, 1, 2));
+        assert_eq!(policy.default_series(), "9.0");
+        assert_eq!(policy.release().version(), &Version::new(9, 0, 1));
+        let source = policy
+            .resolve_build_source(
+                &FfmpegBuildSourceInputs::default(),
+                ["ffmpeg-9.0.1.tar.xz".to_owned()],
+                None,
+            )
+            .expect("resolve the checked-in FFmpeg cache entry");
+        assert_eq!(source.version, "9.0.1");
+        assert_eq!(source.archive_name, "ffmpeg-9.0.1.tar.xz");
+        assert_eq!(
+            source.expected_sha256.as_deref(),
+            Some("cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635")
+        );
     }
 
     #[test]

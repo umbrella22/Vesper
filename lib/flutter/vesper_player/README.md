@@ -40,15 +40,15 @@ federated implementations resolve automatically:
 
 ```yaml
 dependencies:
-  vesper_player: 0.5.0
+  vesper_player: 0.5.3
   # Optional unified Android Cast / DLNA external playback.
-  vesper_player_external_playback: 0.5.0
+  vesper_player_external_playback: 0.5.3
   # Optional stage controls and AirPlay route button.
-  vesper_player_ui: 0.5.0
+  vesper_player_ui: 0.5.3
   # Optional normalized-resource playback.
-  vesper_player_source_normalizer_ffmpeg: 0.5.0
+  vesper_player_source_normalizer_ffmpeg: 0.5.3
   # Optional post-download MP4 remux.
-  vesper_player_remux_ffmpeg: 0.5.0
+  vesper_player_remux_ffmpeg: 0.5.3
 ```
 
 Repository source-checkout development writes ignored local dependency

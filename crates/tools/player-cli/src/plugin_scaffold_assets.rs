@@ -4,7 +4,7 @@ pub(crate) const NATIVE_CARGO_TEMPLATE: &str = r#"[package]
 name = {{CRATE_NAME}}
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.98"
+rust-version = "1.98.1"
 license = {{LICENSE}}
 
 [lib]
@@ -49,7 +49,7 @@ pub(crate) const WASM_CARGO_TEMPLATE: &str = r#"[package]
 name = {{CRATE_NAME}}
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.98"
+rust-version = "1.98.1"
 license = {{LICENSE}}
 
 [lib]

@@ -1580,10 +1580,10 @@ fn configure_ios_plugin_ffmpeg_fixture(fixture: &IosPluginFixture) {
                         "bsfs=\n",
                         "external_dependencies=none\n",
                         "license_flags=\n",
-                        "ffmpeg_version=8.1.2\n",
+                        "ffmpeg_version=9.0.1\n",
                         "source_archive=fixture.tar.xz\n",
-                        "source_url=https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz\n",
-                        "source_sha256=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c\n",
+                        "source_url=https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz\n",
+                        "source_sha256=cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635\n",
                         "configure_line=--enable-shared\n",
                         "shared_library_link_flags=-dynamiclib -Wl,-install_name,$(INSTALL_NAME_DIR)/$(SLIBNAME_WITH_MAJOR),-current_version,$(LIBVERSION),-compatibility_version,$(LIBMAJOR)\n"
                     ),
@@ -1883,7 +1883,7 @@ fn rewrite_ios_ffmpeg_root_declared_profile(root: &std::path::Path, declared_pro
 fn configure_ios_release_source_fixture(root: &std::path::Path) {
     use sha2::{Digest, Sha256};
 
-    let version = "8.1.2";
+    let version = "9.0.1";
     let relative_archive = format!("third_party/_cache/ffmpeg-{version}.tar.xz");
     let archive_path = root.join(&relative_archive);
     fs::create_dir_all(archive_path.parent().expect("source archive parent"))
@@ -1923,7 +1923,7 @@ fn configure_ios_release_source_fixture(root: &std::path::Path) {
     fs::write(
         root.join("scripts/ffmpeg-source-policy.toml"),
         format!(
-            "schema_version = 1\n\n[compatibility]\nrequirement = \">=8.1.0, <8.2.0\"\ndefault_series = \"8.1\"\n\n[release]\nversion = \"{version}\"\nsource_url = \"https://ffmpeg.org/releases/ffmpeg-{version}.tar.xz\"\nsource_sha256 = \"{source_sha256}\"\n"
+            "schema_version = 1\n\n[compatibility]\nrequirement = \">=9.0.0, <9.1.0\"\ndefault_series = \"9.0\"\n\n[release]\nversion = \"{version}\"\nsource_url = \"https://ffmpeg.org/releases/ffmpeg-{version}.tar.xz\"\nsource_sha256 = \"{source_sha256}\"\n"
         ),
     )
     .expect("write iOS release source policy");
@@ -5845,7 +5845,7 @@ fn write_invalid_optional_ios_release_assets(release: &std::path::Path) {
         "VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip",
         "VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip",
         "VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip",
-        "VesperPlayerOptionalPlugins-FFmpeg-8.1.2-source.tar.xz",
+        "VesperPlayerOptionalPlugins-FFmpeg-9.0.1-source.tar.xz",
     ] {
         fs::write(release.join(asset), b"invalid preflight fixture\n")
             .expect("write malformed optional iOS release asset");
@@ -8086,8 +8086,36 @@ fn ios_commands_are_exposed_by_clap() {
     assert!(stdout.contains("verify-native-frame"));
     assert!(stdout.contains("verify-optional-plugins-release"));
     assert!(stdout.contains("verify-optional-plugins-device"));
+    assert!(stdout.contains("verify-playback-lifecycle-device"));
     assert!(stdout.contains("verify-release"));
     assert!(stdout.contains("stage-release"));
+}
+
+#[test]
+fn ios_playback_lifecycle_device_verifier_exposes_explicit_device_contract() {
+    let help = Command::new(env!("CARGO_BIN_EXE_vesper"))
+        .args(["ios", "verify-playback-lifecycle-device", "--help"])
+        .output()
+        .expect("show iOS playback lifecycle device verifier help");
+
+    assert_eq!(help.status.code(), Some(0));
+    assert!(help.stderr.is_empty());
+    let stdout = String::from_utf8(help.stdout).expect("UTF-8 iOS device verifier help");
+    for argument in [
+        "--device",
+        "--development-team",
+        "--output-directory",
+        "--allow-provisioning-updates",
+    ] {
+        assert!(stdout.contains(argument), "missing {argument} in help");
+    }
+
+    let missing = Command::new(env!("CARGO_BIN_EXE_vesper"))
+        .args(["ios", "verify-playback-lifecycle-device"])
+        .output()
+        .expect("run iOS playback lifecycle verifier without required arguments");
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(missing.stdout.is_empty());
 }
 
 #[test]
@@ -9140,7 +9168,7 @@ fn ios_stage_release_stages_core_and_optional_outputs_transactionally() {
         "VesperPlayerKit-ios-simulator-arm64.framework.zip",
         "VesperPlayerKit.xcframework.zip",
         "VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip",
-        "VesperPlayerOptionalPlugins-FFmpeg-8.1.2-source.tar.xz",
+        "VesperPlayerOptionalPlugins-FFmpeg-9.0.1-source.tar.xz",
     ] {
         let metadata =
             fs::symlink_metadata(output.join(asset)).expect("inspect staged release asset");
@@ -9301,7 +9329,7 @@ fn ios_stage_release_preserves_previous_outputs_when_build_or_optional_staging_f
 #[test]
 fn ios_stage_release_preserves_previous_outputs_when_ffmpeg_source_drifts() {
     let (_directory, root, tools) = ios_stage_release_fixture();
-    let source = root.join("third_party/_cache/ffmpeg-8.1.2.tar.xz");
+    let source = root.join("third_party/_cache/ffmpeg-9.0.1.tar.xz");
     fs::OpenOptions::new()
         .append(true)
         .open(&source)

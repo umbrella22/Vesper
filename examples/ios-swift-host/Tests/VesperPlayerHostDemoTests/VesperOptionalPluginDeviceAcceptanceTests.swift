@@ -96,6 +96,7 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
         surfaceView.layoutIfNeeded()
         surfaceView.attachNativeFramePresenter()
 
+        let audioOutput = VesperNativeFrameAudioOutput(outputVolume: 0.0)
         let session = VesperNativeFramePipelineSession(
             source: source,
             configuration: VesperNativeFramePipelineConfiguration(
@@ -110,7 +111,8 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
                 mode: .preflightOnly,
                 pluginReferences: [VesperBundledPluginReferences.sourceNormalizerFfmpeg]
             ),
-            surfaceHost: surfaceView
+            surfaceHost: surfaceView,
+            audioOutput: audioOutput
         )
         var timelines: [VesperNativeFramePipelineTimeline] = []
         var playbackEndedCount = 0
@@ -133,6 +135,7 @@ final class VesperOptionalPluginDeviceAcceptanceTests: XCTestCase {
         }
 
         XCTAssertTrue(session.play())
+        XCTAssertEqual(audioOutput.playerNode?.volume, 0.0)
         let presented = await waitForPluginPlayback(timeout: 10) {
             session.counters.presentedFrames > 0 &&
                 session.counters.processedFrames > 0

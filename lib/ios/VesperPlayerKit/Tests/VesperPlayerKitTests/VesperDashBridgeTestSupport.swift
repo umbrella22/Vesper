@@ -393,10 +393,14 @@ final class CountingDashNetworkClient: VesperDashNetworkClient {
     private let lock = NSLock()
     private var counts: [String: Int] = [:]
 
-    init(dataByURL: [URL: Data], delayNanoseconds: UInt64 = 0) {
+    init(
+        dataByURL: [URL: Data],
+        delayNanoseconds: UInt64 = 0,
+        headers: [String: String] = [:]
+    ) {
         self.dataByURL = dataByURL
         self.delayNanoseconds = delayNanoseconds
-        super.init()
+        super.init(headers: headers)
     }
 
     override func data(

@@ -33,7 +33,7 @@ struct VesperDashCachedSegmentFile {
 
 enum VesperDashResourceResponse {
     case resource(VesperLocalResourceBody)
-    case redirect(URL)
+    case redirect(URLRequest)
 }
 
 enum VesperDashSegmentPayload {

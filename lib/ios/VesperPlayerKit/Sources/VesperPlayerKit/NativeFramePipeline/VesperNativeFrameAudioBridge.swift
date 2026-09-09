@@ -5,6 +5,7 @@ import Foundation
 
 @MainActor
 final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputing, @unchecked Sendable {
+    let outputVolume: Float
     var engine: AVAudioEngine?
     var playerNode: AVAudioPlayerNode?
     var timePitch: AVAudioUnitTimePitch?
@@ -18,6 +19,10 @@ final class VesperNativeFrameAudioOutput: VesperNativeFrameAudioOutputing, @unch
     var isPrepared = false
     var seekPositionMs: Int64 = 0
     var onStateChanged: ((VesperNativeFrameAudioBridgeState) -> Void)?
+
+    init(outputVolume: Float = 1.0) {
+        self.outputVolume = min(max(outputVolume, 0.0), 1.0)
+    }
 
     var currentPositionMs: Int64? {
         guard isPrepared else { return nil }

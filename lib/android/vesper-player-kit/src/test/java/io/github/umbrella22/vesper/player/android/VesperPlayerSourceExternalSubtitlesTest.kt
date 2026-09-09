@@ -12,6 +12,43 @@ class VesperPlayerSourceExternalSubtitlesTest {
         )
 
     @Test
+    fun sourceProtocolWireValuesStayStableAndUnknownValuesFailClosed() {
+        val expected =
+            listOf(
+                VesperPlayerSourceProtocol.Unknown to 0,
+                VesperPlayerSourceProtocol.File to 1,
+                VesperPlayerSourceProtocol.Content to 2,
+                VesperPlayerSourceProtocol.Progressive to 3,
+                VesperPlayerSourceProtocol.Hls to 4,
+                VesperPlayerSourceProtocol.Dash to 5,
+                VesperPlayerSourceProtocol.Rtmp to 6,
+                VesperPlayerSourceProtocol.Rtsp to 7,
+                VesperPlayerSourceProtocol.Flv to 8,
+            )
+
+        expected.forEach { (protocol, wireValue) ->
+            assertEquals(wireValue, protocol.wireValue)
+            assertEquals(protocol, VesperPlayerSourceProtocol.fromWireValue(wireValue))
+        }
+        assertEquals(
+            VesperPlayerSourceProtocol.Unknown,
+            VesperPlayerSourceProtocol.fromWireValue(Int.MAX_VALUE),
+        )
+    }
+
+    @Test
+    fun sourceKindWireValuesStayStableAndUnknownValuesRemainRemote() {
+        assertEquals(0, VesperPlayerSourceKind.Local.wireValue)
+        assertEquals(1, VesperPlayerSourceKind.Remote.wireValue)
+        assertEquals(VesperPlayerSourceKind.Local, VesperPlayerSourceKind.fromWireValue(0))
+        assertEquals(VesperPlayerSourceKind.Remote, VesperPlayerSourceKind.fromWireValue(1))
+        assertEquals(
+            VesperPlayerSourceKind.Remote,
+            VesperPlayerSourceKind.fromWireValue(Int.MAX_VALUE),
+        )
+    }
+
+    @Test
     fun convenienceFactoriesPreserveExternalSubtitles() {
         val expected = listOf(subtitle)
         val sources =

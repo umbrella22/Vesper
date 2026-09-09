@@ -41,26 +41,31 @@ VESPER_ANDROID_INCLUDE_OPTIONAL_PLUGINS=1 ./scripts/vesper android stage-release
 ./scripts/vesper ios bootstrap-bridge-shim
 ./scripts/vesper ios sync-bridge-shim
 ./scripts/vesper ios verify-bridge-shim
-./scripts/vesper ios stage-optional-plugins-release /tmp/vesper-ios-release --profile source-normalizer ios-arm64 ios-simulator-arm64
-./scripts/vesper ios verify-optional-plugins-release /tmp/vesper-ios-release
-./scripts/vesper ios verify-optional-plugins-device /tmp/vesper-ios-release \
+./scripts/vesper ios stage-optional-plugins-release /private/tmp/vesper-ios-release --profile source-normalizer ios-arm64 ios-simulator-arm64
+./scripts/vesper ios verify-optional-plugins-release /private/tmp/vesper-ios-release
+./scripts/vesper ios verify-optional-plugins-device /private/tmp/vesper-ios-release \
   --device <UDID> \
   --development-team <TEAM_ID> \
-  --output-directory /tmp/vesper-ios-device-evidence \
+  --output-directory /private/tmp/vesper-ios-device-evidence \
+  --allow-provisioning-updates
+./scripts/vesper ios verify-playback-lifecycle-device \
+  --device <UDID> \
+  --development-team <TEAM_ID> \
+  --output-directory /private/tmp/vesper-ios-playback-lifecycle \
   --allow-provisioning-updates
 ./scripts/vesper ios verify-app-store-layout /path/to/App.app
-VESPER_IOS_OPTIONAL_RELEASE_FIXTURE=/tmp/vesper-ios-release \
+VESPER_IOS_OPTIONAL_RELEASE_FIXTURE=/private/tmp/vesper-ios-release \
   cargo test -p vesper-player-cli --test ios_release_regressions \
   ios_optional_release_real_fixture_rejects_policy_drift \
   -- --ignored --exact --nocapture --test-threads=1
 ./scripts/vesper ios kit-xcframework
-./scripts/vesper ios stage-release /tmp/vesper-ios-release
-./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope core
-./scripts/vesper ios stage-release /tmp/vesper-ios-release --include-optional-plugins
-./scripts/vesper ios verify-release /tmp/vesper-ios-release --scope complete
+./scripts/vesper ios stage-release /private/tmp/vesper-ios-release
+./scripts/vesper ios verify-release /private/tmp/vesper-ios-release --scope core
+./scripts/vesper ios stage-release /private/tmp/vesper-ios-release --include-optional-plugins
+./scripts/vesper ios verify-release /private/tmp/vesper-ios-release --scope complete
 ./scripts/vesper ios publish-spm-index \
   vMAJOR.MINOR.PATCH \
-  /tmp/vesper-ios-release/VesperPlayerKit.xcframework.zip \
+  /private/tmp/vesper-ios-release/VesperPlayerKit.xcframework.zip \
   --source-repository umbrella22/Vesper \
   --dry-run
 
@@ -102,7 +107,7 @@ Run `plugin-sdk-release.sh verify` before pushing the release commit. The
 command tests all public packages and creates their `.crate` archives in an
 isolated source snapshot, so local Git submodule metadata and working-tree build
 artifacts cannot affect the package contents. The script invokes the exact Rust
-1.98.0 toolchain through `rustup`, independent of the caller's default or local
+1.98.1 toolchain through `rustup`, independent of the caller's default or local
 directory override. Pre-publication archives resolve same-release dependencies
 through temporary Cargo config patches; those patches are not written into the
 source tree or published manifests. After the release commit is on `main` and
@@ -164,7 +169,7 @@ release jobs.
 
 Every workflow that invokes `./scripts/vesper` first runs the local
 `.github/actions/setup-vesper-cli` composite action. The action installs Rust
-1.98, builds `player-cli` once with `cargo build --locked --release`, and
+1.98.1, builds `player-cli` once with `cargo build --locked --release`, and
 exports the resulting executable through `VESPER_CLI`. The thin
 `scripts/vesper` launcher then executes that prebuilt binary instead of running
 Cargo for every command. On Windows, CLI steps that use the launcher explicitly
@@ -411,8 +416,9 @@ tarballs somewhere else.
   directory overrides continue to use the existing `VESPER_*` environment
   variable semantics.
 - FFmpeg source builds default to the shared audited source series declared in
-  `scripts/ffmpeg-source-policy.toml`. The resolver selects the highest matching patch from
-  `third_party/_cache` before consulting upstream release indexes. Use
+  `scripts/ffmpeg-source-policy.toml` (currently FFmpeg 9.0.1 / 9.0 series). The
+  resolver selects the highest matching patch from `third_party/_cache` before
+  consulting upstream release indexes. Use
   `VESPER_FFMPEG_SERIES` / `VESPER_<PLATFORM>_FFMPEG_SERIES` for intentional
   series moves, and `VESPER_FFMPEG_VERSION` /
   `VESPER_<PLATFORM>_FFMPEG_VERSION` only for exact-version reproduction.

@@ -32,9 +32,12 @@ extension VesperDownloadManager {
     }
 
     static func stateStoreURL(for configuration: VesperDownloadConfiguration) -> URL {
-        let root = configuration.baseDirectory
-            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-                .appendingPathComponent("vesper-downloads", isDirectory: true)
+        let fileManager = FileManager.default
+        let root = resolvedVesperDownloadDirectory(
+            baseDirectory: configuration.baseDirectory,
+            documentDirectory: fileManager.urls(for: .documentDirectory, in: .userDomainMask).first,
+            temporaryDirectory: fileManager.temporaryDirectory
+        )
         return root.appendingPathComponent("download-state.json")
     }
 }

@@ -3259,6 +3259,18 @@
         {
           "name": "PlayerFfiMediaSourceProtocolDash",
           "value": 5
+        },
+        {
+          "name": "PlayerFfiMediaSourceProtocolRtmp",
+          "value": 6
+        },
+        {
+          "name": "PlayerFfiMediaSourceProtocolRtsp",
+          "value": 7
+        },
+        {
+          "name": "PlayerFfiMediaSourceProtocolFlv",
+          "value": 8
         }
       ]
     },

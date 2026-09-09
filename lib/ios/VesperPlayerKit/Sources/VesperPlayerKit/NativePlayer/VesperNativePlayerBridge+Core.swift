@@ -25,6 +25,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
 
     var currentSource: VesperPlayerSource?
     var player: AVPlayer?
+    let systemPlayerVolume: Float
+    let systemPlayerIsMuted: Bool
     let subtitleOverlayRenderer = VesperSubtitleOverlayRenderer()
     var pendingSubtitleOverlayFailure: VesperSubtitleOverlayRenderer.PreparationFailure?
     var currentSubtitleStyle = VesperSubtitleStyle.default
@@ -255,6 +257,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         sourceReadinessWaitPolicy: VesperSourceReadinessWaitPolicy = .production,
         seekCommandWaitPolicy: VesperSeekCommandWaitPolicy = .production,
         sourceLoadAttemptOverride: VesperSourceLoadAttemptOverride? = nil,
+        systemPlayerVolume: Float = 1.0,
+        systemPlayerIsMuted: Bool = false,
         systemPlayerSeekSubmitter: @escaping VesperSystemPlayerSeekSubmitter = {
             player, target, toleranceBefore, toleranceAfter, completion in
             player.seek(
@@ -294,6 +298,8 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         self.sourceReadinessWaitPolicy = sourceReadinessWaitPolicy
         self.seekCommandWaitPolicy = seekCommandWaitPolicy
         self.sourceLoadAttemptOverride = sourceLoadAttemptOverride
+        self.systemPlayerVolume = min(max(systemPlayerVolume, 0.0), 1.0)
+        self.systemPlayerIsMuted = systemPlayerIsMuted
         self.systemPlayerSeekSubmitter = systemPlayerSeekSubmitter
         currentPluginDiagnostics = []
         benchmarkRecorder = VesperBenchmarkCoordinator(configuration: benchmarkConfiguration)

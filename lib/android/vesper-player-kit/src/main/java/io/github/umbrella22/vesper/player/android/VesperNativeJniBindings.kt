@@ -39,6 +39,7 @@ import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistTracker
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -48,6 +49,7 @@ import androidx.media3.exoplayer.text.TextRenderer
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo
 import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
+import androidx.media3.exoplayer.video.VideoFrameMetadataListener
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import java.io.File
 import java.net.URI
@@ -96,6 +98,7 @@ internal class VesperNativeJniBindings(
         get() = player != null && !isDisposed.get()
     override val supportsAwaitableCommands: Boolean = true
     internal var analyticsListener: AnalyticsListener? = null
+    internal var videoFrameMetadataListener: VideoFrameMetadataListener? = null
     @Volatile
     internal var attachedSurface: Surface? = null
     @Volatile
@@ -144,6 +147,11 @@ internal class VesperNativeJniBindings(
     internal var currentRetryMaxAttempts: Int? = null
     internal var currentDrmRuntimeErrorCount = 0
     internal var terminalErrorReportedForCurrentSource = false
+    internal val behindLiveWindowRecoveryState =
+        BehindLiveWindowRecoveryState(MAX_CONSECUTIVE_BEHIND_LIVE_WINDOW_RECOVERY_ATTEMPTS)
+    internal val behindLiveWindowInternalSeekSuppression =
+        BehindLiveWindowInternalSeekSuppression(BEHIND_LIVE_WINDOW_INTERNAL_SEEK_TIMEOUT_MS)
+    internal var behindLiveWindowStableResetRunnable: Runnable? = null
     internal var firstFrameWatchdogSource: VesperPlayerSource? = null
     internal var firstFrameWatchdogRunnable: Runnable? = null
     internal var firstFrameRenderedForCurrentSource = false
@@ -256,6 +264,8 @@ internal class VesperNativeJniBindings(
             currentRuntimeTrackRejectionState = null
             currentFixedTrackCommandState = null
             terminalErrorReportedForCurrentSource = false
+            behindLiveWindowRecoveryState.resetForSource(callbackGeneration)
+            behindLiveWindowInternalSeekSuppression.resetForSource(callbackGeneration)
             currentDrmRuntimeErrorCount = 0
             cancelFirstFrameWatchdog()
             firstFrameRenderedForCurrentSource = false
@@ -302,15 +312,15 @@ internal class VesperNativeJniBindings(
                 buildLoadErrorHandlingPolicy(playbackSource, resolvedResiliencePolicy.retry) { attempt, delayMs ->
                     VesperNativeJni.reportRetryScheduled(handle, attempt, delayMs)
                 }
+            val playbackDataSourceFactory =
+                buildDataSourceFactory(
+                    appContext,
+                    resolvedResiliencePolicy.cache,
+                    playbackSource.headers,
+                )
             val mediaSourceFactory =
                 DefaultMediaSourceFactory(appContext)
-                    .setDataSourceFactory(
-                        buildDataSourceFactory(
-                            appContext,
-                            resolvedResiliencePolicy.cache,
-                            playbackSource.headers,
-                        )
-                    )
+                    .setDataSourceFactory(playbackDataSourceFactory)
                     .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
             val preparedExternalSubtitles =
                 prepareExternalSubtitleMediaSources(
@@ -349,12 +359,33 @@ internal class VesperNativeJniBindings(
             )
             val listener = buildPlayerListener(resolvedTrackPreferences, callbackGeneration)
             val analytics = buildAnalyticsListener(callbackGeneration)
+            val frameMetadata =
+                if (benchmarkRecorder.isEnabled) {
+                    buildVideoFrameMetadataBenchmarkListener(callbackGeneration)
+                } else {
+                    null
+                }
             exoPlayer.addListener(listener)
             exoPlayer.addAnalyticsListener(analytics)
+            frameMetadata?.let(exoPlayer::setVideoFrameMetadataListener)
+            val mainMediaItem = buildMediaItem(playbackSource.copy(externalSubtitles = emptyList()))
             val mainMediaSource =
-                mediaSourceFactory.createMediaSource(
-                    buildMediaItem(playbackSource.copy(externalSubtitles = emptyList()))
-                )
+                if (playbackSource.protocol == VesperPlayerSourceProtocol.Hls) {
+                    HlsMediaSource.Factory(
+                        buildHlsPlaybackDataSourceFactory(
+                            manifestFactory =
+                                buildUpstreamDataSourceFactory(
+                                    appContext,
+                                    playbackSource.headers,
+                                ),
+                            mediaFactory = playbackDataSourceFactory,
+                        )
+                    )
+                        .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+                        .createMediaSource(mainMediaItem)
+                } else {
+                    mediaSourceFactory.createMediaSource(mainMediaItem)
+                }
             val mediaSources = listOf(mainMediaSource) + preparedExternalSubtitles.mediaSources
             exoPlayer.setMediaSource(
                 if (mediaSources.size == 1) {
@@ -379,6 +410,7 @@ internal class VesperNativeJniBindings(
             player = exoPlayer
             playerListener = listener
             analyticsListener = analytics
+            videoFrameMetadataListener = frameMetadata
             systemPlaybackCoordinator.attachPlayer(exoPlayer)
 
             pushSnapshotToRust()
@@ -688,7 +720,10 @@ internal class VesperNativeJniBindings(
     override fun invalidateSystemPlaybackCallbacks() {
         cancelPendingSourceCommandInternal("sourceCommandSuperseded")
         cancelPendingSeekCommand("seekSourceChanged")
-        systemPlaybackCallbackGeneration.incrementAndGet()
+        val callbackGeneration = systemPlaybackCallbackGeneration.incrementAndGet()
+        cancelBehindLiveWindowStableReset()
+        behindLiveWindowRecoveryState.resetForSource(callbackGeneration)
+        behindLiveWindowInternalSeekSuppression.resetForSource(callbackGeneration)
         localBridgeEvents.clear()
     }
 
@@ -698,7 +733,10 @@ internal class VesperNativeJniBindings(
         }
         cancelPendingSourceCommandInternal("sourceCommandDisposed")
         cancelPendingSeekCommand("seekCommandDisposed")
-        systemPlaybackCallbackGeneration.incrementAndGet()
+        val callbackGeneration = systemPlaybackCallbackGeneration.incrementAndGet()
+        cancelBehindLiveWindowStableReset()
+        behindLiveWindowRecoveryState.resetForSource(callbackGeneration)
+        behindLiveWindowInternalSeekSuppression.resetForSource(callbackGeneration)
         Log.i(NATIVE_JNI_BINDINGS_TAG, "dispose")
         closeNativeFramePipeline()
         preloadCoordinator.dispose()
@@ -714,6 +752,10 @@ internal class VesperNativeJniBindings(
             player?.removeAnalyticsListener(listener)
         }
         analyticsListener = null
+        videoFrameMetadataListener?.let { listener ->
+            player?.clearVideoFrameMetadataListener(listener)
+        }
+        videoFrameMetadataListener = null
         systemPlaybackCoordinator.attachPlayer(null)
         val handle = sessionHandle
         val playerToRelease = player

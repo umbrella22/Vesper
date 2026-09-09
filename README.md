@@ -263,7 +263,7 @@ scaffold templates, then use the Rust CLI for the complete local workflow.
 Install the versioned CLI from crates.io:
 
 ```sh
-cargo install vesper-player-cli --version 0.5.0 --locked
+cargo install vesper-player-cli --version 0.5.3 --locked
 vesper --version
 ```
 
@@ -272,7 +272,7 @@ short Rust dependency and import name:
 
 ```toml
 [dependencies]
-player-plugin = { package = "vesper-player-plugin", version = "=0.5.0" }
+player-plugin = { package = "vesper-player-plugin", version = "=0.5.3" }
 ```
 
 ```rust
@@ -281,7 +281,7 @@ use player_plugin::{Plugin, PluginBuildError};
 
 For a WASM Component guest, use
 `player-plugin-wasm = { package = "vesper-player-plugin-wasm", version =
-"=0.5.0" }`; its Rust import remains `player_plugin_wasm`. The dependency key
+"=0.5.3" }`; its Rust import remains `player_plugin_wasm`. The dependency key
 on the left defines the Rust import name, while `package` selects the published
 crates.io identity. All Vesper plugin SDK crates are released at one version so
 author projects can pin the complete contract exactly.
@@ -468,7 +468,7 @@ The Android CLI uses project-local cached Gradle distributions for local
 development and a CI-provisioned `gradle` executable in GitHub Actions. Each
 Android project also keeps its service home under
 `<project>/.gradle/gradle-user-home`; the repository root has no shared Gradle
-state. This keeps local agent work offline-safe while letting CI install Gradle
+state. This keeps local development work offline-safe while letting CI install Gradle
 through `gradle/actions/setup-gradle`.
 
 iOS CLI build commands resolve the workspace through the SDK root Cargo
@@ -506,9 +506,10 @@ record the Darwin shared-library flags that replace FFmpeg's obsolete
 
 Android builds that explicitly opt into `--tls-backend openssl` provision
 OpenSSL from the 3.5 LTS series by default. FFmpeg source builds default to the
-8.1.x series. Both defaults resolve the highest matching patch already present
-in `third_party/_cache` before consulting upstream release indexes; release
-metadata still records the exact resolved version. Use `VESPER_FFMPEG_VERSION`
+9.0.x series (currently locked to 9.0.1). Both defaults resolve the highest
+matching patch already present in `third_party/_cache` before consulting
+upstream release indexes; release metadata still records the exact resolved
+version. Use `VESPER_FFMPEG_VERSION`
 or `VESPER_ANDROID_OPENSSL_VERSION` for exact-version reproduction, and use
 `VESPER_FFMPEG_SERIES` or `VESPER_ANDROID_OPENSSL_SERIES` only for intentional
 series moves. Stale local OpenSSL prebuilts are rebuilt when their `openssl.pc`
@@ -694,11 +695,11 @@ generation tasks during their own Gradle / Xcode build.
 
 ## Current Status
 
-The source tree and package metadata are frozen at `0.5.0`. Android and iOS host
+The source tree and package metadata are frozen at `0.5.3`. Android and iOS host
 kits, the Flutter package family, plugin archives, and optional FFmpeg-backed
 artifacts have checked release paths for the modern arm64 platform boundary.
 Publishing starts only from the corresponding release tag; this source commit
-does not imply that every `0.5.0` coordinate is already available remotely.
+does not imply that every `0.5.3` coordinate is already available remotely.
 
 Mobile production playback remains Media3 and AVPlayer. Desktop playback,
 SDK-managed native-frame routes, Native `AudioProcessor`, decoder plugins,

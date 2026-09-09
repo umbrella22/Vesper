@@ -1,20 +1,32 @@
 package io.github.umbrella22.vesper.player.android
 
-enum class VesperPlayerSourceKind {
-    Local,
-    Remote,
+enum class VesperPlayerSourceKind(internal val wireValue: Int) {
+    Local(0),
+    Remote(1),
+    ;
+
+    companion object {
+        internal fun fromWireValue(value: Int): VesperPlayerSourceKind =
+            entries.firstOrNull { it.wireValue == value } ?: Remote
+    }
 }
 
-enum class VesperPlayerSourceProtocol {
-    Unknown,
-    File,
-    Content,
-    Progressive,
-    Hls,
-    Dash,
-    Rtmp,
-    Rtsp,
-    Flv,
+enum class VesperPlayerSourceProtocol(internal val wireValue: Int) {
+    Unknown(0),
+    File(1),
+    Content(2),
+    Progressive(3),
+    Hls(4),
+    Dash(5),
+    Rtmp(6),
+    Rtsp(7),
+    Flv(8),
+    ;
+
+    companion object {
+        internal fun fromWireValue(value: Int): VesperPlayerSourceProtocol =
+            entries.firstOrNull { it.wireValue == value } ?: Unknown
+    }
 }
 
 data class VesperPlayerDrmConfiguration(

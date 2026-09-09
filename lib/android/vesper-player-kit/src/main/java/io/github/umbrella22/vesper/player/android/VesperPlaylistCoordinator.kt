@@ -386,8 +386,8 @@ private fun resolvePlaylistResiliencePolicy(
     resiliencePolicy: VesperPlaybackResiliencePolicy,
 ): NativeResolvedResiliencePolicy =
     VesperNativeJni.resolveResiliencePolicy(
-        sourceKindOrdinal = source.kind.ordinal,
-        sourceProtocolOrdinal = source.protocol.ordinal,
+        sourceKindOrdinal = source.kind.wireValue,
+        sourceProtocolOrdinal = source.protocol.wireValue,
         bufferingPolicy = resiliencePolicy.buffering.toNativePayload(),
         retryPolicy = resiliencePolicy.retry.toNativePayload(),
         cachePolicy = resiliencePolicy.cache.toNativePayload(),

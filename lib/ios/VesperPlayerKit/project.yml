@@ -83,11 +83,29 @@ targets:
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: FMWK
-        CFBundleShortVersionString: "0.5.2"
-        CFBundleVersion: "502"
+        CFBundleShortVersionString: "0.5.3"
+        CFBundleVersion: "503"
     scheme:
       testTargets:
         - VesperPlayerKitTests
+        - VesperPlayerKitDeviceTests
+  VesperPlayerKitDeviceTestHost:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - Tests/VesperPlayerKitDeviceTestHost
+    dependencies:
+      - target: VesperPlayerKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.umbrella22.vesper.lib.ioshost.devicetests
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: true
+        INFOPLIST_KEY_UIRequiresFullScreen: true
+        "ARCHS[sdk=iphonesimulator*]": arm64
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
   VesperPlayerKitTests:
     type: bundle.unit-test
     platform: iOS
@@ -95,7 +113,29 @@ targets:
     dependencies:
       - target: VesperPlayerKit
     sources:
-      - Tests/VesperPlayerKitTests
+      - path: Tests/VesperPlayerKitTests
+        excludes:
+          - VesperPlaybackLifecycleDeviceTests.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        "ARCHS[sdk=iphonesimulator*]": arm64
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+        "ARCHS[sdk=macosx*]": arm64
+        "EXCLUDED_ARCHS[sdk=macosx*]": x86_64
+  VesperPlayerKitDeviceTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    dependencies:
+      - target: VesperPlayerKitDeviceTestHost
+      - target: VesperPlayerKit
+    sources:
+      - path: Tests/VesperPlayerKitTests/VesperPlaybackLifecycleDeviceTests.swift
+      - path: ../../../fixtures/media/device-720p-h264-aac.m4v
+        buildPhase: resources
+      - path: ../../../fixtures/media/device-1080p-h264-aac.m4v
+        buildPhase: resources
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
