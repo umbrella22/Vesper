@@ -414,7 +414,7 @@ fn ios_optional_release_real_fixture_rejects_policy_drift() {
         unlocked_source.join(format!(
             "VesperPlayerOptionalPlugins-FFmpeg-{locked_version}-source.tar.xz"
         )),
-        unlocked_source.join("VesperPlayerOptionalPlugins-FFmpeg-8.1.999-source.tar.xz"),
+        unlocked_source.join("VesperPlayerOptionalPlugins-FFmpeg-9.0.999-source.tar.xz"),
     )
     .expect("rename source archive to an unlocked compatible version");
     expect_verification_failure(&unlocked_source, "does not match locked release version");

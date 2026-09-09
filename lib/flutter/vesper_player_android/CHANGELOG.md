@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.4 - 2026-09-09
+
+- Updated the Android host-kit constraint to 0.5.4, whose AARs retain the
+  Kotlin 2.2.10 compiler metadata baseline for AGP 9.1 consumers.
+
 ## 0.5.3 - 2026-09-09
 
 - Prepared package metadata for the 0.5.3 release.

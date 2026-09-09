@@ -225,11 +225,11 @@ scripts/vesper ffi c-host-smoke
 
 ### 插件开发
 
-插件 CLI 和 Rust author SDK 使用统一的 `0.5.3` 版本。CLI 可直接从 crates.io
+插件 CLI 和 Rust author SDK 使用统一的 `0.5.4` 版本。CLI 可直接从 crates.io
 安装：
 
 ```sh
-cargo install vesper-player-cli --version 0.5.3 --locked
+cargo install vesper-player-cli --version 0.5.4 --locked
 vesper --version
 ```
 
@@ -237,14 +237,14 @@ Native 插件的 Cargo 依赖写法如下：
 
 ```toml
 [dependencies]
-player-plugin = { package = "vesper-player-plugin", version = "=0.5.3" }
+player-plugin = { package = "vesper-player-plugin", version = "=0.5.4" }
 ```
 
 其中 `vesper-player-plugin` 是 crates.io 上的分发包名，依赖 key
 `player-plugin` 继续对应 Rust 中的 `player_plugin` import，因此现有源码不需要采用
 更长的品牌化 import 名。WASM Component guest 同理使用
 `player-plugin-wasm = { package = "vesper-player-plugin-wasm", version =
-"=0.5.3" }`，Rust import 保持为 `player_plugin_wasm`。
+"=0.5.4" }`，Rust import 保持为 `player_plugin_wasm`。
 
 随后可用 `vesper plugin new` 创建 Native 或 WASM 项目，并通过 `build`、
 `inspect`、`check`、`package` 和 `verify` 完成构建与签名包验证。预编译 CLI 与
@@ -476,9 +476,9 @@ Release AAR / XCFramework 是完全打包的二进制产物。消费这些下载
 
 ## 当前状态
 
-当前源码与包元数据已冻结为 `0.5.3`。Android、iOS、Flutter、plugin archive 与可选
+当前源码与包元数据已冻结为 `0.5.4`。Android、iOS、Flutter、plugin archive 与可选
 FFmpeg-backed 产物均具备面向现代 arm64 平台的受检发布路径；只有推送对应 release tag
-后，`0.5.3` 远端坐标才会进入实际发布流程。
+后，`0.5.4` 远端坐标才会进入实际发布流程。
 
 移动端生产播放仍使用 Media3 与 AVPlayer。桌面播放、SDK-managed native-frame、Native
 AudioProcessor、decoder plugin、FrameProcessor 与 SourceNormalizer 仍属于实验或显式

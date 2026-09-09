@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.4 - 2026-09-09
+
+- Updated the Android external-playback host-kit constraint to 0.5.4 while
+  retaining the SDK 36-compatible OkHttp 5.4.0 dependency.
+
 ## 0.5.3 - 2026-09-09
 
 - Prepared package metadata for the 0.5.3 release.

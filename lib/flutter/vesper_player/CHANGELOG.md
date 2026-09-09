@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.5.4 - 2026-09-09
+
+- Updated sibling package and native host-kit constraints to 0.5.4, including
+  the restored Android Kotlin metadata compatibility baseline.
+
 ## 0.5.3 - 2026-09-09
 
 - Prepared package metadata and native package constraints for the 0.5.3

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.4 - 2026-09-09
+
+### Fixed
+
+- Updated the optional-release policy-drift regression fixture for the FFmpeg
+  9.0.1 source lock so the release gate tests the intended exact-version error.
+
 ## 0.5.3 - 2026-09-09
 
 ### Added

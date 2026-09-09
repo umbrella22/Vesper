@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.5.4 - 2026-09-09
+
+### Fixed
+
+- Restored the Kotlin 2.2.10 compiler baseline for published Android AARs so
+  AGP 9.1 built-in Kotlin consumers can compile against their metadata while
+  Flutter and Compose applications remain free to use Kotlin 2.4.x.
+- Updated the iOS optional-release policy-drift regression fixture to exercise
+  an alternate FFmpeg 9.0.x source version under the 9.0.1 compatibility lock.
+
 ## 0.5.3 - 2026-09-09
 
 ### Added

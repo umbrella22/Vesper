@@ -263,7 +263,7 @@ scaffold templates, then use the Rust CLI for the complete local workflow.
 Install the versioned CLI from crates.io:
 
 ```sh
-cargo install vesper-player-cli --version 0.5.3 --locked
+cargo install vesper-player-cli --version 0.5.4 --locked
 vesper --version
 ```
 
@@ -272,7 +272,7 @@ short Rust dependency and import name:
 
 ```toml
 [dependencies]
-player-plugin = { package = "vesper-player-plugin", version = "=0.5.3" }
+player-plugin = { package = "vesper-player-plugin", version = "=0.5.4" }
 ```
 
 ```rust
@@ -281,7 +281,7 @@ use player_plugin::{Plugin, PluginBuildError};
 
 For a WASM Component guest, use
 `player-plugin-wasm = { package = "vesper-player-plugin-wasm", version =
-"=0.5.3" }`; its Rust import remains `player_plugin_wasm`. The dependency key
+"=0.5.4" }`; its Rust import remains `player_plugin_wasm`. The dependency key
 on the left defines the Rust import name, while `package` selects the published
 crates.io identity. All Vesper plugin SDK crates are released at one version so
 author projects can pin the complete contract exactly.
@@ -695,11 +695,11 @@ generation tasks during their own Gradle / Xcode build.
 
 ## Current Status
 
-The source tree and package metadata are frozen at `0.5.3`. Android and iOS host
+The source tree and package metadata are frozen at `0.5.4`. Android and iOS host
 kits, the Flutter package family, plugin archives, and optional FFmpeg-backed
 artifacts have checked release paths for the modern arm64 platform boundary.
 Publishing starts only from the corresponding release tag; this source commit
-does not imply that every `0.5.3` coordinate is already available remotely.
+does not imply that every `0.5.4` coordinate is already available remotely.
 
 Mobile production playback remains Media3 and AVPlayer. Desktop playback,
 SDK-managed native-frame routes, Native `AudioProcessor`, decoder plugins,

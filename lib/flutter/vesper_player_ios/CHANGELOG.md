@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.4 - 2026-09-09
+
+- Updated the exact VesperPlayerKit dependency to 0.5.4.
+
 ## 0.5.3 - 2026-09-09
 
 - Updated the exact VesperPlayerKit dependency to 0.5.3.

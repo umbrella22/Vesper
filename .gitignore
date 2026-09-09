@@ -145,6 +145,7 @@ examples/flutter-host/ios/Flutter/ephemeral/
 examples/flutter-host/macos/Pods/
 examples/flutter-host/macos/Flutter/ephemeral/
 examples/flutter-host/android/.gradle/
+examples/flutter-host/android/.kotlin/
 examples/flutter-host/android/local.properties
 examples/flutter-host/*.iml
 examples/flutter-host/pubspec.lock

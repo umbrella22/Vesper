@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.4 - 2026-09-09
+
+### Fixed
+
+- Restored the Kotlin 2.2.10 compiler baseline for published AAR metadata,
+  preserving compatibility with raw AGP 9.1 consumers and Flutter hosts.
+
 ## 0.5.3 - 2026-09-09
 
 ### Added

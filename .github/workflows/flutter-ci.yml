@@ -98,7 +98,7 @@ jobs:
       - name: Set up Vesper CLI
         uses: ./.github/actions/setup-vesper-cli
 
-      - name: Set up Flutter
+      - name: Set up current Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.47.1"
@@ -252,9 +252,9 @@ jobs:
           cat <<EOF > examples/flutter-host/android/gradle.properties
           org.gradle.jvmargs=-Xmx8G -XX:MaxMetaspaceSize=4G -XX:ReservedCodeCacheSize=512m -XX:+HeapDumpOnOutOfMemoryError
           android.useAndroidX=true
-          # Flutter 3.47 still casts AGP's Android extension to the legacy DSL type.
+          # Supported Flutter toolchains still cast AGP's Android extension to the legacy DSL type.
           android.newDsl=false
-          # Flutter 3.47 still applies the standalone Kotlin Gradle plugin.
+          # Supported Flutter toolchains still apply the standalone Kotlin Gradle plugin.
           android.builtInKotlin=false
           vesper.player.android.abis=${{ matrix.abi }}
           vesper.player.android.app.abis=${{ matrix.abi }}
@@ -322,12 +322,41 @@ jobs:
           ./scripts/vesper flutter verify-android-release
           examples/flutter-host/build/app/outputs/flutter-apk/app-release.apk
 
+      - name: Preserve current Flutter Android release APK
+        run: >-
+          cp examples/flutter-host/build/app/outputs/flutter-apk/app-release.apk
+          "$RUNNER_TEMP/flutter-3.47.1-app-release.apk"
+
+      - name: Set up minimum supported Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.0"
+          channel: stable
+          cache: true
+
+      - name: Build Flutter Android host release with minimum supported Flutter
+        working-directory: examples/flutter-host
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          flutter --version
+          cat <<EOF > android/local.properties
+          sdk.dir=${ANDROID_SDK_ROOT}
+          flutter.sdk=${FLUTTER_ROOT}
+          EOF
+          flutter clean
+          flutter pub get
+          flutter build apk --release --target-platform ${{ matrix.flutter_target }}
+          ../../scripts/vesper flutter verify-android-release \
+            build/app/outputs/flutter-apk/app-release.apk
+
       - name: Stage Flutter Android release APK
         if: github.event_name == 'workflow_dispatch'
         run: |
           mkdir -p artifacts/flutter-android
           cp \
-            examples/flutter-host/build/app/outputs/flutter-apk/app-release.apk \
+            "$RUNNER_TEMP/flutter-3.47.1-app-release.apk" \
             artifacts/flutter-android/flutter-host-${{ matrix.abi }}-release.apk
 
       - name: Upload Flutter Android release APK
