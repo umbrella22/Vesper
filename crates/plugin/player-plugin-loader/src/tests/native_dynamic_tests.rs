@@ -715,6 +715,48 @@ fn embedded_registry_verifies_checksum_identity_and_root_capabilities() {
     ));
 }
 
+#[test]
+#[cfg(unix)]
+#[ignore = "requires a built player-plugin-fixture shared library artifact"]
+fn registered_native_artifact_retains_verified_library_without_reopening_path() {
+    let fixture = resolve_plugin_path("vesper_plugin_fixture").expect("built plugin fixture");
+    let directory = tempfile::tempdir().expect("temporary plugin directory");
+    let path = directory
+        .path()
+        .join(fixture.file_name().expect("library filename"));
+    std::fs::copy(&fixture, &path).expect("copy fixture");
+    let checksum = hex::encode(Sha256::digest(std::fs::read(&path).expect("fixture bytes")));
+    let embedded = EmbeddedPluginRegistry::parse(
+        fixture_embedded_registry_json(&checksum).as_bytes(),
+        "aarch64-linux-android",
+        "arm64-v8a",
+    )
+    .expect("embedded registry");
+    let registry = embedded
+        .load_native(|_| Ok(path.clone()))
+        .expect("verified library");
+    let reference = registry
+        .pipeline_event_hook_references()
+        .expect("hook references")
+        .remove(0);
+    let artifact = registry
+        .native_artifact(&reference)
+        .expect("retained artifact");
+    drop(registry);
+    std::fs::remove_file(&path).expect("remove original locator");
+
+    let consumer =
+        PluginRegistry::load_native_artifacts([artifact]).expect("must reuse the loaded library");
+    let hook = consumer
+        .resolve_pipeline_event_hook(&reference)
+        .expect("retained hook");
+    assert!(
+        hook.capability()
+            .on_event(&pipeline_event("retained", "session"))
+            .is_ok()
+    );
+}
+
 fn fixture_embedded_registry_json(checksum: &str) -> String {
     format!(
         r#"{{

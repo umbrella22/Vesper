@@ -1,15 +1,15 @@
 group = "io.github.umbrella22.vesper.player.flutter.source_normalizer_ffmpeg"
-version = "0.5.4"
+version = "0.5.5"
 
 buildscript {
-    ext.kotlin_version = "2.4.10"
+    ext.kotlin_version = "2.4.20"
     repositories {
         google()
         mavenCentral()
     }
 
     dependencies {
-        classpath "com.android.tools.build:gradle:9.1.0"
+        classpath "com.android.tools.build:gradle:9.1.1"
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
     }
 }

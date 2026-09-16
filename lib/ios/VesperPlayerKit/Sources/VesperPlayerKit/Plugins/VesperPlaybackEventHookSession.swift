@@ -40,8 +40,12 @@ final class VesperPlaybackEventHookSession {
         self.handle = handle
     }
 
+    private init(ownedHandle: UInt64) {
+        handle = ownedHandle
+    }
+
     deinit {
-        dispose()
+        if handle != 0 { dispose() }
     }
 
     @discardableResult
@@ -146,13 +150,23 @@ final class VesperPlaybackEventHookSession {
         return closed
     }
 
-    func dispose() {
-        guard handle != 0 else { return }
-        if !isClosed {
-            _ = close()
-        }
-        vesper_runtime_playback_event_hook_session_dispose(handle)
+    /// Transfers the handle to a background cleanup task before returning.
+    /// No further submission can race with close or disposal of this handle.
+    @discardableResult
+    func dispose() -> Task<VesperPipelineEventHookReportBatch, Never> {
+        let ownedHandle = handle
         handle = 0
+        isClosed = true
+        return Task.detached(priority: .utility) {
+            guard ownedHandle != 0 else { return VesperPipelineEventHookReportBatch() }
+            let session = VesperPlaybackEventHookSession(ownedHandle: ownedHandle)
+            // Rust bounds close itself; a separate flush would double the wait.
+            _ = session.close()
+            let reports = session.drainReports()
+            vesper_runtime_playback_event_hook_session_dispose(ownedHandle)
+            session.handle = 0
+            return reports
+        }
     }
 }
 

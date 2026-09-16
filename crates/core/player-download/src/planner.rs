@@ -208,7 +208,7 @@ where
                             initialization,
                             &item.representation,
                             template.start_number,
-                        ),
+                        )?,
                     );
                     let size = self.probe_required_size(&remote, None)?;
                     add_total_size(&mut total_size_bytes, size)?;
@@ -239,7 +239,7 @@ where
                     })?;
                     let remote = resolve_uri(
                         &item.base_uri,
-                        &expand_dash_template(&template.media, &item.representation, number),
+                        &expand_dash_template(&template.media, &item.representation, number)?,
                     );
                     let size = self.probe_required_size(&remote, None)?;
                     add_total_size(&mut total_size_bytes, size)?;
@@ -1637,12 +1637,15 @@ fn expand_dash_template(
     template: &str,
     representation: &DashRepresentation,
     number: u64,
-) -> String {
+) -> PlayerResult<String> {
     let value = template.replace("$RepresentationID$", &representation.id);
     replace_dash_number_token(&value, number)
 }
 
-fn replace_dash_number_token(value: &str, number: u64) -> String {
+fn replace_dash_number_token(value: &str, number: u64) -> PlayerResult<String> {
+    // Match the DASH bridge's formatting budget: 32 digits exceeds every u64
+    // segment number. MPD-controlled widths must be rejected before allocation.
+    const MAX_TEMPLATE_NUMBER_WIDTH: usize = 32;
     let mut output = value.replace("$Number$", &number.to_string());
     while let Some(start) = output.find("$Number%") {
         let Some(end_offset) = output[start + "$Number%".len()..].find("$") else {
@@ -1653,11 +1656,26 @@ fn replace_dash_number_token(value: &str, number: u64) -> String {
         let width = format_spec
             .strip_suffix('d')
             .and_then(|value| value.strip_prefix('0'))
-            .and_then(|value| value.parse::<usize>().ok())
+            .map(str::parse::<usize>)
+            .transpose()
+            .map_err(|_| {
+                planning_error(
+                    PlayerErrorCode::InvalidSource,
+                    PlayerErrorCategory::Source,
+                    "invalid DASH SegmentTemplate format width",
+                )
+            })?
             .unwrap_or(0);
+        if width > MAX_TEMPLATE_NUMBER_WIDTH {
+            return Err(planning_error(
+                PlayerErrorCode::InvalidSource,
+                PlayerErrorCategory::Source,
+                format!("DASH SegmentTemplate format width exceeds {MAX_TEMPLATE_NUMBER_WIDTH}"),
+            ));
+        }
         output.replace_range(start..token_end, &format!("{number:0width$}"));
     }
-    output
+    Ok(output)
 }
 
 fn dash_segment_count(duration_seconds: f64, segment_seconds: f64) -> PlayerResult<u64> {
@@ -2226,6 +2244,33 @@ mod tests {
         assert_eq!(index.total_size_bytes, Some(100));
         assert_eq!(index.segments.len(), 3);
         assert_eq!(index.resources[1].size_bytes, Some(10));
+    }
+
+    #[test]
+    fn dash_planning_rejects_oversized_number_widths_before_probing_resources() {
+        for width in ["33", "9999999999", "999999999999999999999999999999"] {
+            for attribute in ["initialization", "media"] {
+                let mpd = format!(
+                    r#"<MPD type="static" mediaPresentationDuration="PT2S"><Period><AdaptationSet><Representation id="v1" bandwidth="1000"><SegmentTemplate timescale="1" duration="2" {attribute}="chunk-$Number%0{width}d$.m4s" {} /></Representation></AdaptationSet></Period></MPD>"#,
+                    if attribute == "initialization" {
+                        "media=\"chunk-$Number$.m4s\""
+                    } else {
+                        ""
+                    },
+                );
+                let client = FakeClient::default().with_text("https://cdn.test/manifest.mpd", &mpd);
+                let source = DownloadSource::new(
+                    MediaSource::new("https://cdn.test/manifest.mpd"),
+                    DownloadContentFormat::DashSegments,
+                )
+                .with_manifest_uri("https://cdn.test/manifest.mpd");
+                let error = DownloadPlanner::new(client)
+                    .plan(&source, &DownloadProfile::default())
+                    .expect_err("untrusted format width must be rejected");
+                assert_eq!(error.code(), PlayerErrorCode::InvalidSource);
+                assert!(error.message().contains("format width"), "{error}");
+            }
+        }
     }
 
     #[test]

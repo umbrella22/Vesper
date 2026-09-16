@@ -147,10 +147,10 @@ Android versions, without a separate product-direction change.
 ## Source Build Toolchain
 
 - Gradle Wrapper `9.7.1`
-- Android Gradle Plugin `9.1.0`
+- Android Gradle Plugin `9.1.1`
 - Gradle runtime JDK `21`
 - Java / Kotlin bytecode target `17`
-- Kotlin `2.4.10`
+- Kotlin `2.2.10` for published AAR metadata; consumer apps may use Kotlin `2.4.20`
 - Android SDK `36` with Build Tools `36.0.0`
 - Android NDK `29.0.14206865`
 

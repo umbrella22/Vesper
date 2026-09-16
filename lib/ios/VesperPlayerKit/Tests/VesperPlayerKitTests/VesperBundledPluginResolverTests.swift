@@ -94,10 +94,12 @@ final class VesperBundledPluginResolverTests: XCTestCase {
             [remuxPath.path, remuxPath.path]
         )
 
-        let json = try encodeVesperResolvedPluginArtifactsJSON(artifacts)
+        let json = try encodeVesperResolvedPluginArtifactsJSON(artifacts, registryHandle: 42)
         let values = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[String: Any]]
         )
+        XCTAssertTrue(values.allSatisfy { ($0["registryHandle"] as? UInt64) == 42 && $0["libraryPath"] == nil })
+        XCTAssertThrowsError(try encodeVesperResolvedPluginArtifactsJSON(artifacts, registryHandle: 0))
         let capabilityInstanceIds = values.compactMap { value in
             (value["reference"] as? [String: Any])?["capabilityInstanceId"] as? String
         }

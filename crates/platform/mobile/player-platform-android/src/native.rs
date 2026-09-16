@@ -33,9 +33,7 @@ use player_plugin::{
     SourceNormalizerPacketStreamInfo, SourceNormalizerPacketTrackInfo,
     SourceNormalizerReadPacketStatus, normalize_decoder_codec_identifier,
 };
-use player_plugin_loader::{
-    DecoderPluginMatchRequest, NativePluginArtifact, PluginCapabilitySummary, PluginRegistry,
-};
+use player_plugin_loader::{DecoderPluginMatchRequest, PluginCapabilitySummary, PluginRegistry};
 use player_runtime::{
     DEFAULT_PLAYBACK_RATE, DecodedVideoFrame, FirstFrameReady, FixedTrackSelectionErrorDetails,
     FrameProcessorMode, FrameProcessorPolicy, MAX_PENDING_RUNTIME_EVENTS, MAX_PLAYBACK_RATE,
@@ -1176,14 +1174,12 @@ fn prepare_android_native_frame_decoder(
     {
         let mut last_rejection = None;
         for artifact in &config.native_frame_pipeline.decoder_plugin_artifacts {
-            let native_artifact =
-                NativePluginArtifact::new(artifact.reference.plugin_id(), &artifact.library_path)
-                    .map_err(|error| {
-                    PlayerError::new(
-                        PlayerErrorCode::Unsupported,
-                        format!("Android native-frame decoder reference is invalid: {error}"),
-                    )
-                })?;
+            let native_artifact = artifact.loader_artifact().map_err(|error| {
+                PlayerError::new(
+                    PlayerErrorCode::Unsupported,
+                    format!("Android native-frame decoder reference is invalid: {error}"),
+                )
+            })?;
             let registry =
                 PluginRegistry::load_native_artifacts([native_artifact]).map_err(|error| {
                     PlayerError::new(
@@ -1441,23 +1437,22 @@ fn open_android_native_frame_processor_chain(
         configuration
             .frame_processor_plugin_artifacts
             .iter()
-            .map(|artifact| (&artifact.library_path, Some(&artifact.reference)))
+            .map(|artifact| (&artifact.library_path, Some(artifact)))
             .collect::<Vec<_>>()
     };
-    for (processor_index, (path, requested_reference)) in bindings
+    for (processor_index, (path, requested_artifact)) in bindings
         .into_iter()
         .enumerate()
         .take(policy.max_chain_depth)
     {
-        let registry = match requested_reference {
-            Some(reference) => {
-                let artifact =
-                    NativePluginArtifact::new(reference.plugin_id(), path).map_err(|error| {
-                        PlayerError::new(
-                            PlayerErrorCode::Unsupported,
-                            format!("Android frame processor reference is invalid: {error}"),
-                        )
-                    })?;
+        let registry = match requested_artifact {
+            Some(artifact) => {
+                let artifact = artifact.loader_artifact().map_err(|error| {
+                    PlayerError::new(
+                        PlayerErrorCode::Unsupported,
+                        format!("Android frame processor reference is invalid: {error}"),
+                    )
+                })?;
                 PluginRegistry::load_native_artifacts([artifact])
             }
             None => PluginRegistry::load_native_development([path]),
@@ -1472,7 +1467,7 @@ fn open_android_native_frame_processor_chain(
             )
         })?;
         let implicit_references;
-        let reference = match requested_reference {
+        let reference = match requested_artifact.map(|artifact| &artifact.reference) {
             Some(reference) => reference,
             None => {
                 implicit_references = registry.frame_processor_references().map_err(|error| {

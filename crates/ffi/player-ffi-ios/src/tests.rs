@@ -884,9 +884,7 @@ fn source_normalizer_resource_open_can_return_bypass_diagnostics_without_handle(
 fn ios_native_frame_pipeline_open_requires_source_normalizer_packet_plugin_reference() {
     let source = test_c_string("file:///tmp/video.mp4");
     let source_artifacts = test_c_string("[]");
-    let decoder_artifacts = test_c_string(
-        r#"[{"reference":{"pluginId":"io.github.umbrella22.vesper.decoder-videotoolbox","capabilityInstanceId":"io.github.umbrella22.vesper.decoder-videotoolbox.video","transport":"native"},"libraryPath":"/tmp/libdecoder.dylib"}]"#,
-    );
+    let decoder_artifacts = test_c_string("[]");
     let frame_artifacts = test_c_string("[]");
     let mut out_handle = 99_u64;
     let mut out_json: *mut c_char = ptr::null_mut();
@@ -921,7 +919,7 @@ fn ios_native_frame_pipeline_open_requires_source_normalizer_packet_plugin_refer
 }
 
 #[test]
-fn ios_native_frame_pipeline_open_requires_videotoolbox_decoder_plugin_reference() {
+fn ios_native_frame_pipeline_open_rejects_unverified_artifact_paths() {
     let source = test_c_string("file:///tmp/video.mp4");
     let source_artifacts = test_c_string(
         r#"[{"reference":{"pluginId":"io.github.umbrella22.vesper.source-normalizer-ffmpeg","capabilityInstanceId":"io.github.umbrella22.vesper.source-normalizer-ffmpeg.packet","transport":"native"},"libraryPath":"/tmp/libsource_normalizer.dylib"}]"#,
@@ -953,11 +951,30 @@ fn ios_native_frame_pipeline_open_requires_videotoolbox_decoder_plugin_reference
     assert_eq!(status, PlayerFfiCallStatus::Error);
     assert_eq!(out_handle, 0);
     assert!(out_json.is_null());
-    assert_eq!(error.code, PlayerFfiErrorCode::BackendFailure);
+    assert_eq!(error.code, PlayerFfiErrorCode::InvalidArgument);
     let message = ffi_error_message(&error);
-    assert!(message.contains("nativeFrameIssueKind=missingVideoToolboxDecoderPlugin"));
-    assert!(message.contains("VideoToolbox decoder plugin path"));
+    assert!(message.contains("unknown field `libraryPath`"), "{message}");
     free_ffi_error(&mut error);
+}
+
+#[test]
+fn mobile_artifact_json_requires_a_live_ios_registry_containing_the_plugin() {
+    let handle = super::plugin_registry::register_test_plugin_registry(
+        player_plugin_loader::PluginRegistry::default(),
+    )
+    .expect("live registry");
+    let json = format!(
+        r#"[{{"reference":{{"pluginId":"dev.vesper.missing","transport":"native"}},"registryHandle":{handle}}}]"#,
+    );
+    let missing =
+        super::parse_mobile_native_plugin_artifacts_json(&json).expect_err("missing plugin");
+    // SAFETY: this test owns the registry handle and releases it exactly once.
+    unsafe { super::player_ffi_ios_plugin_registry_dispose(handle) };
+    assert!(missing.contains("is not loaded"), "{missing}");
+    assert_eq!(
+        super::parse_mobile_native_plugin_artifacts_json(&json).expect_err("disposed registry"),
+        "invalid iOS plugin registry handle",
+    );
 }
 
 #[test]

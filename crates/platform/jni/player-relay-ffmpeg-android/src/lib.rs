@@ -749,19 +749,15 @@ pub unsafe extern "system" fn Java_io_github_umbrella22_vesper_player_android_ex
     offset: jint,
     length: jint,
 ) -> jint {
-    let mut output = -1;
-    let _ = unowned_env.with_env(|env| -> JniResult<()> {
+    let outcome = unowned_env.with_env(|env| -> JniResult<jint> {
         if handle == 0 {
-            output = JNI_READ_INVALID_HANDLE;
-            return Ok(());
+            return Ok(JNI_READ_INVALID_HANDLE);
         }
         if length <= 0 || buffer.is_null() {
-            output = 0;
-            return Ok(());
+            return Ok(0);
         }
         if offset < 0 {
-            output = 0;
-            return Ok(());
+            return Ok(0);
         }
 
         let array = {
@@ -769,52 +765,68 @@ pub unsafe extern "system" fn Java_io_github_umbrella22_vesper_player_android_ex
             // frame to this native method and is only borrowed for this call.
             unsafe { JByteArray::from_raw(env, buffer) }
         };
-        let array_length = array.len(env).unwrap_or(0);
+        let array_length = array.len(env)?;
         let offset = offset as usize;
         let length = length as usize;
         let Some(end) = offset.checked_add(length) else {
-            output = 0;
-            return Ok(());
+            return Ok(0);
         };
         if end > array_length {
-            output = 0;
-            return Ok(());
+            return Ok(0);
         }
         let target_length = length;
         if target_length == 0 {
-            output = 0;
-            return Ok(());
+            return Ok(0);
         }
 
         let mut bytes = vec![0u8; target_length];
         let stream = {
             let streams = lock_or_recover(streams());
             let Some(stream) = streams.get(handle) else {
-                output = JNI_READ_INVALID_HANDLE;
-                return Ok(());
+                return Ok(JNI_READ_INVALID_HANDLE);
             };
             stream.clone()
         };
-        match lock_or_recover(&stream).read_outcome(&mut bytes) {
+        let read_outcome = lock_or_recover(&stream).read_outcome(&mut bytes);
+        Ok(match read_outcome {
             NativeReadOutcome::Bytes(read) => {
                 let jbytes: Vec<i8> = bytes[..read].iter().map(|byte| *byte as i8).collect();
                 array.set_region(env, offset as jint, &jbytes)?;
-                output = read as jint;
+                read as jint
             }
-            NativeReadOutcome::Complete => output = JNI_READ_COMPLETE,
+            NativeReadOutcome::Complete => JNI_READ_COMPLETE,
             NativeReadOutcome::Failed(error) => {
-                output = if error.code == "remux_timeout" {
+                if error.code == "remux_timeout" {
                     JNI_READ_STALLED
                 } else {
                     JNI_READ_FAILED
-                };
+                }
             }
-            NativeReadOutcome::Stalled => output = JNI_READ_STALLED,
-            NativeReadOutcome::Cancelled => output = JNI_READ_CANCELLED,
-        }
-        Ok(())
+            NativeReadOutcome::Stalled => JNI_READ_STALLED,
+            NativeReadOutcome::Cancelled => JNI_READ_CANCELLED,
+        })
     });
-    output
+    relay_read_outcome(outcome.into_outcome())
+}
+
+// JNI failures and caught panics must never look like a completed HTTP body.
+// A pending Java exception remains pending; otherwise Kotlin maps -3 to a
+// VesperRelayIOException and aborts the response without a terminal chunk.
+fn relay_read_outcome(outcome: jni::Outcome<jint, jni::errors::Error>) -> jint {
+    match outcome {
+        jni::Outcome::Ok(read) => read,
+        jni::Outcome::Err(error) => {
+            eprintln!("Vesper relay JNI read failed: {error}");
+            JNI_READ_FAILED
+        }
+        jni::Outcome::Panic(payload) => {
+            eprintln!(
+                "Vesper relay JNI read panicked: {}",
+                panic_message(payload.as_ref())
+            );
+            JNI_READ_FAILED
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -2470,6 +2482,23 @@ mod tests {
         open_growing_cache_file, open_growing_cache_range, packet_sort_timestamp_us,
         prewarm_stream, resolve_range, safe_file_component, sessions, streams, validate_request,
     };
+
+    #[test]
+    fn jni_read_errors_and_panics_are_failures_not_end_of_stream() {
+        assert_eq!(
+            super::relay_read_outcome(jni::Outcome::Err(jni::errors::Error::WrongObjectType)),
+            super::JNI_READ_FAILED
+        );
+        assert_eq!(
+            super::relay_read_outcome(jni::Outcome::Panic(Box::new("copy failed"))),
+            super::JNI_READ_FAILED
+        );
+        assert_eq!(
+            super::relay_read_outcome(jni::Outcome::Ok(super::JNI_READ_COMPLETE)),
+            super::JNI_READ_COMPLETE
+        );
+        assert_eq!(super::relay_read_outcome(jni::Outcome::Ok(32)), 32);
+    }
 
     #[test]
     fn resolves_standard_and_suffix_ranges() {

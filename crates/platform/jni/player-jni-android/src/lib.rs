@@ -35,7 +35,6 @@ use player_platform_mobile::{
     mobile_plugin_diagnostics_json, mobile_source_normalizer_resource_bypass_diagnostics_json,
     mobile_source_normalizer_resource_open_json, mobile_source_normalizer_resource_status_json,
     open_mobile_source_normalizer_resource_with_diagnostics,
-    parse_mobile_native_plugin_artifacts_json,
 };
 use player_runtime::NativeFramePipelineMode;
 use player_runtime::{
@@ -43,6 +42,16 @@ use player_runtime::{
     PlayerErrorCategory, PlayerErrorCode, PlayerRuntimeCommand, SourceNormalizerMode,
     SubtitleErrorDetails,
 };
+
+fn parse_mobile_native_plugin_artifacts_json(
+    json: &str,
+) -> Result<Vec<player_platform_mobile::MobileNativePluginArtifact>, String> {
+    player_platform_mobile::parse_mobile_native_plugin_artifacts_json(json, |handle| {
+        let handle = i64::try_from(handle)
+            .map_err(|_| "invalid Android plugin registry handle".to_owned())?;
+        clone_android_plugin_registry(handle).map_err(str::to_owned)
+    })
+}
 
 pub(crate) const PKG: &str = "io/github/umbrella22/vesper/player/android";
 

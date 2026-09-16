@@ -112,7 +112,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     let frameProcessorConfiguration: VesperFrameProcessorConfiguration
     let nativeFramePipelineConfiguration: VesperNativeFramePipelineConfiguration
     let pipelineEventHookConfiguration: VesperPipelineEventHookConfiguration
-    let pipelineEventHookSession: VesperPlaybackEventHookSession?
+    var pipelineEventHookSession: VesperPlaybackEventHookSession?
     let pipelineEventRunId: String
     let pipelineEventSessionId: String
     let pipelineEventResourceIdentity: String

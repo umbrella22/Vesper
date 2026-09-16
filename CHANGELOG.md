@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 0.5.5 - 2026-09-16
+
+### Fixed
+
+- Bounded playback EventHook shutdown and moved iOS disposal off the main
+  thread; timed-out callbacks retain their resources until they return.
+- Required verified embedded registry handles for mobile SourceNormalizer,
+  decoder, and FrameProcessor loading, and reused loaded native instances.
+- Preserved relay JNI failures and panics as read errors so truncated HTTP
+  responses cannot be reported as normal end-of-stream.
+- Delivered DLNA route callbacks outside the route lock, preserving the final
+  empty snapshot across concurrent stop and callback failures.
+- Rejected oversized DASH SegmentTemplate Number formatting widths before
+  allocating initialization or media resource paths.
+
+### Changed
+
+- Updated Rust dependencies, including Clap 4.6.7, crossbeam-queue 0.3.14,
+  indexmap 2.14.2, TOML 1.1.6, UUID 1.26.1, Wasmtime 48.0.2, WIT Bindgen 0.62.0,
+  and WIT parser/component tooling 0.259.0, with refreshed lockfiles.
+- Updated Android Media3 to 1.11.1, Lifecycle to 2.11.0, and AGP to 9.1.1.
+  Consumer Kotlin tooling uses 2.4.20; published AAR metadata retains Kotlin
+  2.2.10 for AGP 9.1 compatibility.
+- Updated Flutter material_ui to 1.3.0 and CI to Flutter 3.47.2.
+- Retained Android SDK 36, Compose BOM 2026.06.01, AndroidX Core 1.18.0, and
+  OkHttp 5.4.0; newer Core, Compose UI, and OkHttp releases require SDK 37.
+
 ## 0.5.4 - 2026-09-09
 
 ### Fixed

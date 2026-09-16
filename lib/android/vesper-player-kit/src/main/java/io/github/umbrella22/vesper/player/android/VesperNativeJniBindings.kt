@@ -209,18 +209,25 @@ internal class VesperNativeJniBindings(
             return emptyList()
         }
         VesperNativeLibrary.ensureLoaded()
-        val json = VesperNativeJni.probeMobilePlugins(
-            source.uri,
-            sourceNormalizerConfiguration.modeOrdinal,
-            encodeVesperResolvedMobilePluginArtifacts(
-                resolvedPluginArtifacts.sourceNormalizerArtifacts,
-            ),
-            sourceNormalizerConfiguration.runtimeProfile,
-            frameProcessorConfiguration.modeOrdinal,
-            encodeVesperResolvedMobilePluginArtifacts(
-                resolvedPluginArtifacts.frameProcessorArtifacts,
-            ),
-        )
+        val json = withVesperMobilePluginRegistry(
+            appContext,
+            resolvedPluginArtifacts.sourceNormalizerArtifacts + resolvedPluginArtifacts.frameProcessorArtifacts,
+        ) { registryHandle ->
+            VesperNativeJni.probeMobilePlugins(
+                source.uri,
+                sourceNormalizerConfiguration.modeOrdinal,
+                encodeVesperResolvedMobilePluginArtifacts(
+                    resolvedPluginArtifacts.sourceNormalizerArtifacts,
+                    registryHandle,
+                ),
+                sourceNormalizerConfiguration.runtimeProfile,
+                frameProcessorConfiguration.modeOrdinal,
+                encodeVesperResolvedMobilePluginArtifacts(
+                    resolvedPluginArtifacts.frameProcessorArtifacts,
+                    registryHandle,
+                ),
+            )
+        }
         return parsePluginDiagnosticsJson(json)
     }
 
@@ -448,17 +455,24 @@ internal class VesperNativeJniBindings(
         var openedHandle: Long? = null
         var claimedMedia3Surface = false
         try {
-            val json =
+            val json = withVesperMobilePluginRegistry(
+                appContext,
+                resolvedPluginArtifacts.sourceNormalizerArtifacts +
+                    resolvedPluginArtifacts.decoderArtifacts +
+                    resolvedPluginArtifacts.nativeFrameProcessorArtifacts,
+            ) { registryHandle ->
                 VesperNativeJni.openNativeFramePipeline(
                     packetSource.source.uri,
                     sourceNormalizerConfiguration.modeOrdinal,
                     encodeVesperResolvedMobilePluginArtifacts(
                         resolvedPluginArtifacts.sourceNormalizerArtifacts,
+                        registryHandle,
                     ),
                     sourceNormalizerConfiguration.runtimeProfile,
                     nativeFramePipelineConfiguration.modeWireName,
                     encodeVesperResolvedMobilePluginArtifacts(
                         resolvedPluginArtifacts.decoderArtifacts,
+                        registryHandle,
                     ),
                     VesperHardwareMediaCodecSelector.preferredHardwareDecoderName(
                         MimeTypes.VIDEO_H264,
@@ -468,10 +482,12 @@ internal class VesperNativeJniBindings(
                     ),
                     encodeVesperResolvedMobilePluginArtifacts(
                         resolvedPluginArtifacts.nativeFrameProcessorArtifacts,
+                        registryHandle,
                     ),
                     nativeFramePipelineConfiguration.maxInFlightFrames ?: 0,
                     surfaceKind.nativeFramePresenterProfileWireName,
-                ) ?: return null
+                )
+            } ?: return null
             val opened = parseNativeFramePipelineJson(json) ?: return null
             val handle = (opened["handle"] as? Number)?.toLong() ?: 0L
             check(handle != 0L) { "native-frame pipeline handle must not be zero" }

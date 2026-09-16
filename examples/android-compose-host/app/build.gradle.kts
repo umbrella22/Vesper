@@ -128,8 +128,8 @@ extensions.configure<ApplicationExtension>("android") {
         applicationId = "io.github.umbrella22.vesper.example.androidcomposehost"
         minSdk = 26
         targetSdk = 36
-        versionCode = 504
-        versionName = "0.5.4"
+        versionCode = 505
+        versionName = "0.5.5"
 
         ndk {
             abiFilters += configuredAndroidAbis
@@ -185,7 +185,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.fragment:fragment:1.9.0")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")

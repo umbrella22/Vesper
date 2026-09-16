@@ -46,7 +46,7 @@ extensions.configure<KotlinAndroidProjectExtension>("kotlin") {
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
-    val media3Version = "1.11.0"
+    val media3Version = "1.11.1"
 
     api(project.dependencies.project(":vesper-player-kit"))
     api(composeBom)
@@ -55,7 +55,7 @@ dependencies {
     api("androidx.compose.foundation:foundation")
 
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
     implementation("androidx.media3:media3-ui-compose:$media3Version")
     testImplementation("junit:junit:4.13.2")
 }

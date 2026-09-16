@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.5.5 - 2026-09-16
+
+- Updated VesperPlayerKit to 0.5.5 with bounded EventHook disposal and retained
+  verified native plugin instances.
+
 ## 0.5.4 - 2026-09-09
 
 - Updated the exact VesperPlayerKit dependency to 0.5.4.

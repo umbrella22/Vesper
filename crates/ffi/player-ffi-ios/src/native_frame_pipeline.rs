@@ -21,9 +21,7 @@ use player_plugin::{
     SourceNormalizerPacketMediaKind, SourceNormalizerPacketSeek, SourceNormalizerPacketSession,
     SourceNormalizerPacketTrackInfo, SourceNormalizerReadPacketStatus,
 };
-use player_plugin_loader::{
-    DecoderPluginMatchRequest, NativePluginArtifact, PluginDiagnosticRecord, PluginRegistry,
-};
+use player_plugin_loader::{DecoderPluginMatchRequest, PluginDiagnosticRecord, PluginRegistry};
 use player_runtime::{
     FrameProcessorMode, FrameProcessorPolicy, NativeFramePipelineMode, PlayerPlaybackRoute,
     PlayerPluginDiagnostic, PlayerPluginParticipation, SourceNormalizerMode,
@@ -1358,17 +1356,18 @@ fn open_frame_processor_chain(
     } else {
         artifacts
             .iter()
-            .map(|artifact| (&artifact.library_path, Some(&artifact.reference)))
+            .map(|artifact| (&artifact.library_path, Some(artifact)))
             .collect::<Vec<_>>()
     };
-    for (processor_index, (path, requested_reference)) in bindings
+    for (processor_index, (path, requested_artifact)) in bindings
         .into_iter()
         .enumerate()
         .take(policy.max_chain_depth)
     {
-        let registry = match requested_reference {
-            Some(reference) => {
-                let artifact = NativePluginArtifact::new(reference.plugin_id(), path)
+        let registry = match requested_artifact {
+            Some(artifact) => {
+                let artifact = artifact
+                    .loader_artifact()
                     .map_err(|error| error.to_string())?;
                 PluginRegistry::load_native_artifacts([artifact])
             }
@@ -1381,7 +1380,7 @@ fn open_frame_processor_chain(
             )
         })?;
         let implicit_references;
-        let reference = match requested_reference {
+        let reference = match requested_artifact.map(|artifact| &artifact.reference) {
             Some(reference) => reference,
             None => {
                 implicit_references = registry
@@ -1772,14 +1771,12 @@ fn resolve_selected_ios_decoder(
     require_pcm_frames: bool,
 ) -> Result<Option<Arc<dyn NativeDecoderPluginFactory>>, IosNativeFramePipelineOpenError> {
     for artifact in artifacts {
-        let native_artifact =
-            NativePluginArtifact::new(artifact.reference.plugin_id(), &artifact.library_path)
-                .map_err(|error| {
-                    IosNativeFramePipelineOpenError::new(
-                        "missingVideoToolboxDecoderPlugin",
-                        format!("decoder reference is invalid: {error}"),
-                    )
-                })?;
+        let native_artifact = artifact.loader_artifact().map_err(|error| {
+            IosNativeFramePipelineOpenError::new(
+                "missingVideoToolboxDecoderPlugin",
+                format!("decoder reference is invalid: {error}"),
+            )
+        })?;
         let registry =
             PluginRegistry::load_native_artifacts([native_artifact]).map_err(|error| {
                 IosNativeFramePipelineOpenError::new(
@@ -1988,7 +1985,7 @@ mod tests {
     }
 
     #[test]
-    fn ios_native_frame_pipeline_rejects_raw_paths_without_development_policy() {
+    fn ios_native_frame_pipeline_validates_loading_policy_and_required_decoders() {
         let config = IosNativeFramePipelineOpenConfig {
             source_uri: "file:///tmp/video.mp4".to_owned(),
             source_normalizer_mode: SourceNormalizerMode::PreflightOnly,
@@ -2016,6 +2013,20 @@ mod tests {
         );
         assert!(!error.message.contains("failed to open plugin library"));
         assert!(!error.message.contains("dlopen"));
+
+        let mut development_config = config;
+        development_config.native_plugin_loading_policy =
+            player_runtime::NativePluginLoadingPolicy::DevelopmentRawPaths;
+        development_config.decoder_plugin_library_paths.clear();
+        let error = IosNativeFramePipelineSession::open(development_config)
+            .err()
+            .expect("a decoder is required before opening a source plugin");
+        assert!(
+            error
+                .wire_message()
+                .contains("nativeFrameIssueKind=missingVideoToolboxDecoderPlugin")
+        );
+        assert!(error.message.contains("VideoToolbox decoder plugin path"));
     }
 
     #[test]

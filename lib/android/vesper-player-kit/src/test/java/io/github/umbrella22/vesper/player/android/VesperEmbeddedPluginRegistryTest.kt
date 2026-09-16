@@ -8,6 +8,43 @@ import org.junit.Test
 
 class VesperEmbeddedPluginRegistryTest {
     @Test
+    fun mobileArtifactsKeepRegistryLiveDuringTheCallAndReleaseItOnEveryExit() {
+        val reference = VesperBundledPluginReferences.sourceNormalizerFfmpeg
+        val artifact = VesperResolvedMobilePluginArtifact(reference, "/unused/unverified.so")
+        for (fail in listOf(false, true)) {
+            var closed = false
+            var creates = 0
+            val factory = VesperPluginRegistryFactory { _, references ->
+                creates += 1
+                assertEquals(listOf(reference), references)
+                object : VesperPluginRegistryHandleOwner {
+                    override val handle = 42L
+                    override fun close() { closed = true }
+                }
+            }
+            val result = runCatching {
+                withVesperMobilePluginRegistry(null, listOf(artifact, artifact), factory) { handle ->
+                    assertEquals(false, closed)
+                    val wire = JSONArray(encodeVesperResolvedMobilePluginArtifacts(listOf(artifact), handle))
+                        .getJSONObject(0)
+                    assertEquals(42L, wire.getLong("registryHandle"))
+                    assertEquals(false, wire.has("libraryPath"))
+                    if (fail) error("native operation failed")
+                }
+            }
+            assertEquals(fail, result.isFailure)
+            assertEquals(1, creates)
+            assertEquals(true, closed)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            encodeVesperResolvedMobilePluginArtifacts(listOf(artifact), 0L)
+        }
+        assertEquals("[]", withVesperMobilePluginRegistry(null, emptyList()) { handle ->
+            encodeVesperResolvedMobilePluginArtifacts(emptyList(), handle)
+        })
+    }
+
+    @Test
     fun referencesEncodeExplicitTransportAndOptionalInstance() {
         val encoded =
             JSONArray(

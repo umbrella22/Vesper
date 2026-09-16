@@ -21,18 +21,35 @@ use player_plugin_wasm_host::{
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
-/// One verified native artifact entry supplied by a host-owned plugin catalog.
+/// One native artifact supplied by a host-owned plugin catalog or loaded registry.
 ///
 /// The path is an internal locator. Capability selection always uses a
 /// [`PluginReference`], and loading verifies that the Root ABI identity matches
 /// `plugin_id` exactly.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct NativePluginArtifact {
     plugin_id: String,
     path: PathBuf,
+    loaded: Option<Arc<LoadedNativePlugin>>,
 }
 
+impl PartialEq for NativePluginArtifact {
+    fn eq(&self, other: &Self) -> bool {
+        self.plugin_id == other.plugin_id
+            && self.path == other.path
+            && match (&self.loaded, &other.loaded) {
+                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+impl Eq for NativePluginArtifact {}
+
 impl NativePluginArtifact {
+    /// Constructs a path binding. The caller must verify the artifact before loading it.
+    /// Use [`PluginRegistry::native_artifact`] to reuse an already loaded instance.
     pub fn new(
         plugin_id: impl Into<String>,
         path: impl Into<PathBuf>,
@@ -42,6 +59,7 @@ impl NativePluginArtifact {
         Ok(Self {
             plugin_id,
             path: path.into(),
+            loaded: None,
         })
     }
 
@@ -51,6 +69,13 @@ impl NativePluginArtifact {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn load(&self) -> Result<Arc<LoadedNativePlugin>, PluginLoadError> {
+        match &self.loaded {
+            Some(plugin) => Ok(plugin.clone()),
+            None => LoadedNativePlugin::load_host_verified(&self.path).map(Arc::new),
+        }
     }
 }
 
@@ -498,8 +523,8 @@ impl PluginRegistry {
         artifact: &NativePluginArtifact,
     ) -> Option<Arc<LoadedNativePlugin>> {
         let path = artifact.path();
-        let plugin = match LoadedNativePlugin::load_host_verified(path) {
-            Ok(plugin) => Arc::new(plugin),
+        let plugin = match artifact.load() {
+            Ok(plugin) => plugin,
             Err(error) => {
                 self.push_record(
                     PluginDiagnosticRecord::load_failed(path.to_path_buf(), error),
@@ -607,13 +632,13 @@ impl PluginRegistry {
         artifacts: impl IntoIterator<Item = NativePluginArtifact>,
     ) -> Result<(), PluginRegistryBuildError> {
         for artifact in artifacts {
-            let path = artifact.path;
-            let plugin = LoadedNativePlugin::load_host_verified(&path).map_err(|source| {
-                PluginRegistryBuildError::Load {
-                    path: path.display().to_string(),
+            let plugin = artifact
+                .load()
+                .map_err(|source| PluginRegistryBuildError::Load {
+                    path: artifact.path.display().to_string(),
                     source,
-                }
-            })?;
+                })?;
+            let path = artifact.path;
             if plugin.plugin_id() != artifact.plugin_id {
                 return Err(PluginRegistryBuildError::PluginIdentityMismatch {
                     path: path.display().to_string(),
@@ -621,7 +646,7 @@ impl PluginRegistry {
                     actual_plugin_id: plugin.plugin_id().to_owned(),
                 });
             }
-            self.insert_native(path, Arc::new(plugin))?;
+            self.insert_native(path, plugin)?;
         }
         Ok(())
     }
@@ -1152,6 +1177,31 @@ impl PluginRegistry {
         PluginInvocationPolicy::standard()
             .validate(workload, reference.transport())
             .map_err(PluginSelectionError::from)
+    }
+
+    /// Retains the loaded native library so another consumer can use it without
+    /// reopening its path. Diagnostic-only records cannot produce an artifact.
+    /// Capability selection remains the consumer's responsibility.
+    pub fn native_artifact(
+        &self,
+        reference: &PluginReference,
+    ) -> Result<NativePluginArtifact, PluginSelectionError> {
+        let plugin = self.plugin_for(reference)?;
+        let identity = PluginIdentityKey {
+            transport: reference.transport(),
+            plugin_id: reference.plugin_id().to_owned(),
+        };
+        let path = self.plugin_paths.get(&identity).cloned().ok_or_else(|| {
+            PluginSelectionError::PluginNotFound {
+                plugin_id: reference.plugin_id().to_owned(),
+                transport: reference.transport(),
+            }
+        })?;
+        Ok(NativePluginArtifact {
+            plugin_id: reference.plugin_id().to_owned(),
+            path,
+            loaded: Some(plugin),
+        })
     }
 
     fn plugin_for(

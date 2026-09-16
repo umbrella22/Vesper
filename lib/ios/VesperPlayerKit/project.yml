@@ -83,8 +83,8 @@ targets:
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: FMWK
-        CFBundleShortVersionString: "0.5.4"
-        CFBundleVersion: "504"
+        CFBundleShortVersionString: "0.5.5"
+        CFBundleVersion: "505"
     scheme:
       testTargets:
         - VesperPlayerKitTests

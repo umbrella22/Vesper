@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.5 - 2026-09-16
+
+- Updated package metadata for the synchronized 0.5.5 Flutter release.
+
 ## 0.5.4 - 2026-09-09
 
 - Updated package metadata for the synchronized 0.5.4 Flutter release.

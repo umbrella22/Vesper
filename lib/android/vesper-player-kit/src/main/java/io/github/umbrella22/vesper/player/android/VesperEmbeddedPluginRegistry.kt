@@ -147,18 +147,37 @@ internal fun encodeVesperPluginReferences(references: List<VesperPluginReference
     return encoded.toString()
 }
 
+internal fun <T> withVesperMobilePluginRegistry(
+    context: Context?,
+    artifacts: List<VesperResolvedMobilePluginArtifact>,
+    factory: VesperPluginRegistryFactory = DefaultVesperPluginRegistryFactory,
+    operation: (Long) -> T,
+): T {
+    val references = artifacts.map { it.reference }.distinct()
+    if (references.isEmpty()) return operation(0L)
+    return factory.create(context, references).use { registry ->
+        val handle = registry.handle
+        check(handle > 0L) { "native plugin registry handle must be live" }
+        operation(handle)
+    }
+}
+
 internal fun encodeVesperResolvedMobilePluginArtifacts(
     artifacts: List<VesperResolvedMobilePluginArtifact>,
+    registryHandle: Long,
 ): String {
     require(artifacts.size <= MAX_PLUGIN_REFERENCES) {
         "mobile plugin artifact count exceeds $MAX_PLUGIN_REFERENCES"
+    }
+    require(artifacts.isEmpty() || registryHandle > 0L) {
+        "mobile plugin artifacts require a live registry handle"
     }
     val encoded = JSONArray()
     artifacts.forEach { artifact ->
         encoded.put(
             JSONObject()
                 .put("reference", artifact.reference.toJsonObject())
-                .put("libraryPath", artifact.libraryPath),
+                .put("registryHandle", registryHandle),
         )
     }
     return encoded.toString()

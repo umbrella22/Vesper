@@ -132,7 +132,7 @@ extensions.configure<KotlinAndroidProjectExtension>("kotlin") {
 }
 
 dependencies {
-    val media3Version = "1.11.0"
+    val media3Version = "1.11.1"
 
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.media3:media3-exoplayer:$media3Version")

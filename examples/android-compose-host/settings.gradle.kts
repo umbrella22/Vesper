@@ -1,5 +1,5 @@
 pluginManagement {
-    val androidGradlePluginVersion = "9.1.0"
+    val androidGradlePluginVersion = "9.1.1"
 
     repositories {
         google()

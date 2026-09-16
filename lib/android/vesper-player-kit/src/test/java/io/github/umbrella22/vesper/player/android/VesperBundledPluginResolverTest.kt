@@ -132,7 +132,7 @@ class VesperBundledPluginResolverTest {
             )
 
         assertEquals(reference, resolved.sourceNormalizerArtifacts.single().reference)
-        val encoded = encodeVesperResolvedMobilePluginArtifacts(resolved.sourceNormalizerArtifacts)
+        val encoded = encodeVesperResolvedMobilePluginArtifacts(resolved.sourceNormalizerArtifacts, 42L)
         assertTrue(encoded.contains(reference.capabilityInstanceId.orEmpty()))
     }
 
@@ -170,7 +170,7 @@ class VesperBundledPluginResolverTest {
             resolved.sourceNormalizerArtifacts.map { it.libraryPath },
         )
         val encoded =
-            JSONArray(encodeVesperResolvedMobilePluginArtifacts(resolved.sourceNormalizerArtifacts))
+            JSONArray(encodeVesperResolvedMobilePluginArtifacts(resolved.sourceNormalizerArtifacts, 42L))
         assertEquals("$pluginId.first", encoded.getJSONObject(0).getJSONObject("reference").getString("capabilityInstanceId"))
         assertEquals("$pluginId.second", encoded.getJSONObject(1).getJSONObject("reference").getString("capabilityInstanceId"))
     }

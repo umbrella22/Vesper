@@ -6,7 +6,7 @@ import org.gradle.plugins.signing.SigningExtension
 import com.android.build.api.dsl.LibraryExtension
 
 plugins {
-    id("com.android.library") version "9.1.0" apply false
+    id("com.android.library") version "9.1.1" apply false
     // Keep published AAR metadata readable by AGP 9.1's built-in Kotlin compiler.
     // Consumer applications may use newer Kotlin versions independently.
     id("org.jetbrains.kotlin.plugin.compose") version "2.2.10" apply false
@@ -14,7 +14,7 @@ plugins {
 
 val vesperMavenGroupId =
     providers.gradleProperty("vesper.maven.groupId").orElse("io.github.umbrella22.vesper")
-val vesperDefaultPublicationVersion = "0.5.4"
+val vesperDefaultPublicationVersion = "0.5.5"
 val vesperPublicationVersion =
     providers.gradleProperty("vesper.mavenVersion").orElse(vesperDefaultPublicationVersion)
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.5 - 2026-09-16
+
+- Updated the Android host kit to 0.5.5 with verified plugin registry handles
+  and bounded EventHook shutdown; consumer Kotlin tooling now uses 2.4.20.
+
 ## 0.5.4 - 2026-09-09
 
 - Updated the Android host-kit constraint to 0.5.4, whose AARs retain the

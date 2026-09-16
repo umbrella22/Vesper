@@ -229,7 +229,7 @@ public struct VesperPipelineEventHookReport: Equatable, Sendable {
 }
 
 /// A bounded batch drained from one playback EventHook dispatcher.
-public struct VesperPipelineEventHookReportBatch {
+public struct VesperPipelineEventHookReportBatch: Sendable {
     /// Reports produced by the selected hooks.
     public let reports: [VesperPipelineEventHookReport]
     /// Events rejected before reaching the hook worker.

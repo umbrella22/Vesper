@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.5 - 2026-09-16
+
+- Updated native remux plugin constraints to 0.5.5 and Android consumer Kotlin
+  tooling to 2.4.20.
+
 ## 0.5.4 - 2026-09-09
 
 - Updated the native remux plugin constraints to 0.5.4 with the FFmpeg 9.0.1

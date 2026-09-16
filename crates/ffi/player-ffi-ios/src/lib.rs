@@ -18,7 +18,6 @@ use player_platform_mobile::{
     mobile_source_normalizer_resource_bypass_diagnostics_json,
     mobile_source_normalizer_resource_open_json, mobile_source_normalizer_resource_status_json,
     open_mobile_source_normalizer_resource_with_diagnostics,
-    parse_mobile_native_plugin_artifacts_json,
 };
 use player_plugin::{PipelineEvent, PluginReference, ProcessorProgress};
 use player_plugin_abi::{
@@ -56,6 +55,14 @@ pub use types::*;
 
 #[cfg(test)]
 mod tests;
+
+fn parse_mobile_native_plugin_artifacts_json(
+    json: &str,
+) -> Result<Vec<player_platform_mobile::MobileNativePluginArtifact>, String> {
+    player_platform_mobile::parse_mobile_native_plugin_artifacts_json(json, |handle| {
+        plugin_registry::clone_plugin_registry(handle)
+    })
+}
 
 /// Creates an iOS playback-sequence session.
 ///

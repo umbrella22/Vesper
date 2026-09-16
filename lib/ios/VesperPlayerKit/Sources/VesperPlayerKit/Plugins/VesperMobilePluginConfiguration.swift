@@ -208,9 +208,12 @@ enum VesperMobilePluginDiagnosticsProbe {
         }
         let sourceArtifactsJSON: String
         let frameArtifactsJSON: String
+        var registry: VesperEmbeddedPluginRegistry?
+        defer { registry?.close() }
         do {
-            sourceArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(sourceArtifacts)
-            frameArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(frameArtifacts)
+            registry = try VesperEmbeddedPluginRegistry.create(mobileArtifacts: [sourceArtifacts, frameArtifacts])
+            sourceArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(sourceArtifacts, registryHandle: registry?.handle ?? 0)
+            frameArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(frameArtifacts, registryHandle: registry?.handle ?? 0)
         } catch {
             return [
                 pluginResolutionDiagnostic(
@@ -328,8 +331,11 @@ enum VesperMobileSourceNormalizerResource {
             )
         }
         let artifactsJSON: String
+        var registry: VesperEmbeddedPluginRegistry?
+        defer { registry?.close() }
         do {
-            artifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(resolvedArtifacts)
+            registry = try VesperEmbeddedPluginRegistry.create(mobileArtifacts: [resolvedArtifacts])
+            artifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(resolvedArtifacts, registryHandle: registry?.handle ?? 0)
         } catch {
             return VesperSourceNormalizerResourceOpenOutcome(
                 resource: nil,

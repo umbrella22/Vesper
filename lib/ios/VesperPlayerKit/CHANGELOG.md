@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.5.5 - 2026-09-16
+
+### Fixed
+
+- Moved playback EventHook disposal off the main thread and bounded Rust
+  shutdown; callbacks that exceed the deadline retain their resources.
+- Required verified embedded registry handles for mobile native plugins and
+  reused loaded instances when opening SourceNormalizer, decoder, and
+  FrameProcessor sessions.
+- Rejected oversized DASH SegmentTemplate Number format widths before path
+  allocation in the shared download planner.
+
 ## 0.5.4 - 2026-09-09
 
 ### Fixed

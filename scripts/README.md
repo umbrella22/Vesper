@@ -159,7 +159,7 @@ root does not contain shared Gradle state. An explicit non-empty
 through `./scripts/vesper`; no shell helper is required.
 
 The independent Android library and Compose host pin Gradle 9.7.1. The Flutter
-Android host remains on Gradle 9.3.1 because Flutter 3.47.1 reports Gradle
+Android host remains on Gradle 9.3.1 because Flutter 3.47.2 reports Gradle
 9.7.1 with AGP 9.1 as an incompatible tooling pair. CI mirrors this split by
 invocation: Android library and Compose steps use the provisioned Gradle 9.7.1,
 while `flutter build` uses the Flutter host's 9.3.1 wrapper, including in mixed

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.5 - 2026-09-16
+
+### Changed
+
+- Updated material_ui to 1.3.0 and Android consumer Kotlin tooling to 2.4.20.
+
+### Fixed
+
+- Included Android relay error propagation and DLNA callback ordering fixes.
+
 ## 0.5.4 - 2026-09-09
 
 - Updated the Android external-playback host-kit constraint to 0.5.4 while

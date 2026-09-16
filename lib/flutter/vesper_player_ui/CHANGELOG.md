@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.5 - 2026-09-16
+
+### Changed
+
+- Updated the material_ui dependency to 1.3.0 and validated the existing stage,
+  controls, timeline gestures, and Picture in Picture behavior.
+
 ## 0.5.4 - 2026-09-09
 
 - Updated the `vesper_player` dependency constraint to 0.5.4.

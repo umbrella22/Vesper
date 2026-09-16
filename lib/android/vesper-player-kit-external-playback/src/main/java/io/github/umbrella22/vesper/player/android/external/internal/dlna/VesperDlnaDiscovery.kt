@@ -42,6 +42,8 @@ class VesperDlnaDiscovery(
     internal val wakeLock = ReentrantLock()
     internal val wakeCondition = wakeLock.newCondition()
     internal val routeLock = Any()
+    internal var pendingRouteSnapshot: List<VesperDlnaDevice>? = null
+    internal var routeDeliveryInProgress = false
     internal val devices = ConcurrentHashMap<String, VesperDlnaDevice>()
     internal val pendingDescriptionFetches = ConcurrentHashMap.newKeySet<String>()
     private var executor: ExecutorService? = null
@@ -92,8 +94,9 @@ class VesperDlnaDiscovery(
         multicastLock = null
         synchronized(routeLock) {
             devices.clear()
-            listener.onRoutesChanged(emptyList())
+            queueRouteSnapshotLocked()
         }
+        emitPendingRoutes()
     }
 
     internal fun wakeDiscoveryLoop() {

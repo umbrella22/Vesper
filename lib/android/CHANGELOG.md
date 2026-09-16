@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.5.5 - 2026-09-16
+
+### Fixed
+
+- Routed mobile native plugins through verified embedded registries and
+  retained the loaded instances throughout active sessions.
+- Reported relay JNI errors and panics as failures instead of successful EOF.
+- Moved DLNA callbacks outside route locks and preserved the final route
+  snapshot during concurrent stop, reentrant callbacks, and listener errors.
+- Bounded EventHook teardown and rejected oversized DASH Number format widths.
+
+### Changed
+
+- Updated Media3 to 1.11.1, Lifecycle to 2.11.0, AGP to 9.1.1, and consumer
+  Kotlin tooling to 2.4.20. Published AAR metadata retains Kotlin 2.2.10.
+- Retained the SDK 36-compatible Core, Compose BOM, and OkHttp versions.
+
 ## 0.5.4 - 2026-09-09
 
 ### Fixed

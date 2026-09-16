@@ -304,6 +304,14 @@ mod tests {
             build_android_plugin_registry(&[], &[], Path::new(""), &[], 0).expect("empty registry");
         let first = register_android_plugin_registry(registry).expect("first handle");
         let retained = clone_android_plugin_registry(first).expect("clone registry");
+        let mobile_json = format!(
+            r#"[{{"reference":{{"pluginId":"dev.vesper.missing","transport":"native"}},"registryHandle":{first}}}]"#,
+        );
+        assert!(
+            crate::parse_mobile_native_plugin_artifacts_json(&mobile_json)
+                .expect_err("live registries must contain the selected plugin")
+                .contains("is not loaded")
+        );
 
         dispose_android_plugin_registry(first);
         assert_eq!(
@@ -311,6 +319,11 @@ mod tests {
             invalid_plugin_registry_handle_error(),
         );
         assert_eq!(retained.registered_interfaces().len(), 0);
+        assert_eq!(
+            crate::parse_mobile_native_plugin_artifacts_json(&mobile_json)
+                .expect_err("retained owners cannot resurrect a disposed handle"),
+            invalid_plugin_registry_handle_error()
+        );
 
         let second = register_android_plugin_registry(
             build_android_plugin_registry(&[], &[], Path::new(""), &[], 0)

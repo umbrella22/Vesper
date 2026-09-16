@@ -53,7 +53,7 @@ use player_runtime::{
     PreloadTaskId, PreloadTaskSnapshot, SourceNormalizerMode,
 };
 use serde::ser::{SerializeMap, Serializer};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 const SOURCE_NORMALIZER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const SOURCE_NORMALIZER_SESSION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -828,19 +828,19 @@ impl MobilePlaylistBridgeSession {
     }
 }
 
-/// Internal Rust bridge configuration for mobile experimental plugin routes.
+/// Internal Rust configuration for mobile experimental plugin routes.
 ///
-/// Public Android, iOS, and Flutter APIs resolve embedded artifacts through
-/// `VesperPluginReference`; these filesystem paths are restricted to internal
-/// JNI, FFI, and platform bridge crates.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// Loading requires an instance retained from the platform's verified embedded
+/// registry. A reference and filesystem path alone are not a loading credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MobileNativePluginArtifact {
     pub reference: PluginReference,
     pub library_path: PathBuf,
+    registered_artifact: Option<NativePluginArtifact>,
 }
 
 impl MobileNativePluginArtifact {
+    /// Creates an unresolved binding for configuration and diagnostics only.
     pub fn new(
         reference: PluginReference,
         library_path: impl Into<PathBuf>,
@@ -861,33 +861,59 @@ impl MobileNativePluginArtifact {
         Ok(Self {
             reference,
             library_path,
+            registered_artifact: None,
         })
+    }
+
+    /// Retains the registry's loaded library; subsequent use never reopens its path.
+    pub fn from_registry(
+        reference: PluginReference,
+        registry: &PluginRegistry,
+    ) -> Result<Self, String> {
+        if reference.transport() != PluginTransport::Native {
+            return Err(format!(
+                "mobile plugin artifact `{}` must use native transport",
+                reference.plugin_id()
+            ));
+        }
+        let registered = registry
+            .native_artifact(&reference)
+            .map_err(|error| error.to_string())?;
+        let mut artifact = Self::new(reference, registered.path())?;
+        artifact.registered_artifact = Some(registered);
+        Ok(artifact)
+    }
+
+    pub fn loader_artifact(&self) -> Result<NativePluginArtifact, String> {
+        let artifact = self.registered_artifact.as_ref().ok_or_else(|| {
+            format!(
+                "mobile plugin `{}` requires a verified registry instance",
+                self.reference.plugin_id()
+            )
+        })?;
+        if self.reference.transport() != PluginTransport::Native
+            || artifact.plugin_id() != self.reference.plugin_id()
+            || artifact.path() != self.library_path
+        {
+            return Err("mobile plugin binding differs from its registered artifact".to_owned());
+        }
+        Ok(artifact.clone())
     }
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MobileNativePluginArtifactWire {
     reference: PluginReference,
-    library_path: PathBuf,
+    registry_handle: u64,
 }
 
-impl<'de> Deserialize<'de> for MobileNativePluginArtifact {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = MobileNativePluginArtifactWire::deserialize(deserializer)?;
-        Self::new(wire.reference, wire.library_path).map_err(serde::de::Error::custom)
-    }
-}
-
-/// Parses one bounded set of host-resolved native plugin artifacts.
-///
-/// The reference is the capability selector. `library_path` is only its
-/// internal build-time locator and never substitutes for identity selection.
+/// Resolves a bounded set of references through live platform registry handles.
+/// The resolver must clone a verified embedded registry and reject stale handles.
+/// Paths are derived exclusively from those registries, never from the JSON.
 pub fn parse_mobile_native_plugin_artifacts_json(
     json: &str,
+    mut resolve_registry: impl FnMut(u64) -> Result<Arc<PluginRegistry>, String>,
 ) -> Result<Vec<MobileNativePluginArtifact>, String> {
     if json.len() > MAX_MOBILE_NATIVE_PLUGIN_ARTIFACTS_JSON_BYTES {
         return Err(format!(
@@ -896,7 +922,7 @@ pub fn parse_mobile_native_plugin_artifacts_json(
             MAX_MOBILE_NATIVE_PLUGIN_ARTIFACTS_JSON_BYTES
         ));
     }
-    let artifacts = serde_json::from_str::<Vec<MobileNativePluginArtifact>>(json)
+    let artifacts = serde_json::from_str::<Vec<MobileNativePluginArtifactWire>>(json)
         .map_err(|error| format!("invalid mobile plugin artifact JSON: {error}"))?;
     if artifacts.len() > MAX_MOBILE_NATIVE_PLUGIN_ARTIFACTS {
         return Err(format!(
@@ -905,7 +931,16 @@ pub fn parse_mobile_native_plugin_artifacts_json(
             MAX_MOBILE_NATIVE_PLUGIN_ARTIFACTS
         ));
     }
-    Ok(artifacts)
+    artifacts
+        .into_iter()
+        .map(|artifact| {
+            if artifact.registry_handle == 0 {
+                return Err("mobile plugin artifact requires a nonzero registry handle".to_owned());
+            }
+            let registry = resolve_registry(artifact.registry_handle)?;
+            MobileNativePluginArtifact::from_registry(artifact.reference, &registry)
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2039,7 +2074,7 @@ pub fn frame_processor_diagnostics(
         PluginRegistry::inspect_frame_processor_support_development(&paths)
     } else {
         let artifacts =
-            match host_verified_mobile_native_plugin_artifacts(&configuration.plugin_artifacts) {
+            match registered_mobile_native_plugin_artifacts(&configuration.plugin_artifacts) {
                 Ok(artifacts) => artifacts,
                 Err(error) => {
                     return vec![runtime_frame_processor_diagnostic(
@@ -3309,8 +3344,7 @@ fn inspect_mobile_source_normalizer_registry(
     if configuration.plugin_artifacts.is_empty() {
         Ok(PluginRegistry::inspect_source_normalizer_support_development(paths))
     } else {
-        let artifacts =
-            host_verified_mobile_native_plugin_artifacts(&configuration.plugin_artifacts)?;
+        let artifacts = registered_mobile_native_plugin_artifacts(&configuration.plugin_artifacts)?;
         Ok(PluginRegistry::inspect_source_normalizer_support_artifacts(
             artifacts,
         ))
@@ -3489,11 +3523,12 @@ fn configured_mobile_plugin_count(
     }
 }
 
-fn host_verified_mobile_native_plugin_artifacts(
+fn registered_mobile_native_plugin_artifacts(
     artifacts: &[MobileNativePluginArtifact],
 ) -> Result<Vec<NativePluginArtifact>, String> {
     let mut loader_artifacts = Vec::with_capacity(artifacts.len());
     for artifact in artifacts {
+        let loaded = artifact.loader_artifact()?;
         if loader_artifacts
             .iter()
             .any(|candidate: &NativePluginArtifact| {
@@ -3503,19 +3538,7 @@ fn host_verified_mobile_native_plugin_artifacts(
         {
             continue;
         }
-        loader_artifacts.push(
-            NativePluginArtifact::new(
-                artifact.reference.plugin_id(),
-                artifact.library_path.clone(),
-            )
-            .map_err(|error| {
-                format!(
-                    "host-verified mobile plugin artifact `{}` at `{}` is invalid: {error}",
-                    artifact.reference.plugin_id(),
-                    artifact.library_path.display()
-                )
-            })?,
-        );
+        loader_artifacts.push(loaded);
     }
     Ok(loader_artifacts)
 }
@@ -4082,34 +4105,87 @@ mod tests {
     }
 
     #[test]
-    fn mobile_plugin_artifact_json_preserves_capability_instance_identity() {
-        let artifacts = parse_mobile_native_plugin_artifacts_json(
-            r#"[{"reference":{"pluginId":"dev.vesper.mobile-plugin","capabilityInstanceId":"dev.vesper.mobile-plugin.second","transport":"native"},"libraryPath":"/plugins/mobile.dylib"}]"#,
-        )
-        .expect("valid mobile artifact JSON");
+    fn mobile_plugin_artifact_json_rejects_paths_and_missing_or_stale_registries() {
+        let reference = r#"{"pluginId":"dev.vesper.mobile-plugin","transport":"native"}"#;
+        for fields in [
+            r#""libraryPath":"/tmp/unverified.dylib""#,
+            r#""registryHandle":0"#,
+        ] {
+            let json = format!("[{{\"reference\":{reference},{fields}}}]");
+            let error = parse_mobile_native_plugin_artifacts_json(&json, |_| {
+                panic!("invalid wire credentials must be rejected before registry resolution")
+            })
+            .expect_err("unverified input must fail");
+            assert!(
+                error.contains("libraryPath") || error.contains("nonzero registry handle"),
+                "{error}"
+            );
+        }
+        let json = format!("[{{\"reference\":{reference},\"registryHandle\":42}}]");
+        let error = parse_mobile_native_plugin_artifacts_json(&json, |handle| {
+            assert_eq!(handle, 42);
+            Err("stale registry handle".to_owned())
+        })
+        .expect_err("stale handles must fail");
+        assert_eq!(error, "stale registry handle");
+        let error = parse_mobile_native_plugin_artifacts_json(&json, |_| {
+            Ok(Arc::new(PluginRegistry::default()))
+        })
+        .expect_err("a live registry must actually contain the selected library");
+        assert!(error.contains("is not loaded"), "{error}");
+        assert!(
+            parse_mobile_native_plugin_artifacts_json("[]", |_| panic!("empty set"))
+                .unwrap()
+                .is_empty()
+        );
+    }
 
-        assert_eq!(artifacts.len(), 1);
-        assert_eq!(
-            artifacts[0].reference.plugin_id(),
-            "dev.vesper.mobile-plugin"
+    #[test]
+    #[ignore = "requires VESPER_MOBILE_PLUGIN_FIXTURE_PATH pointing to a built player-plugin-fixture library"]
+    fn mobile_plugin_artifacts_retain_resolved_identity_and_library() {
+        let path = PathBuf::from(
+            std::env::var("VESPER_MOBILE_PLUGIN_FIXTURE_PATH").expect("built fixture path"),
         );
-        assert_eq!(
-            artifacts[0].reference.capability_instance_id(),
-            Some("dev.vesper.mobile-plugin.second")
+        let registry = Arc::new(
+            PluginRegistry::load_native_development([&path]).expect("trusted test fixture"),
         );
-        assert_eq!(
-            artifacts[0].library_path,
-            PathBuf::from("/plugins/mobile.dylib")
+        let hook = registry.pipeline_event_hook_references().unwrap().remove(0);
+        let post_download = registry.post_download_references().unwrap().remove(0);
+        let json = serde_json::json!([
+            {"reference": hook, "registryHandle": 7},
+            {"reference": post_download, "registryHandle": 7},
+        ])
+        .to_string();
+        let mut artifacts = parse_mobile_native_plugin_artifacts_json(&json, |handle| {
+            assert_eq!(handle, 7);
+            Ok(registry.clone())
+        })
+        .expect("registered mobile artifacts");
+        drop(registry);
+        assert_eq!(artifacts[0].reference, hook);
+        assert_eq!(artifacts[1].reference, post_download);
+        assert_eq!(artifacts[0].library_path, path);
+        let retained =
+            registered_mobile_native_plugin_artifacts(&artifacts).expect("owned libraries");
+        assert_eq!(retained.len(), 1);
+        let consumer = PluginRegistry::load_native_artifacts(retained).expect("retained root");
+        assert!(consumer.resolve_pipeline_event_hook(&hook).is_ok());
+        artifacts[0].library_path = PathBuf::from("/tmp/substituted.dylib");
+        assert!(
+            artifacts[0]
+                .loader_artifact()
+                .unwrap_err()
+                .contains("differs from its registered artifact")
         );
     }
 
     #[test]
     fn mobile_plugin_artifact_json_rejects_wasm_transport() {
         let error = parse_mobile_native_plugin_artifacts_json(
-            r#"[{"reference":{"pluginId":"dev.vesper.mobile-plugin","transport":"wasm"},"libraryPath":"/plugins/mobile.wasm"}]"#,
+            r#"[{"reference":{"pluginId":"dev.vesper.mobile-plugin","transport":"wasm"},"registryHandle":1}]"#,
+            |_| Ok(Arc::new(PluginRegistry::default())),
         )
         .expect_err("mobile native bridge must reject WASM artifacts");
-
         assert!(error.contains("must use native transport"));
     }
 
@@ -4143,26 +4219,16 @@ mod tests {
     }
 
     #[test]
-    fn host_verified_mobile_artifacts_load_each_root_identity_once() {
-        let artifacts = vec![
-            test_mobile_artifact(
-                "dev.vesper.mobile-plugin.source-packet",
-                "/plugins/mobile.dylib",
-            ),
-            test_mobile_artifact(
-                "dev.vesper.mobile-plugin.source-resource",
-                "/plugins/mobile.dylib",
-            ),
-        ];
-
-        let loader_artifacts = host_verified_mobile_native_plugin_artifacts(&artifacts)
-            .expect("valid host-verified mobile artifacts");
-
-        assert_eq!(loader_artifacts.len(), 1);
-        assert_eq!(loader_artifacts[0].plugin_id(), "dev.vesper.mobile-plugin");
-        assert_eq!(
-            loader_artifacts[0].path(),
-            std::path::Path::new("/plugins/mobile.dylib")
+    fn mobile_artifact_paths_do_not_bypass_the_verified_registry() {
+        let artifact = test_mobile_artifact(
+            "dev.vesper.mobile-plugin.source-packet",
+            "/tmp/unverified.dylib",
+        );
+        let error = registered_mobile_native_plugin_artifacts(&[artifact])
+            .expect_err("a reference plus path must not authorize loading");
+        assert!(
+            error.contains("requires a verified registry instance"),
+            "{error}"
         );
     }
 

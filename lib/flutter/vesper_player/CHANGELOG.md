@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.5.5 - 2026-09-16
+
+- Updated sibling package constraints to 0.5.5, including the native host-kit
+  lifecycle, plugin loading, and network error fixes.
+
 ## 0.5.4 - 2026-09-09
 
 - Updated sibling package and native host-kit constraints to 0.5.4, including

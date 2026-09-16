@@ -1693,16 +1693,22 @@ internal fun VesperNativeJniBindings.prepareSourceNormalizerResourceForPlayback(
     val outputRoot = File(appContext.cacheDir, "vesper-source-normalizer").absolutePath
     val json =
         try {
-            VesperNativeJni.openSourceNormalizerResource(
-                source.uri,
-                sourceNormalizerConfiguration.modeOrdinal,
-                encodeVesperResolvedMobilePluginArtifacts(
-                    resolvedPluginArtifacts.sourceNormalizerArtifacts,
-                ),
-                sourceNormalizerConfiguration.runtimeProfile,
-                outputRoot,
-                sourceNormalizerConfiguration.mode == VesperSourceNormalizerMode.RequireNormalized,
-            )
+            withVesperMobilePluginRegistry(
+                appContext,
+                resolvedPluginArtifacts.sourceNormalizerArtifacts,
+            ) { registryHandle ->
+                VesperNativeJni.openSourceNormalizerResource(
+                    source.uri,
+                    sourceNormalizerConfiguration.modeOrdinal,
+                    encodeVesperResolvedMobilePluginArtifacts(
+                        resolvedPluginArtifacts.sourceNormalizerArtifacts,
+                        registryHandle,
+                    ),
+                    sourceNormalizerConfiguration.runtimeProfile,
+                    outputRoot,
+                    sourceNormalizerConfiguration.mode == VesperSourceNormalizerMode.RequireNormalized,
+                )
+            }
         } catch (error: Throwable) {
             if (sourceNormalizerConfiguration.mode == VesperSourceNormalizerMode.RequireNormalized) {
                 throw error

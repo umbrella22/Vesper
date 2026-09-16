@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
 use player_plugin::{
@@ -19,6 +19,11 @@ use super::types::{DownloadContentFormat, DownloadTaskSnapshot};
 pub const MAX_PIPELINE_EVENT_HOOKS: usize = 256;
 pub const MAX_PENDING_PIPELINE_EVENTS: usize = 1_024;
 pub const MAX_PENDING_PIPELINE_EVENT_REPORTS: usize = 1_024;
+/// Maximum drain time for synchronous teardown on a background thread.
+const DEFAULT_EVENT_HOOK_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+const WORKER_RUNNING: u8 = 0;
+const WORKER_FINISHED: u8 = 1;
+const WORKER_PANICKED: u8 = 2;
 
 #[derive(Clone)]
 pub struct PipelineEventHookRegistration {
@@ -108,10 +113,13 @@ impl ReportSink {
 
 struct PipelineEventDispatcherInner {
     sender: Mutex<Option<SyncSender<DispatchMessage>>>,
-    worker: Mutex<Option<JoinHandle<()>>>,
-    closed: std::sync::atomic::AtomicBool,
+    worker_id: Option<ThreadId>,
+    worker_state: Arc<AtomicU8>,
+    closed: AtomicBool,
+    cancelled: Arc<AtomicBool>,
+    close_failed: AtomicBool,
     report_sink: Arc<ReportSink>,
-    dropped_events: AtomicU64,
+    dropped_events: Arc<AtomicU64>,
     dispatcher_error: Mutex<Option<String>>,
 }
 
@@ -136,30 +144,59 @@ impl fmt::Debug for PipelineEventDispatcherInner {
 }
 
 impl PipelineEventDispatcherInner {
-    fn close(&self) -> bool {
+    fn request_close(&self) {
         self.closed.store(true, Ordering::Release);
         self.sender
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
-        let handle = self
-            .worker
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
-        let Some(handle) = handle else {
-            return true;
-        };
-        if handle.thread().id() == std::thread::current().id() {
-            return false;
+    }
+
+    fn close(&self, timeout: Duration) -> bool {
+        self.request_close();
+        let start = Instant::now();
+        loop {
+            let state = self.worker_state.load(Ordering::Acquire);
+            if state != WORKER_RUNNING {
+                if state == WORKER_PANICKED {
+                    let mut error = self
+                        .dispatcher_error
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    if error.is_none() {
+                        *error = Some("event-hook worker panicked during shutdown".to_owned());
+                    }
+                }
+                return state == WORKER_FINISHED && !self.close_failed.load(Ordering::Acquire);
+            }
+            if self.worker_id == Some(std::thread::current().id())
+                || self.close_failed.load(Ordering::Acquire)
+                || start.elapsed() >= timeout
+            {
+                self.close_failed.store(true, Ordering::Release);
+                self.cancelled.store(true, Ordering::Release);
+                let mut error = self
+                    .dispatcher_error
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if error.is_none() {
+                    *error = Some("event-hook close timed out; pending events cancelled and worker quarantined".to_owned());
+                }
+                return false;
+            }
+            std::thread::sleep(
+                Duration::from_millis(1).min(timeout.saturating_sub(start.elapsed())),
+            );
         }
-        handle.join().is_ok()
     }
 }
 
 impl Drop for PipelineEventDispatcherInner {
     fn drop(&mut self) {
-        let _ = self.close();
+        self.request_close();
+        self.cancelled.store(true, Ordering::Release);
+        // The detached worker owns the hooks and report sink until any in-flight
+        // callback returns. Never release these owners from the calling thread.
     }
 }
 
@@ -185,18 +222,47 @@ impl PipelineEventDispatcher {
 
         let (sender, receiver) = mpsc::sync_channel(MAX_PENDING_PIPELINE_EVENTS);
         let worker_sink = report_sink.clone();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = cancelled.clone();
+        let dropped_events = Arc::new(AtomicU64::new(0));
+        let worker_dropped_events = dropped_events.clone();
+        let worker_state = Arc::new(AtomicU8::new(WORKER_RUNNING));
+        let completion = worker_state.clone();
         let spawn_result = std::thread::Builder::new()
             .name("vesper-pipeline-event-hook".to_owned())
-            .spawn(move || run_worker(receiver, registrations, worker_sink));
+            .spawn(move || {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    run_worker(
+                        receiver,
+                        registrations,
+                        worker_sink,
+                        worker_cancelled,
+                        worker_dropped_events,
+                    );
+                }));
+                completion.store(
+                    if result.is_ok() {
+                        WORKER_FINISHED
+                    } else {
+                        WORKER_PANICKED
+                    },
+                    Ordering::Release,
+                );
+            });
 
         match spawn_result {
             Ok(_worker) => Self {
                 inner: Arc::new(PipelineEventDispatcherInner {
                     sender: Mutex::new(Some(sender)),
-                    worker: Mutex::new(Some(_worker)),
-                    closed: std::sync::atomic::AtomicBool::new(false),
+                    // Do not join even after completion: native TLS destructors
+                    // can also block. Dropping the handle detaches the OS thread.
+                    worker_id: Some(_worker.thread().id()),
+                    worker_state,
+                    closed: AtomicBool::new(false),
+                    cancelled,
+                    close_failed: AtomicBool::new(false),
                     report_sink,
-                    dropped_events: AtomicU64::new(0),
+                    dropped_events,
                     dispatcher_error: Mutex::new(None),
                 }),
             },
@@ -211,10 +277,13 @@ impl PipelineEventDispatcher {
         Self {
             inner: Arc::new(PipelineEventDispatcherInner {
                 sender: Mutex::new(None),
-                worker: Mutex::new(None),
-                closed: std::sync::atomic::AtomicBool::new(false),
+                worker_id: None,
+                worker_state: Arc::new(AtomicU8::new(WORKER_FINISHED)),
+                closed: AtomicBool::new(false),
+                cancelled: Arc::new(AtomicBool::new(false)),
+                close_failed: AtomicBool::new(false),
                 report_sink,
-                dropped_events: AtomicU64::new(0),
+                dropped_events: Arc::new(AtomicU64::new(0)),
                 dispatcher_error: Mutex::new(error),
             }),
         }
@@ -321,9 +390,18 @@ impl PipelineEventDispatcher {
         barrier_rx.recv_timeout(remaining).is_ok()
     }
 
-    /// Closes the dispatcher, drains the worker queue, and joins the worker.
+    /// Drains accepted events on a background thread within the default deadline.
+    /// Returns false if a callback prevents shutdown; see `close_with_timeout`.
     pub fn close(&self) -> bool {
-        self.inner.close()
+        self.close_with_timeout(DEFAULT_EVENT_HOOK_CLOSE_TIMEOUT)
+    }
+
+    /// Stops submissions and waits up to `timeout` for accepted events to drain.
+    /// On timeout, queued callbacks are cancelled and the running worker retains
+    /// its owners until it returns. Subsequent closes also report failure.
+    /// Dropping a dispatcher never waits for plugin code.
+    pub fn close_with_timeout(&self, timeout: Duration) -> bool {
+        self.inner.close(timeout)
     }
 
     pub fn drain_reports(&self) -> PipelineEventHookReportBatch {
@@ -360,11 +438,17 @@ fn run_worker(
     receiver: mpsc::Receiver<DispatchMessage>,
     registrations: Vec<PipelineEventHookRegistration>,
     report_sink: Arc<ReportSink>,
+    cancelled: Arc<AtomicBool>,
+    dropped_events: Arc<AtomicU64>,
 ) {
     while let Ok(message) = receiver.recv() {
         match message {
             DispatchMessage::Event(event) => {
                 for registration in &registrations {
+                    if cancelled.load(Ordering::Acquire) {
+                        dropped_events.fetch_add(1, Ordering::Relaxed);
+                        break;
+                    }
                     let result = catch_unwind(AssertUnwindSafe(|| {
                         match registration.hook.on_event(&event) {
                             Ok(outcome) => {
@@ -467,6 +551,93 @@ mod tests {
             Arc::new(NoopHook),
         )
         .expect("valid registration")
+    }
+
+    struct BlockingHook {
+        entered: std::sync::mpsc::SyncSender<()>,
+        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        dropped: std::sync::mpsc::SyncSender<()>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl PipelineEventHook for BlockingHook {
+        fn on_event(
+            &self,
+            _event: &PipelineEvent,
+        ) -> Result<PipelineEventHookOutcome, player_plugin::PipelineEventHookError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.entered.send(()).expect("entered");
+            let _ = self.release.lock().expect("release lock").recv();
+            Ok(PipelineEventHookOutcome::accepted())
+        }
+    }
+
+    impl Drop for BlockingHook {
+        fn drop(&mut self) {
+            let _ = self.dropped.send(());
+        }
+    }
+
+    #[test]
+    fn close_deadline_and_drop_never_wait_for_blocked_hooks() {
+        for explicit_close in [true, false] {
+            let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let (dropped_tx, dropped_rx) = std::sync::mpsc::sync_channel(1);
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut registration = registration();
+            registration.hook = Arc::new(BlockingHook {
+                entered: entered_tx,
+                release: std::sync::Mutex::new(release_rx),
+                dropped: dropped_tx,
+                calls: calls.clone(),
+            });
+            let dispatcher = PipelineEventDispatcher::new(vec![registration]);
+            let event = PipelineEvent {
+                run_id: "run".to_owned(),
+                session_id: "session".to_owned(),
+                platform: "test".to_owned(),
+                protocol: None,
+                event_name: "pipeline.test".to_owned(),
+                timestamp_ns: 0,
+                thread: None,
+                resource_identity: None,
+                attributes: BTreeMap::new(),
+                diagnostic: None,
+            };
+            dispatcher.enqueue(event.clone());
+            entered_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("hook started");
+            dispatcher.enqueue(event);
+            let start = std::time::Instant::now();
+            if explicit_close {
+                assert!(!dispatcher.close_with_timeout(Duration::from_millis(20)));
+                assert!(!dispatcher.close_with_timeout(Duration::ZERO));
+                assert!(
+                    dispatcher
+                        .drain_reports()
+                        .dispatcher_error
+                        .expect("timeout diagnostic")
+                        .contains("quarantined")
+                );
+            }
+            drop(dispatcher);
+            assert!(start.elapsed() < Duration::from_millis(500));
+            assert!(
+                dropped_rx.try_recv().is_err(),
+                "in-flight hook must retain its owner"
+            );
+            drop(release_tx);
+            dropped_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("worker eventually releases its owner");
+            assert_eq!(
+                calls.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "cancelled queue must not invoke another hook"
+            );
+        }
     }
 
     #[test]

@@ -135,7 +135,7 @@ extensions.configure<KotlinAndroidProjectExtension>("kotlin") {
 }
 
 dependencies {
-    val media3Version = "1.11.0"
+    val media3Version = "1.11.1"
     // OkHttp 5.5.0 requires compileSdk 37; 5.4.0 is the latest release compatible with SDK 36.
     val okhttpVersion = "5.4.0"
 

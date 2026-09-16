@@ -82,6 +82,20 @@ final class VesperEmbeddedPluginRegistry {
         handle = 0
     }
 
+    /// Keeps verified libraries alive until the mobile FFI has retained its own instances.
+    static func create(
+        mobileArtifacts: [VesperResolvedPluginArtifacts]
+    ) throws -> VesperEmbeddedPluginRegistry? {
+        var references: [VesperPluginReference] = []
+        for artifact in mobileArtifacts.flatMap({ $0.artifacts }) {
+            if !references.contains(artifact.reference) {
+                references.append(artifact.reference)
+            }
+        }
+        guard !references.isEmpty else { return nil }
+        return try create(references: references)
+    }
+
     static func create(
         references: [VesperPluginReference],
         frameworksURL: URL? = Bundle.main.privateFrameworksURL,

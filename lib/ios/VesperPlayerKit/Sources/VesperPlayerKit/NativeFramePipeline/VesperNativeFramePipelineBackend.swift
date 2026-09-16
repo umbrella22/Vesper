@@ -62,6 +62,8 @@ final class VesperFfiNativeFramePipelineBackend: VesperNativeFramePipelineBacken
         let sourceArtifactsJSON: String
         let decoderArtifactsJSON: String
         let frameProcessorArtifactsJSON: String
+        var registry: VesperEmbeddedPluginRegistry?
+        defer { registry?.close() }
         do {
             let sourceArtifacts = try artifactResolver(
                 sourceNormalizer.pluginReferences
@@ -72,10 +74,14 @@ final class VesperFfiNativeFramePipelineBackend: VesperNativeFramePipelineBacken
             let frameProcessorArtifacts = try artifactResolver(
                 configuration.frameProcessorPluginReferences
             )
-            sourceArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(sourceArtifacts)
-            decoderArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(decoderArtifacts)
+            registry = try VesperEmbeddedPluginRegistry.create(
+                mobileArtifacts: [sourceArtifacts, decoderArtifacts, frameProcessorArtifacts]
+            )
+            sourceArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(sourceArtifacts, registryHandle: registry?.handle ?? 0)
+            decoderArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(decoderArtifacts, registryHandle: registry?.handle ?? 0)
             frameProcessorArtifactsJSON = try encodeVesperResolvedPluginArtifactsJSON(
-                frameProcessorArtifacts
+                frameProcessorArtifacts,
+                registryHandle: registry?.handle ?? 0
             )
         } catch {
             return .failure(

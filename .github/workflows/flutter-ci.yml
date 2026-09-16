@@ -101,7 +101,7 @@ jobs:
       - name: Set up current Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.47.1"
+          flutter-version: "3.47.2"
           channel: stable
           cache: true
 
@@ -230,7 +230,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.47.1"
+          flutter-version: "3.47.2"
           channel: stable
           cache: true
 
@@ -325,7 +325,7 @@ jobs:
       - name: Preserve current Flutter Android release APK
         run: >-
           cp examples/flutter-host/build/app/outputs/flutter-apk/app-release.apk
-          "$RUNNER_TEMP/flutter-3.47.1-app-release.apk"
+          "$RUNNER_TEMP/flutter-3.47.2-app-release.apk"
 
       - name: Set up minimum supported Flutter
         uses: subosito/flutter-action@v2
@@ -356,7 +356,7 @@ jobs:
         run: |
           mkdir -p artifacts/flutter-android
           cp \
-            "$RUNNER_TEMP/flutter-3.47.1-app-release.apk" \
+            "$RUNNER_TEMP/flutter-3.47.2-app-release.apk" \
             artifacts/flutter-android/flutter-host-${{ matrix.abi }}-release.apk
 
       - name: Upload Flutter Android release APK
@@ -401,7 +401,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.47.1"
+          flutter-version: "3.47.2"
           channel: stable
           cache: true
 

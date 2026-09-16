@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.5 - 2026-09-16
+
+- Updated native SourceNormalizer constraints to 0.5.5 with retained verified
+  plugin instances; Android consumer Kotlin tooling now uses 2.4.20.
+
 ## 0.5.4 - 2026-09-09
 
 - Updated the native source-normalizer plugin constraints to 0.5.4 with the

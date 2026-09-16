@@ -48,9 +48,9 @@ log; it does not read Logcat, native logs, or system diagnostic streams.
 - Xcode 16+ and an arm64 Simulator or device (for iOS target)
 - Rust toolchain with the corresponding mobile targets installed
 
-CI validates this host with Flutter 3.47.1 and its supported Gradle 9.3.1
+CI validates this host with Flutter 3.47.2 and its supported Gradle 9.3.1
 wrapper. The independent Android library and Compose host use Gradle 9.7.1,
-but Flutter 3.47.1 reports that version as incompatible with its AGP 9.1
+but Flutter 3.47.2 reports that version as incompatible with its AGP 9.1
 tooling matrix, so the Flutter Android wrapper intentionally remains separate.
 
 The Android and iOS example targets share the base application identifier
