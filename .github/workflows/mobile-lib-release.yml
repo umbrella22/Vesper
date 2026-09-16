@@ -143,6 +143,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: Resolve Android SDK root
         run: |
@@ -258,6 +260,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: Resolve Android SDK root
         run: |
@@ -753,6 +757,8 @@ jobs:
           while IFS= read -r changed_path; do
             case "$changed_path" in
               .github/workflows/mobile-lib-release.yml | \
+              .github/workflows/flutter-ci.yml | \
+              .github/workflows/mobile-hosts-ci.yml | \
               crates/tools/player-cli/src/android_publish.rs)
                 ;;
               *)
@@ -778,6 +784,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: Resolve Android SDK root
         run: |
