@@ -21,7 +21,7 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
 
 extensions.configure<LibraryExtension>("android") {
     namespace = "io.github.umbrella22.vesper.player.android.remux.ffmpeg"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 26

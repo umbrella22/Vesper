@@ -101,7 +101,7 @@ and only accepts generic `VesperPlayerSource` values.
 
 - Android Studio with Android Gradle Plugin 9.1 support
 - JDK 21 for Gradle
-- Android SDK 36, Build Tools 36.0.0, and minSdk 26
+- Android SDK 37, Build Tools 37.0.0, and minSdk 26
 - NDK `29.0.14206865`
 - Rust toolchain with `aarch64-linux-android` target
 - arm64 device or arm64 emulator

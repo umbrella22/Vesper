@@ -223,7 +223,8 @@ class MainActivity : FlutterFragmentActivity() {
   }
 
   @Suppress("DEPRECATION")
-  private fun Display.legacySupportedHdrTypes(): IntArray = hdrCapabilities.supportedHdrTypes
+  private fun Display.legacySupportedHdrTypes(): IntArray =
+    hdrCapabilities?.supportedHdrTypes ?: intArrayOf()
 
   private fun decoderCandidates(mimeType: String): List<String> {
     return runCatching {

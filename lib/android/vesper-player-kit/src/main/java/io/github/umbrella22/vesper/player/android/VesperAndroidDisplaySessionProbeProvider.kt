@@ -394,6 +394,7 @@ private fun Display.supportedHdrKinds(): Set<VesperPlaybackCapabilityHdrKind> {
         return emptySet()
     }
     val kinds = linkedSetOf<VesperPlaybackCapabilityHdrKind>()
+    val hdrCapabilities = hdrCapabilities ?: return emptySet()
     hdrCapabilities.supportedHdrTypesCompat().forEach { hdrType ->
         when (hdrType) {
                 Display.HdrCapabilities.HDR_TYPE_DOLBY_VISION ->

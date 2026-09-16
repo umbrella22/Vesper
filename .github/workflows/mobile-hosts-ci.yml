@@ -131,8 +131,8 @@ jobs:
         run: |
           sdkmanager \
             "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
+            "platforms;android-37.0" \
+            "build-tools;37.0.0" \
             "ndk;29.0.14206865"
 
       - name: Install cargo-ndk
@@ -192,6 +192,23 @@ jobs:
 
       - name: Assemble Vesper Android host demo release
         run: gradle -p examples/android-compose-host -Pvesper.player.android.abis=${{ matrix.abi }} assembleRelease
+
+      - name: Verify Android host demo minimum SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apk_files=(examples/android-compose-host/app/build/outputs/apk/release/*.apk)
+          if [[ ${#apk_files[@]} -ne 1 ]]; then
+            echo "Expected exactly one release APK, found ${#apk_files[@]}." >&2
+            printf '%s\n' "${apk_files[@]}" >&2
+            exit 1
+          fi
+          min_sdk="$(apkanalyzer manifest min-sdk "${apk_files[0]}")"
+          if [[ "$min_sdk" != "26" ]]; then
+            echo "Expected Android minSdk 26, found $min_sdk in ${apk_files[0]}." >&2
+            exit 1
+          fi
 
       - name: Stage Vesper Android release APK
         if: github.event_name == 'workflow_dispatch'

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.6 - 2026-09-16
+
+- Raised the minimum supported Flutter toolchain to 3.47.2 and compileSdk to
+  37 while retaining minSdk 26.
+
 ## 0.5.5 - 2026-09-16
 
 - Updated native host-kit constraints to 0.5.5 and Android consumer Kotlin

@@ -616,8 +616,14 @@ final class VesperPlayerControllerStateTests: XCTestCase {
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
-        _ = await waitForRoutePickerPlayer(in: bridge)
+        let didFallback = await waitForNativeFrameSmoke(timeout: 10.0) {
+            bridge.routePickerPlayer != nil &&
+                bridge.pluginDiagnostics.contains { diagnostic in
+                    diagnostic["fallbackKind"] as? String == "unsupportedCodec"
+                }
+        }
 
+        XCTAssertTrue(didFallback)
         XCTAssertNotNil(bridge.routePickerPlayer)
         XCTAssertEqual(backend.closeHandles, [])
         XCTAssertTrue(

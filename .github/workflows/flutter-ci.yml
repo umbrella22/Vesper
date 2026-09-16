@@ -202,8 +202,8 @@ jobs:
         run: |
           sdkmanager \
             "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
+            "platforms;android-37.0" \
+            "build-tools;37.0.0" \
             "ndk;29.0.14206865"
 
       - name: Install cargo-ndk
@@ -324,6 +324,17 @@ jobs:
           ./scripts/vesper flutter verify-android-release
           examples/flutter-host/build/app/outputs/flutter-apk/app-release.apk
 
+      - name: Verify Flutter Android host minimum SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="examples/flutter-host/build/app/outputs/flutter-apk/app-release.apk"
+          min_sdk="$(apkanalyzer manifest min-sdk "$apk")"
+          if [[ "$min_sdk" != "26" ]]; then
+            echo "Expected Android minSdk 26, found $min_sdk in $apk." >&2
+            exit 1
+          fi
+
       - name: Preserve current Flutter Android release APK
         run: >-
           cp examples/flutter-host/build/app/outputs/flutter-apk/app-release.apk
@@ -332,7 +343,7 @@ jobs:
       - name: Set up minimum supported Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.44.0"
+          flutter-version: "3.47.2"
           channel: stable
           cache: true
 

@@ -85,7 +85,7 @@ if (!Version.ANDROID_GRADLE_PLUGIN_VERSION.startsWith("9.")) {
 
 extensions.configure<LibraryExtension>("android") {
     namespace = "io.github.umbrella22.vesper.player.android.external"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 26
@@ -136,7 +136,7 @@ extensions.configure<KotlinAndroidProjectExtension>("kotlin") {
 
 dependencies {
     val media3Version = "1.11.1"
-    // OkHttp 5.5.0 requires compileSdk 37; 5.4.0 is the latest release compatible with SDK 36.
+    // Keep the externally validated relay baseline while the Android toolchain advances independently.
     val okhttpVersion = "5.4.0"
 
     api(project.dependencies.project(":vesper-player-kit"))

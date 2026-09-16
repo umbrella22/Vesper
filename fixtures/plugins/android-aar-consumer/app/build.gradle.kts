@@ -41,7 +41,7 @@ vesperAars?.let { artifacts ->
 
 extensions.configure<ApplicationExtension>("android") {
     namespace = "io.github.umbrella22.vesper.fixture.androidaarconsumer"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "io.github.umbrella22.vesper.fixture.androidaarconsumer"

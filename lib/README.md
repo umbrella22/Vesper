@@ -105,7 +105,7 @@ public models.
 | --- | --- | --- |
 | Android | API 26+, Kotlin 2.x | `arm64-v8a` |
 | iOS | iOS 17+, Xcode 16+ | arm64 device and Apple Silicon Simulator |
-| Flutter | Dart 3.6+, Flutter 3.44+ | Android and iOS through the native host kits |
+| Flutter | Dart 3.6+, Flutter 3.47.2+ | Android and iOS through the native host kits |
 
 Older mobile OS versions, 32-bit Android, Intel Android ABIs, and Intel iOS
 Simulator are outside the current product boundary.

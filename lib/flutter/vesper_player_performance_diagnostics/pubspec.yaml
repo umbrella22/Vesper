@@ -1,12 +1,12 @@
 name: vesper_player_performance_diagnostics
 description: Optional native BenchmarkSink diagnostics artifacts for Vesper Player Flutter hosts.
-version: 0.5.5
+version: 0.5.6
 homepage: https://github.com/umbrella22/Vesper
 repository: https://github.com/umbrella22/Vesper
 
 environment:
   sdk: ">=3.6.0 <4.0.0"
-  flutter: ">=3.44.0"
+  flutter: ">=3.47.2"
 
 dependencies:
   flutter:

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.6 - 2026-09-16
+
+- Raised the minimum supported Flutter toolchain to 3.47.2.
+
 ## 0.5.5 - 2026-09-16
 
 - Updated package metadata for the synchronized 0.5.5 Flutter release.

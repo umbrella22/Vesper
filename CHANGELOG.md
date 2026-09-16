@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.5.6 - 2026-09-16
+
+### Fixed
+
+- Treated unavailable Android display HDR capabilities as an empty capability
+  set for compatibility with the Android 37 SDK annotations.
+- Stabilized the iOS native-frame fallback regression by waiting for the
+  asynchronous system-player route and diagnostic before asserting it.
+
+### Changed
+
+- Raised the Android compile SDK to 37 while retaining minSdk 26 and targetSdk
+  36, so Android 8.0 and newer devices remain installable.
+- Raised the minimum supported Flutter toolchain to 3.47.2.
+
 ## 0.5.5 - 2026-09-16
 
 ### Fixed

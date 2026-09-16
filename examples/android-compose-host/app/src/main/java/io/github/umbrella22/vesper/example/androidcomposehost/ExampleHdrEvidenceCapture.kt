@@ -391,7 +391,7 @@ private fun exampleHdrEvidenceDevice(
 }
 
 private fun Display.hdrTypeNames(): List<String> =
-    hdrCapabilities.supportedHdrTypesCompat().map { type ->
+    hdrCapabilities?.supportedHdrTypesCompat()?.map { type ->
         when (type) {
             Display.HdrCapabilities.HDR_TYPE_DOLBY_VISION -> "DOLBY_VISION"
             Display.HdrCapabilities.HDR_TYPE_HDR10 -> "HDR10"
@@ -399,7 +399,7 @@ private fun Display.hdrTypeNames(): List<String> =
             Display.HdrCapabilities.HDR_TYPE_HDR10_PLUS -> "HDR10_PLUS"
             else -> "UNKNOWN_$type"
         }
-    }
+    }.orEmpty()
 
 @Suppress("DEPRECATION")
 private fun Display.HdrCapabilities.supportedHdrTypesCompat(): IntArray = supportedHdrTypes

@@ -77,7 +77,7 @@ val provisionAndroidTestNativeLibraries = tasks.register<Exec>("provisionAndroid
 
 extensions.configure<LibraryExtension>("android") {
     namespace = "io.github.umbrella22.vesper.player.android"
-    compileSdk = 36
+    compileSdk = 37
     ndkVersion = "29.0.14206865"
 
     defaultConfig {

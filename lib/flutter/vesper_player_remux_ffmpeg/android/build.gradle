@@ -1,5 +1,5 @@
 group = "io.github.umbrella22.vesper.player.flutter.remux_ffmpeg"
-version = "0.5.5"
+version = "0.5.6"
 
 buildscript {
     ext.kotlin_version = "2.4.20"
@@ -30,7 +30,7 @@ ext.vesperPlayerKitVersion = providers
 
 android {
     namespace = "io.github.umbrella22.vesper.player.flutter.remux_ffmpeg"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 26

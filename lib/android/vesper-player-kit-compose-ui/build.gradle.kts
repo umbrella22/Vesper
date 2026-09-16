@@ -15,7 +15,7 @@ apply(plugin = "org.jetbrains.kotlin.plugin.compose")
 
 extensions.configure<LibraryExtension>("android") {
     namespace = "io.github.umbrella22.vesper.player.android.compose.ui"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 26

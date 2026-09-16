@@ -252,7 +252,7 @@ SDR-only today.
 ## Minimum Requirements
 
 - iOS 17.0+
-- Flutter 3.44.0+
+- Flutter 3.47.2+
 
 ## Related Resources
 

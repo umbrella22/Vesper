@@ -42,8 +42,8 @@ log; it does not read Logcat, native logs, or system diagnostic streams.
 
 ## Requirements
 
-- Flutter 3.44.0+
-- Android Studio with AGP 9.1 support, JDK 21, Android SDK 36, NDK
+- Flutter 3.47.2+
+- Android Studio with AGP 9.1 support, JDK 21, Android SDK 37, NDK
   `29.0.14206865`, and an arm64 device or emulator (for Android target)
 - Xcode 16+ and an arm64 Simulator or device (for iOS target)
 - Rust toolchain with the corresponding mobile targets installed

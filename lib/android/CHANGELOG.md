@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.5.6 - 2026-09-16
+
+### Fixed
+
+- Treated unavailable display HDR capabilities as an empty capability set for
+  compatibility with the Android 37 SDK annotations.
+
+### Changed
+
+- Raised compileSdk to 37 for Lifecycle 2.11 while retaining minSdk 26 and
+  targetSdk 36 for Android 8.0 and newer device compatibility.
+
 ## 0.5.5 - 2026-09-16
 
 ### Fixed

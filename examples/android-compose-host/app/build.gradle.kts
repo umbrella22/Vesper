@@ -121,15 +121,15 @@ val androidExtension = extensions.getByType(ApplicationExtension::class.java)
 
 extensions.configure<ApplicationExtension>("android") {
     namespace = "io.github.umbrella22.vesper.example.androidcomposehost"
-    compileSdk = 36
+    compileSdk = 37
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
         applicationId = "io.github.umbrella22.vesper.example.androidcomposehost"
         minSdk = 26
         targetSdk = 36
-        versionCode = 505
-        versionName = "0.5.5"
+        versionCode = 506
+        versionName = "0.5.6"
 
         ndk {
             abiFilters += configuredAndroidAbis

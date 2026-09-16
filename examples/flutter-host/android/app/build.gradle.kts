@@ -121,7 +121,7 @@ val androidExtension = extensions.getByType(ApplicationExtension::class.java)
 
 extensions.configure<ApplicationExtension>("android") {
     namespace = "io.github.umbrella22.vesper.example.flutterhost"
-    compileSdk = 36
+    compileSdk = 37
     ndkVersion = "29.0.14206865"
 
     compileOptions {

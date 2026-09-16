@@ -154,8 +154,8 @@ jobs:
         run: |
           sdkmanager \
             "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
+            "platforms;android-37.0" \
+            "build-tools;37.0.0" \
             "ndk;29.0.14206865"
 
       - name: Install cargo-ndk
@@ -271,8 +271,8 @@ jobs:
         run: |
           sdkmanager \
             "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
+            "platforms;android-37.0" \
+            "build-tools;37.0.0" \
             "ndk;29.0.14206865"
 
       - name: Install cargo-ndk
@@ -332,7 +332,7 @@ jobs:
           test "$(command -v flutter)" = "${RUNNER_TEMP}/vesper-flutter-bin/flutter"
           ./scripts/vesper android sample-apks release-assets/android-samples ${{ matrix.abi }}
 
-      - name: Verify Android sample APKs are arm64-only
+      - name: Verify Android sample APK compatibility
         shell: bash
         run: |
           set -euo pipefail
@@ -345,6 +345,11 @@ jobs:
           fi
 
           for apk in "${apk_files[@]}"; do
+            min_sdk="$(apkanalyzer manifest min-sdk "$apk")"
+            if [[ "$min_sdk" != "26" ]]; then
+              echo "Expected Android minSdk 26, found $min_sdk in $apk." >&2
+              exit 1
+            fi
             if unzip -Z1 "$apk" | grep -E '(^|/)lib/(x86|x86_64|armeabi-v7a)/' >/dev/null; then
               echo "Found unexpected non-arm64 JNI payload in $apk" >&2
               unzip -Z1 "$apk" | grep -E '(^|/)lib/(x86|x86_64|armeabi-v7a)/' >&2
@@ -795,8 +800,8 @@ jobs:
         run: |
           sdkmanager \
             "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
+            "platforms;android-37.0" \
+            "build-tools;37.0.0" \
             "ndk;29.0.14206865"
 
       - name: Install cargo-ndk

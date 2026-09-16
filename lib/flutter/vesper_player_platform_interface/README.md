@@ -165,7 +165,7 @@ fixed-track convergence directly, so Flutter UI can render the effective
 runtime state instead of only optimistic local intent.
 
 `createPlayer` also accepts `renderSurfaceKind` and `benchmarkConfiguration`.
-Android platform packages should map `auto` to `SurfaceView` for Flutter 3.44+
+Android platform packages should map `auto` to `SurfaceView` for Flutter 3.47.2+
 native video playback and keep explicit `textureView` as the compatibility path
 for overlay-heavy or animation-heavy host screens. Native implementations
 should forward benchmark settings to the host kit and keep `consoleLogging`
