@@ -1,11 +1,17 @@
 import SwiftUI
 import VesperPlayerKit
 
+/// Control density independent of video orientation and fullscreen state.
+public enum VesperStageControlLayout: Hashable {
+    case compact
+    case expanded
+}
+
 @MainActor
 public struct VesperPlayerStage: View {
     let surface: AnyView
     let contentOverlay: AnyView?
-    let landscapeControlBarLeading: AnyView?
+    let expandedControlBarLeading: AnyView?
     let uiState: PlayerHostUiState
     let trackCatalog: VesperTrackCatalog
     let trackSelection: VesperTrackSelectionSnapshot
@@ -13,7 +19,7 @@ public struct VesperPlayerStage: View {
     let fixedTrackStatus: VesperFixedTrackStatus?
     @Binding var controlsVisible: Bool
     @Binding var pendingSeekRatio: Double?
-    let isCompactLayout: Bool
+    let controlLayout: VesperStageControlLayout
     let isFullscreen: Bool
     let pictureInPicturePresentation: Bool
     let onSeekBy: (Int64) -> Void
@@ -29,6 +35,8 @@ public struct VesperPlayerStage: View {
     let onSetBrightnessRatio: (Double) -> Double?
     let currentVolumeRatio: () -> Double?
     let onSetVolumeRatio: (Double) -> Double?
+    @State var stageSize = CGSize.zero
+    @State var interactionRevision = 0
     @State var stageGestureKind: StageAreaGestureKind?
     @State var deviceGestureStartRatio = 0.0
     @State var seekGestureRatio = 0.0
@@ -36,7 +44,7 @@ public struct VesperPlayerStage: View {
     @State var gestureFeedbackTask: Task<Void, Never>?
     @State var speedGestureRestoreRate: Float?
 
-    /// Creates a Stage with optional host content, landscape controls, and a
+    /// Creates a Stage with optional host content, expanded controls, and a
     /// state-labelled navigation action.
     public init(
         surface: AnyView,
@@ -47,7 +55,7 @@ public struct VesperPlayerStage: View {
         fixedTrackStatus: VesperFixedTrackStatus?,
         controlsVisible: Binding<Bool>,
         pendingSeekRatio: Binding<Double?>,
-        isCompactLayout: Bool,
+        controlLayout: VesperStageControlLayout,
         isFullscreen: Bool,
         pictureInPicturePresentation: Bool = false,
         onSeekBy: @escaping (Int64) -> Void,
@@ -62,13 +70,13 @@ public struct VesperPlayerStage: View {
         currentVolumeRatio: @escaping () -> Double? = { nil },
         onSetVolumeRatio: @escaping (Double) -> Double? = { _ in nil },
         contentOverlay: AnyView? = nil,
-        landscapeControlBarLeading: AnyView? = nil,
+        expandedControlBarLeading: AnyView? = nil,
         onNavigateBack: (() -> Void)? = nil,
         navigateBackAccessibilityLabel: String? = nil
     ) {
         self.surface = surface
         self.contentOverlay = contentOverlay
-        self.landscapeControlBarLeading = landscapeControlBarLeading
+        self.expandedControlBarLeading = expandedControlBarLeading
         self.uiState = uiState
         self.trackCatalog = trackCatalog
         self.trackSelection = trackSelection
@@ -76,7 +84,7 @@ public struct VesperPlayerStage: View {
         self.fixedTrackStatus = fixedTrackStatus
         _controlsVisible = controlsVisible
         _pendingSeekRatio = pendingSeekRatio
-        self.isCompactLayout = isCompactLayout
+        self.controlLayout = controlLayout
         self.isFullscreen = isFullscreen
         self.pictureInPicturePresentation = pictureInPicturePresentation
         self.onSeekBy = onSeekBy

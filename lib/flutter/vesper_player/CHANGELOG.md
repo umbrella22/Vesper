@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-17
+
+- Exposed native media display dimensions and per-view geometry callbacks,
+  including stale-view and disposal isolation.
+
+- Exposed snapshot HDR output evidence through the shared platform models and
+  documented explicit probe inputs and unconfirmed-output handling.
+
 ## 0.5.6 - 2026-09-16
 
 - Raised the minimum supported Flutter toolchain to 3.47.2.

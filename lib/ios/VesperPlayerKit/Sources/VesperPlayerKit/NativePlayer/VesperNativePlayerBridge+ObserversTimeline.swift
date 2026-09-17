@@ -25,6 +25,30 @@ extension VesperNativePlayerBridge {
     }
 
     func installObservers(for player: AVPlayer, item: AVPlayerItem, playbackEpoch: UInt64) {
+        // Each native event invalidates independently, including A -> B -> A
+        // changes that can collapse into one later controller snapshot.
+        let outputPathChanged: @Sendable () -> Void = { [weak self, weak player] in
+            let invalidate: @MainActor () -> Void = {
+                guard let self, let player, self.player === player,
+                      self.isPlaybackEpochCurrent(playbackEpoch) else { return }
+                self.outputTracker.outputPathChanged()
+                self.presentationState.update(player.currentItem.flatMap {
+                    VesperVideoPresentation(size: $0.presentationSize)
+                })
+            }
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { invalidate() }
+            } else {
+                Task { @MainActor in invalidate() }
+            }
+        }
+        outputItemObservations = [
+            player.observe(\.isExternalPlaybackActive, options: [.new]) { _, _ in outputPathChanged() },
+            item.observe(\.presentationSize, options: [.new]) { _, _ in outputPathChanged() },
+        ]
+        outputAccessLogObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemNewAccessLogEntry, object: item, queue: .main
+        ) { _ in outputPathChanged() }
         timeObserverToken = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
@@ -182,6 +206,10 @@ extension VesperNativePlayerBridge {
     }
 
     func removeObservers() {
+        outputTracker.outputPathChanged()
+        outputItemObservations.removeAll()
+        if let outputAccessLogObserver { NotificationCenter.default.removeObserver(outputAccessLogObserver) }
+        outputAccessLogObserver = nil
         if let token = timeObserverToken, let player {
             player.removeTimeObserver(token)
         }

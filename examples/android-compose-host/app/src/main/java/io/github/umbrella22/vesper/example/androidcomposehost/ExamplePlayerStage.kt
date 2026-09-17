@@ -1,5 +1,7 @@
 package io.github.umbrella22.vesper.example.androidcomposehost
 
+import io.github.umbrella22.vesper.player.android.compose.ui.VesperStageControlLayout
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -35,7 +37,8 @@ internal fun ExamplePlayerStage(
     uiState: PlayerHostUiState,
     controlsVisible: Boolean,
     pendingSeekRatio: Float?,
-    isPortrait: Boolean,
+    controlLayout: VesperStageControlLayout,
+    isFullscreen: Boolean,
     trackCatalog: VesperTrackCatalog = VesperTrackCatalog.Empty,
     trackSelection: VesperTrackSelectionSnapshot = VesperTrackSelectionSnapshot(),
     modifier: Modifier = Modifier,
@@ -54,7 +57,7 @@ internal fun ExamplePlayerStage(
     currentVolumeRatio: () -> Float? = { null },
     onSetVolumeRatio: (Float) -> Float? = { null },
     contentOverlay: (@Composable BoxScope.() -> Unit)? = null,
-    landscapeControlBarLeading: (@Composable RowScope.() -> Unit)? = null,
+    expandedControlBarLeading: (@Composable RowScope.() -> Unit)? = null,
     onNavigateBack: (() -> Unit)? = null,
     navigateBackContentDescription: String? = null,
 ) {
@@ -64,7 +67,8 @@ internal fun ExamplePlayerStage(
             uiState = uiState,
             controlsVisible = controlsVisible,
             pendingSeekRatio = pendingSeekRatio,
-            isPortrait = isPortrait,
+            controlLayout = controlLayout,
+            isFullscreen = isFullscreen,
             trackCatalog = trackCatalog,
             trackSelection = trackSelection,
             modifier = Modifier.matchParentSize(),
@@ -83,18 +87,18 @@ internal fun ExamplePlayerStage(
             currentVolumeRatio = currentVolumeRatio,
             onSetVolumeRatio = onSetVolumeRatio,
             contentOverlay = contentOverlay,
-            landscapeControlBarLeading = landscapeControlBarLeading,
+            expandedControlBarLeading = expandedControlBarLeading,
             onNavigateBack = onNavigateBack,
             navigateBackContentDescription = navigateBackContentDescription,
         )
         uiState.lastError?.let { error ->
             ExampleStageTerminalError(
                 error = error,
-                isPortrait = isPortrait,
+                isPortrait = controlLayout == VesperStageControlLayout.Compact,
                 modifier =
                     Modifier
                         .align(Alignment.Center)
-                        .fillMaxWidth(if (isPortrait) 0.9f else 0.54f)
+                        .fillMaxWidth(if (controlLayout == VesperStageControlLayout.Compact) 0.9f else 0.54f)
                         .padding(12.dp),
             )
         }

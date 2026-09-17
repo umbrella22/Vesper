@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
@@ -20,11 +21,16 @@ class VesperPlayerView extends StatefulWidget {
     required this.controller,
     this.overlay,
     this.visible = true,
+    this.onGeometryChanged,
   });
 
   final VesperPlayerController controller;
   final Widget? overlay;
   final bool visible;
+
+  /// Actual picture bounds in this view's local logical pixels. Null means
+  /// unknown or detached. This callback is independent of playback snapshots.
+  final ValueChanged<VesperVideoSurfaceGeometry?>? onGeometryChanged;
 
   @override
   State<VesperPlayerView> createState() => _VesperPlayerViewState();
@@ -38,6 +44,68 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
   ScrollPosition? _scrollPosition;
   Timer? _viewportThrottleTimer;
   bool _reportScheduled = false;
+  StreamSubscription<VesperVideoSurfaceGeometry?>? _geometrySubscription;
+  int _geometryGeneration = 0;
+  int _geometryDelivery = 0;
+
+  void _observeGeometry(int viewId, int expectedGeneration) {
+    if (!mounted ||
+        !widget.visible ||
+        expectedGeneration != _geometryGeneration) {
+      return;
+    }
+    final generation = ++_geometryGeneration;
+    _geometrySubscription?.cancel();
+    _geometrySubscription =
+        widget.controller.videoGeometryForView(viewId).listen(
+      (geometry) {
+        if (mounted && generation == _geometryGeneration) {
+          _deliverGeometry(geometry);
+        }
+      },
+      onDone: () {
+        if (mounted && generation == _geometryGeneration) {
+          _deliverGeometry(null);
+        }
+      },
+      onError: (Object error, StackTrace stack) {
+        if (mounted && generation == _geometryGeneration) {
+          _deliverGeometry(null);
+          FlutterError.reportError(FlutterErrorDetails(
+              exception: error,
+              stack: stack,
+              library: 'vesper_player',
+              context: ErrorDescription('receiving video geometry')));
+        }
+      },
+    );
+  }
+
+  void _deliverGeometry(VesperVideoSurfaceGeometry? geometry) {
+    final generation = _geometryGeneration;
+    final delivery = ++_geometryDelivery;
+    void deliver() {
+      if (mounted &&
+          generation == _geometryGeneration &&
+          delivery == _geometryDelivery) {
+        widget.onGeometryChanged?.call(geometry);
+      }
+    }
+
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => deliver());
+    } else {
+      deliver();
+    }
+  }
+
+  void _clearGeometry({bool notify = true}) {
+    _geometryGeneration++;
+    _geometrySubscription?.cancel();
+    _geometrySubscription = null;
+    if (notify) _deliverGeometry(null);
+  }
 
   bool get _usesPlatformView =>
       !kIsWeb &&
@@ -55,6 +123,7 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
   void didUpdateWidget(covariant VesperPlayerView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
+      _clearGeometry();
       _runViewportOperation(
         oldWidget.controller.clearViewport,
         'clear old viewport',
@@ -65,6 +134,7 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
       _viewportThrottleTimer?.cancel();
       _viewportThrottleTimer = null;
     }
+    if (oldWidget.visible && !widget.visible) _clearGeometry();
     _scheduleViewportReport();
   }
 
@@ -77,6 +147,7 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
 
   @override
   void dispose() {
+    _clearGeometry(notify: false);
     WidgetsBinding.instance.removeObserver(_bindingObserver);
     _viewportThrottleTimer?.cancel();
     _scrollPosition?.removeListener(_scheduleViewportReport);
@@ -106,6 +177,7 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
   }
 
   Widget _buildPlatformBaseLayer() {
+    final generation = _geometryGeneration;
     return widget.visible
         ? switch (defaultTargetPlatform) {
             TargetPlatform.android => _buildAndroidPlatformView(),
@@ -118,6 +190,7 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
                   'playerId': widget.controller.playerId,
                 },
                 creationParamsCodec: const StandardMessageCodec(),
+                onPlatformViewCreated: (id) => _observeGeometry(id, generation),
               ),
             _ => const ColoredBox(color: Color(0x00000000)),
           }
@@ -125,6 +198,7 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
   }
 
   Widget _buildAndroidPlatformView() {
+    final generation = _geometryGeneration;
     return PlatformViewLink(
       key: ValueKey<String>(
         'vesper_player_android_${widget.controller.playerId}',
@@ -154,6 +228,8 @@ class _VesperPlayerViewState extends State<VesperPlayerView> {
         controller.addOnPlatformViewCreatedListener(
           params.onPlatformViewCreated,
         );
+        controller.addOnPlatformViewCreatedListener(
+            (id) => _observeGeometry(id, generation));
         return controller;
       },
     );

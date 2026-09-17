@@ -115,7 +115,10 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         eventChannel.setStreamHandler(instance)
         downloadEventChannel.setStreamHandler(DownloadEventStreamHandler(plugin: instance))
         sequenceEventChannel.setStreamHandler(SequenceEventStreamHandler(plugin: instance))
-        registrar.register(PlayerViewFactory(plugin: instance), withId: playerViewType)
+        // Flutter registers platform views on the platform thread.
+        MainActor.assumeIsolated {
+            registrar.register(PlayerViewFactory(plugin: instance, messenger: registrar.messenger()), withId: playerViewType)
+        }
         registrar.register(
             AirPlayRouteButtonFactory(plugin: instance), withId: airPlayRouteButtonViewType)
     }
@@ -1492,7 +1495,24 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
 
     @MainActor
     private func observeSession(_ session: PlayerSession) {
+        session.videoPresentationObservation = session.controller.videoPresentationPublisher.dropFirst().sink {
+            [weak self, weak session] presentation in
+            guard let self, let session, self.sessions[session.id] === session else { return }
+            var snapshot = self.buildSnapshotMap(for: session)
+            snapshot["videoPresentation"] = flutterVideoPresentationMap(presentation)
+            self.emitEvent(["playerId": session.id, "type": "snapshot", "snapshot": snapshot])
+        }
+        session.hdrOutputObservation = session.controller.hdrOutputPublisher.dropFirst().sink {
+            [weak self, weak session] output in
+            guard let self, let session, self.sessions[session.id] === session else { return }
+            // Capture the published value: Combine sends it before the stored
+            // value changes. Deferring this read could skip the unknown barrier.
+            var snapshot = self.buildSnapshotMap(for: session)
+            snapshot["hdrOutput"] = flutterHdrOutputMap(output, playerId: session.id)
+            self.emitEvent(["playerId": session.id, "type": "snapshot", "snapshot": snapshot])
+        }
         session.observation = session.controller.objectWillChange.sink { [weak self] _ in
+            guard !session.controller.isPublishingHdrOutputUpdate else { return }
             // Consume the marker at the same emission boundary as the
             // controller's published state. Reading it inside the deferred
             // task can merge a later full update with a preceding timeline
@@ -1718,6 +1738,13 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         for session: PlayerSession,
         error: VesperIosPictureInPictureError? = nil
     ) {
+        if session.lastOutputPictureInPictureState != session.pictureInPictureState
+            || session.lastOutputPictureInPictureActive != session.pictureInPictureActive {
+            session.lastOutputPictureInPictureState = session.pictureInPictureState
+            session.lastOutputPictureInPictureActive = session.pictureInPictureActive
+            session.controller.invalidateHdrOutput()
+            if session.controller.hdrOutput == nil { emitSnapshot(for: session) }
+        }
         emitEvent([
             "playerId": session.id,
             "type": "pictureInPicture",
@@ -2216,6 +2243,10 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "confirmedSubtitleSelection": trackSelection.confirmedSubtitle.toMap(),
             "effectiveSubtitleTrackId": flutterValue(trackSelection.effectiveSubtitleTrackId),
             "effectiveVideoTrackId": flutterValue(effectiveVideoTrackId),
+            // HDR eligibility, EDR configuration and asset metadata do not
+            // observe this player's active display output.
+            "hdrOutput": flutterHdrOutputMap(session.controller.hdrOutput, playerId: session.id),
+            "videoPresentation": flutterVideoPresentationMap(session.controller.videoPresentation),
             "videoVariantObservation": flutterValue(
                 videoVariantObservation.map { observation in
                     [
@@ -2289,6 +2320,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         session.cancelPendingHostDetach()
         _ = session.advanceHostDetachGeneration()
         session.observation?.cancel()
+        session.hdrOutputObservation?.cancel()
+        session.videoPresentationObservation?.cancel()
         session.pictureInPictureCoordinator?.stop()
         session.pictureInPictureCoordinator = nil
         session.controller.detachSurfaceHost()

@@ -54,5 +54,29 @@ struct TimelineScrubber: View {
             )
         }
         .frame(height: compact ? 22 : 28)
+        .accessibilityRepresentation {
+            // Use the system slider's adjustable actions and disabled semantics
+            // while retaining the custom track and touch gestures above.
+            Slider(
+                value: Binding(
+                    get: { displayedRatio.clamped(to: 0...1) },
+                    set: { ratio in
+                        guard enabled else { return }
+                        let target = ratio.clamped(to: 0...1)
+                        guard target != displayedRatio.clamped(to: 0...1) else { return }
+                        onSeekPreview(target)
+                        onSeekCommit(target)
+                    }
+                ),
+                in: 0...1,
+                step: 0.05
+            ) {
+                Text(VesperPlayerStageStrings.playbackPosition)
+            }
+            .disabled(!enabled)
+            .accessibilityValue(
+                Text(displayedRatio.clamped(to: 0...1), format: .percent.precision(.fractionLength(0)))
+            )
+        }
     }
 }

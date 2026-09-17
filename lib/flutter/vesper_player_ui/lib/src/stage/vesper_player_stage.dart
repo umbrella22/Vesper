@@ -13,18 +13,29 @@ part 'stage_gestures.dart';
 part 'stage_timeline.dart';
 part 'stage_controls.dart';
 
+/// Handles a confirmed content tap in logical pixels from the Stage's top left.
+///
+/// Return true to consume the tap, or false to use the normal controls behavior.
+typedef VesperStageContentTapHandler = bool Function(Offset localPosition);
+
+/// Control density is independent of video orientation and fullscreen state.
+enum VesperStageControlLayout { compact, expanded }
+
 class VesperPlayerStage extends StatefulWidget {
   const VesperPlayerStage({
     super.key,
     required this.controller,
     required this.snapshot,
-    required this.isPortrait,
+    required this.controlLayout,
+    required this.isFullscreen,
     required this.onOpenSheet,
     required this.onToggleFullscreen,
     this.sheetOpen = false,
     this.deviceControls,
     this.contentOverlay,
-    this.landscapeControlBarLeading,
+    this.onContentTap,
+    this.onGeometryChanged,
+    this.expandedControlBarLeading,
     this.onNavigateBack,
     this.navigateBackSemanticLabel,
     this.topBarPrimaryAction,
@@ -36,7 +47,11 @@ class VesperPlayerStage extends StatefulWidget {
 
   final VesperPlayerController controller;
   final VesperPlayerSnapshot snapshot;
-  final bool isPortrait;
+  final VesperStageControlLayout controlLayout;
+  final bool isFullscreen;
+
+  /// Picture bounds in Stage-local logical pixels, excluding renderer bars.
+  final ValueChanged<VesperVideoSurfaceGeometry?>? onGeometryChanged;
   final bool sheetOpen;
   final VesperPlayerDeviceControls? deviceControls;
 
@@ -46,11 +61,26 @@ class VesperPlayerStage extends StatefulWidget {
   /// not built during [pictureInPicturePresentation].
   final Widget? contentOverlay;
 
-  /// A direct landscape control-row child inserted after the play button.
+  /// Offers a confirmed single tap to the host before toggling the controls.
+  ///
+  /// Coordinates use the complete Stage / [contentOverlay] canvas, including
+  /// video letterboxing. They are not normalized to the smaller gesture area.
+  /// Visible controls and the reserved bottom control area take precedence.
+  /// Double taps, drags, long presses and cancelled gestures do not invoke this
+  /// callback. It is also disabled during [pictureInPicturePresentation].
+  ///
+  /// Return true synchronously to consume the tap without changing controls or
+  /// playback. Return false (or leave this null) for the existing tap behavior.
+  /// The host owns content hit testing, playback-state gating and any subsequent
+  /// asynchronous action. This callback does not add accessibility nodes; hosts
+  /// should provide a separate focusable entry point for content actions.
+  final VesperStageContentTapHandler? onContentTap;
+
+  /// A direct expanded control-row child inserted after the play button.
   ///
   /// The host can provide fixed-size content or a flex widget. A null value
   /// adds no child or spacing.
-  final Widget? landscapeControlBarLeading;
+  final Widget? expandedControlBarLeading;
 
   /// Adds a leading top-bar navigation action when non-null.
   final VoidCallback? onNavigateBack;

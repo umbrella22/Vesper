@@ -10,13 +10,14 @@ class ExamplePlayerStage extends StatelessWidget {
     super.key,
     required this.controller,
     required this.snapshot,
-    required this.isPortrait,
+    required this.controlLayout,
+    required this.isFullscreen,
     required this.onOpenSheet,
     required this.onToggleFullscreen,
     this.sheetOpen = false,
     this.deviceControls,
     this.contentOverlay,
-    this.landscapeControlBarLeading,
+    this.expandedControlBarLeading,
     this.onNavigateBack,
     this.navigateBackSemanticLabel,
     this.topBarPrimaryAction,
@@ -27,11 +28,12 @@ class ExamplePlayerStage extends StatelessWidget {
 
   final VesperPlayerController controller;
   final VesperPlayerSnapshot snapshot;
-  final bool isPortrait;
+  final ui.VesperStageControlLayout controlLayout;
+  final bool isFullscreen;
   final bool sheetOpen;
   final ExampleDeviceControls? deviceControls;
   final Widget? contentOverlay;
-  final Widget? landscapeControlBarLeading;
+  final Widget? expandedControlBarLeading;
   final VoidCallback? onNavigateBack;
   final String? navigateBackSemanticLabel;
   final Widget? topBarPrimaryAction;
@@ -46,11 +48,12 @@ class ExamplePlayerStage extends StatelessWidget {
     return ui.VesperPlayerStage(
       controller: controller,
       snapshot: snapshot,
-      isPortrait: isPortrait,
+      controlLayout: controlLayout,
+      isFullscreen: isFullscreen,
       sheetOpen: sheetOpen,
       deviceControls: deviceControls,
       contentOverlay: contentOverlay,
-      landscapeControlBarLeading: landscapeControlBarLeading,
+      expandedControlBarLeading: expandedControlBarLeading,
       onNavigateBack: onNavigateBack,
       navigateBackSemanticLabel: navigateBackSemanticLabel,
       topBarPrimaryAction: topBarPrimaryAction,

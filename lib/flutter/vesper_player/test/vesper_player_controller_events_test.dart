@@ -44,6 +44,64 @@ void main() {
     expect(identical(controller!.snapshot, snapshotBefore), isTrue);
   });
 
+  test('publishes output invalidation independently of capability warnings',
+      () async {
+    controller = await VesperPlayerController.create();
+    final outputs = <VesperHdrOutputState>[];
+    final subscription = controller!.snapshots.listen(
+      (snapshot) => outputs.add(snapshot.hdrOutputState),
+    );
+    addTearDown(subscription.cancel);
+    final confirmed = const VesperPlayerSnapshot.initial().copyWith(
+      hdrOutput: const VesperHdrOutputSnapshot(
+        state: VesperHdrOutputState.hdr,
+        playerId: _EventTestPlatform.playerId,
+        sourceRevision: 1,
+        outputGeneration: 1,
+        evidence: 'testDisplayObservation',
+      ),
+    );
+    platform.emit(VesperPlayerSnapshotEvent(
+      playerId: _EventTestPlatform.playerId,
+      snapshot: confirmed,
+    ));
+    await Future<void>.delayed(Duration.zero);
+    expect(controller!.snapshot.hdrOutputState, VesperHdrOutputState.hdr);
+
+    platform.emit(VesperPlayerEvent.fromMap(<Object?, Object?>{
+      'playerId': _EventTestPlatform.playerId,
+      'type': 'warning',
+      'warning': <String, Object?>{
+        'domain': 'capability',
+        'capability': <String, Object?>{
+          'hdrKind': 'none',
+          'reason': 'hdrNativeFrameUnsupported',
+        },
+      },
+    }));
+    await Future<void>.delayed(Duration.zero);
+    expect(controller!.snapshot.hdrOutput, same(confirmed.hdrOutput));
+
+    platform.emit(VesperPlayerSnapshotEvent(
+      playerId: _EventTestPlatform.playerId,
+      snapshot: confirmed.copyWith(
+        hdrOutput: const VesperHdrOutputSnapshot(
+          playerId: _EventTestPlatform.playerId,
+          sourceRevision: 1,
+          outputGeneration: 2,
+          reason: 'displayPathChanged',
+        ),
+      ),
+    ));
+    await Future<void>.delayed(Duration.zero);
+    expect(controller!.snapshot.hdrOutputState, VesperHdrOutputState.unknown);
+    expect(controller!.snapshot.hdrOutput!.evidence, isNull);
+    expect(outputs, <VesperHdrOutputState>[
+      VesperHdrOutputState.hdr,
+      VesperHdrOutputState.unknown,
+    ]);
+  });
+
   test('keeps final dispose reports and ignores events after disposal',
       () async {
     final finalEvent = _reportsEvent('playback.dispose');

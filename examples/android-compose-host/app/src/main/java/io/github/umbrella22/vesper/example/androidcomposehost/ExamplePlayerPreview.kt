@@ -1,5 +1,7 @@
 package io.github.umbrella22.vesper.example.androidcomposehost
 
+import io.github.umbrella22.vesper.player.android.compose.ui.VesperStageControlLayout
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -45,7 +47,8 @@ private fun PreviewExamplePlayerStagePortraitDark() {
             uiState = previewPlayerUiState(),
             controlsVisible = true,
             pendingSeekRatio = null,
-            isPortrait = true,
+            controlLayout = VesperStageControlLayout.Compact,
+                    isFullscreen = false,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(248.dp),
@@ -79,7 +82,8 @@ private fun PreviewExamplePlayerStagePortraitLight() {
                 uiState = previewPlayerUiState(),
                 controlsVisible = true,
                 pendingSeekRatio = null,
-                isPortrait = true,
+                controlLayout = VesperStageControlLayout.Compact,
+                    isFullscreen = false,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(248.dp),
@@ -113,7 +117,8 @@ private fun PreviewExamplePlayerStageLandscapeDark() {
                 uiState = previewPlayerUiState(),
                 controlsVisible = true,
                 pendingSeekRatio = null,
-                isPortrait = false,
+                controlLayout = VesperStageControlLayout.Expanded,
+                    isFullscreen = true,
                 modifier = Modifier.fillMaxSize(),
                 onControlsVisibilityChange = {},
                 onPendingSeekRatioChange = {},
@@ -145,7 +150,8 @@ private fun PreviewExamplePlayerStageLandscapeLight() {
                 uiState = previewPlayerUiState(),
                 controlsVisible = true,
                 pendingSeekRatio = null,
-                isPortrait = false,
+                controlLayout = VesperStageControlLayout.Expanded,
+                    isFullscreen = true,
                 modifier = Modifier.fillMaxSize(),
                 onControlsVisibilityChange = {},
                 onPendingSeekRatioChange = {},
@@ -177,7 +183,8 @@ private fun PreviewExamplePlayerStageLandscapeMinimal() {
                 uiState = previewPlayerUiState(),
                 controlsVisible = false,
                 pendingSeekRatio = null,
-                isPortrait = false,
+                controlLayout = VesperStageControlLayout.Expanded,
+                    isFullscreen = true,
                 modifier = Modifier.fillMaxSize(),
                 onControlsVisibilityChange = {},
                 onPendingSeekRatioChange = {},

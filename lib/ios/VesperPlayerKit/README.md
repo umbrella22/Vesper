@@ -551,3 +551,19 @@ xcodebuild test \
 
 A SwiftUI sample app that consumes this package lives at
 [`examples/ios-swift-host`](../../../examples/ios-swift-host/).
+
+## Current display-output evidence
+
+`VesperPlayerController.hdrOutput` exposes the native source/output generations
+and current display-output evidence. The native system-player route currently
+reports `unknown` with `outputObservationUnavailable`. Display capability,
+decoder format and source HDR metadata cannot confirm current HDR or SDR output.
+Source, track, Surface, display and player lifecycle events invalidate previous
+evidence. Hosts managing system PiP call `invalidateHdrOutput()` at each handoff.
+
+## Video presentation and portrait playback
+
+Native display dimensions and per-view content rectangles are separate APIs.
+The mobile renderer preserves aspect ratio with centered letterboxing.
+See the [video presentation contract and 0.6.0 migration guide](../../flutter/vesper_player_platform_interface/doc/video-presentation.md)
+for control layout, fullscreen state, geometry lifecycle, and PiP.

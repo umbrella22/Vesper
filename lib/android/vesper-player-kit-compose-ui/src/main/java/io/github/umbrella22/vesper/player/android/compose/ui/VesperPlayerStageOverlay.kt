@@ -40,14 +40,15 @@ import io.github.umbrella22.vesper.player.android.TimelineKind
 internal fun StageControlsOverlay(
     controlsVisible: Boolean,
     uiState: PlayerHostUiState,
-    isPortrait: Boolean,
+    controlLayout: VesperStageControlLayout,
+    isFullscreen: Boolean,
     isPlaying: Boolean,
     displayedRatio: Float,
     pendingSeekRatio: Float?,
     speedLabel: String,
     qualityLabel: String,
     playbackRateControlsEnabled: Boolean,
-    landscapeControlBarLeading: (@Composable RowScope.() -> Unit)?,
+    expandedControlBarLeading: (@Composable RowScope.() -> Unit)?,
     onNavigateBack: (() -> Unit)?,
     navigateBackContentDescription: String?,
     onOpenSheet: (VesperPlayerStageSheet) -> Unit,
@@ -139,7 +140,7 @@ internal fun StageControlsOverlay(
                 )
             }
 
-            if (isPortrait) {
+            if (controlLayout == VesperStageControlLayout.Compact) {
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
@@ -200,8 +201,8 @@ internal fun StageControlsOverlay(
                         )
                     }
                     StageIconButton(
-                        icon = Icons.Rounded.Fullscreen,
-                        label = stringResource(R.string.vesper_player_stage_fullscreen),
+                        icon = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                        label = stringResource(if (isFullscreen) R.string.vesper_player_stage_exit_fullscreen else R.string.vesper_player_stage_fullscreen),
                         size = 38.dp,
                         iconSize = 24.dp,
                         containerAlpha = 0f,
@@ -261,7 +262,7 @@ internal fun StageControlsOverlay(
                                 onControlsVisibilityChange(true)
                             },
                         )
-                        landscapeControlBarLeading?.invoke(this)
+                        expandedControlBarLeading?.invoke(this)
                         Spacer(modifier = Modifier.weight(1f))
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -294,8 +295,8 @@ internal fun StageControlsOverlay(
                                 },
                             )
                             StageIconButton(
-                                icon = Icons.Rounded.FullscreenExit,
-                                label = stringResource(R.string.vesper_player_stage_exit_fullscreen),
+                                icon = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                                label = stringResource(if (isFullscreen) R.string.vesper_player_stage_exit_fullscreen else R.string.vesper_player_stage_fullscreen),
                                 size = 34.dp,
                                 iconSize = 19.dp,
                                 containerAlpha = 0f,

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-17
+
+- Added media-only `VesperVideoPresentation`, per-view
+  `VesperVideoSurfaceGeometry`, and `VesperVideoRect` contracts.
+
+- Added optional HDR output evidence to player snapshots, with independent
+  dynamic-range state and format, observation identity, and unknown fallback.
+  Capability probes retain their existing semantics.
+
 ## 0.5.6 - 2026-09-16
 
 - Raised the minimum supported Flutter toolchain to 3.47.2.

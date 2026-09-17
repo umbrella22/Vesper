@@ -236,6 +236,7 @@ private fun VesperNativePlayerBridge.prepareSourceLoadOnMain(
     // Invalidate the current Media3 item before background preparation. No
     // listener callback or subtitle command may observe the old item while a
     // replacement source/item is being prepared.
+    hdrOutputTracker.outputPathChanged()
     bindings.invalidateSystemPlaybackCallbacks()
     clearTrackState()
     _subtitleState.value =
@@ -487,6 +488,9 @@ internal fun VesperNativePlayerBridge.disposeNativeBridge() {
 
 private fun VesperNativePlayerBridge.disposeNativeBridgeOnMain() {
     if (!disposeCleanupStarted.compareAndSet(false, true)) return
+    hdrOutputTracker.dispose()
+    bindings.setOnOutputPathChangedListener(null)
+    bindings.setOnOutputTrackChangedListener(null)
     bindings.cancelPendingSourceCommand("sourceCommandDisposed")
     bindings.cancelPendingSeekCommand("seekCommandDisposed")
     cancelPendingSubtitleSelectionForDispose()
@@ -781,6 +785,7 @@ private fun VesperNativePlayerBridge.beginNativeSourceSelectionOnMain(
     source: VesperPlayerSource,
 ): Long? {
     if (isDisposed.get()) return null
+    hdrOutputTracker.sourceChanged()
     cancelPendingBridgeSourceCommand("sourceCommandSuperseded")
     sourceLoadJob?.cancel()
     val commandId = sourceCommandGeneration.incrementAndGet()

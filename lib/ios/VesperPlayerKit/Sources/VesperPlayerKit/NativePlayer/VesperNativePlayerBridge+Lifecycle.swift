@@ -62,6 +62,7 @@ extension VesperNativePlayerBridge {
     }
 
     func dispose() {
+        outputTracker.dispose()
         clearLastError()
         recordBenchmark("dispose_command")
         iosHostLog("dispose")
@@ -106,6 +107,8 @@ extension VesperNativePlayerBridge {
     }
 
     func startSourceSelection(_ source: VesperPlayerSource) -> Task<Void, Error> {
+        presentationState.update(nil)
+        outputTracker.sourceChanged()
         clearLastError()
         recordBenchmark(
             "select_source_start",
@@ -159,6 +162,7 @@ extension VesperNativePlayerBridge {
         source: VesperPlayerSource,
         shouldAutoPlay: Bool
     ) -> Task<Void, Error> {
+        outputTracker.outputPathChanged()
         cancelSourceLoadTask(reason: "sourceCommandSuperseded")
         sourceCommandGeneration &+= 1
         if sourceCommandGeneration == 0 {
@@ -438,6 +442,7 @@ extension VesperNativePlayerBridge {
     }
 
     func tearDownActivePlayback(cancelSourceCommand: Bool = true) {
+        outputTracker.outputPathChanged()
         if cancelSourceCommand {
             cancelSourceLoadTask()
         }
@@ -456,6 +461,7 @@ extension VesperNativePlayerBridge {
         cancelPendingSubtitleSelection()
         player?.pause()
         surfaceHost?.attach(player: nil)
+        presentationState.update(nil)
         nativeFramePipelineCoordinator.closeActiveSession()
         player = nil
         currentDashSession = nil

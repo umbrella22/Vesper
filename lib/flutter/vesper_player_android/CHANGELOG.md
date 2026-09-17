@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-17
+
+- Added per-platform-view geometry channels and native media dimensions.
+- Preferred video dimensions for PiP, refreshed automatic-entry parameters,
+  fixed multi-session ownership, and clamped rational ratios inside OS limits.
+- Preserved cleared command errors during native snapshot publication.
+
+- Added native source/output generations and lifecycle invalidation for source,
+  track, Surface, display, PiP and disposal changes; late observation results
+  are rejected by player instance and generation.
+
+- Reported HDR output as `unknown` with `outputObservationUnavailable` in
+  snapshots; display and codec capabilities do not confirm active output.
+
 ## 0.5.6 - 2026-09-16
 
 - Raised the minimum supported Flutter toolchain to 3.47.2 and compileSdk to

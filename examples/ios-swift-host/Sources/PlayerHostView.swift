@@ -149,7 +149,6 @@ private final class ExamplePictureInPictureDelegate: NSObject, AVPictureInPictur
 
 struct PlayerHostView: View {
     @Environment(\.colorScheme) private var systemColorScheme
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @AppStorage("vesper.example.ios.theme_mode") private var themeModeRaw = ExampleThemeMode.system.rawValue
     @StateObject private var controllerStore: ExamplePlayerControllerStore
@@ -251,10 +250,6 @@ struct PlayerHostView: View {
         case .dark:
             true
         }
-    }
-
-    private var isCompactLayout: Bool {
-        horizontalSizeClass != .regular
     }
 
     private var sourceNormalizerPluginReferences: [VesperPluginReference] {
@@ -720,7 +715,7 @@ struct PlayerHostView: View {
             fixedTrackStatus: controller.fixedTrackStatus,
             controlsVisible: $controlsVisible,
             pendingSeekRatio: $pendingSeekRatio,
-            isCompactLayout: isCompactLayout,
+            controlLayout: isFullscreen ? .expanded : .compact,
             isFullscreen: isFullscreen,
             pictureInPicturePresentation: pictureInPicturePresentation,
             onSeekBy: { controller.seek(by: $0) },

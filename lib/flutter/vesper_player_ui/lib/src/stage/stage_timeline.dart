@@ -29,6 +29,14 @@ class _VesperTimelineScrubberState extends State<VesperTimelineScrubber> {
   bool _dragging = false;
 
   @override
+  void dispose() {
+    // Pointer hit-test paths may still reference the old listener after a
+    // layout change replaces this scrubber.
+    _resetPointer();
+    super.dispose();
+  }
+
+  @override
   void didUpdateWidget(covariant VesperTimelineScrubber oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.enabled && !widget.enabled) {
@@ -62,7 +70,7 @@ class _VesperTimelineScrubberState extends State<VesperTimelineScrubber> {
   }
 
   void _handlePointerUp(PointerUpEvent event) {
-    if (event.pointer != _activePointer) {
+    if (!mounted || event.pointer != _activePointer) {
       return;
     }
     if (_dragging) {

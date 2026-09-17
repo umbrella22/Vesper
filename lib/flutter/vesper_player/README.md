@@ -40,15 +40,15 @@ federated implementations resolve automatically:
 
 ```yaml
 dependencies:
-  vesper_player: 0.5.5
+  vesper_player: 0.6.0
   # Optional unified Android Cast / DLNA external playback.
-  vesper_player_external_playback: 0.5.5
+  vesper_player_external_playback: 0.6.0
   # Optional stage controls and AirPlay route button.
-  vesper_player_ui: 0.5.5
+  vesper_player_ui: 0.6.0
   # Optional normalized-resource playback.
-  vesper_player_source_normalizer_ffmpeg: 0.5.5
+  vesper_player_source_normalizer_ffmpeg: 0.6.0
   # Optional post-download MP4 remux.
-  vesper_player_remux_ffmpeg: 0.5.5
+  vesper_player_remux_ffmpeg: 0.6.0
 ```
 
 Repository source-checkout development writes ignored local dependency
@@ -787,6 +787,30 @@ support. `requireNativeFrame` reports a capability error when the requested
 native-frame lane is unavailable instead of silently using the system player.
 Default mobile playback is unchanged.
 
+### Current HDR output
+
+`snapshot.hdrOutputState` reports `unknown`, `sdr`, or `hdr`. The optional
+`snapshot.hdrOutput` carries output evidence and an independently reported
+format. A missing field from an older platform means `unknown`, never SDR.
+Android and iOS currently emit `unknown` with
+`reason = outputObservationUnavailable`; this release does not confirm actual
+HDR output on either platform. Hosts should display "Output unconfirmed" until
+an observing platform explicitly reports a confirmed state. Native source
+activations, including sequence playback, advance a session-local
+`sourceRevision`. Track, Surface, display and PiP changes advance the independent
+`outputGeneration` and clear previous evidence. Late native observations must
+match the live player instance and both generations.
+
+Do not infer output from P010, 10-bit codec strings, source HDR metadata, display
+capability, `sessionProbe`, or native-frame capability warnings.
+`probeAssociatedPlaybackCapability(request)` adds the controller ID for
+capability diagnostics; it does not fill missing request fields. Supply the
+target source, codec, dimensions, frame rate and actual source-normalizer /
+pipeline configuration explicitly. Re-probe on target changes and reject late
+results. Explicit candidate-source requests remain candidates, and cannot
+update output evidence. The [output contract](../vesper_player_platform_interface/doc/hdr-output.md)
+documents native lifecycle tracking and the requirements for enabling output confirmation.
+
 Download task states:
 
 ```text
@@ -830,3 +854,10 @@ if (caps.isExperimental) {
 | `vesper_player_android`            | Android implementation built on ExoPlayer |
 | `vesper_player_ios`                | iOS implementation built on AVPlayer      |
 | `vesper_player_performance_diagnostics` | Optional native BenchmarkSink artifact |
+
+## Video presentation and portrait playback
+
+Native display dimensions and per-view content rectangles are separate APIs.
+The mobile renderer preserves aspect ratio with centered letterboxing.
+See the [video presentation contract and 0.6.0 migration guide](../vesper_player_platform_interface/doc/video-presentation.md)
+for control layout, fullscreen state, geometry lifecycle, and PiP.

@@ -10,6 +10,8 @@ final class PlayerSession {
     var pendingHostDetachTask: Task<Void, Never>?
     var hostDetachGeneration: UInt64 = 0
     var observation: AnyCancellable?
+    var hdrOutputObservation: AnyCancellable?
+    var videoPresentationObservation: AnyCancellable?
     var lastError: [String: Any]?
     var lastEmittedTerminalError: [String: Any]?
     var viewport: FlutterViewport?
@@ -20,6 +22,8 @@ final class PlayerSession {
     var pictureInPictureCoordinator: VesperIosPictureInPictureCoordinator?
     var pictureInPictureState = "inactive"
     var pictureInPictureActive = false
+    var lastOutputPictureInPictureState = "inactive"
+    var lastOutputPictureInPictureActive = false
     var performanceDiagnosticsSession: VesperPerformanceDiagnosticsSession?
 
     init(

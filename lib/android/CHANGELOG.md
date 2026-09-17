@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-17
+
+- Added native display dimensions and per-view picture rectangles, plus Compose
+  geometry callbacks. Centered aspect fit remains the rendering contract.
+- **Breaking:** Stage now requires independent `controlLayout` and `isFullscreen`;
+  renamed `landscapeControlBarLeading` to `expandedControlBarLeading`.
+- Cancelled Stage gestures on layout changes, exposed timeline accessibility
+  adjustment, cleared detached geometry, and confined stop to the main thread.
+
+- Added controller HDR-output snapshots with independent source/output
+  generations, native lifecycle invalidation and stale observation rejection.
+  Current output remains `unknown` / `outputObservationUnavailable` until a
+  reliable display-output observer is available.
+
 ## 0.5.6 - 2026-09-16
 
 ### Fixed

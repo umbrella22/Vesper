@@ -11,11 +11,25 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     static let dashStartupAbrMaxHeight = 720
 
     @Published var publishedUiState: PlayerHostUiState
-    @Published var publishedTrackCatalog: VesperTrackCatalog
+    @Published var publishedTrackCatalog: VesperTrackCatalog {
+        didSet {
+            outputTracker.videoTrackChanged(
+                publishedEffectiveVideoTrackId,
+                catalogRevision: publishedTrackCatalog.catalogRevision
+            )
+        }
+    }
     @Published var publishedTrackSelection: VesperTrackSelectionSnapshot
     @Published var publishedRequestedSubtitleSelection: VesperTrackSelection = .disabled()
     @Published var publishedConfirmedSubtitleSelection: VesperTrackSelection = .disabled()
-    @Published var publishedEffectiveVideoTrackId: String?
+    @Published var publishedEffectiveVideoTrackId: String? {
+        didSet {
+            outputTracker.videoTrackChanged(
+                publishedEffectiveVideoTrackId,
+                catalogRevision: publishedTrackCatalog.catalogRevision
+            )
+        }
+    }
     @Published var publishedVideoVariantObservation: VesperVideoVariantObservation?
     @Published var publishedFixedTrackStatus: VesperFixedTrackStatus?
     @Published var publishedResiliencePolicy: VesperPlaybackResiliencePolicy
@@ -24,7 +38,17 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     @Published var publishedEffectiveSubtitleTrackId: String?
 
     var currentSource: VesperPlayerSource?
-    var player: AVPlayer?
+    let outputTracker = VesperHdrOutputTracker()
+    let presentationState = VesperVideoPresentationState()
+    var videoPresentationState: VesperVideoPresentationState? { presentationState }
+    var hdrOutputTracker: VesperHdrOutputTracker? { outputTracker }
+    var outputItemObservations: [NSKeyValueObservation] = []
+    var outputAccessLogObserver: NSObjectProtocol?
+    var player: AVPlayer? {
+        willSet {
+            if player !== newValue { outputTracker.outputPathChanged() }
+        }
+    }
     let systemPlayerVolume: Float
     let systemPlayerIsMuted: Bool
     let subtitleOverlayRenderer = VesperSubtitleOverlayRenderer()
@@ -334,5 +358,6 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
         publishedEffectiveSubtitleTrackId = nil
         pendingSubtitleOverlayFailure = nil
         currentPluginDiagnostics = nativeFramePipelineDiagnostics()
+        if initialSource != nil { outputTracker.sourceChanged() }
     }
 }

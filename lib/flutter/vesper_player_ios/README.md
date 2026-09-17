@@ -266,3 +266,12 @@ The Flutter package maps external subtitle configurations and subtitle style
 commands to `VesperPlayerKit`. External input uses the host kit's eight-track,
 2 MiB-per-track, and 10,000-cue limits. Unsupported formats and sources return
 platform errors instead of succeeding as no-ops.
+
+## Current display output
+
+Player snapshots include native `sourceRevision` and `outputGeneration` in
+`hdrOutput`. Native lifecycle events invalidate output evidence, including
+sequence source activations and PiP transitions. The platform currently reports
+`unknown` with `outputObservationUnavailable`; capability and source metadata
+cannot confirm actual HDR or SDR output. See the
+[output contract](../vesper_player_platform_interface/doc/hdr-output.md).

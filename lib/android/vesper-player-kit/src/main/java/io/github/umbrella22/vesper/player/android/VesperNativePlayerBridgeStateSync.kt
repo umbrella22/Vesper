@@ -492,6 +492,7 @@ internal fun VesperNativePlayerBridge.advanceNativeUpdateEpoch(clearListener: Bo
 }
 
 internal fun VesperNativePlayerBridge.clearTrackState() {
+    surfaceHost.updateVideoLayout(null)
     hasInitializedSource = false
     activeNativeItemEpoch = null
     advanceNativeUpdateEpoch(clearListener = true)

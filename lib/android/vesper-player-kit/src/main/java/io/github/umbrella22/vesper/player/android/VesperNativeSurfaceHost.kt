@@ -3,6 +3,9 @@ package io.github.umbrella22.vesper.player.android
 import android.graphics.Matrix
 import android.graphics.Color
 import android.graphics.SurfaceTexture
+import android.hardware.display.DisplayManager
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -15,6 +18,8 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.media3.common.text.Cue
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 private const val SUBTITLE_OVERLAY_TAG =
     "io.github.umbrella22.vesper.player.subtitle-overlay"
@@ -22,6 +27,7 @@ private const val SUBTITLE_OVERLAY_TAG =
 internal class VesperNativeSurfaceHost(
     private val bindings: VesperNativeBindings,
     private val surfaceKind: NativeVideoSurfaceKind = NativeVideoSurfaceKind.SurfaceView,
+    private val onOutputPathChanged: (String?) -> Unit = {},
 ) {
     private var hostView: ViewGroup? = null
     private var renderView: View? = null
@@ -29,10 +35,72 @@ internal class VesperNativeSurfaceHost(
     private var attachedSurface: Surface? = null
     private var attachedSurfaceKind: NativeVideoSurfaceKind? = null
     private var videoLayoutInfo: NativeVideoLayoutInfo? = null
+    private val mutableVideoPresentation = MutableStateFlow<VesperVideoPresentation?>(null)
+    val videoPresentation = mutableVideoPresentation.asStateFlow()
+    private var videoPresentationListener: ((VesperVideoPresentation?) -> Unit)? = null
+
+    fun setOnVideoPresentationChangedListener(listener: ((VesperVideoPresentation?) -> Unit)?) {
+        videoPresentationListener = listener
+        listener?.invoke(videoPresentation.value)
+    }
+
+    private val renderLayoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+        publishVideoPresentation()
+    }
     private var keepScreenOn = false
     private var subtitleView: TextView? = null
     private var subtitleStyle = VesperSubtitleStyle.Default
     private var subtitleText = ""
+    private var observedDisplayId: Int? = null
+    private var displayManager: DisplayManager? = null
+
+    private fun outputPathChanged() {
+        observedDisplayId = hostView?.takeIf { it.isAttachedToWindow }?.display?.displayId
+        onOutputPathChanged(observedDisplayId?.toString())
+    }
+
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = Unit
+        override fun onDisplayRemoved(displayId: Int) {
+            if (displayId == observedDisplayId) {
+                observedDisplayId = null
+                onOutputPathChanged(null)
+            }
+        }
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId == observedDisplayId || displayId == hostView?.display?.displayId) {
+                outputPathChanged()
+            }
+        }
+    }
+
+    private fun observeDisplay(host: ViewGroup) {
+        if (displayManager != null) return
+        displayManager = host.context.getSystemService(DisplayManager::class.java)?.also {
+            it.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
+        }
+    }
+
+    private fun stopObservingDisplay() {
+        displayManager?.unregisterDisplayListener(displayListener)
+        displayManager = null
+    }
+
+    private val outputWindowListener = object : View.OnAttachStateChangeListener {
+        override fun onViewAttachedToWindow(view: View) {
+            hostView?.let(::observeDisplay)
+            outputPathChanged()
+            publishVideoPresentation()
+        }
+        override fun onViewDetachedFromWindow(view: View) {
+            stopObservingDisplay()
+            observedDisplayId = null
+            onOutputPathChanged(null)
+            // Children detach before their parent loses its window attachment.
+            // Recomputing from the host here can retain a stale visible rect.
+            (hostView as? VesperPlayerSurfaceView)?.updateGeometry(null)
+        }
+    }
 
     private val hostLayoutListener =
         View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
@@ -56,6 +124,9 @@ internal class VesperNativeSurfaceHost(
         }
 
         hostView?.removeOnLayoutChangeListener(hostLayoutListener)
+        (hostView as? VesperPlayerSurfaceView)?.updateGeometry(null)
+        stopObservingDisplay()
+        onOutputPathChanged(null)
 
         val existingView = renderView
         if (existingView != null) {
@@ -63,6 +134,8 @@ internal class VesperNativeSurfaceHost(
             (existingView.parent as? ViewGroup)?.removeView(existingView)
             attachRenderAndSubtitleViews(host, existingView)
             hostView = host
+            observeDisplay(host)
+            outputPathChanged()
             host.addOnLayoutChangeListener(hostLayoutListener)
             applyVideoTransform()
             postVideoTransform()
@@ -79,6 +152,10 @@ internal class VesperNativeSurfaceHost(
         attachRenderAndSubtitleViews(host, view)
         hostView = host
         renderView = view
+        view.addOnLayoutChangeListener(renderLayoutListener)
+        view.addOnAttachStateChangeListener(outputWindowListener)
+        observeDisplay(host)
+        outputPathChanged()
         applyKeepScreenOn()
         host.addOnLayoutChangeListener(hostLayoutListener)
         applyVideoTransform()
@@ -132,6 +209,8 @@ internal class VesperNativeSurfaceHost(
     }
 
     fun close() {
+        updateVideoLayout(null)
+        videoPresentationListener = null
         bindings.setOnVideoLayoutInfoListener(null)
         bindings.setOnSubtitleCuesListener(null)
         subtitleText = ""
@@ -159,6 +238,11 @@ internal class VesperNativeSurfaceHost(
                 "hasSurface=${surface != null}",
         )
         setKeepScreenOn(false)
+        stopObservingDisplay()
+        renderView?.removeOnAttachStateChangeListener(outputWindowListener)
+        renderView?.removeOnLayoutChangeListener(renderLayoutListener)
+        observedDisplayId = null
+        onOutputPathChanged(null)
         if (notifyNative) {
             bindings.detachSurface()
         }
@@ -178,9 +262,11 @@ internal class VesperNativeSurfaceHost(
         surface = null
         hostView?.removeOnLayoutChangeListener(hostLayoutListener)
         hostView?.removeAllViews()
+        (hostView as? VesperPlayerSurfaceView)?.updateGeometry(null)
         subtitleView = null
         renderView = null
         hostView = null
+        publishVideoPresentation()
     }
 
     private fun attachRenderAndSubtitleViews(host: ViewGroup, view: View) {
@@ -240,6 +326,7 @@ internal class VesperNativeSurfaceHost(
 
     private val surfaceHolderCallback = object : SurfaceHolder.Callback {
         override fun surfaceCreated(holder: SurfaceHolder) {
+            outputPathChanged()
             Log.d(
                 TAG,
                 "surfaceHost SurfaceView surfaceCreated valid=${holder.surface?.isValid == true}",
@@ -253,6 +340,7 @@ internal class VesperNativeSurfaceHost(
             width: Int,
             height: Int,
         ) {
+            outputPathChanged()
             Log.d(
                 TAG,
                 "surfaceHost SurfaceView surfaceChanged format=$format size=${width}x$height " +
@@ -262,6 +350,8 @@ internal class VesperNativeSurfaceHost(
         }
 
         override fun surfaceDestroyed(holder: SurfaceHolder) {
+            observedDisplayId = null
+            onOutputPathChanged(null)
             Log.d(TAG, "surfaceHost SurfaceView surfaceDestroyed")
             bindings.detachSurface()
             clearAttachedSurface(holder.surface)
@@ -336,6 +426,7 @@ internal class VesperNativeSurfaceHost(
                     height: Int,
                 ) {
                     Log.d(TAG, "surfaceHost TextureView available size=${width}x$height")
+                    outputPathChanged()
                     val newSurface = Surface(surfaceTexture)
                     surface = newSurface
                     rememberAttachedSurface(newSurface, NativeVideoSurfaceKind.TextureView)
@@ -346,9 +437,11 @@ internal class VesperNativeSurfaceHost(
                     surfaceTexture: SurfaceTexture,
                     width: Int,
                     height: Int,
-                ) = Unit
+                ) = outputPathChanged()
 
                 override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
+                    observedDisplayId = null
+                    onOutputPathChanged(null)
                     Log.d(TAG, "surfaceHost TextureView destroyed")
                     try {
                         bindings.detachSurface()
@@ -391,6 +484,44 @@ internal class VesperNativeSurfaceHost(
             NativeVideoSurfaceKind.TextureView -> applyTextureViewTransform()
             NativeVideoSurfaceKind.SurfaceView -> applySurfaceViewLayout()
         }
+        publishVideoPresentation()
+    }
+
+    private fun publishVideoPresentation() {
+        val layout = videoLayoutInfo
+        val next = layout?.toVideoPresentation()
+        (hostView as? VesperPlayerSurfaceView)?.updateGeometry(
+            if (next != null) layout?.let(::currentSurfaceGeometry) else null,
+        )
+        if (next == mutableVideoPresentation.value) return
+        mutableVideoPresentation.value = next
+        videoPresentationListener?.invoke(next)
+    }
+
+    private fun currentSurfaceGeometry(layout: NativeVideoLayoutInfo): VesperVideoSurfaceGeometry? {
+        val host = hostView ?: return null
+        val view = renderView ?: return null
+        if (!host.isAttachedToWindow || view.parent !== host || host.width <= 0 || host.height <= 0 ||
+            view.width <= 0 || view.height <= 0) return null
+        val density = host.resources.displayMetrics.density.toDouble()
+        val rect = when (surfaceKind) {
+            NativeVideoSurfaceKind.SurfaceView -> {
+                val expected = calculateAspectFitSize(host.width, host.height, layout.width, layout.height,
+                    layout.pixelWidthHeightRatio) ?: return null
+                // LayoutParams may have changed before Android has laid out the child.
+                if (view.width != expected.width || view.height != expected.height || view.isLayoutRequested) return null
+                VesperVideoRect(view.left / density, view.top / density, view.width / density, view.height / density)
+            }
+            NativeVideoSurfaceKind.TextureView -> {
+                val scale = calculateAspectFitScale(view.width.toFloat(), view.height.toFloat(),
+                    layout.width, layout.height, layout.pixelWidthHeightRatio) ?: return null
+                val width = view.width * scale.scaleX.toDouble()
+                val height = view.height * scale.scaleY.toDouble()
+                VesperVideoRect((view.left + (view.width - width) / 2) / density,
+                    (view.top + (view.height - height) / 2) / density, width / density, height / density)
+            }
+        }
+        return VesperVideoSurfaceGeometry(host.width / density, host.height / density, rect)
     }
 
     private fun postVideoTransform() {

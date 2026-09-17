@@ -15,6 +15,7 @@ use player_cli::{
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
 fn manifest(plugin_id: &str) -> String {
+    let host_sdk = env!("CARGO_PKG_VERSION");
     format!(
         r#"
 schema_version = 1
@@ -28,7 +29,7 @@ license = "Apache-2.0"
 publisher = "dev.vesper.publisher"
 
 [compatibility]
-host_sdk = ">=0.5.0, <0.6.0"
+host_sdk = "={host_sdk}"
 abi_major = 1
 abi_minor_min = 0
 abi_minor_max = 0

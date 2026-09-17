@@ -19,7 +19,7 @@ Exported from `package:vesper_player_ui/vesper_player_ui.dart`:
   gestures (double-tap play / pause, drag scrub), fullscreen toggle, and sheet entry
   points. Hosts can pass `topBarPrimaryAction` and `topBarSecondaryAction` for
   Cast, AirPlay, DLNA, or custom menu buttons that should follow the stage
-  overlay. `contentOverlay`, `landscapeControlBarLeading`, and
+  overlay. `contentOverlay`, `expandedControlBarLeading`, and
   `onNavigateBack` provide content, control-row, and navigation extension points
 - Stage helpers: bottom-sheet entry types, formatting helpers
 - Stage models: presentation-layer DTOs consumed by `VesperPlayerStage`
@@ -35,8 +35,8 @@ Use the hosted packages for normal application integration:
 
 ```yaml
 dependencies:
-  vesper_player: 0.5.5
-  vesper_player_ui: 0.5.5
+  vesper_player: 0.6.0
+  vesper_player_ui: 0.6.0
 ```
 
 Repository development first runs
@@ -66,7 +66,41 @@ to the player area, and removes it from Picture in Picture presentation. Hosts
 remain responsible for bounding the overlay's parsing, layout, cache, and paint
 cost.
 
-`landscapeControlBarLeading` is inserted directly after the landscape play
+Use `onContentTap` to hit-test visual content after the Stage confirms a single
+tap. The synchronous callback receives logical pixels from the top-left of the
+complete Stage / `contentOverlay` canvas, including letterboxing. Return `true`
+to consume the tap without changing controls or playback; return `false` to
+retain normal control visibility and auto-hide behavior. A null callback keeps
+the existing behavior. Hosts can start asynchronous work after accepting a hit:
+
+```dart
+onContentTap: (position) {
+  if (snapshot.playbackState != VesperPlaybackState.paused ||
+      sheetOpen || pictureInPictureActive) {
+    return false;
+  }
+  final content = hitTestVisibleContent(position);
+  if (content == null) return false;
+  openContentMenu(content);
+  return true;
+},
+```
+
+Buttons and the timeline retain priority. While controls are visible, the
+bottom control area (74 logical pixels in compact layout, 112 in expanded layout) is
+excluded from Stage gestures, including blank space between controls. Full
+canvas coordinates do not imply that this reserved area is interactive.
+Double taps, drags, long presses, cancellations, Picture in Picture, and
+disposed stages never dispatch a content tap. Hosts own state gating, current
+content identity checks, and hit testing from the topmost visible item down.
+
+The content layer remains excluded from pointer input and accessibility.
+Existing Stage accessibility taps keep their control visibility action; their
+synthetic center position is not offered to `onContentTap`. Provide a separate
+focusable content list or action entry point. Test host interactions with the
+complete Stage rather than only the visual overlay.
+
+`expandedControlBarLeading` is inserted directly after the expanded play
 button. `null` adds no spacing. A host can pass fixed-size content or a direct
 `Expanded`/`Flexible` child. Controls that are unavailable should pass `null`
 so the remaining built-in controls retain their order.
@@ -94,9 +128,10 @@ stage copy without rebuilding the stage controls:
 VesperPlayerStage(
   controller: controller,
   snapshot: snapshot,
-  isPortrait: isPortrait,
+  controlLayout: VesperStageControlLayout.compact,
+  isFullscreen: isFullscreen,
   contentOverlay: const HostContentOverlay(),
-  landscapeControlBarLeading: const HostLandscapeControls(),
+  expandedControlBarLeading: const HostExpandedControls(),
   onNavigateBack: exitCurrentPresentation,
   navigateBackSemanticLabel: 'Exit fullscreen',
   keepControlsVisible: activeDrawer != null || composerHasFocus,
@@ -105,6 +140,13 @@ VesperPlayerStage(
   onToggleFullscreen: onToggleFullscreen,
 )
 ```
+
+## Portrait playback and migration
+
+Version 0.6.0 separates `controlLayout` from `isFullscreen` and renames the
+expanded control-row slot. See the [video presentation contract and migration
+guide](../vesper_player_platform_interface/doc/video-presentation.md) for
+per-view picture geometry, coordinate mapping, gestures, and PiP.
 
 ## Minimum Requirements
 

@@ -128,7 +128,10 @@ internal class VesperNativePlayerBridge(
     internal val _effectiveVideoTrackId = MutableStateFlow<String?>(null)
     internal val _videoVariantObservation = MutableStateFlow<VesperVideoVariantObservation?>(null)
     internal val _resiliencePolicy = MutableStateFlow(currentResiliencePolicy)
-    internal val surfaceHost = VesperNativeSurfaceHost(bindings, surfaceKind)
+    override val hdrOutputTracker = VesperHdrOutputTracker(initialSource != null)
+    internal val surfaceHost = VesperNativeSurfaceHost(
+        bindings, surfaceKind, hdrOutputTracker::outputPathChanged,
+    )
     @Volatile
     internal var nativeFramePipelineFallbackReason: String? = null
     internal var nativeFramePipelineRequiredFailure = false
@@ -156,6 +159,9 @@ internal class VesperNativePlayerBridge(
         nativeFramePipelineDiagnostics()
 
     override val backend: PlayerBridgeBackend = PlayerBridgeBackend.VesperNativeStub
+    override val videoPresentation get() = surfaceHost.videoPresentation
+    override fun setOnVideoPresentationChangedListener(listener: ((VesperVideoPresentation?) -> Unit)?) =
+        surfaceHost.setOnVideoPresentationChangedListener(listener)
     override val uiState: StateFlow<PlayerHostUiState> = _uiState.asStateFlow()
     override val trackCatalog: StateFlow<VesperTrackCatalog> = _trackCatalog.asStateFlow()
     override val trackSelection: StateFlow<VesperTrackSelectionSnapshot> =
@@ -185,6 +191,8 @@ internal class VesperNativePlayerBridge(
             activeNativeItemEpoch = nativeUpdateEpoch
         }
         installNativeUpdateListener()
+        bindings.setOnOutputPathChangedListener { hdrOutputTracker.outputPathChanged() }
+        bindings.setOnOutputTrackChangedListener(hdrOutputTracker::videoTrackChanged)
         bindings.setOnVideoLayoutInfoListener(surfaceHost::updateVideoLayout)
         bindings.setOnSubtitleCuesListener(surfaceHost::updateSubtitleCues)
         // Structured JNI track-selection failures (e.g. a stale subtitle id
@@ -261,6 +269,24 @@ internal class VesperNativePlayerBridge(
     override fun dispose() = disposeNativeBridge()
 
     override fun refresh() = refreshNativeBridge()
+
+    override fun setOnHdrOutputChangedListener(listener: ((VesperHdrOutputSnapshot) -> Unit)?) {
+        val completed = runOnMainSynchronously("setOnHdrOutputChangedListener") {
+            if (!isDisposed.get() || listener == null) hdrOutputTracker.setListener(listener)
+        }
+        if (completed == MainThreadRunResult.Cancelled) {
+            throw mainThreadBridgeTimeout("setOnHdrOutputChangedListener")
+        }
+    }
+
+    override fun invalidateHdrOutput() {
+        val completed = runOnMainSynchronously("invalidateHdrOutput") {
+            hdrOutputTracker.outputPathChanged(displayId = null)
+        }
+        if (completed == MainThreadRunResult.Cancelled) {
+            throw mainThreadBridgeTimeout("invalidateHdrOutput")
+        }
+    }
 
     override fun sampleTimeline() = sampleTimelineNativeBridge()
 

@@ -98,7 +98,8 @@ extension _PlayerHostLayout on _PlayerHostPageState {
                 child: ExamplePlayerStage(
                   controller: controller,
                   snapshot: snapshot,
-                  isPortrait: false,
+                  controlLayout: ui.VesperStageControlLayout.expanded,
+                  isFullscreen: false,
                   sheetOpen: false,
                   pictureInPicturePresentation: true,
                   onOpenSheet: (_) {},
@@ -160,7 +161,8 @@ extension _PlayerHostLayout on _PlayerHostPageState {
                 return ExamplePlayerStage(
                   controller: controller,
                   snapshot: snapshot,
-                  isPortrait: true,
+                  controlLayout: ui.VesperStageControlLayout.compact,
+                  isFullscreen: false,
                   sheetOpen: _sheetOpen,
                   deviceControls: _deviceControls,
                   topBarPrimaryAction: _buildStageRouteAction(controller),
@@ -390,7 +392,8 @@ extension _PlayerHostLayout on _PlayerHostPageState {
               return ExamplePlayerStage(
                 controller: controller,
                 snapshot: snapshot,
-                isPortrait: false,
+                controlLayout: ui.VesperStageControlLayout.expanded,
+                isFullscreen: true,
                 sheetOpen: _sheetOpen,
                 deviceControls: _deviceControls,
                 topBarPrimaryAction: _buildStageRouteAction(controller),

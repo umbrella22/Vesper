@@ -96,6 +96,8 @@ import io.github.umbrella22.vesper.player.android.VesperTrackSelection
 import io.github.umbrella22.vesper.player.android.VesperTrackSelectionMode
 import io.github.umbrella22.vesper.player.android.VesperTrackSelectionSnapshot
 import io.github.umbrella22.vesper.player.android.VesperVideoSurfaceKind
+import io.github.umbrella22.vesper.player.android.VesperPlayerSurfaceView
+import io.flutter.plugin.common.BinaryMessenger
 import java.io.File
 import java.util.UUID
 import java.util.WeakHashMap
@@ -133,6 +135,9 @@ class VesperPlayerAndroidPlugin :
     private lateinit var downloadEventChannel: EventChannel
     private lateinit var sequenceEventChannel: EventChannel
     private lateinit var applicationContext: Context
+    private lateinit var binaryMessenger: BinaryMessenger
+    private val geometryStreams = mutableMapOf<Int, VideoGeometryStream>()
+    private var pictureInPictureOwner: String? = null
 
     private var eventSink: EventChannel.EventSink? = null
     private var downloadEventSink: EventChannel.EventSink? = null
@@ -174,6 +179,7 @@ class VesperPlayerAndroidPlugin :
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         applicationContext = binding.applicationContext
+        binaryMessenger = binding.binaryMessenger
         methodChannel = MethodChannel(binding.binaryMessenger, METHOD_CHANNEL_NAME)
         eventChannel = EventChannel(binding.binaryMessenger, EVENT_CHANNEL_NAME)
         downloadEventChannel =
@@ -213,6 +219,8 @@ class VesperPlayerAndroidPlugin :
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        geometryStreams.values.forEach { it.close() }
+        geometryStreams.clear()
         disposeAllSessions()
         disposeAllDownloadSessions()
         disposeAllPlaybackSequences()
@@ -232,6 +240,7 @@ class VesperPlayerAndroidPlugin :
         registeredPlugins[binding.activity] = this
         binding.addRequestPermissionsResultListener(this)
         registerPictureInPictureModeChangedListener(binding.activity)
+        sessions[pictureInPictureOwner]?.let(::applyPictureInPictureConfiguration)
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
@@ -508,12 +517,14 @@ class VesperPlayerAndroidPlugin :
                 session.viewport = viewportMap.toFlutterViewport()
                 session.viewportHint =
                     viewportHintMap?.toFlutterViewportHint() ?: FlutterViewportHint.hidden()
+                applyPictureInPictureConfiguration(session)
                 null
             }
             "clearViewport" -> handleSessionCommand(call, result) { session ->
                 session.lastError = null
                 session.viewport = null
                 session.viewportHint = FlutterViewportHint.hidden()
+                applyPictureInPictureConfiguration(session)
                 null
             }
             "configureSystemPlayback" -> handleSessionCommand(call, result) { session ->
@@ -551,7 +562,7 @@ class VesperPlayerAndroidPlugin :
                     (call.argumentMap()["configuration"] as? Map<*, *>)?.stringMap()
                 session.pictureInPictureConfiguration =
                     configurationMap.toPictureInPictureConfiguration()
-                applyPictureInPictureConfiguration(session)
+                configurePictureInPictureOwner(session)
                 null
             }
             "requestPictureInPicture" -> handlePictureInPictureCommand(call, result) { session ->
@@ -603,7 +614,7 @@ class VesperPlayerAndroidPlugin :
     override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
         val arguments = (args as? Map<*, *>)?.stringMap() ?: emptyMap()
         val playerId = arguments["playerId"] as? String
-        val host = FrameLayout(context).apply {
+        val host = VesperPlayerSurfaceView(context).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -615,12 +626,17 @@ class VesperPlayerAndroidPlugin :
             clipToPadding = true
         }
 
+        val geometryStream = VideoGeometryStream(binaryMessenger, viewId, host) {
+            sessions[playerId]?.let(::applyPictureInPictureConfiguration)
+        }
+        geometryStreams[viewId] = geometryStream
         if (!playerId.isNullOrBlank()) {
             host.tag = "$PLAYER_SURFACE_TAG_PREFIX$playerId"
             bindSessionHost(playerId, host)
         }
 
         return VesperPlayerPlatformView(host) {
+            geometryStreams.remove(viewId)?.close()
             if (!playerId.isNullOrBlank()) {
                 unbindSessionHost(playerId, host)
             }
@@ -707,7 +723,7 @@ class VesperPlayerAndroidPlugin :
             return mapOf(
                 "isAvailable" to false,
                 "isActive" to
-                    (currentActivity?.isInPictureInPictureMode == true ||
+                    ((pictureInPictureOwner == session.id && currentActivity?.isInPictureInPictureMode == true) ||
                         session.pictureInPictureActive),
                 "canAutoEnter" to false,
                 "source" to "system",
@@ -730,7 +746,7 @@ class VesperPlayerAndroidPlugin :
             hostSupportsPictureInPicture =
                 currentActivity?.runCatching { supportsPictureInPicture() }?.getOrDefault(false)
                     ?: false,
-            isActive = currentActivity?.isInPictureInPictureMode == true ||
+            isActive = (pictureInPictureOwner == session.id && currentActivity?.isInPictureInPictureMode == true) ||
                 session.pictureInPictureActive,
             canAutoEnter =
                 session.pictureInPictureConfiguration.enabled &&
@@ -738,7 +754,18 @@ class VesperPlayerAndroidPlugin :
         )
     }
 
+    private fun configurePictureInPictureOwner(session: PlayerSession) {
+        val owner = sessions[pictureInPictureOwner]
+        if (owner != null && owner !== session &&
+            (owner.pictureInPictureActive || owner.pictureInPictureState in setOf("entering", "active", "exiting"))) return
+        if (session.pictureInPictureConfiguration.enabled || pictureInPictureOwner == session.id) {
+            pictureInPictureOwner = session.id
+            applyPictureInPictureConfiguration(session)
+        }
+    }
+
     private fun applyPictureInPictureConfiguration(session: PlayerSession) {
+        if (pictureInPictureOwner != session.id) return
         val currentActivity = activity ?: return
         if (!currentActivity.platformSupportsPictureInPicture()) {
             return
@@ -772,6 +799,23 @@ class VesperPlayerAndroidPlugin :
             throw PictureInPictureRequestException(error)
         }
 
+        val previousOwner = pictureInPictureOwner
+        if (previousOwner != null && previousOwner != session.id &&
+            sessions[previousOwner]?.let { it.pictureInPictureActive || it.pictureInPictureState in setOf("entering", "active", "exiting") } == true) {
+            val error = VesperPictureInPictureError(
+                code = VesperPictureInPictureErrorCode.PictureInPictureUnavailableForCurrentRoute,
+                message = "Another player owns the active Picture in Picture presentation.",
+            )
+            failPictureInPicture(session, error)
+            throw PictureInPictureRequestException(error)
+        }
+        // The platform can synchronously notify entry. Roll back this tentative
+        // owner on rejection so failed requests cannot steal auto-entry updates.
+        pictureInPictureOwner = session.id
+        fun restoreOwner() {
+            pictureInPictureOwner = previousOwner
+            sessions[previousOwner]?.let(::applyPictureInPictureConfiguration)
+        }
         session.pictureInPictureState = "entering"
         session.pictureInPictureActive = false
         emitPictureInPictureEvent(session)
@@ -779,11 +823,13 @@ class VesperPlayerAndroidPlugin :
             runCatching {
                 currentActivity.enterPictureInPictureMode(session.buildPictureInPictureParams())
             }.getOrElse { error ->
+                restoreOwner()
                 val pipError = error.toPictureInPictureRequestError()
                 failPictureInPicture(session, pipError)
                 throw PictureInPictureRequestException(pipError)
             }
         if (!entered && currentActivity.isInPictureInPictureMode != true) {
+            restoreOwner()
             val error =
                 VesperPictureInPictureError(
                     code =
@@ -800,6 +846,12 @@ class VesperPlayerAndroidPlugin :
     }
 
     private fun exitPictureInPicture(session: PlayerSession) {
+        if (pictureInPictureOwner != session.id) {
+            session.pictureInPictureState = "inactive"
+            session.pictureInPictureActive = false
+            emitPictureInPictureEvent(session)
+            return
+        }
         val currentActivity = activity
         if (currentActivity == null) {
             val error =
@@ -883,13 +935,7 @@ class VesperPlayerAndroidPlugin :
     }
 
     private fun handlePictureInPictureModeChanged(isInPictureInPictureMode: Boolean) {
-        val targetSession =
-            sessions.values.firstOrNull { session ->
-                session.pictureInPictureState == "entering" ||
-                    session.pictureInPictureState == "active" ||
-                    session.pictureInPictureState == "exiting" ||
-                    session.pictureInPictureActive
-            } ?: return
+        val targetSession = sessions[pictureInPictureOwner] ?: return
         targetSession.pictureInPictureActive = isInPictureInPictureMode
         targetSession.pictureInPictureState =
             if (isInPictureInPictureMode) {
@@ -1496,11 +1542,9 @@ class VesperPlayerAndroidPlugin :
         if (!currentActivity.platformSupportsPictureInPicture()) {
             return
         }
-        val targetSession =
-            sessions.values.firstOrNull { session ->
-                session.pictureInPictureConfiguration.enabled &&
-                    session.pictureInPictureConfiguration.autoEnter
-            } ?: return
+        val targetSession = sessions[pictureInPictureOwner] ?: return
+        if (!targetSession.pictureInPictureConfiguration.enabled ||
+            !targetSession.pictureInPictureConfiguration.autoEnter) return
         if (targetSession.pictureInPictureActive ||
             targetSession.pictureInPictureState == "entering" ||
             targetSession.pictureInPictureState == "active" ||
@@ -1798,6 +1842,18 @@ class VesperPlayerAndroidPlugin :
     }
 
     private fun observeSession(session: PlayerSession) {
+        session.controller.setOnVideoPresentationChangedListener {
+            if (isCurrentSession(session)) {
+                emitSnapshot(session)
+                applyPictureInPictureConfiguration(session)
+            }
+        }
+        session.controller.setOnHdrOutputChangedListener { capturedOutput ->
+            emitSnapshot(
+                session,
+                buildSnapshotMap(session) + ("hdrOutput" to capturedOutput.toFlutterMap(session.id)),
+            )
+        }
         session.warningDrainJob?.cancel()
         // Runtime warnings have exactly one consumer: the snapshot observer
         // below. A separate drain job can consume warnings before the event
@@ -1945,6 +2001,12 @@ class VesperPlayerAndroidPlugin :
         error: VesperPictureInPictureError? = null,
         diagnostics: Map<String, Any?> = emptyMap(),
     ) {
+        val outputState = session.pictureInPictureState to session.pictureInPictureActive
+        if (session.lastOutputPictureInPictureState != outputState) {
+            session.lastOutputPictureInPictureState = outputState
+            session.controller.invalidateHdrOutput()
+            emitSnapshot(session)
+        }
         emitEvent(session.pictureInPictureEventMap(error = error, diagnostics = diagnostics))
     }
 
@@ -2114,9 +2176,8 @@ class VesperPlayerAndroidPlugin :
             val videoVariantObservation = session.controller.videoVariantObservation.value
             val resiliencePolicy = session.controller.resiliencePolicy.value
             val hostLastError = uiState.lastError?.toMap()
-            if (hostLastError != null) {
-                session.lastError = hostLastError
-            }
+            // HDR invalidation can sample the old host state during recovery.
+            // Only error delivery owns the cache; sampling must not restore it.
             val resolvedLastError = hostLastError ?: session.lastError
 
             return mapOf(
@@ -2141,7 +2202,11 @@ class VesperPlayerAndroidPlugin :
                 "confirmedSubtitleSelection" to trackSelection.confirmedSubtitle.toMap(),
                 "effectiveSubtitleTrackId" to trackSelection.effectiveSubtitleTrackId,
                 "effectiveVideoTrackId" to effectiveVideoTrackId,
+                // Display/codec capability and source metadata do not observe
+                // the active Surface's output. Do not reuse probe caches here.
+                "hdrOutput" to session.controller.hdrOutput?.value.toFlutterMap(session.id),
                 "videoVariantObservation" to videoVariantObservation?.toMap(),
+                "videoPresentation" to session.controller.videoPresentation?.value?.toFlutterMap(),
                 "resiliencePolicy" to resiliencePolicy.toMap(),
                 "pluginDiagnostics" to session.controller.pluginDiagnostics,
                 "lastError" to resolvedLastError,
@@ -2206,6 +2271,13 @@ class VesperPlayerAndroidPlugin :
         sequenceSessions.values.filter { it.playerId == session.id }.toList()
             .forEach(::disposePlaybackSequence)
         session.observerJob?.cancel()
+        session.controller.setOnHdrOutputChangedListener(null)
+        session.controller.setOnVideoPresentationChangedListener(null)
+        if (pictureInPictureOwner == session.id) {
+            session.pictureInPictureConfiguration = FlutterPictureInPictureConfiguration(enabled = false)
+            applyPictureInPictureConfiguration(session)
+            pictureInPictureOwner = null
+        }
         session.warningDrainJob?.cancel()
         surfaceHostLifecycle.detachSession(session)
         session.controller.dispose()

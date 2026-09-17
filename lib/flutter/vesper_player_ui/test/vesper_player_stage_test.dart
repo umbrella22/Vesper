@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/semantics.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player/vesper_player.dart';
@@ -25,7 +26,8 @@ void main() {
   Future<void> pumpStage(
     WidgetTester tester, {
     Widget? contentOverlay,
-    Widget? landscapeControlBarLeading,
+    VesperStageContentTapHandler? onContentTap,
+    Widget? expandedControlBarLeading,
     VoidCallback? onNavigateBack,
     String? navigateBackSemanticLabel,
     Widget? topBarPrimaryAction,
@@ -34,7 +36,9 @@ void main() {
     VesperPlayerStageStrings strings = const VesperPlayerStageStrings(),
     bool keepControlsVisible = false,
     bool pictureInPicturePresentation = false,
-    bool isPortrait = true,
+    VesperStageControlLayout controlLayout = VesperStageControlLayout.compact,
+    bool isFullscreen = false,
+    Size stageSize = const Size(400, 240),
     bool insideVerticalScrollView = false,
     ScrollController? scrollController,
   }) async {
@@ -45,15 +49,17 @@ void main() {
 
     final stage = Center(
       child: SizedBox(
-        width: 400,
-        height: 240,
+        width: stageSize.width,
+        height: stageSize.height,
         child: VesperPlayerStage(
           controller: controller,
           snapshot: snapshot ?? _playingSnapshot,
-          isPortrait: isPortrait,
+          controlLayout: controlLayout,
+          isFullscreen: isFullscreen,
           deviceControls: deviceControls,
           contentOverlay: contentOverlay,
-          landscapeControlBarLeading: landscapeControlBarLeading,
+          onContentTap: onContentTap,
+          expandedControlBarLeading: expandedControlBarLeading,
           onNavigateBack: onNavigateBack,
           navigateBackSemanticLabel: navigateBackSemanticLabel,
           topBarPrimaryAction: topBarPrimaryAction,
@@ -103,6 +109,297 @@ void main() {
       VesperPlayerStageSheet.menu,
     ]);
   });
+
+  bool controlsIgnoreInput(WidgetTester tester) => tester
+      .widgetList<IgnorePointer>(find.ancestor(
+        of: find.byIcon(Icons.pause_rounded),
+        matching: find.byType(IgnorePointer),
+      ))
+      .any((widget) => widget.ignoring);
+
+  for (final portrait in <bool>[true, false]) {
+    testWidgets('control hit padding consumes taps, portrait=$portrait',
+        (tester) async {
+      var contentTaps = 0;
+      await pumpStage(tester,
+          controlLayout: portrait
+              ? VesperStageControlLayout.compact
+              : VesperStageControlLayout.expanded, onContentTap: (_) {
+        contentTaps += 1;
+        return true;
+      });
+      final buttons = find.byType(VesperStageIconButton);
+      for (final element in buttons.evaluate()) {
+        final bounds = tester.getRect(find.byWidget(element.widget));
+        expect(bounds.width, greaterThanOrEqualTo(48));
+        expect(bounds.height, greaterThanOrEqualTo(48));
+        // This transparent edge is outside the original 34/38 pixel circle.
+        await tester.tapAt(bounds.centerLeft + const Offset(2, 0));
+      }
+      expect(platform.togglePauseCount, 1);
+      expect(fullscreenToggleCount, 1);
+      expect(
+          openedSheets, <VesperPlayerStageSheet>[VesperPlayerStageSheet.menu]);
+
+      if (!portrait) {
+        final pills = find.byType(VesperStagePillButton);
+        final first = tester.getRect(pills.first);
+        final second = tester.getRect(pills.last);
+        expect(first.height, greaterThanOrEqualTo(48));
+        expect(first.width, greaterThanOrEqualTo(48));
+        expect(first.overlaps(second), isFalse);
+        await tester.tapAt(first.topCenter + const Offset(0, 2));
+        await tester.tapAt(second.topCenter + const Offset(0, 2));
+        expect(openedSheets, <VesperPlayerStageSheet>[
+          VesperPlayerStageSheet.menu,
+          VesperPlayerStageSheet.speed,
+          VesperPlayerStageSheet.quality,
+        ]);
+      }
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(contentTaps, 0);
+    });
+  }
+
+  for (final portrait in <bool>[true, false]) {
+    testWidgets(
+        'consumed content tap uses Stage coordinates, portrait=$portrait',
+        (tester) async {
+      final taps = <Offset>[];
+      await pumpStage(tester,
+          controlLayout: portrait
+              ? VesperStageControlLayout.compact
+              : VesperStageControlLayout.expanded, onContentTap: (position) {
+        taps.add(position);
+        return true;
+      });
+      final origin = tester.getTopLeft(find.byType(VesperPlayerStage));
+      const localPosition = Offset(145, 100);
+      await tester.tapAt(origin + localPosition);
+      expect(taps, isEmpty);
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(taps, <Offset>[localPosition]);
+      expect(controlsIgnoreInput(tester), isFalse);
+      expect(platform.togglePauseCount, 0);
+
+      // Hiding controls changes the gesture height, but not its coordinates.
+      await tester.pump(const Duration(seconds: 3));
+      expect(controlsIgnoreInput(tester), isTrue);
+      await tester.tapAt(origin + localPosition);
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(taps, <Offset>[localPosition, localPosition]);
+      expect(controlsIgnoreInput(tester), isTrue);
+    });
+  }
+
+  testWidgets(
+      'unconsumed content tap preserves controls and keep-visible rules',
+      (tester) async {
+    var calls = 0;
+    bool handleTap(Offset _) {
+      calls += 1;
+      return false;
+    }
+
+    await pumpStage(tester, onContentTap: handleTap);
+    await tester.tapAt(const Offset(400, 300));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(calls, 1);
+    expect(controlsIgnoreInput(tester), isTrue);
+
+    await pumpStage(tester, onContentTap: handleTap, keepControlsVisible: true);
+    await tester.tapAt(const Offset(400, 300));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(calls, 2);
+    expect(controlsIgnoreInput(tester), isFalse);
+  });
+
+  for (final layout in VesperStageControlLayout.values) {
+    for (final fullscreen in <bool>[false, true]) {
+      testWidgets(
+          '$layout fullscreen=$fullscreen uses the actual fullscreen action',
+          (tester) async {
+        await pumpStage(tester,
+            controlLayout: layout,
+            isFullscreen: fullscreen,
+            stageSize: const Size(390, 560));
+        expect(
+            find.byIcon(fullscreen
+                ? Icons.fullscreen_exit_rounded
+                : Icons.fullscreen_rounded),
+            findsOneWidget);
+        await tester.tap(find.byIcon(fullscreen
+            ? Icons.fullscreen_exit_rounded
+            : Icons.fullscreen_rounded));
+        expect(fullscreenToggleCount, 1);
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+
+  testWidgets('resizing to portrait cancels stage seek before release',
+      (tester) async {
+    await pumpStage(tester);
+    final drag = await tester.startGesture(const Offset(400, 300));
+    await drag.moveBy(const Offset(50, 0));
+    await drag.moveBy(const Offset(40, 0));
+    await tester.pump();
+    await pumpStage(tester,
+        stageSize: const Size(390, 560), isFullscreen: true);
+    await drag.up();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(platform.seekRatios, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('fullscreen change cancels timeline seek with the same layout',
+      (tester) async {
+    await pumpStage(tester);
+    final drag = await tester
+        .startGesture(tester.getCenter(find.byType(VesperTimelineScrubber)));
+    await drag.moveBy(const Offset(20, 0));
+    await tester.pump();
+    await pumpStage(tester, isFullscreen: true);
+    await drag.up();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(platform.seekRatios, isEmpty);
+  });
+
+  testWidgets('layout change restores a held temporary playback speed',
+      (tester) async {
+    await pumpStage(tester);
+    final hold = await tester.startGesture(const Offset(400, 300));
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(platform.playbackRates, <double>[2]);
+    await pumpStage(tester,
+        controlLayout: VesperStageControlLayout.expanded, isFullscreen: true);
+    expect(platform.playbackRates, <double>[2, 1]);
+    await hold.up();
+    await tester.pump();
+    expect(platform.playbackRates, <double>[2, 1]);
+  });
+
+  testWidgets('double taps, drags, long presses and cancellation skip content',
+      (tester) async {
+    var calls = 0;
+    await pumpStage(tester, onContentTap: (_) {
+      calls += 1;
+      return true;
+    });
+    const point = Offset(400, 300);
+    await tester.tapAt(point);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tapAt(point);
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(platform.togglePauseCount, 1);
+    expect(calls, 0);
+
+    await tester.dragFrom(point, const Offset(60, 0));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(platform.seekRatios, isNotEmpty);
+    await tester.longPressAt(point);
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(platform.playbackRates, <double>[2, 1]);
+    final cancelled = await tester.startGesture(point);
+    await cancelled.cancel();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(calls, 0);
+  });
+
+  testWidgets('controls and their reserved bottom area skip content',
+      (tester) async {
+    var calls = 0;
+    var backCalls = 0;
+    await pumpStage(tester,
+        onNavigateBack: () => backCalls++,
+        onContentTap: (_) {
+          calls += 1;
+          return true;
+        });
+    await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tester.tap(find.byIcon(Icons.pause_rounded));
+    await tester.tap(find.byIcon(Icons.fullscreen_rounded));
+    await tester.drag(find.byType(VesperTimelineScrubber), const Offset(20, 0));
+    final stageRect = tester.getRect(find.byType(VesperPlayerStage));
+    await tester.tapAt(stageRect.bottomLeft + const Offset(3, -3));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(backCalls, 1);
+    expect(openedSheets, <VesperPlayerStageSheet>[VesperPlayerStageSheet.menu]);
+    expect(platform.togglePauseCount, 1);
+    expect(fullscreenToggleCount, 1);
+    expect(calls, 0);
+  });
+
+  testWidgets('pending tap uses the latest content handler', (tester) async {
+    var oldCalls = 0;
+    var newCalls = 0;
+    await pumpStage(tester, onContentTap: (_) {
+      oldCalls += 1;
+      return true;
+    });
+    await tester.tapAt(const Offset(400, 300));
+    await tester.pump(const Duration(milliseconds: 50));
+    await pumpStage(tester, onContentTap: (_) {
+      newCalls += 1;
+      return true;
+    });
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(oldCalls, 0);
+    expect(newCalls, 1);
+  });
+
+  testWidgets(
+      'accessibility tap keeps the controls action without a content hit',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      var calls = 0;
+      await pumpStage(tester, onContentTap: (_) {
+        calls += 1;
+        return true;
+      });
+      final stageGesture = find.byWidgetPredicate(
+        (widget) => widget is GestureDetector && widget.onDoubleTap != null,
+      );
+      final node = tester.getSemantics(stageGesture);
+      tester.binding.performSemanticsAction(SemanticsActionEvent(
+        viewId: tester.view.viewId,
+        nodeId: node.id,
+        type: SemanticsAction.tap,
+      ));
+      await tester.pump();
+      expect(calls, 0);
+      expect(controlsIgnoreInput(tester), isTrue);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  for (final enterPip in <bool>[true, false]) {
+    testWidgets(
+        'pending content tap cancelled on ${enterPip ? 'PiP' : 'dispose'}',
+        (tester) async {
+      var calls = 0;
+      bool handleTap(Offset _) {
+        calls += 1;
+        return true;
+      }
+
+      await pumpStage(tester, onContentTap: handleTap);
+      await tester.tapAt(const Offset(400, 300));
+      await tester.pump(const Duration(milliseconds: 50));
+      if (enterPip) {
+        await pumpStage(tester,
+            onContentTap: handleTap, pictureInPicturePresentation: true);
+      } else {
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(calls, 0);
+    });
+  }
 
   testWidgets('top bar action slots render primary left of secondary',
       (tester) async {
@@ -202,14 +499,14 @@ void main() {
 
   testWidgets('empty landscape slot does not move built-in controls',
       (tester) async {
-    await pumpStage(tester, isPortrait: false);
+    await pumpStage(tester, controlLayout: VesperStageControlLayout.expanded);
     final speedWithoutSlot =
         tester.getRect(find.byType(VesperStagePillButton).first);
 
     await pumpStage(
       tester,
-      isPortrait: false,
-      landscapeControlBarLeading: const SizedBox.shrink(
+      controlLayout: VesperStageControlLayout.expanded,
+      expandedControlBarLeading: const SizedBox.shrink(
         key: Key('empty-landscape-slot'),
       ),
     );
@@ -223,8 +520,8 @@ void main() {
       (tester) async {
     await pumpStage(
       tester,
-      isPortrait: false,
-      landscapeControlBarLeading: const SizedBox(
+      controlLayout: VesperStageControlLayout.expanded,
+      expandedControlBarLeading: const SizedBox(
         key: Key('fixed-landscape-slot'),
         width: 72,
         height: 38,
@@ -242,8 +539,8 @@ void main() {
 
     await pumpStage(
       tester,
-      isPortrait: false,
-      landscapeControlBarLeading: const Expanded(
+      controlLayout: VesperStageControlLayout.expanded,
+      expandedControlBarLeading: const Expanded(
         child: SizedBox(
           key: Key('flex-landscape-slot'),
           height: 38,
@@ -251,10 +548,14 @@ void main() {
       ),
     );
 
+    final flexibleSlot =
+        tester.getRect(find.byKey(const Key('flex-landscape-slot')));
+    final speedButton =
+        tester.getRect(find.byType(VesperStagePillButton).first);
+    // The slot and the adjacent Spacer divide the space left by the buttons.
+    expect(flexibleSlot.width, greaterThan(0));
     expect(
-      tester.getSize(find.byKey(const Key('flex-landscape-slot'))).width,
-      greaterThan(72),
-    );
+        speedButton.left - flexibleSlot.right, closeTo(flexibleSlot.width, 1));
   });
 
   testWidgets('keepControlsVisible restarts auto-hide after release',
@@ -626,6 +927,7 @@ final class _FakeVesperPlayerPlatform extends VesperPlayerPlatform {
   var togglePauseCount = 0;
   var viewportUpdateCount = 0;
   final seekRatios = <double>[];
+  final playbackRates = <double>[];
 
   @override
   Future<VesperPlatformCreateResult> createPlayer({
@@ -663,6 +965,11 @@ final class _FakeVesperPlayerPlatform extends VesperPlayerPlatform {
   @override
   Future<void> togglePause(String playerId) async {
     togglePauseCount += 1;
+  }
+
+  @override
+  Future<void> setPlaybackRate(String playerId, double rate) async {
+    playbackRates.add(rate);
   }
 
   @override

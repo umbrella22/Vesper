@@ -34,6 +34,7 @@ extension VesperPlayerStage {
                         )
                         .simultaneousGesture(stageDragGesture(stageSize: proxy.size))
                         .simultaneousGesture(temporarySpeedGesture())
+                        .id(interactionRevision)
                 }
             }
 
@@ -113,10 +114,10 @@ extension VesperPlayerStage {
 
                         Spacer(minLength: 0)
 
-                        if isFullscreen {
-                            landscapeControls
+                        if controlLayout == .expanded {
+                            expandedControls.id(interactionRevision)
                         } else {
-                            portraitControls
+                            compactControls.id(interactionRevision)
                         }
                     }
                 }
@@ -128,17 +129,21 @@ extension VesperPlayerStage {
                     .transition(.opacity)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: isFullscreen ? 0 : 28, style: .continuous))
+        .clipped()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
-            if !isFullscreen {
-                RoundedRectangle(cornerRadius: 28, style: .continuous)
+            if controlLayout == .compact {
+                Rectangle()
                     .stroke(Color.white.opacity(0.08), lineWidth: 1)
             }
         }
-        .onDisappear {
-            endTemporarySpeedGesture()
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+            if stageSize != .zero && stageSize != size { cancelInteraction() }
+            stageSize = size
         }
+        .onChange(of: controlLayout) { _, _ in cancelInteraction() }
+        .onChange(of: isFullscreen) { _, _ in cancelInteraction() }
+        .onDisappear { cancelInteraction() }
         .onChange(of: pictureInPicturePresentation) { _, enabled in
             guard enabled else {
                 return

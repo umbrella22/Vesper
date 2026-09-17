@@ -74,6 +74,13 @@ class VesperPlayerController {
     return VesperPlayerPlatform.instance.probePlaybackCapability(request);
   }
 
+  /// Probes the explicit request and associates capability diagnostics with
+  /// this player. Association does not fill missing source, codec, dimensions,
+  /// frame rate or plugin configuration from the current playback session.
+  ///
+  /// Supply those inputs explicitly, including for candidate sources. The
+  /// result describes capabilities, never [VesperPlayerSnapshot.hdrOutput].
+  /// Hosts should discard late results after changing the probe's target.
   Future<VesperPlaybackCapabilityProbeResult> probeAssociatedPlaybackCapability(
     VesperPlaybackCapabilityProbeRequest request,
   ) {
@@ -102,6 +109,10 @@ class VesperPlayerController {
   Duration _progressRefreshDelay = _progressRefreshInterval;
 
   VesperPlayerSnapshot get snapshot => snapshotListenable.value;
+
+  @internal
+  Stream<VesperVideoSurfaceGeometry?> videoGeometryForView(int viewId) =>
+      _platform.videoGeometryForView(viewId);
 
   /// The platform contract used by the sequence facade. It is intentionally
   /// limited to the public platform-interface methods.
@@ -144,7 +155,8 @@ class VesperPlayerController {
       );
       throw const VesperPerformanceDiagnosticsException(
         code: 'controllerDisposed',
-        message: 'The player controller was disposed while diagnostics started.',
+        message:
+            'The player controller was disposed while diagnostics started.',
       );
     }
     _performanceDiagnosticsSession = session;

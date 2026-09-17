@@ -26,6 +26,15 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
   final EventChannel downloadEventChannel;
   final EventChannel sequenceEventChannel;
 
+  @override
+  Stream<VesperVideoSurfaceGeometry?> videoGeometryForView(int viewId) =>
+      EventChannel('io.github.umbrella22.vesper_player/views/$viewId/geometry',
+              const StandardMethodCodec(), eventChannel.binaryMessenger)
+          .receiveBroadcastStream()
+          .map((dynamic value) => value == null
+              ? null
+              : VesperVideoSurfaceGeometry.fromMap(vesperDecodeMap(value)));
+
   late final Stream<VesperPlayerEvent> _events = eventChannel
       .receiveBroadcastStream()
       .where((dynamic event) => event is Map)

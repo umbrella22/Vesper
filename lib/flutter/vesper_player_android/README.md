@@ -238,3 +238,12 @@ plugins.
 is a real MethodChannel command rather than a no-op. Text
 cues render in the native surface host; frames are never sent through Dart.
 HTTP `.flv` URLs remain progressive unless `VesperPlayerSource.flvLive` is used.
+
+## Current display output
+
+Player snapshots include native `sourceRevision` and `outputGeneration` in
+`hdrOutput`. Native lifecycle events invalidate output evidence, including
+sequence source activations and PiP transitions. The platform currently reports
+`unknown` with `outputObservationUnavailable`; capability and source metadata
+cannot confirm actual HDR or SDR output. See the
+[output contract](../vesper_player_platform_interface/doc/hdr-output.md).

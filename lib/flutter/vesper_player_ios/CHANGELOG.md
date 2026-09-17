@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-17
+
+- Added media dimensions and per-platform-view picture geometry channels.
+- Released view streams and surface bindings when Flutter releases its wrapper.
+
+- Added native source/output generations and lifecycle invalidation for source,
+  track, Surface, display, PiP and disposal changes; late observation results
+  are rejected by player instance and generation.
+
+- Reported HDR output as `unknown` with `outputObservationUnavailable` in
+  snapshots; HDR eligibility and source metadata do not confirm active output.
+
 ## 0.5.6 - 2026-09-16
 
 - Raised the minimum supported Flutter toolchain to 3.47.2.

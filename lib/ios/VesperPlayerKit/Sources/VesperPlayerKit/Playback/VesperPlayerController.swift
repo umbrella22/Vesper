@@ -152,6 +152,33 @@ public final class VesperPlayerController: ObservableObject {
     public private(set) var pluginDiagnostics: [[String: Any]]
 
     private var bridgeObservation: AnyCancellable?
+    private var hdrOutputObservation: AnyCancellable?
+    private let hdrOutputTracker: VesperHdrOutputTracker?
+    private var videoPresentationObservation: AnyCancellable?
+
+    /// Display dimensions independent of playback view layout.
+    @Published public private(set) var videoPresentation: VesperVideoPresentation?
+
+    public var videoPresentationPublisher: AnyPublisher<VesperVideoPresentation?, Never> {
+        $videoPresentation.eraseToAnyPublisher()
+    }
+
+    /// Current display-output evidence. Unsupported bridges return nil.
+    public var hdrOutput: VesperHdrOutputSnapshot? { hdrOutputTracker?.snapshot }
+
+    /// Publishes captured output transitions on the main actor, including unknown
+    /// invalidations that must precede a replacement observer's confirmation.
+    public var hdrOutputPublisher: AnyPublisher<VesperHdrOutputSnapshot, Never> {
+        hdrOutputTracker?.$snapshot.eraseToAnyPublisher()
+            ?? Empty<VesperHdrOutputSnapshot, Never>().eraseToAnyPublisher()
+    }
+
+    /// Clears evidence when the host hands presentation to or from system PiP.
+    public func invalidateHdrOutput() { hdrOutputTracker?.outputPathChanged() }
+
+    /// True only while objectWillChange forwards a dedicated HDR output publication.
+    @_spi(VesperFlutter)
+    public var isPublishingHdrOutputUpdate: Bool { publishingHdrOutputUpdate }
     private let initializeImpl: () -> Void
     private let initializeAsyncImpl: () async throws -> Void
     private let disposeImpl: () -> Void
@@ -215,6 +242,7 @@ public final class VesperPlayerController: ObservableObject {
     private let screenSleepToken = VesperScreenSleepToken()
     private var keepScreenOnDuringPlayback: Bool
     private var pendingTimelineOnlyUpdate = false
+    private var publishingHdrOutputUpdate = false
     private var systemPlaybackCoordinatorStorage: VesperSystemPlaybackCoordinator?
     private var isDisposed = false
     private weak var sequenceAttachment: VesperPlaybackSequenceAttachment?
@@ -237,6 +265,8 @@ public final class VesperPlayerController: ObservableObject {
         keepScreenOnDuringPlayback: Bool = true
     ) {
         backend = bridge.backend
+        hdrOutputTracker = bridge.hdrOutputTracker
+        videoPresentation = bridge.videoPresentationState?.value
         self.keepScreenOnDuringPlayback = keepScreenOnDuringPlayback
         publishedUiState = bridge.publishedUiState
         publishedTrackCatalog = bridge.publishedTrackCatalog
@@ -319,6 +349,17 @@ public final class VesperPlayerController: ObservableObject {
         performanceDiagnosticsSnapshotImpl = bridge.performanceDiagnosticsSnapshot
         stopPerformanceDiagnosticsImpl = bridge.stopPerformanceDiagnostics
         routePickerPlayerImpl = { bridge.routePickerPlayer }
+        videoPresentationObservation = bridge.videoPresentationState?.$value.dropFirst().sink { [weak self] value in
+            self?.pendingTimelineOnlyUpdate = false
+            self?.videoPresentation = value
+        }
+        hdrOutputObservation = hdrOutputTracker?.$snapshot.dropFirst().sink { [weak self] _ in
+            guard let self else { return }
+            self.pendingTimelineOnlyUpdate = false
+            self.publishingHdrOutputUpdate = true
+            defer { self.publishingHdrOutputUpdate = false }
+            self.objectWillChange.send()
+        }
         bridgeObservation = bridge.objectWillChange.sink { [weak self] _ in
             guard let self else { return }
             let timelineOnlyUpdate = bridge.consumeTimelineOnlyUpdate()
@@ -379,6 +420,10 @@ public final class VesperPlayerController: ObservableObject {
         attachment?.onControllerDisposed(self)
         bridgeObservation?.cancel()
         bridgeObservation = nil
+        videoPresentationObservation?.cancel()
+        videoPresentationObservation = nil
+        hdrOutputObservation?.cancel()
+        hdrOutputObservation = nil
         VesperScreenSleepCoordinator.release(screenSleepToken)
         systemPlaybackCoordinatorStorage?.clear()
         disposeImpl()

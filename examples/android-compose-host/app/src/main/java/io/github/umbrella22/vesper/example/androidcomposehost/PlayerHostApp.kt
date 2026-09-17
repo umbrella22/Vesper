@@ -1,5 +1,7 @@
 package io.github.umbrella22.vesper.example.androidcomposehost
 
+import io.github.umbrella22.vesper.player.android.compose.ui.VesperStageControlLayout
+
 import android.Manifest
 import android.app.Activity
 import android.app.PictureInPictureParams
@@ -1613,7 +1615,8 @@ internal fun PlayerHostApp(
                     uiState = displayedUiState,
                     controlsVisible = false,
                     pendingSeekRatio = null,
-                    isPortrait = false,
+                    controlLayout = VesperStageControlLayout.Expanded,
+                    isFullscreen = true,
                     modifier = Modifier.fillMaxSize(),
                     pictureInPicturePresentation = true,
                     onControlsVisibilityChange = { _ -> },
@@ -1699,7 +1702,8 @@ internal fun PlayerHostApp(
                                 uiState = displayedUiState,
                                 controlsVisible = controlsVisible,
                                 pendingSeekRatio = pendingSeekRatio,
-                                isPortrait = false,
+                                controlLayout = VesperStageControlLayout.Expanded,
+                    isFullscreen = true,
                                 modifier = Modifier.fillMaxSize(),
                                 pictureInPicturePresentation = pictureInPicturePresentation,
                                 onControlsVisibilityChange = { controlsVisible = it },
@@ -1753,7 +1757,8 @@ internal fun PlayerHostApp(
                                         uiState = displayedUiState,
                                         controlsVisible = controlsVisible,
                                         pendingSeekRatio = pendingSeekRatio,
-                                        isPortrait = true,
+                                        controlLayout = VesperStageControlLayout.Compact,
+                    isFullscreen = false,
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .height(248.dp),
@@ -2225,7 +2230,8 @@ private fun ExamplePlayerStageWithTracks(
     uiState: io.github.umbrella22.vesper.player.android.PlayerHostUiState,
     controlsVisible: Boolean,
     pendingSeekRatio: Float?,
-    isPortrait: Boolean,
+    controlLayout: VesperStageControlLayout,
+    isFullscreen: Boolean,
     modifier: Modifier,
     pictureInPicturePresentation: Boolean,
     onControlsVisibilityChange: (Boolean) -> Unit,
@@ -2249,7 +2255,8 @@ private fun ExamplePlayerStageWithTracks(
         uiState = uiState,
         controlsVisible = controlsVisible,
         pendingSeekRatio = pendingSeekRatio,
-        isPortrait = isPortrait,
+        controlLayout = controlLayout,
+        isFullscreen = isFullscreen,
         trackCatalog = trackCatalog,
         trackSelection = trackSelection,
         modifier = modifier,

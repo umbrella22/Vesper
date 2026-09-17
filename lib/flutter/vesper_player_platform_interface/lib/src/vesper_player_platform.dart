@@ -318,6 +318,10 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
 
   Future<void> clearViewport(String playerId);
 
+  /// Geometry events for one native view, independent of player snapshots.
+  Stream<VesperVideoSurfaceGeometry?> videoGeometryForView(int viewId) =>
+      const Stream<VesperVideoSurfaceGeometry?>.empty();
+
   Future<void> configureSystemPlayback(
     String playerId,
     VesperSystemPlaybackConfiguration configuration,

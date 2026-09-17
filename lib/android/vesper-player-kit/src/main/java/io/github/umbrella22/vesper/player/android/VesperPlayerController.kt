@@ -59,6 +59,30 @@ class VesperPlayerController internal constructor(
     val effectiveVideoTrackId: StateFlow<String?>
         get() = bridge.effectiveVideoTrackId
 
+    /** Latest display-output evidence. StateFlow collectors may conflate transitions. */
+    val hdrOutput: StateFlow<VesperHdrOutputSnapshot>?
+        get() = bridge.hdrOutputTracker?.snapshot
+
+    /** Display dimensions and the current surface's local geometry in dp. */
+    val videoPresentation: StateFlow<VesperVideoPresentation?>?
+        get() = bridge.videoPresentation
+
+    fun setOnVideoPresentationChangedListener(listener: ((VesperVideoPresentation?) -> Unit)?) =
+        bridge.setOnVideoPresentationChangedListener(listener)
+
+    /**
+     * Replaces the listener and immediately supplies the current output when supported.
+     * Every subsequent transition is delivered synchronously on the main looper,
+     * including unknown invalidations before reconfirmation. The listener must return
+     * promptly without throwing or changing playback. Pass null to unregister;
+     * disposal also releases the listener. Unsupported bridges do not invoke it.
+     */
+    fun setOnHdrOutputChangedListener(listener: ((VesperHdrOutputSnapshot) -> Unit)?) =
+        bridge.setOnHdrOutputChangedListener(listener)
+
+    /** Clears evidence when the host hands presentation to or from system PiP. */
+    fun invalidateHdrOutput() = bridge.invalidateHdrOutput()
+
     val videoVariantObservation: StateFlow<VesperVideoVariantObservation?>
         get() = bridge.videoVariantObservation
 

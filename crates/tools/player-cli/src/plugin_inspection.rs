@@ -1010,7 +1010,7 @@ mod tests {
                 publisher: "dev.vesper.publisher".to_owned(),
             },
             compatibility: PluginCompatibilityDescriptor {
-                host_sdk: ">=0.5.0, <0.6.0".to_owned(),
+                host_sdk: format!("={}", env!("CARGO_PKG_VERSION")),
                 abi_major: 1,
                 abi_minor_min: 0,
                 abi_minor_max: 0,

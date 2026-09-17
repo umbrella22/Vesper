@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-17
+
+- Added AVPlayer presentation dimensions and per-view AVPlayerLayer video
+  rectangles, with source/host invalidation and SwiftUI geometry callbacks.
+- **Breaking:** Stage replaces `isCompactLayout` with `controlLayout`; fullscreen
+  state remains independent. Renamed the expanded control-row slot.
+- Cancelled gestures on layout changes, restored temporary speed, and exposed
+  adjustable timeline accessibility.
+
+- Added controller HDR-output snapshots with independent source/output
+  generations, native lifecycle invalidation and stale observation rejection.
+  Current output remains `unknown` / `outputObservationUnavailable` until a
+  reliable display-output observer is available.
+
 ## 0.5.6 - 2026-09-16
 
 ## 0.5.5 - 2026-09-16

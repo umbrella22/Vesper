@@ -31,6 +31,58 @@ import org.junit.Test
 
 class VesperNativePlayerBridgeTest {
     @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun outputGenerationsFollowNativeEventsAndRepeatedSequenceActivation() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        val source = VesperPlayerSource.remote("https://example.invalid/video.mp4", "Video")
+        val bindings = FakeBindings()
+        val bridge = VesperNativePlayerBridge(bindings = bindings, initialSource = source)
+        val controller = VesperPlayerController(bridge)
+        val outputs = mutableListOf<VesperHdrOutputSnapshot>()
+        try {
+            controller.setOnHdrOutputChangedListener { outputs.add(it) }
+            assertTrue(bridge.hdrOutputTracker.apply(bridge.hdrOutputTracker.capture(), VesperHdrOutputObservation(
+                VesperHdrOutputState.Hdr, evidence = "testOutputObserver",
+            )))
+            controller.invalidateHdrOutput()
+            assertTrue(bridge.hdrOutputTracker.apply(bridge.hdrOutputTracker.capture(), VesperHdrOutputObservation(
+                VesperHdrOutputState.Hdr, evidence = "testOutputObserver",
+            )))
+            assertEquals(listOf(
+                VesperHdrOutputState.Unknown, VesperHdrOutputState.Hdr,
+                VesperHdrOutputState.Unknown, VesperHdrOutputState.Hdr,
+            ), outputs.map { it.state })
+            bindings.outputTrackListener?.invoke("A", 1)
+            val firstA = bridge.hdrOutputTracker.capture()
+            bindings.outputTrackListener?.invoke("B", 1)
+            bindings.outputTrackListener?.invoke("A", 1)
+            assertTrue(controller.hdrOutput!!.value.outputGeneration > firstA.outputGeneration)
+            assertFalse(bridge.hdrOutputTracker.apply(firstA, VesperHdrOutputObservation(
+                VesperHdrOutputState.Hdr, evidence = "testOutputObserver",
+            )))
+            val beforeSurface = controller.hdrOutput!!.value.outputGeneration
+            bindings.outputPathListener?.invoke()
+            assertTrue(controller.hdrOutput!!.value.outputGeneration > beforeSurface)
+            val beforePip = controller.hdrOutput!!.value.outputGeneration
+            controller.invalidateHdrOutput()
+            assertTrue(controller.hdrOutput!!.value.outputGeneration > beforePip)
+            val attachment = object : VesperPlaybackSequenceAttachment {
+                override fun onControllerDisposed(controller: VesperPlayerController) = Unit
+            }
+            controller.attachPlaybackSequence(attachment)
+            controller.activateSequenceSource(attachment, source)
+            controller.activateSequenceSource(attachment, source)
+            assertEquals(3L, controller.hdrOutput!!.value.sourceRevision)
+            assertEquals(VesperHdrOutputState.Unknown, controller.hdrOutput!!.value.state)
+        } finally {
+            controller.dispose()
+            Dispatchers.resetMain()
+        }
+        assertNull(bindings.outputTrackListener)
+        assertNull(bindings.outputPathListener)
+    }
+
+    @Test
     fun commandFailurePreservesDomainReasonAndOwnsCommandMetadata() {
         val error =
             commandFailure(
@@ -6249,6 +6301,15 @@ private class FakeBindings(
 
     override fun setOnNativeUpdateListener(listener: (() -> Unit)?) {
         updateListener = listener
+    }
+
+    var outputTrackListener: ((String?, Long?) -> Unit)? = null
+    var outputPathListener: (() -> Unit)? = null
+    override fun setOnOutputTrackChangedListener(listener: ((String?, Long?) -> Unit)?) {
+        outputTrackListener = listener
+    }
+    override fun setOnOutputPathChangedListener(listener: (() -> Unit)?) {
+        outputPathListener = listener
     }
 
     override fun setOnTrackSelectionFailureListener(

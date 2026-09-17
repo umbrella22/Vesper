@@ -167,13 +167,18 @@ extension VesperPlayerStage {
         }
     }
 
-    func enterPictureInPicturePresentation() {
+    func cancelInteraction() {
+        interactionRevision += 1
         endTemporarySpeedGesture()
         gestureFeedbackTask?.cancel()
         gestureFeedbackTask = nil
         stageGestureKind = nil
         pendingSeekRatio = nil
         gestureFeedback = nil
+    }
+
+    func enterPictureInPicturePresentation() {
+        cancelInteraction()
         controlsVisible = false
     }
 }

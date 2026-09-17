@@ -6,6 +6,10 @@ This package defines the cross-platform abstractions, DTOs, and event contracts
 used by the federated Flutter plugin. It is intended for platform plugin
 authors. Application code should usually depend on `vesper_player` directly.
 
+The [HDR output contract](doc/hdr-output.md) defines optional snapshot output
+evidence, unknown-state compatibility, and requirements for future native output
+observers. Capability probe results remain separate.
+
 ## What This Package Contains
 
 ### Platform abstraction
@@ -193,3 +197,10 @@ fine-grained mode. Platform plugins should populate fields like
 - `vesper_player`
 - `vesper_player_android`
 - `vesper_player_ios`
+
+## Video presentation and portrait playback
+
+Native display dimensions and per-view content rectangles are separate APIs.
+The mobile renderer preserves aspect ratio with centered letterboxing.
+See the [video presentation contract and 0.6.0 migration guide](doc/video-presentation.md)
+for control layout, fullscreen state, geometry lifecycle, and PiP.

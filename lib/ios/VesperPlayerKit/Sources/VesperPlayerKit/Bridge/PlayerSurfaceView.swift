@@ -26,15 +26,18 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
     @ObservedObject public var controller: VesperPlayerController
     private let onSurfaceReady: ((PlayerSurfaceView) -> Void)?
     private let onSurfaceRemoved: ((PlayerSurfaceView) -> Void)?
+    private let onGeometryChanged: ((VesperVideoSurfaceGeometry?) -> Void)?
 
     public init(
         controller: VesperPlayerController,
         onSurfaceReady: ((PlayerSurfaceView) -> Void)? = nil,
-        onSurfaceRemoved: ((PlayerSurfaceView) -> Void)? = nil
+        onSurfaceRemoved: ((PlayerSurfaceView) -> Void)? = nil,
+        onGeometryChanged: ((VesperVideoSurfaceGeometry?) -> Void)? = nil
     ) {
         self.controller = controller
         self.onSurfaceReady = onSurfaceReady
         self.onSurfaceRemoved = onSurfaceRemoved
+        self.onGeometryChanged = onGeometryChanged
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -43,12 +46,18 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
 
     public func makeUIView(context: Context) -> PlayerSurfaceView {
         let view = PlayerSurfaceView()
+        context.coordinator.onGeometryChanged = onGeometryChanged
+        view.onGeometryChanged = { [weak coordinator = context.coordinator, weak view] geometry in
+            guard let view else { return }
+            coordinator?.receiveGeometry(geometry, from: view)
+        }
         context.coordinator.attach(controller: controller, view: view)
         onSurfaceReady?(view)
         return view
     }
 
     public func updateUIView(_ uiView: PlayerSurfaceView, context: Context) {
+        context.coordinator.onGeometryChanged = onGeometryChanged
         guard !context.coordinator.isAttached(controller: controller, view: uiView) else {
             onSurfaceReady?(uiView)
             return
@@ -62,7 +71,20 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
         coordinator.detach(view: uiView)
     }
 
+    @MainActor
     public final class Coordinator {
+        var onGeometryChanged: ((VesperVideoSurfaceGeometry?) -> Void)?
+        private var geometryDelivery = 0
+
+        func receiveGeometry(_ geometry: VesperVideoSurfaceGeometry?, from view: PlayerSurfaceView) {
+            geometryDelivery += 1
+            let delivery = geometryDelivery
+            Task { @MainActor [weak self, weak view] in
+                guard let self, let view, self.attachedView === view,
+                      self.geometryDelivery == delivery else { return }
+                self.onGeometryChanged?(geometry)
+            }
+        }
         private weak var attachedController: VesperPlayerController?
         private weak var attachedView: PlayerSurfaceView?
         private let onSurfaceRemoved: ((PlayerSurfaceView) -> Void)?
@@ -91,6 +113,9 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
 
         @MainActor
         func detach(view: PlayerSurfaceView) {
+            geometryDelivery += 1
+            view.onGeometryChanged = nil
+            onGeometryChanged = nil
             if let attachedController {
                 attachedController.detachSurfaceHost(view)
             } else {
@@ -113,6 +138,25 @@ public final class PlayerSurfaceView: UIView {
 
     private weak var attachedPlayer: AVPlayer?
     private var readyForDisplayObservation: NSKeyValueObservation?
+    private var videoRectObservation: NSKeyValueObservation?
+    /// The current picture rectangle in this view's local points.
+    public private(set) var geometry: VesperVideoSurfaceGeometry?
+    public var onGeometryChanged: ((VesperVideoSurfaceGeometry?) -> Void)? {
+        didSet { onGeometryChanged?(geometry) }
+    }
+
+    private func publishGeometry() {
+        let rect = playerLayer.videoRect
+        let valid = window != nil && playerLayer.player?.currentItem?.status == .readyToPlay
+            && playerLayer.isReadyForDisplay && !isNativeFramePresentationActive
+            && bounds.width > 0 && bounds.height > 0 && !rect.isEmpty && !rect.isInfinite && !rect.isNull
+        let next = valid ? VesperVideoSurfaceGeometry(
+            width: Double(bounds.width), height: Double(bounds.height), contentRect: rect
+        ) : nil
+        guard next != geometry else { return }
+        geometry = next
+        onGeometryChanged?(next)
+    }
     private let playerLayer = AVPlayerLayer()
     private var metalLayer: CAMetalLayer?
     private var metalDevice: MTLDevice?
@@ -120,28 +164,59 @@ public final class PlayerSurfaceView: UIView {
     private var ciContext: CIContext?
     private let subtitleLabel = UILabel()
     var onReadyForDisplay: (() -> Void)?
+    var onOutputPathChanged: (() -> Void)?
 
     public override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = UIColor.black
-        layer.cornerRadius = 24
         layer.masksToBounds = true
         configurePlayerLayer()
         configureSubtitleLabel()
+        configureOutputPathObservation()
     }
 
     public required init?(coder: NSCoder) {
         super.init(coder: coder)
         backgroundColor = UIColor.black
-        layer.cornerRadius = 24
         layer.masksToBounds = true
         configurePlayerLayer()
         configureSubtitleLabel()
+        configureOutputPathObservation()
+    }
+
+    private func configureOutputPathObservation() {
+        registerForTraitChanges([UITraitDisplayGamut.self, UITraitDisplayScale.self]) {
+            (view: PlayerSurfaceView, _: UITraitCollection) in
+            view.onOutputPathChanged?()
+        }
+        for name in [UIScreen.modeDidChangeNotification, UIScreen.brightnessDidChangeNotification,
+                     UIScene.didActivateNotification, UIScene.willDeactivateNotification,
+                     UIScene.didDisconnectNotification, AVPlayer.eligibleForHDRPlaybackDidChangeNotification,
+                     UIApplication.didBecomeActiveNotification, UIApplication.willResignActiveNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(outputDisplayChanged), name: name, object: nil)
+        }
+    }
+
+    @objc private func outputDisplayChanged(_ notification: Notification) {
+        guard window != nil else { return }
+        if let screen = notification.object as? UIScreen, screen !== window?.screen { return }
+        if let scene = notification.object as? UIWindowScene, scene !== window?.windowScene { return }
+        onOutputPathChanged?()
+    }
+
+    public override func didMoveToWindow() {
+        super.didMoveToWindow()
+        onOutputPathChanged?()
+        publishGeometry()
     }
 
     public override func layoutSubviews() {
         super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         playerLayer.frame = bounds
+        CATransaction.commit()
+        publishGeometry()
         metalLayer?.frame = bounds
         let horizontalInset: CGFloat = 24
         let bottomInset: CGFloat = 32
@@ -236,26 +311,35 @@ public final class PlayerSurfaceView: UIView {
         if attachedPlayer === player, playerLayer.player === player {
             return
         }
+        onOutputPathChanged?()
         readyForDisplayObservation = nil
+        videoRectObservation = nil
         attachedPlayer = player
         playerLayer.player = player
         playerLayer.videoGravity = .resizeAspect
+        videoRectObservation = playerLayer.observe(\.videoRect, options: [.initial, .new]) { [weak self] _, _ in
+            Task { @MainActor [weak self] in self?.publishGeometry() }
+        }
+        publishGeometry()
         readyForDisplayObservation = playerLayer.observe(
             \.isReadyForDisplay, options: [.initial, .new]
         ) {
             [weak self] layer, _
             in
+            self?.publishGeometry()
             guard layer.isReadyForDisplay else { return }
             self?.onReadyForDisplay?()
         }
     }
 
     func attachNativeFramePresenter() {
+        onOutputPathChanged?()
         readyForDisplayObservation = nil
         attachedPlayer = nil
         playerLayer.player = nil
         playerLayer.videoGravity = .resizeAspect
         setNativeFramePresentationEnabled(true)
+        publishGeometry()
     }
 
     public func detachBridgeIfNeeded() {
@@ -276,6 +360,7 @@ public final class PlayerSurfaceView: UIView {
     }
 
     func setNativeFramePresentationEnabled(_ enabled: Bool) {
+        if isNativeFramePresentationActive != enabled { onOutputPathChanged?() }
         if enabled {
             guard let device = MTLCreateSystemDefaultDevice() else {
                 return

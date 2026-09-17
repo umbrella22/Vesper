@@ -47,8 +47,12 @@ extension VesperNativePlayerBridge {
         }
 
         recordBenchmark("attach_surface_host")
+        outputTracker.outputPathChanged()
+        surfaceHost?.onOutputPathChanged = nil
+        host.onOutputPathChanged = { [weak self] in self?.outputTracker.outputPathChanged() }
         iosHostLog("attachSurfaceHost")
         surfaceHost?.onReadyForDisplay = nil
+        surfaceHost?.detachBridgeIfNeeded()
         let shouldRebindNativeSession =
             activeNativeSession != nil &&
             activeNativeSession?.surfaceHost !== host
@@ -89,6 +93,8 @@ extension VesperNativePlayerBridge {
             return
         }
         iosHostLog("detachSurfaceHost")
+        outputTracker.outputPathChanged()
+        surfaceHost?.onOutputPathChanged = nil
         recordBenchmark("detach_surface_host")
         if let nativeSession = nativeFramePipelineCoordinator.activeSession {
             iosHostLog("native-frame pipeline suspending until surface host reattaches")
@@ -222,6 +228,7 @@ extension VesperNativePlayerBridge {
     }
 
     func stop() {
+        outputTracker.outputPathChanged()
         clearLastError()
         recordBenchmark("stop_command")
         cancelPendingSeekCommand(reason: "seekCommandStopped")

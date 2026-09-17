@@ -347,6 +347,7 @@ internal class VesperNativeJniBindings(
                 NATIVE_JNI_BINDINGS_TAG,
                 "using decoderBackend=$decoderBackend extensionRendererMode=${decoderBackend.toExtensionRendererMode()} sourceNormalizerRoute=${normalizedResource?.outputRoute ?: "native"}",
             )
+            outputPathChangedListener?.invoke()
             val exoPlayer =
                 ExoPlayer.Builder(appContext, renderersFactory)
                     .setLoadControl(buildLoadControl(resolvedResiliencePolicy.buffering))
@@ -734,6 +735,7 @@ internal class VesperNativeJniBindings(
     }
 
     override fun invalidateSystemPlaybackCallbacks() {
+        outputPathChangedListener?.invoke()
         cancelPendingSourceCommandInternal("sourceCommandSuperseded")
         cancelPendingSeekCommand("seekSourceChanged")
         val callbackGeneration = systemPlaybackCallbackGeneration.incrementAndGet()
@@ -994,11 +996,23 @@ internal class VesperNativeJniBindings(
         videoLayoutRelay.setListener(listener)
     }
 
+    internal var outputPathChangedListener: (() -> Unit)? = null
+    internal var outputTrackChangedListener: ((String?, Long?) -> Unit)? = null
+
+    override fun setOnOutputPathChangedListener(listener: (() -> Unit)?) {
+        outputPathChangedListener = listener
+    }
+
+    override fun setOnOutputTrackChangedListener(listener: ((String?, Long?) -> Unit)?) {
+        outputTrackChangedListener = listener
+    }
+
     override fun attachSurface(surface: Surface, surfaceKind: NativeVideoSurfaceKind) {
         if (isDisposed.get()) {
             return
         }
         Log.i(NATIVE_JNI_BINDINGS_TAG, "attachSurface kind=$surfaceKind")
+        outputPathChangedListener?.invoke()
         recordBenchmark("surface_attach", mapOf("surfaceKind" to surfaceKind.name))
         player?.let { exoPlayer ->
             runPlayerSurfaceOperation(exoPlayer, "surface attach") {
@@ -1025,6 +1039,7 @@ internal class VesperNativeJniBindings(
             return
         }
         Log.i(NATIVE_JNI_BINDINGS_TAG, "detachSurface")
+        outputPathChangedListener?.invoke()
         recordBenchmark("surface_detach")
         player?.let { exoPlayer ->
             runPlayerSurfaceOperation(exoPlayer, "surface detach") {

@@ -14,6 +14,14 @@ extension VesperPlayerStage {
         isPlaying ? VesperPlayerStageStrings.pause : VesperPlayerStageStrings.play
     }
 
+    var fullscreenSymbol: String {
+        isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
+    }
+
+    var fullscreenLabel: String {
+        isFullscreen ? VesperPlayerStageStrings.exitFullscreen : VesperPlayerStageStrings.fullscreen
+    }
+
     var qualityPillLabel: String {
         qualityButtonLabel(
             trackCatalog,
@@ -23,7 +31,7 @@ extension VesperPlayerStage {
         )
     }
 
-    var portraitControls: some View {
+    var compactControls: some View {
         HStack(spacing: 8) {
             StageIconButton(
                 systemName: playButtonSymbol,
@@ -67,7 +75,7 @@ extension VesperPlayerStage {
             }
 
             StageIconButton(
-                systemName: "arrow.up.left.and.arrow.down.right",
+                systemName: fullscreenSymbol,
                 size: 38,
                 iconSize: 18,
                 backgroundOpacity: 0.0
@@ -75,12 +83,13 @@ extension VesperPlayerStage {
                 onToggleFullscreen()
                 controlsVisible = true
             }
+            .accessibilityLabel(Text(fullscreenLabel))
         }
         .padding(.horizontal, 18)
         .padding(.bottom, 18)
     }
 
-    var landscapeControls: some View {
+    var expandedControls: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(timelineSummary(uiState.timeline, pendingSeekRatio: pendingSeekRatio))
                 .font(.caption.monospacedDigit().weight(.semibold))
@@ -117,8 +126,8 @@ extension VesperPlayerStage {
                 }
                 .accessibilityLabel(Text(playButtonLabel))
 
-                if let landscapeControlBarLeading {
-                    landscapeControlBarLeading
+                if let expandedControlBarLeading {
+                    expandedControlBarLeading
                 }
 
                 Spacer(minLength: 12)
@@ -141,7 +150,7 @@ extension VesperPlayerStage {
                 }
 
                 StageIconButton(
-                    systemName: "arrow.down.right.and.arrow.up.left",
+                    systemName: fullscreenSymbol,
                     size: 34,
                     iconSize: 17,
                     backgroundOpacity: 0.0
@@ -149,6 +158,7 @@ extension VesperPlayerStage {
                     onToggleFullscreen()
                     controlsVisible = true
                 }
+                .accessibilityLabel(Text(fullscreenLabel))
             }
         }
         .padding(.horizontal, 18)

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-17
+
+- **Breaking:** require `controlLayout` and `isFullscreen` independently; rename
+  `landscapeControlBarLeading` to `expandedControlBarLeading`.
+- Forward per-view geometry to host overlays and use actual fullscreen state
+  for control actions in both compact and expanded layouts.
+- Cancel active gestures during presentation changes and prevent replaced
+  progress bars from committing stale pointer-up events.
+- Give icon buttons 48 logical pixel hit targets without enlarging their visuals.
+
+- Added `onContentTap` for synchronous host consumption of confirmed Stage
+  single taps, with complete canvas coordinates and existing gesture, control,
+  accessibility, and Picture in Picture behavior preserved.
+
 ## 0.5.6 - 2026-09-16
 
 - Raised the minimum supported Flutter toolchain to 3.47.2.

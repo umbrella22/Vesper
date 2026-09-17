@@ -22,6 +22,8 @@ final class VesperPlayerSnapshot {
     String? effectiveSubtitleTrackId,
     this.effectiveVideoTrackId,
     this.videoVariantObservation,
+    this.videoPresentation,
+    this.hdrOutput,
     this.fixedTrackStatus,
     this.resiliencePolicy = const VesperPlaybackResiliencePolicy(),
     this.pluginDiagnostics = const <VesperPluginDiagnostic>[],
@@ -55,6 +57,8 @@ final class VesperPlayerSnapshot {
         trackSelection = const VesperTrackSelectionSnapshot(),
         effectiveVideoTrackId = null,
         videoVariantObservation = null,
+        videoPresentation = null,
+        hdrOutput = null,
         fixedTrackStatus = null,
         resiliencePolicy = const VesperPlaybackResiliencePolicy(),
         pluginDiagnostics = const <VesperPluginDiagnostic>[],
@@ -155,6 +159,13 @@ final class VesperPlayerSnapshot {
           : const VesperTrackCatalog(),
       trackSelection: canonicalTrackSelection,
       effectiveVideoTrackId: rawEffectiveVideoTrackId as String?,
+      videoPresentation: map['videoPresentation'] is Map
+          ? VesperVideoPresentation.fromMap(
+              vesperDecodeMap(map['videoPresentation']))
+          : null,
+      hdrOutput: map['hdrOutput'] is Map
+          ? VesperHdrOutputSnapshot.fromMap(vesperDecodeMap(map['hdrOutput']))
+          : null,
       videoVariantObservation: videoVariantObservation != null
           ? VesperVideoVariantObservation.fromMap(
               videoVariantObservation,
@@ -220,6 +231,17 @@ final class VesperPlayerSnapshot {
 
   final String? effectiveVideoTrackId;
   final VesperVideoVariantObservation? videoVariantObservation;
+
+  /// Native display dimensions, independent of playback view layout.
+  /// Null while dimensions are unknown or the presentation route is unsupported.
+  final VesperVideoPresentation? videoPresentation;
+
+  /// Current display-output evidence. Null means output is unconfirmed, just
+  /// like [VesperHdrOutputState.unknown]; it never implies SDR output.
+  final VesperHdrOutputSnapshot? hdrOutput;
+
+  VesperHdrOutputState get hdrOutputState =>
+      hdrOutput?.state ?? VesperHdrOutputState.unknown;
   final VesperFixedTrackStatus? fixedTrackStatus;
   final VesperPlaybackResiliencePolicy resiliencePolicy;
   final List<VesperPluginDiagnostic> pluginDiagnostics;
@@ -254,6 +276,10 @@ final class VesperPlayerSnapshot {
     bool clearEffectiveVideoTrackId = false,
     VesperVideoVariantObservation? videoVariantObservation,
     bool clearVideoVariantObservation = false,
+    VesperVideoPresentation? videoPresentation,
+    bool clearVideoPresentation = false,
+    VesperHdrOutputSnapshot? hdrOutput,
+    bool clearHdrOutput = false,
     VesperFixedTrackStatus? fixedTrackStatus,
     bool clearFixedTrackStatus = false,
     VesperPlaybackResiliencePolicy? resiliencePolicy,
@@ -305,6 +331,10 @@ final class VesperPlayerSnapshot {
       videoVariantObservation: clearVideoVariantObservation
           ? null
           : (videoVariantObservation ?? this.videoVariantObservation),
+      hdrOutput: clearHdrOutput ? null : (hdrOutput ?? this.hdrOutput),
+      videoPresentation: clearVideoPresentation
+          ? null
+          : (videoPresentation ?? this.videoPresentation),
       fixedTrackStatus: clearFixedTrackStatus
           ? null
           : (fixedTrackStatus ?? this.fixedTrackStatus),
@@ -339,6 +369,8 @@ final class VesperPlayerSnapshot {
       'effectiveSubtitleTrackId': effectiveSubtitleTrackId,
       'effectiveVideoTrackId': effectiveVideoTrackId,
       'videoVariantObservation': videoVariantObservation?.toMap(),
+      'videoPresentation': videoPresentation?.toMap(),
+      if (hdrOutput != null) 'hdrOutput': hdrOutput!.toMap(),
       'fixedTrackStatus': fixedTrackStatus?.name,
       'resiliencePolicy': resiliencePolicy.toMap(),
       'pluginDiagnostics':

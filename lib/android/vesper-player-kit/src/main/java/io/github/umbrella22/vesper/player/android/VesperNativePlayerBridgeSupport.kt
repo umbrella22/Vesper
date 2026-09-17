@@ -448,6 +448,8 @@ internal interface VesperNativeBindings {
     fun currentVideoLayoutInfo(): NativeVideoLayoutInfo?
     fun setOnNativeUpdateListener(listener: (() -> Unit)?)
     fun setOnVideoLayoutInfoListener(listener: ((NativeVideoLayoutInfo?) -> Unit)?) = Unit
+    fun setOnOutputPathChangedListener(listener: (() -> Unit)?) = Unit
+    fun setOnOutputTrackChangedListener(listener: ((String?, Long?) -> Unit)?) = Unit
     fun setOnSubtitleCuesListener(listener: ((List<Cue>) -> Unit)?) = Unit
     /**
      * Installs the structured track-selection failure callback. Default

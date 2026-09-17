@@ -278,6 +278,12 @@ data class VesperRuntimeWarning(
 )
 
 internal interface PlayerBridge {
+    val videoPresentation: StateFlow<VesperVideoPresentation?>? get() = null
+    fun setOnVideoPresentationChangedListener(listener: ((VesperVideoPresentation?) -> Unit)?) = Unit
+    val hdrOutputTracker: VesperHdrOutputTracker? get() = null
+    fun setOnHdrOutputChangedListener(listener: ((VesperHdrOutputSnapshot) -> Unit)?) =
+        hdrOutputTracker?.setListener(listener) ?: Unit
+    fun invalidateHdrOutput() = Unit
     val backend: PlayerBridgeBackend
     /** Application context retained only for host-owned sequence warmup/cache work. */
     val appContext: android.content.Context?

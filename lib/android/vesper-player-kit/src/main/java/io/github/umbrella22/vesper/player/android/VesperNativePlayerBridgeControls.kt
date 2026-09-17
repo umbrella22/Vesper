@@ -5,7 +5,9 @@ import android.view.ViewGroup
 
 internal fun VesperNativePlayerBridge.attachNativeSurfaceHost(host: ViewGroup) {
     recordBenchmark("attach_surface_host")
-    surfaceHost.updateVideoLayout(bindings.currentVideoLayoutInfo())
+    surfaceHost.updateVideoLayout(
+        bindings.currentVideoLayoutInfo().takeIf { hasInitializedSource && activeNativeItemEpoch == nativeUpdateEpoch },
+    )
     surfaceHost.attach(host)
     if (isRequiredNativeFramePipelineFailureActive()) {
         return
@@ -87,6 +89,13 @@ internal fun VesperNativePlayerBridge.toggleNativePause() {
 }
 
 internal fun VesperNativePlayerBridge.stopNativeBridge() {
+    if (runOnMainSynchronously("stop") { stopNativeBridgeOnMain() } == MainThreadRunResult.Cancelled) {
+        throw mainThreadBridgeTimeout("stop")
+    }
+}
+
+private fun VesperNativePlayerBridge.stopNativeBridgeOnMain() {
+    hdrOutputTracker.outputPathChanged()
     recordBenchmark("stop_command")
     pendingAutoPlay = false
     sourceLoadEpoch.incrementAndGet()

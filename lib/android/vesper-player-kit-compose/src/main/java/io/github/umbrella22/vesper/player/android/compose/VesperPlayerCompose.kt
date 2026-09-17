@@ -25,6 +25,8 @@ import io.github.umbrella22.vesper.player.android.VesperPlaybackResiliencePolicy
 import io.github.umbrella22.vesper.player.android.VesperPlayerController
 import io.github.umbrella22.vesper.player.android.VesperPlayerControllerFactory
 import io.github.umbrella22.vesper.player.android.VesperPlayerSource
+import io.github.umbrella22.vesper.player.android.VesperPlayerSurfaceView
+import io.github.umbrella22.vesper.player.android.VesperVideoSurfaceGeometry
 import io.github.umbrella22.vesper.player.android.VesperVideoSurfaceKind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -135,7 +137,9 @@ fun VesperPlayerSurface(
     controller: VesperPlayerController,
     modifier: Modifier = Modifier,
     manageControllerLifecycle: Boolean = true,
+    onGeometryChanged: (VesperVideoSurfaceGeometry?) -> Unit = {},
 ) {
+    val latestOnGeometryChanged by rememberUpdatedState(onGeometryChanged)
     var surfaceHost by remember { mutableStateOf<ViewGroup?>(null) }
     val attachedControllerRef = remember { arrayOfNulls<VesperPlayerController>(1) }
 
@@ -170,7 +174,8 @@ fun VesperPlayerSurface(
     AndroidView(
         modifier = modifier.fillMaxSize(),
         factory = { context ->
-            object : FrameLayout(context) {}.apply {
+            VesperPlayerSurfaceView(context).apply {
+                this.onGeometryChanged = { latestOnGeometryChanged(it) }
                 Log.d(TAG, "surface composable factory controller=${controller.identity()}")
                 surfaceHost = this
                 attachControllerToHost(this, controller)

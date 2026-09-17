@@ -14,6 +14,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -51,7 +52,10 @@ class VesperSurfaceLayoutInstrumentationTest {
 
                 scenario.onActivity { activity ->
                     val previousHost = requireNotNull(host)
+                    (previousHost.parent as ViewGroup).removeView(previousHost)
+                    assertNull((previousHost as VesperPlayerSurfaceView).geometry.value)
                     requireNotNull(controller).detachSurfaceHost(previousHost)
+                    assertNull(previousHost.geometry.value)
                     host = activity.replaceSurfaceHost(width = 400, height = 400)
                     requireNotNull(controller).attachSurfaceHost(requireNotNull(host))
                 }
@@ -97,6 +101,15 @@ class VesperSurfaceLayoutInstrumentationTest {
         assertEquals(400 to 400, observedHostSize)
         assertEquals(400 to 300, observedSurfaceSize)
         assertEquals(400 to 300, observedLayoutParamsSize)
+        scenario.onActivity {
+            val host = hostProvider() as VesperPlayerSurfaceView
+            val density = host.resources.displayMetrics.density.toDouble()
+            val geometry = requireNotNull(host.geometry.value)
+            assertEquals(400.0 / density, geometry.width, 0.001)
+            assertEquals(0.0, geometry.contentRect.left, 0.001)
+            assertEquals(50.0 / density, geometry.contentRect.top, 0.001)
+            assertEquals(300.0 / density, geometry.contentRect.height, 0.001)
+        }
     }
 
     private fun awaitCondition(
@@ -125,7 +138,7 @@ class VesperSurfaceLayoutTestActivity : Activity() {
         width: Int = 400,
         height: Int = 300,
     ): FrameLayout =
-        FrameLayout(this).also { host ->
+        VesperPlayerSurfaceView(this).also { host ->
             root.removeAllViews()
             root.addView(
                 host,

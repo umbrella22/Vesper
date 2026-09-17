@@ -174,7 +174,6 @@ final class FakePlayerBridge: ObservableObject, ObservablePlayerBridge {
             let placeholder = UIView(frame: host.bounds)
             placeholder.translatesAutoresizingMaskIntoConstraints = false
             placeholder.backgroundColor = UIColor(white: 0.05, alpha: 1.0)
-            placeholder.layer.cornerRadius = 24
             placeholder.layer.masksToBounds = true
             host.addSubview(placeholder)
 

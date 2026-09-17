@@ -22,6 +22,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
@@ -51,12 +58,29 @@ internal fun TimelineScrubber(
     val latestOnSeekPreview by rememberUpdatedState(onSeekPreview)
     val latestOnSeekCommit by rememberUpdatedState(onSeekCommit)
     val latestOnSeekCancel by rememberUpdatedState(onSeekCancel)
+    val progressLabel = stringResource(R.string.vesper_player_stage_playback_position)
 
     var scrubberModifier =
         modifier
             .fillMaxWidth()
             .height(touchHeight)
             .onSizeChanged { widthPx = it.width.toFloat().coerceAtLeast(1f) }
+            .semantics(mergeDescendants = true) {
+                contentDescription = progressLabel
+                progressBarRangeInfo = ProgressBarRangeInfo(ratio, 0f..1f)
+                if (!enabled) {
+                    disabled()
+                } else {
+                    setProgress { requestedRatio ->
+                        if (!requestedRatio.isFinite()) return@setProgress false
+                        val targetRatio = requestedRatio.coerceIn(0f, 1f)
+                        if (targetRatio == ratio) return@setProgress false
+                        latestOnSeekPreview(targetRatio)
+                        latestOnSeekCommit(targetRatio)
+                        true
+                    }
+                }
+            }
     if (enabled) {
         scrubberModifier =
             scrubberModifier

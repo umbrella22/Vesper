@@ -1,5 +1,7 @@
 part of 'vesper_player_stage.dart';
 
+const double _stageMinimumTapTargetSize = 48;
+
 class VesperStagePrimaryPlayButton extends StatelessWidget {
   const VesperStagePrimaryPlayButton({
     super.key,
@@ -16,20 +18,31 @@ class VesperStagePrimaryPlayButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hitSize =
+        size < _stageMinimumTapTargetSize ? _stageMinimumTapTargetSize : size;
     return SizedBox(
-      width: size,
-      height: size,
+      width: hitSize,
+      height: hitSize,
       child: Material(
-        color: Colors.white.withValues(alpha: 0.14),
-        shape: const CircleBorder(),
+        type: MaterialType.transparency,
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onPressed,
           child: Center(
-            child: Icon(
-              isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-              size: iconSize,
-              color: Colors.white,
+            child: Ink(
+              width: size,
+              height: size,
+              decoration: ShapeDecoration(
+                color: Colors.white.withValues(alpha: 0.14),
+                shape: const CircleBorder(),
+              ),
+              child: Center(
+                child: Icon(
+                  isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                  size: iconSize,
+                  color: Colors.white,
+                ),
+              ),
             ),
           ),
         ),
@@ -58,22 +71,33 @@ class VesperStageIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hitSize =
+        size < _stageMinimumTapTargetSize ? _stageMinimumTapTargetSize : size;
     return Tooltip(
       message: label,
       child: Semantics(
         label: label,
         button: true,
         child: SizedBox(
-          width: size,
-          height: size,
+          width: hitSize,
+          height: hitSize,
           child: Material(
-            color: Colors.white.withValues(alpha: containerAlpha),
-            shape: const CircleBorder(),
+            type: MaterialType.transparency,
             child: InkWell(
               customBorder: const CircleBorder(),
               onTap: onPressed,
               child: Center(
-                child: Icon(icon, size: iconSize, color: Colors.white),
+                child: Ink(
+                  width: size,
+                  height: size,
+                  decoration: ShapeDecoration(
+                    color: Colors.white.withValues(alpha: containerAlpha),
+                    shape: const CircleBorder(),
+                  ),
+                  child: Center(
+                    child: Icon(icon, size: iconSize, color: Colors.white),
+                  ),
+                ),
               ),
             ),
           ),
@@ -107,7 +131,8 @@ class VesperStagePillButton extends StatelessWidget {
           vertical: compact ? 6 : 8,
         ),
         minimumSize: Size(0, compact ? 30 : 36),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        tapTargetSize: MaterialTapTargetSize.padded,
+        visualDensity: VisualDensity.standard,
       ),
       child: Text(
         label,

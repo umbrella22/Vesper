@@ -3,11 +3,14 @@ import Flutter
 import UIKit
 import VesperPlayerKit
 
-final class PlayerViewFactory: NSObject, FlutterPlatformViewFactory {
+@MainActor
+final class PlayerViewFactory: NSObject, @preconcurrency FlutterPlatformViewFactory {
+    private let messenger: FlutterBinaryMessenger
     private weak var plugin: VesperPlayerIosPlugin?
 
-    init(plugin: VesperPlayerIosPlugin) {
+    init(plugin: VesperPlayerIosPlugin, messenger: FlutterBinaryMessenger) {
         self.plugin = plugin
+        self.messenger = messenger
     }
 
     func createArgsCodec() -> FlutterMessageCodec & NSObjectProtocol {
@@ -23,6 +26,7 @@ final class PlayerViewFactory: NSObject, FlutterPlatformViewFactory {
         let playerId = arguments["playerId"] as? String
         let hostView = PlayerSurfaceView(frame: frame)
         hostView.isUserInteractionEnabled = false
+        let geometryStream = VideoGeometryStream(messenger: messenger, viewId: viewId, host: hostView)
 
         if let playerId {
             hostView.accessibilityIdentifier =
@@ -33,18 +37,13 @@ final class PlayerViewFactory: NSObject, FlutterPlatformViewFactory {
             evidenceMarker.accessibilityIdentifier =
                 "io.github.umbrella22.vesper.player.surface-marker.\(playerId)"
             hostView.addSubview(evidenceMarker)
-            Task { @MainActor [weak plugin, weak hostView] in
-                guard let plugin, let hostView else { return }
-                plugin.bindSessionHost(playerId: playerId, host: hostView)
-            }
+            plugin?.bindSessionHost(playerId: playerId, host: hostView)
         }
 
-        return PlayerPlatformView(hostView: hostView) { [weak plugin, weak hostView] in
+        return PlayerPlatformView(hostView: hostView) { [weak plugin, hostView] in
+            geometryStream.close()
             guard let playerId else { return }
-            Task { @MainActor in
-                guard let plugin, let hostView else { return }
-                plugin.unbindSessionHost(playerId: playerId, host: hostView)
-            }
+            plugin?.unbindSessionHost(playerId: playerId, host: hostView)
         }
     }
 }
@@ -106,11 +105,12 @@ final class AirPlayRoutePlatformView: NSObject, FlutterPlatformView {
     func dispose() {}
 }
 
-final class PlayerPlatformView: NSObject, FlutterPlatformView {
+@MainActor
+final class PlayerPlatformView: NSObject, @preconcurrency FlutterPlatformView {
     private let hostView: PlayerSurfaceView
-    private let onDispose: () -> Void
+    private let onDispose: @MainActor () -> Void
 
-    init(hostView: PlayerSurfaceView, onDispose: @escaping () -> Void) {
+    init(hostView: PlayerSurfaceView, onDispose: @escaping @MainActor () -> Void) {
         self.hostView = hostView
         self.onDispose = onDispose
     }
@@ -119,7 +119,8 @@ final class PlayerPlatformView: NSObject, FlutterPlatformView {
         hostView
     }
 
-    func dispose() {
-        onDispose()
+    deinit {
+        let cleanup = onDispose
+        Task { @MainActor in cleanup() }
     }
 }

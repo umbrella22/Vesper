@@ -1,7 +1,12 @@
 part of 'vesper_player_stage.dart';
 
 class _VesperPlayerStageState extends State<VesperPlayerStage> {
-  late VesperPlayerView _playerView;
+  Size? _stageSize;
+  int _interactionRevision = 0;
+  int _deviceGestureGeneration = 0;
+  VesperPlayerController? _speedGestureController;
+
+  bool get _compact => widget.controlLayout == VesperStageControlLayout.compact;
   Timer? _controlsTimer;
   Timer? _gestureFeedbackTimer;
   bool _controlsVisible = true;
@@ -20,15 +25,16 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   @override
   void initState() {
     super.initState();
-    _playerView = VesperPlayerView(controller: widget.controller);
     _syncAutoHide();
   }
 
   @override
   void didUpdateWidget(covariant VesperPlayerStage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller != widget.controller) {
-      _playerView = VesperPlayerView(controller: widget.controller);
+    if (oldWidget.controller != widget.controller ||
+        oldWidget.controlLayout != widget.controlLayout ||
+        oldWidget.isFullscreen != widget.isFullscreen) {
+      _cancelInteraction();
     }
     final playbackChanged =
         oldWidget.snapshot.playbackState != widget.snapshot.playbackState;
@@ -71,6 +77,15 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
 
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final size = constraints.biggest;
+      if (_stageSize != null && _stageSize != size) _cancelInteraction();
+      _stageSize = size;
+      return _buildStage(context);
+    });
+  }
+
+  Widget _buildStage(BuildContext context) {
     final snapshot = widget.snapshot;
     final timeline = snapshot.timeline;
     final pictureInPicturePresentation = widget.pictureInPicturePresentation;
@@ -81,16 +96,14 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
             snapshot.playbackState != VesperPlaybackState.playing ||
             widget.sheetOpen ||
             widget.keepControlsVisible);
-    final stageRadius = BorderRadius.circular(widget.isPortrait ? 20 : 0);
     final title =
         snapshot.sourceLabel.isEmpty ? snapshot.title : snapshot.sourceLabel;
 
-    return ClipRRect(
-      borderRadius: stageRadius,
+    return ClipRect(
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: Colors.black,
-          border: widget.isPortrait
+          border: _compact
               ? Border.all(color: Colors.white.withValues(alpha: 0.08))
               : null,
         ),
@@ -98,7 +111,10 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           fit: StackFit.expand,
           children: <Widget>[
             Positioned.fill(
-              child: _playerView,
+              child: VesperPlayerView(
+                controller: widget.controller,
+                onGeometryChanged: widget.onGeometryChanged,
+              ),
             ),
             if (!pictureInPicturePresentation && widget.contentOverlay != null)
               Positioned.fill(
@@ -150,16 +166,16 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                         child: _buildTopBar(context, snapshot, title),
                       ),
                       Positioned(
-                        left: widget.isPortrait ? 18 : 12,
-                        right: widget.isPortrait ? 18 : 12,
-                        bottom: widget.isPortrait ? 18 : 14,
-                        child: widget.isPortrait
-                            ? _buildPortraitTimeline(
+                        left: _compact ? 18 : 12,
+                        right: _compact ? 18 : 12,
+                        bottom: _compact ? 18 : 14,
+                        child: _compact
+                            ? _buildCompactTimeline(
                                 context,
                                 snapshot,
                                 displayedRatio,
                               )
-                            : _buildLandscapeTimeline(
+                            : _buildExpandedTimeline(
                                 context,
                                 snapshot,
                                 displayedRatio,
@@ -198,8 +214,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           // Keep the control bar out of the stage gesture arena. The values
           // include the bottom inset and a small hit-test buffer around the
           // rendered timeline/buttons.
-          final reservedHeight =
-              showControls ? (widget.isPortrait ? 74.0 : 112.0) : 0.0;
+          final reservedHeight = showControls ? (_compact ? 74.0 : 112.0) : 0.0;
           final gestureHeight = (constraints.maxHeight - reservedHeight)
               .clamp(0.0, constraints.maxHeight)
               .toDouble();
@@ -210,8 +225,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
               width: constraints.maxWidth,
               height: gestureHeight,
               child: GestureDetector(
+                key: ValueKey(_interactionRevision),
                 behavior: HitTestBehavior.opaque,
-                onTap: _handleTap,
+                onTapUp: _handleContentTapUp,
                 onDoubleTap: _togglePause,
                 onLongPressStart: (_) => _startTemporarySpeedGesture(),
                 onLongPressEnd: (_) => _endTemporarySpeedGesture(),
@@ -307,7 +323,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
     );
   }
 
-  Widget _buildPortraitTimeline(
+  Widget _buildCompactTimeline(
     BuildContext context,
     VesperPlayerSnapshot snapshot,
     double displayedRatio,
@@ -327,6 +343,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         const SizedBox(width: 8),
         Expanded(
           child: VesperTimelineScrubber(
+            key: ValueKey(_interactionRevision),
             displayedRatio: displayedRatio,
             compact: true,
             enabled: snapshot.timeline.isSeekable,
@@ -359,8 +376,12 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         ],
         const SizedBox(width: 6),
         VesperStageIconButton(
-          icon: Icons.fullscreen_rounded,
-          label: widget.strings.fullscreen,
+          icon: widget.isFullscreen
+              ? Icons.fullscreen_exit_rounded
+              : Icons.fullscreen_rounded,
+          label: widget.isFullscreen
+              ? widget.strings.exitFullscreen
+              : widget.strings.fullscreen,
           size: 38,
           iconSize: 24,
           containerAlpha: 0,
@@ -370,7 +391,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
     );
   }
 
-  Widget _buildLandscapeTimeline(
+  Widget _buildExpandedTimeline(
     BuildContext context,
     VesperPlayerSnapshot snapshot,
     double displayedRatio,
@@ -402,6 +423,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         ),
         const SizedBox(height: 4),
         VesperTimelineScrubber(
+          key: ValueKey(_interactionRevision),
           displayedRatio: displayedRatio,
           compact: true,
           enabled: snapshot.timeline.isSeekable,
@@ -420,8 +442,8 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
               containerAlpha: 0,
               onPressed: _togglePause,
             ),
-            if (widget.landscapeControlBarLeading != null)
-              widget.landscapeControlBarLeading!,
+            if (widget.expandedControlBarLeading != null)
+              widget.expandedControlBarLeading!,
             const Spacer(),
             if (snapshot.timeline.kind ==
                 VesperTimelineKind.liveDvr) ...<Widget>[
@@ -447,8 +469,12 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
             ),
             const SizedBox(width: 6),
             VesperStageIconButton(
-              icon: Icons.fullscreen_exit_rounded,
-              label: widget.strings.exitFullscreen,
+              icon: widget.isFullscreen
+                  ? Icons.fullscreen_exit_rounded
+                  : Icons.fullscreen_rounded,
+              label: widget.isFullscreen
+                  ? widget.strings.exitFullscreen
+                  : widget.strings.fullscreen,
               size: 34,
               iconSize: 19,
               containerAlpha: 0,
@@ -490,6 +516,22 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
       _pendingSeekRatio = null;
     });
     _syncAutoHide();
+  }
+
+  void _handleContentTapUp(TapUpDetails details) {
+    if (!mounted || widget.pictureInPicturePresentation) {
+      return;
+    }
+    // Flutter synthesizes accessibility taps at the gesture area's center.
+    // That is not a content hit position; keep the existing controls action.
+    if (details.kind == PointerDeviceKind.unknown) {
+      _handleTap();
+      return;
+    }
+    // The gesture area is aligned with the complete Stage's top-left corner.
+    if (widget.onContentTap?.call(details.localPosition) != true) {
+      _handleTap();
+    }
   }
 
   void _handleTap() {
@@ -622,13 +664,16 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
     if (controls == null) {
       return;
     }
+    final generation = _deviceGestureGeneration;
     final ratio = switch (kind) {
       _StageAreaGestureKind.brightness =>
         await controls.currentBrightnessRatio(),
       _StageAreaGestureKind.volume => await controls.currentVolumeRatio(),
       _StageAreaGestureKind.seek || _StageAreaGestureKind.ignored => null,
     };
-    if (!mounted || _stageGestureKind != kind) {
+    if (!mounted ||
+        generation != _deviceGestureGeneration ||
+        _stageGestureKind != kind) {
       return;
     }
     if (ratio == null) {
@@ -687,6 +732,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
             (baseRatio - _deviceGestureDragDy / height * 1.15)
                 .clamp(0.0, 1.0)
                 .toDouble();
+        final generation = _deviceGestureGeneration;
         final actualRatio = switch (kind) {
           _StageAreaGestureKind.brightness => await controls.setBrightnessRatio(
               requestedRatio,
@@ -696,7 +742,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
             ),
           _StageAreaGestureKind.seek || _StageAreaGestureKind.ignored => null,
         };
-        if (!mounted || _stageGestureKind != kind) {
+        if (!mounted ||
+            generation != _deviceGestureGeneration ||
+            _stageGestureKind != kind) {
           continue;
         }
         if (actualRatio == null) {
@@ -728,6 +776,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
       return;
     }
     _resetStageGesture();
+    _speedGestureController ??= widget.controller;
     _speedGestureRestoreRate ??= widget.snapshot.playbackRate;
     _reportControllerCall(
       widget.controller.setPlaybackRate(2.0),
@@ -748,9 +797,11 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
     if (restoreRate == null) {
       return;
     }
+    final controller = _speedGestureController!;
     _speedGestureRestoreRate = null;
+    _speedGestureController = null;
     _reportControllerCall(
-      widget.controller.setPlaybackRate(restoreRate),
+      controller.setPlaybackRate(restoreRate),
       'end temporary speed gesture',
     );
   }
@@ -774,6 +825,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
   }
 
   void _resetStageGesture() {
+    _deviceGestureGeneration++;
     _stageGestureKind = null;
     _deviceGestureBaseRatio = null;
     _stageGestureStartX = 0;
@@ -869,6 +921,18 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         );
       }),
     );
+  }
+
+  // Called during rebuilds as well as presentation changes. Do not setState here.
+  void _cancelInteraction() {
+    _interactionRevision++;
+    _endTemporarySpeedGesture();
+    _resetStageGesture();
+    _deviceGestureSetQueued = false;
+    _pendingSeekRatio = null;
+    _gestureFeedback = null;
+    _gestureFeedbackTimer?.cancel();
+    _syncAutoHide();
   }
 
   void _enterPictureInPicturePresentation() {

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-17
+
+### Added
+
+- Exposed native video display dimensions separately from per-view content
+  rectangles for portrait playback, overlay positioning, and content hit tests.
+- Added source/output-scoped HDR evidence snapshots and Flutter confirmed
+  content-tap handling for host overlays.
+
+### Changed
+
+- **Breaking:** replaced Stage `isPortrait` / SwiftUI `isCompactLayout` with
+  explicit `controlLayout`, independent of required `isFullscreen`, and renamed
+  `landscapeControlBarLeading` to `expandedControlBarLeading` on all UI surfaces.
+- Android PiP now prefers video dimensions, refreshes automatic-entry parameters,
+  and consistently routes system events to the configured player.
+
+### Fixed
+
+- Cancelled seeks and restored temporary speed during Stage layout changes;
+  prevented disposed progress bars from committing stale pointer-up events.
+- Cleared detached view geometry and released iOS Flutter platform-view channels.
+- Preserved platform PiP ratio bounds after rational rounding.
+- Expanded Flutter button hit targets, exposed adjustable native timelines to
+  accessibility, retained cleared snapshot errors, and confined Android stop
+  and HDR invalidation to the main thread.
+
 ## 0.5.6 - 2026-09-16
 
 ### Fixed

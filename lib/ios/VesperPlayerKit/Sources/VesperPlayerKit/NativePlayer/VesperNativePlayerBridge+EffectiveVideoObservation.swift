@@ -5,6 +5,7 @@ import UIKit
 
 extension VesperNativePlayerBridge {
     func refreshEffectiveVideoTrackObservation(for item: AVPlayerItem?) {
+        presentationState.update(item.flatMap { VesperVideoPresentation(size: $0.presentationSize) })
         let now = Date()
         let videoVariantObservation = resolvedVideoVariantObservation(for: item)
         if publishedVideoVariantObservation != videoVariantObservation {

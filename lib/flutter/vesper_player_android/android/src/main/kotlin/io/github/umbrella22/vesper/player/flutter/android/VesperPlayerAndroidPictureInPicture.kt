@@ -8,16 +8,24 @@ import android.graphics.Rect
 import android.os.Build
 import android.util.Rational
 import android.view.View
+import io.github.umbrella22.vesper.player.android.VesperPlayerSurfaceView
 import io.github.umbrella22.vesper.player.android.VesperPictureInPictureError
 import io.github.umbrella22.vesper.player.android.VesperPictureInPictureErrorCode
 import io.github.umbrella22.vesper.player.android.VesperPictureInPictureReadiness
 import kotlin.math.roundToInt
+import kotlin.math.ceil
+import kotlin.math.floor
 
 internal data class FlutterPictureInPictureConfiguration(
     val enabled: Boolean = true,
     val autoEnter: Boolean = false,
     val preferredAspectRatio: Double? = null,
 ) {
+    init {
+        require(preferredAspectRatio == null || (preferredAspectRatio.isFinite() && preferredAspectRatio > 0)) {
+            "preferredAspectRatio must be finite and positive."
+        }
+    }
     fun toMap(): Map<String, Any?> =
         mapOf(
             "enabled" to enabled,
@@ -181,7 +189,12 @@ internal fun Activity.requestPictureInPictureForegroundRestore(): Boolean {
 
 internal fun PlayerSession.buildPictureInPictureParams(): PictureInPictureParams {
     val builder = PictureInPictureParams.Builder()
-    val ratio = pictureInPictureConfiguration.preferredAspectRatio ?: inferredAspectRatio()
+    val ratio = resolvePictureInPictureAspectRatio(
+        pictureInPictureConfiguration.preferredAspectRatio,
+        controller.videoPresentation?.value?.displayAspectRatio,
+        viewport?.let { it.width / it.height },
+        hostView?.let { it.width.toDouble() / it.height },
+    )
     builder.setAspectRatio(ratio.toRational())
     hostView?.sourceRectHint()?.let(builder::setSourceRectHint)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -192,23 +205,27 @@ internal fun PlayerSession.buildPictureInPictureParams(): PictureInPictureParams
     return builder.build()
 }
 
-private fun PlayerSession.inferredAspectRatio(): Double {
-    val viewport = viewport
-    if (viewport != null && viewport.width > 0.0 && viewport.height > 0.0) {
-        return viewport.width / viewport.height
-    }
-    val host = hostView
-    if (host != null && host.width > 0 && host.height > 0) {
-        return host.width.toDouble() / host.height.toDouble()
-    }
-    return 16.0 / 9.0
-}
+internal fun resolvePictureInPictureAspectRatio(
+    preferred: Double?, display: Double?, viewport: Double?, host: Double?,
+): Double = listOf(preferred, display, viewport, host)
+    .firstOrNull { it != null && it.isFinite() && it > 0 } ?: (16.0 / 9.0)
 
 private fun Double.toRational(): Rational {
-    val clamped = coerceIn(0.418410, 2.390000)
-    val denominator = 10_000
-    val numerator = (clamped * denominator).roundToInt().coerceAtLeast(1)
+    val (numerator, denominator) = pictureInPictureRatioFraction(this)
     return Rational(numerator, denominator)
+}
+
+internal fun pictureInPictureRatioFraction(ratio: Double): Pair<Int, Int> {
+    val minimum = 100.0 / 239.0
+    val maximum = 239.0 / 100.0
+    if (ratio <= minimum) return 100 to 239
+    if (ratio >= maximum) return 239 to 100
+    val denominator = 10_000
+    // Quantization must stay inside Android's accepted interval at both ends.
+    val numerator = (ratio * denominator).roundToInt().coerceIn(
+        ceil(minimum * denominator).toInt(), floor(maximum * denominator).toInt(),
+    )
+    return numerator to denominator
 }
 
 private fun View.sourceRectHint(): Rect? {
@@ -217,6 +234,16 @@ private fun View.sourceRectHint(): Rect? {
     }
     val location = IntArray(2)
     getLocationOnScreen(location)
+    val content = (this as? VesperPlayerSurfaceView)?.geometry?.value?.contentRect
+    if (content != null) {
+        val density = resources.displayMetrics.density
+        return Rect(
+            location[0] + (content.left * density).roundToInt(),
+            location[1] + (content.top * density).roundToInt(),
+            location[0] + ((content.left + content.width) * density).roundToInt(),
+            location[1] + ((content.top + content.height) * density).roundToInt(),
+        )
+    }
     return Rect(
         location[0],
         location[1],

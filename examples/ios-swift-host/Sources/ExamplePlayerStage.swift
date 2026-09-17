@@ -11,11 +11,11 @@ struct ExamplePlayerStage: View {
     let fixedTrackStatus: VesperFixedTrackStatus?
     @Binding var controlsVisible: Bool
     @Binding var pendingSeekRatio: Double?
-    let isCompactLayout: Bool
+    let controlLayout: VesperStageControlLayout
     let isFullscreen: Bool
     let pictureInPicturePresentation: Bool
     let contentOverlay: AnyView?
-    let landscapeControlBarLeading: AnyView?
+    let expandedControlBarLeading: AnyView?
     let onSeekBy: (Int64) -> Void
     let onTogglePause: () -> Void
     let onSeekToRatio: (Double) -> Void
@@ -40,7 +40,7 @@ struct ExamplePlayerStage: View {
         fixedTrackStatus: VesperFixedTrackStatus?,
         controlsVisible: Binding<Bool>,
         pendingSeekRatio: Binding<Double?>,
-        isCompactLayout: Bool,
+        controlLayout: VesperStageControlLayout,
         isFullscreen: Bool,
         pictureInPicturePresentation: Bool = false,
         onSeekBy: @escaping (Int64) -> Void,
@@ -55,7 +55,7 @@ struct ExamplePlayerStage: View {
         currentVolumeRatio: @escaping () -> Double? = { nil },
         onSetVolumeRatio: @escaping (Double) -> Double? = { _ in nil },
         contentOverlay: AnyView? = nil,
-        landscapeControlBarLeading: AnyView? = nil,
+        expandedControlBarLeading: AnyView? = nil,
         onNavigateBack: (() -> Void)? = nil,
         navigateBackAccessibilityLabel: String? = nil,
         airPlayRouteButton: AnyView? = nil
@@ -68,11 +68,11 @@ struct ExamplePlayerStage: View {
         self.fixedTrackStatus = fixedTrackStatus
         _controlsVisible = controlsVisible
         _pendingSeekRatio = pendingSeekRatio
-        self.isCompactLayout = isCompactLayout
+        self.controlLayout = controlLayout
         self.isFullscreen = isFullscreen
         self.pictureInPicturePresentation = pictureInPicturePresentation
         self.contentOverlay = contentOverlay
-        self.landscapeControlBarLeading = landscapeControlBarLeading
+        self.expandedControlBarLeading = expandedControlBarLeading
         self.onSeekBy = onSeekBy
         self.onTogglePause = onTogglePause
         self.onSeekToRatio = onSeekToRatio
@@ -100,7 +100,7 @@ struct ExamplePlayerStage: View {
                 fixedTrackStatus: fixedTrackStatus,
                 controlsVisible: $controlsVisible,
                 pendingSeekRatio: $pendingSeekRatio,
-                isCompactLayout: isCompactLayout,
+                controlLayout: controlLayout,
                 isFullscreen: isFullscreen,
                 pictureInPicturePresentation: pictureInPicturePresentation,
                 onSeekBy: onSeekBy,
@@ -115,7 +115,7 @@ struct ExamplePlayerStage: View {
                 currentVolumeRatio: currentVolumeRatio,
                 onSetVolumeRatio: onSetVolumeRatio,
                 contentOverlay: contentOverlay,
-                landscapeControlBarLeading: landscapeControlBarLeading,
+                expandedControlBarLeading: expandedControlBarLeading,
                 onNavigateBack: onNavigateBack,
                 navigateBackAccessibilityLabel: navigateBackAccessibilityLabel
             )

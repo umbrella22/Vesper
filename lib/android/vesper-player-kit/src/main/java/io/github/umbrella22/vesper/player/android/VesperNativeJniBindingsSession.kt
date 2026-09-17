@@ -789,6 +789,9 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(
             decoderReuseEvaluation: DecoderReuseEvaluation?,
         ) {
             if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            // Format callbacks invalidate evidence even if the same track ID recurs
+            // before the public StateFlow consumer observes the intermediate track.
+            outputPathChangedListener?.invoke()
             val codec = nativeTrackCodec(format) ?: ""
             val mimeType = videoMimeType(format)
             val decoderDiagnostics = VesperHardwareMediaCodecSelector.decoderDiagnostics(mimeType)
@@ -1513,6 +1516,7 @@ internal fun VesperNativeJniBindings.pushTrackStateToRust() {
             trackCatalog.advertisedSubtitleTrackCount
         }
     currentEffectiveVideoTrackIdState = effectiveVideoTrackId
+    outputTrackChangedListener?.invoke(effectiveVideoTrackId, publicTrackCatalog.catalogRevision)
     currentVideoVariantObservationState = videoVariantObservation
     Log.d(
         NATIVE_JNI_BINDINGS_TAG,
