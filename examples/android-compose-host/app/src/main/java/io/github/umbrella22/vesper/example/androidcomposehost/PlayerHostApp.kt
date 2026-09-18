@@ -4,7 +4,6 @@ import io.github.umbrella22.vesper.player.android.compose.ui.VesperStageControlL
 
 import android.Manifest
 import android.app.Activity
-import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -14,7 +13,6 @@ import android.media.AudioManager
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
-import android.util.Rational
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -189,7 +187,21 @@ internal fun PlayerHostApp(
 
     val palette = remember(useDarkTheme) { exampleHostPalette(useDarkTheme) }
     val uiState = rememberVesperPlayerUiState(controller)
+    val videoPresentation = controller.videoPresentation?.collectAsState()?.value
+    val videoVariantObservation by controller.videoVariantObservation.collectAsState()
     val playlistSnapshot by playlistCoordinator.snapshot.collectAsState()
+    val trackCatalog by controller.trackCatalog.collectAsState()
+    val effectiveVideoTrackId by controller.effectiveVideoTrackId.collectAsState()
+    val trackSelection by controller.trackSelection.collectAsState()
+
+    val pictureInPictureAspectRatio =
+        selectExamplePictureInPictureAspectRatio(
+            displayAspectRatio = videoPresentation?.displayAspectRatio,
+            videoVariantObservation = videoVariantObservation,
+            trackCatalog = trackCatalog,
+            effectiveVideoTrackId = effectiveVideoTrackId,
+            trackSelection = trackSelection,
+        )
 
     var remoteStreamUrl by rememberSaveable { mutableStateOf(ANDROID_HLS_DEMO_URL) }
     var downloadRemoteUrl by rememberSaveable { mutableStateOf(ANDROID_HLS_DEMO_URL) }
@@ -310,14 +322,17 @@ internal fun PlayerHostApp(
             pictureInPicturePresentationState.onPictureInPictureAutoEnterTimeout()
     }
 
-    LaunchedEffect(activity, pictureInPictureEnabled) {
+    LaunchedEffect(activity, pictureInPictureEnabled, pictureInPictureAspectRatio) {
         val hostActivity = activity ?: return@LaunchedEffect
         if (!hostActivity.supportsExamplePictureInPicture()) {
             return@LaunchedEffect
         }
         runCatching {
             hostActivity.setPictureInPictureParams(
-                buildExamplePictureInPictureParams(autoEnter = pictureInPictureEnabled),
+                buildExamplePictureInPictureParams(
+                    autoEnter = pictureInPictureEnabled,
+                    videoAspectRatio = pictureInPictureAspectRatio,
+                ),
             )
         }
     }
@@ -415,7 +430,10 @@ internal fun PlayerHostApp(
         scope.launch {
             withFrameNanos { }
             val params =
-                buildExamplePictureInPictureParams(autoEnter = pictureInPictureEnabled)
+                buildExamplePictureInPictureParams(
+                    autoEnter = pictureInPictureEnabled,
+                    videoAspectRatio = pictureInPictureAspectRatio,
+                )
             val entered =
                 runCatching { hostActivity.enterPictureInPictureMode(params) }
                     .getOrDefault(false)
@@ -2367,19 +2385,6 @@ private fun ExampleDownloadTasksSectionState(
         onSaveToGallery = onSaveToGallery,
         onRemoveTask = onRemoveTask,
     )
-}
-
-private fun buildExamplePictureInPictureParams(autoEnter: Boolean): PictureInPictureParams {
-    check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        "Picture in Picture params require Android O or newer."
-    }
-    val builder =
-        PictureInPictureParams.Builder()
-            .setAspectRatio(Rational(16, 9))
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        builder.setAutoEnterEnabled(autoEnter)
-    }
-    return builder.build()
 }
 
 private class ExampleAndroidDeviceControls(

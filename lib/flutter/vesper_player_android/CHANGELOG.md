@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.1 - 2026-09-18
+
 ## 0.6.0 - 2026-09-17
 
 - Added per-platform-view geometry channels and native media dimensions.

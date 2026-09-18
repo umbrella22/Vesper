@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.6.1 - 2026-09-18
+
+### Fixed
+
+- Updated the Android Compose host to derive manual and automatic Picture in
+  Picture aspect ratios from display dimensions, decoder observations, and
+  selected-track metadata, preserving portrait video instead of forcing 16:9.
+
 ## 0.6.0 - 2026-09-17
 
 ### Added

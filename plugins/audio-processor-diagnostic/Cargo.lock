@@ -491,7 +491,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-audio-processor-diagnostic"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "vesper-player-plugin",
  "wsola",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "hex",
  "semver",
@@ -515,11 +515,11 @@ dependencies = [
 
 [[package]]
 name = "vesper-player-plugin-abi"
-version = "0.6.0"
+version = "0.6.1"
 
 [[package]]
 name = "vesper-player-plugin-macros"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "proc-macro2",
  "quote",
