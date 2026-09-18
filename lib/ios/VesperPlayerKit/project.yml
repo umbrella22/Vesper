@@ -83,8 +83,8 @@ targets:
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: FMWK
-        CFBundleShortVersionString: "0.6.1"
-        CFBundleVersion: "601"
+        CFBundleShortVersionString: "0.6.2"
+        CFBundleVersion: "602"
     scheme:
       testTargets:
         - VesperPlayerKitTests
@@ -116,6 +116,7 @@ targets:
       - path: Tests/VesperPlayerKitTests
         excludes:
           - VesperPlaybackLifecycleDeviceTests.swift
+          - VesperPortraitPlaybackDeviceTests.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
@@ -132,6 +133,7 @@ targets:
       - target: VesperPlayerKit
     sources:
       - path: Tests/VesperPlayerKitTests/VesperPlaybackLifecycleDeviceTests.swift
+      - path: Tests/VesperPlayerKitTests/VesperPortraitPlaybackDeviceTests.swift
       - path: ../../../fixtures/media/device-720p-h264-aac.m4v
         buildPhase: resources
       - path: ../../../fixtures/media/device-1080p-h264-aac.m4v

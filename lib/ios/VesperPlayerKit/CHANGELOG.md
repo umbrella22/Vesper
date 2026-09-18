@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.6.2 - 2026-09-18
+
+### Fixed
+
+- Restored retained SwiftUI playback surfaces after a temporary fullscreen
+  container is dismissed without allowing suspended containers to steal the
+  active host.
+- Added a device-gated portrait playback regression covering rotated video,
+  fullscreen replacement, and inline-surface restoration.
+
 ## 0.6.1 - 2026-09-18
 
 ## 0.6.0 - 2026-09-17

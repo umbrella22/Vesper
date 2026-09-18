@@ -49,4 +49,69 @@ final class VesperVideoPresentationTests: XCTestCase {
         controller.detachSurfaceHost(first)
         XCTAssertNotNil(second.pictureInPicturePlayerLayer)
     }
+
+    @MainActor
+    func testClosingFullscreenRestoresTheRetainedSurfaceContainer() {
+        let bridge = VesperNativePlayerBridge()
+        let controller = VesperPlayerController(bridge)
+        defer { controller.dispose() }
+        bridge.player = AVPlayer()
+        let inline = PlayerSurfaceView()
+        let fullscreen = PlayerSurfaceView()
+        let inlineCoordinator = PlayerSurfaceContainer(controller: controller).makeCoordinator()
+        let fullscreenCoordinator = PlayerSurfaceContainer(controller: controller).makeCoordinator()
+
+        inlineCoordinator.attach(controller: controller, view: inline)
+        fullscreenCoordinator.attach(controller: controller, view: fullscreen)
+        XCTAssertNil(inline.pictureInPicturePlayerLayer)
+        XCTAssertTrue(bridge.surfaceHost === fullscreen)
+
+        fullscreenCoordinator.detach(view: fullscreen)
+
+        XCTAssertTrue(bridge.surfaceHost === inline)
+        XCTAssertTrue(inline.pictureInPicturePlayerLayer?.player === bridge.player)
+        XCTAssertNil(fullscreen.pictureInPicturePlayerLayer)
+    }
+
+    @MainActor
+    func testRemovingSuspendedContainerDoesNotStealPlaybackOrRestoreItLater() {
+        let bridge = VesperNativePlayerBridge()
+        let controller = VesperPlayerController(bridge)
+        defer { controller.dispose() }
+        bridge.player = AVPlayer()
+        let inline = PlayerSurfaceView()
+        let fullscreen = PlayerSurfaceView()
+        let inlineCoordinator = PlayerSurfaceContainer(controller: controller).makeCoordinator()
+        let fullscreenCoordinator = PlayerSurfaceContainer(controller: controller).makeCoordinator()
+        inlineCoordinator.attach(controller: controller, view: inline)
+        fullscreenCoordinator.attach(controller: controller, view: fullscreen)
+
+        XCTAssertTrue(inlineCoordinator.isRegistered(controller: controller, view: inline))
+        XCTAssertTrue(bridge.surfaceHost === fullscreen)
+        inlineCoordinator.detach(view: inline)
+        XCTAssertTrue(bridge.surfaceHost === fullscreen)
+        XCTAssertNotNil(fullscreen.pictureInPicturePlayerLayer)
+
+        fullscreenCoordinator.detach(view: fullscreen)
+        XCTAssertNil(bridge.surfaceHost)
+        XCTAssertNil(inline.pictureInPicturePlayerLayer)
+    }
+
+    @MainActor
+    func testContainerDisposalDoesNotReplaceAnExplicitlyAttachedHost() {
+        let bridge = VesperNativePlayerBridge()
+        let controller = VesperPlayerController(bridge)
+        defer { controller.dispose() }
+        bridge.player = AVPlayer()
+        let inline = PlayerSurfaceView()
+        let explicitHost = PlayerSurfaceView()
+        let coordinator = PlayerSurfaceContainer(controller: controller).makeCoordinator()
+        coordinator.attach(controller: controller, view: inline)
+        controller.attachSurfaceHost(explicitHost)
+
+        coordinator.detach(view: inline)
+
+        XCTAssertTrue(bridge.surfaceHost === explicitHost)
+        XCTAssertNotNil(explicitHost.pictureInPicturePlayerLayer)
+    }
 }

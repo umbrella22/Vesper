@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.6.2 - 2026-09-18
+
+### Fixed
+
+- Applied Picture in Picture configuration changes to the native iOS
+  controller, including automatic entry and disabling an existing controller.
+- Prevented unwanted background re-entry after automatic Picture in Picture
+  is turned off, while preserving explicit manual entry.
+- Cancelled pending Picture in Picture starts when exiting, replacing the
+  player surface, or disposing a session.
+- Rechecked system readiness before executing queued Picture in Picture
+  requests, preserving the request when readiness temporarily changes.
+
 ## 0.6.1 - 2026-09-18
 
 ## 0.6.0 - 2026-09-17

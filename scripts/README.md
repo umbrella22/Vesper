@@ -96,6 +96,16 @@ first-party plugin Cargo manifests and lockfiles, plugin compatibility ranges,
 Android/iOS bundle metadata, Flutter packages, and changelog headings.
 `release verify-current` checks the same version surface.
 
+`release notes` reads the requested tag's root `CHANGELOG.md`, not the working
+copy or Git commit subjects. Each new version entry must contain
+`<!-- release-notes:en -->` and `<!-- release-notes:zh-CN -->` blocks with the
+same release changes in English and Simplified Chinese. Keep category headings,
+lists, and other Markdown inside those blocks; the generator preserves them in
+the corresponding GitHub Release summary. Missing, empty, or duplicate version
+or locale sections fail generation. Prerelease tags require their exact version
+entry. `release set-version` moves these blocks from `Unreleased` into the new
+version along with the rest of its changelog content.
+
 ## Rust Plugin SDK Release
 
 The public Rust packages use `vesper-player-*` crates.io identities while their

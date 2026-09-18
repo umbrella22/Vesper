@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+## 0.6.2 - 2026-09-18
+
+<!-- release-notes:en -->
+
+### Fixed
+
+- Preserved portrait video aspect ratios in Android Compose manual and
+  automatic Picture in Picture using display dimensions, decoder observations,
+  and selected-track metadata.
+- Preserved iOS SwiftUI playback when a temporary fullscreen surface replaces
+  and later restores a retained inline surface, including portrait geometry.
+- Synchronized Flutter iOS Picture in Picture configuration with the native
+  controller, preventing unwanted background re-entry after automatic entry
+  is disabled while preserving explicit manual entry.
+- Cancelled pending Flutter iOS Picture in Picture starts after exit, surface
+  replacement, or session disposal, and rechecked system readiness before
+  executing queued requests.
+
+### Changed
+
+- GitHub Release change summaries now use the matching version in the tagged
+  `CHANGELOG.md`, with separate English and Simplified Chinese content instead
+  of abbreviated commit titles. Missing translations fail note generation.
+
+<!-- release-notes:zh-CN -->
+
+### 修复
+
+- Android Compose 手动和自动进入画中画时，会根据视频显示尺寸、解码器观测值和
+  已选轨道元数据保持竖屏视频比例。
+- iOS SwiftUI 临时全屏容器关闭后，会恢复保留的内嵌播放画面，竖屏视频也能正常恢复。
+- Flutter iOS 画中画配置会同步到系统控制器；关闭自动进入后不会在退到后台时意外
+  重新进入画中画，同时保留显式手动进入能力。
+- Flutter iOS 退出画中画、更换播放视图或销毁会话时，会取消等待中的画中画请求；
+  执行排队请求前会重新检查系统就绪状态。
+
+### 改进
+
+- GitHub Release 的变更摘要改为读取发布标签中 `CHANGELOG.md` 的对应版本，
+  分别展示完整的英文和简体中文内容，不再使用简短的提交标题；缺少翻译时会停止生成。
+
 ## 0.6.1 - 2026-09-18
 
 ### Fixed

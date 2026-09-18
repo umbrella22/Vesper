@@ -246,6 +246,16 @@ public final class VesperPlayerController: ObservableObject {
     private var systemPlaybackCoordinatorStorage: VesperSystemPlaybackCoordinator?
     private var isDisposed = false
     private weak var sequenceAttachment: VesperPlaybackSequenceAttachment?
+    private weak var attachedSurfaceHost: UIView?
+    private var surfaceContainerHosts: [SurfaceContainerHost] = []
+
+    private final class SurfaceContainerHost {
+        weak var view: PlayerSurfaceView?
+
+        init(_ view: PlayerSurfaceView) {
+            self.view = view
+        }
+    }
 
     private var systemPlaybackCoordinator: VesperSystemPlaybackCoordinator {
         if let coordinator = systemPlaybackCoordinatorStorage {
@@ -424,6 +434,8 @@ public final class VesperPlayerController: ObservableObject {
         videoPresentationObservation = nil
         hdrOutputObservation?.cancel()
         hdrOutputObservation = nil
+        surfaceContainerHosts.removeAll()
+        attachedSurfaceHost = nil
         VesperScreenSleepCoordinator.release(screenSleepToken)
         systemPlaybackCoordinatorStorage?.clear()
         disposeImpl()
@@ -548,15 +560,39 @@ public final class VesperPlayerController: ObservableObject {
     }
 
     public func attachSurfaceHost(_ host: UIView) {
+        attachedSurfaceHost = host
         attachSurfaceHostImpl(host)
     }
 
     public func detachSurfaceHost() {
+        attachedSurfaceHost = nil
         detachSurfaceHostImpl()
     }
 
     func detachSurfaceHost(_ host: UIView) {
+        if attachedSurfaceHost === host {
+            attachedSurfaceHost = nil
+        }
         detachSurfaceHostForHostImpl(host)
+    }
+
+    func registerSurfaceContainer(_ host: PlayerSurfaceView) {
+        guard !isDisposed else { return }
+        surfaceContainerHosts.removeAll { $0.view == nil || $0.view === host }
+        surfaceContainerHosts.append(SurfaceContainerHost(host))
+        attachSurfaceHost(host)
+    }
+
+    func unregisterSurfaceContainer(_ host: PlayerSurfaceView) {
+        surfaceContainerHosts.removeAll { $0.view == nil || $0.view === host }
+        // A modal container temporarily owns playback while the underlying
+        // SwiftUI container stays alive. Restore it only when the owner leaves;
+        // updates or disposal of a suspended container must not steal playback.
+        if attachedSurfaceHost === host, let previous = surfaceContainerHosts.last?.view {
+            attachSurfaceHost(previous)
+        } else {
+            detachSurfaceHost(host)
+        }
     }
 
     public func play() {

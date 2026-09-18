@@ -58,7 +58,7 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
 
     public func updateUIView(_ uiView: PlayerSurfaceView, context: Context) {
         context.coordinator.onGeometryChanged = onGeometryChanged
-        guard !context.coordinator.isAttached(controller: controller, view: uiView) else {
+        guard !context.coordinator.isRegistered(controller: controller, view: uiView) else {
             onSurfaceReady?(uiView)
             return
         }
@@ -94,7 +94,7 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
         }
 
         @MainActor
-        func isAttached(controller: VesperPlayerController, view: PlayerSurfaceView) -> Bool {
+        func isRegistered(controller: VesperPlayerController, view: PlayerSurfaceView) -> Bool {
             attachedController === controller && attachedView === view
         }
 
@@ -104,9 +104,9 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
                 let attachedView,
                 attachedController !== controller || attachedView !== view
             {
-                attachedController.detachSurfaceHost(attachedView)
+                attachedController.unregisterSurfaceContainer(attachedView)
             }
-            controller.attachSurfaceHost(view)
+            controller.registerSurfaceContainer(view)
             attachedController = controller
             attachedView = view
         }
@@ -117,7 +117,7 @@ public struct PlayerSurfaceContainer: UIViewRepresentable {
             view.onGeometryChanged = nil
             onGeometryChanged = nil
             if let attachedController {
-                attachedController.detachSurfaceHost(view)
+                attachedController.unregisterSurfaceContainer(view)
             } else {
                 view.detachBridgeIfNeeded()
             }

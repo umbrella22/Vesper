@@ -525,6 +525,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     .toPictureInPictureConfiguration()
                     ?? FlutterPictureInPictureConfiguration()
                 session.pictureInPictureConfiguration = configuration
+                syncPictureInPictureConfiguration(for: session)
                 return nil
             }
         case "requestPictureInPicture":
@@ -534,6 +535,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     .toPictureInPictureConfiguration()
                 {
                     session.pictureInPictureConfiguration = configuration
+                    syncPictureInPictureConfiguration(for: session)
                 }
                 try requestPictureInPicture(for: session)
             }
@@ -1550,6 +1552,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         guard sessions[session.id] === session else {
             return
         }
+        syncPictureInPictureConfiguration(for: session)
         let snapshot = buildSnapshotMap(for: session)
         emitHostTerminalErrorIfNeeded(for: session, snapshot: snapshot)
         emitPipelineEventHookReports(for: session)
@@ -1632,6 +1635,28 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     }
 
     @MainActor
+    private func syncPictureInPictureConfiguration(for session: PlayerSession) {
+        guard let layer = session.hostView?.pictureInPicturePlayerLayer else {
+            session.pictureInPictureCoordinator?.reset()
+            return
+        }
+        // A view can bind before initialize creates its AVPlayer. Snapshot
+        // updates retry this idempotent binding once the system layer exists.
+        guard session.pictureInPictureConfiguration.enabled else {
+            if let coordinator = session.pictureInPictureCoordinator {
+                _ = coordinator.configure(with: layer)
+            }
+            return
+        }
+        let coordinator = session.pictureInPictureCoordinator
+            ?? VesperIosPictureInPictureCoordinator(plugin: self, session: session)
+        session.pictureInPictureCoordinator = coordinator
+        _ = coordinator.configure(
+            with: layer, createIfNeeded: session.pictureInPictureConfiguration.autoEnter
+        )
+    }
+
+    @MainActor
     private func requestPictureInPicture(for session: PlayerSession) throws {
         if let error = pictureInPicturePreflightError(for: session) {
             failPictureInPicture(for: session, error: error)
@@ -1668,6 +1693,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     @MainActor
     private func exitPictureInPicture(for session: PlayerSession) {
         if session.pictureInPictureCoordinator?.isActive != true && !session.pictureInPictureActive {
+            session.pictureInPictureCoordinator?.stop()
             session.pictureInPictureState = "inactive"
             session.pictureInPictureActive = false
             emitPictureInPictureEvent(for: session)
@@ -2322,7 +2348,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         session.observation?.cancel()
         session.hdrOutputObservation?.cancel()
         session.videoPresentationObservation?.cancel()
-        session.pictureInPictureCoordinator?.stop()
+        session.pictureInPictureCoordinator?.reset()
         session.pictureInPictureCoordinator = nil
         session.controller.detachSurfaceHost()
         session.hostView = nil
