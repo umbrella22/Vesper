@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.6.4 - 2026-09-21
+
+- Add Compose `VesperPlayerStageSkin`, semantic vector/custom icon rendering,
+  palette, button roles, timeline/HUD styling, and runtime switching. Public
+  skinned action buttons preserve 48 dp bounds and SDK accessibility/actions.
+- **Breaking binary change:** recompile consumers for the extended Stage
+  signature. Existing source calls may omit `skin` for SDK defaults. See the
+  [migration guide](../doc/stage-skins.md).
+
 ## 0.6.3 - 2026-09-20
 
 ### Fixed

@@ -14,13 +14,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Fullscreen
-import androidx.compose.material.icons.rounded.FullscreenExit
-import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -59,6 +54,7 @@ internal fun StageControlsOverlay(
     onSeekToLiveEdge: () -> Unit,
     onToggleFullscreen: () -> Unit,
 ) {
+    val skin = LocalVesperPlayerStageSkin.current
     AnimatedVisibility(
         visible = controlsVisible || uiState.playbackState != PlaybackStateUi.Playing,
         enter = fadeIn(),
@@ -70,10 +66,10 @@ internal fun StageControlsOverlay(
                 .background(
                     brush = Brush.verticalGradient(
                         colors = listOf(
-                            Color.Black.copy(alpha = 0.68f),
+                            skin.colors.scrim.copy(alpha = skin.colors.scrim.alpha * 0.68f),
                             Color.Transparent,
                             Color.Transparent,
-                            Color.Black.copy(alpha = 0.82f),
+                            skin.colors.scrim.copy(alpha = skin.colors.scrim.alpha * 0.82f),
                         ),
                     ),
                 ),
@@ -87,16 +83,14 @@ internal fun StageControlsOverlay(
             ) {
                 if (onNavigateBack != null) {
                     StageIconButton(
-                        icon = Icons.AutoMirrored.Rounded.ArrowBack,
+                        icon = VesperStageIconRole.NavigateBack,
                         label =
                             navigateBackContentDescription
                                 ?: stringResource(R.string.vesper_player_stage_navigate_back),
-                        size = 38.dp,
-                        iconSize = 23.dp,
-                        containerAlpha = 0f,
+                        variant = VesperStageButtonVariant.Navigation,
                         onClick = onNavigateBack,
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(skin.metrics.buttonSpacing))
                 }
                 Column(
                     modifier = Modifier.weight(1f),
@@ -104,38 +98,36 @@ internal fun StageControlsOverlay(
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(skin.metrics.buttonSpacing),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
                             text = uiState.sourceLabel,
                             modifier = Modifier.weight(1f),
-                            color = Color.White,
+                            color = skin.colors.foreground,
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                         if (uiState.isBuffering) {
-                            StageChip(
+                            VesperStageChip(
                                 label = stringResource(R.string.vesper_player_stage_buffering),
-                                accent = Color(0xFFFFB454),
+                                accent = skin.colors.accent,
                                 compact = true,
                             )
                         }
                     }
                     Text(
                         text = stageBadgeText(uiState.timeline),
-                        color = Color(0xFFBFC6D6),
+                        color = skin.colors.secondaryForeground,
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
 
                 StageIconButton(
-                    icon = Icons.Rounded.MoreVert,
+                    icon = VesperStageIconRole.More,
                     label = stringResource(R.string.vesper_player_stage_more),
-                    size = 38.dp,
-                    iconSize = 24.dp,
-                    containerAlpha = 0f,
+                    variant = VesperStageButtonVariant.Toolbar,
                     onClick = { onOpenSheet(VesperPlayerStageSheet.Menu) },
                 )
             }
@@ -146,20 +138,18 @@ internal fun StageControlsOverlay(
                         .align(Alignment.BottomStart)
                         .fillMaxWidth()
                         .padding(horizontal = 18.dp, vertical = 18.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(skin.metrics.buttonSpacing),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     StageIconButton(
-                        icon = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        icon = if (isPlaying) VesperStageIconRole.Pause else VesperStageIconRole.Play,
                         label =
                             if (isPlaying) {
                                 stringResource(R.string.vesper_player_stage_pause)
                             } else {
                                 stringResource(R.string.vesper_player_stage_play)
                             },
-                        size = 38.dp,
-                        iconSize = 24.dp,
-                        containerAlpha = 0f,
+                        variant = VesperStageButtonVariant.Compact,
                         onClick = {
                             onTogglePlayback()
                             onControlsVisibilityChange(true)
@@ -185,13 +175,13 @@ internal fun StageControlsOverlay(
                     )
                     Text(
                         text = compactTimelineSummary(uiState.timeline, pendingSeekRatio),
-                        color = Color(0xFFF7F8FC),
+                        color = skin.colors.foreground,
                         style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                     if (uiState.timeline.kind == TimelineKind.LiveDvr) {
-                        StagePillButton(
+                        VesperStagePillButton(
                             label = liveButtonLabel(uiState.timeline),
                             compact = true,
                             onClick = {
@@ -201,11 +191,9 @@ internal fun StageControlsOverlay(
                         )
                     }
                     StageIconButton(
-                        icon = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                        icon = if (isFullscreen) VesperStageIconRole.ExitFullscreen else VesperStageIconRole.Fullscreen,
                         label = stringResource(if (isFullscreen) R.string.vesper_player_stage_exit_fullscreen else R.string.vesper_player_stage_fullscreen),
-                        size = 38.dp,
-                        iconSize = 24.dp,
-                        containerAlpha = 0f,
+                        variant = VesperStageButtonVariant.CompactFullscreen,
                         onClick = onToggleFullscreen,
                     )
                 }
@@ -219,7 +207,7 @@ internal fun StageControlsOverlay(
                 ) {
                     Text(
                         text = timelineSummary(uiState.timeline, pendingSeekRatio),
-                        color = Color(0xFFF7F8FC),
+                        color = skin.colors.foreground,
                         style = MaterialTheme.typography.labelLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -247,16 +235,14 @@ internal fun StageControlsOverlay(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         StageIconButton(
-                            icon = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                            icon = if (isPlaying) VesperStageIconRole.Pause else VesperStageIconRole.Play,
                             label =
                                 if (isPlaying) {
                                     stringResource(R.string.vesper_player_stage_pause)
                                 } else {
                                     stringResource(R.string.vesper_player_stage_play)
                                 },
-                            size = 38.dp,
-                            iconSize = 22.dp,
-                            containerAlpha = 0f,
+                            variant = VesperStageButtonVariant.Expanded,
                             onClick = {
                                 onTogglePlayback()
                                 onControlsVisibilityChange(true)
@@ -265,11 +251,11 @@ internal fun StageControlsOverlay(
                         expandedControlBarLeading?.invoke(this)
                         Spacer(modifier = Modifier.weight(1f))
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(skin.metrics.buttonSpacing),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             if (uiState.timeline.kind == TimelineKind.LiveDvr) {
-                                StagePillButton(
+                                VesperStagePillButton(
                                     label = liveButtonLabel(uiState.timeline),
                                     compact = true,
                                     onClick = {
@@ -279,7 +265,7 @@ internal fun StageControlsOverlay(
                                 )
                             }
                             if (playbackRateControlsEnabled) {
-                                StagePillButton(
+                                VesperStagePillButton(
                                     label = speedLabel,
                                     compact = true,
                                     onClick = {
@@ -287,7 +273,7 @@ internal fun StageControlsOverlay(
                                     },
                                 )
                             }
-                            StagePillButton(
+                            VesperStagePillButton(
                                 label = qualityLabel,
                                 compact = true,
                                 onClick = {
@@ -295,11 +281,9 @@ internal fun StageControlsOverlay(
                                 },
                             )
                             StageIconButton(
-                                icon = if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                                icon = if (isFullscreen) VesperStageIconRole.ExitFullscreen else VesperStageIconRole.Fullscreen,
                                 label = stringResource(if (isFullscreen) R.string.vesper_player_stage_exit_fullscreen else R.string.vesper_player_stage_fullscreen),
-                                size = 34.dp,
-                                iconSize = 19.dp,
-                                containerAlpha = 0f,
+                                variant = VesperStageButtonVariant.ExpandedFullscreen,
                                 onClick = onToggleFullscreen,
                             )
                         }

@@ -6,45 +6,20 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
-import androidx.compose.material.icons.rounded.WbSunny
-import androidx.compose.material.icons.rounded.Fullscreen
-import androidx.compose.material.icons.rounded.FullscreenExit
-import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Pause
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Speed
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -52,31 +27,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import io.github.umbrella22.vesper.player.android.PlaybackStateUi
 import io.github.umbrella22.vesper.player.android.PlayerHostUiState
-import io.github.umbrella22.vesper.player.android.TimelineKind
-import io.github.umbrella22.vesper.player.android.VesperVideoSurfaceGeometry
 import io.github.umbrella22.vesper.player.android.VesperPlayerController
 import io.github.umbrella22.vesper.player.android.VesperTrackCatalog
 import io.github.umbrella22.vesper.player.android.VesperTrackSelectionSnapshot
+import io.github.umbrella22.vesper.player.android.VesperVideoSurfaceGeometry
 import io.github.umbrella22.vesper.player.android.compose.VesperPlayerSurface
-import kotlinx.coroutines.delay
 import kotlin.math.abs
-import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 /** Control density independent of video orientation and fullscreen state. */
 enum class VesperStageControlLayout { Compact, Expanded }
@@ -120,7 +85,9 @@ fun VesperPlayerStage(
     expandedControlBarLeading: (@Composable RowScope.() -> Unit)? = null,
     onNavigateBack: (() -> Unit)? = null,
     navigateBackContentDescription: String? = null,
-) {
+    skin: VesperPlayerStageSkin? = null,
+) = VesperPlayerStageTheme(skin ?: VesperPlayerStageSkin()) {
+    val colors = LocalVesperPlayerStageSkin.current.colors
     var stageSize by remember { mutableStateOf(IntSize.Zero) }
     val currentRatio = uiState.timeline.displayedRatio ?: 0f
     val displayedRatio = pendingSeekRatio ?: currentRatio
@@ -167,7 +134,7 @@ fun VesperPlayerStage(
         modifier = modifier
             .onSizeChanged { stageSize = it }
             .clipToBounds()
-            .background(Color(0xFF000000)),
+            .background(colors.background),
     ) {
         if (controlLayout == VesperStageControlLayout.Compact) {
             Box(
@@ -175,7 +142,7 @@ fun VesperPlayerStage(
                     .fillMaxSize()
                     .border(
                         width = 1.dp,
-                        color = Color.White.copy(alpha = 0.08f),
+                        color = colors.foreground.copy(alpha = colors.foreground.alpha * 0.08f),
                     ),
             )
         }
@@ -195,6 +162,19 @@ fun VesperPlayerStage(
                     .clearAndSetSemantics {},
                 content = contentOverlay,
             )
+        }
+
+        // Paint decorative feedback below the gesture layer so custom icon
+        // content cannot intercept Stage taps or drags.
+        AnimatedVisibility(
+            visible = !pictureInPicturePresentation && gestureFeedback != null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            gestureFeedback?.let { feedback ->
+                StageGestureFeedbackPanel(feedback = feedback)
+            }
         }
 
         key(controlLayout, isFullscreen, stageSize) {
@@ -392,16 +372,6 @@ fun VesperPlayerStage(
                     onSeekToLiveEdge = onSeekToLiveEdge,
                     onToggleFullscreen = onToggleFullscreen,
                 )
-            }
-        }
-        AnimatedVisibility(
-            visible = !pictureInPicturePresentation && gestureFeedback != null,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.Center),
-        ) {
-            gestureFeedback?.let { feedback ->
-                StageGestureFeedbackPanel(feedback = feedback)
             }
         }
     }

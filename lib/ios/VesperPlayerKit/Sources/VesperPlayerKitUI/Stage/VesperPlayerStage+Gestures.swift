@@ -203,22 +203,21 @@ struct StageGestureFeedback {
 }
 
 struct StageGestureFeedbackPanel: View {
+    @Environment(\.vesperPlayerStageSkin) private var skin
     let feedback: StageGestureFeedback
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: symbolName)
-                .font(.system(size: 23, weight: .semibold))
-                .foregroundStyle(.white)
+            VesperStageIcon(iconRole, style: VesperStageIconStyle(size: skin.metrics.hudIconSize, color: skin.colors.hudForeground))
 
             if let progress = feedback.progress {
                 GeometryReader { proxy in
                     ZStack(alignment: .leading) {
                         Capsule()
-                            .fill(Color.white.opacity(0.18))
+                            .fill(skin.colors.hudForeground.opacity(0.18))
 
                         Capsule()
-                            .fill(Color.white)
+                            .fill(skin.colors.hudForeground)
                             .frame(width: proxy.size.width * progress.clamped(to: 0...1))
                     }
                 }
@@ -227,23 +226,23 @@ struct StageGestureFeedbackPanel: View {
 
             Text(feedback.label)
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(skin.colors.hudForeground)
                 .monospacedDigit()
         }
         .frame(width: feedback.progress == nil ? nil : 226)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(Color.black.opacity(0.72), in: Capsule())
+        .background(skin.colors.hudBackground, in: RoundedRectangle(cornerRadius: skin.metrics.hudBorderRadius))
     }
 
-    private var symbolName: String {
+    private var iconRole: VesperStageIconRole {
         switch feedback.kind {
         case .brightness:
-            return "sun.max.fill"
+            return .brightness
         case .volume:
-            return "speaker.wave.2.fill"
+            return .volume
         case .speed:
-            return "speedometer"
+            return .speed
         }
     }
 }

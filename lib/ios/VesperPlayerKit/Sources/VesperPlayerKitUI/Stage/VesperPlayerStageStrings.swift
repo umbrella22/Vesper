@@ -18,6 +18,7 @@ enum VesperPlayerStageStrings {
     static let fullscreen = "Fullscreen"
     static let exitFullscreen = "Exit fullscreen"
     static let navigateBack = "Back"
+    static let more = "More"
 
     static func liveBehind(_ time: String) -> String {
         "Live -\(time)"

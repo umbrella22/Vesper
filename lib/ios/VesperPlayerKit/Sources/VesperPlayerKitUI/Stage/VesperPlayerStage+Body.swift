@@ -43,7 +43,7 @@ extension VesperPlayerStage {
                 ZStack {
                     VStack(spacing: 0) {
                         LinearGradient(
-                            colors: [Color.black.opacity(0.72), Color.clear],
+                            colors: [skin.colors.scrim.opacity(0.72), Color.clear],
                             startPoint: .top,
                             endPoint: .bottom
                         )
@@ -52,58 +52,51 @@ extension VesperPlayerStage {
                         Spacer(minLength: 0)
 
                         LinearGradient(
-                            colors: [Color.clear, Color.black.opacity(0.82)],
+                            colors: [Color.clear, skin.colors.scrim.opacity(0.82)],
                             startPoint: .top,
                             endPoint: .bottom
                         )
                         .frame(height: 144)
                     }
+                    .allowsHitTesting(false)
 
                     VStack(spacing: 0) {
-                        HStack(alignment: .top) {
+                        HStack(alignment: .top, spacing: skin.metrics.buttonSpacing) {
                             if let onNavigateBack {
                                 StageIconButton(
-                                    systemName: "chevron.left",
-                                    size: 38,
-                                    iconSize: 19,
-                                    backgroundOpacity: 0.0,
+                                    icon: .navigateBack,
+                                    label: navigateBackAccessibilityLabel ?? VesperPlayerStageStrings.navigateBack,
+                                    variant: .navigation,
                                     action: onNavigateBack
-                                )
-                                .accessibilityLabel(
-                                    Text(
-                                        navigateBackAccessibilityLabel
-                                            ?? VesperPlayerStageStrings.navigateBack
-                                    )
                                 )
                             }
 
                             VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 8) {
+                                HStack(spacing: skin.metrics.buttonSpacing) {
                                     Text(uiState.sourceLabel)
                                         .font(.headline.weight(.bold))
-                                        .foregroundStyle(.white)
+                                        .foregroundStyle(skin.colors.foreground)
                                         .lineLimit(1)
 
                                     if uiState.isBuffering {
                                         StageChip(
                                             label: VesperPlayerStageStrings.buffering,
-                                            accent: Color(red: 1.0, green: 0.71, blue: 0.33),
+                                            accent: skin.colors.accent,
                                             compact: true
                                         )
                                     }
                                 }
                                 Text(stageBadgeText(uiState.timeline))
                                     .font(.caption)
-                                    .foregroundStyle(Color.white.opacity(0.70))
+                                    .foregroundStyle(skin.colors.secondaryForeground)
                             }
 
                             Spacer(minLength: 12)
 
                             StageIconButton(
-                                systemName: "ellipsis",
-                                size: 38,
-                                iconSize: 22,
-                                backgroundOpacity: 0.0
+                                icon: .more,
+                                label: VesperPlayerStageStrings.more,
+                                variant: .toolbar
                             ) {
                                 onOpenSheet(.menu)
                                 controlsVisible = true
@@ -126,15 +119,19 @@ extension VesperPlayerStage {
 
             if !pictureInPicturePresentation, let gestureFeedback {
                 StageGestureFeedbackPanel(feedback: gestureFeedback)
+                    .allowsHitTesting(false)
                     .transition(.opacity)
             }
         }
+        .environment(\.vesperPlayerStageSkin, skin)
+        .background(skin.colors.background)
         .clipped()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
             if controlLayout == .compact {
                 Rectangle()
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(skin.colors.foreground.opacity(0.08), lineWidth: 1)
+                    .allowsHitTesting(false)
             }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in

@@ -431,6 +431,13 @@ downloads should own that service layer, use the correct Android
 `foregroundServiceType` such as `dataSync` when required, and feed completed
 local assets back into the SDK.
 
+## Stage skins
+
+The optional `vesper-player-kit-compose-ui` module exposes `VesperPlayerStageSkin`,
+semantic icon overrides, custom composable icon content, and reusable skinned
+action buttons. See the [skin contract and migration guide](../doc/stage-skins.md).
+Recompile UI consumers with the matching AAR after upgrading.
+
 ## Minimal Compose Usage
 
 ```kotlin

@@ -82,6 +82,33 @@ AudioProcessor output that mutates host-owned timing metadata.
 
 ## Feature-Specific Evidence Gates
 
+- Stage skins: run `dart analyze --format=machine` and `flutter test` from
+  `lib/flutter/vesper_player_ui`. Compile the Compose UI module with
+  `:vesper-player-kit-compose-ui:compileDebugKotlin` and
+  `:vesper-player-kit-compose-ui:compileDebugAndroidTestKotlin`, then execute
+  `:vesper-player-kit-compose-ui:connectedDebugAndroidTest` on a supported
+  device/emulator (filter `StageSkinInstrumentationTest` when appropriate).
+  Generate the iOS project from `lib/ios/VesperPlayerKit/project.yml` and run
+  the `VesperPlayerKitUI` scheme's `VesperPlayerKitUITests` on an Apple Silicon
+  iOS Simulator with the matching FFI build. Run the separate
+  `VesperPlayerKitUIInteractionTests` scheme for touches and accessibility-tree
+  assertions on Simulator and a signed iPhone test host/runner. Cover renderer
+  fallback, state roles, minimum hit bounds, button semantics, HUD input
+  isolation, non-default spacing, both layouts, and runtime switching while retaining playback
+  identity. Compile-only Android evidence does not establish interaction
+  correctness; Simulator rendering tests do not establish VoiceOver or physical
+  device acceptance. On Android, resolve SDK labels through localized resources
+  and explicitly exercise `SemanticsActions.OnClick` as well as physical input;
+  `performClick()` alone tests touch input. Preview-controller tests establish
+  UI behavior, not native media playback. iOS interaction tests also use an
+  inert surface; accessibility-tree assertions are not manual VoiceOver gesture
+  acceptance. A runner that fails before its first test starts supplies no
+  interaction evidence. On first device UI-test execution, iOS can require an
+  **Enable UI Automation** passcode confirmation on the iPhone. Developer Mode
+  and pairing do not replace it; inspect the device prompt if XCTest reports
+  `Timed out while enabling automation mode`. The passcode is entered only on
+  the device. See `stage-skins.md` for the contract and migration.
+
 - Performance Diagnostics: run the Rust aggregator/ABI tests, bounded lifecycle
   and unknown-value host tests, Flutter batching/model tests, Android host-kit
   checks, and iOS Simulator XCTest. Inspect Release APK/IPA outputs when a host

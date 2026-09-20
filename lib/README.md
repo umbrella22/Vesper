@@ -153,6 +153,13 @@ composition, and gestures inside the player area:
 subtitle, and speed. The host supplies the actual sheet content and page-level
 business logic.
 
+### Stage Skins
+
+All three optional UI modules accept `VesperPlayerStageSkin` with semantic icons,
+colors, metrics, and platform-native custom icon content. Null/nil selects the
+Stage default. The [skin contract and migration guide](doc/stage-skins.md) covers
+the public button changes, standalone control scopes, and platform boundaries.
+
 ### Gesture Contract
 
 - Tap toggles the control overlay.

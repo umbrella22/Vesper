@@ -141,6 +141,14 @@ VesperPlayerStage(
 )
 ```
 
+## Stage skins
+
+`VesperPlayerStage.skin` configures semantic icons, colors, button roles, timeline,
+and gesture feedback. Omit it for the default skin. Public icon buttons now take
+widget content and named styles. See the [three-platform skin contract and detailed
+migration guide](https://github.com/umbrella22/Vesper/blob/main/lib/doc/stage-skins.md)
+for the breaking Flutter button changes and native host examples.
+
 ## Portrait playback and migration
 
 Version 0.6.0 separates `controlLayout` from `isFullscreen` and renames the

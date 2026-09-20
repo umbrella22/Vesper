@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.4 - 2026-09-21
+
 ## 0.6.3 - 2026-09-20
 
 - Check the Android ABI and process bitness before player JNI initialization,

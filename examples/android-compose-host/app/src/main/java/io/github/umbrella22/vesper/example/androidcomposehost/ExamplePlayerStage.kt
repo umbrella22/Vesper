@@ -29,6 +29,7 @@ import io.github.umbrella22.vesper.player.android.VesperPlayerErrorState
 import io.github.umbrella22.vesper.player.android.VesperTrackCatalog
 import io.github.umbrella22.vesper.player.android.VesperTrackSelectionSnapshot
 import io.github.umbrella22.vesper.player.android.compose.ui.VesperPlayerStage
+import io.github.umbrella22.vesper.player.android.compose.ui.VesperPlayerStageSkin
 import io.github.umbrella22.vesper.player.android.compose.ui.VesperPlayerStageSheet
 
 @Composable
@@ -60,10 +61,12 @@ internal fun ExamplePlayerStage(
     expandedControlBarLeading: (@Composable RowScope.() -> Unit)? = null,
     onNavigateBack: (() -> Unit)? = null,
     navigateBackContentDescription: String? = null,
+    skin: VesperPlayerStageSkin? = null,
 ) {
     Box(modifier = modifier) {
         VesperPlayerStage(
             controller = controller,
+            skin = skin,
             uiState = uiState,
             controlsVisible = controlsVisible,
             pendingSeekRatio = pendingSeekRatio,

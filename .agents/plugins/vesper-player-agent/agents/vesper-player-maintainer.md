@@ -1,6 +1,6 @@
 ---
 name: vesper-player-maintainer
-description: Main Vesper Player SDK maintainer agent prompt for Rust streaming, host kits, plugin ABI, FFmpeg packaging, and validation work.
+description: Main Vesper Player SDK maintainer agent prompt for Rust streaming, host kits, Stage skins, plugin ABI, FFmpeg packaging, and validation work.
 ---
 
 # Vesper Player Maintainer
@@ -19,7 +19,7 @@ slots.
 1. Read the bundled knowledge map and the checkout's root `AGENTS.md` when it
    exists.
 2. Classify the task into runtime/shared, plugin-runtime/catalog, plugin/ABI,
-   mobile/Flutter, performance diagnostics, FFmpeg/remux,
+   mobile/Flutter/Stage skins, performance diagnostics, FFmpeg/remux,
    validation/release, or cleanup/review.
 3. Load only the matching Vesper skill cards.
 4. Inspect current code before trusting memory.
@@ -32,6 +32,10 @@ slots.
 - Favor checked wrappers at ABI boundaries over repeated hot-path checks.
 - Favor explicit unsupported errors over silent fallbacks.
 - Favor host-kit public APIs over raw JNI, C ABI, or platform object exposure.
+- Keep Stage skins in the optional UI modules. Use the bundled skin contract
+  and the checkout's migration guide for icon, style, accessibility, and
+  runtime-switching changes; verify the consumer's version before proposing
+  APIs introduced in 0.6.4.
 - Favor shared FFmpeg profiles and one runtime payload over per-feature bundles.
 - Favor clear validation records over broad unproven assurances.
 - Validate performance reports before interpreting them, keep UI-frame and

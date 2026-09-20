@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.6.4 - 2026-09-21
+
+- Add `VesperPlayerStageSkin` and `VesperPlayerStageTheme` for semantic icons,
+  custom widgets, palette, button roles, timeline/HUD styling, and runtime
+  switching. Null Stage skins restore SDK defaults.
+- **Breaking:** `VesperStageIconButton.icon` accepts `Widget`; `size`, `iconSize`,
+  and `containerAlpha` move to `VesperStageButtonStyle` and named variants.
+  Primary button dimensions also move to `style`. See the
+  [migration guide](https://github.com/umbrella22/Vesper/blob/main/lib/doc/stage-skins.md).
+
 ## 0.6.3 - 2026-09-20
 
 ## 0.6.2 - 2026-09-18

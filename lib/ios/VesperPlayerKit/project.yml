@@ -2,6 +2,54 @@ name: VesperPlayerKit
 options:
   bundleIdPrefix: io.github.umbrella22.vesper.lib
 targets:
+  VesperPlayerKitUI:
+    type: framework
+    platform: iOS
+    deploymentTarget: "17.0"
+    dependencies:
+      - target: VesperPlayerKit
+    sources:
+      - Sources/VesperPlayerKitUI
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        DEFINES_MODULE: true
+        BUILD_LIBRARY_FOR_DISTRIBUTION: true
+        "ARCHS[sdk=iphonesimulator*]": arm64
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+    scheme:
+      testTargets:
+        - VesperPlayerKitUITests
+  VesperPlayerKitUITests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    dependencies:
+      - target: VesperPlayerKitUI
+    sources:
+      - Tests/VesperPlayerKitUITests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        "ARCHS[sdk=iphonesimulator*]": arm64
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+  VesperPlayerKitUIInteractionTests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    dependencies:
+      - target: VesperPlayerKitDeviceTestHost
+    sources:
+      - Tests/VesperPlayerKitUIInteractionTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: VesperPlayerKitDeviceTestHost
+        "ARCHS[sdk=iphonesimulator*]": arm64
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+    scheme:
+      testTargets:
+        - VesperPlayerKitUIInteractionTests
   VesperPlayerKitBridgeShim:
     type: library.static
     platform: iOS
@@ -83,8 +131,8 @@ targets:
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: FMWK
-        CFBundleShortVersionString: "0.6.3"
-        CFBundleVersion: "603"
+        CFBundleShortVersionString: "0.6.4"
+        CFBundleVersion: "604"
     scheme:
       testTargets:
         - VesperPlayerKitTests
@@ -97,6 +145,7 @@ targets:
       - Tests/VesperPlayerKitDeviceTestHost
     dependencies:
       - target: VesperPlayerKit
+      - target: VesperPlayerKitUI
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.umbrella22.vesper.lib.ioshost.devicetests

@@ -1,6 +1,6 @@
 ---
 name: vesper-mobile-flutter-hosts
-description: Use when changing Vesper Android host kits, iOS VesperPlayerKit, Flutter federated packages, MethodChannel/EventChannel behavior, system playback, AirPlay, Cast, DLNA, relay, surfaces, PlatformView, SurfaceView, TextureView, SwiftUI/UIKit, or example mobile hosts.
+description: Use when changing Vesper Android host kits, iOS VesperPlayerKit, Flutter packages, Stage skins, custom icons, control styles, UI migrations, MethodChannel/EventChannel behavior, system playback, AirPlay, Cast, DLNA, relay, video surfaces, SwiftUI/UIKit, or example mobile hosts.
 metadata:
   short-description: Mobile and Flutter host boundaries
 ---
@@ -14,6 +14,7 @@ metadata:
 - `../../references/plugin-runtime-contract.md` for plan, scope, slot, and
   participation boundaries
 - `../../references/platform-hosts.md`
+- `../../references/stage-skins.md` for skins, icons, control styling, or UI migration
 - `../../references/defensive-boundaries.md` for lifecycle/channel changes
 - The current host-kit and Flutter package READMEs when a checkout is available
 - For command selection and release evidence: `$vesper-validation-playbook`
@@ -55,15 +56,25 @@ Do not call JNI or C FFI directly from Dart on Android or iOS.
 
 ## Flutter Contract
 
-- `vesper_player_platform_interface` owns public DTOs.
+- `vesper_player_platform_interface` defines player DTOs and channel contracts.
 - Platform packages serialize, adapt, and report capabilities.
 - Main package exposes controller, view, state, and event semantics.
-- UI package owns reusable controls and stage helpers.
+- UI package provides reusable controls, Stage skins, icon roles, and widget
+  styles; presentation types do not enter player DTOs or channels.
 - Example host demonstrates integration and regression behavior only.
 
 Do not expose `SurfaceView`, `TextureView`, `AVPlayerLayer`, JNI, or C ABI as
 Dart public API promises. Express platform differences through capabilities,
 snapshots, unsupported errors, or internal strategy.
+
+## Stage Skins
+
+Verify the installed package version before recommending the skin API; it is
+available from 0.6.4. Use `lib/doc/stage-skins.md` when present and the bundled
+skin reference for portable integration guidance. Keep host skin selection
+separate from controller creation. Preserve SDK input and accessibility when
+accepting custom icon views, and migrate Flutter button `IconData` arguments
+to widgets with named variants or `VesperStageButtonStyle`.
 
 ## Rendering
 

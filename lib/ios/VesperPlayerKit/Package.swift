@@ -38,6 +38,11 @@ let package = Package(
         ),
     ],
     targets: [
+        .testTarget(
+            name: "VesperPlayerKitUITests",
+            dependencies: ["VesperPlayerKitUI"],
+            path: "Tests/VesperPlayerKitUITests"
+        ),
         .binaryTarget(
             name: "VesperPlayerFFI",
             path: rustResolverRelativePath

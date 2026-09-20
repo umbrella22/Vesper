@@ -1,6 +1,9 @@
 part of 'vesper_player_stage.dart';
 
 class _VesperPlayerStageState extends State<VesperPlayerStage> {
+  VesperPlayerStageSkin get _skin =>
+      widget.skin ?? const VesperPlayerStageSkin();
+
   Size? _stageSize;
   int _interactionRevision = 0;
   int _deviceGestureGeneration = 0;
@@ -77,12 +80,14 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
-      final size = constraints.biggest;
-      if (_stageSize != null && _stageSize != size) _cancelInteraction();
-      _stageSize = size;
-      return _buildStage(context);
-    });
+    return VesperPlayerStageTheme(
+        skin: _skin,
+        child: LayoutBuilder(builder: (context, constraints) {
+          final size = constraints.biggest;
+          if (_stageSize != null && _stageSize != size) _cancelInteraction();
+          _stageSize = size;
+          return _buildStage(context);
+        }));
   }
 
   Widget _buildStage(BuildContext context) {
@@ -102,9 +107,11 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
     return ClipRect(
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: Colors.black,
+          color: _skin.colors.background,
           border: _compact
-              ? Border.all(color: Colors.white.withValues(alpha: 0.08))
+              ? Border.all(
+                  color: _skin.colors.foreground
+                      .withValues(alpha: _skin.colors.foreground.a * 0.08))
               : null,
         ),
         child: Stack(
@@ -140,10 +147,12 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: <Color>[
-                          Colors.black.withValues(alpha: 0.68),
+                          _skin.colors.scrim
+                              .withValues(alpha: _skin.colors.scrim.a * 0.68),
                           Colors.transparent,
                           Colors.transparent,
-                          Colors.black.withValues(alpha: 0.82),
+                          _skin.colors.scrim
+                              .withValues(alpha: _skin.colors.scrim.a * 0.82),
                         ],
                       ),
                     ),
@@ -214,7 +223,23 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           // Keep the control bar out of the stage gesture arena. The values
           // include the bottom inset and a small hit-test buffer around the
           // rendered timeline/buttons.
-          final reservedHeight = showControls ? (_compact ? 74.0 : 112.0) : 0.0;
+          final metrics = _skin.metrics;
+          final buttonHeight = math.max(
+              48.0,
+              _compact
+                  ? math.max(
+                      metrics.compact.size, metrics.compactFullscreen.size)
+                  : math.max(
+                      metrics.expanded.size, metrics.expandedFullscreen.size));
+          final timelineHeight = math.max(
+              22.0,
+              math.max(metrics.timelineThumbSize, metrics.timelineTrackHeight) +
+                  8);
+          final reservedHeight = !showControls
+              ? 0.0
+              : _compact
+                  ? 26 + math.max(buttonHeight, timelineHeight)
+                  : 112 + (buttonHeight - 48) + (timelineHeight - 22);
           final gestureHeight = (constraints.maxHeight - reservedHeight)
               .clamp(0.0, constraints.maxHeight)
               .toDouble();
@@ -255,15 +280,13 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
       children: <Widget>[
         if (widget.onNavigateBack != null) ...<Widget>[
           VesperStageIconButton(
-            icon: Icons.arrow_back_rounded,
+            icon: const VesperStageIcon(VesperStageIconRole.navigateBack),
             label:
                 widget.navigateBackSemanticLabel ?? widget.strings.navigateBack,
-            size: 38,
-            iconSize: 23,
-            containerAlpha: 0,
+            variant: VesperStageButtonVariant.navigation,
             onPressed: widget.onNavigateBack!,
           ),
-          const SizedBox(width: 8),
+          SizedBox(width: _skin.metrics.buttonSpacing),
         ],
         Expanded(
           child: Column(
@@ -277,16 +300,16 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            color: Colors.white,
+                            color: _skin.colors.foreground,
                             fontWeight: FontWeight.bold,
                           ),
                     ),
                   ),
                   if (snapshot.isBuffering) ...<Widget>[
-                    const SizedBox(width: 8),
+                    SizedBox(width: _skin.metrics.buttonSpacing),
                     VesperStageChip(
                       label: widget.strings.buffering,
-                      accent: Color(0xFFFFB454),
+                      accent: _skin.colors.accent,
                       compact: true,
                     ),
                   ],
@@ -297,7 +320,10 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                 stageBadgeText(snapshot.timeline, strings: widget.strings),
                 style: Theme.of(
                   context,
-                ).textTheme.bodySmall?.copyWith(color: const Color(0xFFBFC6D6)),
+                )
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: _skin.colors.secondaryForeground),
               ),
             ],
           ),
@@ -314,11 +340,9 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
 
   Widget _defaultMenuAction() {
     return VesperStageIconButton(
-      icon: Icons.more_vert_rounded,
+      icon: const VesperStageIcon(VesperStageIconRole.more),
       label: widget.strings.more,
-      size: 38,
-      iconSize: 24,
-      containerAlpha: 0,
+      variant: VesperStageButtonVariant.toolbar,
       onPressed: () => widget.onOpenSheet(VesperPlayerStageSheet.menu),
     );
   }
@@ -333,14 +357,13 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
         VesperStageIconButton(
-          icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+          icon: VesperStageIcon(
+              isPlaying ? VesperStageIconRole.pause : VesperStageIconRole.play),
           label: isPlaying ? widget.strings.pause : widget.strings.play,
-          size: 38,
-          iconSize: 24,
-          containerAlpha: 0,
+          variant: VesperStageButtonVariant.compact,
           onPressed: _togglePause,
         ),
-        const SizedBox(width: 8),
+        SizedBox(width: _skin.metrics.buttonSpacing),
         Expanded(
           child: VesperTimelineScrubber(
             key: ValueKey(_interactionRevision),
@@ -352,7 +375,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
             onSeekCancel: _handleSeekCancel,
           ),
         ),
-        const SizedBox(width: 8),
+        SizedBox(width: _skin.metrics.buttonSpacing),
         Text(
           compactTimelineSummary(
             snapshot.timeline,
@@ -362,29 +385,27 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.labelSmall?.copyWith(
-            color: const Color(0xFFF7F8FC),
+            color: _skin.colors.foreground,
             fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
           ),
         ),
         if (snapshot.timeline.kind == VesperTimelineKind.liveDvr) ...<Widget>[
-          const SizedBox(width: 8),
+          SizedBox(width: _skin.metrics.buttonSpacing),
           VesperStagePillButton(
             label: liveButtonLabel(snapshot.timeline, strings: widget.strings),
             compact: true,
             onPressed: _seekToLiveEdge,
           ),
         ],
-        const SizedBox(width: 6),
+        SizedBox(width: _skin.metrics.buttonSpacing),
         VesperStageIconButton(
-          icon: widget.isFullscreen
-              ? Icons.fullscreen_exit_rounded
-              : Icons.fullscreen_rounded,
+          icon: VesperStageIcon(widget.isFullscreen
+              ? VesperStageIconRole.exitFullscreen
+              : VesperStageIconRole.fullscreen),
           label: widget.isFullscreen
               ? widget.strings.exitFullscreen
               : widget.strings.fullscreen,
-          size: 38,
-          iconSize: 24,
-          containerAlpha: 0,
+          variant: VesperStageButtonVariant.compactFullscreen,
           onPressed: widget.onToggleFullscreen,
         ),
       ],
@@ -417,7 +438,7 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.labelLarge?.copyWith(
-            color: const Color(0xFFF7F8FC),
+            color: _skin.colors.foreground,
             fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
           ),
         ),
@@ -435,11 +456,11 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
         Row(
           children: <Widget>[
             VesperStageIconButton(
-              icon: isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+              icon: VesperStageIcon(isPlaying
+                  ? VesperStageIconRole.pause
+                  : VesperStageIconRole.play),
               label: isPlaying ? widget.strings.pause : widget.strings.play,
-              size: 38,
-              iconSize: 22,
-              containerAlpha: 0,
+              variant: VesperStageButtonVariant.expanded,
               onPressed: _togglePause,
             ),
             if (widget.expandedControlBarLeading != null)
@@ -453,31 +474,29 @@ class _VesperPlayerStageState extends State<VesperPlayerStage> {
                 compact: true,
                 onPressed: _seekToLiveEdge,
               ),
-              const SizedBox(width: 8),
+              SizedBox(width: _skin.metrics.buttonSpacing),
             ],
             VesperStagePillButton(
               label: speedBadge(snapshot.playbackRate),
               compact: true,
               onPressed: () => widget.onOpenSheet(VesperPlayerStageSheet.speed),
             ),
-            const SizedBox(width: 8),
+            SizedBox(width: _skin.metrics.buttonSpacing),
             VesperStagePillButton(
               label: qualityLabelText,
               compact: true,
               onPressed: () =>
                   widget.onOpenSheet(VesperPlayerStageSheet.quality),
             ),
-            const SizedBox(width: 6),
+            SizedBox(width: _skin.metrics.buttonSpacing),
             VesperStageIconButton(
-              icon: widget.isFullscreen
-                  ? Icons.fullscreen_exit_rounded
-                  : Icons.fullscreen_rounded,
+              icon: VesperStageIcon(widget.isFullscreen
+                  ? VesperStageIconRole.exitFullscreen
+                  : VesperStageIconRole.fullscreen),
               label: widget.isFullscreen
                   ? widget.strings.exitFullscreen
                   : widget.strings.fullscreen,
-              size: 34,
-              iconSize: 19,
-              containerAlpha: 0,
+              variant: VesperStageButtonVariant.expandedFullscreen,
               onPressed: widget.onToggleFullscreen,
             ),
           ],

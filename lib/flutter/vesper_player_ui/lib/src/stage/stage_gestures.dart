@@ -23,10 +23,11 @@ class _StageGestureFeedbackView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final skin = VesperPlayerStageTheme.of(context);
     final icon = switch (feedback.kind) {
-      _StageGestureKind.brightness => Icons.wb_sunny_rounded,
-      _StageGestureKind.volume => Icons.volume_up_rounded,
-      _StageGestureKind.speed => Icons.speed_rounded,
+      _StageGestureKind.brightness => VesperStageIconRole.brightness,
+      _StageGestureKind.volume => VesperStageIconRole.volume,
+      _StageGestureKind.speed => VesperStageIconRole.speed,
     };
     final progress = feedback.progress?.clamp(0.0, 1.0).toDouble();
 
@@ -34,24 +35,28 @@ class _StageGestureFeedbackView extends StatelessWidget {
       width: progress == null ? null : 226,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(999),
+        color: skin.colors.hudBackground,
+        borderRadius: BorderRadius.circular(skin.metrics.hudBorderRadius),
       ),
       child: Row(
         mainAxisSize: progress == null ? MainAxisSize.min : MainAxisSize.max,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
-          Icon(icon, size: 24, color: Colors.white),
+          VesperStageIcon(icon,
+              size: skin.metrics.hudIconSize, color: skin.colors.hudForeground),
           const SizedBox(width: 10),
           if (progress != null) ...<Widget>[
             Expanded(
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(999),
+                borderRadius:
+                    BorderRadius.circular(skin.metrics.hudBorderRadius),
                 child: LinearProgressIndicator(
                   minHeight: 4,
                   value: progress,
-                  backgroundColor: Colors.white.withValues(alpha: 0.18),
-                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                  backgroundColor: skin.colors.hudForeground
+                      .withValues(alpha: skin.colors.hudForeground.a * 0.18),
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(skin.colors.hudForeground),
                 ),
               ),
             ),
@@ -60,7 +65,7 @@ class _StageGestureFeedbackView extends StatelessWidget {
           Text(
             feedback.label,
             style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: Colors.white,
+              color: skin.colors.hudForeground,
               fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
             ),
           ),

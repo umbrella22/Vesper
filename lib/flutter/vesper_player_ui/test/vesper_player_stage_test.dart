@@ -25,6 +25,7 @@ void main() {
 
   Future<void> pumpStage(
     WidgetTester tester, {
+    VesperPlayerStageSkin? skin,
     Widget? contentOverlay,
     VesperStageContentTapHandler? onContentTap,
     Widget? expandedControlBarLeading,
@@ -53,6 +54,7 @@ void main() {
         height: stageSize.height,
         child: VesperPlayerStage(
           controller: controller,
+          skin: skin,
           snapshot: snapshot ?? _playingSnapshot,
           controlLayout: controlLayout,
           isFullscreen: isFullscreen,
@@ -90,6 +92,14 @@ void main() {
     await tester.pump();
   }
 
+  Future<void> tapControl(WidgetTester tester, Finder icon,
+          {bool warnIfMissed = true}) =>
+      tester.tap(
+          find
+              .ancestor(of: icon, matching: find.byType(VesperStageIconButton))
+              .first,
+          warnIfMissed: warnIfMissed);
+
   testWidgets(
       'empty stage taps still reach gestures while controls are visible',
       (tester) async {
@@ -97,13 +107,14 @@ void main() {
 
     await tester.tapAt(const Offset(400, 300));
     await tester.pump(const Duration(milliseconds: 400));
-    await tester.tap(find.byIcon(Icons.more_vert_rounded), warnIfMissed: false);
+    await tapControl(tester, find.byIcon(Icons.more_vert_rounded),
+        warnIfMissed: false);
 
     expect(openedSheets, isEmpty);
 
     await tester.tapAt(const Offset(400, 300));
     await tester.pump(const Duration(milliseconds: 400));
-    await tester.tap(find.byIcon(Icons.more_vert_rounded));
+    await tapControl(tester, find.byIcon(Icons.more_vert_rounded));
 
     expect(openedSheets, <VesperPlayerStageSheet>[
       VesperPlayerStageSheet.menu,
@@ -112,7 +123,7 @@ void main() {
 
   bool controlsIgnoreInput(WidgetTester tester) => tester
       .widgetList<IgnorePointer>(find.ancestor(
-        of: find.byIcon(Icons.pause_rounded),
+        of: find.byType(VesperStageIconButton).first,
         matching: find.byType(IgnorePointer),
       ))
       .any((widget) => widget.ignoring);
@@ -229,9 +240,11 @@ void main() {
                 ? Icons.fullscreen_exit_rounded
                 : Icons.fullscreen_rounded),
             findsOneWidget);
-        await tester.tap(find.byIcon(fullscreen
-            ? Icons.fullscreen_exit_rounded
-            : Icons.fullscreen_rounded));
+        await tapControl(
+            tester,
+            find.byIcon(fullscreen
+                ? Icons.fullscreen_exit_rounded
+                : Icons.fullscreen_rounded));
         expect(fullscreenToggleCount, 1);
         expect(tester.takeException(), isNull);
       });
@@ -317,10 +330,10 @@ void main() {
           calls += 1;
           return true;
         });
-    await tester.tap(find.byIcon(Icons.arrow_back_rounded));
-    await tester.tap(find.byIcon(Icons.more_vert_rounded));
-    await tester.tap(find.byIcon(Icons.pause_rounded));
-    await tester.tap(find.byIcon(Icons.fullscreen_rounded));
+    await tapControl(tester, find.byIcon(Icons.arrow_back_rounded));
+    await tapControl(tester, find.byIcon(Icons.more_vert_rounded));
+    await tapControl(tester, find.byIcon(Icons.pause_rounded));
+    await tapControl(tester, find.byIcon(Icons.fullscreen_rounded));
     await tester.drag(find.byType(VesperTimelineScrubber), const Offset(20, 0));
     final stageRect = tester.getRect(find.byType(VesperPlayerStage));
     await tester.tapAt(stageRect.bottomLeft + const Offset(3, -3));
@@ -449,7 +462,7 @@ void main() {
 
       expect(find.byTooltip('Exit listen mode'), findsOneWidget);
       expect(find.bySemanticsLabel('Exit listen mode'), findsOneWidget);
-      await tester.tap(find.byIcon(Icons.arrow_back_rounded));
+      await tapControl(tester, find.byIcon(Icons.arrow_back_rounded));
       expect(navigateBackCount, 1);
 
       await pumpStage(tester);
@@ -487,7 +500,7 @@ void main() {
 
       await tester.tapAt(const Offset(400, 300));
       await tester.pump(const Duration(milliseconds: 400));
-      await tester.tap(find.byIcon(Icons.pause_rounded));
+      await tapControl(tester, find.byIcon(Icons.pause_rounded));
       await tester.pump();
 
       expect(overlayTapCount, 0);
@@ -564,7 +577,7 @@ void main() {
       return tester
           .widgetList<IgnorePointer>(
             find.ancestor(
-              of: find.byIcon(Icons.pause_rounded),
+              of: find.byType(VesperStageIconButton).first,
               matching: find.byType(IgnorePointer),
             ),
           )
@@ -594,6 +607,173 @@ void main() {
 
     expect(find.text('Loading media'), findsOneWidget);
     expect(find.text('On-demand asset'), findsOneWidget);
+  });
+
+  for (final layout in VesperStageControlLayout.values) {
+    testWidgets('skin overrides and builder fallback preserve actions: $layout',
+        (tester) async {
+      final semantics = tester.ensureSemantics();
+      try {
+        final skin = VesperPlayerStageSkin(
+          icons: const VesperPlayerStageIcons(
+              pause: Icons.stop, fullscreen: Icons.open_in_full),
+          colors: const VesperStageColors(foreground: Colors.cyan),
+          iconBuilder: (context, role, style) =>
+              role == VesperStageIconRole.navigateBack
+                  ? Semantics(
+                      label: 'Decorative child',
+                      child: SizedBox.square(
+                          key: const Key('custom-back'), dimension: style.size))
+                  : null,
+        );
+        var backCount = 0;
+        await pumpStage(tester,
+            skin: skin,
+            controlLayout: layout,
+            onNavigateBack: () => backCount++);
+        expect(find.byKey(const Key('custom-back')), findsOneWidget);
+        expect(find.bySemanticsLabel('Decorative child'), findsNothing);
+        expect(tester.widget<Icon>(find.byIcon(Icons.stop)).color, Colors.cyan);
+        expect(find.byIcon(Icons.more_vert_rounded), findsOneWidget);
+        await tester.tap(find.bySemanticsLabel('Back'));
+        await tester.tap(find.bySemanticsLabel('Pause'));
+        await tester.tap(find.bySemanticsLabel('Fullscreen'));
+        expect(backCount, 1);
+        expect(platform.togglePauseCount, 1);
+        expect(fullscreenToggleCount, 1);
+        expect(tester.takeException(), isNull);
+      } finally {
+        semantics.dispose();
+      }
+    });
+  }
+
+  testWidgets(
+      'skin changes retain the player view and update state-specific icons',
+      (tester) async {
+    await pumpStage(tester);
+    final viewState = tester.state(find.byType(VesperPlayerView));
+    final viewportUpdates = platform.viewportUpdateCount;
+    final skin = VesperPlayerStageSkin(
+        iconBuilder: (context, role, style) => SizedBox.square(
+            key: ValueKey('skin-${role.name}'), dimension: style.size));
+    await pumpStage(tester, skin: skin);
+    expect(find.byKey(const ValueKey('skin-pause')), findsOneWidget);
+    expect(find.byKey(const ValueKey('skin-fullscreen')), findsOneWidget);
+    expect(tester.state(find.byType(VesperPlayerView)), same(viewState));
+    expect(platform.viewportUpdateCount, viewportUpdates);
+    expect(platform.togglePauseCount, 0);
+    expect(platform.seekRatios, isEmpty);
+    await pumpStage(tester,
+        skin: skin,
+        isFullscreen: true,
+        snapshot: _playingSnapshot.copyWith(
+            playbackState: VesperPlaybackState.paused));
+    expect(find.byKey(const ValueKey('skin-play')), findsOneWidget);
+    expect(find.byKey(const ValueKey('skin-exitFullscreen')), findsOneWidget);
+    await pumpStage(tester);
+    expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
+    expect(find.byKey(const ValueKey('skin-pause')), findsNothing);
+    expect(tester.state(find.byType(VesperPlayerView)), same(viewState));
+  });
+
+  testWidgets('HUD uses all three skin roles', (tester) async {
+    final seen = <VesperStageIconRole>{};
+    final skin = VesperPlayerStageSkin(iconBuilder: (context, role, style) {
+      seen.add(role);
+      return SizedBox.square(dimension: style.size);
+    });
+    await pumpStage(tester, skin: skin);
+    await tester.dragFrom(const Offset(230, 310), const Offset(0, -40));
+    await tester.pump();
+    expect(seen, contains(VesperStageIconRole.brightness));
+    await tester.dragFrom(const Offset(550, 310), const Offset(0, -40));
+    await tester.pump();
+    expect(seen, contains(VesperStageIconRole.volume));
+    await tester.longPressAt(const Offset(400, 300));
+    await tester.pump();
+    expect(seen, contains(VesperStageIconRole.speed));
+  });
+
+  testWidgets('host buttons inherit skin and preserve the minimum hit target',
+      (tester) async {
+    const skin = VesperPlayerStageSkin(
+      colors: VesperStageColors(
+          foreground: Colors.green, buttonBackground: Colors.blue),
+      metrics: VesperStageMetrics(
+          toolbar:
+              VesperStageButtonStyle(size: 20, iconSize: 12, borderRadius: 4)),
+    );
+    var hostTaps = 0;
+    await pumpStage(tester,
+        skin: skin,
+        topBarPrimaryAction: VesperStageIconButton(
+          key: const Key('host-button'),
+          icon: const Icon(Icons.favorite),
+          label: 'Favorite',
+          variant: VesperStageButtonVariant.toolbar,
+          onPressed: () => hostTaps++,
+        ));
+    final button = find.byKey(const Key('host-button'));
+    expect(tester.getSize(button), const Size(48, 48));
+    final iconContext = tester.element(find.byIcon(Icons.favorite));
+    expect(IconTheme.of(iconContext).color, Colors.green);
+    expect(IconTheme.of(iconContext).size, 12);
+    await tester.tapAt(tester.getRect(button).centerLeft + const Offset(2, 0));
+    expect(hostTaps, 1);
+  });
+
+  testWidgets('standalone icons inherit skin defaults and explicit overrides',
+      (tester) async {
+    final received = <VesperStageIconRole, VesperStageIconStyle>{};
+    await tester.pumpWidget(MaterialApp(
+      home: IconTheme(
+        data: const IconThemeData(size: 32, color: Colors.red),
+        child: VesperPlayerStageTheme(
+          skin: VesperPlayerStageSkin(
+            colors: const VesperStageColors(foreground: Colors.green),
+            metrics: const VesperStageMetrics(
+                standard: VesperStageButtonStyle(iconSize: 12)),
+            iconBuilder: (context, role, style) {
+              received[role] = style;
+              return null;
+            },
+          ),
+          child: const Row(children: [
+            VesperStageIcon(VesperStageIconRole.play),
+            VesperStageIcon(VesperStageIconRole.pause,
+                size: 18, color: Colors.blue),
+          ]),
+        ),
+      ),
+    ));
+    expect(received[VesperStageIconRole.play]!.size, 12);
+    expect(received[VesperStageIconRole.play]!.color, Colors.green);
+    expect(received[VesperStageIconRole.pause]!.size, 18);
+    expect(received[VesperStageIconRole.pause]!.color, Colors.blue);
+  });
+
+  testWidgets('standalone primary button uses the same icon and label contract',
+      (tester) async {
+    var taps = 0;
+    final semantics = tester.ensureSemantics();
+    try {
+      await tester.pumpWidget(MaterialApp(
+          home: VesperPlayerStageTheme(
+        skin: const VesperPlayerStageSkin(
+            icons: VesperPlayerStageIcons(play: Icons.start)),
+        child: Center(
+            child: VesperStagePrimaryPlayButton(
+                isPlaying: false,
+                strings: const VesperPlayerStageStrings(play: 'Start playback'),
+                onPressed: () => taps++)),
+      )));
+      expect(find.byIcon(Icons.start), findsOneWidget);
+      await tester.tap(find.bySemanticsLabel('Start playback'));
+      expect(taps, 1);
+    } finally {
+      semantics.dispose();
+    }
   });
 
   testWidgets('snapshot-only updates keep the player view stable',
@@ -653,7 +833,7 @@ void main() {
   testWidgets('visible timeline and buttons remain clickable', (tester) async {
     await pumpStage(tester);
 
-    await tester.tap(find.byIcon(Icons.pause_rounded).first);
+    await tapControl(tester, find.byIcon(Icons.pause_rounded).first);
     await tester.pump();
     expect(platform.togglePauseCount, 1);
 
@@ -661,7 +841,7 @@ void main() {
     await tester.pump();
     expect(platform.seekRatios, isNotEmpty);
 
-    await tester.tap(find.byIcon(Icons.fullscreen_rounded));
+    await tapControl(tester, find.byIcon(Icons.fullscreen_rounded));
     await tester.pump();
     expect(fullscreenToggleCount, 1);
   });

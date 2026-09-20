@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
@@ -7,6 +8,7 @@ import 'package:vesper_player/vesper_player.dart';
 import 'stage_device_controls.dart';
 import 'stage_helpers.dart';
 import 'stage_models.dart';
+import 'stage_skin.dart';
 
 part 'stage_body.dart';
 part 'stage_gestures.dart';
@@ -43,6 +45,7 @@ class VesperPlayerStage extends StatefulWidget {
     this.keepControlsVisible = false,
     this.pictureInPicturePresentation = false,
     this.strings = const VesperPlayerStageStrings(),
+    this.skin,
   });
 
   final VesperPlayerController controller;
@@ -96,6 +99,9 @@ class VesperPlayerStage extends StatefulWidget {
   final bool keepControlsVisible;
   final bool pictureInPicturePresentation;
   final VesperPlayerStageStrings strings;
+
+  /// Null selects the SDK default, including inside another theme scope.
+  final VesperPlayerStageSkin? skin;
   final ValueChanged<VesperPlayerStageSheet> onOpenSheet;
   final VoidCallback onToggleFullscreen;
 

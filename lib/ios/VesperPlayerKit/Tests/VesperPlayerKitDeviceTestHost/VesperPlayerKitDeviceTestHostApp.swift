@@ -32,8 +32,15 @@ final class VesperPlayerKitDeviceTestHostSceneDelegate: UIResponder, UIWindowSce
         options connectionOptions: UIScene.ConnectionOptions
     ) {
         guard let windowScene = scene as? UIWindowScene else { return }
-        let window = UIWindow(windowScene: windowScene)
-        window.rootViewController = UIViewController()
+        let window: UIWindow
+        if ProcessInfo.processInfo.arguments.contains("--stage-skin-ui-tests") {
+            let testWindow = StageSkinInteractionWindow(windowScene: windowScene)
+            testWindow.installHarness()
+            window = testWindow
+        } else {
+            window = UIWindow(windowScene: windowScene)
+            window.rootViewController = UIViewController()
+        }
         window.makeKeyAndVisible()
         self.window = window
     }

@@ -19,7 +19,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
@@ -43,18 +42,20 @@ internal fun TimelineScrubber(
     onSeekCommit: (Float) -> Unit,
     onSeekCancel: () -> Unit,
 ) {
+    val skin = LocalVesperPlayerStageSkin.current
+    val metrics = skin.metrics
     var widthPx by remember { mutableFloatStateOf(1f) }
-    val knobDiameter = if (compact) 11.dp else 14.dp
+    val knobDiameter = if (compact) metrics.timelineThumbSize else metrics.timelineLargeThumbSize
     val knobRadiusPx =
         with(androidx.compose.ui.platform.LocalDensity.current) { (knobDiameter / 2).toPx() }
-    val touchHeight = if (compact) 22.dp else 28.dp
-    val visualHeight = if (compact) 14.dp else 18.dp
-    val trackHeight = 4.dp
+    val touchHeight = (if (compact) 22.dp else 28.dp).coerceAtLeast(maxOf(knobDiameter, metrics.timelineTrackHeight) + 8.dp)
+    val visualHeight = (if (compact) 14.dp else 18.dp).coerceAtLeast(maxOf(knobDiameter, metrics.timelineTrackHeight))
+    val trackHeight = metrics.timelineTrackHeight
     val ratio = displayedRatio.coerceIn(0f, 1f)
-    val inactiveTrackColor = Color.White.copy(alpha = if (enabled) 0.16f else 0.10f)
-    val activeStart = Color(0xFFFF6B8E).copy(alpha = if (enabled) 1f else 0.42f)
-    val activeEnd = Color(0xFFFFB454).copy(alpha = if (enabled) 1f else 0.42f)
-    val knobColor = Color.White.copy(alpha = if (enabled) 1f else 0.42f)
+    val inactiveTrackColor = skin.colors.timelineInactive.copy(alpha = skin.colors.timelineInactive.alpha * if (enabled) 0.16f else 0.10f)
+    val activeStart = skin.colors.timelineStart.copy(alpha = skin.colors.timelineStart.alpha * if (enabled) 1f else 0.42f)
+    val activeEnd = skin.colors.timelineEnd.copy(alpha = skin.colors.timelineEnd.alpha * if (enabled) 1f else 0.42f)
+    val knobColor = skin.colors.timelineThumb.copy(alpha = skin.colors.timelineThumb.alpha * if (enabled) 1f else 0.42f)
     val latestOnSeekPreview by rememberUpdatedState(onSeekPreview)
     val latestOnSeekCommit by rememberUpdatedState(onSeekCommit)
     val latestOnSeekCancel by rememberUpdatedState(onSeekCancel)

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.6.4 - 2026-09-21
+
+- Add SwiftUI `VesperPlayerStageSkin`, semantic SF Symbols/custom icon views,
+  palette, button roles, timeline/HUD styling, and runtime switching. Public
+  skinned action buttons preserve 44 point bounds and SDK accessibility/actions.
+- Exclude custom icon descendants from accessibility and preserve a single
+  labeled SDK button action. Pass Stage gestures through decorative scrims,
+  borders, and HUD content.
+- Add separate Stage rendering and touch/accessibility regression test schemes.
+- Rebuild consumers with the matching UI framework or Swift package after the
+  Stage initializer change. Omitting `skin` restores SDK defaults. See the
+  [migration guide](../../doc/stage-skins.md).
+
 ## 0.6.3 - 2026-09-20
 
 ## 0.6.2 - 2026-09-18

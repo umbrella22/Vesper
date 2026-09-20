@@ -6,16 +6,16 @@ extension VesperPlayerStage {
         uiState.playbackState == .playing
     }
 
-    var playButtonSymbol: String {
-        isPlaying ? "pause.fill" : "play.fill"
+    var playButtonIcon: VesperStageIconRole {
+        isPlaying ? .pause : .play
     }
 
     var playButtonLabel: String {
         isPlaying ? VesperPlayerStageStrings.pause : VesperPlayerStageStrings.play
     }
 
-    var fullscreenSymbol: String {
-        isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
+    var fullscreenIcon: VesperStageIconRole {
+        isFullscreen ? .exitFullscreen : .fullscreen
     }
 
     var fullscreenLabel: String {
@@ -32,17 +32,15 @@ extension VesperPlayerStage {
     }
 
     var compactControls: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: skin.metrics.buttonSpacing) {
             StageIconButton(
-                systemName: playButtonSymbol,
-                size: 38,
-                iconSize: 17,
-                backgroundOpacity: 0.0
+                icon: playButtonIcon,
+                label: playButtonLabel,
+                variant: .compact
             ) {
                 onTogglePause()
                 controlsVisible = true
             }
-            .accessibilityLabel(Text(playButtonLabel))
 
             TimelineScrubber(
                 displayedRatio: pendingSeekRatio ?? uiState.timeline.displayedRatio ?? 0.0,
@@ -64,7 +62,7 @@ extension VesperPlayerStage {
 
             Text(compactTimelineSummary(uiState.timeline, pendingSeekRatio: pendingSeekRatio))
                 .font(.caption2.monospacedDigit().weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(skin.colors.foreground)
                 .lineLimit(1)
 
             if uiState.timeline.kind == .liveDvr {
@@ -75,15 +73,13 @@ extension VesperPlayerStage {
             }
 
             StageIconButton(
-                systemName: fullscreenSymbol,
-                size: 38,
-                iconSize: 18,
-                backgroundOpacity: 0.0
+                icon: fullscreenIcon,
+                label: fullscreenLabel,
+                variant: .compactFullscreen
             ) {
                 onToggleFullscreen()
                 controlsVisible = true
             }
-            .accessibilityLabel(Text(fullscreenLabel))
         }
         .padding(.horizontal, 18)
         .padding(.bottom, 18)
@@ -93,7 +89,7 @@ extension VesperPlayerStage {
         VStack(alignment: .leading, spacing: 4) {
             Text(timelineSummary(uiState.timeline, pendingSeekRatio: pendingSeekRatio))
                 .font(.caption.monospacedDigit().weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(skin.colors.foreground)
                 .lineLimit(1)
 
             TimelineScrubber(
@@ -114,17 +110,15 @@ extension VesperPlayerStage {
                 }
             )
 
-            HStack(alignment: .center) {
+            HStack(alignment: .center, spacing: skin.metrics.buttonSpacing) {
                 StageIconButton(
-                    systemName: playButtonSymbol,
-                    size: 38,
-                    iconSize: 17,
-                    backgroundOpacity: 0.0
+                    icon: playButtonIcon,
+                label: playButtonLabel,
+                    variant: .expanded
                 ) {
                     onTogglePause()
                     controlsVisible = true
                 }
-                .accessibilityLabel(Text(playButtonLabel))
 
                 if let expandedControlBarLeading {
                     expandedControlBarLeading
@@ -150,15 +144,13 @@ extension VesperPlayerStage {
                 }
 
                 StageIconButton(
-                    systemName: fullscreenSymbol,
-                    size: 34,
-                    iconSize: 17,
-                    backgroundOpacity: 0.0
+                    icon: fullscreenIcon,
+                label: fullscreenLabel,
+                    variant: .expandedFullscreen
                 ) {
                     onToggleFullscreen()
                     controlsVisible = true
                 }
-                .accessibilityLabel(Text(fullscreenLabel))
             }
         }
         .padding(.horizontal, 18)

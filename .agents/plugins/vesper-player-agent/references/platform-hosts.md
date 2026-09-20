@@ -63,6 +63,21 @@
 - Channel registration is lazy and idempotent where possible. Shared default
   event streams must remain safe for multiple controller instances.
 
+## Optional Player UI
+
+Stage skins and visual types belong in `vesper_player_ui`,
+`vesper-player-kit-compose-ui`, and `VesperPlayerKitUI`. Dart widget styles are
+UI types, not player DTOs in `vesper_player_platform_interface`. Skin values,
+asset loaders, and builders never cross Rust, FFI, JNI, or player channels.
+
+Hosts select a nullable `VesperPlayerStageSkin` on their Stage. Null/nil resets
+that Stage to SDK defaults, including within an outer standalone-control theme.
+Changing skins preserves the controller, surface, source, and playback state.
+Icons express semantic actions; SDK controls retain input and accessibility.
+System PiP, notifications, lock-screen controls, and AirPlay route pickers have
+separate platform presentation rules. Read `stage-skins.md` for the API,
+platform-native resources, migration, and verification requirements.
+
 ## Timeline Sampling
 
 - Periodic progress refresh should call `sampleTimeline` and patch only the

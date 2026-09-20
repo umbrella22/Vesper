@@ -196,6 +196,13 @@ The package does not embed demo URLs or preset sources. Construct
 `VesperPlayerSource` from your own content. A runnable sample lives at
 [`examples/ios-swift-host`](../../../examples/ios-swift-host/).
 
+## Stage skins
+
+`VesperPlayerKitUI` exposes `VesperPlayerStageSkin`, SF Symbols and custom image
+builders, and public skinned action buttons. See the [skin contract and migration
+guide](../../doc/stage-skins.md) for SwiftUI scopes, runtime switching, and rebuild
+requirements.
+
 ## Minimal SwiftUI Usage
 
 ```swift
@@ -521,6 +528,28 @@ xcodebuild \
   ARCHS=arm64 ONLY_ACTIVE_ARCH=YES \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test
 ```
+
+Stage skin rendering tests use the `VesperPlayerKitUI` scheme. Touch and
+accessibility-tree regressions use the `VesperPlayerKitUIInteractionTests`
+scheme and its dedicated mode in `VesperPlayerKitDeviceTestHost`:
+
+```sh
+xcodebuild -project VesperPlayerKit.xcodeproj \
+  -scheme VesperPlayerKitUIInteractionTests \
+  -destination 'platform=iOS Simulator,id=<SIMULATOR_ID>' \
+  CODE_SIGNING_ALLOWED=NO test
+```
+
+For device execution, use `platform=iOS,id=<DEVICE_ID>` and configure development
+signing for the test host and runner. `VESPER_IOS_FFI_PREBUILT=1` may skip the Rust
+build when the matching device or Simulator resolver artifact already exists.
+The first device UI-test run can show an **Enable UI Automation** prompt that
+requires the iPhone passcode on the device. Complete that prompt before the
+XCTest startup timeout; Developer Mode and pairing do not replace this
+confirmation. `Timed out while enabling automation mode` means no test cases
+have started.
+These tests use an inert surface and verify UI interaction and view identity;
+they do not establish media playback or manual VoiceOver gesture acceptance.
 
 List Simulator IDs:
 

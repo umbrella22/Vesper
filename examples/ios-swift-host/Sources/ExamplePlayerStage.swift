@@ -3,6 +3,7 @@ import VesperPlayerKit
 import VesperPlayerKitUI
 
 struct ExamplePlayerStage: View {
+    let skin: VesperPlayerStageSkin?
     let surface: AnyView
     let uiState: PlayerHostUiState
     let trackCatalog: VesperTrackCatalog
@@ -58,8 +59,10 @@ struct ExamplePlayerStage: View {
         expandedControlBarLeading: AnyView? = nil,
         onNavigateBack: (() -> Void)? = nil,
         navigateBackAccessibilityLabel: String? = nil,
-        airPlayRouteButton: AnyView? = nil
+        airPlayRouteButton: AnyView? = nil,
+        skin: VesperPlayerStageSkin? = nil
     ) {
+        self.skin = skin
         self.surface = surface
         self.uiState = uiState
         self.trackCatalog = trackCatalog
@@ -117,7 +120,8 @@ struct ExamplePlayerStage: View {
                 contentOverlay: contentOverlay,
                 expandedControlBarLeading: expandedControlBarLeading,
                 onNavigateBack: onNavigateBack,
-                navigateBackAccessibilityLabel: navigateBackAccessibilityLabel
+                navigateBackAccessibilityLabel: navigateBackAccessibilityLabel,
+                skin: skin
             )
 
             if !pictureInPicturePresentation,

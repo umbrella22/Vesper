@@ -14,6 +14,7 @@ class ExamplePlayerStage extends StatelessWidget {
     required this.isFullscreen,
     required this.onOpenSheet,
     required this.onToggleFullscreen,
+    this.skin,
     this.sheetOpen = false,
     this.deviceControls,
     this.contentOverlay,
@@ -26,6 +27,7 @@ class ExamplePlayerStage extends StatelessWidget {
     this.pictureInPicturePresentation = false,
   });
 
+  final ui.VesperPlayerStageSkin? skin;
   final VesperPlayerController controller;
   final VesperPlayerSnapshot snapshot;
   final ui.VesperStageControlLayout controlLayout;
@@ -47,6 +49,7 @@ class ExamplePlayerStage extends StatelessWidget {
   Widget build(BuildContext context) {
     return ui.VesperPlayerStage(
       controller: controller,
+      skin: skin,
       snapshot: snapshot,
       controlLayout: controlLayout,
       isFullscreen: isFullscreen,

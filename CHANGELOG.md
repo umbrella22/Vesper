@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+## 0.6.4 - 2026-09-21
+
+<!-- release-notes:en -->
+
+### Added
+
+- Added configurable Stage skins to Flutter, Android Compose, and iOS SwiftUI:
+  semantic icon roles, custom icon views, colors, button variants, and
+  timeline/HUD styling. Hosts can switch skins at runtime or select SDK defaults
+  with null/nil while retaining their playback surface.
+- Exposed reusable skinned action buttons in the native UI modules and forwarded
+  skin selection through all three example Stage wrappers.
+
+### Changed
+
+- **Breaking:** Flutter `VesperStageIconButton.icon` now takes a `Widget`.
+  Button sizing parameters move to `VesperStageButtonStyle` and named variants.
+  Native UI consumers must rebuild for the extended Stage signatures. The
+  [0.6.4 migration guide](https://github.com/umbrella22/Vesper/blob/v0.6.4/lib/doc/stage-skins.md)
+  includes per-platform examples and the button API migration.
+- Updated the first-party Vesper Player Agent with skin API guidance, migration
+  rules, UI boundaries, and platform-specific validation entrypoints.
+
+### Fixed
+
+- Excluded custom SwiftUI icon descendants from the accessibility tree while
+  preserving SDK button labels, actions, and minimum hit areas. Decorative
+  scrims, borders, and HUD content now pass Stage gestures through.
+
+<!-- release-notes:zh-CN -->
+
+### 新增
+
+- Flutter、Android Compose 和 iOS SwiftUI 播放器支持皮肤配置，包括语义图标、
+  自定义图标视图、配色、按钮样式以及时间轴和手势 HUD 样式。宿主可以在运行时
+  切换皮肤，或通过 null/nil 恢复 SDK 默认外观，同时保留播放 Surface。
+- 原生 UI 模块提供可复用的皮肤按钮，三个平台的示例 Stage 均支持传入皮肤。
+
+### 改进
+
+- **破坏性变更：** Flutter `VesperStageIconButton.icon` 改为接收 `Widget`，
+  按钮尺寸参数迁移至 `VesperStageButtonStyle` 和命名样式。原生 UI 使用方需要
+  针对扩展后的 Stage 签名重新编译。
+  [0.6.4 迁移指南](https://github.com/umbrella22/Vesper/blob/v0.6.4/lib/doc/stage-skins.md)
+  提供各平台接入示例和按钮 API 迁移步骤。
+- 第一方 Vesper Player Agent 同步更新皮肤 API、迁移规则、UI 模块边界和各平台
+  验证入口。
+
+### 修复
+
+- 自定义 SwiftUI 图标的子节点不再泄漏到无障碍树，按钮保留 SDK 标签、动作及
+  最小触摸热区。渐变遮罩、边框和手势 HUD 装饰内容不再拦截 Stage 手势。
+
 ## 0.6.3 - 2026-09-20
 
 <!-- release-notes:en -->

@@ -9,6 +9,7 @@ public enum VesperStageControlLayout: Hashable {
 
 @MainActor
 public struct VesperPlayerStage: View {
+    let skin: VesperPlayerStageSkin
     let surface: AnyView
     let contentOverlay: AnyView?
     let expandedControlBarLeading: AnyView?
@@ -72,8 +73,10 @@ public struct VesperPlayerStage: View {
         contentOverlay: AnyView? = nil,
         expandedControlBarLeading: AnyView? = nil,
         onNavigateBack: (() -> Void)? = nil,
-        navigateBackAccessibilityLabel: String? = nil
+        navigateBackAccessibilityLabel: String? = nil,
+        skin: VesperPlayerStageSkin? = nil
     ) {
+        self.skin = skin ?? VesperPlayerStageSkin()
         self.surface = surface
         self.contentOverlay = contentOverlay
         self.expandedControlBarLeading = expandedControlBarLeading

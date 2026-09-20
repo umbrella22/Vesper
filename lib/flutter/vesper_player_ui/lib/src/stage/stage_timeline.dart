@@ -110,22 +110,27 @@ class _VesperTimelineScrubberState extends State<VesperTimelineScrubber> {
 
   @override
   Widget build(BuildContext context) {
-    final knobSize = widget.compact ? 11.0 : 14.0;
-    final touchHeight = widget.compact ? 22.0 : 28.0;
-    final visualHeight = widget.compact ? 14.0 : 18.0;
-    final trackHeight = 4.0;
+    final skin = VesperPlayerStageTheme.of(context);
+    final metrics = skin.metrics;
+    final knobSize = widget.compact
+        ? metrics.timelineThumbSize
+        : metrics.timelineLargeThumbSize;
+    final touchHeight = math.max(widget.compact ? 22.0 : 28.0,
+        math.max(knobSize, metrics.timelineTrackHeight) + 8);
+    final visualHeight = math.max(widget.compact ? 14.0 : 18.0,
+        math.max(knobSize, metrics.timelineTrackHeight));
+    final trackHeight = metrics.timelineTrackHeight;
     final ratio = widget.displayedRatio.clamp(0.0, 1.0);
     final enabled = widget.enabled;
-    final inactiveTrackColor = Colors.white.withValues(
-      alpha: enabled ? 0.16 : 0.10,
+    final inactiveTrackColor = skin.colors.timelineInactive.withValues(
+      alpha: skin.colors.timelineInactive.a * (enabled ? 0.16 : 0.10),
     );
-    final activeStart = const Color(
-      0xFFFF6B8E,
-    ).withValues(alpha: enabled ? 1 : 0.42);
-    final activeEnd = const Color(
-      0xFFFFB454,
-    ).withValues(alpha: enabled ? 1 : 0.42);
-    final knobColor = Colors.white.withValues(alpha: enabled ? 1 : 0.42);
+    final activeStart = skin.colors.timelineStart
+        .withValues(alpha: skin.colors.timelineStart.a * (enabled ? 1 : 0.42));
+    final activeEnd = skin.colors.timelineEnd
+        .withValues(alpha: skin.colors.timelineEnd.a * (enabled ? 1 : 0.42));
+    final knobColor = skin.colors.timelineThumb
+        .withValues(alpha: skin.colors.timelineThumb.a * (enabled ? 1 : 0.42));
 
     return LayoutBuilder(
       builder: (context, constraints) {

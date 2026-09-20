@@ -7,21 +7,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Speed
-import androidx.compose.material.icons.rounded.WbSunny
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 
@@ -46,17 +40,18 @@ internal data class StageGestureFeedback(
 
 @Composable
 internal fun StageGestureFeedbackPanel(feedback: StageGestureFeedback) {
+    val skin = LocalVesperPlayerStageSkin.current
     val icon =
         when (feedback.kind) {
-            StageGestureKind.Brightness -> Icons.Rounded.WbSunny
-            StageGestureKind.Volume -> Icons.AutoMirrored.Rounded.VolumeUp
-            StageGestureKind.Speed -> Icons.Rounded.Speed
+            StageGestureKind.Brightness -> VesperStageIconRole.Brightness
+            StageGestureKind.Volume -> VesperStageIconRole.Volume
+            StageGestureKind.Speed -> VesperStageIconRole.Speed
         }
 
     Surface(
-        shape = RoundedCornerShape(999.dp),
-        color = Color.Black.copy(alpha = 0.72f),
-        contentColor = Color.White,
+        shape = RoundedCornerShape(skin.metrics.hudBorderRadius),
+        color = skin.colors.hudBackground,
+        contentColor = skin.colors.hudForeground,
     ) {
         Row(
             modifier = Modifier
@@ -65,30 +60,26 @@ internal fun StageGestureFeedbackPanel(feedback: StageGestureFeedback) {
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-            )
+            VesperStageIcon(icon, VesperStageIconStyle(skin.metrics.hudIconSize, skin.colors.hudForeground))
             feedback.progress?.let { progress ->
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .height(4.dp)
-                        .background(Color.White.copy(alpha = 0.18f), RoundedCornerShape(999.dp)),
+                        .background(skin.colors.hudForeground.copy(alpha = skin.colors.hudForeground.alpha * 0.18f), RoundedCornerShape(999.dp)),
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(progress.coerceIn(0f, 1f))
                             .height(4.dp)
-                            .background(Color.White, RoundedCornerShape(999.dp)),
+                            .background(skin.colors.hudForeground, RoundedCornerShape(999.dp)),
                     )
                 }
             }
             Text(
                 text = feedback.label,
                 style = MaterialTheme.typography.labelMedium,
-                color = Color.White,
+                color = skin.colors.hudForeground,
             )
         }
     }

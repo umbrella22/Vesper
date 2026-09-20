@@ -31,6 +31,8 @@ or released/consumer evidence.
   participation evidence.
 - `platform-hosts.md`: Android, iOS, Flutter, surfaces, channels, system
   playback, and external-route boundaries.
+- `stage-skins.md`: optional Flutter/Compose/SwiftUI skins, icon rendering,
+  reusable controls, runtime selection, and migration to 0.6.4.
 - `mobile-plugin-contract.md`: SourceNormalizer, Decoder, FrameProcessor,
   AudioProcessor, and mobile participation rules.
 - `ffmpeg-contract.md`: FFmpeg profiles, runtime/plugin artifact split,
@@ -59,5 +61,6 @@ reason to load private material:
 - `CURRENT-CHECKLIST.md`
 - `CHANGELOG.md`
 - package READMEs under `lib/`, `examples/`, and `crates/`
+- `lib/doc/stage-skins.md` for the Stage skin API and migration guide
 - `docs/performance-diagnostics.md` when the checkout exposes the official
   diagnostics session

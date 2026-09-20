@@ -40,8 +40,10 @@ already proves them impossible.
 - Mobile SourceNormalizer playback consumption, normalized fMP4/HLS resources,
   packet-stream boundaries, FrameProcessor/Decoder mobile participation, or
   local Android/iOS resource loaders: use `$vesper-mobile-plugin-playback`.
-- Android host kit, iOS host kit, Flutter packages, system playback, external
-  routes, surfaces, or channel lifecycle: use `$vesper-mobile-flutter-hosts`.
+- Android host kit, iOS host kit, Flutter packages, Stage skins, custom icons,
+  control styles, system playback, external routes, surfaces, or channel
+  lifecycle: use `$vesper-mobile-flutter-hosts`. For skins and UI migration,
+  load `references/stage-skins.md`.
 - Refactors involving guards, `runCatching`, `catch`, lifecycle checks,
   `unwrap`, `expect`, FFI/JNI panic boundaries, or over-defensive code review:
   use `$vesper-defensive-programming`.

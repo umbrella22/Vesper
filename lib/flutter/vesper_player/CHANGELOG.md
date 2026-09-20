@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.4 - 2026-09-21
+
 ## 0.6.3 - 2026-09-20
 
 - Android player creation reports unsupported architectures as a catchable
