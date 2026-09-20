@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.6.3 - 2026-09-20
+
+- Android player creation reports unsupported architectures as a catchable
+  `VesperUnsupportedError` with platform code `vesper_unsupported_architecture`.
+- Documented the arm64-only Android runtime requirement and creation error handling.
+
 ## 0.6.2 - 2026-09-18
 
 ## 0.6.1 - 2026-09-18

@@ -33,6 +33,29 @@ deliberate native product boundary: Android API 26+ on `arm64-v8a`, and iOS 17+
 on arm64 devices and Apple Silicon Simulator. Older OS versions and legacy ABIs
 are not a compatibility backlog. Desktop Flutter implementations are not shipped.
 
+Android requires both an OS that exposes `arm64-v8a` and a 64-bit app process.
+An ARM64-capable CPU running a 32-bit Android OS is unsupported, including TV
+sticks and boxes that report only `armeabi-v7a` / `armeabi`. Changing
+`abiFilters` cannot add support for those devices.
+
+`VesperPlayerController.create` rejects unsupported Android architectures before
+native initialization. Catch `VesperUnsupportedError` and check its
+`platformCode` for `vesper_unsupported_architecture`. The error message identifies
+the reported ABIs and process bitness; `platformDetails['details']` contains
+`reason: unsupportedArchitecture`, `requiredAbi`, `supportedAbis`, and
+`is64BitProcess`. No controller is created, so handle this failure around
+`create`, before subscribing to player events:
+
+```dart
+try {
+  final controller = await VesperPlayerController.create();
+  // Retain the controller and dispose it when the player is no longer needed.
+} on VesperUnsupportedError catch (error) {
+  if (error.platformCode != 'vesper_unsupported_architecture') rethrow;
+  // Show an unsupported-device message using error.message.
+}
+```
+
 ## Installation
 
 Use the hosted package for normal application integration. The Android and iOS

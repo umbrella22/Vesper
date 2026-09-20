@@ -1,6 +1,6 @@
 name: vesper_player
-description: Flutter-facing Vesper Player controller and Hole Punch view.
-version: 0.6.2
+description: Flutter-facing Vesper Player controller and Hole Punch view for Android API 26+ (arm64-v8a only) and iOS 17+.
+version: 0.6.3
 homepage: https://github.com/umbrella22/Vesper
 repository: https://github.com/umbrella22/Vesper
 
@@ -11,9 +11,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  vesper_player_android: ^0.6.2
-  vesper_player_ios: ^0.6.2
-  vesper_player_platform_interface: ^0.6.2
+  vesper_player_android: ^0.6.3
+  vesper_player_ios: ^0.6.3
+  vesper_player_platform_interface: ^0.6.3
 
 dev_dependencies:
   flutter_test:

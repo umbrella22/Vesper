@@ -12,6 +12,55 @@ import org.junit.Test
 
 class VesperPlayerAndroidErrorRoutingTest {
     @Test
+    fun unsupportedArchitectureReturnsAnActionableCreationError() {
+        val failure = VesperPlayerUnsupportedOperation(
+            "Unsupported Android architecture: armeabi-v7a. Vesper requires arm64-v8a.",
+            mapOf(
+                "reason" to "unsupportedArchitecture",
+                "requiredAbi" to "arm64-v8a",
+                "supportedAbis" to listOf("armeabi-v7a", "armeabi"),
+                "is64BitProcess" to false,
+            ),
+        )
+        var returnedCount = 0
+        routeCreatePlayerFailure(failure) { code, message, payload ->
+            returnedCount += 1
+            assertEquals("vesper_unsupported_architecture", code)
+            assertEquals(failure.message, message)
+            assertEquals("unsupported", payload["code"])
+            assertEquals("capability", payload["category"])
+            assertEquals(false, payload["retriable"])
+            val details = payload["details"] as Map<*, *>
+            assertEquals("unsupportedArchitecture", details["reason"])
+            assertEquals("arm64-v8a", details["requiredAbi"])
+            assertEquals(listOf("armeabi-v7a", "armeabi"), details["supportedAbis"])
+            assertEquals(false, details["is64BitProcess"])
+        }
+        assertEquals(1, returnedCount)
+    }
+
+    @Test
+    fun unrelatedCreationErrorsKeepTheirExistingCodesAndDetails() {
+        val failures = listOf(
+            UnsatisfiedLinkError("missing arm64 native library"),
+            VesperPlayerUnsupportedOperation(
+                "decoder unavailable",
+                mapOf("reason" to "decoderUnavailable"),
+            ),
+        )
+        for (failure in failures) {
+            var returnedCount = 0
+            routeCreatePlayerFailure(failure) { code, message, payload ->
+                returnedCount += 1
+                assertEquals("vesper_create_failed", code)
+                assertEquals(failure.message, message)
+                assertEquals(failure.toErrorMap(), payload)
+            }
+            assertEquals(1, returnedCount)
+        }
+    }
+
+    @Test
     fun obsoletePlayerCommandFailuresOnlyReturnTheMethodError() {
         val sentinelLastError = mapOf<String, Any?>("code" to "newer_error")
         var lastError = sentinelLastError

@@ -40,6 +40,8 @@ internal object PlayerBridgeFactory {
                 )
             }
             PlayerBridgeBackend.VesperNativeStub -> {
+                // Reject unsupported runtimes before plugin discovery or JNI class initialization.
+                VesperNativeLibrary.ensureLoaded()
                 val appContext = context.applicationContext
                 val resolvedPluginArtifacts =
                     VesperBundledPluginResolver.resolve(

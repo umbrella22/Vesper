@@ -1013,11 +1013,7 @@ class VesperPlayerAndroidPlugin :
             )
         }.onSuccess(result::success)
             .onFailure { error ->
-                result.error(
-                    "vesper_create_failed",
-                    error.message,
-                    error.toErrorMap(),
-                )
+                routeCreatePlayerFailure(error, result::error)
             }
     }
 

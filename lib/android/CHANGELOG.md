@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.6.3 - 2026-09-20
+
+### Fixed
+
+- Reject unsupported Android ABIs and 32-bit processes before player JNI
+  initialization, preserving actionable errors across repeated creation
+  attempts. Errors include the required ABI and runtime architecture details.
+- Clarified the arm64-only requirement in the Android package documentation.
+
 ## 0.6.2 - 2026-09-18
 
 ## 0.6.1 - 2026-09-18

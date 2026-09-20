@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.6.3 - 2026-09-20
+
+<!-- release-notes:en -->
+
+### Fixed
+
+- Reject unsupported Android architectures before player JNI initialization,
+  preserving actionable errors across repeated creation attempts. Flutter
+  reports `VesperUnsupportedError` with platform code
+  `vesper_unsupported_architecture` and runtime ABI details.
+- Clarified the Android arm64-only requirement in native and Flutter package
+  documentation and Flutter package descriptions.
+
+<!-- release-notes:zh-CN -->
+
+### 修复
+
+- 在播放器 JNI 初始化前拒绝不支持的 Android 架构，重复创建仍返回明确错误。
+  Flutter 通过 `VesperUnsupportedError` 返回平台错误码
+  `vesper_unsupported_architecture` 和运行时 ABI 信息。
+- 在 Android、Flutter 包文档及 Flutter 包描述中明确仅支持 arm64 的要求。
+
 ## 0.6.2 - 2026-09-18
 
 <!-- release-notes:en -->

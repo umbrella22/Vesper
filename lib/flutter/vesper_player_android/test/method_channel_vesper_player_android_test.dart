@@ -26,6 +26,48 @@ void main() {
         .setMockMethodCallHandler(channel, null);
   });
 
+  test('createPlayer preserves unsupported architecture errors on retries',
+      () async {
+    const message = 'Unsupported Android architecture: device ABIs '
+        '[armeabi-v7a, armeabi], 32-bit app process. '
+        'Vesper requires arm64-v8a and a 64-bit app process.';
+    const details = <String, Object?>{
+      'message': message,
+      'code': 'unsupported',
+      'category': 'capability',
+      'retriable': false,
+      'details': <String, Object?>{
+        'reason': 'unsupportedArchitecture',
+        'requiredAbi': 'arm64-v8a',
+        'supportedAbis': <String>['armeabi-v7a', 'armeabi'],
+        'is64BitProcess': false,
+      },
+    };
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      throw PlatformException(
+        code: 'vesper_unsupported_architecture',
+        message: message,
+        details: details,
+      );
+    });
+
+    final platform = MethodChannelVesperPlayerAndroid();
+    for (var attempt = 0; attempt < 2; attempt += 1) {
+      await expectLater(
+        platform.createPlayer(),
+        throwsA(isA<VesperUnsupportedError>()
+            .having((error) => error.platformCode, 'platformCode',
+                'vesper_unsupported_architecture')
+            .having((error) => error.message, 'message', message)
+            .having(
+                (error) => error.platformDetails, 'platformDetails', details)),
+      );
+    }
+    expect(calls.map((call) => call.method), ['createPlayer', 'createPlayer']);
+  });
+
   test('createPlayer forwards sparse defaults payloads', () async {
     final platform = MethodChannelVesperPlayerAndroid();
     final source = VesperPlayerSource.hls(
@@ -324,7 +366,8 @@ void main() {
   });
 
   test('snapshot decodes native HDR failure evidence details', () async {
-    const eventChannel = EventChannel('io.github.umbrella22.vesper_player/events');
+    const eventChannel =
+        EventChannel('io.github.umbrella22.vesper_player/events');
     final platform = MethodChannelVesperPlayerAndroid();
     final events = <VesperPlayerEvent>[];
 
@@ -410,7 +453,8 @@ void main() {
 
   test('error event carries terminal Widevine snapshot lastError details',
       () async {
-    const eventChannel = EventChannel('io.github.umbrella22.vesper_player/events');
+    const eventChannel =
+        EventChannel('io.github.umbrella22.vesper_player/events');
     final platform = MethodChannelVesperPlayerAndroid();
     final events = <VesperPlayerEvent>[];
 

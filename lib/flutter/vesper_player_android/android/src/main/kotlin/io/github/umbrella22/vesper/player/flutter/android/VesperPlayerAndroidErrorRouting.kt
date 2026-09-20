@@ -1,6 +1,22 @@
 package io.github.umbrella22.vesper.player.flutter.android
 
 import io.github.umbrella22.vesper.player.android.VesperPerformanceDiagnosticsException
+import io.github.umbrella22.vesper.player.android.VesperPlayerUnsupportedOperation
+
+internal fun routeCreatePlayerFailure(
+    error: Throwable,
+    returnMethodError: (String, String?, Map<String, Any?>) -> Unit,
+) {
+    val code =
+        if (error is VesperPlayerUnsupportedOperation &&
+            error.details["reason"] == "unsupportedArchitecture"
+        ) {
+            "vesper_unsupported_architecture"
+        } else {
+            "vesper_create_failed"
+        }
+    returnMethodError(code, error.message, error.toErrorMap())
+}
 
 private val OBSOLETE_SUBTITLE_SELECTION_ERROR_CODES =
     setOf(

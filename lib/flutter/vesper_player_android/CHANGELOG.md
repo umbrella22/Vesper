@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.6.3 - 2026-09-20
+
+- Check the Android ABI and process bitness before player JNI initialization,
+  returning `vesper_unsupported_architecture` with runtime details instead of
+  entering JNI class initialization on unsupported devices.
+- Clarified that Android API 26+, `arm64-v8a`, and a 64-bit app process are required.
+
 ## 0.6.2 - 2026-09-18
 
 ## 0.6.1 - 2026-09-18

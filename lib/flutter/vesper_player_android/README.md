@@ -7,6 +7,16 @@ It is built on Media3 ExoPlayer and the Vesper Android host kit located in
 `vesper_player`, so application code usually does not need to depend on it
 directly.
 
+Android API 26+ with `arm64-v8a` and a 64-bit app process is required.
+32-bit Android (`armeabi-v7a` / `armeabi`) and Intel ABIs are unsupported.
+This includes TV devices with a 64-bit-capable CPU but a 32-bit Android OS.
+Player creation checks the runtime before JNI initialization and fails with a
+catchable `VesperUnsupportedError` whose `platformCode` is
+`vesper_unsupported_architecture`. Its message and `platformDetails['details']`
+report the required ABI, device ABIs, and process bitness. See the
+[main package's platform support section](../vesper_player/README.md#platform-support)
+for the error-handling contract and example.
+
 ## Platform Capabilities
 
 | Format / feature                            | Status                             |

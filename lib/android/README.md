@@ -90,6 +90,17 @@ Android packaging is `arm64-v8a` only. Use an arm64 device or arm64 Android
 emulator. See [Release Downloads](../../README.md#release-downloads) for the
 public package names and artifact-selection notes.
 
+The Android OS must expose `arm64-v8a`, and the host app must run in a 64-bit
+process. A 64-bit-capable CPU running a 32-bit Android OS is unsupported,
+including Android TV devices that report only `armeabi-v7a` / `armeabi`.
+`VesperPlayerControllerFactory.createDefault` checks these requirements before
+loading JNI or setting up plugins. Unsupported runtimes throw
+`VesperPlayerUnsupportedOperation` with `details["reason"]` set to
+`unsupportedArchitecture`; `requiredAbi`, `supportedAbis`, and `is64BitProcess`
+describe the requirement and runtime. Retrying creation returns the same
+structured failure. Missing or broken native libraries on supported runtimes
+remain native loading errors.
+
 Maven releases publish eight coordinates: core, both Compose modules, external
 playback, the shared FFmpeg runtime, SourceNormalizer, post-download remux, and
 performance diagnostics.
