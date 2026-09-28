@@ -24,6 +24,7 @@ internal suspend fun VesperNativeJniBindings.awaitMedia3SourceCommandReadiness(
     check(Looper.myLooper() == Looper.getMainLooper()) {
         "source command readiness must be awaited on the Android main looper"
     }
+    playbackDiagnosticsTracker.stallDetector.resetWindow()
     val exoPlayer = player ?: throw commandFailure(
         message = "Android system playback is not available for source readiness.",
         code = VesperPlayerErrorCode.InvalidState,

@@ -22,6 +22,42 @@ void main() {
     VesperPlayerPlatform.instance = previousPlatform;
   });
 
+  test('playback warning follows its snapshot and rejects superseded epochs',
+      () async {
+    controller = await VesperPlayerController.create();
+    final received = <VesperPlayerWarningEvent>[];
+    final subscription = controller!.events.listen((event) {
+      if (event is VesperPlayerWarningEvent) received.add(event);
+    });
+    addTearDown(subscription.cancel);
+    const observation = VesperPlaybackStallObservation(
+        playbackEpoch: 1,
+        kind: VesperPlaybackStallKind.positionNotAdvancing,
+        stalledForMs: 5000,
+        elapsedSinceLoadStartMs: 7000,
+        mediaPositionMs: 1000,
+        audio: VesperAudioPlaybackDiagnostics());
+    const event = VesperPlayerWarningEvent(
+        playerId: _EventTestPlatform.playerId,
+        warning: VesperRuntimeWarning.playback(observation));
+    platform.emit(VesperPlayerSnapshotEvent(
+        playerId: _EventTestPlatform.playerId,
+        snapshot: controller!.snapshot.copyWith(
+            playbackDiagnostics: const VesperPlaybackDiagnosticsSnapshot(
+                playbackEpoch: 1, lastStall: observation))));
+    platform.emit(event);
+    await Future<void>.delayed(Duration.zero);
+    expect(received, [event]);
+    platform.emit(VesperPlayerSnapshotEvent(
+        playerId: _EventTestPlatform.playerId,
+        snapshot: controller!.snapshot.copyWith(
+            playbackDiagnostics:
+                const VesperPlaybackDiagnosticsSnapshot(playbackEpoch: 2))));
+    platform.emit(event);
+    await Future<void>.delayed(Duration.zero);
+    expect(received, [event]);
+  });
+
   test(
       'first-frame event follows retained snapshot and rejects superseded epochs',
       () async {

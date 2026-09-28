@@ -63,6 +63,14 @@ class VesperPlayerController internal constructor(
     val playbackDiagnostics: StateFlow<VesperPlaybackDiagnosticsSnapshot>?
         get() = bridge.playbackDiagnosticsTracker?.snapshot
 
+    /** Applies bounded media-clock stall observations to native system playback. */
+    fun setPlaybackStallPolicy(policy: VesperPlaybackStallPolicy) {
+        check(!isDisposed.get()) { "The player controller has been disposed" }
+        val tracker = bridge.playbackDiagnosticsTracker
+            ?: throw UnsupportedOperationException("Playback stall observations are not supported by this bridge")
+        tracker.stallDetector.policy = policy
+    }
+
     /** Main-looper transitions, with immediate replay. The listener must return promptly. */
     fun setOnPlaybackDiagnosticsChangedListener(listener: ((VesperPlaybackDiagnosticsSnapshot) -> Unit)?) =
         bridge.setOnPlaybackDiagnosticsChangedListener(listener)
@@ -384,6 +392,9 @@ class VesperPlayerController internal constructor(
 }
 
 object VesperPlayerControllerFactory {
+    fun probeAudioDecoderCapability(context: Context, request: VesperAudioDecoderCapabilityRequest): VesperAudioDecoderCapabilityResult =
+        VesperAudioDecoderCapabilityProbe.probe(context.applicationContext, request)
+
     fun probePlaybackCapability(
         context: Context,
         request: VesperPlaybackCapabilityProbeRequest,

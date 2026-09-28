@@ -27,6 +27,8 @@ part 'models/subtitle_state_models.dart';
 part 'models/viewport_models.dart';
 part 'models/video_presentation_models.dart';
 part 'models/playback_diagnostics_models.dart';
+part 'models/playback_stall_models.dart';
+part 'models/audio_decoder_capability_models.dart';
 part 'models/error_models.dart';
 part 'models/snapshot_models.dart';
 

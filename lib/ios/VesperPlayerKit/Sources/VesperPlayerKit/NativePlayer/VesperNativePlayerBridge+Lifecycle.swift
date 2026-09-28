@@ -451,6 +451,10 @@ extension VesperNativePlayerBridge {
     }
 
     func tearDownActivePlayback(cancelSourceCommand: Bool = true) {
+        playbackStallTask?.cancel()
+        playbackStallTask = nil
+        activeLegacySeekId = nil
+        diagnosticsTracker.stallDetector.resetWindow()
         diagnosticsTracker.endAttempt()
         activePlayerObservationToken = nil
         outputTracker.outputPathChanged()

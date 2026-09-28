@@ -7,6 +7,7 @@ extension VesperPlaybackDiagnosticsSnapshot {
             "playbackEpoch": playbackEpoch,
             "audio": audio.toMap(),
             "firstFrame": flutterValue(firstFrame?.toMap()),
+            "lastStall": flutterValue(lastStall?.toMap()),
         ]
     }
 }

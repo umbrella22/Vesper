@@ -65,6 +65,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var fairPlayDrmCoordinator: VesperFairPlayDrmCoordinator?
     var fairPlayDrmCoordinatorId: UUID?
     weak var surfaceHost: PlayerSurfaceView?
+    var playbackStallTask: Task<Void, Never>?
     var timeObserverToken: Any?
     var endObserver: NSObjectProtocol?
     var playbackStalledObserver: NSObjectProtocol?
@@ -111,6 +112,7 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     var pendingSourceCommandFailure: Error?
     var seekCommandGeneration: UInt64 = 0
     var activeSeekCommand: VesperSeekCommandHandle?
+    var activeLegacySeekId: UUID?
     var subtitleSourceEpoch: UInt64 = 0
     var nextSubtitleCommandId: UInt64 = 0
     var pendingSubtitleSelection: PendingSubtitleSelection?

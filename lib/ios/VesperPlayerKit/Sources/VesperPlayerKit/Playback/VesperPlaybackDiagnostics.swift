@@ -82,6 +82,7 @@ public struct VesperPlaybackDiagnosticsSnapshot: Equatable, Codable, Sendable {
     public let playbackEpoch: UInt64
     public var audio: VesperAudioPlaybackDiagnostics
     public var firstFrame: VesperFirstFrameObservation?
+    public var lastStall: VesperPlaybackStallObservation?
 
     init(playbackEpoch: UInt64 = 0) {
         self.playbackEpoch = playbackEpoch
@@ -113,6 +114,7 @@ struct VesperPlaybackObservationToken: Equatable {
 
 @MainActor
 final class VesperPlaybackDiagnosticsTracker {
+    var stallDetector = VesperPlaybackStallDetector()
     private let owner = UUID()
     private let nowMs: () -> UInt64
     private var epoch: UInt64 = 0
@@ -136,6 +138,7 @@ final class VesperPlaybackDiagnosticsTracker {
     @discardableResult
     func beginAttempt() -> VesperPlaybackObservationToken {
         guard !disposed else { return capture() }
+        stallDetector.resetAttempt()
         epoch &+= 1
         startedAtMs = nowMs()
         let token = capture()
@@ -145,6 +148,7 @@ final class VesperPlaybackDiagnosticsTracker {
 
     func invalidate() {
         guard !disposed else { return }
+        stallDetector.resetAttempt()
         epoch &+= 1
         startedAtMs = nil
         publish(.init(playbackEpoch: epoch))
@@ -181,6 +185,18 @@ final class VesperPlaybackDiagnosticsTracker {
         var next = snapshot
         next.audio = value
         publish(next)
+    }
+
+    func sampleStall(_ token: VesperPlaybackObservationToken, positionMs: Int64?, eligible: Bool, buffering: Bool) {
+        guard isCurrent(token), let startedAtMs else { return }
+        let now = nowMs()
+        guard let evidence = stallDetector.sample(nowMs: now, positionMs: positionMs, eligible: eligible, buffering: buffering),
+              let positionMs else { return }
+        var value = snapshot
+        value.lastStall = VesperPlaybackStallObservation(playbackEpoch: token.epoch, kind: evidence.kind,
+            stalledForMs: evidence.durationMs, elapsedSinceLoadStartMs: now >= startedAtMs ? now - startedAtMs : 0,
+            mediaPositionMs: positionMs, audio: value.audio)
+        publish(value)
     }
 
     func dispose() {

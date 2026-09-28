@@ -1,6 +1,12 @@
 part of '../models.dart';
 
-enum VesperRuntimeWarningDomain { frameProcessor, capability, audio, unknown }
+enum VesperRuntimeWarningDomain {
+  frameProcessor,
+  capability,
+  audio,
+  playback,
+  unknown
+}
 
 enum VesperFrameProcessorWarningKind {
   slow,
@@ -133,6 +139,7 @@ final class VesperRuntimeWarning {
       : domain = VesperRuntimeWarningDomain.frameProcessor,
         capability = null,
         audio = null,
+        playback = null,
         domainRawValue = null,
         rawPayload = const <String, Object?>{};
 
@@ -140,11 +147,21 @@ final class VesperRuntimeWarning {
       : domain = VesperRuntimeWarningDomain.capability,
         frameProcessor = null,
         audio = null,
+        playback = null,
         domainRawValue = null,
         rawPayload = const <String, Object?>{};
 
   const VesperRuntimeWarning.audio(this.audio)
       : domain = VesperRuntimeWarningDomain.audio,
+        playback = null,
+        capability = null,
+        frameProcessor = null,
+        domainRawValue = null,
+        rawPayload = const <String, Object?>{};
+
+  const VesperRuntimeWarning.playback(this.playback)
+      : domain = VesperRuntimeWarningDomain.playback,
+        audio = null,
         capability = null,
         frameProcessor = null,
         domainRawValue = null,
@@ -156,7 +173,8 @@ final class VesperRuntimeWarning {
   })  : domain = VesperRuntimeWarningDomain.unknown,
         frameProcessor = null,
         capability = null,
-        audio = null;
+        audio = null,
+        playback = null;
 
   factory VesperRuntimeWarning.fromMap(Map<Object?, Object?> map) {
     final domainRawValue = map['domain'] as String?;
@@ -164,6 +182,10 @@ final class VesperRuntimeWarning {
     final rawFrameProcessor = _rawMap(map['frameProcessor']);
     final rawCapability = _rawMap(map['capability']);
     return switch (domain) {
+      VesperRuntimeWarningDomain.playback => VesperRuntimeWarning.playback(
+          VesperPlaybackStallObservation.fromMap(
+              _rawMap(map['playback']) ?? const <Object?, Object?>{}),
+        ),
       VesperRuntimeWarningDomain.audio => VesperRuntimeWarning.audio(
           VesperAudioRuntimeWarning.fromMap(
               _rawMap(map['audio']) ?? const <Object?, Object?>{}),
@@ -190,6 +212,7 @@ final class VesperRuntimeWarning {
   final VesperFrameProcessorWarning? frameProcessor;
   final VesperCapabilityWarning? capability;
   final VesperAudioRuntimeWarning? audio;
+  final VesperPlaybackStallObservation? playback;
   final String? domainRawValue;
   final Map<String, Object?> rawPayload;
 
@@ -205,6 +228,7 @@ final class VesperRuntimeWarning {
       if (frameProcessor != null) 'frameProcessor': frameProcessor!.toMap(),
       if (capability != null) 'capability': capability!.toMap(),
       if (audio != null) 'audio': audio!.toMap(),
+      if (playback != null) 'playback': playback!.toMap(),
     };
   }
 }

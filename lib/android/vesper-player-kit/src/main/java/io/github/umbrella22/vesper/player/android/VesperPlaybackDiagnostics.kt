@@ -74,11 +74,13 @@ data class VesperPlaybackDiagnosticsSnapshot(
     val playbackEpoch: Long = 0,
     val audio: VesperAudioPlaybackDiagnostics = VesperAudioPlaybackDiagnostics(),
     val firstFrame: VesperFirstFrameObservation? = null,
+    val lastStall: VesperPlaybackStallObservation? = null,
 ) {
     fun toMap(): Map<String, Any?> = mapOf(
         "playbackEpoch" to playbackEpoch,
         "audio" to audio.toMap(),
         "firstFrame" to firstFrame?.toMap(),
+        "lastStall" to lastStall?.toMap(),
     )
 }
 
@@ -88,6 +90,7 @@ internal data class VesperPlaybackObservationToken(val owner: Any, val epoch: Lo
 internal class VesperPlaybackDiagnosticsTracker(
     private val nowMs: () -> Long = { android.os.SystemClock.elapsedRealtime() },
 ) {
+    internal val stallDetector = VesperPlaybackStallDetector()
     private val owner = Any()
     private var epoch = 0L
     private var startedAtMs: Long? = null
@@ -104,6 +107,7 @@ internal class VesperPlaybackDiagnosticsTracker(
 
     fun beginAttempt(): VesperPlaybackObservationToken {
         if (!disposed) {
+            stallDetector.resetAttempt()
             epoch += 1
             startedAtMs = nowMs()
             val token = capture()
@@ -116,6 +120,7 @@ internal class VesperPlaybackDiagnosticsTracker(
     /** Immediately rejects old evidence while the replacement load is being scheduled. */
     fun invalidate() {
         if (disposed) return
+        stallDetector.resetAttempt()
         epoch += 1
         startedAtMs = null
         publish(VesperPlaybackDiagnosticsSnapshot(playbackEpoch = epoch))
@@ -166,6 +171,18 @@ internal class VesperPlaybackDiagnosticsTracker(
             kind, elapsedMs(), platformCode, message,
         )))
         publish(captured)
+        return captured
+    }
+
+    fun sampleStall(
+        token: VesperPlaybackObservationToken, positionMs: Long?, eligible: Boolean, buffering: Boolean,
+    ): VesperPlaybackStallObservation? {
+        if (!isCurrent(token)) return null
+        val evidence = stallDetector.sample(nowMs(), positionMs, eligible, buffering) ?: return null
+        val captured = VesperPlaybackStallObservation(
+            epoch, evidence.kind, evidence.durationMs, elapsedMs(), positionMs!!, snapshot.value.audio,
+        )
+        publish(snapshot.value.copy(lastStall = captured))
         return captured
     }
 

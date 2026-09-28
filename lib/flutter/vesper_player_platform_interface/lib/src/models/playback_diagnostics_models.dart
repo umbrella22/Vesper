@@ -168,14 +168,19 @@ final class VesperPlaybackDiagnosticsSnapshot {
     required this.playbackEpoch,
     this.audio = const VesperAudioPlaybackDiagnostics(),
     this.firstFrame,
+    this.lastStall,
   });
 
   factory VesperPlaybackDiagnosticsSnapshot.fromMap(Map<Object?, Object?> map) {
     final firstFrame = _rawMap(map['firstFrame']);
+    final lastStall = _rawMap(map['lastStall']);
     return VesperPlaybackDiagnosticsSnapshot(
       playbackEpoch: _requireDiagnosticInteger(map, 'playbackEpoch'),
       audio: VesperAudioPlaybackDiagnostics.fromMap(
           _rawMap(map['audio']) ?? const <Object?, Object?>{}),
+      lastStall: lastStall == null
+          ? null
+          : VesperPlaybackStallObservation.fromMap(lastStall),
       firstFrame: firstFrame == null
           ? null
           : VesperFirstFrameObservation.fromMap(firstFrame),
@@ -185,11 +190,13 @@ final class VesperPlaybackDiagnosticsSnapshot {
   final int playbackEpoch;
   final VesperAudioPlaybackDiagnostics audio;
   final VesperFirstFrameObservation? firstFrame;
+  final VesperPlaybackStallObservation? lastStall;
 
   Map<String, Object?> toMap() => <String, Object?>{
         'playbackEpoch': playbackEpoch,
         'audio': audio.toMap(),
         if (firstFrame != null) 'firstFrame': firstFrame!.toMap(),
+        if (lastStall != null) 'lastStall': lastStall!.toMap(),
       };
 }
 

@@ -102,6 +102,16 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
         const VesperPipelineEventHookConfiguration(),
   });
 
+  Future<VesperAudioDecoderCapabilityResult> probeAudioDecoderCapability(
+      VesperAudioDecoderCapabilityRequest request) async {
+    request.toMap();
+    return VesperAudioDecoderCapabilityResult(
+        request: request,
+        status: VesperAudioDecoderSupport.unknown,
+        reason: 'platformProbeNotImplemented',
+        evidence: 'unavailable');
+  }
+
   Future<VesperPlaybackCapabilityProbeResult> probePlaybackCapability(
       VesperPlaybackCapabilityProbeRequest request,
       {String? playerId}) async {
@@ -299,6 +309,11 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
     VesperAbrPolicy policy, {
     int? expectedCatalogRevision,
   });
+
+  Future<void> setPlaybackStallPolicy(
+          String playerId, VesperPlaybackStallPolicy policy) async =>
+      throw VesperUnsupportedError(
+          'Playback stall observations are not supported.');
 
   Future<void> setResiliencePolicy(
     String playerId,

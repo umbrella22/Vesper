@@ -192,6 +192,7 @@ extension VesperNativePlayerBridge {
     }
 
     func executeSeekCommand(to positionMs: Int64) async throws {
+        diagnosticsTracker.stallDetector.resetWindow()
         try Task.checkCancellation()
         cancelPendingSeekCommand(reason: "seekCommandSuperseded")
         seekCommandGeneration &+= 1

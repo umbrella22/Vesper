@@ -331,6 +331,7 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
             if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            playbackDiagnosticsTracker.stallDetector.resetWindow()
             Log.d(NATIVE_JNI_BINDINGS_TAG, "onPlayWhenReadyChanged playWhenReady=$playWhenReady reason=$reason")
             recordBenchmark(
                 "play_when_ready_changed",
@@ -343,8 +344,14 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
             notifyNativeUpdate()
         }
 
+        override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            playbackDiagnosticsTracker.stallDetector.resetWindow()
+        }
+
         override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
             if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            playbackDiagnosticsTracker.stallDetector.resetWindow()
             Log.d(NATIVE_JNI_BINDINGS_TAG, "onPlaybackParametersChanged speed=${playbackParameters.speed}")
             recordBenchmark(
                 "playback_parameters_changed",
@@ -424,6 +431,7 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
             reason: Int,
         ) {
             if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            playbackDiagnosticsTracker.stallDetector.resetWindow()
             if (reason == Player.DISCONTINUITY_REASON_SEEK) {
                 val internalRecoverySeek =
                     behindLiveWindowInternalSeekSuppression.consumeIfPending(

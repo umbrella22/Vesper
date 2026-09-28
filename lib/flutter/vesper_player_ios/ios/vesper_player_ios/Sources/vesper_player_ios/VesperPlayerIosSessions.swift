@@ -13,6 +13,7 @@ final class PlayerSession {
     var hdrOutputObservation: AnyCancellable?
     var playbackDiagnosticsObservation: AnyCancellable?
     var lastDeliveredFirstFrameEpoch: UInt64?
+    var lastDeliveredPlaybackStallEpoch: UInt64?
     var videoPresentationObservation: AnyCancellable?
     var lastError: [String: Any]?
     var lastEmittedTerminalError: [String: Any]?

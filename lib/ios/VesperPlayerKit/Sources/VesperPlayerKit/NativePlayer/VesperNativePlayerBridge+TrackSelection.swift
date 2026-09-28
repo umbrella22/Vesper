@@ -670,6 +670,7 @@ extension VesperNativePlayerBridge {
     }
 
     func setAudioSessionInterrupted(_ interrupted: Bool) {
+        diagnosticsTracker.stallDetector.resetWindow()
         updateState {
             PlayerHostUiState(
                 title: $0.title,

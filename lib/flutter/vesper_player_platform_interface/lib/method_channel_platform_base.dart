@@ -116,6 +116,19 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
   }
 
   @override
+  Future<VesperAudioDecoderCapabilityResult> probeAudioDecoderCapability(
+      VesperAudioDecoderCapabilityRequest request) async {
+    try {
+      final result = await _invokeMethod<Object?>(
+          'probeAudioDecoderCapability', request.toMap());
+      return VesperAudioDecoderCapabilityResult.fromMap(
+          Map<Object?, Object?>.from(result as Map));
+    } on MissingPluginException {
+      return super.probeAudioDecoderCapability(request);
+    }
+  }
+
+  @override
   Future<VesperPlaybackCapabilityProbeResult> probePlaybackCapability(
       VesperPlaybackCapabilityProbeRequest request,
       {String? playerId}) async {
@@ -440,6 +453,14 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
       'expectedCatalogRevision': expectedCatalogRevision,
     });
   }
+
+  @override
+  Future<void> setPlaybackStallPolicy(
+          String playerId, VesperPlaybackStallPolicy policy) =>
+      _invokeVoid('setPlaybackStallPolicy', <String, Object?>{
+        'playerId': playerId,
+        'policy': policy.toMap(),
+      });
 
   @override
   Future<void> setResiliencePolicy(

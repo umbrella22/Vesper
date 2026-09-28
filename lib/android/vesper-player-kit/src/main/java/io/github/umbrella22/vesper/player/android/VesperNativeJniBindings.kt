@@ -155,6 +155,7 @@ internal class VesperNativeJniBindings(
     internal var behindLiveWindowStableResetRunnable: Runnable? = null
     internal var firstFrameWatchdogSource: VesperPlayerSource? = null
     internal var firstFrameWatchdogRunnable: Runnable? = null
+    internal var playbackStallRunnable: Runnable? = null
     internal var firstFrameRenderedForCurrentSource = false
     @Volatile
     internal var lastSnapshotLogElapsedMs = 0L
@@ -417,6 +418,7 @@ internal class VesperNativeJniBindings(
             executePreloadWarmupCommands(source)
 
             player = exoPlayer
+            schedulePlaybackStallObservation(exoPlayer, callbackGeneration)
             playerListener = listener
             analyticsListener = analytics
             videoFrameMetadataListener = frameMetadata
@@ -750,6 +752,9 @@ internal class VesperNativeJniBindings(
         if (!isDisposed.compareAndSet(false, true)) {
             return
         }
+        playbackStallRunnable?.let(mainHandler::removeCallbacks)
+        playbackStallRunnable = null
+        playbackDiagnosticsTracker.stallDetector.resetWindow()
         cancelPendingSourceCommandInternal("sourceCommandDisposed")
         cancelPendingSeekCommand("seekCommandDisposed")
         val callbackGeneration = systemPlaybackCallbackGeneration.incrementAndGet()
@@ -1091,18 +1096,21 @@ internal class VesperNativeJniBindings(
     }
 
     override fun pause() {
+        playbackDiagnosticsTracker.stallDetector.resetWindow()
         Log.i(NATIVE_JNI_BINDINGS_TAG, "pause")
         recordBenchmark("native_pause_command")
         dispatchRustCommand { handle -> VesperNativeJni.pause(handle) }
     }
 
     override fun stop() {
+        playbackDiagnosticsTracker.stallDetector.resetWindow()
         Log.i(NATIVE_JNI_BINDINGS_TAG, "stop")
         recordBenchmark("native_stop_command")
         dispatchRustCommand { handle -> VesperNativeJni.stop(handle) }
     }
 
     override fun seekTo(positionMs: Long) {
+        playbackDiagnosticsTracker.stallDetector.resetWindow()
         Log.i(NATIVE_JNI_BINDINGS_TAG, "seekTo positionMs=$positionMs")
         recordBenchmark("native_seek_command", mapOf("positionMs" to positionMs.toString()))
         cancelFirstFrameWatchdog()
@@ -1110,6 +1118,7 @@ internal class VesperNativeJniBindings(
     }
 
     override fun setPlaybackRate(rate: Float) {
+        playbackDiagnosticsTracker.stallDetector.resetWindow()
         Log.i(NATIVE_JNI_BINDINGS_TAG, "setPlaybackRate rate=$rate")
         recordBenchmark("native_set_playback_rate_command", mapOf("rate" to rate.toString()))
         dispatchRustCommand { handle -> VesperNativeJni.setPlaybackRate(handle, rate) }

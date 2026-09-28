@@ -5,16 +5,20 @@ import UIKit
 
 extension VesperNativePlayerBridge {
     func seekToPosition(_ positionMs: Int64) {
+        diagnosticsTracker.stallDetector.resetWindow()
+        guard let player else { return }
+        let seekId = UUID()
+        activeLegacySeekId = seekId
         let playbackEpoch = currentPlaybackEpoch()
         let time = CMTime(milliseconds: positionMs)
         recordBenchmark("seek_start", attributes: ["positionMs": "\(positionMs)"])
-        player?.seek(
-            to: time,
-            toleranceBefore: .zero,
-            toleranceAfter: .zero
-        ) { [weak self] finished in
+        systemPlayerSeekSubmitter(player, time, .zero, .zero) { [weak self, weak player] finished in
             guard let self else { return }
             Task { @MainActor in
+                guard let player, self.player === player, self.isPlaybackEpochCurrent(playbackEpoch),
+                      self.activeLegacySeekId == seekId else { return }
+                self.activeLegacySeekId = nil
+                self.diagnosticsTracker.stallDetector.resetWindow()
                 guard finished else {
                     iosHostLog("seek did not finish positionMs=\(positionMs)")
                     return
@@ -25,6 +29,7 @@ extension VesperNativePlayerBridge {
     }
 
     func installObservers(for player: AVPlayer, item: AVPlayerItem, playbackEpoch: UInt64) {
+        installPlaybackStallObserver(player: player, item: item)
         // Each native event invalidates independently, including A -> B -> A
         // changes that can collapse into one later controller snapshot.
         let outputPathChanged: @Sendable () -> Void = { [weak self, weak player] in

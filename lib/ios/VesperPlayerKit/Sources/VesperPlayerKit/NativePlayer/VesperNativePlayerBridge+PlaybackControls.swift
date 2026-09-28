@@ -185,6 +185,7 @@ extension VesperNativePlayerBridge {
     }
 
     func pause() {
+        diagnosticsTracker.stallDetector.resetWindow()
         clearLastError()
         recordBenchmark("pause_command")
         pendingAutoPlay = false
@@ -235,6 +236,7 @@ extension VesperNativePlayerBridge {
     }
 
     func stop() {
+        diagnosticsTracker.stallDetector.resetWindow()
         outputTracker.outputPathChanged()
         clearLastError()
         recordBenchmark("stop_command")
@@ -434,6 +436,7 @@ extension VesperNativePlayerBridge {
     }
 
     func setPlaybackRate(_ rate: Float) {
+        diagnosticsTracker.stallDetector.resetWindow()
         clearLastError()
         let clampedRate = min(max(rate, 0.5), 3.0)
         iosHostLog("setPlaybackRate rate=\(clampedRate)")

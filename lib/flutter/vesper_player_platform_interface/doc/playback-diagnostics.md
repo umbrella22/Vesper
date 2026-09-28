@@ -103,9 +103,61 @@ nested map. A generic AVPlayer failure with audio context remains a generic
 playback failure. AVPlayer currently supplies no independent audio sink-error
 observation in this API.
 
-This contract does not observe speaker output progress, detect silent stalls,
-probe codec compatibility, or select a recovery policy. Device testing remains
-necessary to associate a stall with a particular audio format or decoder.
+This contract does not observe speaker output progress or select a recovery
+policy. Device testing remains necessary to associate a stall with a particular
+audio format or decoder.
+
+## Suspected playback stalls
+
+`lastStall` retains at most one `VesperPlaybackStallObservation` per native load
+attempt. A `VesperPlayerWarningEvent` with `domain: playback` carries the same
+observation through `warning.playback`. The retained snapshot is published first;
+Dart rejects warnings from a superseded epoch. An iOS EventChannel subscriber
+can receive the current retained warning if it was not previously delivered.
+This is historical evidence, not a claim that playback remains stalled.
+
+Native timers sample independently of media-time observers every second. Detection
+requires observed forward media progress. Initial startup, pause, stop, seeking,
+interruption/suppression, terminal errors and invalid positions do not count.
+Seek completion and rate changes reset the observation window. A backwards media
+position or a sampling gap over three seconds also requires fresh progress, so
+suspension and main-thread delays do not immediately produce a warning.
+
+The default `VesperPlaybackStallPolicy` reports `positionNotAdvancing` after five
+seconds or `bufferingTimeout` after fifteen seconds. Configure positive thresholds
+or disable observations using `controller.setPlaybackStallPolicy(policy)`.
+The observation includes monotonic elapsed duration, media position and the
+captured audio diagnostics. It does not assert that an audio decoder or sink
+caused the stall. Audio-only playback can be observed, but silent output while
+the media clock advances cannot be detected by this API. Observations currently
+apply to native system playback, not experimental native-frame pipelines.
+
+## Independent audio decoder capability probe
+
+`VesperPlayerController.probeAudioDecoderCapability(request)` is independent of
+the video/HDR capability probe. Supply the original codec string, sample MIME,
+channel count and sample rate when known. Results retain the request, resolved
+MIME, evidence, reason and decoder candidates; unknown status values survive
+Dart forwarding through `statusRawValue`.
+
+Android queries the same default MediaCodec audio candidates used by the native
+player, including software audio decoders. It checks sample rate and channel
+limits, Media3 format acceptance, and explicit platform profile evidence for
+profile-bearing codecs. Missing profile evidence, incomplete constraints,
+unrecognized codecs, conflicting MIME/codec metadata and query failures yield
+`unknown`. `unsupported` requires a complete request with no candidates or
+known format rejection by every candidate. Raw PCM remains `unknown` because
+its playback route may bypass MediaCodec.
+
+iOS returns `unknown`, evidence `unavailable`, and reason
+`avPlayerAudioDecoderQueryUnavailable`: AVPlayer exposes no equivalent public
+full-format decoder query. Older Flutter MethodChannel hosts return
+`unknown/platformProbeNotImplemented` when the method is absent.
+
+A `supported` result is decoder-format evidence only. It does not establish
+container, manifest, DRM, network, output-route or audible-output support. It
+must not remove device-specific compatibility rules or automatically select a
+recovery policy.
 
 ## Application use
 

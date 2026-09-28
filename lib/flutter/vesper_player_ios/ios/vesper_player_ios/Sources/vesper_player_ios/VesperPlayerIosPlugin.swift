@@ -130,7 +130,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         Task { @MainActor in
             eventSink = events
             sessions.values.forEach { emitSnapshot(for: $0) }
-            sessions.values.forEach { emitPendingFirstFrame(for: $0) }
+            sessions.values.forEach { emitPendingFirstFrame(for: $0); emitPendingPlaybackStall(for: $0) }
         }
         return nil
     }
@@ -184,6 +184,11 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         switch call.method {
         case "createPlayer":
             handleCreatePlayer(call, result: result)
+        case "probeAudioDecoderCapability":
+            do {
+                result(try VesperPlayerControllerFactory.probeAudioDecoderCapability(
+                    arguments(of: call).toAudioDecoderCapabilityRequest()).toMap())
+            } catch { result(FlutterError(code: "invalid_probe_request", message: error.localizedDescription, details: nil)) }
         case "probePlaybackCapability":
             handleProbePlaybackCapability(call, result: result)
         case "createDownloadManager":
@@ -439,6 +444,12 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                     expectedCatalogRevision: expectedCatalogRevision
                 )
                 emitSnapshot(for: session)
+                return nil
+            }
+        case "setPlaybackStallPolicy":
+            handleSessionCommand(call, result: result) { session in
+                try session.controller.setPlaybackStallPolicy(
+                    requireNestedMap(arguments: arguments(of: call), key: "policy").toPlaybackStallPolicy())
                 return nil
             }
         case "setResiliencePolicy":
@@ -1505,6 +1516,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             snapshot["playbackDiagnostics"] = captured.toMap()
             self.emitEvent(["playerId": session.id, "type": "snapshot", "snapshot": snapshot])
             self.emitPendingFirstFrame(for: session)
+            self.emitPendingPlaybackStall(for: session)
         }
         session.videoPresentationObservation = session.controller.videoPresentationPublisher.dropFirst().sink {
             [weak self, weak session] presentation in
@@ -2245,6 +2257,14 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
               session.lastDeliveredFirstFrameEpoch != observation.playbackEpoch else { return }
         session.lastDeliveredFirstFrameEpoch = observation.playbackEpoch
         eventSink(["playerId": session.id, "type": "firstFrame", "observation": observation.toMap()])
+    }
+
+    @MainActor
+    private func emitPendingPlaybackStall(for session: PlayerSession) {
+        guard let eventSink, let observation = session.controller.playbackDiagnostics?.lastStall,
+              session.lastDeliveredPlaybackStallEpoch != observation.playbackEpoch else { return }
+        session.lastDeliveredPlaybackStallEpoch = observation.playbackEpoch
+        eventSink(["playerId": session.id, "type": "warning", "warning": ["domain": "playback", "playback": observation.toMap()]])
     }
 
     @MainActor

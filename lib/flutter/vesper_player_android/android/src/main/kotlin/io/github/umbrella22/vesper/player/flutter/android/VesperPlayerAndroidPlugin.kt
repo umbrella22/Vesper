@@ -296,6 +296,12 @@ class VesperPlayerAndroidPlugin :
     private fun dispatchMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "createPlayer" -> handleCreatePlayer(call, result)
+            "probeAudioDecoderCapability" -> {
+                runCatching {
+                    VesperPlayerControllerFactory.probeAudioDecoderCapability(applicationContext,
+                        call.argumentMap().toAudioDecoderCapabilityRequest()).toMap()
+                }.fold(result::success) { error -> result.error("invalid_probe_request", error.message, null) }
+            }
             "probePlaybackCapability" -> handleProbePlaybackCapability(call, result)
             "createDownloadManager" -> handleCreateDownloadManager(call, result)
             "createPlaybackSequence" -> handleCreatePlaybackSequence(call, result)
@@ -492,6 +498,10 @@ class VesperPlayerAndroidPlugin :
                     expectedCatalogRevision,
                 )
                 emitSnapshot(session)
+                null
+            }
+            "setPlaybackStallPolicy" -> handleSessionCommand(call, result) { session ->
+                session.controller.setPlaybackStallPolicy(requireNestedMap(call.argumentMap(), "policy").toPlaybackStallPolicy())
                 null
             }
             "setResiliencePolicy" -> handleSessionCommand(call, result) { session ->

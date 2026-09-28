@@ -42,6 +42,18 @@ public final class VesperPlayerController: ObservableObject {
     /// because it only affects rendering.
     @Published private(set) var publishedSubtitleStyle: VesperSubtitleStyle
 
+    /// Applies bounded media-clock observations. Both thresholds must be positive.
+    public func setPlaybackStallPolicy(_ policy: VesperPlaybackStallPolicy) throws {
+        guard !isDisposed else { throw VesperPlayerError(message: "The player controller has been disposed", code: .invalidState, category: .playback, retriable: false) }
+        guard policy.positionThresholdMs > 0, policy.bufferingThresholdMs > 0 else {
+            throw VesperPlayerError(message: "Stall thresholds must be positive", code: .invalidArgument, category: .input, retriable: false)
+        }
+        guard let tracker = playbackDiagnosticsTracker else {
+            throw VesperPlayerError(message: "Playback stall observations are not supported by this bridge", code: .unsupported, category: .capability, retriable: false)
+        }
+        tracker.stallDetector.policy = policy
+    }
+
     public var uiState: PlayerHostUiState {
         publishedUiState
     }

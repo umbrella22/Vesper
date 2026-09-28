@@ -68,6 +68,10 @@ class VesperPlayerController {
     );
   }
 
+  static Future<VesperAudioDecoderCapabilityResult> probeAudioDecoderCapability(
+          VesperAudioDecoderCapabilityRequest request) =>
+      VesperPlayerPlatform.instance.probeAudioDecoderCapability(request);
+
   static Future<VesperPlaybackCapabilityProbeResult> probePlaybackCapability(
     VesperPlaybackCapabilityProbeRequest request,
   ) {
@@ -284,6 +288,10 @@ class VesperPlayerController {
   ) =>
       _runVoidOperation(() => _platform.setResiliencePolicy(playerId, policy));
 
+  Future<void> setPlaybackStallPolicy(VesperPlaybackStallPolicy policy) =>
+      _runVoidOperation(
+          () => _platform.setPlaybackStallPolicy(playerId, policy));
+
   Future<void> setResiliencePolicy(VesperPlaybackResiliencePolicy policy) =>
       setPlaybackResiliencePolicy(policy);
 
@@ -380,7 +388,12 @@ class VesperPlayerController {
               _eventsController.add(event);
             }
           case VesperPlayerWarningEvent():
-            _eventsController.add(event);
+            final playback = event.warning.playback;
+            if (playback == null ||
+                snapshot.playbackDiagnostics?.playbackEpoch ==
+                    playback.playbackEpoch) {
+              _eventsController.add(event);
+            }
           case VesperPlayerPipelineEventHookReportsEvent():
             _eventsController.add(event);
           case VesperPlayerPictureInPictureEvent():
