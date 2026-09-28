@@ -21,6 +21,8 @@ final class VesperNativePreloadCoordinator {
         guard source.drmConfiguration == nil else {
             return
         }
+        // A sequence owns SegmentBase startup requests for this source scope.
+        guard source.dashStartupScope == nil else { return }
         guard max(cachePolicy.memoryCapacity, cachePolicy.diskCapacity) > 0 else {
             return
         }

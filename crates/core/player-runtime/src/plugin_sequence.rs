@@ -4,8 +4,7 @@ use std::fmt;
 
 use player_playlist::{
     SequenceErrorCode, SequenceItemSnapshot, SequencePreloadIntent, SequencePreloadPriority,
-    SequenceSnapshot, SequenceSourceRevision, SequenceSourceState, SequenceWarmupGoal,
-    SequenceWarmupTaskId,
+    SequenceSnapshot, SequenceSourceRevision, SequenceSourceState, SequenceWarmupTaskId,
 };
 use player_plugin::{
     PluginActivePlaybackCorrelation, PluginNextPrewarmCorrelation, PluginPlaybackError,
@@ -188,7 +187,12 @@ impl PlayerPluginSequenceCorrelation {
             .iter()
             .find(|item| item.item.item_id == *active_item_id)
             .ok_or(PlayerPluginSequenceCorrelationError::ItemMissing)?;
-        let SequenceSourceState::Resolved { revision, .. } = &item.item.source_state else {
+        let SequenceSourceState::Resolved {
+            revision,
+            warmup_goal,
+            ..
+        } = &item.item.source_state
+        else {
             return Err(PlayerPluginSequenceCorrelationError::SourceUnavailable);
         };
         if revision.get() != prewarm.source_revision() {
@@ -204,7 +208,7 @@ impl PlayerPluginSequenceCorrelation {
                 active_item_id,
                 SequenceSourceRevision::new(prewarm.source_revision()),
                 SequenceWarmupTaskId::new(prewarm.warmup_task_id()),
-                SequenceWarmupGoal::ProgressiveRange,
+                *warmup_goal,
             )
             .map_err(
                 |error| PlayerPluginSequenceCorrelationError::IntentIdentityMismatch {
@@ -450,7 +454,7 @@ mod tests {
                 task_id: intents[1].warmup_task_id,
                 item_id: intents[1].item_id.clone(),
                 source_revision: intents[1].source_revision,
-                warmup_goal: SequenceWarmupGoal::ProgressiveRange,
+                warmup_goal: player_playlist::SequenceWarmupGoal::ProgressiveRange,
                 status: SequenceWarmupStatus::Completed,
                 expected_bytes: 0,
                 actual_bytes: 0,

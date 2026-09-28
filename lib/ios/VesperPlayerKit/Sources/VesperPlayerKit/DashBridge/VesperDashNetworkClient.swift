@@ -9,6 +9,10 @@ class VesperDashNetworkClient {
         self.headers = headers
     }
 
+    func manifestData(for url: URL) async throws -> (Data, URL) {
+        (try await data(for: url), url)
+    }
+
     func request(for url: URL) throws -> URLRequest {
         try rejectInsecureHTTPURL(url)
         var request = URLRequest(url: url)
@@ -17,8 +21,12 @@ class VesperDashNetworkClient {
     }
 
     func data(for url: URL, byteRange: VesperDashByteRange? = nil) async throws -> Data {
+        try await dataWithFinalURL(for: url, byteRange: byteRange).0
+    }
+
+    func dataWithFinalURL(for url: URL, byteRange: VesperDashByteRange? = nil) async throws -> (Data, URL) {
         if url.isFileURL {
-            return try readLocalFile(url: url, byteRange: byteRange)
+            return (try readLocalFile(url: url, byteRange: byteRange), url)
         }
         var request = try request(for: url)
         if let byteRange {
@@ -33,7 +41,7 @@ class VesperDashNetworkClient {
                 "HTTP \(httpResponse.statusCode) for \(diagnosticURLDescription(url.absoluteString))"
             )
         }
-        return data
+        return (data, response.url ?? url)
     }
 
     func download(
@@ -72,7 +80,7 @@ class VesperDashNetworkClient {
         return fileSize(at: destinationURL) ?? 0
     }
 
-    private func makeSession() -> URLSession {
+    func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.waitsForConnectivity = true
         configuration.timeoutIntervalForRequest = vesperDashNetworkStallTimeoutSeconds

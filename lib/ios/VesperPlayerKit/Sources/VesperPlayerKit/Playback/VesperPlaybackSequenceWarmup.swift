@@ -85,7 +85,7 @@ private struct VesperSequenceWarmupIntent: Hashable {
               let sourceRevision = value["sourceRevision"] as? UInt64, sourceRevision > 0,
               let warmupTaskId = value["warmupTaskId"] as? UInt64, warmupTaskId > 0,
               let warmupGoal = value["warmupGoal"] as? String,
-              warmupGoal == "progressiveRange",
+              ["progressiveRange", "dashSegmentBaseStartup"].contains(warmupGoal),
               let priorityValue = value["priority"] as? String,
               let priority = VesperSequenceWarmupPriority(rawValue: priorityValue),
               let identity = value["cacheIdentity"] as? [String: Any],
@@ -132,6 +132,7 @@ internal struct VesperSequenceWarmupReport {
     let cacheBytes: UInt64
     let evictedEntries: UInt64
     let reasonCode: String?
+    var warmupGoal: String = "progressiveRange"
 }
 
 internal struct VesperSequenceCacheInventory: Equatable, Sendable {
@@ -414,12 +415,14 @@ internal final class VesperPlaybackSequenceWarmupExecutor {
     private let cache: any VesperSequenceWarmupCaching
     private let loader: any VesperSequenceWarmupLoading
     private let requestedMaxDiskBytes: UInt64
+    private let startupByteBudget: Int
     private let onSourceExpired: (String, UInt64) -> Void
     private let onReport: (VesperSequenceWarmupReport) -> Void
     private var isClosed = false
 
     init(
         maxDiskBytes: UInt64 = 256 * 1024 * 1024,
+        startupMaxMemoryBytes: UInt64 = 8 * 1024 * 1024,
         onSourceExpired: @escaping (String, UInt64) -> Void,
         onReport: @escaping (VesperSequenceWarmupReport) -> Void = { _ in },
         cache: (any VesperSequenceWarmupCaching)? = nil,
@@ -428,6 +431,7 @@ internal final class VesperPlaybackSequenceWarmupExecutor {
         self.cache = cache ?? Self.sharedCache
         self.loader = loader
         requestedMaxDiskBytes = min(maxDiskBytes, 256 * 1024 * 1024)
+        startupByteBudget = Int(min(maxDiskBytes, startupMaxMemoryBytes, UInt64(VesperDashStartupCache.maxWarmupBytes)))
         self.onSourceExpired = onSourceExpired
         self.onReport = onReport
     }
@@ -492,7 +496,11 @@ internal final class VesperPlaybackSequenceWarmupExecutor {
         token: UInt64
     ) async {
         guard isCurrent(intent: intent, token: token), !isClosed else { return }
-        guard source.drmConfiguration == nil, source.protocol == .progressive,
+        if intent.warmupGoal == "dashSegmentBaseStartup", source.protocol == .dash, source.drmConfiguration == nil {
+            await runDash(intent: intent, source: source, token: token)
+            return
+        }
+        guard intent.warmupGoal == "progressiveRange", source.drmConfiguration == nil, source.protocol == .progressive,
               let url = URL(string: source.uri) else {
             if finish(intent: intent, token: token, transform: { $0.incrementUnsupported() }) {
                 emitReport(intent: intent, status: "unsupported", reasonCode: "protocol_or_drm_unsupported")
@@ -652,6 +660,49 @@ internal final class VesperPlaybackSequenceWarmupExecutor {
         }
     }
 
+    private func runDash(intent: VesperSequenceWarmupIntent, source: VesperPlayerSource, token: UInt64) async {
+        guard startupByteBudget > 0, let scope = source.dashStartupScope else {
+            if finish(intent: intent, token: token, transform: { $0.incrementUnsupported() }) {
+                emitReport(intent: intent, status: "unsupported", reasonCode: "startup_cache_disabled")
+            }
+            return
+        }
+        emitReport(intent: intent, status: "started")
+        do {
+            let timeout = min(max(intent.warmupWindowMs, 1_000), 60_000)
+            let result = try await withThrowingTaskGroup(of: (bytes: UInt64, hit: Bool).self) { group in
+                let budget = startupByteBudget
+                group.addTask { try await vesperWarmDashStartup(source: source, scope: scope, maximumBytes: budget) }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: timeout * 1_000_000)
+                    throw URLError(.timedOut)
+                }
+                defer { group.cancelAll() }
+                guard let result = try await group.next() else { throw CancellationError() }
+                return result
+            }
+            let inventory = await VesperDashStartupCache.shared.inventory()
+            guard continueAfterSuspension(intent: intent, token: token, expectedBytes: result.bytes) else { return }
+            let statsInventory = VesperSequenceCacheInventory(evicted: 0, entries: inventory.entries, bytes: inventory.bytes)
+            if finish(intent: intent, token: token, transform: {
+                let expected = $0.addExpected(result.bytes)
+                return result.hit ? expected.addHit(actual: result.bytes, inventory: statsInventory)
+                    : expected.addMiss(actual: result.bytes, inventory: statsInventory)
+            }) {
+                emitReport(intent: intent, status: "completed", expectedBytes: result.bytes, actualBytes: result.bytes,
+                           cacheHit: result.hit, cacheEntries: inventory.entries, cacheBytes: inventory.bytes)
+            }
+        } catch VesperDashStartupError.httpStatus(let status) where [401, 403, 410].contains(status) {
+            guard continueAfterSuspension(intent: intent, token: token, expectedBytes: 0) else { return }
+            if finish(intent: intent, token: token, transform: { $0.incrementFailed() }) {
+                onSourceExpired(intent.itemId, intent.sourceRevision)
+                emitReport(intent: intent, status: "failed", reasonCode: "source_expired")
+            }
+        } catch {
+            finishSuspensionFailure(error, intent: intent, token: token, expectedBytes: 0, reasonCode: "dash_startup_failed")
+        }
+    }
+
     private func combiningEvictions(
         _ initial: VesperSequenceCacheInventory,
         _ final: VesperSequenceCacheInventory
@@ -742,7 +793,8 @@ internal final class VesperPlaybackSequenceWarmupExecutor {
                 cacheEntries: cacheEntries,
                 cacheBytes: cacheBytes,
                 evictedEntries: evictedEntries,
-                reasonCode: reasonCode
+                reasonCode: reasonCode,
+                warmupGoal: intent.warmupGoal
             )
         )
     }

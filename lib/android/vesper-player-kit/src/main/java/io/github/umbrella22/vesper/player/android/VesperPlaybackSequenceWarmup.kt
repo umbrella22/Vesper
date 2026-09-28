@@ -84,7 +84,7 @@ internal data class VesperSequenceWarmupIntent(
                 return null
             }
             if (cacheKey.isEmpty() || cacheKey.length > 2_048 || cacheKey.contains("://") ||
-                warmupGoal != "progressiveRange"
+                warmupGoal !in setOf("progressiveRange", "dashSegmentBaseStartup")
             ) {
                 return null
             }
@@ -140,6 +140,7 @@ internal data class VesperSequenceWarmupReport(
     val cacheBytes: Long = 0,
     val evictedEntries: Long = 0,
     val reasonCode: String? = null,
+    val warmupGoal: String = "progressiveRange",
 )
 
 internal data class VesperSequenceCacheInventoryObservation(
@@ -272,13 +273,14 @@ private class WarmupJobRecord(
 }
 
 /**
- * Executes only the v1 progressive range warmup goal. Rust supplies intent and
+ * Executes progressive range and DASH SegmentBase startup goals. Rust supplies intent and
  * identity; this class owns the URL, request headers, physical cache, and byte
  * accounting on Android.
  */
 internal class VesperPlaybackSequenceWarmupExecutor(
     context: Context?,
     maxDiskBytes: Long = DEFAULT_SEQUENCE_CACHE_BYTES,
+    startupMaxMemoryBytes: Long = 8 * 1024 * 1024,
     private val onSourceExpired: (itemId: String, sourceRevision: Long) -> Unit,
     private val onReport: (VesperSequenceWarmupReport) -> Unit = {},
     dispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -298,6 +300,8 @@ internal class VesperPlaybackSequenceWarmupExecutor(
     private var stats = VesperPlaybackSequenceWarmupSnapshot()
     private val _snapshot = MutableStateFlow(stats)
     private val closed = AtomicBoolean(false)
+    private val startupByteBudget = minOf(maxDiskBytes, startupMaxMemoryBytes, VesperDashStartupCache.MAX_WARMUP_BYTES).coerceAtLeast(0)
+    private val startupCacheEnabled = startupByteBudget > 0
     private val cache: SimpleCache?
     private val transport: VesperSequenceWarmupTransport
     private val inventoryObserver: VesperSequenceCacheInventoryObserver?
@@ -363,6 +367,7 @@ internal class VesperPlaybackSequenceWarmupExecutor(
                     emitReport(
                         VesperSequenceWarmupReport(
                             sessionGeneration = intent.sessionGeneration,
+                            warmupGoal = intent.goal,
                             taskId = intent.warmupTaskId,
                             itemId = intent.itemId,
                             sourceRevision = intent.sourceRevision,
@@ -402,6 +407,7 @@ internal class VesperPlaybackSequenceWarmupExecutor(
                         emitReport(
                             VesperSequenceWarmupReport(
                                 sessionGeneration = intent.sessionGeneration,
+                                warmupGoal = intent.goal,
                                 taskId = intent.warmupTaskId,
                                 itemId = intent.itemId,
                                 sourceRevision = intent.sourceRevision,
@@ -446,7 +452,11 @@ internal class VesperPlaybackSequenceWarmupExecutor(
         source: VesperPlayerSource,
         record: WarmupJobRecord,
     ) {
-        if (source.drmConfiguration != null || source.protocol != VesperPlayerSourceProtocol.Progressive) {
+        if (intent.goal == "dashSegmentBaseStartup" && source.protocol == VesperPlayerSourceProtocol.Dash && source.drmConfiguration == null) {
+            runDashWarmup(intent, source, record)
+            return
+        }
+        if (intent.goal != "progressiveRange" || source.drmConfiguration != null || source.protocol != VesperPlayerSourceProtocol.Progressive) {
             if (recordTerminal(record) {
                     copy(unsupportedJobs = vesperSequenceSaturatingAdd(unsupportedJobs, 1L))
                 }
@@ -454,6 +464,7 @@ internal class VesperPlaybackSequenceWarmupExecutor(
                 emitReport(
                     VesperSequenceWarmupReport(
                         sessionGeneration = intent.sessionGeneration,
+                        warmupGoal = intent.goal,
                         taskId = intent.warmupTaskId,
                         itemId = intent.itemId,
                         sourceRevision = intent.sourceRevision,
@@ -470,6 +481,7 @@ internal class VesperPlaybackSequenceWarmupExecutor(
             emitReport(
                 VesperSequenceWarmupReport(
                     sessionGeneration = intent.sessionGeneration,
+                    warmupGoal = intent.goal,
                     taskId = intent.warmupTaskId,
                     itemId = intent.itemId,
                     sourceRevision = intent.sourceRevision,
@@ -524,6 +536,7 @@ internal class VesperPlaybackSequenceWarmupExecutor(
                     emitReport(
                         VesperSequenceWarmupReport(
                             sessionGeneration = intent.sessionGeneration,
+                            warmupGoal = intent.goal,
                             taskId = intent.warmupTaskId,
                             itemId = intent.itemId,
                             sourceRevision = intent.sourceRevision,
@@ -560,6 +573,7 @@ internal class VesperPlaybackSequenceWarmupExecutor(
                 emitReport(
                     VesperSequenceWarmupReport(
                         sessionGeneration = intent.sessionGeneration,
+                        warmupGoal = intent.goal,
                         taskId = intent.warmupTaskId,
                         itemId = intent.itemId,
                         sourceRevision = intent.sourceRevision,
@@ -581,6 +595,7 @@ internal class VesperPlaybackSequenceWarmupExecutor(
                 emitReport(
                     VesperSequenceWarmupReport(
                         sessionGeneration = intent.sessionGeneration,
+                        warmupGoal = intent.goal,
                         taskId = intent.warmupTaskId,
                         itemId = intent.itemId,
                         sourceRevision = intent.sourceRevision,
@@ -599,6 +614,7 @@ internal class VesperPlaybackSequenceWarmupExecutor(
                 emitReport(
                     VesperSequenceWarmupReport(
                         sessionGeneration = intent.sessionGeneration,
+                        warmupGoal = intent.goal,
                         taskId = intent.warmupTaskId,
                         itemId = intent.itemId,
                         sourceRevision = intent.sourceRevision,
@@ -623,6 +639,7 @@ internal class VesperPlaybackSequenceWarmupExecutor(
                 emitReport(
                     VesperSequenceWarmupReport(
                         sessionGeneration = intent.sessionGeneration,
+                        warmupGoal = intent.goal,
                         taskId = intent.warmupTaskId,
                         itemId = intent.itemId,
                         sourceRevision = intent.sourceRevision,
@@ -632,6 +649,53 @@ internal class VesperPlaybackSequenceWarmupExecutor(
                         reasonCode = if (sourceExpired) "source_expired" else "warmup_failed",
                     ),
                 )
+            }
+        }
+    }
+
+    private suspend fun runDashWarmup(intent: VesperSequenceWarmupIntent, source: VesperPlayerSource, record: WarmupJobRecord) {
+        fun report(status: String, bytes: Long = 0, hit: Boolean? = null, reason: String? = null) {
+            val inventory = VesperDashStartupCache.shared.inventory()
+            emitReport(VesperSequenceWarmupReport(intent.sessionGeneration, intent.warmupTaskId,
+                intent.itemId, intent.sourceRevision, status, expectedBytes = bytes, actualBytes = bytes, cacheHit = hit,
+                cacheEntries = inventory.first, cacheBytes = inventory.second, reasonCode = reason,
+                warmupGoal = intent.goal))
+        }
+        try {
+            ensureWarmupActive()
+            record.started.set(true)
+            report("started")
+            if (!startupCacheEnabled) {
+                if (recordTerminal(record) { copy(unsupportedJobs = vesperSequenceSaturatingAdd(unsupportedJobs, 1)) }) report("unsupported", reason = "startup_cache_disabled")
+                return
+            }
+            val scope = requireNotNull(source.dashStartupScope) { "Missing startup cache scope" }
+            val (bytes, hit) = withTimeout(timeoutMillis(intent)) {
+                warmDashStartup(source, scope, timeoutMillis(intent), commitFence = { commit ->
+                    // Only the bounded in-memory commit runs under this fence; transport work is complete.
+                    synchronized(jobsLock) {
+                        if (closed.get() || record.cancellationRequested || jobs[intent.key] !== record) false
+                        else commit()
+                    }
+                }, maximumBytes = startupByteBudget)
+            }
+            ensureWarmupActive()
+            val inventory = VesperDashStartupCache.shared.inventory()
+            if (recordTerminal(record) { copy(completedJobs = vesperSequenceSaturatingAdd(completedJobs, 1),
+                expectedBytes = vesperSequenceSaturatingAdd(expectedBytes, bytes),
+                actualBytes = vesperSequenceSaturatingAdd(actualBytes, bytes), cacheEntries = inventory.first,
+                cacheBytes = inventory.second, cacheHits = vesperSequenceSaturatingAdd(cacheHits, if (hit) 1 else 0),
+                cacheMisses = vesperSequenceSaturatingAdd(cacheMisses, if (hit) 0 else 1)) }) report("completed", bytes, hit)
+        } catch (error: TimeoutCancellationException) {
+            if (recordTerminal(record) { copy(failedJobs = vesperSequenceSaturatingAdd(failedJobs, 1)) }) report("failed", reason = "timeout")
+        } catch (error: CancellationException) {
+            if (recordTerminal(record, allowCancellationRequested = true) { copy(cancelledJobs = vesperSequenceSaturatingAdd(cancelledJobs, 1)) }) report("cancelled")
+            throw error
+        } catch (error: Exception) {
+            if (recordTerminal(record) { copy(failedJobs = vesperSequenceSaturatingAdd(failedJobs, 1)) }) {
+                val expired = isExpired(error)
+                if (expired && !closed.get()) onSourceExpired(intent.itemId, intent.sourceRevision)
+                report("failed", reason = if (expired) "source_expired" else "dash_startup_failed")
             }
         }
     }

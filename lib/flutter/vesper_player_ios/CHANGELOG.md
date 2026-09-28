@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-28
+
+- Forward native audio/first-frame/stall evidence and conservative audio-decoder probe results.
+- Preserve native sequence warmup reports and use the matching iOS DASH startup cache host.
+
 ## 0.6.5 - 2026-09-28
 
 - Consume iOS host fixes for retry-delay overflow and DASH type inference,

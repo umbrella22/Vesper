@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-28
+
+- Expose retained native audio/first-frame/stall evidence and typed playback warnings.
+- Add configurable stall policy and independent audio-decoder capability probing with conservative unknown results on unsupported hosts.
+- Upgrade mobile sequence hosts with bounded DASH SegmentBase startup caching and formal playback reuse.
+
 ## 0.6.5 - 2026-09-28
 
 - Update native host dependencies with Android buffer-threshold fixes,

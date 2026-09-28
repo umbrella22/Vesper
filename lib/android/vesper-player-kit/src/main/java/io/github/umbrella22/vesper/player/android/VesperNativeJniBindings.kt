@@ -326,6 +326,7 @@ internal class VesperNativeJniBindings(
                     appContext,
                     resolvedResiliencePolicy.cache,
                     playbackSource.headers,
+                    playbackSource.dashStartupScope,
                 )
             val mediaSourceFactory =
                 DefaultMediaSourceFactory(appContext)

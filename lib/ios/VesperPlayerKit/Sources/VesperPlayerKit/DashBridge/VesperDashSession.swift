@@ -21,6 +21,7 @@ actor VesperDashSession {
     nonisolated let segmentCacheDirectory: URL
 
     let networkClient: VesperDashNetworkClient
+    nonisolated let startupServer: VesperDashStartupServer?
     var manifest: VesperDashManifest?
     var manifestLoadedAt: Date?
     var masterPlaylistCache: Data?
@@ -46,6 +47,7 @@ actor VesperDashSession {
         sourceURL: URL,
         headers: [String: String] = [:],
         networkClient: VesperDashNetworkClient? = nil,
+        startupScope: VesperDashStartupScope? = nil,
         videoDecodeCapabilityProvider: VideoDecodeCapabilityProvider? = nil,
         benchmarkEventRecorder: BenchmarkEventRecorder? = nil
     ) {
@@ -54,7 +56,10 @@ actor VesperDashSession {
         self.sourceURL = sourceURL
         segmentCacheDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("vesper-dash-\(sessionId)", isDirectory: true)
-        self.networkClient = networkClient ?? VesperDashNetworkClient(headers: headers)
+        let client = networkClient ?? startupScope.map { VesperDashStartupNetworkClient(scope: $0, headers: headers) }
+            ?? VesperDashNetworkClient(headers: headers)
+        self.networkClient = client
+        startupServer = (client as? VesperDashStartupNetworkClient).map(VesperDashStartupServer.init)
         if let videoDecodeCapabilityProvider {
             self.videoDecodeCapabilityProvider = videoDecodeCapabilityProvider
         } else {
@@ -66,9 +71,18 @@ actor VesperDashSession {
     }
 
     deinit {
+        startupServer?.close()
         removeFileIfPresent(
             segmentCacheDirectory,
             context: "DASH segment cache directory"
         )
+    }
+
+    nonisolated func closeStartupResources() { startupServer?.close() }
+
+    func startupResourceURL(_ resource: VesperDashStartupResource) async -> URL? {
+        guard let client = networkClient as? VesperDashStartupNetworkClient, let startupServer,
+              await client.cached(resource) != nil else { return nil }
+        return try? await startupServer.register(resource)
     }
 }

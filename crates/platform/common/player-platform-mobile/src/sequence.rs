@@ -451,6 +451,9 @@ impl SequenceItemWire {
                 cache_identity,
                 source.expires_at_epoch_ms,
             )
+            .with_warmup_goal(warmup_goal_from_wire(
+                source.warmup_goal.as_deref().unwrap_or("progressiveRange"),
+            )?)
         } else {
             SequenceItem::unresolved(self.item_id, content, media_kind)
         };
@@ -491,6 +494,8 @@ struct InitialResolvedSourceWire {
     cache_identity: CacheIdentityWire,
     #[serde(default)]
     expires_at_epoch_ms: Option<u64>,
+    #[serde(default)]
+    warmup_goal: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -506,6 +511,8 @@ struct ResolvedSourceWire {
     cache_identity: CacheIdentityWire,
     #[serde(default)]
     expires_at_epoch_ms: Option<u64>,
+    #[serde(default)]
+    warmup_goal: Option<String>,
 }
 
 impl TryFrom<ResolvedSourceWire> for SequenceResolvedSource {
@@ -524,6 +531,9 @@ impl TryFrom<ResolvedSourceWire> for SequenceResolvedSource {
             source_reference: SequenceSourceReference::new(value.source_reference),
             cache_identity: value.cache_identity.try_into()?,
             expires_at_epoch_ms: value.expires_at_epoch_ms,
+            warmup_goal: warmup_goal_from_wire(
+                value.warmup_goal.as_deref().unwrap_or("progressiveRange"),
+            )?,
         })
     }
 }
@@ -656,12 +666,14 @@ fn source_state_value(state: &SequenceSourceState) -> Value {
             revision,
             cache_identity,
             expires_at_epoch_ms,
+            warmup_goal,
         } => json!({
             "state": "resolved",
             "sourceReference": source_reference.as_str(),
             "sourceRevision": revision.get(),
             "cacheIdentity": cache_identity_value(cache_identity),
             "expiresAtEpochMs": expires_at_epoch_ms,
+            "warmupGoal": warmup_goal.as_str(),
         }),
         SequenceSourceState::Expired { revision } => json!({
             "state": "expired",
@@ -790,6 +802,7 @@ fn preload_intent_value(intent: &SequencePreloadIntent) -> Value {
         },
         "warmupGoal": match intent.warmup_goal {
             SequenceWarmupGoal::ProgressiveRange => "progressiveRange",
+            SequenceWarmupGoal::DashSegmentBaseStartup => "dashSegmentBaseStartup",
         },
         "profile": {
             "expectedMemoryBytes": intent.profile.expected_memory_bytes,
@@ -807,6 +820,7 @@ fn warmup_task_value(task: &SequenceWarmupTaskSnapshot) -> Value {
         "sourceRevision": task.source_revision.get(),
         "warmupGoal": match task.warmup_goal {
             SequenceWarmupGoal::ProgressiveRange => "progressiveRange",
+            SequenceWarmupGoal::DashSegmentBaseStartup => "dashSegmentBaseStartup",
         },
         "status": warmup_status_wire(task.status),
         "expectedBytes": task.expected_bytes,
@@ -916,6 +930,7 @@ fn media_kind_from_wire(value: &str) -> Result<SequenceMediaKind, MobileSequence
 fn warmup_goal_from_wire(value: &str) -> Result<SequenceWarmupGoal, MobileSequenceBridgeError> {
     match value {
         "progressiveRange" => Ok(SequenceWarmupGoal::ProgressiveRange),
+        "dashSegmentBaseStartup" => Ok(SequenceWarmupGoal::DashSegmentBaseStartup),
         _ => Err(MobileSequenceBridgeError::new(
             "unknown_enum",
             format!("unknown warmup goal: {value}"),
@@ -1126,6 +1141,37 @@ mod tests {
             session
                 .drain_events_json(512)
                 .contains("sourceResolutionRequired")
+        );
+    }
+
+    #[test]
+    fn bridge_preserves_dash_warmup_goal_and_rejects_wrong_goal() {
+        let mut session = MobileSequenceBridgeSession::from_config_json(config()).expect("config");
+        let mut item: Value = serde_json::from_str(&resolved_item_json("a", 1)).expect("item");
+        item["resolvedSource"]["warmupGoal"] = json!("dashSegmentBaseStartup");
+        let replace = json!({"type": "replace", "items": [item], "activeItemId": "a"});
+        assert!(
+            session
+                .execute_json(&replace.to_string(), 1_000)
+                .contains(r#""ok":true"#)
+        );
+        let preload: Value =
+            serde_json::from_str(&session.preload_intents_json(1_000)).expect("intents");
+        let intent = &preload["result"]["intents"][0];
+        assert_eq!(intent["warmupGoal"], "dashSegmentBaseStartup");
+        let mut report = json!({"type": "reportWarmup", "sessionGeneration": intent["sessionGeneration"],
+            "taskId": intent["warmupTaskId"], "itemId": "a", "sourceRevision": 1,
+            "warmupGoal": "progressiveRange", "status": "completed", "expectedBytes": 0, "actualBytes": 0});
+        assert!(
+            session
+                .execute_json(&report.to_string(), 1_000)
+                .contains("stale_source")
+        );
+        report["warmupGoal"] = json!("dashSegmentBaseStartup");
+        assert!(
+            session
+                .execute_json(&report.to_string(), 1_000)
+                .contains(r#""accepted":true"#)
         );
     }
 

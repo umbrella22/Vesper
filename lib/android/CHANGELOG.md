@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-28
+
+- Retain audio format, decoder and first-frame observations per playback attempt.
+- Add configurable suspected-stall observations and profile-aware audio decoder probes.
+- Reuse bounded DASH SegmentBase sequence startup bytes in the formal Media3 data source, respecting cache policy, credentials and source revisions.
+
 ## 0.6.5 - 2026-09-28
 
 ### Fixed

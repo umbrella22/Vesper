@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-28
+
+- Retain audio-selection evidence, first-frame observations and suspected-stall diagnostics per playback attempt.
+- Return an explicit unknown result for unavailable AVPlayer audio decoder queries.
+- Reuse bounded DASH SegmentBase sequence startup bytes through the native DASH bridge and local HTTP segment delivery. Preserve warmup task reports in sequence snapshots.
+
 ## 0.6.5 - 2026-09-28
 
 ### Fixed

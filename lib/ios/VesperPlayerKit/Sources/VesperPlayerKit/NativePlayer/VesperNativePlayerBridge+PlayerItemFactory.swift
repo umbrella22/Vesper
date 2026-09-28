@@ -32,6 +32,7 @@ extension VesperNativePlayerBridge {
         }
 
         if isVesperSourceNormalizerURL(url) {
+            currentDashSession?.closeStartupResources()
             currentDashSession = nil
             dashResourceLoaderDelegate = nil
             fairPlayDrmCoordinator?.close()
@@ -55,6 +56,7 @@ extension VesperNativePlayerBridge {
         }
 
         guard source.protocol == .dash else {
+            currentDashSession?.closeStartupResources()
             currentDashSession = nil
             dashResourceLoaderDelegate = nil
             sourceNormalizerResourceLoaderDelegate = nil
@@ -77,9 +79,12 @@ extension VesperNativePlayerBridge {
         } else {
             dashBenchmarkEventRecorder = nil
         }
+        let cachePolicy = resiliencePolicy.resolvedForRuntimeSource(source).cache
+        let startupCacheEnabled = max(cachePolicy.maxMemoryBytes ?? 0, cachePolicy.maxDiskBytes ?? 0) > 0
         let session = VesperDashSession(
             sourceURL: url,
             headers: source.headers,
+            startupScope: startupCacheEnabled ? source.dashStartupScope : nil,
             benchmarkEventRecorder: dashBenchmarkEventRecorder
         )
         let loaderDelegate = VesperDashResourceLoaderDelegate(
@@ -103,6 +108,7 @@ extension VesperNativePlayerBridge {
             loaderDelegate,
             queue: loaderDelegate.resourceLoadingQueue
         )
+        currentDashSession?.closeStartupResources()
         currentDashSession = session
         dashResourceLoaderDelegate = loaderDelegate
         sourceNormalizerResourceLoaderDelegate = nil

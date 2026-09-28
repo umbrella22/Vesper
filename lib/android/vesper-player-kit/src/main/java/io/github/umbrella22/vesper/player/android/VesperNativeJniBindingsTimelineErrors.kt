@@ -91,6 +91,7 @@ internal fun buildDataSourceFactory(
     appContext: Context,
     cachePolicy: NativeCachePolicy,
     headers: Map<String, String> = emptyMap(),
+    dashStartupScope: DashStartupScope? = null,
 ): androidx.media3.datasource.DataSource.Factory {
     val upstreamFactory = buildUpstreamDataSourceFactory(appContext, headers)
     val resolvedCachePolicy = resolveCachePolicy(cachePolicy)
@@ -107,7 +108,18 @@ internal fun buildDataSourceFactory(
                 .setCache(cache)
                 .setUpstreamDataSourceFactory(upstreamFactory)
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+                .apply {
+                    if (dashStartupScope != null) setCacheKeyFactory { spec ->
+                        VesperDashStartupCache.shared.resourceKey(dashStartupScope, spec.uri.toString(),
+                            dashStartupRequestHeaders(headers, spec.httpRequestHeaders))
+                    }
+                }
         }
+    if (resolvedCachePolicy.enabled && dashStartupScope != null) {
+        return androidx.media3.datasource.DataSource.Factory {
+            VesperDashStartupDataSource(baseFactory.createDataSource(), dashStartupScope, headers)
+        }
+    }
     return baseFactory
 }
 

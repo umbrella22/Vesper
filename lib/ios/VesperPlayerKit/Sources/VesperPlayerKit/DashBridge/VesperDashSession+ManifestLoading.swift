@@ -67,8 +67,8 @@ extension VesperDashSession {
     }
 
     func fetchManifestFromNetwork() async throws -> VesperDashManifest {
-        let data = try await networkClient.data(for: sourceURL)
-        return try VesperDashManifestParser.parse(data: data, manifestURL: sourceURL)
+        let (data, finalURL) = try await networkClient.manifestData(for: sourceURL)
+        return try VesperDashManifestParser.parse(data: data, manifestURL: finalURL)
     }
 
     func shouldRefreshManifest(_ manifest: VesperDashManifest) -> Bool {

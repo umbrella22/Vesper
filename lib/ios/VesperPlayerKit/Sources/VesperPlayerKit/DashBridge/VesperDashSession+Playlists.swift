@@ -194,15 +194,20 @@ extension VesperDashSession {
             }
             let segments = try await mediaSegments(for: playable, segmentBase: segmentBase)
             let mediaURL = playable.representation.baseURL
+            guard let url = URL(string: mediaURL) else { throw VesperDashStartupError.invalidResponse }
+            let localInit = await startupResourceURL(.init(url: url, range: segmentBase.initialization))
+            let localFirst: URL?
+            if let first = segments.first { localFirst = await startupResourceURL(.init(url: url, range: first.range)) }
+            else { localFirst = nil }
             let playlist = try VesperDashHlsBuilder.buildExternalMediaPlaylist(
-                map: VesperDashHlsMap(uri: mediaURL, byteRange: segmentBase.initialization),
+                map: VesperDashHlsMap(uri: localInit?.absoluteString ?? mediaURL, byteRange: localInit == nil ? segmentBase.initialization : nil),
                 playlistKind: .vod,
                 mediaSequence: nil,
-                segments: segments.map {
+                segments: segments.enumerated().map { index, segment in
                     VesperDashHlsSegment(
-                        duration: $0.duration,
-                        uri: mediaURL,
-                        byteRange: $0.range
+                        duration: segment.duration,
+                        uri: index == 0 ? (localFirst?.absoluteString ?? mediaURL) : mediaURL,
+                        byteRange: index == 0 && localFirst != nil ? nil : segment.range
                     )
                 }
             )

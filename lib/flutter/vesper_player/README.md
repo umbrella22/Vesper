@@ -894,3 +894,9 @@ Native display dimensions and per-view content rectangles are separate APIs.
 The mobile renderer preserves aspect ratio with centered letterboxing.
 See the [video presentation contract and 0.6.0 migration guide](../vesper_player_platform_interface/doc/video-presentation.md)
 for control layout, fullscreen state, geometry lifecycle, and PiP.
+
+### DASH sequence startup cache
+
+Playback sequences can warm bounded static DASH SegmentBase startup resources and
+reuse them in formal native playback. See the [startup cache contract](../../doc/dash-startup-cache.md)
+for budgets, source/credential isolation, platform delivery and warmup-report semantics.

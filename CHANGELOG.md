@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-28
+
+<!-- release-notes:en -->
+
+### Added
+
+- Retain native audio input evidence and monotonic first-frame observations per
+  playback attempt, including typed Flutter warnings and terminal-error context.
+- Observe suspected playback stalls with configurable native timers and retained
+  evidence. Add audio-decoder capability probes with explicit supported,
+  unsupported and unknown outcomes; iOS reports its unavailable decoder query.
+- Warm static DASH SegmentBase MPD, index, initialization and first-media ranges
+  through playback sequences, with bounded caches consumed by Media3 and the
+  iOS AVPlayer DASH bridge. Preserve source/credential isolation, cancellation
+  fences, byte budgets and formal playback fallback.
+
+### Changed
+
+- **Rust migration:** `SequenceResolvedSource` literals now require
+  `warmup_goal`; `SequenceWarmupGoal` includes `DashSegmentBaseStartup`.
+  See the [startup cache contract](lib/doc/dash-startup-cache.md) for migration,
+  cache limits and the distinction between warmup completion and first-frame
+  evidence. Native and Flutter consumers should upgrade matching host packages.
+
+<!-- release-notes:zh-CN -->
+
+### 新增
+
+- 按播放尝试保留原生音频输入证据与单调时钟首帧观测，提供 Flutter 类型化
+  警告，并将诊断上下文保留到终态错误。
+- 使用可配置的原生定时器观测疑似播放停滞并保留证据；新增音频解码能力
+  探测，明确区分支持、不支持与未知，iOS 显式报告系统查询能力缺失。
+- 播放序列支持静态 DASH SegmentBase 的 MPD、索引、初始化段及首个媒体段
+  预热，Media3 与 iOS AVPlayer DASH 桥接实际复用有界缓存，并保持来源与鉴权
+  隔离、取消屏障、字节预算及正式播放回退。
+
+### 改进
+
+- **Rust 迁移：** `SequenceResolvedSource` 字面量新增必填 `warmup_goal`；
+  `SequenceWarmupGoal` 新增 `DashSegmentBaseStartup`。迁移方法、缓存边界与
+  预热完成和首帧证据的区别见 [启动缓存契约](lib/doc/dash-startup-cache.md)。
+  原生与 Flutter 使用方应同步升级匹配的宿主包。
+
 ## 0.6.5 - 2026-09-28
 
 <!-- release-notes:en -->

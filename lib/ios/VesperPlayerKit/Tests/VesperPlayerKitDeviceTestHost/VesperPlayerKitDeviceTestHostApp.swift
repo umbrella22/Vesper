@@ -43,5 +43,18 @@ final class VesperPlayerKitDeviceTestHostSceneDelegate: UIResponder, UIWindowSce
         }
         window.makeKeyAndVisible()
         self.window = window
+        if ProcessInfo.processInfo.arguments.contains("--dash-startup-smoke") {
+            Task { @MainActor in
+                do {
+                    let result = try await runDashStartupPlaybackScenario()
+                    let data = try JSONEncoder().encode(result)
+                    print("DASH_STARTUP_SMOKE " + String(decoding: data, as: UTF8.self))
+                    exit(result.passed ? 0 : 1)
+                } catch {
+                    print("DASH_STARTUP_SMOKE_FAILED \(error)")
+                    exit(1)
+                }
+            }
+        }
     }
 }

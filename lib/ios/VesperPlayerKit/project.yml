@@ -131,8 +131,8 @@ targets:
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: FMWK
-        CFBundleShortVersionString: "0.6.5"
-        CFBundleVersion: "605"
+        CFBundleShortVersionString: "0.7.0"
+        CFBundleVersion: "700"
     scheme:
       testTargets:
         - VesperPlayerKitTests
@@ -143,6 +143,10 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - Tests/VesperPlayerKitDeviceTestHost
+      - Tests/VesperPlayerKitTests/VesperDashStartupTestSupport.swift
+      - Tests/VesperPlayerKitTests/VesperDashStartupPlaybackScenario.swift
+      - path: ../../../fixtures/media/dash-startup-video.mp4
+        buildPhase: resources
     dependencies:
       - target: VesperPlayerKit
       - target: VesperPlayerKitUI
@@ -166,6 +170,10 @@ targets:
         excludes:
           - VesperPlaybackLifecycleDeviceTests.swift
           - VesperPortraitPlaybackDeviceTests.swift
+          - VesperDashStartupPlaybackDeviceTests.swift
+          - VesperDashStartupPlaybackScenario.swift
+      - path: ../../../fixtures/media/dash-startup-video.mp4
+        buildPhase: resources
     settings:
       base:
         GENERATE_INFOPLIST_FILE: true
@@ -183,6 +191,11 @@ targets:
     sources:
       - path: Tests/VesperPlayerKitTests/VesperPlaybackLifecycleDeviceTests.swift
       - path: Tests/VesperPlayerKitTests/VesperPortraitPlaybackDeviceTests.swift
+      - path: Tests/VesperPlayerKitTests/VesperDashStartupTestSupport.swift
+      - path: Tests/VesperPlayerKitTests/VesperDashStartupPlaybackDeviceTests.swift
+      - path: Tests/VesperPlayerKitTests/VesperDashStartupPlaybackScenario.swift
+      - path: ../../../fixtures/media/dash-startup-video.mp4
+        buildPhase: resources
       - path: ../../../fixtures/media/device-720p-h264-aac.m4v
         buildPhase: resources
       - path: ../../../fixtures/media/device-1080p-h264-aac.m4v

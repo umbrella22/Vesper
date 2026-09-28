@@ -68,6 +68,8 @@ data class VesperPlayerSource(
     /** Canonical external side-loaded subtitle tracks. */
     val externalSubtitles: List<VesperExternalSubtitleSource> = emptyList(),
 ) {
+    internal var dashStartupScope: DashStartupScope? = null
+
     /** @deprecated Use [externalSubtitles]. */
     @Deprecated("Use externalSubtitles instead.")
     val subtitleConfigurations: List<VesperExternalSubtitleSource>

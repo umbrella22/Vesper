@@ -43,6 +43,10 @@ public struct VesperPlayerDrmConfiguration: Equatable, Codable {
 }
 
 public struct VesperPlayerSource: Equatable, Codable {
+    internal var dashStartupScope: VesperDashStartupScope? = nil
+    private enum CodingKeys: String, CodingKey {
+        case uri, label, kind, `protocol`, headers, drmConfiguration, externalSubtitles
+    }
     public let uri: String
     public let label: String
     public let kind: VesperPlayerSourceKind
@@ -75,6 +79,12 @@ public struct VesperPlayerSource: Equatable, Codable {
         self.headers = headers
         self.drmConfiguration = drmConfiguration
         self.externalSubtitles = externalSubtitles
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.uri == rhs.uri && lhs.label == rhs.label && lhs.kind == rhs.kind && lhs.protocol == rhs.protocol
+            && lhs.headers == rhs.headers && lhs.drmConfiguration == rhs.drmConfiguration
+            && lhs.externalSubtitles == rhs.externalSubtitles
     }
 
     public static func localFile(
@@ -183,5 +193,14 @@ public struct VesperPlayerSource: Equatable, Codable {
             return .progressive
         }
         return .unknown
+    }
+}
+
+extension VesperPlayerSource {
+    var sequenceWarmupGoal: String { `protocol` == .dash ? "dashSegmentBaseStartup" : "progressiveRange" }
+    func withDashStartupScope(expiresAtMs: UInt64?, owner: String) -> Self {
+        var copy = self
+        if `protocol` == .dash { copy.dashStartupScope = .init(owner: owner, sourceExpiresAtMs: expiresAtMs) }
+        return copy
     }
 }

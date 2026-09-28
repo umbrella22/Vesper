@@ -479,6 +479,7 @@ extension VesperNativePlayerBridge {
         presentationState.update(nil)
         nativeFramePipelineCoordinator.closeActiveSession()
         player = nil
+        currentDashSession?.closeStartupResources()
         currentDashSession = nil
         dashResourceLoaderDelegate = nil
         fairPlayDrmCoordinator?.close()

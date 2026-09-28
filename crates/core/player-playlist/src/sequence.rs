@@ -278,6 +278,8 @@ pub enum SequenceSourceState {
         revision: SequenceSourceRevision,
         /// Stable cache identity.
         cache_identity: SequenceCacheIdentity,
+        /// Host-selected protocol warmup goal.
+        warmup_goal: SequenceWarmupGoal,
         /// Optional absolute expiry timestamp.
         expires_at_epoch_ms: Option<u64>,
     },
@@ -341,6 +343,14 @@ pub struct SequenceItem {
 }
 
 impl SequenceItem {
+    /// Selects the host warmup goal for an already resolved source.
+    pub fn with_warmup_goal(mut self, goal: SequenceWarmupGoal) -> Self {
+        if let SequenceSourceState::Resolved { warmup_goal, .. } = &mut self.source_state {
+            *warmup_goal = goal;
+        }
+        self
+    }
+
     /// Creates an unresolved sequence item.
     pub fn unresolved(
         item_id: impl Into<String>,
@@ -376,6 +386,7 @@ impl SequenceItem {
                 revision,
                 cache_identity,
                 expires_at_epoch_ms,
+                warmup_goal: SequenceWarmupGoal::ProgressiveRange,
             },
             provider_metadata_ref: None,
             preload_profile: SequencePreloadProfile::default(),
@@ -576,6 +587,7 @@ impl SequenceSnapshot {
         let SequenceSourceState::Resolved {
             revision,
             cache_identity,
+            warmup_goal: expected_goal,
             ..
         } = &item.item.source_state
         else {
@@ -584,7 +596,8 @@ impl SequenceSnapshot {
                 "warmup task requires a resolved source",
             ));
         };
-        if *revision != source_revision
+        if *expected_goal != warmup_goal
+            || *revision != source_revision
             || stable_warmup_task_id(
                 self.session_generation,
                 item_id,
@@ -649,6 +662,7 @@ impl SequenceSnapshot {
         let SequenceSourceState::Resolved {
             source_reference,
             cache_identity,
+            warmup_goal,
             ..
         } = &item.source_state
         else {
@@ -659,7 +673,7 @@ impl SequenceSnapshot {
         };
         if source_reference != &intent.source_reference
             || cache_identity != &intent.cache_identity
-            || intent.warmup_goal != SequenceWarmupGoal::ProgressiveRange
+            || intent.warmup_goal != *warmup_goal
         {
             return Err(SequenceError::new(
                 SequenceErrorCode::StaleSource,
@@ -751,6 +765,8 @@ pub struct SequenceResolvedSource {
     pub source_reference: SequenceSourceReference,
     /// Stable cache identity.
     pub cache_identity: SequenceCacheIdentity,
+    /// Host-selected protocol warmup goal.
+    pub warmup_goal: SequenceWarmupGoal,
     /// Optional absolute expiry timestamp.
     pub expires_at_epoch_ms: Option<u64>,
 }
@@ -768,12 +784,14 @@ pub enum SequencePreloadPriority {
 
 /// Protocol-level goal requested from a host warmup executor.
 ///
-/// v1 deliberately exposes one bounded goal. Admission cost hints remain
-/// separate from the physical byte range selected by the host.
+/// Admission cost hints remain separate from the physical resources selected
+/// by the host. Each resolved source fixes its goal for that source revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SequenceWarmupGoal {
     /// Read a bounded prefix of a progressive resource.
     ProgressiveRange,
+    /// Cache a static, unencrypted DASH SegmentBase startup resource set.
+    DashSegmentBaseStartup,
 }
 
 impl SequenceWarmupGoal {
@@ -781,6 +799,7 @@ impl SequenceWarmupGoal {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ProgressiveRange => "progressiveRange",
+            Self::DashSegmentBaseStartup => "dashSegmentBaseStartup",
         }
     }
 }
@@ -1388,6 +1407,7 @@ impl SequenceCoordinator {
             revision: source.source_revision,
             cache_identity: source.cache_identity,
             expires_at_epoch_ms: source.expires_at_epoch_ms,
+            warmup_goal: source.warmup_goal,
         };
         self.prune_warmup_tasks();
         self.remove_pending_request(source.request_id);
@@ -1594,12 +1614,10 @@ impl SequenceCoordinator {
     /// task is rejected as stale.
     pub fn report_warmup(&mut self, report: SequenceWarmupReport) -> SequenceResult<()> {
         self.validate_generation(report.session_generation)?;
-        if report.warmup_goal != SequenceWarmupGoal::ProgressiveRange
-            || report.cache_entries > 4_096
-        {
+        if report.cache_entries > 4_096 {
             return Err(SequenceError::new(
                 SequenceErrorCode::InvalidArgument,
-                "warmup report used an unsupported goal or inventory size",
+                "warmup report used an unsupported inventory size",
             ));
         }
         let index = self.item_index(&report.item_id).ok_or_else(|| {
@@ -1608,6 +1626,7 @@ impl SequenceCoordinator {
         let SequenceSourceState::Resolved {
             revision,
             cache_identity,
+            warmup_goal,
             ..
         } = &self.items[index].source_state
         else {
@@ -1616,7 +1635,8 @@ impl SequenceCoordinator {
                 "warmup report requires a currently resolved source",
             ));
         };
-        if *revision != report.source_revision
+        if *warmup_goal != report.warmup_goal
+            || *revision != report.source_revision
             || stable_warmup_task_id(
                 self.session_generation,
                 &report.item_id,
@@ -2171,6 +2191,7 @@ impl SequenceCoordinator {
             revision,
             cache_identity,
             expires_at_epoch_ms,
+            warmup_goal,
         } = &item.source_state
         else {
             return;
@@ -2185,7 +2206,7 @@ impl SequenceCoordinator {
             &item.item_id,
             *revision,
             cache_identity,
-            SequenceWarmupGoal::ProgressiveRange,
+            *warmup_goal,
         );
         if self
             .warmup_tasks
@@ -2202,7 +2223,7 @@ impl SequenceCoordinator {
             warmup_task_id,
             cache_identity: cache_identity.clone(),
             priority,
-            warmup_goal: SequenceWarmupGoal::ProgressiveRange,
+            warmup_goal: *warmup_goal,
             profile: item.preload_profile.clone(),
         });
     }
@@ -2215,6 +2236,7 @@ impl SequenceCoordinator {
                 let SequenceSourceState::Resolved {
                     revision,
                     cache_identity,
+                    warmup_goal,
                     ..
                 } = &item.source_state
                 else {
@@ -2225,7 +2247,7 @@ impl SequenceCoordinator {
                     &item.item_id,
                     *revision,
                     cache_identity,
-                    SequenceWarmupGoal::ProgressiveRange,
+                    *warmup_goal,
                 ))
             })
             .collect::<HashSet<_>>();
@@ -2700,6 +2722,7 @@ mod tests {
                 source_revision: SequenceSourceRevision::new(1),
                 source_reference: SequenceSourceReference::new("source-ref-a-1"),
                 cache_identity: cache("a", 1),
+                warmup_goal: SequenceWarmupGoal::ProgressiveRange,
                 expires_at_epoch_ms: None,
             })
             .expect_err("stale attempt must fail");
@@ -2715,6 +2738,7 @@ mod tests {
                 source_revision: SequenceSourceRevision::new(1),
                 source_reference: SequenceSourceReference::new("source-ref-a-1"),
                 cache_identity: cache("a", 1),
+                warmup_goal: SequenceWarmupGoal::ProgressiveRange,
                 expires_at_epoch_ms: None,
             })
             .expect("accept current attempt");
@@ -2930,6 +2954,44 @@ mod tests {
         assert_eq!(intents[1].priority, SequencePreloadPriority::Next);
         assert_eq!(intents[0].warmup_goal, SequenceWarmupGoal::ProgressiveRange);
         assert_eq!(intents[1].warmup_goal, SequenceWarmupGoal::ProgressiveRange);
+    }
+
+    #[test]
+    fn dash_goal_is_carried_by_intents_and_rejects_forged_progressive_reports() {
+        let mut coordinator = replenishable(64);
+        let clock = now();
+        coordinator
+            .replace(
+                vec![
+                    resolved_item("a", "a", 1)
+                        .with_warmup_goal(SequenceWarmupGoal::DashSegmentBaseStartup),
+                ],
+                None,
+                clock,
+            )
+            .expect("replace DASH queue");
+        let intent = coordinator.preload_intents(clock.wall_epoch_ms).remove(0);
+        assert_eq!(
+            intent.warmup_goal,
+            SequenceWarmupGoal::DashSegmentBaseStartup
+        );
+        let mut forged = warmup_report(&intent, SequenceWarmupStatus::Completed);
+        forged.warmup_goal = SequenceWarmupGoal::ProgressiveRange;
+        assert_eq!(
+            coordinator
+                .report_warmup(forged)
+                .expect_err("goal mismatch")
+                .code,
+            SequenceErrorCode::StaleSource
+        );
+        coordinator
+            .report_warmup(warmup_report(&intent, SequenceWarmupStatus::Completed))
+            .expect("matching DASH report");
+        assert_eq!(
+            coordinator.snapshot().warmup_tasks[0].warmup_goal,
+            SequenceWarmupGoal::DashSegmentBaseStartup
+        );
+        assert!(coordinator.preload_intents(clock.wall_epoch_ms).is_empty());
     }
 
     #[test]

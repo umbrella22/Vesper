@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-28
+
+- Forward native audio/first-frame/stall evidence and audio-decoder capability probes.
+- Consume the matching Android host with bounded DASH sequence startup reuse.
+
 ## 0.6.5 - 2026-09-28
 
 - Consume Android host fixes for custom buffering thresholds and integer

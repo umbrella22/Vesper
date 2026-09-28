@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-28
+
+- Add typed audio diagnostics, first-frame and suspected-stall observations, retained terminal-error context, and audio-decoder probe request/results.
+- Preserve unknown capability and event values; old hosts without audio probing return an explicit unknown result.
+
 ## 0.6.5 - 2026-09-28
 
 ## 0.6.4 - 2026-09-21

@@ -1623,6 +1623,8 @@ internal fun resolveTrackCatalogReadiness(
     }
 
 internal fun VesperNativeJniBindings.executePreloadWarmupCommands(source: VesperPlayerSource) {
+    // The sequence owns startup requests; do not issue another generic MPD prefix read.
+    if (source.dashStartupScope != null) return
     preloadCoordinator.planCurrentSource(source).forEach { command ->
         when (command) {
             is NativePreloadCommand.Start -> dispatchWarmup(command.task, source)

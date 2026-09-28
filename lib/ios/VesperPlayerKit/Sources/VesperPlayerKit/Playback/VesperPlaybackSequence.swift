@@ -211,6 +211,8 @@ public struct VesperPlaybackSequenceSnapshot {
     public let previousEndReached: Bool
     public let nextEndReached: Bool
     public let droppedEvents: UInt64
+    public let warmupTasks: [[String: Any]]
+    public let warmupStats: [String: Any]
 
     public var wire: [String: Any] {
         [
@@ -238,6 +240,8 @@ public struct VesperPlaybackSequenceSnapshot {
             "previousEndReached": previousEndReached,
             "nextEndReached": nextEndReached,
             "droppedEvents": droppedEvents,
+            "warmupTasks": warmupTasks,
+            "warmupStats": warmupStats,
         ]
     }
 }
@@ -279,6 +283,7 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
     private var sessionHandle: UInt64 = 0
     private weak var controller: VesperPlayerController?
     private var sourceRegistry: [String: SourceRegistryEntry] = [:]
+    private let startupCacheOwner = UUID().uuidString
     private var sourceReferenceCounter: UInt64 = 1
     private var appliedActivation: AppliedActivation?
     private var warmupExecutor: VesperPlaybackSequenceWarmupExecutor?
@@ -301,7 +306,9 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
             requestFailures: [],
             previousEndReached: false,
             nextEndReached: false,
-            droppedEvents: 0
+            droppedEvents: 0,
+            warmupTasks: [],
+            warmupStats: [:]
         )
         let configObject: [String: Any] = [
             "sequenceId": configuration.sequenceId,
@@ -349,6 +356,7 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
         let maxDiskBytes = UInt64(max(target.resiliencePolicy.cache.maxDiskBytes ?? 256 * 1024 * 1024, 0))
         let executor = VesperPlaybackSequenceWarmupExecutor(
             maxDiskBytes: maxDiskBytes,
+            startupMaxMemoryBytes: UInt64(max(target.resiliencePolicy.cache.maxMemoryBytes ?? 8 * 1024 * 1024, 0)),
             onSourceExpired: { [weak self] itemId, sourceRevision in
                 Task { @MainActor [weak self] in
                     guard let self, !self.isDisposed, self.attachEpoch == epoch else { return }
@@ -363,7 +371,7 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
                     "taskId": report.taskId,
                     "itemId": report.itemId,
                     "sourceRevision": report.sourceRevision,
-                    "warmupGoal": "progressiveRange",
+                    "warmupGoal": report.warmupGoal,
                     "status": report.status,
                     "expectedBytes": report.expectedBytes,
                     "actualBytes": report.actualBytes,
@@ -509,7 +517,7 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
         sourceRegistry[sourceReference] = SourceRegistryEntry(
             itemId: resolved.itemId,
             sourceRevision: resolved.sourceRevision,
-            source: resolved.source
+            source: resolved.source.withDashStartupScope(expiresAtMs: resolved.expiresAtEpochMs, owner: startupCacheOwner)
         )
         let source: [String: Any] = [
             "sessionGeneration": resolved.sessionGeneration,
@@ -519,6 +527,7 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
             "expectedSourceRevision": resolved.expectedSourceRevision,
             "sourceRevision": resolved.sourceRevision,
             "sourceReference": sourceReference,
+            "warmupGoal": resolved.source.sequenceWarmupGoal,
             "cacheIdentity": resolved.cacheIdentity.wire,
             "expiresAtEpochMs": resolved.expiresAtEpochMs as Any,
         ]
@@ -636,10 +645,11 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
             staged[reference] = SourceRegistryEntry(
                 itemId: item.itemId,
                 sourceRevision: item.sourceRevision,
-                source: source
+                source: source.withDashStartupScope(expiresAtMs: item.expiresAtEpochMs, owner: startupCacheOwner)
             )
             wire["resolvedSource"] = [
                 "sourceReference": reference,
+                "warmupGoal": source.sequenceWarmupGoal,
                 "cacheIdentity": cacheIdentity.wire,
                 "expiresAtEpochMs": item.expiresAtEpochMs as Any,
             ]
@@ -776,7 +786,9 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
             requestFailures: value["requestFailures"] as? [[String: Any]] ?? [],
             previousEndReached: value["previousEndReached"] as? Bool ?? false,
             nextEndReached: value["nextEndReached"] as? Bool ?? false,
-            droppedEvents: value["droppedEvents"] as? UInt64 ?? 0
+            droppedEvents: value["droppedEvents"] as? UInt64 ?? 0,
+            warmupTasks: value["warmupTasks"] as? [[String: Any]] ?? [],
+            warmupStats: value["warmupStats"] as? [String: Any] ?? [:]
         )
     }
 

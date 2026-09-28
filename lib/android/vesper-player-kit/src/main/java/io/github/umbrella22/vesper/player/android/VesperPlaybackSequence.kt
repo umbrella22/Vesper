@@ -224,6 +224,7 @@ class VesperPlaybackSequence(
     private val sourceReferenceCounter = AtomicLong(1)
     private val ownershipLock = Any()
     private val sourceRegistry = LinkedHashMap<String, SourceRegistryEntry>()
+    private val startupCacheOwner = java.util.UUID.randomUUID().toString()
     private var controller: VesperPlayerController? = null
     private var appliedActivation: AppliedActivation? = null
     private var warmupExecutor: VesperPlaybackSequenceWarmupExecutor? = null
@@ -266,6 +267,7 @@ class VesperPlaybackSequence(
             VesperPlaybackSequenceWarmupExecutor(
                 context = context,
                 maxDiskBytes = maxDiskBytes,
+                startupMaxMemoryBytes = target.sequenceResiliencePolicy().cache.maxMemoryBytes ?: 8L * 1024 * 1024,
                 onSourceExpired = { itemId, sourceRevision ->
                     mainHandler.post {
                         synchronized(ownershipLock) {
@@ -291,7 +293,7 @@ class VesperPlaybackSequence(
                                     .put("taskId", report.taskId)
                                     .put("itemId", report.itemId)
                                     .put("sourceRevision", report.sourceRevision)
-                                    .put("warmupGoal", "progressiveRange")
+                                    .put("warmupGoal", report.warmupGoal)
                                     .put("status", report.status)
                                     .put("expectedBytes", report.expectedBytes)
                                     .put("actualBytes", report.actualBytes)
@@ -462,7 +464,7 @@ class VesperPlaybackSequence(
             "cache identity revision must match source revision"
         }
         val sourceReference = nextSourceReference()
-        val entry = SourceRegistryEntry(resolved.itemId, resolved.sourceRevision, resolved.source)
+        val entry = SourceRegistryEntry(resolved.itemId, resolved.sourceRevision, resolved.source.withDashStartupScope(resolved.expiresAtEpochMs, startupCacheOwner))
         synchronized(ownershipLock) {
             ensureRegistryCapacity(1)
             sourceRegistry[sourceReference] = entry
@@ -477,6 +479,7 @@ class VesperPlaybackSequence(
                 .put("sourceRevision", resolved.sourceRevision)
                 .put("sourceReference", sourceReference)
                 .put("cacheIdentity", resolved.cacheIdentity.toJson())
+                .put("warmupGoal", resolved.source.sequenceWarmupGoal())
                 .putNullable("expiresAtEpochMs", resolved.expiresAtEpochMs)
         try {
             executeAndRefresh(
@@ -581,12 +584,13 @@ class VesperPlaybackSequence(
                 .put("preloadProfile", preloadProfile.toJson())
         if (source != null && cacheIdentity != null) {
             val sourceReference = nextSourceReference()
-            stagedRegistry[sourceReference] = SourceRegistryEntry(itemId, sourceRevision, source)
+            stagedRegistry[sourceReference] = SourceRegistryEntry(itemId, sourceRevision, source.withDashStartupScope(expiresAtEpochMs, startupCacheOwner))
             payload.put(
                 "resolvedSource",
                 JSONObject()
                     .put("sourceReference", sourceReference)
                     .put("cacheIdentity", cacheIdentity.toJson())
+                    .put("warmupGoal", source.sequenceWarmupGoal())
                     .putNullable("expiresAtEpochMs", expiresAtEpochMs),
             )
         }
@@ -830,3 +834,10 @@ private fun Any?.toKotlinValue(): Any? =
         is JSONArray -> (0 until length()).map { index -> get(index).toKotlinValue() }
         else -> this
     }
+
+internal fun VesperPlayerSource.sequenceWarmupGoal(): String =
+    if (protocol == VesperPlayerSourceProtocol.Dash) "dashSegmentBaseStartup" else "progressiveRange"
+
+private fun VesperPlayerSource.withDashStartupScope(expiresAtMs: Long?, owner: String): VesperPlayerSource =
+    if (protocol == VesperPlayerSourceProtocol.Dash) copy().also { it.dashStartupScope = DashStartupScope(owner = owner, sourceExpiresAtMs = expiresAtMs) }
+    else this
