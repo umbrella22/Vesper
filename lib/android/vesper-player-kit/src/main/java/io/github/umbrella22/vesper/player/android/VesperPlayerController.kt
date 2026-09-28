@@ -59,6 +59,14 @@ class VesperPlayerController internal constructor(
     val effectiveVideoTrackId: StateFlow<String?>
         get() = bridge.effectiveVideoTrackId
 
+    /** Retained native load/audio evidence; unsupported bridges return null. */
+    val playbackDiagnostics: StateFlow<VesperPlaybackDiagnosticsSnapshot>?
+        get() = bridge.playbackDiagnosticsTracker?.snapshot
+
+    /** Main-looper transitions, with immediate replay. The listener must return promptly. */
+    fun setOnPlaybackDiagnosticsChangedListener(listener: ((VesperPlaybackDiagnosticsSnapshot) -> Unit)?) =
+        bridge.setOnPlaybackDiagnosticsChangedListener(listener)
+
     /** Latest display-output evidence. StateFlow collectors may conflate transitions. */
     val hdrOutput: StateFlow<VesperHdrOutputSnapshot>?
         get() = bridge.hdrOutputTracker?.snapshot

@@ -8,6 +8,12 @@ sealed class VesperPlayerEvent {
     final playerId = map['playerId'] as String? ?? '';
 
     switch (type) {
+      case 'firstFrame':
+        return VesperPlayerFirstFrameEvent(
+          playerId: playerId,
+          observation: VesperFirstFrameObservation.fromMap(
+              vesperDecodeMap(map['observation'])),
+        );
       case 'pictureInPicture':
         final errorMap = vesperDecodeMap(map['error']);
         final rawState = map['state'];
@@ -81,6 +87,13 @@ sealed class VesperPlayerEvent {
   }
 
   final String playerId;
+}
+
+/// First native video evidence in a loading attempt, independent of benchmark capture.
+final class VesperPlayerFirstFrameEvent extends VesperPlayerEvent {
+  const VesperPlayerFirstFrameEvent(
+      {required super.playerId, required this.observation});
+  final VesperFirstFrameObservation observation;
 }
 
 final class VesperPlayerSnapshotEvent extends VesperPlayerEvent {

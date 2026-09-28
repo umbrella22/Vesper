@@ -766,11 +766,13 @@ final class VesperPlayerControllerStateTests: XCTestCase {
                 decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
+        defer { bridge.dispose() }
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
-        _ = await waitForRoutePickerPlayer(in: bridge)
+        let configured = await waitForRoutePickerPlayer(in: bridge)
+        XCTAssertTrue(configured, "HLS fallback must configure the system player before the deadline")
 
         XCTAssertNil(bridge.lastError)
         XCTAssertNotNil(bridge.routePickerPlayer)
@@ -806,11 +808,13 @@ final class VesperPlayerControllerStateTests: XCTestCase {
                 decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
+        defer { bridge.dispose() }
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
-        _ = await waitForRoutePickerPlayer(in: bridge)
+        let configured = await waitForRoutePickerPlayer(in: bridge)
+        XCTAssertTrue(configured, "DASH fallback must configure the system player before the deadline")
 
         XCTAssertNil(bridge.lastError)
         XCTAssertNotNil(bridge.routePickerPlayer)
@@ -3109,7 +3113,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
 
     private func waitForRoutePickerPlayer(
         in bridge: VesperNativePlayerBridge,
-        timeout: TimeInterval = 1.0
+        // Asynchronous route setup can exceed one second on simulators. These
+        // tests verify route selection, not a startup latency budget.
+        timeout: TimeInterval = 5.0
     ) async -> Bool {
         await waitForNativeFrameSmoke(timeout: timeout) {
             bridge.routePickerPlayer != nil

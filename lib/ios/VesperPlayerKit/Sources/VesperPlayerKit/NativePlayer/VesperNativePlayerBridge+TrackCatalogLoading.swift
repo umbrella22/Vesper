@@ -46,6 +46,7 @@ extension VesperNativePlayerBridge {
             self.enforceSubtitleVisibility(for: item)
             await self.applyPendingResilienceRestore(ifNeededFor: item, phase: .trackSelection)
             self.refreshEffectiveVideoTrackObservation(for: item)
+            self.refreshAudioDiagnostics()
         }
     }
 

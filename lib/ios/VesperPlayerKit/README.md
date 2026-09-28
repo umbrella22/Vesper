@@ -581,6 +581,16 @@ xcodebuild test \
 A SwiftUI sample app that consumes this package lives at
 [`examples/ios-swift-host`](../../../examples/ios-swift-host/).
 
+## Audio and first-frame observations
+
+`VesperPlayerController.playbackDiagnostics` retains selected audio-option
+evidence and the first `AVPlayerLayer.isReadyForDisplay` observation for each
+native load. `playbackDiagnosticsPublisher` provides dedicated main-actor
+updates and replays the retained value. Startup duration uses a native monotonic
+clock independently of media position and benchmark capture. AVPlayer decoder
+identity and audio output progress remain unknown. See the
+[shared playback diagnostics contract](../../flutter/vesper_player_platform_interface/doc/playback-diagnostics.md).
+
 ## Current display-output evidence
 
 `VesperPlayerController.hdrOutput` exposes the native source/output generations

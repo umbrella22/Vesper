@@ -363,6 +363,9 @@ extension VesperDownloadError {
 extension VesperPlayerError {
     var toMap: [String: Any] {
         var mappedDetails: [String: Any] = details
+        if let diagnostics = playbackDiagnostics {
+            mappedDetails["playbackDiagnostics"] = diagnostics.toMap()
+        }
         if mappedDetails["obsolete"] as? String == "true" {
             mappedDetails["obsolete"] = true
         }

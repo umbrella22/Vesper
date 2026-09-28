@@ -278,6 +278,9 @@ data class VesperRuntimeWarning(
 )
 
 internal interface PlayerBridge {
+    val playbackDiagnosticsTracker: VesperPlaybackDiagnosticsTracker? get() = null
+    fun setOnPlaybackDiagnosticsChangedListener(listener: ((VesperPlaybackDiagnosticsSnapshot) -> Unit)?) =
+        playbackDiagnosticsTracker?.setListener(listener) ?: Unit
     val videoPresentation: StateFlow<VesperVideoPresentation?>? get() = null
     fun setOnVideoPresentationChangedListener(listener: ((VesperVideoPresentation?) -> Unit)?) = Unit
     val hdrOutputTracker: VesperHdrOutputTracker? get() = null

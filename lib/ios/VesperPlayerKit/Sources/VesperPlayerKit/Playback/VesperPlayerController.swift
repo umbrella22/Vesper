@@ -154,6 +154,7 @@ public final class VesperPlayerController: ObservableObject {
     private var bridgeObservation: AnyCancellable?
     private var hdrOutputObservation: AnyCancellable?
     private let hdrOutputTracker: VesperHdrOutputTracker?
+    private let playbackDiagnosticsTracker: VesperPlaybackDiagnosticsTracker?
     private var videoPresentationObservation: AnyCancellable?
 
     /// Display dimensions independent of playback view layout.
@@ -165,6 +166,17 @@ public final class VesperPlayerController: ObservableObject {
 
     /// Current display-output evidence. Unsupported bridges return nil.
     public var hdrOutput: VesperHdrOutputSnapshot? { hdrOutputTracker?.snapshot }
+
+    /// Retained native audio and first-frame evidence. Unsupported bridges return nil.
+    public var playbackDiagnostics: VesperPlaybackDiagnosticsSnapshot? {
+        playbackDiagnosticsTracker?.snapshot
+    }
+
+    /// Main-actor updates, including the retained value on subscription.
+    public var playbackDiagnosticsPublisher: AnyPublisher<VesperPlaybackDiagnosticsSnapshot, Never> {
+        playbackDiagnosticsTracker?.publisher
+            ?? Empty<VesperPlaybackDiagnosticsSnapshot, Never>().eraseToAnyPublisher()
+    }
 
     /// Publishes captured output transitions on the main actor, including unknown
     /// invalidations that must precede a replacement observer's confirmation.
@@ -276,6 +288,7 @@ public final class VesperPlayerController: ObservableObject {
     ) {
         backend = bridge.backend
         hdrOutputTracker = bridge.hdrOutputTracker
+        playbackDiagnosticsTracker = bridge.playbackDiagnosticsTracker
         videoPresentation = bridge.videoPresentationState?.value
         self.keepScreenOnDuringPlayback = keepScreenOnDuringPlayback
         publishedUiState = bridge.publishedUiState

@@ -374,6 +374,11 @@ class VesperPlayerController {
             _applySnapshot(event.snapshot);
           case VesperPlayerErrorEvent():
             _applyPlatformError(event);
+          case VesperPlayerFirstFrameEvent():
+            if (snapshot.playbackDiagnostics?.playbackEpoch ==
+                event.observation.playbackEpoch) {
+              _eventsController.add(event);
+            }
           case VesperPlayerWarningEvent():
             _eventsController.add(event);
           case VesperPlayerPipelineEventHookReportsEvent():

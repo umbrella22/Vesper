@@ -62,6 +62,7 @@ extension VesperNativePlayerBridge {
     }
 
     func dispose() {
+        diagnosticsTracker.dispose()
         outputTracker.dispose()
         clearLastError()
         recordBenchmark("dispose_command")
@@ -129,6 +130,10 @@ extension VesperNativePlayerBridge {
         pendingResilienceRestore = nil
         pendingAutoPlay = true
         pendingNativeFrameSeek = nil
+        let task = startSourceLoadTask(source: source, shouldAutoPlay: true)
+        // Diagnostics subscribers can synchronously select another source.
+        // The newer command owns state once it cancels this task.
+        guard !task.isCancelled else { return task }
         updateState {
             PlayerHostUiState(
                 title: $0.title,
@@ -149,7 +154,7 @@ extension VesperNativePlayerBridge {
             )
         }
         configureAudioSessionIfNeeded()
-        return startSourceLoadTask(source: source, shouldAutoPlay: true)
+        return task
     }
 
     func selectSourceAsync(_ source: VesperPlayerSource) async throws {
@@ -202,6 +207,7 @@ extension VesperNativePlayerBridge {
         }
         command.task = task
         sourceLoadTask = task
+        diagnosticsTracker.invalidate()
         return task
     }
 
@@ -241,7 +247,10 @@ extension VesperNativePlayerBridge {
                 throw error
             }
             let epoch = nextSourceLoadEpoch()
+            diagnosticsTracker.beginAttempt()
             do {
+                try Task.checkCancellation()
+                try ensureCurrentSourceCommand(command)
                 let pluginDiagnostics = await probeMobilePluginsAsync(for: command.source)
                 try Task.checkCancellation()
                 try ensureCurrentSourceCommand(command)
@@ -442,6 +451,8 @@ extension VesperNativePlayerBridge {
     }
 
     func tearDownActivePlayback(cancelSourceCommand: Bool = true) {
+        diagnosticsTracker.endAttempt()
+        activePlayerObservationToken = nil
         outputTracker.outputPathChanged()
         if cancelSourceCommand {
             cancelSourceLoadTask()

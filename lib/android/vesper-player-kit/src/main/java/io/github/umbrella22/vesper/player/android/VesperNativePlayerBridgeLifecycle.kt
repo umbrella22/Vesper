@@ -238,6 +238,8 @@ private fun VesperNativePlayerBridge.prepareSourceLoadOnMain(
     // replacement source/item is being prepared.
     hdrOutputTracker.outputPathChanged()
     bindings.invalidateSystemPlaybackCallbacks()
+    playbackDiagnosticsTracker?.beginAttempt()
+    if (!isCurrentSourceLoad(epoch) || currentSource != source) return null
     clearTrackState()
     _subtitleState.value =
         VesperSubtitleState.loading(
@@ -489,6 +491,7 @@ internal fun VesperNativePlayerBridge.disposeNativeBridge() {
 private fun VesperNativePlayerBridge.disposeNativeBridgeOnMain() {
     if (!disposeCleanupStarted.compareAndSet(false, true)) return
     hdrOutputTracker.dispose()
+    playbackDiagnosticsTracker?.dispose()
     bindings.setOnOutputPathChangedListener(null)
     bindings.setOnOutputTrackChangedListener(null)
     bindings.cancelPendingSourceCommand("sourceCommandDisposed")
@@ -816,6 +819,8 @@ private fun VesperNativePlayerBridge.beginNativeSourceSelectionOnMain(
         NATIVE_PLAYER_BRIDGE_TAG,
         "selecting source=${source.uri} label=${source.label} kind=${source.kind} protocol=${source.protocol}",
     )
+    playbackDiagnosticsTracker?.invalidate()
+    if (isDisposed.get() || sourceCommandGeneration.get() != commandId) return null
     updateState {
         copy(
             subtitle = i18n.openingSource(source.label),

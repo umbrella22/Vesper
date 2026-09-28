@@ -24,6 +24,7 @@ final class VesperPlayerSnapshot {
     this.videoVariantObservation,
     this.videoPresentation,
     this.hdrOutput,
+    this.playbackDiagnostics,
     this.fixedTrackStatus,
     this.resiliencePolicy = const VesperPlaybackResiliencePolicy(),
     this.pluginDiagnostics = const <VesperPluginDiagnostic>[],
@@ -59,6 +60,7 @@ final class VesperPlayerSnapshot {
         videoVariantObservation = null,
         videoPresentation = null,
         hdrOutput = null,
+        playbackDiagnostics = null,
         fixedTrackStatus = null,
         resiliencePolicy = const VesperPlaybackResiliencePolicy(),
         pluginDiagnostics = const <VesperPluginDiagnostic>[],
@@ -163,6 +165,10 @@ final class VesperPlayerSnapshot {
           ? VesperVideoPresentation.fromMap(
               vesperDecodeMap(map['videoPresentation']))
           : null,
+      playbackDiagnostics: map['playbackDiagnostics'] is Map
+          ? VesperPlaybackDiagnosticsSnapshot.fromMap(
+              vesperDecodeMap(map['playbackDiagnostics']))
+          : null,
       hdrOutput: map['hdrOutput'] is Map
           ? VesperHdrOutputSnapshot.fromMap(vesperDecodeMap(map['hdrOutput']))
           : null,
@@ -240,6 +246,9 @@ final class VesperPlayerSnapshot {
   /// like [VesperHdrOutputState.unknown]; it never implies SDR output.
   final VesperHdrOutputSnapshot? hdrOutput;
 
+  /// Native audio and startup evidence, absent on hosts without observation support.
+  final VesperPlaybackDiagnosticsSnapshot? playbackDiagnostics;
+
   VesperHdrOutputState get hdrOutputState =>
       hdrOutput?.state ?? VesperHdrOutputState.unknown;
   final VesperFixedTrackStatus? fixedTrackStatus;
@@ -280,6 +289,8 @@ final class VesperPlayerSnapshot {
     bool clearVideoPresentation = false,
     VesperHdrOutputSnapshot? hdrOutput,
     bool clearHdrOutput = false,
+    VesperPlaybackDiagnosticsSnapshot? playbackDiagnostics,
+    bool clearPlaybackDiagnostics = false,
     VesperFixedTrackStatus? fixedTrackStatus,
     bool clearFixedTrackStatus = false,
     VesperPlaybackResiliencePolicy? resiliencePolicy,
@@ -332,6 +343,9 @@ final class VesperPlayerSnapshot {
           ? null
           : (videoVariantObservation ?? this.videoVariantObservation),
       hdrOutput: clearHdrOutput ? null : (hdrOutput ?? this.hdrOutput),
+      playbackDiagnostics: clearPlaybackDiagnostics
+          ? null
+          : (playbackDiagnostics ?? this.playbackDiagnostics),
       videoPresentation: clearVideoPresentation
           ? null
           : (videoPresentation ?? this.videoPresentation),
@@ -371,6 +385,8 @@ final class VesperPlayerSnapshot {
       'videoVariantObservation': videoVariantObservation?.toMap(),
       'videoPresentation': videoPresentation?.toMap(),
       if (hdrOutput != null) 'hdrOutput': hdrOutput!.toMap(),
+      if (playbackDiagnostics != null)
+        'playbackDiagnostics': playbackDiagnostics!.toMap(),
       'fixedTrackStatus': fixedTrackStatus?.name,
       'resiliencePolicy': resiliencePolicy.toMap(),
       'pluginDiagnostics':

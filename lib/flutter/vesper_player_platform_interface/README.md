@@ -10,6 +10,10 @@ The [HDR output contract](doc/hdr-output.md) defines optional snapshot output
 evidence, unknown-state compatibility, and requirements for future native output
 observers. Capability probe results remain separate.
 
+The [native playback diagnostics contract](doc/playback-diagnostics.md) defines
+audio input evidence, recoverable audio warnings, and a retained first-frame
+observation with an independent monotonic startup duration.
+
 ## What This Package Contains
 
 ### Platform abstraction

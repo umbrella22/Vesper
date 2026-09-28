@@ -36,6 +36,7 @@ internal data class PlayerSession(
     var lastError: Map<String, Any?>? = null,
     var lastEmittedTerminalError: Map<String, Any?>? = null,
     var lastEmittedSnapshot: Map<String, Any?>? = null,
+    val firstFrameDelivery: VesperFirstFrameEventDelivery = VesperFirstFrameEventDelivery(),
     var viewport: FlutterViewport? = null,
     var viewportHint: FlutterViewportHint = FlutterViewportHint.hidden(),
     var recentCapabilityProbe: SourceBoundCapabilityProbe? = null,

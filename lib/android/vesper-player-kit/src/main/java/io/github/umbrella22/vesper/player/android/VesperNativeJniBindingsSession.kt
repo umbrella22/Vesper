@@ -759,8 +759,62 @@ internal fun media3DroppedVideoFramesBenchmarkAttributes(
 
 internal fun VesperNativeJniBindings.buildAnalyticsListener(
     callbackGeneration: Long,
-): AnalyticsListener =
-    object : AnalyticsListener {
+): AnalyticsListener {
+    val observationToken = playbackDiagnosticsTracker.capture()
+    return object : AnalyticsListener {
+        override fun onAudioInputFormatChanged(
+            eventTime: AnalyticsListener.EventTime,
+            format: Format,
+            decoderReuseEvaluation: DecoderReuseEvaluation?,
+        ) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            val trackId = player?.currentTracks?.groups?.asSequence()
+                ?.filter { it.type == C.TRACK_TYPE_AUDIO }
+                ?.flatMap { group -> (0 until group.length).asSequence().map { index -> group to index } }
+                ?.firstOrNull { (group, index) -> group.getTrackFormat(index) == format }
+                ?.let { (group, index) -> nativeTrackId(group.mediaTrackGroup, index, format) }
+            playbackDiagnosticsTracker.audioFormat(observationToken, VesperAudioPlaybackDiagnostics(
+                trackId = trackId, formatId = format.id, codec = format.codecs,
+                sampleMimeType = format.sampleMimeType,
+                channels = format.channelCount.takeIf { it > 0 },
+                sampleRate = format.sampleRate.takeIf { it > 0 },
+                evidence = VesperAudioDiagnosticEvidence.RuntimeFormat,
+            ))
+        }
+
+        override fun onAudioDecoderInitialized(
+            eventTime: AnalyticsListener.EventTime, decoderName: String,
+            initializedTimestampMs: Long, initializationDurationMs: Long,
+        ) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            playbackDiagnosticsTracker.audioDecoder(observationToken, decoderName)
+        }
+
+        override fun onAudioDecoderReleased(eventTime: AnalyticsListener.EventTime, decoderName: String) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            if (playbackDiagnosticsTracker.snapshot.value.audio.decoderName == decoderName) {
+                playbackDiagnosticsTracker.audioDecoder(observationToken, null)
+            }
+        }
+
+        override fun onAudioDisabled(
+            eventTime: AnalyticsListener.EventTime,
+            decoderCounters: androidx.media3.exoplayer.DecoderCounters,
+        ) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            playbackDiagnosticsTracker.audioDisabled(observationToken)
+        }
+
+        override fun onAudioCodecError(eventTime: AnalyticsListener.EventTime, audioCodecError: Exception) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            recordAudioDiagnosticIssue(observationToken, VesperAudioDiagnosticIssueKind.DecoderError, audioCodecError)
+        }
+
+        override fun onAudioSinkError(eventTime: AnalyticsListener.EventTime, audioSinkError: Exception) {
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
+            recordAudioDiagnosticIssue(observationToken, VesperAudioDiagnosticIssueKind.SinkError, audioSinkError)
+        }
+
         override fun onVideoDecoderInitialized(
             eventTime: AnalyticsListener.EventTime,
             decoderName: String,
@@ -838,6 +892,9 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(
                 NATIVE_JNI_BINDINGS_TAG,
                 "onRenderedFirstFrame renderTimeMs=$renderTimeMs output=${output::class.java.name}",
             )
+            playbackDiagnosticsTracker.firstFrame(observationToken, player?.currentPosition?.coerceAtLeast(0L))
+            if (!isCurrentSystemPlaybackCallback(callbackGeneration) ||
+                !playbackDiagnosticsTracker.isCurrent(observationToken)) return
             val firstFrameMark = firstFrameGate.markFirstFrameRendered()
             if (!firstFrameMark.isFirstForEpoch) {
                 return
@@ -1064,6 +1121,23 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(
             )
         }
     }
+}
+
+internal fun VesperNativeJniBindings.recordAudioDiagnosticIssue(
+    token: VesperPlaybackObservationToken,
+    kind: VesperAudioDiagnosticIssueKind,
+    error: Exception,
+) {
+    val captured = playbackDiagnosticsTracker.audioIssue(
+        token, kind, error::class.java.name, error.message?.boundedFailureMessage(),
+    ) ?: return
+    if (!playbackDiagnosticsTracker.isCurrent(token)) return
+    addLocalBridgeEvent(NativeBridgeEvent.Warning(VesperRuntimeWarning(
+        domain = "audio",
+        payload = mapOf("playbackEpoch" to captured.playbackEpoch, "audio" to captured.audio.toMap()),
+    )))
+    notifyNativeUpdate()
+}
 
 internal fun VesperNativeJniBindings.isCurrentSystemPlaybackCallback(
     callbackGeneration: Long,
@@ -1271,6 +1345,7 @@ internal fun VesperNativeJniBindings.terminalPlaybackErrorDetails(
                 output["reason"] = reason
             }
     }
+    output["playbackDiagnostics"] = playbackDiagnosticsTracker.snapshot.value.toMap()
     output.putAll(extraDetails)
     return output
 }

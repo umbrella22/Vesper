@@ -42,6 +42,7 @@ final class ExampleHdrEvidenceCaptureRecorder {
         case VesperPlayerErrorEvent():
           playbackError = event.error;
         case VesperPlayerPipelineEventHookReportsEvent():
+        case VesperPlayerFirstFrameEvent():
         case VesperPlayerSnapshotEvent():
         case VesperPlayerPictureInPictureEvent():
         case VesperPlayerDisposedEvent():

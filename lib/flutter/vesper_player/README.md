@@ -431,6 +431,16 @@ final controller = await VesperPlayerController.create(
 off by default; keep it disabled in normal app builds unless you are actively
 tracing startup or playback behavior.
 
+### Native audio and first-frame observations
+
+`controller.snapshot.playbackDiagnostics` retains the current native load's
+audio evidence and first-frame observation. `controller.events` emits
+`VesperPlayerFirstFrameEvent` after the matching snapshot and typed audio
+warnings through `VesperPlayerWarningEvent.warning.audio`. Benchmark capture is
+not required. Startup elapsed time and media position are separate fields;
+iOS layer readiness and Android rendered-frame evidence preserve their native
+meaning. See the [playback diagnostics contract and example](../vesper_player_platform_interface/doc/playback-diagnostics.md).
+
 ### Performance Diagnostics Session
 
 The optional `vesper_player_performance_diagnostics` package supplies the

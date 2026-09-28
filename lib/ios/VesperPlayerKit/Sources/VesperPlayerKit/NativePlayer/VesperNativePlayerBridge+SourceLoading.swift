@@ -179,6 +179,7 @@ extension VesperNativePlayerBridge {
         resetTrackState()
         applyDashStartupAbrLimitIfNeeded(for: playbackSource, to: item)
         self.player = player
+        activePlayerObservationToken = diagnosticsTracker.capture()
         surfaceHost?.attach(player: player)
         subtitleOverlayRenderer.attach(surfaceHost: surfaceHost)
         installObservers(for: player, item: item, playbackEpoch: playbackEpoch)

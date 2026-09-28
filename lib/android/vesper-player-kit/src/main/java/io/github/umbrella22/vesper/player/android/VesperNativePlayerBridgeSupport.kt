@@ -363,6 +363,7 @@ internal data class PreservedPlaybackState(
 }
 
 internal interface VesperNativeBindings {
+    val playbackDiagnosticsTracker: VesperPlaybackDiagnosticsTracker? get() = null
     /** Whether the bindings already own an active system-playback item. */
     val isSystemPlaybackActive: Boolean
         get() = false

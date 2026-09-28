@@ -32,6 +32,64 @@ import org.junit.Test
 class VesperNativePlayerBridgeTest {
     @Test
     @OptIn(ExperimentalCoroutinesApi::class)
+    fun diagnosticsListenerSourceReplacementOwnsTheNewCommand() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        val sourceA = VesperPlayerSource.remote("https://example.invalid/video.mp4", "A")
+        val sourceB = VesperPlayerSource.remote("https://example.invalid/video.mp4", "B")
+        val fake = FakeBindings()
+        val tracker = VesperPlaybackDiagnosticsTracker { 100L }
+        val bindings = object : VesperNativeBindings by fake {
+            override val playbackDiagnosticsTracker = tracker
+        }
+        val bridge = VesperNativePlayerBridge(bindings = bindings, initialSource = sourceA)
+        val controller = VesperPlayerController(bridge)
+        var replaceOnce = false
+        try {
+            controller.setOnPlaybackDiagnosticsChangedListener {
+                if (replaceOnce) {
+                    replaceOnce = false
+                    controller.selectSource(sourceB)
+                }
+            }
+            replaceOnce = true
+            controller.selectSource(sourceA)
+            assertEquals(sourceB, bridge.currentSource)
+            assertEquals("B", controller.uiState.value.sourceLabel)
+        } finally {
+            controller.dispose()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun diagnosticsListenerDisposalStopsPreparationBeforeInitialize() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        val fake = FakeBindings()
+        val tracker = VesperPlaybackDiagnosticsTracker { 100L }
+        val bindings = object : VesperNativeBindings by fake {
+            override val playbackDiagnosticsTracker = tracker
+        }
+        val bridge = VesperNativePlayerBridge(
+            bindings = bindings,
+            initialSource = VesperPlayerSource.remote("https://example.invalid/video.mp4", "A"),
+        )
+        val controller = VesperPlayerController(bridge)
+        try {
+            controller.setOnPlaybackDiagnosticsChangedListener {
+                if (it.playbackEpoch > 0) controller.dispose()
+            }
+            bridge.initializeAsync()
+            assertNull(fake.lastInitializedSource)
+            assertEquals(1, fake.disposeCount)
+        } finally {
+            controller.dispose()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun outputGenerationsFollowNativeEventsAndRepeatedSequenceActivation() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         val source = VesperPlayerSource.remote("https://example.invalid/video.mp4", "Video")

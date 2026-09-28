@@ -8,6 +8,7 @@ import UIKit
 protocol PlayerBridge: AnyObject {
     var videoPresentationState: VesperVideoPresentationState? { get }
     var hdrOutputTracker: VesperHdrOutputTracker? { get }
+    var playbackDiagnosticsTracker: VesperPlaybackDiagnosticsTracker? { get }
     var backend: PlayerBridgeBackend { get }
     var uiState: PlayerHostUiState { get }
     var trackCatalog: VesperTrackCatalog { get }
@@ -115,6 +116,7 @@ protocol ObservablePlayerBridge: PlayerBridge, ObservableObject {
 extension PlayerBridge {
     var videoPresentationState: VesperVideoPresentationState? { nil }
     var hdrOutputTracker: VesperHdrOutputTracker? { nil }
+    var playbackDiagnosticsTracker: VesperPlaybackDiagnosticsTracker? { nil }
 
     /// Backward-compatible envelope for callers that do not carry a catalog
     /// revision. The throwing overload is used by the native command bridge.

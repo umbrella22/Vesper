@@ -130,6 +130,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         Task { @MainActor in
             eventSink = events
             sessions.values.forEach { emitSnapshot(for: $0) }
+            sessions.values.forEach { emitPendingFirstFrame(for: $0) }
         }
         return nil
     }
@@ -1497,6 +1498,14 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
 
     @MainActor
     private func observeSession(_ session: PlayerSession) {
+        session.playbackDiagnosticsObservation = session.controller.playbackDiagnosticsPublisher.dropFirst().sink {
+            [weak self, weak session] captured in
+            guard let self, let session, self.sessions[session.id] === session else { return }
+            var snapshot = self.buildSnapshotMap(for: session)
+            snapshot["playbackDiagnostics"] = captured.toMap()
+            self.emitEvent(["playerId": session.id, "type": "snapshot", "snapshot": snapshot])
+            self.emitPendingFirstFrame(for: session)
+        }
         session.videoPresentationObservation = session.controller.videoPresentationPublisher.dropFirst().sink {
             [weak self, weak session] presentation in
             guard let self, let session, self.sessions[session.id] === session else { return }
@@ -2231,6 +2240,14 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     }
 
     @MainActor
+    private func emitPendingFirstFrame(for session: PlayerSession) {
+        guard let eventSink, let observation = session.controller.playbackDiagnostics?.firstFrame,
+              session.lastDeliveredFirstFrameEpoch != observation.playbackEpoch else { return }
+        session.lastDeliveredFirstFrameEpoch = observation.playbackEpoch
+        eventSink(["playerId": session.id, "type": "firstFrame", "observation": observation.toMap()])
+    }
+
+    @MainActor
     private func buildSnapshotMap(for session: PlayerSession) -> [String: Any] {
         VesperFlutterPlaybackTrace.interval("VesperRefresh#buildSnapshotMap") {
             buildSnapshotMapBody(for: session)
@@ -2272,6 +2289,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             // HDR eligibility, EDR configuration and asset metadata do not
             // observe this player's active display output.
             "hdrOutput": flutterHdrOutputMap(session.controller.hdrOutput, playerId: session.id),
+            "playbackDiagnostics": flutterValue(session.controller.playbackDiagnostics?.toMap()),
             "videoPresentation": flutterVideoPresentationMap(session.controller.videoPresentation),
             "videoVariantObservation": flutterValue(
                 videoVariantObservation.map { observation in
@@ -2347,6 +2365,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         _ = session.advanceHostDetachGeneration()
         session.observation?.cancel()
         session.hdrOutputObservation?.cancel()
+        session.playbackDiagnosticsObservation?.cancel()
         session.videoPresentationObservation?.cancel()
         session.pictureInPictureCoordinator?.reset()
         session.pictureInPictureCoordinator = nil

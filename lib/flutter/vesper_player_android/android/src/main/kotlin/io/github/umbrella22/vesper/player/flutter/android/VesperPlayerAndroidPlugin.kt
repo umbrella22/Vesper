@@ -649,6 +649,7 @@ class VesperPlayerAndroidPlugin :
             session.lastEmittedSnapshot = null
         }
         sessions.values.forEach(::emitSnapshot)
+        sessions.values.forEach(::emitPendingFirstFrame)
     }
 
     override fun onCancel(arguments: Any?) {
@@ -1838,6 +1839,12 @@ class VesperPlayerAndroidPlugin :
     }
 
     private fun observeSession(session: PlayerSession) {
+        session.controller.setOnPlaybackDiagnosticsChangedListener { captured ->
+            if (isCurrentSession(session)) {
+                emitSnapshot(session, buildSnapshotMap(session) + ("playbackDiagnostics" to captured.toMap()))
+                emitPendingFirstFrame(session)
+            }
+        }
         session.controller.setOnVideoPresentationChangedListener {
             if (isCurrentSession(session)) {
                 emitSnapshot(session)
@@ -2132,6 +2139,12 @@ class VesperPlayerAndroidPlugin :
         )
     }
 
+    private fun emitPendingFirstFrame(session: PlayerSession) {
+        session.firstFrameDelivery.deliver(
+            session.id, session.controller.playbackDiagnostics?.value?.firstFrame, eventSink,
+        )
+    }
+
     private fun emitEvent(payload: Map<String, Any?>) {
         eventSink?.success(payload)
     }
@@ -2201,6 +2214,7 @@ class VesperPlayerAndroidPlugin :
                 // Display/codec capability and source metadata do not observe
                 // the active Surface's output. Do not reuse probe caches here.
                 "hdrOutput" to session.controller.hdrOutput?.value.toFlutterMap(session.id),
+                "playbackDiagnostics" to session.controller.playbackDiagnostics?.value?.toMap(),
                 "videoVariantObservation" to videoVariantObservation?.toMap(),
                 "videoPresentation" to session.controller.videoPresentation?.value?.toFlutterMap(),
                 "resiliencePolicy" to resiliencePolicy.toMap(),
@@ -2268,6 +2282,7 @@ class VesperPlayerAndroidPlugin :
             .forEach(::disposePlaybackSequence)
         session.observerJob?.cancel()
         session.controller.setOnHdrOutputChangedListener(null)
+        session.controller.setOnPlaybackDiagnosticsChangedListener(null)
         session.controller.setOnVideoPresentationChangedListener(null)
         if (pictureInPictureOwner == session.id) {
             session.pictureInPictureConfiguration = FlutterPictureInPictureConfiguration(enabled = false)

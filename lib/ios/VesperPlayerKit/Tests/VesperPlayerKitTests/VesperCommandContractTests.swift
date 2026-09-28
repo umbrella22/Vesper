@@ -45,10 +45,14 @@ final class VesperCommandContractTests: XCTestCase {
 
     func testSourceCommandRetriesThenSucceeds() async throws {
         var attempts = 0
+        var diagnosticEpochs: [UInt64] = []
         let bridge = VesperNativePlayerBridge(
             resiliencePolicy: retryPolicy(maxAttempts: 2, delayMs: 1),
-            sourceLoadAttemptOverride: { _, _, _, _ in
+            sourceLoadAttemptOverride: { bridge, _, _, _ in
                 attempts += 1
+                diagnosticEpochs.append(bridge.diagnosticsTracker.snapshot.playbackEpoch)
+                XCTAssertNil(bridge.diagnosticsTracker.snapshot.firstFrame)
+                bridge.diagnosticsTracker.firstFrame(bridge.diagnosticsTracker.capture(), mediaPositionMs: 0)
                 if attempts == 1 {
                     throw fixtureNetworkError()
                 }
@@ -59,6 +63,8 @@ final class VesperCommandContractTests: XCTestCase {
         try await bridge.selectSourceAsync(remoteSource("retry-success"))
 
         XCTAssertEqual(attempts, 2)
+        XCTAssertGreaterThan(diagnosticEpochs[1], diagnosticEpochs[0])
+        XCTAssertEqual(bridge.diagnosticsTracker.snapshot.firstFrame?.playbackEpoch, diagnosticEpochs[1])
         XCTAssertNil(bridge.lastError)
         XCTAssertNil(bridge.activeSourceCommand)
     }

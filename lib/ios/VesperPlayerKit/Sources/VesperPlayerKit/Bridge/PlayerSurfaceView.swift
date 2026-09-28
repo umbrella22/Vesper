@@ -163,7 +163,7 @@ public final class PlayerSurfaceView: UIView {
     private var metalCommandQueue: MTLCommandQueue?
     private var ciContext: CIContext?
     private let subtitleLabel = UILabel()
-    var onReadyForDisplay: (() -> Void)?
+    var onReadyForDisplay: ((AVPlayer, AVPlayerItem) -> Void)?
     var onOutputPathChanged: (() -> Void)?
 
     public override init(frame: CGRect) {
@@ -321,14 +321,16 @@ public final class PlayerSurfaceView: UIView {
             Task { @MainActor [weak self] in self?.publishGeometry() }
         }
         publishGeometry()
+        let item = player?.currentItem
         readyForDisplayObservation = playerLayer.observe(
             \.isReadyForDisplay, options: [.initial, .new]
         ) {
-            [weak self] layer, _
+            [weak self, weak player, weak item] layer, _
             in
             self?.publishGeometry()
-            guard layer.isReadyForDisplay else { return }
-            self?.onReadyForDisplay?()
+            guard layer.isReadyForDisplay, let player, let item,
+                  layer.player === player, player.currentItem === item else { return }
+            self?.onReadyForDisplay?(player, item)
         }
     }
 

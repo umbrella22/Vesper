@@ -31,11 +31,7 @@ extension VesperNativePlayerBridge {
         let activeNativeSession = nativeFramePipelineCoordinator.activeSession
         subtitleOverlayRenderer.attach(surfaceHost: host)
         if surfaceHost === host {
-            host.onReadyForDisplay = { [weak self] in
-                Task { @MainActor in
-                    self?.handleSurfaceReadyForDisplay()
-                }
-            }
+            observeSurfaceReadiness(host)
             if activeNativeSession?.didStart == true, player == nil {
                 host.attachNativeFramePresenter()
             } else {
@@ -61,11 +57,7 @@ extension VesperNativePlayerBridge {
             activeNativeSession?.rebindSurfaceHost(host)
         }
         surfaceHost = host
-        host.onReadyForDisplay = { [weak self] in
-            Task { @MainActor in
-                self?.handleSurfaceReadyForDisplay()
-            }
-        }
+        observeSurfaceReadiness(host)
         if activeNativeSession?.didStart == true, player == nil {
             host.attachNativeFramePresenter()
         } else {
@@ -77,6 +69,21 @@ extension VesperNativePlayerBridge {
 
     func detachSurfaceHost() {
         detachSurfaceHostIfCurrent(nil)
+    }
+
+    private func observeSurfaceReadiness(_ host: PlayerSurfaceView) {
+        host.onReadyForDisplay = { [weak self, weak host] observedPlayer, item in
+            guard let self, let host, self.player === observedPlayer,
+                  let token = self.activePlayerObservationToken else { return }
+            // Capture the originating identities before queuing work. A queued
+            // callback must never read a replacement load's epoch at delivery.
+            Task { @MainActor [weak self, weak host, weak observedPlayer, weak item] in
+                guard let self, let host, let observedPlayer, let item else { return }
+                self.handleSurfaceReadyForDisplay(
+                    player: observedPlayer, item: item, host: host, token: token
+                )
+            }
+        }
     }
 
     func detachSurfaceHost(_ host: UIView) {

@@ -589,6 +589,16 @@ Generated `.so` files are not committed to the repository.
 A Compose sample app that consumes these modules lives at
 [examples/android-compose-host](../../examples/android-compose-host/).
 
+## Audio and first-frame observations
+
+`VesperPlayerController.playbackDiagnostics` exposes a retained `StateFlow` of
+Media3 audio input/decoder evidence and the first rendered video observation.
+`setOnPlaybackDiagnosticsChangedListener` provides synchronous main-thread
+updates. Each native load has a new epoch and monotonic startup timer, independent
+of media position and benchmark capture. Recoverable decoder/sink callbacks also
+enter the runtime warning channel under the `audio` domain. See the
+[shared playback diagnostics contract](../flutter/vesper_player_platform_interface/doc/playback-diagnostics.md).
+
 ## Current display-output evidence
 
 `VesperPlayerController.hdrOutput` exposes the native source/output generations

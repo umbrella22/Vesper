@@ -48,6 +48,12 @@ final class VesperPlayerError {
   final String? codeRawValue;
   final String? categoryRawValue;
 
+  /// Native evidence captured at the failure, independent of error attribution.
+  VesperPlaybackDiagnosticsSnapshot? get playbackDiagnostics {
+    final raw = _rawMap(details['playbackDiagnostics']);
+    return raw == null ? null : VesperPlaybackDiagnosticsSnapshot.fromMap(raw);
+  }
+
   Map<String, Object?> toMap() {
     return <String, Object?>{
       'message': message,

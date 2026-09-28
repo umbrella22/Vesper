@@ -42,6 +42,9 @@ final class VesperNativePlayerBridge: ObservableObject, ObservablePlayerBridge {
     let presentationState = VesperVideoPresentationState()
     var videoPresentationState: VesperVideoPresentationState? { presentationState }
     var hdrOutputTracker: VesperHdrOutputTracker? { outputTracker }
+    let diagnosticsTracker = VesperPlaybackDiagnosticsTracker()
+    var playbackDiagnosticsTracker: VesperPlaybackDiagnosticsTracker? { diagnosticsTracker }
+    var activePlayerObservationToken: VesperPlaybackObservationToken?
     var outputItemObservations: [NSKeyValueObservation] = []
     var outputAccessLogObserver: NSObjectProtocol?
     var player: AVPlayer? {

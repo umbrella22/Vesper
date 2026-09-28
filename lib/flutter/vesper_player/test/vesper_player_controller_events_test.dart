@@ -22,6 +22,59 @@ void main() {
     VesperPlayerPlatform.instance = previousPlatform;
   });
 
+  test(
+      'first-frame event follows retained snapshot and rejects superseded epochs',
+      () async {
+    controller = await VesperPlayerController.create();
+    final received = <VesperPlayerFirstFrameEvent>[];
+    final retainedWhenDelivered = <int?>[];
+    final subscription = controller!.events.listen((event) {
+      if (event is VesperPlayerFirstFrameEvent) {
+        received.add(event);
+        retainedWhenDelivered.add(controller!
+            .snapshot.playbackDiagnostics?.firstFrame?.playbackEpoch);
+      }
+    });
+    addTearDown(subscription.cancel);
+    const observation = VesperFirstFrameObservation(
+      playbackEpoch: 1,
+      elapsedSinceLoadStartMs: 120,
+      mediaPositionMs: 90000,
+      kind: VesperFirstFrameObservationKind.media3RenderedFirstFrame,
+    );
+    const event = VesperPlayerFirstFrameEvent(
+        playerId: _EventTestPlatform.playerId, observation: observation);
+    platform.emit(VesperPlayerSnapshotEvent(
+      playerId: _EventTestPlatform.playerId,
+      snapshot: controller!.snapshot.copyWith(
+          playbackDiagnostics: const VesperPlaybackDiagnosticsSnapshot(
+        playbackEpoch: 1,
+        firstFrame: observation,
+      )),
+    ));
+    platform.emit(event);
+    await Future<void>.delayed(Duration.zero);
+    expect(received, [event]);
+    expect(retainedWhenDelivered, [1]);
+    expect(
+        controller!.snapshot.playbackDiagnostics!.firstFrame!.mediaPositionMs,
+        90000);
+    platform.emit(VesperPlayerSnapshotEvent(
+      playerId: _EventTestPlatform.playerId,
+      snapshot: controller!.snapshot.copyWith(
+          playbackDiagnostics:
+              const VesperPlaybackDiagnosticsSnapshot(playbackEpoch: 2)),
+    ));
+    platform.emit(event);
+    await Future<void>.delayed(Duration.zero);
+    expect(received, hasLength(1));
+    expect(controller!.snapshot.playbackDiagnostics!.firstFrame, isNull);
+    await controller!.dispose();
+    platform.emit(event);
+    await Future<void>.delayed(Duration.zero);
+    expect(received, hasLength(1));
+  });
+
   test('forwards pipeline EventHook reports once without changing snapshot',
       () async {
     controller = await VesperPlayerController.create();

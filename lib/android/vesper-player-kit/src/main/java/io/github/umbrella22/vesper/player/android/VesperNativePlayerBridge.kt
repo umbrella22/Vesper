@@ -128,6 +128,7 @@ internal class VesperNativePlayerBridge(
     internal val _effectiveVideoTrackId = MutableStateFlow<String?>(null)
     internal val _videoVariantObservation = MutableStateFlow<VesperVideoVariantObservation?>(null)
     internal val _resiliencePolicy = MutableStateFlow(currentResiliencePolicy)
+    override val playbackDiagnosticsTracker get() = bindings.playbackDiagnosticsTracker
     override val hdrOutputTracker = VesperHdrOutputTracker(initialSource != null)
     internal val surfaceHost = VesperNativeSurfaceHost(
         bindings, surfaceKind, hdrOutputTracker::outputPathChanged,

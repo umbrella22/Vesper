@@ -290,6 +290,22 @@ extension VesperNativePlayerBridge {
         refreshPlaybackState()
     }
 
+    func handleSurfaceReadyForDisplay(
+        player observedPlayer: AVPlayer,
+        item: AVPlayerItem,
+        host: PlayerSurfaceView,
+        token: VesperPlaybackObservationToken
+    ) {
+        guard player === observedPlayer, observedPlayer.currentItem === item,
+              surfaceHost === host, diagnosticsTracker.isCurrent(token) else { return }
+        let time = observedPlayer.currentTime()
+        diagnosticsTracker.firstFrame(token, mediaPositionMs: time.isNumeric ? time.milliseconds : nil)
+        // Native clients can synchronously replace playback from the publisher.
+        guard player === observedPlayer, surfaceHost === host,
+              diagnosticsTracker.isCurrent(token) else { return }
+        handleSurfaceReadyForDisplay()
+    }
+
     func handleSurfaceReadyForDisplay() {
         let playbackEpoch = currentPlaybackEpoch()
         let readyCount = (readyForDisplayCountByEpoch[playbackEpoch] ?? 0) + 1
@@ -345,6 +361,7 @@ extension VesperNativePlayerBridge {
         guard let player else {
             return
         }
+        defer { refreshAudioDiagnostics() }
 
         let previousPlaybackState = publishedUiState.playbackState
         let previousBuffering = publishedUiState.isBuffering

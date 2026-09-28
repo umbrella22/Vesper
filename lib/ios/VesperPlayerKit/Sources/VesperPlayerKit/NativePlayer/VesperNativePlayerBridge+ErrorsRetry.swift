@@ -78,6 +78,7 @@ extension VesperNativePlayerBridge {
             )
             .enrichedWithDetails(itemStatusDetails)
             .enrichedWithDetails(itemErrorLogDetails)
+            .enrichedWithDetails(diagnosticsTracker.snapshot.errorDetails)
             .enrichedWithHdrFailureEvidence(currentHdrFailureEvidence)
     }
 

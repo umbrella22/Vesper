@@ -72,6 +72,7 @@ internal class VesperNativeJniBindings(
     internal val pipelineEventHookRegistryHandle: Long = 0L,
     internal val pipelineEventHookReferencesJson: String = "[]",
 ) : VesperNativeBindings {
+    override val playbackDiagnosticsTracker = VesperPlaybackDiagnosticsTracker()
     internal val appContext = context.applicationContext
     internal val i18n = VesperPlayerI18n.fromContext(appContext)
     internal val mainHandler = Handler(Looper.getMainLooper())
