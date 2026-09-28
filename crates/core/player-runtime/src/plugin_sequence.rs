@@ -454,7 +454,7 @@ mod tests {
                 task_id: intents[1].warmup_task_id,
                 item_id: intents[1].item_id.clone(),
                 source_revision: intents[1].source_revision,
-                warmup_goal: player_playlist::SequenceWarmupGoal::ProgressiveRange,
+                warmup_goal: SequenceWarmupGoal::ProgressiveRange,
                 status: SequenceWarmupStatus::Completed,
                 expected_bytes: 0,
                 actual_bytes: 0,
