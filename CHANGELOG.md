@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+## 0.6.5 - 2026-09-28
+
+<!-- release-notes:en -->
+
+### Fixed
+
+- Normalize Android buffering overrides at the Media3 boundary so playback
+  thresholds above the minimum buffer no longer prevent initialization.
+- Compute Android and iOS retry backoff with bounded integer arithmetic,
+  preserving zero and large delays without overflow, floating-point rounding,
+  or NaN failures. Saturate iOS sleep conversion at the nanosecond limit.
+- Infer DASH adaptation types from Representation MIME types and inherited
+  codecs when the AdaptationSet type is unknown. Preserve URL query strings,
+  fragments, and empty path segments when resolving relative BaseURLs.
+- Parse DASH durations containing days or zero-valued calendar fields, and
+  decode XML character references exactly once in resource URLs and metadata.
+
+<!-- release-notes:zh-CN -->
+
+### 修复
+
+- 在 Android Media3 边界规范缓冲参数，避免起播或重新缓冲阈值高于最小缓冲
+  时导致播放器初始化失败。
+- Android 和 iOS 重试退避改用有界整数运算，正确处理零延迟和大数，避免
+  溢出、浮点舍入及 NaN 异常；iOS 休眠时间转换在纳秒表示上限处饱和。
+- 当 AdaptationSet 类型未知时，从 Representation MIME 类型及继承的 codecs
+  推断 DASH 轨道类型；解析相对 BaseURL 时保留查询参数、片段和空路径段。
+- 支持包含天数或零值年月字段的 DASH 时长，资源 URL 和元数据中的 XML
+  字符引用仅解码一次。
+
 ## 0.6.4 - 2026-09-21
 
 <!-- release-notes:en -->

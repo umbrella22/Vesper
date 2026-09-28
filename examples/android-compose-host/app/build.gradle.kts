@@ -128,8 +128,8 @@ extensions.configure<ApplicationExtension>("android") {
         applicationId = "io.github.umbrella22.vesper.example.androidcomposehost"
         minSdk = 26
         targetSdk = 36
-        versionCode = 604
-        versionName = "0.6.4"
+        versionCode = 605
+        versionName = "0.6.5"
 
         ndk {
             abiFilters += configuredAndroidAbis

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.6.5 - 2026-09-28
+
+- Consume Android host fixes for custom buffering thresholds and integer
+  retry backoff, with regression coverage for channel and native mappings.
+
 ## 0.6.4 - 2026-09-21
 
 ## 0.6.3 - 2026-09-20

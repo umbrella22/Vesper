@@ -131,8 +131,8 @@ targets:
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: FMWK
-        CFBundleShortVersionString: "0.6.4"
-        CFBundleVersion: "604"
+        CFBundleShortVersionString: "0.6.5"
+        CFBundleVersion: "605"
     scheme:
       testTargets:
         - VesperPlayerKitTests

@@ -26,6 +26,7 @@ pub fn parse_mpd_with_base_uri(
 
     let mpd_base = child_text(mpd, "BaseURL")
         .map(|base| resolve_uri(manifest_uri.unwrap_or_default(), base))
+        .transpose()?
         .unwrap_or_else(|| manifest_uri.unwrap_or_default().to_owned());
     let manifest_type = parse_manifest_type(mpd.attr("type").unwrap_or("static"))?;
     let duration_ms = mpd
@@ -77,6 +78,7 @@ fn parse_manifest_type(value: &str) -> DashHlsResult<DashManifestType> {
 fn parse_period(node: &XmlNode, inherited_base_uri: &str) -> DashHlsResult<DashPeriod> {
     let period_base = child_text(node, "BaseURL")
         .map(|base| resolve_uri(inherited_base_uri, base))
+        .transpose()?
         .unwrap_or_else(|| inherited_base_uri.to_owned());
     let mut adaptation_sets = Vec::new();
 
@@ -96,13 +98,17 @@ fn parse_adaptation_set(
 ) -> DashHlsResult<DashAdaptationSet> {
     let adaptation_base = child_text(node, "BaseURL")
         .map(|base| resolve_uri(inherited_base_uri, base))
+        .transpose()?
         .unwrap_or_else(|| inherited_base_uri.to_owned());
     let mime_type = node.attr("mimeType").map(str::to_owned);
-    let kind = adaptation_kind(
+    let mut kind = adaptation_kind(
         node.attr("contentType"),
         mime_type.as_deref(),
         node.attr("lang"),
     );
+    if kind == DashAdaptationKind::Unknown {
+        kind = infer_kind_from_representations(node);
+    }
     let requires_initialization = matches!(
         kind,
         DashAdaptationKind::Audio | DashAdaptationKind::Video | DashAdaptationKind::Unknown
@@ -146,6 +152,7 @@ fn parse_adaptation_set(
         };
         let base_url = child_text(representation, "BaseURL")
             .map(|base| resolve_uri(&adaptation_base, base))
+            .transpose()?
             .unwrap_or_else(|| adaptation_base.clone());
         let representation_mime_type = representation
             .attr("mimeType")
@@ -235,6 +242,45 @@ fn adaptation_kind(
     } else {
         DashAdaptationKind::Unknown
     }
+}
+
+fn infer_kind_from_representations(node: &XmlNode) -> DashAdaptationKind {
+    for representation in node.children_named("Representation") {
+        let kind = adaptation_kind(
+            None,
+            representation
+                .attr("mimeType")
+                .or_else(|| node.attr("mimeType")),
+            node.attr("lang"),
+        );
+        if kind != DashAdaptationKind::Unknown {
+            return kind;
+        }
+    }
+    for representation in node.children_named("Representation") {
+        let codecs = representation
+            .attr("codecs")
+            .or_else(|| node.attr("codecs"));
+        for codec in codecs.unwrap_or_default().split(',') {
+            let codec = codec
+                .trim()
+                .split('.')
+                .next()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let kind = match codec.as_str() {
+                "avc1" | "avc3" | "hvc1" | "hev1" | "dvh1" | "dvhe" | "av01" | "vp09" | "vvc1"
+                | "vvi1" => DashAdaptationKind::Video,
+                "mp4a" | "ac-3" | "ec-3" | "opus" | "flac" => DashAdaptationKind::Audio,
+                "wvtt" | "stpp" => DashAdaptationKind::Subtitle,
+                _ => DashAdaptationKind::Unknown,
+            };
+            if kind != DashAdaptationKind::Unknown {
+                return kind;
+            }
+        }
+    }
+    DashAdaptationKind::Unknown
 }
 
 fn parse_segment_base(node: &XmlNode) -> DashHlsResult<Option<DashSegmentBase>> {
@@ -404,42 +450,50 @@ fn parse_byte_range(value: &str) -> DashHlsResult<ByteRange> {
 }
 
 fn parse_iso8601_duration_ms(value: &str) -> Option<u64> {
-    let mut rest = value.strip_prefix('P')?;
-    let date_time_split = rest.find('T')?;
-    let date = &rest[..date_time_split];
-    if !date.is_empty() {
-        return None;
-    }
-    rest = &rest[date_time_split + 1..];
-
-    let mut number = String::new();
+    let rest = value.strip_prefix('P')?;
+    let (date, time) = match rest.split_once('T') {
+        Some((_, "")) => return None,
+        Some(parts) => parts,
+        None => (rest, ""),
+    };
     let mut seconds = 0.0_f64;
-    for ch in rest.chars() {
-        if ch.is_ascii_digit() || ch == '.' {
-            number.push(ch);
-            continue;
+    for (part, is_date) in [(date, true), (time, false)] {
+        let mut number = String::new();
+        let mut previous_unit = 0;
+        for ch in part.chars() {
+            if ch.is_ascii_digit() || ch == '.' {
+                number.push(ch);
+                continue;
+            }
+            let value: f64 = number.parse().ok()?;
+            if !value.is_finite() {
+                return None;
+            }
+            number.clear();
+            let (unit, multiplier) = match (is_date, ch) {
+                // Calendar years and months need a reference date. Zero values
+                // are common in DASH encoders and do not affect the duration.
+                (true, 'Y') if value == 0.0 => (1, 0.0),
+                (true, 'M') if value == 0.0 => (2, 0.0),
+                (true, 'D') => (3, 86_400.0),
+                (false, 'H') => (1, 3_600.0),
+                (false, 'M') => (2, 60.0),
+                (false, 'S') => (3, 1.0),
+                _ => return None,
+            };
+            if unit <= previous_unit {
+                return None;
+            }
+            previous_unit = unit;
+            seconds += value * multiplier;
         }
-
-        if number.is_empty() {
+        if !number.is_empty() {
             return None;
-        }
-        let value: f64 = number.parse().ok()?;
-        if !value.is_finite() {
-            return None;
-        }
-        number.clear();
-        match ch {
-            'H' => seconds += value * 3600.0,
-            'M' => seconds += value * 60.0,
-            'S' => seconds += value,
-            _ => return None,
         }
     }
-
-    if !number.is_empty() || !seconds.is_finite() || seconds <= 0.0 {
+    if !seconds.is_finite() || seconds <= 0.0 {
         return None;
     }
-
     Some((seconds * 1000.0).round() as u64)
 }
 
@@ -456,88 +510,123 @@ fn child_text<'a>(node: &'a XmlNode, name: &str) -> Option<&'a str> {
         .find_map(|child| (!child.text.trim().is_empty()).then(|| child.text.trim()))
 }
 
-fn resolve_uri(base_uri: &str, reference: &str) -> String {
+fn resolve_uri(base_uri: &str, reference: &str) -> DashHlsResult<String> {
     let reference = reference.trim();
     if reference.is_empty() {
-        return base_uri.to_owned();
+        return Ok(base_uri.to_owned());
     }
     if has_uri_scheme(reference) || base_uri.is_empty() {
-        return reference.to_owned();
+        return Ok(reference.to_owned());
+    }
+    if has_uri_scheme(base_uri) {
+        return url::Url::parse(base_uri)
+            .and_then(|base| base.join(reference))
+            .map(String::from)
+            .map_err(|error| {
+                DashHlsError::InvalidMpd(format!("invalid BaseURL reference: {error}"))
+            });
     }
 
-    if reference.starts_with('/') {
-        if let Some(authority_end) = authority_end(base_uri) {
-            return format!("{}{}", &base_uri[..authority_end], reference);
-        }
-        return reference.to_owned();
+    // Parsing without a manifest URI must keep relative BaseURLs relative.
+    // Only the path participates in directory merging and dot-segment removal.
+    if reference.starts_with("//") {
+        return Ok(reference.to_owned());
     }
-
-    let base_dir = if base_uri.ends_with('/') {
-        base_uri.to_owned()
+    let (base_path, base_suffix) = split_uri_suffix(base_uri);
+    let (reference_path, reference_suffix) = split_uri_suffix(reference);
+    if reference_path.is_empty() {
+        let query = if reference.starts_with('#') {
+            base_suffix.split('#').next().unwrap_or_default()
+        } else {
+            ""
+        };
+        return Ok(format!("{base_path}{query}{reference_suffix}"));
+    }
+    let (authority, base_path) = if let Some(rest) = base_path.strip_prefix("//") {
+        let end = rest.find('/').map_or(base_path.len(), |index| index + 2);
+        (&base_path[..end], &base_path[end..])
     } else {
-        match base_uri.rfind('/') {
-            Some(index) => base_uri[..=index].to_owned(),
-            None => String::new(),
-        }
+        ("", base_path)
     };
-    normalize_relative_uri(&(base_dir + reference))
+    let path = if reference_path.starts_with('/') {
+        reference_path.to_owned()
+    } else {
+        let directory = base_path
+            .rfind('/')
+            .map_or("", |index| &base_path[..=index]);
+        let directory = if directory.is_empty() && !authority.is_empty() {
+            "/"
+        } else {
+            directory
+        };
+        format!("{directory}{reference_path}")
+    };
+    Ok(format!(
+        "{authority}{}{reference_suffix}",
+        normalize_relative_path(&path)
+    ))
 }
 
 fn has_uri_scheme(value: &str) -> bool {
-    let Some(colon) = value.find(':') else {
+    let Some((scheme, _)) = value.split_once(':') else {
         return false;
     };
-    value[..colon]
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
+    scheme.starts_with(|ch: char| ch.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
 }
 
-fn authority_end(uri: &str) -> Option<usize> {
-    let scheme_end = uri.find("://")? + 3;
-    let path_start = uri[scheme_end..]
-        .find('/')
-        .map(|offset| scheme_end + offset)
-        .unwrap_or(uri.len());
-    Some(path_start)
+fn split_uri_suffix(uri: &str) -> (&str, &str) {
+    uri.find(['?', '#'])
+        .map_or((uri, ""), |index| uri.split_at(index))
 }
 
-fn normalize_relative_uri(uri: &str) -> String {
-    let Some(authority_end) = authority_end(uri) else {
-        return normalize_path(uri);
-    };
-    let prefix = &uri[..authority_end];
-    let path = &uri[authority_end..];
-    format!("{prefix}{}", normalize_path(path))
-}
-
-fn normalize_path(path: &str) -> String {
+fn normalize_relative_path(path: &str) -> String {
     let absolute = path.starts_with('/');
-    let trailing = path.ends_with('/');
     let mut parts = Vec::new();
-    for part in path.split('/') {
+    let mut segments = path.strip_prefix('/').unwrap_or(path).split('/').peekable();
+    while let Some(part) = segments.next() {
         match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
+            "." => {
+                if segments.peek().is_none() {
+                    parts.push("");
+                }
             }
+            ".." => {
+                if parts.last().is_some_and(|last| *last != "..") {
+                    parts.pop();
+                } else if !absolute {
+                    parts.push(part);
+                }
+                if segments.peek().is_none() {
+                    parts.push("");
+                }
+            }
+            // Empty path segments are significant and must not be collapsed.
             _ => parts.push(part),
         }
     }
-
-    let mut normalized = String::new();
-    if absolute {
-        normalized.push('/');
-    }
+    let mut normalized = if absolute {
+        "/".to_owned()
+    } else {
+        String::new()
+    };
     normalized.push_str(&parts.join("/"));
-    if trailing && !normalized.ends_with('/') {
-        normalized.push('/');
-    }
     if normalized.is_empty() {
-        if absolute {
-            "/".to_owned()
-        } else {
-            ".".to_owned()
-        }
+        ".".to_owned()
+    } else if !absolute
+        && (normalized.starts_with('/')
+            || normalized
+                .split('/')
+                .next()
+                .is_some_and(|part| part.contains(':')))
+    {
+        // Dot removal must not turn a relative path into a root path,
+        // network-path reference, or URI with a scheme.
+        format!("./{normalized}")
+    } else if absolute && normalized.starts_with("//") {
+        format!("/.{normalized}")
     } else {
         normalized
     }
@@ -593,7 +682,7 @@ fn parse_xml_document(input: &str) -> DashHlsResult<XmlNode> {
 
     while let Some(tag_start_offset) = input[cursor..].find('<') {
         let tag_start = cursor + tag_start_offset;
-        append_text(&mut stack, &input[cursor..tag_start]);
+        append_text(&mut stack, &input[cursor..tag_start])?;
 
         if input[tag_start..].starts_with("<!--") {
             let end = input[tag_start + 4..]
@@ -660,7 +749,7 @@ fn parse_xml_document(input: &str) -> DashHlsResult<XmlNode> {
         cursor = tag_end + 1;
     }
 
-    append_text(&mut stack, &input[cursor..]);
+    append_text(&mut stack, &input[cursor..])?;
     if stack.len() != 1 {
         return Err(DashHlsError::InvalidMpd(
             "unclosed XML element in MPD".to_owned(),
@@ -671,13 +760,11 @@ fn parse_xml_document(input: &str) -> DashHlsResult<XmlNode> {
         .ok_or_else(|| DashHlsError::InvalidMpd("empty XML parser stack".to_owned()))
 }
 
-fn append_text(stack: &mut [XmlNode], text: &str) {
-    if text.is_empty() {
-        return;
-    }
+fn append_text(stack: &mut [XmlNode], text: &str) -> DashHlsResult<()> {
     if let Some(current) = stack.last_mut() {
-        current.text.push_str(&decode_xml_entities(text));
+        current.text.push_str(&decode_xml_entities(text)?);
     }
+    Ok(())
 }
 
 fn close_node(stack: &mut Vec<XmlNode>, expected_name: &str) -> DashHlsResult<()> {
@@ -779,7 +866,7 @@ fn parse_attributes(input: &str) -> DashHlsResult<HashMap<String, String>> {
                     "unterminated XML attribute {key}"
                 )));
             }
-            let value = decode_xml_entities(&input[value_start..cursor]);
+            let value = decode_xml_entities(&input[value_start..cursor])?;
             cursor += 1;
             value
         } else {
@@ -787,7 +874,7 @@ fn parse_attributes(input: &str) -> DashHlsResult<HashMap<String, String>> {
             while cursor < bytes.len() && !bytes[cursor].is_ascii_whitespace() {
                 cursor += 1;
             }
-            decode_xml_entities(&input[value_start..cursor])
+            decode_xml_entities(&input[value_start..cursor])?
         };
         attributes.insert(key.to_owned(), value);
     }
@@ -795,13 +882,10 @@ fn parse_attributes(input: &str) -> DashHlsResult<HashMap<String, String>> {
     Ok(attributes)
 }
 
-fn decode_xml_entities(input: &str) -> String {
-    input
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
+fn decode_xml_entities(input: &str) -> DashHlsResult<String> {
+    quick_xml::escape::unescape(input)
+        .map(|text| text.into_owned())
+        .map_err(|error| DashHlsError::InvalidMpd(format!("invalid XML entity: {error}")))
 }
 
 #[cfg(test)]
@@ -888,7 +972,9 @@ mod tests {
 
     #[test]
     fn rejects_malformed_iso8601_duration_values() {
-        for value in ["PT", "PT0S", "PT1H2", "PTMS", "P1D"] {
+        for value in [
+            "P", "PT", "PT0S", "PT1H2", "PTMS", "P1DT", "P1Y", "P1M", "P1D2D", "PT1S2H",
+        ] {
             assert_eq!(parse_iso8601_duration_ms(value), None, "{value}");
         }
         assert_eq!(parse_iso8601_duration_ms("PT1H2M3.5S"), Some(3_723_500));

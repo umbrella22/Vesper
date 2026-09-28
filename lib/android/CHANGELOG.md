@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.6.5 - 2026-09-28
+
+### Fixed
+
+- Normalize buffer thresholds at the Media3 boundary so custom minimum
+  buffers below playback thresholds no longer prevent initialization.
+- Use bounded integer retry backoff to preserve zero and large delays
+  without overflow, floating-point rounding, or NaN failures.
+
 ## 0.6.4 - 2026-09-21
 
 - Add Compose `VesperPlayerStageSkin`, semantic vector/custom icon rendering,

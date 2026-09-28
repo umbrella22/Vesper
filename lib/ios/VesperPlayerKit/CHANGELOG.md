@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.6.5 - 2026-09-28
+
+### Fixed
+
+- Prevent retry-delay conversion and sleep overflow, including zero-delay
+  exponential retries and large explicit delays from native or Flutter hosts.
+- Resolve DASH adaptation types from Representation MIME types and effective
+  codecs before parsing segment templates.
+- Preserve query strings, fragments, and empty path segments in DASH BaseURLs;
+  accept day-based durations and decode XML character references once.
+
 ## 0.6.4 - 2026-09-21
 
 - Add SwiftUI `VesperPlayerStageSkin`, semantic SF Symbols/custom icon views,

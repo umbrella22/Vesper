@@ -4,6 +4,104 @@ import XCTest
 
 @MainActor
 final class PlayerErrorStateTests: XCTestCase {
+    func testRetryDelayCapsUnrepresentableValues() {
+        let bridge = VesperNativePlayerBridge()
+        defer { bridge.dispose() }
+
+        XCTAssertEqual(bridge.retryDelayMs(
+            forAttempt: 1,
+            retryPolicy: VesperRetryPolicy(baseDelayMs: .max, maxDelayMs: 8_000, backoff: .fixed)
+        ), 8_000)
+        XCTAssertEqual(bridge.retryDelayMs(
+            forAttempt: 70,
+            retryPolicy: VesperRetryPolicy(baseDelayMs: 1_000, maxDelayMs: 8_000, backoff: .exponential)
+        ), 8_000)
+        XCTAssertEqual(bridge.retryDelayMs(
+            forAttempt: 2,
+            retryPolicy: VesperRetryPolicy(baseDelayMs: .max / 2 + 1, maxDelayMs: .max, backoff: .linear)
+        ), .max)
+    }
+
+    func testRetryDelayPreservesLargeRepresentableValues() {
+        let bridge = VesperNativePlayerBridge()
+        defer { bridge.dispose() }
+
+        XCTAssertEqual(bridge.retryDelayMs(
+            forAttempt: 1,
+            retryPolicy: VesperRetryPolicy(baseDelayMs: .max - 1, maxDelayMs: .max, backoff: .fixed)
+        ), .max - 1)
+        XCTAssertEqual(bridge.retryDelayMs(
+            forAttempt: 64,
+            retryPolicy: VesperRetryPolicy(baseDelayMs: 1, maxDelayMs: .max, backoff: .exponential)
+        ), UInt64(1) << 63)
+        XCTAssertEqual(bridge.retryDelayMs(
+            forAttempt: 65,
+            retryPolicy: VesperRetryPolicy(baseDelayMs: 1, maxDelayMs: .max, backoff: .exponential)
+        ), .max)
+    }
+
+    func testZeroRetryDelayRemainsZeroForUnlimitedRetries() {
+        let bridge = VesperNativePlayerBridge()
+        defer { bridge.dispose() }
+
+        for attempt in [1_025, Int.max] {
+            XCTAssertEqual(bridge.retryDelayMs(
+                forAttempt: attempt,
+                retryPolicy: VesperRetryPolicy(maxAttempts: nil, baseDelayMs: 0, backoff: .exponential)
+            ), 0)
+            XCTAssertEqual(bridge.retryDelayMs(
+                forAttempt: attempt,
+                retryPolicy: VesperRetryPolicy(maxAttempts: nil, maxDelayMs: 0, backoff: .exponential)
+            ), 0)
+        }
+    }
+
+    func testRetryDelayKeepsEachBackoffShape() {
+        let bridge = VesperNativePlayerBridge()
+        defer { bridge.dispose() }
+
+        for (backoff, expected): (VesperRetryBackoff, UInt64) in [(.fixed, 1_000), (.linear, 3_000), (.exponential, 4_000)] {
+            XCTAssertEqual(bridge.retryDelayMs(
+                forAttempt: 3,
+                retryPolicy: VesperRetryPolicy(baseDelayMs: 1_000, maxDelayMs: 8_000, backoff: backoff)
+            ), expected)
+        }
+    }
+
+    func testScheduledRetryAcceptsDelayBeyondNanosecondRange() async {
+        let source = VesperPlayerSource.hls(url: URL(string: "https://example.com/retry.m3u8")!, label: "Retry")
+        let bridge = VesperNativePlayerBridge(
+            initialSource: source,
+            resiliencePolicy: VesperPlaybackResiliencePolicy(retry: VesperRetryPolicy(
+                baseDelayMs: UInt64.max / 1_000_000 + 1,
+                maxDelayMs: .max,
+                backoff: .fixed
+            ))
+        )
+        defer { bridge.dispose() }
+
+        bridge.handlePlaybackFailureForTesting(
+            error: NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost),
+            fallbackMessage: "network lost"
+        )
+        await Task.yield()
+
+        XCTAssertEqual(bridge.retryAttemptCount, 1)
+        XCTAssertNil(bridge.lastError)
+    }
+
+    func testRetrySleepSaturatesOnlyAtTheNanosecondRepresentationLimit() {
+        let bridge = VesperNativePlayerBridge()
+        defer { bridge.dispose() }
+
+        XCTAssertEqual(bridge.retryDelayNanoseconds(0), 0)
+        XCTAssertEqual(bridge.retryDelayNanoseconds(1_500), 1_500_000_000)
+        let largestExactDelay = UInt64.max / 1_000_000
+        XCTAssertEqual(bridge.retryDelayNanoseconds(largestExactDelay), largestExactDelay * 1_000_000)
+        XCTAssertEqual(bridge.retryDelayNanoseconds(largestExactDelay + 1), .max)
+        XCTAssertEqual(bridge.retryDelayNanoseconds(.max), .max)
+    }
+
     func testNativeBridgeReportsUnsupportedVideoTrackSelection() {
         let bridge = VesperNativePlayerBridge()
         let missingTrackId = "video:missing"

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.5 - 2026-09-28
+
 ## 0.6.4 - 2026-09-21
 
 - Add `VesperPlayerStageSkin` and `VesperPlayerStageTheme` for semantic icons,

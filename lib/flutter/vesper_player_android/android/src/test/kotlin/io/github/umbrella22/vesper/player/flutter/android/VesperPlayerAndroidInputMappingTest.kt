@@ -3,11 +3,44 @@ package io.github.umbrella22.vesper.player.flutter.android
 import io.github.umbrella22.vesper.player.android.VesperVideoSurfaceKind
 import io.github.umbrella22.vesper.player.android.VesperPlayerUnsupportedOperation
 import io.github.umbrella22.vesper.player.android.VesperPluginTransport
+import io.github.umbrella22.vesper.player.android.VesperRetryBackoff
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.fail
 import org.junit.Test
 
 class VesperPlayerAndroidInputMappingTest {
+    @Test
+    fun retryBoundariesReachTheHostPolicyWithoutNarrowing() {
+        for (baseDelay in listOf(0L, -1L, Long.MAX_VALUE)) {
+            val policy = mapOf<String, Any?>(
+                "maxAttempts" to null,
+                "baseDelayMs" to baseDelay,
+                "maxDelayMs" to 8_000L,
+                "backoff" to "exponential",
+            ).toRetryPolicy()
+
+            assertNull(policy.maxAttempts)
+            assertEquals(baseDelay, policy.baseDelayMs)
+            assertEquals(8_000L, policy.maxDelayMs)
+            assertEquals(VesperRetryBackoff.Exponential, policy.backoff)
+        }
+        assertEquals(3, emptyMap<String, Any?>().toRetryPolicy().maxAttempts)
+    }
+
+    @Test
+    fun bufferingOverridesReachTheHostAlongsidePresetDefaults() {
+        val policy = mapOf<String, Any?>(
+            "preset" to "resilient",
+            "minBufferMs" to 1_000,
+        ).toBufferingPolicy()
+
+        assertEquals(1_000, policy.minBufferMs)
+        assertEquals(50_000, policy.maxBufferMs)
+        assertEquals(1_500, policy.bufferForPlaybackMs)
+        assertEquals(3_000, policy.bufferForPlaybackAfterRebufferMs)
+    }
+
     @Test
     fun benchmarkPluginReferencePreservesUnknownTransport() {
         val configuration =

@@ -627,6 +627,36 @@ void main() {
     },
   );
 
+  test('resilience channel preserves retry boundaries and buffer overrides',
+      () async {
+    final platform = MethodChannelVesperPlayerAndroid();
+    for (final baseDelay in [0, -1, 0x7fffffffffffffff]) {
+      calls.clear();
+      final policy = VesperPlaybackResiliencePolicy(
+        buffering: const VesperBufferingPolicy(minBufferMs: 1000),
+        retry: VesperRetryPolicy(
+          maxAttempts: null,
+          baseDelayMs: baseDelay,
+          maxDelayMs: 8000,
+          backoff: VesperRetryBackoff.exponential,
+        ),
+      );
+
+      await platform.setResiliencePolicy('boundary-player', policy);
+
+      expect(calls, hasLength(1));
+      final arguments = calls.single.arguments as Map;
+      final forwarded = arguments['policy'] as Map;
+      expect((forwarded['buffering'] as Map)['minBufferMs'], 1000);
+      expect(forwarded['retry'], <String, Object?>{
+        'maxAttempts': null,
+        'baseDelayMs': baseDelay,
+        'maxDelayMs': 8000,
+        'backoff': 'exponential',
+      });
+    }
+  });
+
   test('refreshPlayer forwards player id', () async {
     final platform = MethodChannelVesperPlayerAndroid();
 

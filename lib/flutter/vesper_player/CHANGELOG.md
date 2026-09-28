@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.6.5 - 2026-09-28
+
+- Update native host dependencies with Android buffer-threshold fixes,
+  overflow-safe retry delays, and iOS DASH manifest parsing corrections.
+
 ## 0.6.4 - 2026-09-21
 
 ## 0.6.3 - 2026-09-20

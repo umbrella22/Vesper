@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.6.5 - 2026-09-28
+
+- Consume iOS host fixes for retry-delay overflow and DASH type inference,
+  BaseURL resolution, durations, and XML character references.
+
 ## 0.6.4 - 2026-09-21
 
 ## 0.6.3 - 2026-09-20

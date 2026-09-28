@@ -385,8 +385,9 @@ extension VesperNativePlayerBridge {
 
         let expectedUri = currentSource.uri
         let expectedPlaybackEpoch = currentPlaybackEpoch()
+        let delayNanoseconds = retryDelayNanoseconds(delayMs)
         retryTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 self?.handleScheduledRetryFire(
@@ -442,18 +443,30 @@ extension VesperNativePlayerBridge {
 
     func retryDelayMs(forAttempt attempt: Int, retryPolicy: VesperRetryPolicy) -> UInt64 {
         let policy = retryPolicy
-        let multiplier: Double
+        guard policy.baseDelayMs > 0, policy.maxDelayMs > 0 else { return 0 }
+        let multiplier: UInt64
         switch policy.backoff {
         case .fixed:
             multiplier = 1
         case .linear:
-            multiplier = Double(attempt)
+            multiplier = UInt64(max(attempt, 0))
         case .exponential:
-            multiplier = pow(2, Double(max(attempt - 1, 0)))
+            let exponent = max(attempt, 1) - 1
+            // A nonzero base times 2^64 exceeds every UInt64 delay.
+            guard exponent < UInt64.bitWidth else { return policy.maxDelayMs }
+            multiplier = UInt64(1) << exponent
         }
 
-        let computedDelay = Double(policy.baseDelayMs) * multiplier
-        return min(UInt64(computedDelay.rounded()), policy.maxDelayMs)
+        guard multiplier > 0 else { return 0 }
+        guard policy.baseDelayMs <= policy.maxDelayMs / multiplier else {
+            return policy.maxDelayMs
+        }
+        return policy.baseDelayMs * multiplier
+    }
+
+    func retryDelayNanoseconds(_ delayMs: UInt64) -> UInt64 {
+        let (nanoseconds, overflow) = delayMs.multipliedReportingOverflow(by: 1_000_000)
+        return overflow ? .max : nanoseconds
     }
 
     func classifyPlaybackFailure(

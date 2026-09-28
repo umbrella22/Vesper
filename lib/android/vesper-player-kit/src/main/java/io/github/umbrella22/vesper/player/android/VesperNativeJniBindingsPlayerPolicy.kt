@@ -47,8 +47,6 @@ import java.io.File
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.absoluteValue
-import kotlin.math.pow
-import kotlin.math.roundToLong
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -108,9 +106,11 @@ internal fun resolveBufferingPolicy(
         return null
     }
 
+    // Media3 requires its low watermark to include both playback thresholds.
+    val resolvedMin = maxOf(0, minBufferMs, bufferForPlaybackMs, bufferForPlaybackAfterRebufferMs)
     return ResolvedBufferingPolicy(
-        minBufferMs = minBufferMs.coerceAtLeast(0),
-        maxBufferMs = maxBufferMs.coerceAtLeast(minBufferMs),
+        minBufferMs = resolvedMin,
+        maxBufferMs = maxBufferMs.coerceAtLeast(resolvedMin),
         bufferForPlaybackMs = bufferForPlaybackMs.coerceAtLeast(0),
         bufferForPlaybackAfterRebufferMs = bufferForPlaybackAfterRebufferMs.coerceAtLeast(0),
     )
@@ -139,6 +139,37 @@ internal fun NativeRetryPolicy.resolvedMaxAttempts(): Int? =
         else -> null
     }
 
+internal fun resolveRetryDelayMs(retryPolicy: NativeRetryPolicy, errorCount: Int): Long {
+    val baseDelayMs = (retryPolicy.baseDelayMs.takeIf { retryPolicy.hasBaseDelayMs } ?: 1_000L)
+        .coerceAtLeast(0L)
+    val maxDelayMs = (retryPolicy.maxDelayMs.takeIf { retryPolicy.hasMaxDelayMs } ?: 5_000L)
+        .coerceAtLeast(0L)
+    if (baseDelayMs == 0L || maxDelayMs == 0L) {
+        return 0L
+    }
+    val backoff = if (retryPolicy.hasBackoff) {
+        VesperRetryBackoff.entries.getOrElse(retryPolicy.backoffOrdinal) { VesperRetryBackoff.Linear }
+    } else {
+        VesperRetryBackoff.Linear
+    }
+    val multiplier = when (backoff) {
+        VesperRetryBackoff.Fixed -> 1L
+        VesperRetryBackoff.Linear -> errorCount.coerceAtLeast(0).toLong()
+        VesperRetryBackoff.Exponential -> {
+            val exponent = errorCount.coerceAtLeast(1) - 1
+            // A nonzero base times 2^63 exceeds every positive Long delay.
+            if (exponent >= Long.SIZE_BITS - 1) {
+                return maxDelayMs
+            }
+            1L shl exponent
+        }
+    }
+    if (multiplier == 0L) {
+        return 0L
+    }
+    return if (baseDelayMs > maxDelayMs / multiplier) maxDelayMs else baseDelayMs * multiplier
+}
+
 internal class VesperLoadErrorHandlingPolicy(
     private val retryPolicy: NativeRetryPolicy,
     private val onRetryScheduled: (attempt: Int, delayMs: Long) -> Unit,
@@ -154,24 +185,7 @@ internal class VesperLoadErrorHandlingPolicy(
             return C.TIME_UNSET
         }
 
-        val backoff =
-            if (retryPolicy.hasBackoff) {
-                VesperRetryBackoff.entries.getOrElse(retryPolicy.backoffOrdinal) {
-                    VesperRetryBackoff.Linear
-                }
-            } else {
-                VesperRetryBackoff.Linear
-            }
-        val step = when (backoff) {
-            VesperRetryBackoff.Fixed -> 1.0
-            VesperRetryBackoff.Linear -> loadErrorInfo.errorCount.toDouble()
-            VesperRetryBackoff.Exponential ->
-                2.0.pow((loadErrorInfo.errorCount - 1).coerceAtLeast(0).toDouble())
-        }
-        val baseDelayMs = retryPolicy.baseDelayMs.takeIf { retryPolicy.hasBaseDelayMs } ?: 1_000L
-        val maxDelayMs = retryPolicy.maxDelayMs.takeIf { retryPolicy.hasMaxDelayMs } ?: 5_000L
-        val computedDelay = (baseDelayMs.toDouble() * step).roundToLong()
-        val resolvedDelay = computedDelay.coerceAtMost(maxDelayMs).coerceAtLeast(0L)
+        val resolvedDelay = resolveRetryDelayMs(retryPolicy, loadErrorInfo.errorCount)
         onRetryScheduled(loadErrorInfo.errorCount, resolvedDelay)
         return resolvedDelay
     }
