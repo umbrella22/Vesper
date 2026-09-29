@@ -3,6 +3,16 @@
 Android-native host kit for the Vesper Player SDK. Distributed as Android `AAR`
 artifacts and consumable from any Android app or library.
 
+## Source lifecycle (0.8)
+
+Use `VesperSourceSession` to register immutable sources and preload independently
+of a controller. `controller.activate(handle, options)` suspends until native
+readiness and the requested initial seek/play state. Sequence items now reference
+handles; list changes and resolver responses never implicitly start playback.
+See the [source lifecycle and migration guide](../doc/source-lifecycle.md) and
+[DASH startup cache contract](../doc/dash-startup-cache.md). The session memory
+budget owns startup preloading independently of player disk-cache settings.
+
 ## Modules
 
 | Module                         | Purpose                                                                                                                                                                             |

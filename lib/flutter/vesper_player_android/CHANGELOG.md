@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-29
+
+- Implement source-session lifecycle and activation over the Android host kit.
+- Retain the latest preload result per registered source and reject lossy numeric channel input.
+- Migrate sequence channels to source references and explicit awaited navigation.
+
 ## 0.7.0 - 2026-09-28
 
 - Forward native audio/first-frame/stall evidence and audio-decoder capability probes.

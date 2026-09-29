@@ -187,7 +187,6 @@ The primary control surface for playback.
 
 ```dart
 final controller = await VesperPlayerController.create(
-  initialSource: VesperPlayerSource.hls(uri: 'https://example.com/stream.m3u8'),
   renderSurfaceKind: VesperPlayerRenderSurfaceKind.auto,
   resiliencePolicy: const VesperPlaybackResiliencePolicy.resilient(),
   trackPreferencePolicy: const VesperTrackPreferencePolicy(
@@ -196,8 +195,13 @@ final controller = await VesperPlayerController.create(
   ),
 );
 
-await controller.selectSource(
-  VesperPlayerSource.local(uri: '/path/to/video.mp4'),
+final sources = await VesperSourceSession.create();
+final source = await sources.register(
+  VesperPlayerSource.hls(uri: 'https://example.com/stream.m3u8'),
+);
+final activation = await controller.activate(
+  source,
+  options: const VesperSourceActivationOptions(playWhenReady: false),
 );
 await controller.play();
 await controller.pause();
@@ -210,6 +214,14 @@ await controller.seekToLiveEdge();
 
 await controller.setPlaybackRate(1.5);
 ```
+
+Source sessions also support optional independent preloading. Sequence items now
+reference source handles; providers return references and the SDK owns revisions.
+List replacement, reorder and resolver responses never implicitly select
+playback. Activation supplies explicit play/position/rate intent and returns a
+native playback epoch for later diagnostic correlation. Dispose the source
+session when its registrations are no longer needed; acquired playback leases
+survive ordinary disposal. See the [source lifecycle and 0.7 migration guide](../../doc/source-lifecycle.md).
 
 Mobile source and seek commands have native completion semantics. A successful
 `selectSource` completes only after the current source publishes a stable VOD,

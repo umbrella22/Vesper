@@ -1210,7 +1210,9 @@ impl SequenceCoordinator {
         }
     }
 
-    /// Replaces the queue and starts a new provider-response generation.
+    /// Replaces queue metadata and starts a new provider-response generation.
+    /// An optional cursor is a scheduling hint, never a playback activation.
+    /// Without a hint, an existing cursor is retained only if its item remains.
     pub fn replace(
         &mut self,
         items: Vec<SequenceItem>,
@@ -1242,14 +1244,13 @@ impl SequenceCoordinator {
         self.session_generation =
             SequenceSessionGeneration(next_non_zero(self.session_generation.get()));
         self.max_wall_epoch_ms_seen = now.wall_epoch_ms;
+        let cursor = active_item_id.or_else(|| self.active_item_id.clone());
         self.items = items;
-        self.active_item_id =
-            active_item_id.or_else(|| self.items.first().map(|item| item.item_id.clone()));
+        self.active_item_id = cursor.filter(|id| self.items.iter().any(|item| item.item_id == *id));
         self.previous_end_reached = self.config.mode == SequenceMode::Finite;
         self.next_end_reached = self.config.mode == SequenceMode::Finite;
         self.record_event(SequenceEventKind::SnapshotChanged);
         if self.active_item_id.is_some() {
-            self.bump_activation(SequenceActivationReason::Replace);
             self.ensure_active_source_request(SequenceSourceResolutionReason::Initial, now)?;
             self.maybe_request_next(now)?;
         }
@@ -1274,11 +1275,11 @@ impl SequenceCoordinator {
         self.apply_items_response(SequenceDirection::Previous, response, now)
     }
 
-    /// Removes an item and selects a deterministic replacement when necessary.
+    /// Removes queue metadata without activating a neighboring item.
     pub fn remove(
         &mut self,
         item_id: &SequenceItemId,
-        now: SequenceClockSnapshot,
+        _now: SequenceClockSnapshot,
     ) -> SequenceResult<bool> {
         let Some(index) = self.item_index(item_id) else {
             return Ok(false);
@@ -1288,19 +1289,7 @@ impl SequenceCoordinator {
         self.cancel_source_requests_for(item_id);
         self.prune_warmup_tasks();
         if was_active {
-            self.active_item_id = self
-                .items
-                .get(index)
-                .or_else(|| {
-                    index
-                        .checked_sub(1)
-                        .and_then(|previous| self.items.get(previous))
-                })
-                .map(|item| item.item_id.clone());
-            if self.active_item_id.is_some() {
-                self.bump_activation(SequenceActivationReason::Removal);
-                self.ensure_active_source_request(SequenceSourceResolutionReason::Initial, now)?;
-            }
+            self.active_item_id = None;
         }
         self.record_event(SequenceEventKind::SnapshotChanged);
         Ok(true)
@@ -1321,7 +1310,10 @@ impl SequenceCoordinator {
         now: SequenceClockSnapshot,
     ) -> SequenceResult<SequenceNavigationOutcome> {
         let Some(active_index) = self.active_index() else {
-            return Ok(SequenceNavigationOutcome::Empty);
+            return match self.items.first().map(|item| item.item_id.clone()) {
+                Some(id) => self.activate(&id, SequenceActivationReason::Next, now),
+                None => Ok(SequenceNavigationOutcome::Empty),
+            };
         };
         if let Some(next_item_id) = self
             .items
@@ -1744,7 +1736,7 @@ impl SequenceCoordinator {
         &mut self,
         direction: SequenceDirection,
         response: SequenceItemsResponse,
-        now: SequenceClockSnapshot,
+        _now: SequenceClockSnapshot,
     ) -> SequenceResult<usize> {
         self.validate_generation(response.session_generation)?;
         if self.is_acknowledged(response.request_id) {
@@ -1810,13 +1802,6 @@ impl SequenceCoordinator {
         }
         self.remove_pending_request(response.request_id);
         self.record_acknowledged_request(response.request_id);
-        if self.active_item_id.is_none() {
-            self.active_item_id = self.items.first().map(|item| item.item_id.clone());
-            if self.active_item_id.is_some() {
-                self.bump_activation(SequenceActivationReason::Replace);
-                self.ensure_active_source_request(SequenceSourceResolutionReason::Initial, now)?;
-            }
-        }
         self.record_event(SequenceEventKind::SnapshotChanged);
         Ok(accepted)
     }
@@ -2386,6 +2371,23 @@ fn next_non_zero(value: u64) -> u64 {
 mod tests {
     use super::*;
 
+    impl SequenceCoordinator {
+        // Existing scheduler fixtures explicitly start playback after installing metadata.
+        fn replace_and_activate(
+            &mut self,
+            items: Vec<SequenceItem>,
+            active: Option<SequenceItemId>,
+            now: SequenceClockSnapshot,
+        ) -> SequenceResult<()> {
+            let target = active.or_else(|| items.first().map(|item| item.item_id.clone()));
+            self.replace(items, target.clone(), now)?;
+            if let Some(target) = target {
+                self.set_active(&target, now)?;
+            }
+            Ok(())
+        }
+    }
+
     fn now() -> SequenceClockSnapshot {
         SequenceClockSnapshot {
             wall_epoch_ms: 1_000_000,
@@ -2461,7 +2463,7 @@ mod tests {
         let mut coordinator = replenishable(32);
         let clock = now();
         coordinator
-            .replace(vec![resolved_item("a", "same", 1)], None, clock)
+            .replace_and_activate(vec![resolved_item("a", "same", 1)], None, clock)
             .expect("replace queue");
         let request_id = match coordinator.next(clock).expect("request next") {
             SequenceNavigationOutcome::AwaitingItems(request_id) => request_id,
@@ -2490,7 +2492,7 @@ mod tests {
         let mut coordinator = replenishable(32);
         let clock = now();
         let error = coordinator
-            .replace(
+            .replace_and_activate(
                 vec![resolved_item("same", "a", 1), resolved_item("same", "b", 1)],
                 None,
                 clock,
@@ -2506,7 +2508,7 @@ mod tests {
         let mut coordinator = replenishable(64);
         let clock = now();
         coordinator
-            .replace(
+            .replace_and_activate(
                 vec![resolved_item("a", "a", 1), resolved_item("b", "b", 1)],
                 None,
                 clock,
@@ -2551,7 +2553,7 @@ mod tests {
         let mut coordinator = replenishable(64);
         let clock = now();
         coordinator
-            .replace(
+            .replace_and_activate(
                 vec![resolved_item("a", "a", 1), resolved_item("b", "b", 1)],
                 None,
                 clock,
@@ -2578,7 +2580,7 @@ mod tests {
         let mut coordinator = replenishable(64);
         let clock = now();
         coordinator
-            .replace(vec![resolved_item("a", "a", 1)], None, clock)
+            .replace_and_activate(vec![resolved_item("a", "a", 1)], None, clock)
             .expect("replace queue");
         let request_id = match coordinator.next(clock).expect("request next") {
             SequenceNavigationOutcome::AwaitingItems(request_id) => request_id,
@@ -2612,7 +2614,7 @@ mod tests {
         let mut coordinator = replenishable(1);
         let clock = now();
         coordinator
-            .replace(vec![resolved_item("a", "a", 1)], None, clock)
+            .replace_and_activate(vec![resolved_item("a", "a", 1)], None, clock)
             .expect("replace queue");
 
         let snapshot = coordinator.snapshot();
@@ -2635,11 +2637,11 @@ mod tests {
         let mut coordinator = replenishable(32);
         let clock = now();
         coordinator
-            .replace(vec![resolved_item("a", "a", 1)], None, clock)
+            .replace_and_activate(vec![resolved_item("a", "a", 1)], None, clock)
             .expect("first replace");
         let stale_generation = coordinator.session_generation();
         coordinator
-            .replace(vec![resolved_item("b", "b", 1)], None, clock)
+            .replace_and_activate(vec![resolved_item("b", "b", 1)], None, clock)
             .expect("second replace");
 
         let error = coordinator
@@ -2662,7 +2664,7 @@ mod tests {
         let mut coordinator = replenishable(32);
         let clock = now();
         coordinator
-            .replace(vec![resolved_item("a", "a", 1)], None, clock)
+            .replace_and_activate(vec![resolved_item("a", "a", 1)], None, clock)
             .expect("replace queue");
         let request_id = match coordinator.next(clock).expect("request next") {
             SequenceNavigationOutcome::AwaitingItems(request_id) => request_id,
@@ -2692,7 +2694,7 @@ mod tests {
         let mut coordinator = replenishable(64);
         let clock = now();
         coordinator
-            .replace(
+            .replace_and_activate(
                 vec![SequenceItem::unresolved(
                     "a",
                     content("a"),
@@ -2749,7 +2751,7 @@ mod tests {
         let mut coordinator = replenishable(32);
         let clock = now();
         coordinator
-            .replace(
+            .replace_and_activate(
                 vec![SequenceItem::unresolved(
                     "a",
                     content("a"),
@@ -2811,7 +2813,7 @@ mod tests {
             *expires_at_epoch_ms = Some(start.wall_epoch_ms + 20_000);
         }
         coordinator
-            .replace(vec![item], None, start)
+            .replace_and_activate(vec![item], None, start)
             .expect("replace");
 
         coordinator
@@ -2850,7 +2852,7 @@ mod tests {
             *expires_at_epoch_ms = Some(start.wall_epoch_ms + 20_000);
         }
         coordinator
-            .replace(vec![item], None, start)
+            .replace_and_activate(vec![item], None, start)
             .expect("replace");
         coordinator
             .tick(SequenceClockSnapshot {
@@ -2876,7 +2878,7 @@ mod tests {
         let mut coordinator = replenishable(64);
         let clock = now();
         coordinator
-            .replace(
+            .replace_and_activate(
                 vec![resolved_item("a", "a", 1), resolved_item("b", "b", 1)],
                 None,
                 clock,
@@ -2927,7 +2929,7 @@ mod tests {
         );
 
         let error = coordinator
-            .replace(vec![item], None, clock)
+            .replace_and_activate(vec![item], None, clock)
             .expect_err("URL source reference must fail");
         assert_eq!(error.code, SequenceErrorCode::InvalidArgument);
     }
@@ -2937,7 +2939,7 @@ mod tests {
         let mut coordinator = replenishable(64);
         let clock = now();
         coordinator
-            .replace(
+            .replace_and_activate(
                 vec![
                     resolved_item("a", "a", 1),
                     resolved_item("b", "b", 1),
@@ -2961,7 +2963,7 @@ mod tests {
         let mut coordinator = replenishable(64);
         let clock = now();
         coordinator
-            .replace(
+            .replace_and_activate(
                 vec![
                     resolved_item("a", "a", 1)
                         .with_warmup_goal(SequenceWarmupGoal::DashSegmentBaseStartup),
@@ -2999,7 +3001,7 @@ mod tests {
         let mut coordinator = replenishable(64);
         let clock = now();
         coordinator
-            .replace(vec![resolved_item("a", "a", 1)], None, clock)
+            .replace_and_activate(vec![resolved_item("a", "a", 1)], None, clock)
             .expect("replace queue");
         let intent = coordinator
             .preload_intents(clock.wall_epoch_ms)
@@ -3046,7 +3048,7 @@ mod tests {
         let mut coordinator = replenishable(64);
         let clock = now();
         coordinator
-            .replace(vec![resolved_item("a", "a", 1)], None, clock)
+            .replace_and_activate(vec![resolved_item("a", "a", 1)], None, clock)
             .expect("replace queue");
         let intent = coordinator
             .preload_intents(clock.wall_epoch_ms)
@@ -3074,12 +3076,12 @@ mod tests {
         let mut coordinator = replenishable(64);
         let clock = now();
         coordinator
-            .replace(vec![resolved_item("a", "a", 1)], None, clock)
+            .replace_and_activate(vec![resolved_item("a", "a", 1)], None, clock)
             .expect("first queue");
         let old_intent = coordinator.preload_intents(clock.wall_epoch_ms).remove(0);
 
         coordinator
-            .replace(vec![resolved_item("a", "a", 1)], None, clock)
+            .replace_and_activate(vec![resolved_item("a", "a", 1)], None, clock)
             .expect("new session");
         let new_intent = coordinator.preload_intents(clock.wall_epoch_ms).remove(0);
         assert_ne!(old_intent.session_generation, new_intent.session_generation);
@@ -3109,7 +3111,7 @@ mod tests {
         let mut coordinator = replenishable(1);
         let clock = now();
         coordinator
-            .replace(
+            .replace_and_activate(
                 vec![resolved_item("a", "a", 1), resolved_item("b", "b", 1)],
                 None,
                 clock,

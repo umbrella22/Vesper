@@ -186,6 +186,7 @@ struct PlayerHostView: View {
     @State private var hasHandledFinishedPlayback = false
     @State private var controlsHideTask: Task<Void, Never>?
     @State private var activeDirectSource: VesperPlayerSource?
+    @State private var directSourceSession: VesperSourceSession?
     @State private var playbackOrigin: ExamplePlaybackOrigin?
     @State private var hostLogEntries: [ExampleHostLogEntry] = []
     @State private var hostLogNextId: Int64 = 1
@@ -338,6 +339,8 @@ struct PlayerHostView: View {
         }
         .onDisappear {
             controlsHideTask?.cancel()
+            directSourceSession?.close()
+            directSourceSession = nil
             downloadManager.dispose()
             playlistCoordinator.dispose()
             controllerStore.dispose()
@@ -1064,7 +1067,22 @@ struct PlayerHostView: View {
         ensurePlaybackSafeNativeFrameSetting()
         activeDirectSource = source
         playbackOrigin = origin
-        controller.selectSource(source)
+        do {
+            let session: VesperSourceSession
+            if let existing = directSourceSession { session = existing }
+            else {
+                session = try VesperSourceSession()
+                directSourceSession = session
+            }
+            let handle = try session.register(source)
+            let target = controller
+            Task { @MainActor in
+                defer { handle.close() }
+                do { _ = try await target.activate(handle) }
+                catch VesperSourceActivationError.superseded { }
+                catch { hostMessage = String(describing: error) }
+            }
+        } catch { hostMessage = String(describing: error) }
         configureSystemPlayback(for: source)
     }
 

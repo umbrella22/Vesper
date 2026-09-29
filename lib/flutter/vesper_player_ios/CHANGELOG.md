@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-29
+
+- Implement independent source sessions and handle activation over VesperPlayerKit.
+- Retain bounded task/waiter registries and validate lifecycle options at the native channel.
+- Migrate sequence channels to source references and explicit awaited navigation.
+
 ## 0.7.0 - 2026-09-28
 
 - Forward native audio/first-frame/stall evidence and conservative audio-decoder probe results.

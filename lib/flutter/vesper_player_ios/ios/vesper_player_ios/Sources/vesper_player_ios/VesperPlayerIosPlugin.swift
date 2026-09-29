@@ -4,8 +4,7 @@ import Combine
 import Flutter
 import UIKit
 import os
-@_spi(VesperFlutter)
-import VesperPlayerKit
+@_spi(VesperFlutter) import VesperPlayerKit
 
 private enum VesperFlutterPlaybackTrace {
     private static let signposter = OSSignposter(
@@ -79,6 +78,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     @MainActor var sequenceEventSink: FlutterEventSink?
     @MainActor var sessions: [String: PlayerSession] = [:]
     @MainActor var downloadSessions: [String: DownloadSession] = [:]
+    @MainActor var sourceSessions: [String: VesperPluginSourceSession] = [:]
+    @MainActor var sourceWaiters = 0
     @MainActor var sequenceSessions: [String: PlaybackSequenceSession] = [:]
 
     public static func register(with registrar: FlutterPluginRegistrar) {
@@ -157,6 +158,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             sessions.removeAll()
             downloadSessions.removeAll()
             sequenceSessions.removeAll()
+            sourceSessions.values.forEach { $0.session.close() }
+            sourceSessions.removeAll()
             eventSink = nil
             downloadEventSink = nil
             sequenceEventSink = nil
@@ -182,6 +185,9 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
     @MainActor
     private func handleOnMain(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
+        case "createSourceSession", "registerSource", "releaseSource", "invalidateSourceSession", "disposeSourceSession",
+             "preloadSource", "sourcePreloadSnapshot", "awaitSourcePreload", "cancelSourcePreload", "activateSource":
+            handleSourceLifecycle(call, result: result)
         case "createPlayer":
             handleCreatePlayer(call, result: result)
         case "probeAudioDecoderCapability":
@@ -716,14 +722,13 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             switch command["type"] as? String {
             case "replace":
                 try session.sequence.replace(
-                    try command.sequenceItems(),
-                    activeItemId: command["activeItemId"] as? String
+                    try command.sequenceItems(resolve: sourceHandle)
                 )
             case "append", "prepend":
                 let generation = (command["sessionGeneration"] as? NSNumber)?.uint64Value ?? 0
                 let requestId = (command["requestId"] as? NSNumber)?.uint64Value ?? 0
                 let anchor = command["anchorItemId"] as? String
-                let items = try command.sequenceItems()
+                let items = try command.sequenceItems(resolve: sourceHandle)
                 let endReached = command["endReached"] as? Bool ?? false
                 if command["type"] as? String == "append" {
                     _ = try session.sequence.append(
@@ -744,16 +749,28 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 }
             case "remove":
                 _ = try session.sequence.remove(itemId: command["itemId"] as? String ?? "")
-            case "setActive":
-                try session.sequence.setActive(command["itemId"] as? String ?? "")
-            case "next":
-                try session.sequence.next()
-            case "previous":
-                try session.sequence.previous()
+            case "activate", "next", "previous":
+                guard sourceWaiters < 128 else { throw PluginError.operationFailed("Source waiter capacity exceeded.") }
+                let options = try sourceActivationOptions(command["options"])
+                sourceWaiters += 1
+                Task { @MainActor in
+                    defer { self.sourceWaiters -= 1 }
+                    do {
+                        let activation: VesperSourceActivation?
+                        switch command["type"] as? String {
+                        case "activate": activation = try await session.sequence.activate(command["itemId"] as? String ?? "", options: options)
+                        case "next": activation = try await session.sequence.next(options: options)
+                        default: activation = try await session.sequence.previous(options: options)
+                        }
+                        self.emitPlaybackSequenceSnapshot(for: session)
+                        result(["activation": activation?.wire as Any])
+                    } catch { result(sourceLifecycleError(error)) }
+                }
+                return
             case "submitResolvedSource":
                 try session.sequence.submitResolvedSource(
                     try requireNestedMap(arguments: command, key: "source")
-                        .toPlaybackSequenceResolvedSource()
+                        .toPlaybackSequenceResolvedSource(resolve: sourceHandle)
                 )
             case "markSourceExpired":
                 try session.sequence.markSourceExpired(

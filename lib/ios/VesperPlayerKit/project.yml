@@ -131,8 +131,8 @@ targets:
         CFBundleInfoDictionaryVersion: "6.0"
         CFBundleName: "$(PRODUCT_NAME)"
         CFBundlePackageType: FMWK
-        CFBundleShortVersionString: "0.7.0"
-        CFBundleVersion: "700"
+        CFBundleShortVersionString: "0.8.0"
+        CFBundleVersion: "800"
     scheme:
       testTargets:
         - VesperPlayerKitTests
@@ -145,6 +145,7 @@ targets:
       - Tests/VesperPlayerKitDeviceTestHost
       - Tests/VesperPlayerKitTests/VesperDashStartupTestSupport.swift
       - Tests/VesperPlayerKitTests/VesperDashStartupPlaybackScenario.swift
+      - Tests/VesperPlayerKitTests/VesperSourceLifecyclePlaybackScenario.swift
       - path: ../../../fixtures/media/dash-startup-video.mp4
         buildPhase: resources
     dependencies:
@@ -172,6 +173,7 @@ targets:
           - VesperPortraitPlaybackDeviceTests.swift
           - VesperDashStartupPlaybackDeviceTests.swift
           - VesperDashStartupPlaybackScenario.swift
+          - VesperSourceLifecyclePlaybackScenario.swift
       - path: ../../../fixtures/media/dash-startup-video.mp4
         buildPhase: resources
     settings:

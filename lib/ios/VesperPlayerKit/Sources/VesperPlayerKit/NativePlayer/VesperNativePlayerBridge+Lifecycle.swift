@@ -108,6 +108,10 @@ extension VesperNativePlayerBridge {
     }
 
     func startSourceSelection(_ source: VesperPlayerSource) -> Task<Void, Error> {
+        startSourceSelection(source, shouldAutoPlay: true)
+    }
+
+    func startSourceSelection(_ source: VesperPlayerSource, shouldAutoPlay: Bool) -> Task<Void, Error> {
         presentationState.update(nil)
         outputTracker.sourceChanged()
         clearLastError()
@@ -128,9 +132,9 @@ extension VesperNativePlayerBridge {
         currentSourceIsConfirmedLive = nil
         currentHdrFailureEvidence = nil
         pendingResilienceRestore = nil
-        pendingAutoPlay = true
+        pendingAutoPlay = shouldAutoPlay
         pendingNativeFrameSeek = nil
-        let task = startSourceLoadTask(source: source, shouldAutoPlay: true)
+        let task = startSourceLoadTask(source: source, shouldAutoPlay: shouldAutoPlay)
         // Diagnostics subscribers can synchronously select another source.
         // The newer command owns state once it cancels this task.
         guard !task.isCancelled else { return task }

@@ -8,6 +8,16 @@ module name. First-party bundle and plugin identities use the
 `io.github.umbrella22.vesper` root; identifiers from the unreleased
 `io.github.ikaros` source line are not accepted as compatibility aliases.
 
+## Source lifecycle (0.8)
+
+`try VesperSourceSession()` registers immutable source handles independently of
+players. Optional `handle.preload()` retains an observable task and completion;
+`try await controller.activate(handle, options:)` awaits native readiness and
+initial playback intent. Sequence items use those same handles, and list updates
+never select playback. Use `.local` plus `.dash` for a local MPD whose media
+BaseURLs are HTTPS. See the [source lifecycle and migration guide](../../doc/source-lifecycle.md)
+and [DASH startup cache contract](../../doc/dash-startup-cache.md).
+
 ## Delivery
 
 - `Package.swift` — local Swift Package consumed by app projects

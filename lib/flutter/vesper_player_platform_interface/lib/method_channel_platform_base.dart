@@ -9,6 +9,7 @@ import 'src/models.dart';
 import 'src/performance_diagnostics_exception.dart';
 import 'src/platform_error_mapping.dart';
 import 'src/sequence_models.dart';
+import 'src/source_models.dart';
 import 'src/vesper_player_platform.dart';
 
 const Duration _vesperDownloadRecoveryTimeout = Duration(seconds: 30);
@@ -291,6 +292,88 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
       'source': source.toMap(),
     });
   }
+
+  @override
+  Future<String> createSourceSession(
+      VesperSourceSessionConfiguration configuration) async {
+    final result = vesperDecodeMap(await _invokeMethod<Object?>(
+        'createSourceSession',
+        <String, Object?>{'configuration': configuration.toMap()}));
+    final id = result['sessionId'];
+    if (id is! String || id.isEmpty) {
+      throw const FormatException('Missing source session identity.');
+    }
+    return id;
+  }
+
+  @override
+  Future<VesperSourceReference> registerSource(
+          String sessionId, VesperPlayerSource source,
+          {int? expiresAtEpochMs}) async =>
+      VesperSourceReference.fromMap(vesperDecodeMap(
+          await _invokeMethod<Object?>('registerSource', <String, Object?>{
+        'sessionId': sessionId,
+        'source': source.toMap(),
+        if (expiresAtEpochMs != null) 'expiresAtEpochMs': expiresAtEpochMs,
+      })));
+
+  @override
+  Future<void> releaseSource(VesperSourceReference source) =>
+      _invokeVoid('releaseSource', source.toMap());
+
+  @override
+  Future<void> invalidateSourceSession(String sessionId) => _invokeVoid(
+      'invalidateSourceSession', <String, Object?>{'sessionId': sessionId});
+
+  @override
+  Future<void> disposeSourceSession(String sessionId) => _invokeVoid(
+      'disposeSourceSession', <String, Object?>{'sessionId': sessionId});
+
+  @override
+  Future<VesperSourcePreloadSnapshot> preloadSource(
+          VesperSourceReference source,
+          VesperSourcePreloadOptions options) async =>
+      VesperSourcePreloadSnapshot.fromMap(vesperDecodeMap(
+          await _invokeMethod<Object?>('preloadSource', <String, Object?>{
+        ...source.toMap(),
+        'options': options.toMap(),
+      })));
+
+  @override
+  Future<VesperSourcePreloadSnapshot> sourcePreloadSnapshot(
+          String sessionId, String taskId) async =>
+      VesperSourcePreloadSnapshot.fromMap(vesperDecodeMap(
+          await _invokeMethod<Object?>(
+              'sourcePreloadSnapshot', <String, Object?>{
+        'sessionId': sessionId,
+        'taskId': taskId,
+      })));
+
+  @override
+  Future<VesperSourcePreloadSnapshot> awaitSourcePreload(
+          String sessionId, String taskId) async =>
+      VesperSourcePreloadSnapshot.fromMap(vesperDecodeMap(
+          await _invokeMethod<Object?>('awaitSourcePreload', <String, Object?>{
+        'sessionId': sessionId,
+        'taskId': taskId,
+      })));
+
+  @override
+  Future<void> cancelSourcePreload(String sessionId, String taskId) =>
+      _invokeVoid('cancelSourcePreload',
+          <String, Object?>{'sessionId': sessionId, 'taskId': taskId});
+
+  @override
+  Future<VesperSourceActivation> activateSource(
+          String playerId,
+          VesperSourceReference source,
+          VesperSourceActivationOptions options) async =>
+      VesperSourceActivation.fromMap(vesperDecodeMap(
+          await _invokeMethod<Object?>('activateSource', <String, Object?>{
+        'playerId': playerId,
+        ...source.toMap(),
+        'options': options.toMap(),
+      })));
 
   @override
   Future<VesperPlaybackSequenceSnapshot> createPlaybackSequence(

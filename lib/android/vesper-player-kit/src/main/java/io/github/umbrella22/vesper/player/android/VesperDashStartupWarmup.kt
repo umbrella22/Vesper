@@ -171,24 +171,35 @@ internal suspend fun warmDashStartup(
     cache: VesperDashStartupCache = VesperDashStartupCache.shared,
     commitFence: (() -> Boolean) -> Boolean = { it() },
     maximumBytes: Long = VesperDashStartupCache.MAX_WARMUP_BYTES,
+    residentMaximumBytes: Long = maximumBytes,
+    onBytesLoaded: (Long) -> Unit = {},
 ): Pair<Long, Boolean> {
     require(source.drmConfiguration == null && source.headers.keys.none { it.equals("Range", true) })
     val generation = cache.currentGeneration()
     val staged = mutableListOf<DashStartupBytes>()
     var total = 0L
     var allHit = true
-    suspend fun load(resource: DashStartupResource, limit: Long): DashStartupBytes {
+    suspend fun load(resource: DashStartupResource, limit: Long, manifest: Boolean = false): DashStartupBytes {
         currentCoroutineContext().ensureActive()
         val maximum = minOf(limit, minOf(maximumBytes, VesperDashStartupCache.MAX_WARMUP_BYTES) - total)
         require(maximum > 0 && (resource.length ?: 0) <= maximum) { "DASH startup budget exceeded" }
         val cached = cache.read(scope, resource, source.headers)
-        val value = cached ?: transport.fetch(resource, source.headers, maximum, timeoutMs).also { allHit = false }
+        val value = cached ?: run {
+            allHit = false
+            val uri = URI(resource.uri)
+            if (manifest && uri.scheme.equals("file", ignoreCase = true)) {
+                DashStartupBytes(resource, readVesperLocalManifest(uri, maximum))
+            } else {
+                transport.fetch(resource, source.headers, maximum, timeoutMs)
+            }
+        }
         require(value.bytes.size <= maximum && (resource.length == null || value.bytes.size.toLong() == resource.length))
         total += value.bytes.size
+        onBytesLoaded(total)
         staged += value
         return value
     }
-    val manifest = load(DashStartupResource(source.uri), 1024 * 1024)
+    val manifest = load(DashStartupResource(source.uri), 1024 * 1024, manifest = true)
     val selected = VesperDashStartupPlanner.parseManifest(manifest.bytes, manifest.finalUri)
     for (representation in selected) {
         val index = load(representation.index, 1024 * 1024)
@@ -196,6 +207,6 @@ internal suspend fun warmDashStartup(
         load(VesperDashStartupPlanner.firstMedia(representation.index, index.bytes), VesperDashStartupCache.MAX_RESOURCE_BYTES)
     }
     currentCoroutineContext().ensureActive()
-    check(commitFence { cache.store(scope, staged, source.headers, generation, maximumBytes) }) { "DASH startup cache invalidated before commit" }
+    check(commitFence { cache.store(scope, staged, source.headers, generation, residentMaximumBytes) }) { "DASH startup cache invalidated before commit" }
     return total to allHit
 }

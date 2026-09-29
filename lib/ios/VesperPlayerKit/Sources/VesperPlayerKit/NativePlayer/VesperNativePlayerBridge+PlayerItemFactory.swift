@@ -79,12 +79,12 @@ extension VesperNativePlayerBridge {
         } else {
             dashBenchmarkEventRecorder = nil
         }
-        let cachePolicy = resiliencePolicy.resolvedForRuntimeSource(source).cache
-        let startupCacheEnabled = max(cachePolicy.maxMemoryBytes ?? 0, cachePolicy.maxDiskBytes ?? 0) > 0
+
         let session = VesperDashSession(
             sourceURL: url,
             headers: source.headers,
-            startupScope: startupCacheEnabled ? source.dashStartupScope : nil,
+            // The source session owns its preload budget independently of controller policy.
+            startupScope: source.dashStartupScope,
             benchmarkEventRecorder: dashBenchmarkEventRecorder
         )
         let loaderDelegate = VesperDashResourceLoaderDelegate(

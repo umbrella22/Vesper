@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-29
+
+- Align mobile host and Flutter dependencies with the 0.8.0 source lifecycle contract.
+
 ## 0.7.0 - 2026-09-28
 
 ## 0.6.5 - 2026-09-28

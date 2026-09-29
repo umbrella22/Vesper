@@ -126,6 +126,10 @@ internal fun PlayerHostApp(
     frameProcessorPluginReferences: List<VesperPluginReference>,
 ) {
     val context = LocalContext.current
+    val sourceSession = remember(context.applicationContext) {
+        io.github.umbrella22.vesper.player.android.VesperSourceSession(context.applicationContext)
+    }
+    DisposableEffect(sourceSession) { onDispose { sourceSession.close() } }
     val resources = LocalResources.current
     val activity = remember(context) { context.findActivity() }
     val deviceControls = remember(context, activity) {
@@ -491,7 +495,7 @@ internal fun PlayerHostApp(
                     val networkFailureEvidence =
                         if (preset.sampleId == "NETWORK-FAILURE-CONTROL") {
                             activePlaybackSource = source
-                            controller.selectSourceAsync(source)
+                            sourceSession.register(source).use { handle -> controller.activate(handle) }
                             controller.configureSystemPlayback(
                                 VesperSystemPlaybackConfiguration(
                                     metadata =
@@ -571,7 +575,7 @@ internal fun PlayerHostApp(
         playbackOrigin = origin
         scope.launch {
             runCatching {
-                controller.selectSourceAsync(source)
+                sourceSession.register(source).use { handle -> controller.activate(handle) }
             }.onFailure { error ->
                 Log.e(
                     PLAYER_HOST_EXAMPLE_TAG,

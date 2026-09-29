@@ -34,3 +34,15 @@ actor DashStartupFixtureTransport: VesperDashStartupTransport {
 }
 
 private final class DashStartupFixtureBundle: NSObject {}
+
+struct HeaderCheckingStartupTransport: VesperDashStartupTransport {
+    let base: DashStartupFixtureTransport
+    let headers: [String: String]
+
+    func fetch(_ resource: VesperDashStartupResource, headers: [String: String], maximumBytes: Int) async throws -> VesperDashStartupBytes {
+        guard resource.url.scheme == "https", resource.range != nil, headers == self.headers else {
+            throw VesperDashStartupError.invalidResponse
+        }
+        return try await base.fetch(resource, headers: headers, maximumBytes: maximumBytes)
+    }
+}

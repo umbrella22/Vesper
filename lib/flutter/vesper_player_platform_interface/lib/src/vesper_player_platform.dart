@@ -3,6 +3,7 @@ import 'download_events.dart';
 import 'download_models.dart';
 import 'models.dart';
 import 'sequence_models.dart';
+import 'source_models.dart';
 import 'performance_diagnostics_exception.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
@@ -219,6 +220,66 @@ abstract class VesperPlayerPlatform extends PlatformInterface {
   }
 
   Future<void> selectSource(String playerId, VesperPlayerSource source);
+
+  Future<String> createSourceSession(
+          VesperSourceSessionConfiguration configuration) async =>
+      throw VesperUnsupportedError(
+          'Source sessions are not supported by this platform.',
+          'sourceSessionUnsupported');
+
+  Future<VesperSourceReference> registerSource(
+          String sessionId, VesperPlayerSource source,
+          {int? expiresAtEpochMs}) async =>
+      throw VesperUnsupportedError(
+          'Source sessions are not supported by this platform.',
+          'sourceSessionUnsupported');
+
+  Future<void> releaseSource(VesperSourceReference source) async =>
+      throw VesperUnsupportedError(
+          'Source sessions are not supported by this platform.',
+          'sourceSessionUnsupported');
+
+  Future<void> invalidateSourceSession(String sessionId) async =>
+      throw VesperUnsupportedError(
+          'Source sessions are not supported by this platform.',
+          'sourceSessionUnsupported');
+
+  Future<void> disposeSourceSession(String sessionId) async =>
+      throw VesperUnsupportedError(
+          'Source sessions are not supported by this platform.',
+          'sourceSessionUnsupported');
+
+  Future<VesperSourcePreloadSnapshot> preloadSource(
+          VesperSourceReference source,
+          VesperSourcePreloadOptions options) async =>
+      throw VesperUnsupportedError(
+          'Source preloading is not supported by this platform.',
+          'sourcePreloadUnsupported');
+
+  Future<VesperSourcePreloadSnapshot> sourcePreloadSnapshot(
+          String sessionId, String taskId) async =>
+      throw VesperUnsupportedError(
+          'Source preloading is not supported by this platform.',
+          'sourcePreloadUnsupported');
+
+  Future<VesperSourcePreloadSnapshot> awaitSourcePreload(
+          String sessionId, String taskId) async =>
+      throw VesperUnsupportedError(
+          'Source preloading is not supported by this platform.',
+          'sourcePreloadUnsupported');
+
+  Future<void> cancelSourcePreload(String sessionId, String taskId) async =>
+      throw VesperUnsupportedError(
+          'Source preloading is not supported by this platform.',
+          'sourcePreloadUnsupported');
+
+  Future<VesperSourceActivation> activateSource(
+          String playerId,
+          VesperSourceReference source,
+          VesperSourceActivationOptions options) async =>
+      throw VesperUnsupportedError(
+          'Source activation is not supported by this platform.',
+          'sourceActivationUnsupported');
 
   /// Creates the bounded native sequence session attached to one controller.
   /// Platform implementations must keep source bytes and headers on the host.

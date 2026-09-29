@@ -68,31 +68,6 @@ public struct VesperPlaybackSequenceContentIdentity: Equatable {
     }
 }
 
-public struct VesperPlaybackSequenceCacheIdentity: Equatable {
-    public let providerNamespace: String
-    public let contentIdentity: String
-    public let renditionIdentity: String
-    public let resourceIdentity: String
-    public let accessPartition: String
-    public let sourceRevision: UInt64
-
-    public init(
-        providerNamespace: String,
-        contentIdentity: String,
-        renditionIdentity: String,
-        resourceIdentity: String,
-        accessPartition: String,
-        sourceRevision: UInt64
-    ) {
-        self.providerNamespace = providerNamespace
-        self.contentIdentity = contentIdentity
-        self.renditionIdentity = renditionIdentity
-        self.resourceIdentity = resourceIdentity
-        self.accessPartition = accessPartition
-        self.sourceRevision = sourceRevision
-    }
-}
-
 public struct VesperPlaybackSequencePreloadProfile: Equatable {
     public let expectedMemoryBytes: UInt64
     public let expectedDiskBytes: UInt64
@@ -112,81 +87,53 @@ public struct VesperPlaybackSequencePreloadProfile: Equatable {
     }
 }
 
-public struct VesperPlaybackSequenceItem: Equatable {
+public struct VesperPlaybackSequenceItem {
     public let itemId: String
     public let contentIdentity: VesperPlaybackSequenceContentIdentity
     public let mediaKind: VesperPlaybackSequenceMediaKind
-    public let source: VesperPlayerSource?
-    public let cacheIdentity: VesperPlaybackSequenceCacheIdentity?
-    public let sourceRevision: UInt64
-    public let expiresAtEpochMs: UInt64?
+    public let source: VesperSourceHandle?
     public let providerMetadataRef: String?
     public let preloadProfile: VesperPlaybackSequencePreloadProfile
-
-    public init(
-        itemId: String,
-        contentIdentity: VesperPlaybackSequenceContentIdentity,
-        mediaKind: VesperPlaybackSequenceMediaKind = .vod,
-        source: VesperPlayerSource? = nil,
-        cacheIdentity: VesperPlaybackSequenceCacheIdentity? = nil,
-        sourceRevision: UInt64 = 0,
-        expiresAtEpochMs: UInt64? = nil,
-        providerMetadataRef: String? = nil,
-        preloadProfile: VesperPlaybackSequencePreloadProfile =
-            VesperPlaybackSequencePreloadProfile()
-    ) {
-        precondition(!itemId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        precondition(!contentIdentity.providerNamespace.isEmpty)
-        precondition(!contentIdentity.value.isEmpty)
-        precondition((source == nil) == (cacheIdentity == nil))
-        if let cacheIdentity {
-            precondition(sourceRevision > 0 && cacheIdentity.sourceRevision == sourceRevision)
-        }
-        self.itemId = itemId
-        self.contentIdentity = contentIdentity
-        self.mediaKind = mediaKind
-        self.source = source
-        self.cacheIdentity = cacheIdentity
-        self.sourceRevision = sourceRevision
-        self.expiresAtEpochMs = expiresAtEpochMs
-        self.providerMetadataRef = providerMetadataRef
-        self.preloadProfile = preloadProfile
+    public init(itemId: String, contentIdentity: VesperPlaybackSequenceContentIdentity,
+                mediaKind: VesperPlaybackSequenceMediaKind = .vod, source: VesperSourceHandle? = nil,
+                providerMetadataRef: String? = nil, preloadProfile: VesperPlaybackSequencePreloadProfile = .init()) {
+        self.itemId = itemId; self.contentIdentity = contentIdentity; self.mediaKind = mediaKind
+        self.source = source; self.providerMetadataRef = providerMetadataRef; self.preloadProfile = preloadProfile
     }
 }
 
-public struct VesperPlaybackSequenceResolvedSource {
+@_spi(VesperFlutter) public struct VesperPlaybackSequenceResolvedSource {
     public let sessionGeneration: UInt64
     public let requestId: UInt64
     public let resolutionAttemptId: UInt64
     public let itemId: String
     public let expectedSourceRevision: UInt64
-    public let sourceRevision: UInt64
-    public let source: VesperPlayerSource
-    public let cacheIdentity: VesperPlaybackSequenceCacheIdentity
-    public let expiresAtEpochMs: UInt64?
+    public let source: VesperSourceHandle
+    public init(sessionGeneration: UInt64, requestId: UInt64, resolutionAttemptId: UInt64,
+                itemId: String, expectedSourceRevision: UInt64, source: VesperSourceHandle) {
+        self.sessionGeneration = sessionGeneration; self.requestId = requestId
+        self.resolutionAttemptId = resolutionAttemptId; self.itemId = itemId
+        self.expectedSourceRevision = expectedSourceRevision; self.source = source
+    }
+}
 
-    public init(
-        sessionGeneration: UInt64,
-        requestId: UInt64,
-        resolutionAttemptId: UInt64,
-        itemId: String,
-        expectedSourceRevision: UInt64,
-        sourceRevision: UInt64,
-        source: VesperPlayerSource,
-        cacheIdentity: VesperPlaybackSequenceCacheIdentity,
-        expiresAtEpochMs: UInt64? = nil
-    ) {
-        precondition(sourceRevision > expectedSourceRevision)
-        precondition(cacheIdentity.sourceRevision == sourceRevision)
-        self.sessionGeneration = sessionGeneration
-        self.requestId = requestId
-        self.resolutionAttemptId = resolutionAttemptId
-        self.itemId = itemId
-        self.expectedSourceRevision = expectedSourceRevision
-        self.sourceRevision = sourceRevision
-        self.source = source
-        self.cacheIdentity = cacheIdentity
-        self.expiresAtEpochMs = expiresAtEpochMs
+public struct VesperPlaybackSequenceSourceRequest {
+    public let itemId: String
+    public let reason: String
+    fileprivate let generation: UInt64
+    fileprivate let requestId: UInt64
+    fileprivate let attemptId: UInt64
+    fileprivate let expectedRevision: UInt64
+    fileprivate init?(_ value: [String: Any]) {
+        let body = value["request"] as? [String: Any] ?? value
+        guard body["type"] as? String == "sourceResolutionRequired",
+              let itemId = body["itemId"] as? String,
+              let generation = body["sessionGeneration"] as? UInt64,
+              let requestId = body["requestId"] as? UInt64,
+              let attempt = body["resolutionAttemptId"] as? UInt64,
+              let revision = body["expectedSourceRevision"] as? UInt64 else { return nil }
+        self.itemId = itemId; self.reason = body["reason"] as? String ?? "initial"
+        self.generation = generation; self.requestId = requestId; self.attemptId = attempt; self.expectedRevision = revision
     }
 }
 
@@ -201,6 +148,7 @@ public struct VesperPlaybackSequenceItemState {
 }
 
 public struct VesperPlaybackSequenceSnapshot {
+    public var sourceRequests: [VesperPlaybackSequenceSourceRequest] { pendingRequests.compactMap(VesperPlaybackSequenceSourceRequest.init) }
     public let sequenceId: String
     public let sessionGeneration: UInt64
     public let activationEpoch: UInt64
@@ -271,28 +219,29 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
     private struct SourceRegistryEntry {
         let itemId: String
         let sourceRevision: UInt64
-        let source: VesperPlayerSource
+        let lease: VesperSourceLease
+        let handle: VesperSourceHandle
     }
 
-    private struct AppliedActivation: Equatable {
-        let itemId: String
-        let sourceRevision: UInt64
-        let activationEpoch: UInt64
+    private final class PendingNavigation {
+        let id = UUID().uuidString
+        var itemId: String?
+        let options: VesperSourceActivationOptions
+        let continuation: CheckedContinuation<VesperSourceActivation?, Error>
+        var worker: Task<Void, Never>?
+        var timeout: Task<Void, Never>?
+        init(options: VesperSourceActivationOptions,
+             continuation: CheckedContinuation<VesperSourceActivation?, Error>) {
+            self.options = options; self.continuation = continuation
+        }
     }
-
+    private var pendingNavigation: PendingNavigation?
     private var sessionHandle: UInt64 = 0
     private weak var controller: VesperPlayerController?
     private var sourceRegistry: [String: SourceRegistryEntry] = [:]
-    private let startupCacheOwner = UUID().uuidString
     private var sourceReferenceCounter: UInt64 = 1
-    private var appliedActivation: AppliedActivation?
-    private var warmupExecutor: VesperPlaybackSequenceWarmupExecutor?
     private var attachEpoch: UInt64 = 0
     private var isDisposed = false
-
-    public var warmupSnapshot: VesperPlaybackSequenceWarmupSnapshot {
-        warmupExecutor?.snapshot ?? VesperPlaybackSequenceWarmupSnapshot()
-    }
 
     public init(configuration: VesperPlaybackSequenceConfiguration) throws {
         self.configuration = configuration
@@ -322,7 +271,8 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
             "requestTimeoutMs": configuration.requestTimeoutMs,
             "sourceExpiryLeadMs": configuration.sourceExpiryLeadMs,
         ]
-        let configData = try JSONSerialization.data(withJSONObject: configObject)
+        var configData = try JSONSerialization.data(withJSONObject: configObject)
+        configData.append(0) // The C bridge consumes a NUL-terminated UTF-8 string.
         var handle: UInt64 = 0
         let created = configData.withUnsafeBytes { bytes in
             guard let base = bytes.baseAddress else { return false }
@@ -352,81 +302,32 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
         try checkActive()
         guard controller == nil else { throw sequenceError("already_attached") }
         attachEpoch = attachEpoch == UInt64.max ? 1 : attachEpoch + 1
-        let epoch = attachEpoch
-        let maxDiskBytes = UInt64(max(target.resiliencePolicy.cache.maxDiskBytes ?? 256 * 1024 * 1024, 0))
-        let executor = VesperPlaybackSequenceWarmupExecutor(
-            maxDiskBytes: maxDiskBytes,
-            startupMaxMemoryBytes: UInt64(max(target.resiliencePolicy.cache.maxMemoryBytes ?? 8 * 1024 * 1024, 0)),
-            onSourceExpired: { [weak self] itemId, sourceRevision in
-                Task { @MainActor [weak self] in
-                    guard let self, !self.isDisposed, self.attachEpoch == epoch else { return }
-                    _ = try? self.markSourceExpired(itemId: itemId, sourceRevision: sourceRevision)
-                }
-            },
-            onReport: { [weak self] report in
-                guard let self, !self.isDisposed, self.attachEpoch == epoch else { return }
-                var command: [String: Any] = [
-                    "type": "reportWarmup",
-                    "sessionGeneration": report.sessionGeneration,
-                    "taskId": report.taskId,
-                    "itemId": report.itemId,
-                    "sourceRevision": report.sourceRevision,
-                    "warmupGoal": report.warmupGoal,
-                    "status": report.status,
-                    "expectedBytes": report.expectedBytes,
-                    "actualBytes": report.actualBytes,
-                    "cacheEntries": report.cacheEntries,
-                    "cacheBytes": report.cacheBytes,
-                    "evictedEntries": report.evictedEntries,
-                ]
-                if let cacheHit = report.cacheHit { command["cacheHit"] = cacheHit }
-                if let reasonCode = report.reasonCode { command["reasonCode"] = reasonCode }
-                if (try? self.execute(command)) != nil {
-                    try? self.refreshSnapshot()
-                    try? self.drainEvents()
-                }
-            }
-        )
-        do {
-            try target.attachPlaybackSequence(self)
-            controller = target
-            warmupExecutor = executor
-            try applyActiveSource()
-            try pumpPreloadIntents()
-        } catch {
-            executor.close()
-            if controller === target {
-                target.detachPlaybackSequence(self)
-                controller = nil
-            }
-            warmupExecutor = nil
-            appliedActivation = nil
-            throw error
-        }
+        try target.attachPlaybackSequence(self)
+        controller = target
+        try pumpPreloadIntents()
     }
 
     public func detach() {
+        cancelNavigation(.detached)
         attachEpoch = attachEpoch == UInt64.max ? 1 : attachEpoch + 1
         controller?.detachPlaybackSequence(self)
         controller = nil
-        appliedActivation = nil
-        warmupExecutor?.close()
-        warmupExecutor = nil
+        cancelSequencePreloads()
     }
 
     public func onControllerDisposed(_ controller: VesperPlayerController) {
         guard self.controller === controller else { return }
+        cancelNavigation(.disposed)
         self.controller = nil
-        appliedActivation = nil
         sourceRegistry.removeAll(keepingCapacity: false)
-        warmupExecutor?.close()
-        warmupExecutor = nil
+        cancelSequencePreloads()
         _ = try? execute(["type": "replace", "items": []])
     }
 
     public func dispose() {
         guard !isDisposed else { return }
         isDisposed = true
+        cancelNavigation(.disposed)
         detach()
         sourceRegistry.removeAll(keepingCapacity: false)
         if sessionHandle != 0 {
@@ -435,18 +336,14 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
         }
     }
 
-    public func replace(
-        _ items: [VesperPlaybackSequenceItem],
-        activeItemId: String? = nil
-    ) throws {
+    public func replace(_ items: [VesperPlaybackSequenceItem]) throws {
         try checkBatch(items)
         var staged: [String: SourceRegistryEntry] = [:]
         let wireItems = try items.map { try itemWire($0, staged: &staged) }
-        var command: [String: Any] = ["type": "replace", "items": wireItems]
-        command["activeItemId"] = activeItemId ?? items.first?.itemId
+        let command: [String: Any] = ["type": "replace", "items": wireItems]
         _ = try execute(command)
+        cancelNavigation(.superseded)
         sourceRegistry = staged
-        appliedActivation = nil
         try refreshAndPump()
     }
 
@@ -489,47 +386,125 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
     @discardableResult
     public func remove(itemId: String) throws -> Bool {
         let result = try execute(["type": "remove", "itemId": itemId])
+        if result["removed"] as? Bool == true, pendingNavigation?.itemId == itemId {
+            cancelNavigation(.superseded)
+        }
         try refreshAndPump()
         return result["removed"] as? Bool ?? false
     }
 
-    public func setActive(_ itemId: String) throws {
-        _ = try execute(["type": "setActive", "itemId": itemId])
-        try refreshAndPump()
+    public func activate(_ itemId: String, options: VesperSourceActivationOptions = .init()) async throws -> VesperSourceActivation {
+        guard let result = try await navigate(["type": "setActive", "itemId": itemId], options: options) else {
+            throw sequenceError("activation_target_unavailable")
+        }
+        return result
+    }
+    public func next(options: VesperSourceActivationOptions = .init()) async throws -> VesperSourceActivation? {
+        try await navigate(["type": "next"], options: options)
+    }
+    public func previous(options: VesperSourceActivationOptions = .init()) async throws -> VesperSourceActivation? {
+        try await navigate(["type": "previous"], options: options)
     }
 
-    public func next() throws {
-        _ = try execute(["type": "next"])
-        try refreshAndPump()
+    private func navigate(_ command: [String: Any], options: VesperSourceActivationOptions) async throws -> VesperSourceActivation? {
+        try checkActive()
+        try options.validate()
+        guard controller != nil else { throw VesperSourceActivationError.detached }
+        try Task.checkCancellation()
+        cancelNavigation(.superseded)
+        let navigationId = UUID().uuidString
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let pending = PendingNavigation(options: options, continuation: continuation)
+                pendingNavigation = pending
+                navigationCancellationId = navigationId
+                do {
+                    let result = try execute(command)
+                    let outcome = result["outcome"] as? String
+                    if outcome == "empty" || outcome == "reachedEnd" || outcome == "awaitingItems" {
+                        pendingNavigation = nil
+                        try refreshAndPump()
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    pending.itemId = command["itemId"] as? String ?? result["itemId"] as? String
+                    pending.timeout = Task { [weak self, pending] in
+                        do { try await Task.sleep(nanoseconds: options.timeoutMs * 1_000_000) } catch { return }
+                        guard let self, self.pendingNavigation === pending else { return }
+                        self.cancelNavigation(.timeout)
+                    }
+                    try refreshAndPump()
+                } catch {
+                    pendingNavigation = nil
+                    pending.timeout?.cancel()
+                    continuation.resume(throwing: error)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, self.navigationCancellationId == navigationId else { return }
+                self.cancelNavigation(.cancelled)
+            }
+        }
+    }
+    private var navigationCancellationId = ""
+
+    private func cancelNavigation(_ reason: VesperSourceActivationError) {
+        guard let pending = pendingNavigation else { return }
+        pendingNavigation = nil
+        pending.worker?.cancel(); pending.timeout?.cancel()
+        pending.continuation.resume(throwing: reason)
     }
 
-    public func previous() throws {
-        _ = try execute(["type": "previous"])
-        try refreshAndPump()
+    private func driveNavigation() {
+        guard let pending = pendingNavigation, pending.worker == nil, let itemId = pending.itemId else { return }
+        guard let item = snapshot.items.first(where: { $0.itemId == itemId }) else {
+            cancelNavigation(.superseded); return
+        }
+        if item.sourceState == "failed" { cancelNavigation(.cancelled); return }
+        guard let reference = item.sourceReference, let entry = sourceRegistry[reference], let target = controller else { return }
+        pending.worker = Task { [weak self, pending] in
+            do {
+                let activation = try await target.activateLease(entry.lease.retained(), options: pending.options)
+                guard let self, self.pendingNavigation === pending else { return }
+                self.pendingNavigation = nil; pending.timeout?.cancel()
+                pending.continuation.resume(returning: activation)
+            } catch {
+                guard let self, self.pendingNavigation === pending else { return }
+                self.pendingNavigation = nil; pending.timeout?.cancel()
+                pending.continuation.resume(throwing: error)
+            }
+        }
     }
 
-    public func submitResolvedSource(_ resolved: VesperPlaybackSequenceResolvedSource) throws {
+    public func submitResolvedSource(request: VesperPlaybackSequenceSourceRequest, source: VesperSourceHandle) throws {
+        try submitResolvedSource(.init(sessionGeneration: request.generation, requestId: request.requestId,
+                                       resolutionAttemptId: request.attemptId, itemId: request.itemId,
+                                       expectedSourceRevision: request.expectedRevision, source: source))
+    }
+
+    @_spi(VesperFlutter) public func submitResolvedSource(_ resolved: VesperPlaybackSequenceResolvedSource) throws {
         try checkActive()
         let sourceReference = nextSourceReference()
         guard sourceRegistry.count < configuration.maxSourceRegistryEntries else {
             throw sequenceError("source_registry_capacity_exceeded")
         }
-        sourceRegistry[sourceReference] = SourceRegistryEntry(
-            itemId: resolved.itemId,
-            sourceRevision: resolved.sourceRevision,
-            source: resolved.source.withDashStartupScope(expiresAtMs: resolved.expiresAtEpochMs, owner: startupCacheOwner)
-        )
+        guard resolved.expectedSourceRevision < UInt64.max else { throw sequenceError("source_revision_exhausted") }
+        let revision = resolved.expectedSourceRevision + 1
+        let lease = try resolved.source.acquire()
+        let descriptor = try lease.sourceForActivation()
+        sourceRegistry[sourceReference] = SourceRegistryEntry(itemId: resolved.itemId, sourceRevision: revision, lease: lease, handle: resolved.source)
         let source: [String: Any] = [
             "sessionGeneration": resolved.sessionGeneration,
             "requestId": resolved.requestId,
             "resolutionAttemptId": resolved.resolutionAttemptId,
             "itemId": resolved.itemId,
             "expectedSourceRevision": resolved.expectedSourceRevision,
-            "sourceRevision": resolved.sourceRevision,
+            "sourceRevision": revision,
             "sourceReference": sourceReference,
-            "warmupGoal": resolved.source.sequenceWarmupGoal,
-            "cacheIdentity": resolved.cacheIdentity.wire,
-            "expiresAtEpochMs": resolved.expiresAtEpochMs as Any,
+            "warmupGoal": descriptor.sequenceWarmupGoal,
+            "cacheIdentity": cacheIdentity(lease, revision: revision),
+            "expiresAtEpochMs": resolved.source.expiresAtEpochMs as Any,
         ]
         do {
             _ = try execute(["type": "submitResolvedSource", "source": source])
@@ -640,18 +615,20 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
         if let providerMetadataRef = item.providerMetadataRef {
             wire["providerMetadataRef"] = providerMetadataRef
         }
-        if let source = item.source, let cacheIdentity = item.cacheIdentity {
+        if let handle = item.source {
             let reference = nextSourceReference()
-            staged[reference] = SourceRegistryEntry(
-                itemId: item.itemId,
-                sourceRevision: item.sourceRevision,
-                source: source.withDashStartupScope(expiresAtMs: item.expiresAtEpochMs, owner: startupCacheOwner)
-            )
+            let existing = sourceRegistry.values.first { $0.itemId == item.itemId && $0.lease.handleId == handle.id && $0.lease.sessionId == handle.sessionId }
+            let lease = try existing?.lease.retained() ?? handle.acquire()
+            let descriptor = try lease.sourceForActivation()
+            let oldRevision = snapshot.items.first(where: { $0.itemId == item.itemId })?.sourceRevision ?? 0
+            guard oldRevision < UInt64.max else { throw sequenceError("source_revision_exhausted") }
+            let revision = existing?.sourceRevision ?? oldRevision + 1
+            staged[reference] = SourceRegistryEntry(itemId: item.itemId, sourceRevision: revision, lease: lease, handle: handle)
             wire["resolvedSource"] = [
                 "sourceReference": reference,
-                "warmupGoal": source.sequenceWarmupGoal,
-                "cacheIdentity": cacheIdentity.wire,
-                "expiresAtEpochMs": item.expiresAtEpochMs as Any,
+                "warmupGoal": descriptor.sequenceWarmupGoal,
+                "cacheIdentity": cacheIdentity(lease, revision: revision),
+                "expiresAtEpochMs": handle.expiresAtEpochMs as Any,
             ]
         }
         return wire
@@ -659,7 +636,8 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
 
     private func execute(_ command: [String: Any]) throws -> [String: Any] {
         try checkActive()
-        let commandData = try JSONSerialization.data(withJSONObject: command)
+        var commandData = try JSONSerialization.data(withJSONObject: command)
+        commandData.append(0)
         var output: UnsafeMutablePointer<CChar>?
         let succeeded = commandData.withUnsafeBytes { bytes in
             guard let base = bytes.baseAddress else { return false }
@@ -684,13 +662,14 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
 
     private func refreshAndPump() throws {
         try refreshSnapshot()
+        pruneRegistry()
         try drainEvents()
-        try applyActiveSource()
+        driveNavigation()
         try pumpPreloadIntents()
     }
 
     private func pumpPreloadIntents() throws {
-        guard let warmupExecutor, !isDisposed else { return }
+        guard controller != nil, !isDisposed else { return }
         var output: UnsafeMutablePointer<CChar>?
         guard vesper_runtime_sequence_session_preload_intents(
             sessionHandle,
@@ -703,12 +682,74 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
               envelope["ok"] as? Bool == true,
               let result = envelope["result"] as? [String: Any],
               let rawIntents = result["intents"] as? [[String: Any]] else { return }
-        warmupExecutor.reconcile(intents: rawIntents) { [weak self] sourceReference, itemId, sourceRevision in
-            guard let self,
-                  let entry = self.sourceRegistry[sourceReference],
-                  entry.itemId == itemId,
-                  entry.sourceRevision == sourceRevision else { return nil }
-            return entry.source
+        let desired = Set(rawIntents.prefix(Self.maxPreloadObservations).compactMap { $0["warmupTaskId"] as? UInt64 })
+        for (id, observation) in preloadObservations where !desired.contains(id) {
+            observation.active = false
+            observation.startedObservation = nil
+        }
+        for intent in rawIntents.prefix(Self.maxPreloadObservations) {
+            guard preloadObservations.count < Self.maxPreloadObservations,
+                  let id = intent["warmupTaskId"] as? UInt64, preloadObservations[id] == nil,
+                  let reference = intent["sourceReference"] as? String,
+                  let entry = sourceRegistry[reference],
+                  intent["itemId"] as? String == entry.itemId,
+                  intent["sourceRevision"] as? UInt64 == entry.sourceRevision else { continue }
+            do {
+                _ = try entry.lease.sourceForActivation()
+                let task = try entry.handle.preload()
+                let observation = PreloadObservation(task: task, intent: intent)
+                preloadObservations[id] = observation
+                observation.startedObservation = task.$snapshot.filter { $0.status == .running }.prefix(1).sink { [weak self] _ in
+                    guard let self, observation.active, !self.isDisposed else { return }
+                    _ = try? self.execute(["type": "reportWarmup", "sessionGeneration": intent["sessionGeneration"] as Any,
+                                  "taskId": id, "itemId": entry.itemId, "sourceRevision": entry.sourceRevision,
+                                  "warmupGoal": intent["warmupGoal"] as Any, "status": "started",
+                                  "expectedBytes": 0, "actualBytes": 0, "cacheEntries": 0, "cacheBytes": 0, "evictedEntries": 0])
+                }
+                Task { @MainActor [weak self, observation] in
+                    let result = await task.result
+                    let inventory = await VesperDashStartupCache.shared.inventory()
+                    guard let self else { return }
+                    self.preloadObservations.removeValue(forKey: id)
+                    observation.startedObservation = nil
+                    defer { if !self.isDisposed { try? self.pumpPreloadIntents() } }
+                    guard observation.active, !self.isDisposed else { return }
+                    var report: [String: Any] = [
+                        "type": "reportWarmup", "sessionGeneration": intent["sessionGeneration"] as Any,
+                        "taskId": id, "itemId": entry.itemId, "sourceRevision": entry.sourceRevision,
+                        "warmupGoal": intent["warmupGoal"] as Any, "status": result.status.rawValue,
+                        "expectedBytes": 0, "actualBytes": result.actualBytes,
+                        "cacheEntries": inventory.entries, "cacheBytes": inventory.bytes, "evictedEntries": 0,
+                    ]
+                    if let hit = result.cacheHit { report["cacheHit"] = hit }
+                    if let reason = result.reasonCode { report["reasonCode"] = reason }
+                    _ = try? self.execute(report)
+                    try? self.refreshSnapshot()
+                    try? self.drainEvents()
+                }
+            } catch {
+                _ = try? execute(["type": "reportWarmup", "sessionGeneration": intent["sessionGeneration"] as Any,
+                                  "taskId": id, "itemId": entry.itemId, "sourceRevision": entry.sourceRevision,
+                                  "warmupGoal": intent["warmupGoal"] as Any, "status": "unsupported",
+                                  "expectedBytes": 0, "actualBytes": 0, "cacheEntries": 0, "cacheBytes": 0,
+                                  "evictedEntries": 0, "reasonCode": "source_unavailable"])
+            }
+        }
+    }
+
+    private final class PreloadObservation {
+        let task: VesperPreloadTask
+        let intent: [String: Any]
+        var active = true
+        var startedObservation: AnyCancellable?
+        init(task: VesperPreloadTask, intent: [String: Any]) { self.task = task; self.intent = intent }
+    }
+    private var preloadObservations: [UInt64: PreloadObservation] = [:]
+    private static let maxPreloadObservations = 4
+    private func cancelSequencePreloads() {
+        for observation in preloadObservations.values {
+            observation.active = false
+            observation.startedObservation = nil
         }
     }
 
@@ -792,22 +833,10 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
         )
     }
 
-    private func applyActiveSource() throws {
-        guard let active = snapshot.items.first(where: { $0.isActive }),
-              let reference = active.sourceReference,
-              let target = controller,
-              let entry = sourceRegistry[reference] else { return }
-        guard entry.itemId == active.itemId, entry.sourceRevision == active.sourceRevision else {
-            throw sequenceError("stale_source_registry_entry")
-        }
-        let activation = AppliedActivation(
-            itemId: active.itemId,
-            sourceRevision: active.sourceRevision,
-            activationEpoch: snapshot.activationEpoch
-        )
-        guard activation != appliedActivation else { return }
-        try target.activateSequenceSource(self, source: entry.source)
-        appliedActivation = activation
+    private func cacheIdentity(_ lease: VesperSourceLease, revision: UInt64) -> [String: Any] {
+        ["providerNamespace": "vesper", "contentIdentity": lease.handleId,
+         "renditionIdentity": "source", "resourceIdentity": lease.handleId,
+         "accessPartition": lease.sessionId, "sourceRevision": revision]
     }
 
     private func pruneRegistry() {
@@ -843,18 +872,5 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
             retriable: false,
             details: ["code": code]
         )
-    }
-}
-
-private extension VesperPlaybackSequenceCacheIdentity {
-    var wire: [String: Any] {
-        [
-            "providerNamespace": providerNamespace,
-            "contentIdentity": contentIdentity,
-            "renditionIdentity": renditionIdentity,
-            "resourceIdentity": resourceIdentity,
-            "accessPartition": accessPartition,
-            "sourceRevision": sourceRevision,
-        ]
     }
 }

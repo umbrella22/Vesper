@@ -18,7 +18,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], manifest = Config.NONE)
 class VesperDashStartupDataSourceTest {
-    @Test fun formalFactoryReusesWarmBytesHonorsDisabledAndCachesLaterReads() = runBlocking {
+    @Test fun formalFactoryKeepsSourcePreloadIndependentOfControllerCachePolicy() = runBlocking {
         val count = AtomicInteger()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val root = "http://127.0.0.1:${server.address.port}"
@@ -59,7 +59,9 @@ class VesperDashStartupDataSourceTest {
             read(factory, "$root/video.mp4", 74, 20)
             assertEquals("Unwarmed bytes must still use the original disk cache", 5, count.get())
             read(buildDataSourceFactory(context, disabled, headers, scope), "$root/video.mp4", 54, 20)
-            assertEquals("Disabled policy must bypass both startup and disk cache", 6, count.get())
+            assertEquals("Controller policy must preserve the source session's warm bytes", 5, count.get())
+            read(buildDataSourceFactory(context, disabled, headers, scope), "$root/video.mp4", 74, 20)
+            assertEquals("Disabled controller cache must still bypass the disk cache", 6, count.get())
             read(buildDataSourceFactory(context, enabled, mapOf("Authorization" to "Bearer different"), scope), "$root/video.mp4", 74, 20)
             assertEquals("Disk keys must isolate credentials too", 7, count.get())
         } finally { server.stop(0) }

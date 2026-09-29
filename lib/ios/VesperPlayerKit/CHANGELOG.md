@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-29
+
+- Add throwing source sessions, observable preload tasks and awaited handle activation with native epoch correlation.
+- Break sequence item/provider APIs to use handles; navigation is explicit and paging boundaries return nil.
+- Keep shared preloads independent of sequence observation, enforce monotonic expiry, and terminate sequence FFI JSON strings correctly.
+
 ## 0.7.0 - 2026-09-28
 
 - Retain audio-selection evidence, first-frame observations and suspected-stall diagnostics per playback attempt.

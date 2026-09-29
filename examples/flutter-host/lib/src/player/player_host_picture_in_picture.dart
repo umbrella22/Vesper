@@ -4,7 +4,14 @@ extension _PlayerHostPictureInPictureActions on _PlayerHostPageState {
   static const String _pictureInPictureUnavailableMessage = '当前播放无法启用小窗';
 
   Future<void> _bindPictureInPicture(VesperPlayerController controller) async {
+    final generation = ++_pictureInPictureBindingGeneration;
     await (_pictureInPictureSubscription?.cancel() ?? Future<void>.value());
+    if (!mounted ||
+        _isClosing ||
+        generation != _pictureInPictureBindingGeneration ||
+        !identical(_controller, controller)) {
+      return;
+    }
     _pictureInPictureSubscription = controller.pictureInPictureEvents.listen(
       _handlePictureInPictureEvent,
     );
@@ -16,7 +23,7 @@ extension _PlayerHostPictureInPictureActions on _PlayerHostPageState {
   ) async {
     try {
       final availability = await controller.isPictureInPictureAvailable();
-      if (!mounted) {
+      if (!mounted || _isClosing || !identical(_controller, controller)) {
         return;
       }
       _updateState(() {
@@ -26,7 +33,7 @@ extension _PlayerHostPictureInPictureActions on _PlayerHostPageState {
             : _pictureInPictureStatus;
       });
     } catch (_) {
-      if (mounted) {
+      if (mounted && !_isClosing && identical(_controller, controller)) {
         _updateState(() {
           _pictureInPictureAvailability =
               const VesperPictureInPictureAvailability(
@@ -124,8 +131,9 @@ extension _PlayerHostPictureInPictureActions on _PlayerHostPageState {
     }
     _updateState(() {
       _pictureInPictureStatus = event.state;
-      _pictureInPicturePresentation =
-          _isPictureInPicturePresentationState(event.state);
+      _pictureInPicturePresentation = _isPictureInPicturePresentationState(
+        event.state,
+      );
       _pictureInPictureAvailability = VesperPictureInPictureAvailability(
         isAvailable: event.error == null,
         isActive: event.isActive,
@@ -175,8 +183,8 @@ extension _PlayerHostPictureInPictureActions on _PlayerHostPageState {
       _updateState(() {
         _pictureInPictureStatus = VesperPictureInPictureStatus.inactive;
         _pictureInPicturePresentation = false;
-        _pictureInPictureAvailability =
-            _pictureInPictureAvailability?.inactive();
+        _pictureInPictureAvailability = _pictureInPictureAvailability
+            ?.inactive();
       });
     });
   }

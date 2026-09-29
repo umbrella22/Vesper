@@ -1,5 +1,5 @@
 import Foundation
-import VesperPlayerKit
+@_spi(VesperFlutter) import VesperPlayerKit
 
 extension Dictionary where Key == String, Value == Any {
     func toPlaybackSequenceConfiguration() throws -> VesperPlaybackSequenceConfiguration {
@@ -15,15 +15,15 @@ extension Dictionary where Key == String, Value == Any {
         default:
             throw PluginError.operationFailed("Unknown sequence mode.")
         }
-        let historyLimit = (self["historyLimit"] as? NSNumber)?.intValue ?? 16
-        let forwardWindow = (self["forwardWindow"] as? NSNumber)?.intValue ?? 1
-        let refillThreshold = (self["refillThreshold"] as? NSNumber)?.intValue ?? 1
-        let maxItems = (self["maxItems"] as? NSNumber)?.intValue ?? 512
+        let historyLimit = try sourceInt(self, "historyLimit", 16)
+        let forwardWindow = try sourceInt(self, "forwardWindow", 1)
+        let refillThreshold = try sourceInt(self, "refillThreshold", 1)
+        let maxItems = try sourceInt(self, "maxItems", 512)
         let maxPendingRequests =
-            (self["maxPendingRequests"] as? NSNumber)?.intValue ?? 32
-        let maxEvents = (self["maxEvents"] as? NSNumber)?.intValue ?? 512
+            try sourceInt(self, "maxPendingRequests", 32)
+        let maxEvents = try sourceInt(self, "maxEvents", 512)
         let maxSourceRegistryEntries =
-            (self["maxSourceRegistryEntries"] as? NSNumber)?.intValue ?? 1_024
+            try sourceInt(self, "maxSourceRegistryEntries", 1_024)
         guard historyLimit >= 0,
               forwardWindow >= 0,
               refillThreshold >= 0,
@@ -43,13 +43,14 @@ extension Dictionary where Key == String, Value == Any {
             maxItems: maxItems,
             maxPendingRequests: maxPendingRequests,
             maxEvents: maxEvents,
-            requestTimeoutMs: (self["requestTimeoutMs"] as? NSNumber)?.uint64Value ?? 15_000,
-            sourceExpiryLeadMs: (self["sourceExpiryLeadMs"] as? NSNumber)?.uint64Value ?? 15_000,
+            requestTimeoutMs: try sourceUInt(self, "requestTimeoutMs", 15_000),
+            sourceExpiryLeadMs: try sourceUInt(self, "sourceExpiryLeadMs", 15_000),
             maxSourceRegistryEntries: maxSourceRegistryEntries
         )
     }
 
-    func toPlaybackSequenceItem() throws -> VesperPlaybackSequenceItem {
+    @MainActor
+    func toPlaybackSequenceItem(resolve: ([String: Any]) throws -> VesperSourceHandle) throws -> VesperPlaybackSequenceItem {
         guard let itemId = self["itemId"] as? String, !itemId.isEmpty else {
             throw PluginError.missingArgument("itemId")
         }
@@ -65,17 +66,7 @@ extension Dictionary where Key == String, Value == Any {
         case "liveDvr": mediaKind = .liveDvr
         default: throw PluginError.operationFailed("Unknown sequence media kind.")
         }
-        let source = try nestedMap(self["source"])?.toVesperPlayerSource()
-        let cache = try nestedMap(self["cacheIdentity"])?.toPlaybackSequenceCacheIdentity()
-        guard (source == nil) == (cache == nil) else {
-            throw PluginError.operationFailed("Sequence source/cache identity mismatch.")
-        }
-        let revision = (self["sourceRevision"] as? NSNumber)?.uint64Value ?? cache?.sourceRevision ?? 0
-        if let cache {
-            guard revision > 0, cache.sourceRevision == revision else {
-                throw PluginError.operationFailed("Invalid sequence source revision.")
-            }
-        }
+        let source = try nestedMap(self["source"]).map(resolve)
         return VesperPlaybackSequenceItem(
             itemId: itemId,
             contentIdentity: VesperPlaybackSequenceContentIdentity(
@@ -84,34 +75,26 @@ extension Dictionary where Key == String, Value == Any {
             ),
             mediaKind: mediaKind,
             source: source,
-            cacheIdentity: cache,
-            sourceRevision: revision,
-            expiresAtEpochMs: (self["expiresAtEpochMs"] as? NSNumber)?.uint64Value,
             providerMetadataRef: self["providerMetadataRef"] as? String,
             preloadProfile: try nestedMap(self["preloadProfile"])?
                 .toPlaybackSequencePreloadProfile() ?? VesperPlaybackSequencePreloadProfile()
         )
     }
 
-    func toPlaybackSequenceResolvedSource() throws -> VesperPlaybackSequenceResolvedSource {
-        let cache = try requireNestedMap(arguments: self, key: "cacheIdentity")
-            .toPlaybackSequenceCacheIdentity()
+    @MainActor
+    func toPlaybackSequenceResolvedSource(resolve: ([String: Any]) throws -> VesperSourceHandle) throws -> VesperPlaybackSequenceResolvedSource {
         let sessionGeneration =
-            (self["sessionGeneration"] as? NSNumber)?.uint64Value ?? 0
-        let requestId = (self["requestId"] as? NSNumber)?.uint64Value ?? 0
+            try sourceUInt(self, "sessionGeneration", 0)
+        let requestId = try sourceUInt(self, "requestId", 0)
         let resolutionAttemptId =
-            (self["resolutionAttemptId"] as? NSNumber)?.uint64Value ?? 0
+            try sourceUInt(self, "resolutionAttemptId", 0)
         let itemId = self["itemId"] as? String ?? ""
         let expectedSourceRevision =
-            (self["expectedSourceRevision"] as? NSNumber)?.uint64Value ?? 0
-        let sourceRevision =
-            (self["sourceRevision"] as? NSNumber)?.uint64Value ?? 0
+            try sourceUInt(self, "expectedSourceRevision", 0)
         guard sessionGeneration > 0,
               requestId > 0,
               resolutionAttemptId > 0,
-              !itemId.isEmpty,
-              sourceRevision > expectedSourceRevision,
-              cache.sourceRevision == sourceRevision
+              !itemId.isEmpty
         else {
             throw PluginError.operationFailed("Invalid resolved sequence source.")
         }
@@ -121,42 +104,36 @@ extension Dictionary where Key == String, Value == Any {
             resolutionAttemptId: resolutionAttemptId,
             itemId: itemId,
             expectedSourceRevision: expectedSourceRevision,
-            sourceRevision: sourceRevision,
-            source: try requireNestedMap(arguments: self, key: "source").toVesperPlayerSource(),
-            cacheIdentity: cache,
-            expiresAtEpochMs: (self["expiresAtEpochMs"] as? NSNumber)?.uint64Value
+            source: try resolve(requireNestedMap(arguments: self, key: "source"))
         )
     }
 
-    func toPlaybackSequencePreloadProfile() -> VesperPlaybackSequencePreloadProfile {
+    func toPlaybackSequencePreloadProfile() throws -> VesperPlaybackSequencePreloadProfile {
         VesperPlaybackSequencePreloadProfile(
-            expectedMemoryBytes: (self["expectedMemoryBytes"] as? NSNumber)?.uint64Value ?? 0,
-            expectedDiskBytes: (self["expectedDiskBytes"] as? NSNumber)?.uint64Value ?? 0,
-            ttlMs: (self["ttlMs"] as? NSNumber)?.uint64Value,
-            warmupWindowMs: (self["warmupWindowMs"] as? NSNumber)?.uint64Value
+            expectedMemoryBytes: try sourceUInt(self, "expectedMemoryBytes", 0),
+            expectedDiskBytes: try sourceUInt(self, "expectedDiskBytes", 0),
+            ttlMs: try optionalSequenceUInt(self, "ttlMs"),
+            warmupWindowMs: try optionalSequenceUInt(self, "warmupWindowMs")
         )
     }
 
-    func toPlaybackSequenceCacheIdentity() -> VesperPlaybackSequenceCacheIdentity {
-        VesperPlaybackSequenceCacheIdentity(
-            providerNamespace: self["providerNamespace"] as? String ?? "",
-            contentIdentity: self["contentIdentity"] as? String ?? "",
-            renditionIdentity: self["renditionIdentity"] as? String ?? "",
-            resourceIdentity: self["resourceIdentity"] as? String ?? "",
-            accessPartition: self["accessPartition"] as? String ?? "",
-            sourceRevision: (self["sourceRevision"] as? NSNumber)?.uint64Value ?? 0
-        )
-    }
+
 }
 
 extension Dictionary where Key == String, Value == Any {
-    func sequenceItems() throws -> [VesperPlaybackSequenceItem] {
+    @MainActor
+    func sequenceItems(resolve: ([String: Any]) throws -> VesperSourceHandle) throws -> [VesperPlaybackSequenceItem] {
         guard let values = self["items"] as? [Any] else { return [] }
         return try values.map { value in
             guard let map = stringKeyedMap(value) else {
                 throw PluginError.operationFailed("Invalid sequence item.")
             }
-            return try map.toPlaybackSequenceItem()
+            return try map.toPlaybackSequenceItem(resolve: resolve)
         }
     }
+}
+
+private func optionalSequenceUInt(_ value: [String: Any], _ key: String) throws -> UInt64? {
+    guard value[key] != nil, !(value[key] is NSNull) else { return nil }
+    return try sourceUInt(value, key, 0)
 }

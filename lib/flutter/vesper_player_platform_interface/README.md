@@ -131,6 +131,20 @@ VesperDownloadState
 VesperDownloadPublicCollection
 ```
 
+## Source lifecycle contract (0.8)
+
+`createSourceSession` and `registerSource` produce opaque session/source
+references. Preload methods retain task states independently of a player.
+`activateSource` returns the matching source, activation ID and a positive native
+playback epoch after readiness and initial intent are applied. Native channels
+reject malformed options instead of truncating them into valid limits.
+
+Sequence items and source-provider responses reference registrations. Native
+hosts assign cache identity and source revisions; list mutation never starts
+playback. Navigation returns a nullable activation at paging/end boundaries.
+See the [source lifecycle and 0.7 migration guide](../../doc/source-lifecycle.md)
+for the wire ownership, bounds and capability distinctions.
+
 ## Implementing A New Platform Package
 
 Extend `VesperPlayerPlatform` and register your implementation in

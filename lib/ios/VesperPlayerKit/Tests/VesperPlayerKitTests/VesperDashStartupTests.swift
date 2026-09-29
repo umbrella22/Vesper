@@ -4,15 +4,55 @@ import XCTest
 final class VesperDashStartupTests: XCTestCase {
     private let manifestURL = URL(string: "https://fixture.test/manifest.mpd")!
 
+    func testLocalManifestWarmsRemoteRangesAndRetainsBaseURL() async throws {
+        let fixture = try DashStartupFixtureTransport()
+        let bytes = await fixture.manifest
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("vesper manifest \(UUID().uuidString).mpd")
+        try bytes.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let headers = ["Referer": "https://app.test/", "User-Agent": "VesperTest"]
+        let transport = HeaderCheckingStartupTransport(base: fixture, headers: headers)
+        let cache = VesperDashStartupCache()
+        let scope = VesperDashStartupScope()
+        let source = VesperPlayerSource.dash(url: file, headers: headers)
+        _ = try await vesperWarmDashStartup(source: source, scope: scope, cache: cache, transport: transport,
+                                           capability: testHardwareVideoDecodeCapabilityProvider)
+        var requests = await fixture.requests
+        XCTAssertEqual(requests, 3)
+        let cached = await cache.read(scope: scope, resource: .init(url: file), headers: headers)
+        XCTAssertEqual(cached?.data, bytes)
+        XCTAssertEqual(cached?.finalURL, file)
+        let result = try await vesperWarmDashStartup(source: source, scope: scope, cache: cache, transport: transport,
+                                                    capability: testHardwareVideoDecodeCapabilityProvider)
+        XCTAssertTrue(result.hit)
+        requests = await fixture.requests
+        XCTAssertEqual(requests, 3)
+    }
+
+    func testOversizedLocalManifestDoesNotRequestMediaOrCommit() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("vesper-large-\(UUID().uuidString).mpd")
+        try Data(repeating: 0, count: 1024 * 1024 + 1).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let transport = try DashStartupFixtureTransport()
+        let cache = VesperDashStartupCache()
+        do {
+            _ = try await vesperWarmDashStartup(source: .dash(url: file), scope: .init(), cache: cache, transport: transport)
+            XCTFail("Oversized manifest was accepted")
+        } catch VesperDashStartupError.budgetExceeded { }
+        let requests = await transport.requests
+        let inventory = await cache.inventory()
+        XCTAssertEqual(requests, 0)
+        XCTAssertEqual(inventory.entries, 0)
+    }
+
     @MainActor
     func testSequenceAcceptsDashGoalThroughRebuiltNativeBridge() throws {
         let sequence = try VesperPlaybackSequence(configuration: .init(sequenceId: "dash-goal-test"))
         defer { sequence.dispose() }
-        try sequence.replace([.init(itemId: "a", contentIdentity: .init(providerNamespace: "test", value: "a"),
-                                    source: .dash(url: manifestURL),
-                                    cacheIdentity: .init(providerNamespace: "test", contentIdentity: "a", renditionIdentity: "v1",
-                                                         resourceIdentity: "startup", accessPartition: "public", sourceRevision: 1),
-                                    sourceRevision: 1)])
+        let session = try VesperSourceSession()
+        defer { session.close() }
+        let handle = try session.register(.dash(url: manifestURL))
+        try sequence.replace([.init(itemId: "a", contentIdentity: .init(providerNamespace: "test", value: "a"), source: handle)])
         XCTAssertEqual(sequence.snapshot.items.first?.sourceState, "resolved")
         XCTAssertNotNil(sequence.snapshot.wire["warmupTasks"])
     }
@@ -89,6 +129,27 @@ final class VesperDashStartupTests: XCTestCase {
         do { _ = try await task.value; XCTFail("Cancelled warmup completed") } catch {}
         inventory = await cache.inventory()
         XCTAssertEqual(inventory.entries, 0)
+    }
+
+    func testFormalPlaylistUsesValidatedMediaRedirectForUnwarmedRanges() async throws {
+        let cache = VesperDashStartupCache()
+        let scope = VesperDashStartupScope()
+        let fixture = try DashStartupFixtureTransport()
+        let transport = RedirectedMediaStartupTransport(base: fixture)
+        let headers = ["X-Fixture": "accepted"]
+        _ = try await vesperWarmDashStartup(source: .dash(url: manifestURL, headers: headers), scope: scope,
+                                           cache: cache, transport: transport,
+                                           capability: testHardwareVideoDecodeCapabilityProvider)
+        let client = VesperDashStartupNetworkClient(scope: scope, headers: headers, cache: cache, transport: transport)
+        let session = VesperDashSession(sourceURL: manifestURL, networkClient: client,
+                                        videoDecodeCapabilityProvider: testHardwareVideoDecodeCapabilityProvider)
+        defer { session.closeStartupResources() }
+        let playlist = String(decoding: try await session.mediaPlaylistData(renditionId: "v1"), as: UTF8.self)
+        XCTAssertTrue(playlist.contains("https://fixture.test/final/video.mp4"))
+        XCTAssertFalse(playlist.contains("https://fixture.test/video.mp4"))
+        XCTAssertTrue(playlist.contains("http://127.0.0.1:"), "Warmed resources retain their local delivery routes")
+        let requests = await fixture.requests
+        XCTAssertEqual(requests, 4, "Resolving the final media URL must reuse the warmed index")
     }
 
     func testConfiguredBudgetCapsWarmupAndAllSourcesOwnedBySequence() async throws {
@@ -180,6 +241,15 @@ private struct BlockingStartupTransport: VesperDashStartupTransport {
             try await Task.sleep(for: .seconds(30))
         }
         return value
+    }
+}
+
+private struct RedirectedMediaStartupTransport: VesperDashStartupTransport {
+    let base: DashStartupFixtureTransport
+    func fetch(_ resource: VesperDashStartupResource, headers: [String: String], maximumBytes: Int) async throws -> VesperDashStartupBytes {
+        let value = try await base.fetch(resource, headers: headers, maximumBytes: maximumBytes)
+        let finalURL = resource.range == nil ? value.finalURL : URL(string: "https://fixture.test/final/video.mp4")!
+        return .init(resource: resource, data: value.data, finalURL: finalURL)
     }
 }
 

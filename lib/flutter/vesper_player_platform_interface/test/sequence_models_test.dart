@@ -2,33 +2,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 void main() {
-  test('sequence item keeps cache identity separate from signed source', () {
-    const cache = VesperPlaybackSequenceCacheIdentity(
-      providerNamespace: 'example.provider',
-      contentIdentity: 'content-1',
-      renditionIdentity: '720p',
-      resourceIdentity: 'progressive',
-      accessPartition: 'public',
-      sourceRevision: 1,
-    );
-    final item = VesperPlaybackSequenceItem(
+  test('sequence items carry opaque source handles without cache credentials',
+      () {
+    const source =
+        VesperSourceReference(sessionId: 'session', sourceId: 'source');
+    const item = VesperPlaybackSequenceItem(
       itemId: 'item-1',
-      contentIdentity: const VesperPlaybackSequenceContentIdentity(
-        providerNamespace: 'example.provider',
-        value: 'content-1',
-      ),
-      source: VesperPlayerSource.remote(
-        uri: 'https://cdn.example/video?token=secret',
-        headers: const <String, String>{'Authorization': 'Bearer secret'},
-      ),
-      cacheIdentity: cache,
-      sourceRevision: 1,
+      contentIdentity: VesperPlaybackSequenceContentIdentity(
+          providerNamespace: 'example.provider', value: 'content-1'),
+      source: source,
     );
-
-    expect(item.cacheIdentity?.toMap()['contentIdentity'], 'content-1');
-    expect(item.cacheIdentity?.toMap().containsKey('uri'), isFalse);
-    expect(item.cacheIdentity?.toMap().containsKey('Authorization'), isFalse);
-    expect(item.toMap()['source'], isNotNull);
+    final wire = item.toMap();
+    expect(wire['source'],
+        <String, Object?>{'sessionId': 'session', 'sourceId': 'source'});
+    expect(wire.containsKey('cacheIdentity'), isFalse);
+    expect(wire.containsKey('sourceRevision'), isFalse);
+    expect(VesperPlaybackSequenceItem.fromMap(wire).source, source);
   });
 
   test('snapshot decodes pending request envelope and nested item state', () {

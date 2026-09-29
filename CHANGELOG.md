@@ -2,6 +2,73 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-29
+
+<!-- release-notes:en -->
+
+### Added
+
+- Add independent source sessions with immutable registrations, opaque handles,
+  bounded preload tasks and explicit cache-reuse capabilities. Local MPDs can
+  preload their absolute HTTPS media without allocating a player.
+- Add awaited handle activation with explicit play intent, start position, rate
+  and timeout, plus activation/source identities and native playback epochs.
+- Preserve acquired playback and sequence leases on ordinary registration close;
+  reject new activation after access invalidation or monotonic source expiry.
+
+### Changed
+
+- **Breaking:** sequence items and provider responses now carry source handles.
+  Native hosts assign source revisions and cache identity; the old Flutter
+  cache-identity and resolved-source DTOs are removed.
+- **Breaking:** list replacement, append/prepend, removal, reorder and resolved
+  source acceptance never implicitly activate playback. Call `activate`, `next`
+  or `previous` explicitly. Paging boundaries return an optional empty result.
+- Use one native activation path for ordinary and sequence playback. Upgrade
+  matching native/Flutter packages together and follow the
+  [0.7-to-0.8 migration guide](lib/doc/source-lifecycle.md).
+
+### Fixed
+
+- Keep worker slots and staging reservations occupied until physical preload
+  work exits, even after timeout/cancellation; include queue time in deadlines.
+- Preserve revisions on same-handle reorder, fence pending activation after
+  list changes, retain preload results per registered source, and reject lossy
+  native-channel integer decoding.
+- Terminate iOS sequence JSON buffers correctly at the C FFI boundary.
+- Consume source-session startup bytes independently of controller cache policy,
+  including local MPDs whose media lives on HTTPS origins.
+- Use the preloaded, validated media redirect target for later iOS SegmentBase
+  range reads, while retaining the original source identity for cache lookup.
+
+<!-- release-notes:zh-CN -->
+
+### 新增
+
+- 新增独立来源会话、不可变来源注册、不透明句柄、有界预加载任务与明确的缓存
+  复用能力。无需创建播放器即可预加载本地 MPD 引用的 HTTPS 媒体。
+- 新增可等待的句柄激活，显式设置播放意图、起始位置、倍速与超时，并返回
+  激活标识、来源标识及原生播放代次，供后续诊断关联。
+- 普通关闭保留已取得的播放及序列租约；访问失效或来源过期后拒绝新的激活。
+
+### 变更
+
+- **破坏性变更：** 序列条目和解析结果改为来源句柄；来源版本与缓存身份由
+  原生 SDK 分配，移除旧 Flutter 缓存身份和已解析来源 DTO。
+- **破坏性变更：** 列表替换、补页、删除、重排和接受解析结果均不隐式播放。
+  宿主显式调用激活或导航；到达补页边界时返回空结果。
+- 普通播放与序列共用原生激活路径；原生和 Flutter 包应同步升级，迁移方法见
+  [0.7 至 0.8 指南](lib/doc/source-lifecycle.md)。
+
+### 修复
+
+- 超时或取消后，工作槽位与暂存预算保留至实际任务退出；预加载期限包含排队时间。
+- 保留相同句柄重排后的来源版本，正确终结失效激活，按注册来源保留预加载结果，
+  并拒绝原生通道对小数或越界整数的有损转换。
+- 修正 iOS 序列 JSON 在 C FFI 边界缺少字符串终止符的问题。
+- 来源会话预加载缓存的消费独立于播放器缓存策略，本地 MPD 引用 HTTPS 媒体时同样生效。
+- iOS SegmentBase 后续范围使用预加载时验证过的媒体跳转目标，缓存查询仍保留原始来源身份。
+
 ## 0.7.0 - 2026-09-28
 
 <!-- release-notes:en -->

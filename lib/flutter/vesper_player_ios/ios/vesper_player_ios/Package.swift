@@ -1,7 +1,7 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
-private let vesperPlayerKitVersion: Version = "0.7.0"
+private let vesperPlayerKitVersion: Version = "0.8.0"
 
 let package = Package(
     name: "vesper_player_ios",

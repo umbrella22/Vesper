@@ -585,7 +585,7 @@ internal fun VesperNativePlayerBridge.selectNativeSource(source: VesperPlayerSou
     }
 }
 
-internal suspend fun VesperNativePlayerBridge.selectNativeSourceAsync(source: VesperPlayerSource) {
+internal suspend fun VesperNativePlayerBridge.selectNativeSourceAsync(source: VesperPlayerSource, playWhenReady: Boolean = true) {
     if (isDisposed.get()) {
         val commandId = sourceCommandGeneration.incrementAndGet()
         throw obsoleteCommandFailure(
@@ -596,7 +596,7 @@ internal suspend fun VesperNativePlayerBridge.selectNativeSourceAsync(source: Ve
             sourceEpoch = commandId,
         )
     }
-    val commandId = runOnMainForSourceLoad { beginNativeSourceSelectionOnMain(source) }
+    val commandId = runOnMainForSourceLoad { beginNativeSourceSelectionOnMain(source, playWhenReady) }
         ?: throw obsoleteCommandFailure(
             message = "Android source command did not start.",
             category = VesperPlayerErrorCategory.Source,
@@ -786,6 +786,7 @@ private fun VesperNativePlayerBridge.sourceCommandTimeoutFailure(
 
 private fun VesperNativePlayerBridge.beginNativeSourceSelectionOnMain(
     source: VesperPlayerSource,
+    playWhenReady: Boolean = true,
 ): Long? {
     if (isDisposed.get()) return null
     hdrOutputTracker.sourceChanged()
@@ -806,7 +807,7 @@ private fun VesperNativePlayerBridge.beginNativeSourceSelectionOnMain(
     nativeFramePipelineLastStatus = null
     resetNativeFramePipelineRuntimeMarkers()
     currentSource = source
-    pendingAutoPlay = true
+    pendingAutoPlay = playWhenReady
     // Fence the previous Media3 item and cancel its pending subtitle command
     // before either source API returns.
     bindings.cancelPendingSeekCommand("seekSourceChanged")

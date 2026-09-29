@@ -3,6 +3,8 @@ package io.github.umbrella22.vesper.player.android
 import android.content.Context
 import android.view.ViewGroup
 import android.view.Window
+import kotlinx.coroutines.*
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +20,10 @@ class VesperPlayerController internal constructor(
     private val bridge: PlayerBridge,
 ) {
     private val isDisposed = AtomicBoolean(false)
+    private val activationLock = Any()
+    private var activationJob: Job? = null
+    private var playbackLease: VesperSourceLease? = null
+    private var activationGeneration = 0L
     private val sequenceAttachmentLock = Any()
     private var sequenceAttachment: VesperPlaybackSequenceAttachment? = null
     /**
@@ -135,6 +141,12 @@ class VesperPlayerController internal constructor(
             sequenceAttachment.also { sequenceAttachment = null }
         }
         attachment?.onControllerDisposed(this)
+        val retired = synchronized(activationLock) {
+            activationGeneration++
+            (activationJob to playbackLease).also { activationJob = null; playbackLease = null }
+        }
+        retired.first?.cancel(CancellationException("activation_disposed"))
+        retired.second?.close()
         bridge.dispose()
     }
 
@@ -148,6 +160,7 @@ class VesperPlayerController internal constructor(
      */
     fun selectSource(source: VesperPlayerSource) {
         checkDirectSourceSelectionAllowed()
+        retireSourceActivation()
         bridge.selectSource(source)
     }
 
@@ -157,8 +170,18 @@ class VesperPlayerController internal constructor(
     suspend fun selectSourceAsync(source: VesperPlayerSource) {
         checkDirectSourceSelectionAllowed()
         withContext(Dispatchers.Main.immediate) {
+            retireSourceActivation()
             bridge.selectSourceAsync(source)
         }
+    }
+
+    private fun retireSourceActivation() {
+        val retired = synchronized(activationLock) {
+            activationGeneration++
+            (activationJob to playbackLease).also { activationJob = null; playbackLease = null }
+        }
+        retired.first?.cancel(CancellationException("activation_superseded"))
+        retired.second?.close()
     }
 
     internal fun attachPlaybackSequence(attachment: VesperPlaybackSequenceAttachment) {
@@ -181,16 +204,94 @@ class VesperPlayerController internal constructor(
         }
     }
 
-    internal fun activateSequenceSource(
+    suspend fun activate(
+        handle: VesperSourceHandle,
+        options: VesperSourceActivationOptions = VesperSourceActivationOptions(),
+    ): VesperSourceActivationResult {
+        checkDirectSourceSelectionAllowed()
+        return activateLease(handle.sessionId, handle.id, handle.acquire(), options)
+    }
+
+    internal suspend fun activateSequenceSource(
         attachment: VesperPlaybackSequenceAttachment,
-        source: VesperPlayerSource,
-    ) {
-        synchronized(sequenceAttachmentLock) {
-            if (sequenceAttachment !== attachment) {
-                throw VesperPlaybackSequenceException("sequence_attached_conflict")
+        sessionId: String,
+        sourceId: String,
+        lease: VesperSourceLease,
+        options: VesperSourceActivationOptions,
+    ): VesperSourceActivationResult {
+        return activateLease(sessionId, sourceId, lease, options, attachment)
+    }
+
+    private suspend fun activateLease(
+        sessionId: String,
+        sourceId: String,
+        lease: VesperSourceLease,
+        options: VesperSourceActivationOptions,
+        attachment: VesperPlaybackSequenceAttachment? = null,
+    ): VesperSourceActivationResult {
+        var retained = false
+        try {
+            return withContext(Dispatchers.Main.immediate) {
+                val diagnostics = bridge.playbackDiagnosticsTracker
+                    ?: throw UnsupportedOperationException("activation_correlation_unavailable")
+                if (bridge !is VesperNativePlayerBridge) {
+                    throw UnsupportedOperationException("source_activation_unsupported")
+                }
+                synchronized(sequenceAttachmentLock) {
+                    check(sequenceAttachment === attachment) { "sequence_attached_conflict" }
+                }
+                val job = currentCoroutineContext().job
+                val previous: Job?
+                val generation: Long
+                synchronized(activationLock) {
+                    check(!isDisposed.get()) { "activation_disposed" }
+                    generation = ++activationGeneration
+                    previous = activationJob
+                    activationJob = job
+                }
+                previous?.cancel(CancellationException("activation_superseded"))
+                fun checkCurrent() {
+                    job.ensureActive()
+                    synchronized(activationLock) {
+                        check(!isDisposed.get() && activationGeneration == generation) { "activation_superseded" }
+                    }
+                    lease.checkValid()
+                }
+                try {
+                    withTimeout(options.timeoutMs) {
+                        val source = lease.sourceForActivation()
+                        bridge.selectNativeSourceAsync(source, playWhenReady = false)
+                        checkCurrent()
+                        bridge.pause()
+                        checkCurrent()
+                        bridge.setPlaybackRate(options.playbackRate)
+                        checkCurrent()
+                        val timeline = bridge.uiState.value.timeline
+                        if (options.startPositionMs != timeline.positionMs &&
+                            (options.startPositionMs != 0L || timeline.isSeekable)) {
+                            bridge.seekByAsync(options.startPositionMs - timeline.positionMs)
+                        }
+                        checkCurrent()
+                        val playbackEpoch = diagnostics.snapshot.value.playbackEpoch
+                        check(playbackEpoch > 0) { "activation_correlation_unavailable" }
+                        if (options.playWhenReady) bridge.play() else bridge.pause()
+                        checkCurrent()
+                        val old = synchronized(activationLock) {
+                            playbackLease.also { playbackLease = lease; retained = true }
+                        }
+                        old?.close()
+                        VesperSourceActivationResult(
+                            UUID.randomUUID().toString(), sessionId, sourceId,
+                            playbackEpoch,
+                        )
+                    }
+                } finally {
+                    synchronized(activationLock) { if (activationJob === job) activationJob = null }
+                }
             }
+        } finally {
+            if (!retained) lease.close()
         }
-        bridge.selectSource(source)
     }
 
     /** Returns the host-only context needed by sequence cache execution. */

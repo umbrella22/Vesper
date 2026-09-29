@@ -32,6 +32,106 @@ import org.junit.Test
 class VesperNativePlayerBridgeTest {
     @Test
     @OptIn(ExperimentalCoroutinesApi::class)
+    fun handleActivationWaitsForReadinessSeekAndPreservesPausedIntent() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val fake = FakeBindings(awaitableCommands = true)
+        val tracker = VesperPlaybackDiagnosticsTracker { 100L }
+        val bindings = object : VesperNativeBindings by fake { override val playbackDiagnosticsTracker = tracker }
+        val bridge = VesperNativePlayerBridge(bindings = bindings)
+        val controller = VesperPlayerController(bridge)
+        val session = activationTestSession()
+        try {
+            val handle = session.register(VesperPlayerSource.remote("https://test/a.mp4", "a"))
+            val activation = async(Dispatchers.Default) { controller.activate(handle, VesperSourceActivationOptions(false, 2000, 1.5f)) }
+            assertTrue(waitUntil { fake.sourceReadinessRequestCount == 1 })
+            assertFalse(activation.isCompleted)
+            assertEquals(0, fake.playCount)
+            handle.close(); session.close()
+            fake.completeSourceReadiness(0, testVodTimeline(positionMs = 0))
+            assertTrue(waitUntil { fake.seekRequestCount == 1 })
+            assertFalse(activation.isCompleted)
+            fake.completeSeek(0, 2000)
+            val result = activation.await()
+            assertEquals(handle.id, result.sourceId)
+            assertEquals(handle.sessionId, result.sessionId)
+            assertEquals(tracker.snapshot.value.playbackEpoch, result.playbackEpoch)
+            assertEquals(0, fake.playCount)
+            assertTrue(fake.playbackRates.contains(1.5f))
+        } finally { controller.dispose(); session.close(); Dispatchers.resetMain() }
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun handleActivationSupersessionSettlesOldWaitAndInvalidationRejectsCommit() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val fake = FakeBindings(awaitableCommands = true)
+        val controller = VesperPlayerController(VesperNativePlayerBridge(bindings = activationBindings(fake)))
+        val session = activationTestSession()
+        try {
+            val a = session.register(VesperPlayerSource.remote("https://test/a.mp4", "a"))
+            val b = session.register(VesperPlayerSource.remote("https://test/b.mp4", "b"))
+            val first = async(Dispatchers.Default) { runCatching { controller.activate(a) } }
+            assertTrue(waitUntil { fake.sourceReadinessRequestCount == 1 })
+            val second = async(Dispatchers.Default) { runCatching { controller.activate(b) } }
+            assertTrue(waitUntil { fake.sourceReadinessRequestCount == 2 })
+            assertTrue(first.await().isFailure)
+            b.invalidate()
+            fake.completeSourceReadiness(1, testVodTimeline(positionMs = 0))
+            assertTrue(second.await().isFailure)
+            assertEquals(0, fake.playCount)
+        } finally { controller.dispose(); session.close(); Dispatchers.resetMain() }
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun handleActivationTimeoutAndDisposeSettlePendingReadiness() = runBlocking {
+        val dispatcher = UnconfinedTestDispatcher()
+        Dispatchers.setMain(dispatcher)
+        val fake = FakeBindings(awaitableCommands = true)
+        val controller = VesperPlayerController(VesperNativePlayerBridge(bindings = activationBindings(fake)))
+        val session = activationTestSession()
+        try {
+            val handle = session.register(VesperPlayerSource.remote("https://test/a.mp4", "a"))
+            val timed = async(Dispatchers.Default) { runCatching { controller.activate(handle, VesperSourceActivationOptions(timeoutMs = 1000)) } }
+            assertTrue(waitUntil { fake.sourceReadinessRequestCount == 1 })
+            dispatcher.scheduler.advanceTimeBy(1001)
+            dispatcher.scheduler.runCurrent()
+            assertTrue(timed.await().isFailure)
+            val disposed = async(Dispatchers.Default) { runCatching { controller.activate(handle) } }
+            assertTrue(waitUntil { fake.sourceReadinessRequestCount == 2 })
+            controller.dispose()
+            assertTrue(disposed.await().isFailure)
+            assertEquals(0, fake.playCount)
+        } finally { controller.dispose(); session.close(); Dispatchers.resetMain() }
+    }
+
+    private fun activationBindings(fake: FakeBindings): VesperNativeBindings =
+        object : VesperNativeBindings by fake {
+            override val playbackDiagnosticsTracker = VesperPlaybackDiagnosticsTracker { 100L }
+        }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun activationRejectsMissingCorrelationBeforeLoading() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val fake = FakeBindings()
+        val controller = VesperPlayerController(VesperNativePlayerBridge(bindings = fake))
+        val session = activationTestSession()
+        try {
+            val handle = session.register(VesperPlayerSource.remote("https://test/a.mp4", "a"))
+            val result = runCatching { controller.activate(handle) }
+            assertTrue(result.exceptionOrNull() is UnsupportedOperationException)
+            assertEquals("activation_correlation_unavailable", result.exceptionOrNull()?.message)
+            assertNull(fake.lastInitializedSource)
+        } finally { controller.dispose(); session.close(); Dispatchers.resetMain() }
+    }
+
+    private fun activationTestSession() = VesperSourceSession(VesperSourceSessionConfiguration(),
+        VesperSequenceWarmupTransport { error("No preload requested") }, DashStartupHttpTransport,
+        VesperDashStartupCache(), Dispatchers.IO, System::currentTimeMillis, { System.nanoTime() / 1_000_000 })
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun diagnosticsListenerSourceReplacementOwnsTheNewCommand() = runTest {
         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
         val sourceA = VesperPlayerSource.remote("https://example.invalid/video.mp4", "A")
@@ -90,11 +190,11 @@ class VesperNativePlayerBridgeTest {
 
     @Test
     @OptIn(ExperimentalCoroutinesApi::class)
-    fun outputGenerationsFollowNativeEventsAndRepeatedSequenceActivation() = runTest {
-        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+    fun outputGenerationsFollowNativeEventsAndRepeatedSequenceActivation() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
         val source = VesperPlayerSource.remote("https://example.invalid/video.mp4", "Video")
         val bindings = FakeBindings()
-        val bridge = VesperNativePlayerBridge(bindings = bindings, initialSource = source)
+        val bridge = VesperNativePlayerBridge(bindings = activationBindings(bindings), initialSource = source)
         val controller = VesperPlayerController(bridge)
         val outputs = mutableListOf<VesperHdrOutputSnapshot>()
         try {
@@ -128,8 +228,8 @@ class VesperNativePlayerBridgeTest {
                 override fun onControllerDisposed(controller: VesperPlayerController) = Unit
             }
             controller.attachPlaybackSequence(attachment)
-            controller.activateSequenceSource(attachment, source)
-            controller.activateSequenceSource(attachment, source)
+            controller.activateSequenceSource(attachment, "session", "source", VesperSourceLease(source) { true }, VesperSourceActivationOptions())
+            controller.activateSequenceSource(attachment, "session", "source", VesperSourceLease(source) { true }, VesperSourceActivationOptions())
             assertEquals(3L, controller.hdrOutput!!.value.sourceRevision)
             assertEquals(VesperHdrOutputState.Unknown, controller.hdrOutput!!.value.state)
         } finally {

@@ -1,5 +1,7 @@
 package io.github.umbrella22.vesper.player.android
 
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -60,7 +62,7 @@ data class VesperPlaybackSequenceContentIdentity(
     val value: String,
 )
 
-data class VesperPlaybackSequenceCacheIdentity(
+internal data class VesperPlaybackSequenceCacheIdentity(
     val providerNamespace: String,
     val contentIdentity: String,
     val renditionIdentity: String,
@@ -80,10 +82,7 @@ data class VesperPlaybackSequenceItem(
     val itemId: String,
     val contentIdentity: VesperPlaybackSequenceContentIdentity,
     val mediaKind: VesperPlaybackSequenceMediaKind = VesperPlaybackSequenceMediaKind.Vod,
-    val source: VesperPlayerSource? = null,
-    val cacheIdentity: VesperPlaybackSequenceCacheIdentity? = null,
-    val sourceRevision: Long = cacheIdentity?.sourceRevision ?: 0,
-    val expiresAtEpochMs: Long? = null,
+    val source: VesperSourceHandle? = null,
     val providerMetadataRef: String? = null,
     val preloadProfile: VesperPlaybackSequencePreloadProfile =
         VesperPlaybackSequencePreloadProfile(),
@@ -94,28 +93,43 @@ data class VesperPlaybackSequenceItem(
             "provider namespace must not be blank"
         }
         require(contentIdentity.value.isNotBlank()) { "content identity must not be blank" }
-        require((source == null) == (cacheIdentity == null)) {
-            "source and cacheIdentity must either both be present or both be absent"
-        }
-        if (source != null) {
-            require(sourceRevision > 0 && cacheIdentity?.sourceRevision == sourceRevision) {
-                "resolved source revision must be positive and match cacheIdentity"
-            }
-        }
+
     }
 }
 
-data class VesperPlaybackSequenceResolvedSource(
+internal data class VesperPlaybackSequenceResolvedSource(
     val sessionGeneration: Long,
     val requestId: Long,
     val resolutionAttemptId: Long,
     val itemId: String,
     val expectedSourceRevision: Long,
-    val sourceRevision: Long,
-    val source: VesperPlayerSource,
-    val cacheIdentity: VesperPlaybackSequenceCacheIdentity,
-    val expiresAtEpochMs: Long? = null,
+    val source: VesperSourceHandle,
 )
+
+/** Opaque resolver fence decoded from a source-resolution event, not supplied by application policy. */
+class VesperPlaybackSequenceSourceRequest private constructor(
+    internal val sessionGeneration: Long,
+    internal val requestId: Long,
+    internal val resolutionAttemptId: Long,
+    val itemId: String,
+    internal val expectedSourceRevision: Long,
+) {
+    companion object {
+        fun fromWireMap(value: Map<String, Any?>): VesperPlaybackSequenceSourceRequest = VesperPlaybackSequenceSourceRequest(
+            value.requestInteger("sessionGeneration"),
+            value.requestInteger("requestId"),
+            value.requestInteger("resolutionAttemptId"),
+            value["itemId"] as? String ?: error("missing_item_id"),
+            value.requestInteger("expectedSourceRevision"),
+        ).also { require(it.sessionGeneration > 0 && it.requestId > 0 && it.resolutionAttemptId > 0 && it.expectedSourceRevision >= 0) }
+    }
+}
+
+private fun Map<String, Any?>.requestInteger(key: String): Long = when (val value = this[key]) {
+    is Int -> value.toLong()
+    is Long -> value
+    else -> throw IllegalArgumentException("invalid_$key")
+}
 
 data class VesperPlaybackSequenceItemState(
     val itemId: String,
@@ -193,7 +207,11 @@ data class VesperPlaybackSequenceEvent(
     val eventSequence: Long,
     val sessionGeneration: Long,
     val event: Map<String, Any?>,
-)
+) {
+    val sourceRequest: VesperPlaybackSequenceSourceRequest?
+        get() = if (event["type"] == "sourceResolutionRequired")
+            VesperPlaybackSequenceSourceRequest.fromWireMap(event + ("sessionGeneration" to sessionGeneration)) else null
+}
 
 internal fun VesperPlaybackSequenceEvent.toWireMap(): Map<String, Any?> =
     mapOf(
@@ -210,24 +228,21 @@ class VesperPlaybackSequence(
     private data class SourceRegistryEntry(
         val itemId: String,
         val sourceRevision: Long,
-        val source: VesperPlayerSource,
-    )
-
-    private data class AppliedActivation(
-        val itemId: String,
-        val sourceRevision: Long,
-        val activationEpoch: Long,
-    )
+        val handle: VesperSourceHandle,
+        val lease: VesperSourceLease,
+    ) { val source: VesperPlayerSource get() = lease.sourceForActivation() }
 
     private val isDisposed = AtomicBoolean(false)
     private val attachmentEpoch = AtomicLong(0)
     private val sourceReferenceCounter = AtomicLong(1)
     private val ownershipLock = Any()
     private val sourceRegistry = LinkedHashMap<String, SourceRegistryEntry>()
-    private val startupCacheOwner = java.util.UUID.randomUUID().toString()
     private var controller: VesperPlayerController? = null
-    private var appliedActivation: AppliedActivation? = null
-    private var warmupExecutor: VesperPlaybackSequenceWarmupExecutor? = null
+    @Volatile private var navigationJob: Job? = null
+    @Volatile private var navigationItemId: String? = null
+    private val preloadObservers = java.util.concurrent.ConcurrentHashMap<WarmupKey, Job>()
+    private val preloadScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    @Volatile private var warmupStats = VesperPlaybackSequenceWarmupSnapshot()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val sessionHandle: Long =
@@ -242,7 +257,7 @@ class VesperPlaybackSequence(
 
     /** Host-observed physical warmup and cache accounting for this sequence. */
     fun warmupSnapshot(): VesperPlaybackSequenceWarmupSnapshot =
-        warmupExecutor?.snapshot?.value ?: VesperPlaybackSequenceWarmupSnapshot()
+        warmupStats.copy(activeJobs = preloadObservers.values.count { it.isActive })
 
     init {
         try {
@@ -257,77 +272,24 @@ class VesperPlaybackSequence(
 
     fun attach(target: VesperPlayerController) {
         checkActive()
-        val attachmentToken = attachmentEpoch.updateAndGet { current ->
+        attachmentEpoch.updateAndGet { current ->
             if (current == Long.MAX_VALUE) 1L else current + 1L
-        }
-        val executor = target.sequencePreloadContext()?.let { context ->
-            val maxDiskBytes =
-                target.sequenceResiliencePolicy().cache.maxDiskBytes
-                    ?: 256L * 1024L * 1024L
-            VesperPlaybackSequenceWarmupExecutor(
-                context = context,
-                maxDiskBytes = maxDiskBytes,
-                startupMaxMemoryBytes = target.sequenceResiliencePolicy().cache.maxMemoryBytes ?: 8L * 1024 * 1024,
-                onSourceExpired = { itemId, sourceRevision ->
-                    mainHandler.post {
-                        synchronized(ownershipLock) {
-                            if (isDisposed.get() || controller !== target ||
-                                attachmentEpoch.get() != attachmentToken
-                            ) return@synchronized
-                        }
-                        runCatching { markSourceExpired(itemId, sourceRevision) }
-                    }
-                },
-                onReport = { report ->
-                    mainHandler.post {
-                        synchronized(ownershipLock) {
-                            if (isDisposed.get() || controller !== target ||
-                                attachmentEpoch.get() != attachmentToken
-                            ) return@synchronized
-                        }
-                        runCatching {
-                            execute(
-                                JSONObject()
-                                    .put("type", "reportWarmup")
-                                    .put("sessionGeneration", report.sessionGeneration)
-                                    .put("taskId", report.taskId)
-                                    .put("itemId", report.itemId)
-                                    .put("sourceRevision", report.sourceRevision)
-                                    .put("warmupGoal", report.warmupGoal)
-                                    .put("status", report.status)
-                                    .put("expectedBytes", report.expectedBytes)
-                                    .put("actualBytes", report.actualBytes)
-                                    .putNullable("cacheHit", report.cacheHit)
-                                    .put("cacheEntries", report.cacheEntries)
-                                    .put("cacheBytes", report.cacheBytes)
-                                    .put("evictedEntries", report.evictedEntries)
-                                    .putNullable("reasonCode", report.reasonCode),
-                                refresh = true,
-                            )
-                        }
-                    }
-                },
-            )
         }
         var attached = false
         synchronized(ownershipLock) {
             if (controller != null) {
-                executor?.close()
                 throw VesperPlaybackSequenceException("already_attached")
             }
             try {
                 target.attachPlaybackSequence(this)
                 controller = target
-                warmupExecutor = executor
                 attached = true
             } catch (error: Throwable) {
-                executor?.close()
                 throw error
             }
         }
         try {
             check(attached) { "sequence attachment did not complete" }
-            applyActiveSource(_snapshot.value)
             pumpPreloadIntents()
         } catch (error: Throwable) {
             detach()
@@ -336,33 +298,36 @@ class VesperPlaybackSequence(
     }
 
     fun detach() {
+        navigationJob?.cancel(CancellationException("sequence_detached"))
+        navigationJob = null
         attachmentEpoch.updateAndGet { current ->
             if (current == Long.MAX_VALUE) 1L else current + 1L
         }
         val target = synchronized(ownershipLock) {
             controller.also {
                 controller = null
-                appliedActivation = null
             }
         }
-        warmupExecutor?.close()
-        warmupExecutor = null
+        preloadObservers.values.toList().forEach { it.cancel() }
+        preloadObservers.clear()
         target?.detachPlaybackSequence(this)
     }
 
     override fun onControllerDisposed(controller: VesperPlayerController) {
+        navigationJob?.cancel(CancellationException("controller_disposed"))
+        navigationJob = null
         attachmentEpoch.updateAndGet { current ->
             if (current == Long.MAX_VALUE) 1L else current + 1L
         }
         synchronized(ownershipLock) {
             if (this.controller === controller) {
                 this.controller = null
-                appliedActivation = null
+                sourceRegistry.values.forEach { it.lease.close() }
                 sourceRegistry.clear()
             }
         }
-        warmupExecutor?.close()
-        warmupExecutor = null
+        preloadObservers.values.toList().forEach { it.cancel() }
+        preloadObservers.clear()
         runCatching {
             execute(
                 JSONObject()
@@ -380,29 +345,29 @@ class VesperPlaybackSequence(
         }
         detach()
         synchronized(ownershipLock) {
+            sourceRegistry.values.forEach { it.lease.close() }
             sourceRegistry.clear()
-            appliedActivation = null
         }
+        preloadScope.cancel()
         VesperNativeJni.disposeSequenceSession(sessionHandle)
     }
 
     fun replace(
         items: List<VesperPlaybackSequenceItem>,
-        activeItemId: String? = items.firstOrNull()?.itemId,
     ) {
         checkBatch(items)
         val stagedRegistry = LinkedHashMap<String, SourceRegistryEntry>()
         val itemPayloads = JSONArray()
-        items.forEach { item ->
-            itemPayloads.put(item.toJson(stagedRegistry))
-        }
+        try { items.forEach { item -> itemPayloads.put(item.toJson(stagedRegistry)) } }
+        catch (error: Throwable) { stagedRegistry.values.forEach { it.lease.close() }; throw error }
         val command = JSONObject().put("type", "replace").put("items", itemPayloads)
-        command.putNullable("activeItemId", activeItemId)
-        execute(command, refresh = false)
+        try { execute(command, refresh = false) }
+        catch (error: Throwable) { stagedRegistry.values.forEach { it.lease.close() }; throw error }
+        navigationJob?.cancel(CancellationException("activation_superseded"))
         synchronized(ownershipLock) {
+            sourceRegistry.values.forEach { it.lease.close() }
             sourceRegistry.clear()
             sourceRegistry.putAll(stagedRegistry)
-            appliedActivation = null
         }
         refreshAndPump()
     }
@@ -439,36 +404,77 @@ class VesperPlaybackSequence(
             endReached = endReached,
         )
 
-    fun remove(itemId: String): Boolean =
-        executeAndRefresh(JSONObject().put("type", "remove").put("itemId", itemId))
-            .optBoolean("removed")
-
-    fun setActive(itemId: String) {
-        executeAndRefresh(JSONObject().put("type", "setActive").put("itemId", itemId))
+    fun remove(itemId: String): Boolean {
+        val removed = executeAndRefresh(JSONObject().put("type", "remove").put("itemId", itemId)).optBoolean("removed")
+        if (removed && navigationItemId == itemId) {
+            navigationJob?.cancel(CancellationException("activation_item_removed"))
+        }
+        pruneRegistry()
+        return removed
     }
 
-    fun next() {
-        executeAndRefresh(JSONObject().put("type", "next"))
-    }
+    suspend fun activate(itemId: String, options: VesperSourceActivationOptions = VesperSourceActivationOptions()): VesperSourceActivationResult =
+        navigate(JSONObject().put("type", "setActive").put("itemId", itemId), options)
+            ?: throw VesperPlaybackSequenceException("activation_item_unavailable")
 
-    fun previous() {
-        executeAndRefresh(JSONObject().put("type", "previous"))
-    }
+    suspend fun next(options: VesperSourceActivationOptions = VesperSourceActivationOptions()): VesperSourceActivationResult? =
+        navigate(JSONObject().put("type", "next"), options)
 
-    fun submitResolvedSource(resolved: VesperPlaybackSequenceResolvedSource) {
+    suspend fun previous(options: VesperSourceActivationOptions = VesperSourceActivationOptions()): VesperSourceActivationResult? =
+        navigate(JSONObject().put("type", "previous"), options)
+
+    private suspend fun navigate(command: JSONObject, options: VesperSourceActivationOptions): VesperSourceActivationResult? =
+        withContext(Dispatchers.Main.immediate) {
+            checkActive()
+            val target = synchronized(ownershipLock) { controller } ?: throw VesperPlaybackSequenceException("not_attached")
+            val job = currentCoroutineContext().job
+            navigationJob?.cancel(CancellationException("activation_superseded"))
+            navigationJob = job
+            try {
+                withTimeout(options.timeoutMs) {
+                    val beforeEpoch = snapshot.value.activationEpoch
+                    executeAndRefresh(command)
+                    if (command.optString("type") != "setActive" && snapshot.value.activationEpoch == beforeEpoch) return@withTimeout null
+                    val itemId = snapshot.value.activeItemId ?: return@withTimeout null
+                    navigationItemId = itemId
+                    val generation = snapshot.value.sessionGeneration
+                    val activationEpoch = snapshot.value.activationEpoch
+                    val resolved = snapshot.first { value ->
+                        checkActive()
+                        check(value.sessionGeneration == generation && value.activationEpoch == activationEpoch &&
+                            value.activeItemId == itemId) { "activation_superseded" }
+                        val state = value.items.firstOrNull { it.itemId == itemId }
+                        check(state != null) { "activation_item_removed" }
+                        check(state.sourceState != "failed") { "source_resolution_failed" }
+                        state.sourceReference != null
+                    }
+                    val active = resolved.items.first { it.itemId == itemId }
+                    val entry = synchronized(ownershipLock) { sourceRegistry[active.sourceReference] }
+                        ?: throw VesperPlaybackSequenceException("stale_source_registry_entry")
+                    val lease = entry.lease.retain()
+                    target.activateSequenceSource(this@VesperPlaybackSequence, entry.handle.sessionId, entry.handle.id, lease, options)
+                }
+            } finally {
+                if (navigationJob === job) {
+                    navigationJob = null
+                    navigationItemId = null
+                }
+            }
+        }
+
+    fun submitResolvedSource(request: VesperPlaybackSequenceSourceRequest, source: VesperSourceHandle) =
+        submitResolvedSource(VesperPlaybackSequenceResolvedSource(request.sessionGeneration, request.requestId,
+            request.resolutionAttemptId, request.itemId, request.expectedSourceRevision, source))
+
+    private fun submitResolvedSource(resolved: VesperPlaybackSequenceResolvedSource) {
         checkActive()
-        require(resolved.sourceRevision > resolved.expectedSourceRevision) {
-            "sourceRevision must advance"
-        }
-        require(resolved.cacheIdentity.sourceRevision == resolved.sourceRevision) {
-            "cache identity revision must match source revision"
-        }
+        val revision = Math.addExact(resolved.expectedSourceRevision, 1)
         val sourceReference = nextSourceReference()
-        val entry = SourceRegistryEntry(resolved.itemId, resolved.sourceRevision, resolved.source.withDashStartupScope(resolved.expiresAtEpochMs, startupCacheOwner))
-        synchronized(ownershipLock) {
+        val entry = SourceRegistryEntry(resolved.itemId, revision, resolved.source, resolved.source.acquire())
+        try { synchronized(ownershipLock) {
             ensureRegistryCapacity(1)
             sourceRegistry[sourceReference] = entry
-        }
+        } } catch (error: Throwable) { entry.lease.close(); throw error }
         val source =
             JSONObject()
                 .put("sessionGeneration", resolved.sessionGeneration)
@@ -476,17 +482,17 @@ class VesperPlaybackSequence(
                 .put("resolutionAttemptId", resolved.resolutionAttemptId)
                 .put("itemId", resolved.itemId)
                 .put("expectedSourceRevision", resolved.expectedSourceRevision)
-                .put("sourceRevision", resolved.sourceRevision)
+                .put("sourceRevision", revision)
                 .put("sourceReference", sourceReference)
-                .put("cacheIdentity", resolved.cacheIdentity.toJson())
-                .put("warmupGoal", resolved.source.sequenceWarmupGoal())
-                .putNullable("expiresAtEpochMs", resolved.expiresAtEpochMs)
+                .put("cacheIdentity", resolved.source.cacheIdentity(revision).toJson())
+                .put("warmupGoal", entry.source.sequenceWarmupGoal())
+                .putNullable("expiresAtEpochMs", entry.source.dashStartupScope?.sourceExpiresAtMs)
         try {
             executeAndRefresh(
                 JSONObject().put("type", "submitResolvedSource").put("source", source)
             )
         } catch (error: Throwable) {
-            synchronized(ownershipLock) { sourceRegistry.remove(sourceReference) }
+            synchronized(ownershipLock) { sourceRegistry.remove(sourceReference) }?.lease?.close()
             throw error
         }
         pruneRegistry()
@@ -550,7 +556,8 @@ class VesperPlaybackSequence(
         checkBatch(items)
         val staged = LinkedHashMap<String, SourceRegistryEntry>()
         val payload = JSONArray()
-        items.forEach { payload.put(it.toJson(staged)) }
+        try { items.forEach { payload.put(it.toJson(staged)) } }
+        catch (error: Throwable) { staged.values.forEach { it.lease.close() }; throw error }
         val command =
             JSONObject()
                 .put("type", type)
@@ -559,10 +566,11 @@ class VesperPlaybackSequence(
                 .putNullable("anchorItemId", anchorItemId)
                 .put("items", payload)
                 .put("endReached", endReached)
-        synchronized(ownershipLock) {
-            ensureRegistryCapacity(staged.size)
+        val result = try {
+            synchronized(ownershipLock) { ensureRegistryCapacity(staged.size) }
+            execute(command, refresh = false)
         }
-        val result = execute(command, refresh = false)
+        catch (error: Throwable) { staged.values.forEach { it.lease.close() }; throw error }
         synchronized(ownershipLock) {
             sourceRegistry.putAll(staged)
         }
@@ -582,16 +590,20 @@ class VesperPlaybackSequence(
                 .put("mediaKind", mediaKind.wireName)
                 .putNullable("providerMetadataRef", providerMetadataRef)
                 .put("preloadProfile", preloadProfile.toJson())
-        if (source != null && cacheIdentity != null) {
+        if (source != null) {
             val sourceReference = nextSourceReference()
-            stagedRegistry[sourceReference] = SourceRegistryEntry(itemId, sourceRevision, source.withDashStartupScope(expiresAtEpochMs, startupCacheOwner))
+            val retained = synchronized(ownershipLock) { sourceRegistry.values.firstOrNull { it.itemId == itemId && it.handle === source } }
+            val revision = retained?.sourceRevision
+                ?: Math.addExact(snapshot.value.items.firstOrNull { it.itemId == itemId }?.sourceRevision ?: 0, 1)
+            val entry = SourceRegistryEntry(itemId, revision, source, retained?.lease?.retain() ?: source.acquire())
+            stagedRegistry[sourceReference] = entry
             payload.put(
                 "resolvedSource",
                 JSONObject()
                     .put("sourceReference", sourceReference)
-                    .put("cacheIdentity", cacheIdentity.toJson())
-                    .put("warmupGoal", source.sequenceWarmupGoal())
-                    .putNullable("expiresAtEpochMs", expiresAtEpochMs),
+                    .put("cacheIdentity", source.cacheIdentity(revision).toJson())
+                    .put("warmupGoal", entry.source.sequenceWarmupGoal())
+                    .putNullable("expiresAtEpochMs", entry.source.dashStartupScope?.sourceExpiresAtMs),
             )
         }
         return payload
@@ -623,43 +635,59 @@ class VesperPlaybackSequence(
     private fun refreshAndPump() {
         refreshSnapshot()
         drainEvents()
-        applyActiveSource(_snapshot.value)
         pumpPreloadIntents()
     }
 
     private fun pumpPreloadIntents() {
-        val executor = warmupExecutor ?: return
-        if (isDisposed.get()) return
-        val envelope =
-            runCatching {
-                JSONObject(
-                    VesperNativeJni.sequencePreloadIntents(
-                        sessionHandle,
-                        System.currentTimeMillis(),
-                    ),
-                )
-            }.getOrNull() ?: return
-        val result = runCatching { envelope.requireResult() }.getOrNull() ?: return
-        val intentsJson = result.optJSONArray("intents") ?: JSONArray()
-        val intents = buildList {
-            for (index in 0 until intentsJson.length()) {
-                val rawIntent = intentsJson.optJSONObject(index)
-                val intent = rawIntent?.let { VesperSequenceWarmupIntent.fromJson(it) }
-                if (intent == null) {
-                    executor.recordUnsupportedWireIntent()
-                } else {
-                    add(intent)
+        if (isDisposed.get() || controller == null) return
+        val token = attachmentEpoch.get()
+        val envelope = runCatching { JSONObject(VesperNativeJni.sequencePreloadIntents(sessionHandle, System.currentTimeMillis())) }.getOrNull() ?: return
+        val raw = runCatching { envelope.requireResult().optJSONArray("intents") }.getOrNull() ?: return
+        val intents = (0 until raw.length()).mapNotNull { raw.optJSONObject(it)?.let(VesperSequenceWarmupIntent::fromJson) }
+        val retained = intents.map { it.key }.toSet()
+        preloadObservers.keys.filter { it !in retained }.forEach { preloadObservers.remove(it)?.cancel() }
+        intents.forEach { intent ->
+            if (preloadObservers.containsKey(intent.key)) return@forEach
+            val entry = synchronized(ownershipLock) { sourceRegistry[intent.sourceReference] }
+                ?.takeIf { it.itemId == intent.itemId && it.sourceRevision == intent.sourceRevision } ?: return@forEach
+            val job = preloadScope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    val task = entry.handle.preload(VesperPreloadOptions(timeoutMs = intent.warmupWindowMs.takeIf { it > 0 }?.coerceAtMost(60_000) ?: 5000))
+                    val firstObservation = task.snapshots.first { it.state != VesperPreloadState.Queued }
+                    if (firstObservation.state == VesperPreloadState.Running) {
+                        reportSessionPreload(intent, "started", firstObservation, token)
+                    }
+                    val result = task.await()
+                    when (result.state) {
+                        VesperPreloadState.Completed -> warmupStats = warmupStats.copy(completedJobs = warmupStats.completedJobs + 1,
+                            actualBytes = warmupStats.actualBytes + result.actualBytes,
+                            cacheHits = warmupStats.cacheHits + if (result.cacheHit == true) 1 else 0,
+                            cacheMisses = warmupStats.cacheMisses + if (result.cacheHit == false) 1 else 0)
+                        VesperPreloadState.Unsupported -> warmupStats = warmupStats.copy(unsupportedJobs = warmupStats.unsupportedJobs + 1)
+                        VesperPreloadState.Cancelled -> warmupStats = warmupStats.copy(cancelledJobs = warmupStats.cancelledJobs + 1)
+                        else -> warmupStats = warmupStats.copy(failedJobs = warmupStats.failedJobs + 1)
+                    }
+                    reportSessionPreload(intent, result.state.name.replaceFirstChar { it.lowercase() }, result, token)
+                } catch (error: CancellationException) { throw error }
+                catch (_: Exception) {
+                    reportSessionPreload(intent, "failed", null, token)
                 }
             }
+            if (preloadObservers.putIfAbsent(intent.key, job) == null) job.start() else job.cancel()
         }
-        executor.reconcile(intents) { sourceReference, itemId, sourceRevision ->
-            synchronized(ownershipLock) {
-                sourceRegistry[sourceReference]
-                    ?.takeIf { entry ->
-                        entry.itemId == itemId && entry.sourceRevision == sourceRevision
-                    }
-                    ?.source
-            }
+    }
+
+    private fun reportSessionPreload(intent: VesperSequenceWarmupIntent, status: String, result: VesperPreloadResult?, token: Long) {
+        if (isDisposed.get() || attachmentEpoch.get() != token || controller == null) return
+        runCatching {
+            execute(JSONObject().put("type", "reportWarmup")
+                .put("sessionGeneration", intent.sessionGeneration).put("taskId", intent.warmupTaskId)
+                .put("itemId", intent.itemId).put("sourceRevision", intent.sourceRevision).put("warmupGoal", intent.goal)
+                .put("status", status).put("expectedBytes", result?.actualBytes ?: 0).put("actualBytes", result?.actualBytes ?: 0)
+                .putNullable("cacheHit", result?.cacheHit).put("cacheEntries", 0).put("cacheBytes", 0).put("evictedEntries", 0)
+                .putNullable("reasonCode", result?.reasonCode ?: if (status == "failed") "source_unavailable" else null), refresh = false)
+            refreshSnapshot()
+            drainEvents()
         }
     }
 
@@ -683,25 +711,10 @@ class VesperPlaybackSequence(
         }
     }
 
-    private fun applyActiveSource(snapshot: VesperPlaybackSequenceSnapshot) {
-        val active = snapshot.items.firstOrNull { it.isActive } ?: return
-        val sourceReference = active.sourceReference ?: return
-        val target = synchronized(ownershipLock) { controller } ?: return
-        val entry = synchronized(ownershipLock) { sourceRegistry[sourceReference] } ?: return
-        if (entry.itemId != active.itemId || entry.sourceRevision != active.sourceRevision) {
-            throw VesperPlaybackSequenceException("stale_source_registry_entry")
-        }
-        val activation = AppliedActivation(active.itemId, active.sourceRevision, snapshot.activationEpoch)
-        if (activation == appliedActivation) {
-            return
-        }
-        target.activateSequenceSource(this, entry.source)
-        appliedActivation = activation
-    }
-
     private fun pruneRegistry() {
         val retained = _snapshot.value.items.mapNotNull { it.sourceReference }.toSet()
         synchronized(ownershipLock) {
+            sourceRegistry.filterKeys { it !in retained }.values.forEach { it.lease.close() }
             sourceRegistry.keys.retainAll(retained)
         }
     }
@@ -838,6 +851,6 @@ private fun Any?.toKotlinValue(): Any? =
 internal fun VesperPlayerSource.sequenceWarmupGoal(): String =
     if (protocol == VesperPlayerSourceProtocol.Dash) "dashSegmentBaseStartup" else "progressiveRange"
 
-private fun VesperPlayerSource.withDashStartupScope(expiresAtMs: Long?, owner: String): VesperPlayerSource =
-    if (protocol == VesperPlayerSourceProtocol.Dash) copy().also { it.dashStartupScope = DashStartupScope(owner = owner, sourceExpiresAtMs = expiresAtMs) }
-    else this
+private fun VesperSourceHandle.cacheIdentity(revision: Long) = VesperPlaybackSequenceCacheIdentity(
+    "vesper", sessionId, id, id, sessionId, revision,
+)

@@ -115,7 +115,8 @@ internal fun buildDataSourceFactory(
                     }
                 }
         }
-    if (resolvedCachePolicy.enabled && dashStartupScope != null) {
+    // Accepted source sessions own their startup budget independently of the controller cache.
+    if (dashStartupScope != null) {
         return androidx.media3.datasource.DataSource.Factory {
             VesperDashStartupDataSource(baseFactory.createDataSource(), dashStartupScope, headers)
         }

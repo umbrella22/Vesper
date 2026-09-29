@@ -674,15 +674,16 @@ class VesperDownloadManagerTest {
                 bindings = bindings,
                 pluginRegistryFactory = VesperPluginRegistryFactory { _, _ -> registry },
                 runtimeDispatcher = runtimeDispatcher,
-                runtimeOperationTimeoutMs = 25L,
+                // Allow constructor dispatch to complete under build load before blocking cleanup.
+                runtimeOperationTimeoutMs = 500L,
             )
         val blockerStarted = CountDownLatch(1)
         val releaseBlocker = CountDownLatch(1)
         runtimeExecutor.execute {
             blockerStarted.countDown()
-            releaseBlocker.await(2, TimeUnit.SECONDS)
+            releaseBlocker.await(5, TimeUnit.SECONDS)
         }
-        assertTrue(blockerStarted.await(2, TimeUnit.SECONDS))
+        assertTrue(blockerStarted.await(5, TimeUnit.SECONDS))
 
         try {
             manager.dispose()

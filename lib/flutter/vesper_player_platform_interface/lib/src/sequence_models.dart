@@ -1,4 +1,5 @@
 import 'models.dart';
+import 'source_models.dart';
 
 enum VesperPlaybackSequenceMode { finite, replenishable }
 
@@ -89,51 +90,6 @@ final class VesperPlaybackSequenceContentIdentity {
       };
 }
 
-final class VesperPlaybackSequenceCacheIdentity {
-  const VesperPlaybackSequenceCacheIdentity({
-    required this.providerNamespace,
-    required this.contentIdentity,
-    required this.renditionIdentity,
-    required this.resourceIdentity,
-    required this.accessPartition,
-    required this.sourceRevision,
-  })  : assert(providerNamespace != ''),
-        assert(contentIdentity != ''),
-        assert(renditionIdentity != ''),
-        assert(resourceIdentity != ''),
-        assert(accessPartition != ''),
-        assert(sourceRevision > 0);
-
-  factory VesperPlaybackSequenceCacheIdentity.fromMap(
-    Map<Object?, Object?> map,
-  ) {
-    return VesperPlaybackSequenceCacheIdentity(
-      providerNamespace: map['providerNamespace'] as String? ?? '',
-      contentIdentity: map['contentIdentity'] as String? ?? '',
-      renditionIdentity: map['renditionIdentity'] as String? ?? '',
-      resourceIdentity: map['resourceIdentity'] as String? ?? '',
-      accessPartition: map['accessPartition'] as String? ?? '',
-      sourceRevision: _asInt(map['sourceRevision']),
-    );
-  }
-
-  final String providerNamespace;
-  final String contentIdentity;
-  final String renditionIdentity;
-  final String resourceIdentity;
-  final String accessPartition;
-  final int sourceRevision;
-
-  Map<String, Object?> toMap() => <String, Object?>{
-        'providerNamespace': providerNamespace,
-        'contentIdentity': contentIdentity,
-        'renditionIdentity': renditionIdentity,
-        'resourceIdentity': resourceIdentity,
-        'accessPartition': accessPartition,
-        'sourceRevision': sourceRevision,
-      };
-}
-
 final class VesperPlaybackSequencePreloadProfile {
   const VesperPlaybackSequencePreloadProfile({
     this.expectedMemoryBytes = 0,
@@ -161,18 +117,12 @@ final class VesperPlaybackSequenceItem {
     required this.contentIdentity,
     this.mediaKind = VesperPlaybackSequenceMediaKind.vod,
     this.source,
-    this.cacheIdentity,
-    this.sourceRevision = 0,
-    this.expiresAtEpochMs,
     this.providerMetadataRef,
     this.preloadProfile = const VesperPlaybackSequencePreloadProfile(),
-  })  : assert(itemId != ''),
-        assert((source == null) == (cacheIdentity == null)),
-        assert(source == null || sourceRevision > 0);
+  }) : assert(itemId != '');
 
   factory VesperPlaybackSequenceItem.fromMap(Map<Object?, Object?> map) {
     final rawSource = map['source'];
-    final rawCache = map['cacheIdentity'];
     final rawProfile = vesperDecodeMap(map['preloadProfile']);
     return VesperPlaybackSequenceItem(
       itemId: map['itemId'] as String? ?? '',
@@ -186,15 +136,8 @@ final class VesperPlaybackSequenceItem {
         VesperPlaybackSequenceMediaKind.vod,
       ),
       source: rawSource is Map
-          ? VesperPlayerSource.fromMap(Map<Object?, Object?>.from(rawSource))
+          ? VesperSourceReference.fromMap(Map<Object?, Object?>.from(rawSource))
           : null,
-      cacheIdentity: rawCache is Map
-          ? VesperPlaybackSequenceCacheIdentity.fromMap(
-              Map<Object?, Object?>.from(rawCache),
-            )
-          : null,
-      sourceRevision: _asInt(map['sourceRevision']),
-      expiresAtEpochMs: _asNullableInt(map['expiresAtEpochMs']),
       providerMetadataRef: map['providerMetadataRef'] as String?,
       preloadProfile: VesperPlaybackSequencePreloadProfile(
         expectedMemoryBytes: _asInt(rawProfile['expectedMemoryBytes']),
@@ -208,10 +151,7 @@ final class VesperPlaybackSequenceItem {
   final String itemId;
   final VesperPlaybackSequenceContentIdentity contentIdentity;
   final VesperPlaybackSequenceMediaKind mediaKind;
-  final VesperPlayerSource? source;
-  final VesperPlaybackSequenceCacheIdentity? cacheIdentity;
-  final int sourceRevision;
-  final int? expiresAtEpochMs;
+  final VesperSourceReference? source;
   final String? providerMetadataRef;
   final VesperPlaybackSequencePreloadProfile preloadProfile;
 
@@ -221,9 +161,6 @@ final class VesperPlaybackSequenceItem {
         'contentIdentity': contentIdentity.value,
         'mediaKind': mediaKind.name,
         if (source != null) 'source': source!.toMap(),
-        if (cacheIdentity != null) 'cacheIdentity': cacheIdentity!.toMap(),
-        'sourceRevision': sourceRevision,
-        'expiresAtEpochMs': expiresAtEpochMs,
         'providerMetadataRef': providerMetadataRef,
         'preloadProfile': preloadProfile.toMap(),
       };
@@ -498,28 +435,10 @@ final class VesperPlaybackSequencePage {
   final bool endReached;
 }
 
-final class VesperResolvedSource {
-  const VesperResolvedSource({
-    required this.itemId,
-    required this.expectedSourceRevision,
-    required this.sourceRevision,
-    required this.source,
-    required this.cacheIdentity,
-    this.expiresAtEpochMs,
-  });
-
-  final String itemId;
-  final int expectedSourceRevision;
-  final int sourceRevision;
-  final VesperPlayerSource source;
-  final VesperPlaybackSequenceCacheIdentity cacheIdentity;
-  final int? expiresAtEpochMs;
-}
-
 abstract interface class VesperPlaybackSequenceProvider {
   Future<VesperPlaybackSequencePage> loadItems(VesperItemsRequested request);
 
-  Future<VesperResolvedSource> resolveSource(
+  Future<VesperSourceReference> resolveSource(
     VesperSourceResolutionRequired request,
   );
 }

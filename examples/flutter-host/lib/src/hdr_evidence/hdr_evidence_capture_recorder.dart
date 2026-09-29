@@ -62,8 +62,11 @@ final class ExampleHdrEvidenceCaptureRecorder {
           frameRate: _doubleValue(sourceMetadata['frameRate']),
         ),
       );
-      await controller.selectSource(source);
-      await controller.play();
+      await activateExampleSource(
+        controller,
+        source,
+        options: const VesperSourceActivationOptions(playWhenReady: true),
+      );
       await Future<void>.delayed(captureWindow);
     } catch (error) {
       if (error is VesperPlayerError) {

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-29
+
+- Add VesperSourceSession, VesperSourceHandle and retained independent preload tasks.
+- Add awaited controller/sequence activation with explicit initial intent and native diagnostic correlation.
+- Break sequence providers/items to return accepted references; remove implicit activation from metadata updates.
+
 ## 0.7.0 - 2026-09-28
 
 - Expose retained native audio/first-frame/stall evidence and typed playback warnings.

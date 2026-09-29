@@ -154,6 +154,7 @@ class VesperPlayerAndroidPlugin :
     private val benchmarkFinalizationScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val sessions = linkedMapOf<String, PlayerSession>()
+    private val sourceChannels by lazy { VesperSourceChannels(applicationContext) { id -> sessions[id]?.controller ?: error("unknown_player") } }
     private val downloadSessions = linkedMapOf<String, DownloadSession>()
     private val sequenceSessions = linkedMapOf<String, PlaybackSequenceSession>()
     private val surfaceHostLifecycle =
@@ -224,6 +225,7 @@ class VesperPlayerAndroidPlugin :
         disposeAllSessions()
         disposeAllDownloadSessions()
         disposeAllPlaybackSequences()
+        sourceChannels.close()
         eventSink = null
         downloadEventSink = null
         eventChannel.setStreamHandler(null)
@@ -294,6 +296,13 @@ class VesperPlayerAndroidPlugin :
     }
 
     private fun dispatchMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        if (call.method in VesperSourceChannels.methods) {
+            scope.launch {
+                try { result.success(sourceChannels.execute(call.method, call.argumentMap())) }
+                catch (_: Exception) { result.error("vesper_source_command_failed", "Source operation failed or was cancelled.", null) }
+            }
+            return
+        }
         when (call.method) {
             "createPlayer" -> handleCreatePlayer(call, result)
             "probeAudioDecoderCapability" -> {
@@ -1317,15 +1326,35 @@ class VesperPlayerAndroidPlugin :
             result.error("vesper_unknown_sequence", "Unknown sequenceId.", null)
             return
         }
+        val navigation = arguments.nested("command")
+        if (navigation["type"] in setOf("activate", "next", "previous")) {
+            scope.launch {
+                try {
+                    val options = navigation.nested("options").activationOptions()
+                    val activation = sourceChannels.withWaiter {
+                        when (navigation["type"]) {
+                            "activate" -> session.sequence.activate(navigation["itemId"] as? String ?: "", options)
+                            "next" -> session.sequence.next(options)
+                            else -> session.sequence.previous(options)
+                        }
+                    }
+                    emitPlaybackSequenceSnapshot(session)
+                    result.success(mapOf("activation" to activation?.toWireMap()))
+                } catch (_: Exception) {
+                    result.error("vesper_sequence_activation_failed", "Sequence activation failed or was cancelled.", null)
+                }
+            }
+            return
+        }
         runCatching {
             val command = requireNestedMap(arguments, "command")
             when (command["type"] as? String) {
                 "replace" -> {
-                    val items = command.sequenceItems()
-                    session.sequence.replace(items, command["activeItemId"] as? String)
+                    val items = command.sequenceItems(sourceChannels::source)
+                    session.sequence.replace(items)
                 }
                 "append", "prepend" -> {
-                    val items = command.sequenceItems()
+                    val items = command.sequenceItems(sourceChannels::source)
                     val generation = (command["sessionGeneration"] as? Number)?.toLong() ?: 0
                     val requestId = (command["requestId"] as? Number)?.toLong() ?: 0
                     val anchor = command["anchorItemId"] as? String
@@ -1337,12 +1366,10 @@ class VesperPlayerAndroidPlugin :
                     }
                 }
                 "remove" -> session.sequence.remove(command["itemId"] as? String ?: "")
-                "setActive" -> session.sequence.setActive(command["itemId"] as? String ?: "")
-                "next" -> session.sequence.next()
-                "previous" -> session.sequence.previous()
-                "submitResolvedSource" -> session.sequence.submitResolvedSource(
-                    requireNestedMap(command, "source").toPlaybackSequenceResolvedSource(),
-                )
+                "submitResolvedSource" -> {
+                    val resolved = requireNestedMap(command, "source").toPlaybackSequenceResolvedSource(sourceChannels::source)
+                    session.sequence.submitResolvedSource(resolved.first, resolved.second)
+                }
                 "markSourceExpired" -> session.sequence.markSourceExpired(
                     command["itemId"] as? String ?: "",
                     (command["sourceRevision"] as? Number)?.toLong() ?: 0,
@@ -2360,11 +2387,11 @@ class VesperPlayerAndroidPlugin :
     }
 }
 
-private fun Map<String, Any?>.sequenceItems(): List<io.github.umbrella22.vesper.player.android.VesperPlaybackSequenceItem> {
+private fun Map<String, Any?>.sequenceItems(resolve: (Map<String, Any?>) -> io.github.umbrella22.vesper.player.android.VesperSourceHandle): List<io.github.umbrella22.vesper.player.android.VesperPlaybackSequenceItem> {
     val raw = this["items"] as? List<*> ?: emptyList<Any?>()
     return raw.map { value ->
         require(value is Map<*, *>) { "sequence item must be a map" }
-        value.stringMap().toPlaybackSequenceItem()
+        value.stringMap().toPlaybackSequenceItem(resolve)
     }
 }
 

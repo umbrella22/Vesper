@@ -136,14 +136,16 @@ func vesperWarmDashStartup(source: VesperPlayerSource, scope: VesperDashStartupS
                           cache: VesperDashStartupCache = .shared,
                           transport: any VesperDashStartupTransport = VesperDashStartupHTTPTransport(),
                           maximumBytes: Int = VesperDashStartupCache.maxWarmupBytes,
-                          capability: VesperDashSession.VideoDecodeCapabilityProvider = { VesperDashSession.defaultVideoDecodeCapability(for: $0) }) async throws -> (bytes: UInt64, hit: Bool) {
+                          capability: VesperDashSession.VideoDecodeCapabilityProvider = { VesperDashSession.defaultVideoDecodeCapability(for: $0) },
+                          commitToken: VesperPreloadCommitToken? = nil,
+                          residentMaximumBytes: Int? = nil) async throws -> (bytes: UInt64, hit: Bool) {
     guard source.drmConfiguration == nil, let url = URL(string: source.uri) else { throw VesperDashStartupError.invalidResponse }
     let generation = await cache.currentGeneration()
     let client = VesperDashStartupNetworkClient(scope: scope, headers: source.headers, cache: cache, transport: transport)
     var staged: [VesperDashStartupBytes] = []
     var total = 0
     var hit = true
-    func load(_ resource: VesperDashStartupResource, limit: Int) async throws -> VesperDashStartupBytes {
+    func load(_ resource: VesperDashStartupResource, limit: Int, manifest: Bool = false) async throws -> VesperDashStartupBytes {
         try Task.checkCancellation()
         let maximum = min(limit, min(maximumBytes, VesperDashStartupCache.maxWarmupBytes) - total)
         guard maximum > 0 else { throw VesperDashStartupError.budgetExceeded }
@@ -151,14 +153,20 @@ func vesperWarmDashStartup(source: VesperPlayerSource, scope: VesperDashStartupS
         let value: VesperDashStartupBytes
         if let cached { value = cached } else {
             hit = false
-            value = try await transport.fetch(resource, headers: source.headers, maximumBytes: maximum)
+            if manifest && resource.url.isFileURL {
+                value = .init(resource: resource,
+                              data: try await vesperReadLocalManifest(url: resource.url, maximumBytes: maximum),
+                              finalURL: resource.url)
+            } else {
+                value = try await transport.fetch(resource, headers: source.headers, maximumBytes: maximum)
+            }
         }
         guard !value.data.isEmpty, value.data.count <= maximum else { throw VesperDashStartupError.budgetExceeded }
         total += value.data.count
         staged.append(value)
         return value
     }
-    let mpd = try await load(.init(url: url), limit: 1024 * 1024)
+    let mpd = try await load(.init(url: url), limit: 1024 * 1024, manifest: true)
     // The FFI parser is intentionally reused so warmup and formal playback select the same representations.
     let manifest = try VesperDashManifestParser.parse(data: mpd.data, manifestURL: mpd.finalURL)
     guard manifest.type == .static, manifest.periods.count == 1 else {
@@ -181,7 +189,8 @@ func vesperWarmDashStartup(source: VesperPlayerSource, scope: VesperDashStartupS
         _ = try await load(.init(url: mediaURL, range: first.range), limit: VesperDashStartupCache.maxResourceBytes)
     }
     try Task.checkCancellation()
-    guard try await cache.store(scope: scope, values: staged, headers: source.headers, expectedGeneration: generation, maximumBytes: maximumBytes) else {
+    guard try await cache.store(scope: scope, values: staged, headers: source.headers, expectedGeneration: generation,
+                               maximumBytes: residentMaximumBytes ?? maximumBytes, commitToken: commitToken) else {
         throw VesperDashStartupError.invalidated
     }
     return (UInt64(total), hit)

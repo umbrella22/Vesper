@@ -1,7 +1,7 @@
 name: flutter_host
 description: Flutter host app for Vesper Player federated plugin validation.
 publish_to: 'none'
-version: 0.7.0+700
+version: 0.8.0+800
 
 environment:
   sdk: ^3.11.4

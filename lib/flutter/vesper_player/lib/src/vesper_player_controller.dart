@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:vesper_player_platform_interface/vesper_player_platform_interface.dart';
 
 import 'vesper_performance_diagnostics_session.dart';
+import 'vesper_source_session.dart';
 
 const Duration _progressRefreshInterval = Duration(seconds: 1);
 const Duration _maxProgressRefreshBackoff = Duration(seconds: 8);
@@ -223,6 +224,25 @@ class VesperPlayerController {
 
   Future<void> selectSource(VesperPlayerSource source) =>
       _runVoidOperation(() => _platform.selectSource(playerId, source));
+
+  /// Waits for native source readiness and the requested initial playback state.
+  /// First-frame presentation is observed separately through diagnostics.
+  Future<VesperSourceActivation> activate(
+    VesperSourceHandle source, {
+    VesperSourceActivationOptions options =
+        const VesperSourceActivationOptions(),
+  }) async {
+    _ensureActive();
+    source.ensureAvailable();
+    options.toMap();
+    final activation =
+        await _platform.activateSource(playerId, source, options);
+    _ensureActive();
+    if (activation.source != source) {
+      throw const FormatException('Activation returned a foreign source.');
+    }
+    return activation;
+  }
 
   Future<void> refresh() =>
       _runVoidOperation(() => _platform.refreshPlayer(playerId));

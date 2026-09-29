@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-29
+
+- Add independent source sessions, handle registration, bounded preloading and awaited activation with native epoch correlation.
+- Break sequence item/provider APIs to use handles; list mutation and source acceptance no longer start playback.
+- Preserve leases on ordinary close, reject expiry/invalidation, and bound physical preload work through cancellation.
+
 ## 0.7.0 - 2026-09-28
 
 - Retain audio format, decoder and first-frame observations per playback attempt.

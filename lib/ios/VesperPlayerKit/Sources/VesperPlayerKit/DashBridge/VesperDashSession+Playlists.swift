@@ -193,8 +193,12 @@ extension VesperDashSession {
                 )
             }
             let segments = try await mediaSegments(for: playable, segmentBase: segmentBase)
-            let mediaURL = playable.representation.baseURL
-            guard let url = URL(string: mediaURL) else { throw VesperDashStartupError.invalidResponse }
+            guard let url = URL(string: playable.representation.baseURL) else { throw VesperDashStartupError.invalidResponse }
+            // Preserve the transport-validated redirect target for AVPlayer's later range reads.
+            // Cache lookups still use the accepted descriptor's original resource identity.
+            let startupClient = networkClient as? VesperDashStartupNetworkClient
+            let cachedIndex = await startupClient?.cached(.init(url: url, range: segmentBase.indexRange))
+            let mediaURL = cachedIndex?.finalURL.absoluteString ?? url.absoluteString
             let localInit = await startupResourceURL(.init(url: url, range: segmentBase.initialization))
             let localFirst: URL?
             if let first = segments.first { localFirst = await startupResourceURL(.init(url: url, range: first.range)) }

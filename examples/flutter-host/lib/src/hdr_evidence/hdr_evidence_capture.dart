@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:vesper_player/vesper_player.dart';
 
+import '../player/example_source_activation.dart';
+
 part 'hdr_evidence_capture_recorder.dart';
 part 'hdr_evidence_capture_helpers.dart';
 

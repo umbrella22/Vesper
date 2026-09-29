@@ -2,12 +2,24 @@ part of 'player_host_page.dart';
 
 extension _PlayerHostSourceActions on _PlayerHostPageState {
   Future<VesperPlayerController> _createController({
-    VesperPlayerSource? initialSource,
+    VesperPlayerSource? source,
+    VesperSourceActivationOptions activationOptions =
+        const VesperSourceActivationOptions(playWhenReady: false),
     bool preservePlaylistState = false,
   }) async {
+    final generation = ++_sourceRequestGeneration;
+    bool isCurrent() =>
+        mounted && !_isClosing && generation == _sourceRequestGeneration;
+    void checkCurrent() {
+      if (!isCurrent()) {
+        throw StateError('Controller creation was superseded or disposed.');
+      }
+    }
+
     VesperPlayerController? nextController;
     try {
-      final selectedSource = initialSource ?? flutterHlsDemoSource();
+      checkCurrent();
+      final selectedSource = source ?? flutterHlsDemoSource();
       final directNativePlaybackRequired =
           exampleDolbyAcceptanceSourceRequiresDirectNativePlayback(
             selectedSource,
@@ -39,7 +51,6 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
       }
 
       nextController = await VesperPlayerController.create(
-        initialSource: selectedSource,
         renderSurfaceKind: renderSurfaceKind,
         resiliencePolicy: _selectedResilienceProfile.policy,
         sourceNormalizerConfiguration: sourceNormalizerConfiguration,
@@ -50,9 +61,21 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
           pluginReferences: frameProcessorPluginReferences,
         ),
       );
-      await nextController.initialize();
-      await _configureSystemPlayback(nextController, selectedSource);
-      await _bindPictureInPicture(nextController);
+      checkCurrent();
+      _pendingControllers.add(nextController);
+      await activateExampleSource(
+        nextController,
+        selectedSource,
+        options: activationOptions,
+        isCurrent: isCurrent,
+      );
+      checkCurrent();
+      await _configureSystemPlayback(
+        nextController,
+        selectedSource,
+        isCurrent: isCurrent,
+      );
+      checkCurrent();
       if (!preservePlaylistState) {
         _playlistItemIds = <String>[flutterHlsPlaylistItemId];
         _activePlaylistItemId = flutterHlsPlaylistItemId;
@@ -68,12 +91,15 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
       if (previous != null && !identical(previous, nextController)) {
         _disposeControllerSilently(previous);
       }
+      await _bindPictureInPicture(nextController);
       return nextController;
     } catch (_) {
       if (nextController != null) {
         _disposeControllerSilently(nextController);
       }
       rethrow;
+    } finally {
+      if (nextController != null) _pendingControllers.remove(nextController);
     }
   }
 
@@ -112,6 +138,7 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
     }
 
     final previousController = _controller ?? await _controllerFuture;
+    if (!mounted || _isClosing) return;
     final activeSource = _activePlaybackSource();
     if (activeSource != null &&
         exampleDolbyAcceptanceSourceRequiresDirectNativePlayback(
@@ -142,25 +169,25 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
       _isRebuildingController = true;
       _appendHostLog(title: '插件模式已切换', detail: setting.title);
       _controllerFuture = _createController(
-        initialSource: activeSource,
+        source: activeSource,
+        activationOptions: VesperSourceActivationOptions(
+          playWhenReady: shouldResumePlayback,
+          startPosition: Duration(milliseconds: restorePositionMs),
+          playbackRate: previousSnapshot.playbackRate,
+        ),
         preservePlaylistState: true,
       );
     });
 
+    final rebuilding = _controllerFuture;
     try {
-      final nextController = await _controllerFuture;
-      if (restorePositionMs > 0) {
-        await nextController.seekBy(restorePositionMs);
-      }
-      if (shouldResumePlayback) {
-        await nextController.play();
-      }
+      await rebuilding;
     } catch (error) {
       if (mounted) {
         _showMessage('SourceNormalizer 配置切换失败：$error');
       }
     } finally {
-      if (mounted) {
+      if (mounted && identical(_controllerFuture, rebuilding)) {
         _updateState(() {
           _isRebuildingController = false;
         });
@@ -265,6 +292,13 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
     VesperPlayerSource source, {
     ExamplePlaybackOrigin? origin,
   }) async {
+    final generation = ++_sourceRequestGeneration;
+    bool isCurrent() =>
+        mounted &&
+        !_isClosing &&
+        generation == _sourceRequestGeneration &&
+        identical(_controller, controller);
+    if (!isCurrent()) return;
     final directNativePlaybackRequired =
         exampleDolbyAcceptanceSourceRequiresDirectNativePlayback(source);
     _activeDirectSource = source;
@@ -303,33 +337,38 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
       );
       return;
     }
-    await controller.selectSource(source);
-    await _configureSystemPlayback(controller, source);
+    await activateExampleSource(
+      controller,
+      source,
+      options: const VesperSourceActivationOptions(playWhenReady: true),
+      isCurrent: isCurrent,
+    );
+    if (!isCurrent()) return;
+    await _configureSystemPlayback(controller, source, isCurrent: isCurrent);
   }
 
   Future<void> _rebuildControllerForSource(
     VesperPlayerSource source, {
     required bool shouldResumePlayback,
   }) async {
-    if (_isRebuildingController) {
-      return;
-    }
+    if (!mounted || _isClosing) return;
 
     _updateState(() {
       _isRebuildingController = true;
       _controllerFuture = _createController(
-        initialSource: source,
+        source: source,
+        activationOptions: VesperSourceActivationOptions(
+          playWhenReady: shouldResumePlayback,
+        ),
         preservePlaylistState: true,
       );
     });
 
+    final rebuilding = _controllerFuture;
     try {
-      final nextController = await _controllerFuture;
-      if (shouldResumePlayback) {
-        await nextController.play();
-      }
+      await rebuilding;
     } finally {
-      if (mounted) {
+      if (mounted && identical(_controllerFuture, rebuilding)) {
         _updateState(() {
           _isRebuildingController = false;
         });
@@ -339,11 +378,13 @@ extension _PlayerHostSourceActions on _PlayerHostPageState {
 
   Future<void> _configureSystemPlayback(
     VesperPlayerController controller,
-    VesperPlayerSource source,
-  ) async {
+    VesperPlayerSource source, {
+    bool Function()? isCurrent,
+  }) async {
     final permissionStatus = await controller
         .getSystemPlaybackPermissionStatus();
-    if (mounted) {
+    if (isCurrent != null && !isCurrent()) return;
+    if (mounted && !_isClosing) {
       _updateState(() {
         _systemPlaybackPermissionStatus = permissionStatus;
       });

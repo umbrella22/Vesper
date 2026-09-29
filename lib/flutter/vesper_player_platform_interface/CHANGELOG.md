@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-09-29
+
+- Add source session, registration, preload and activation channel contracts with opaque references and strict result decoding.
+- Replace host-built sequence cache identities/resolved-source DTOs with accepted source references.
+- Navigation returns correlated activation results; list mutation remains separate.
+
 ## 0.7.0 - 2026-09-28
 
 - Add typed audio diagnostics, first-frame and suspected-stall observations, retained terminal-error context, and audio-decoder probe request/results.

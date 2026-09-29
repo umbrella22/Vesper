@@ -4,6 +4,7 @@ export 'src/events.dart';
 export 'src/fixed_track_exception.dart';
 export 'src/models.dart';
 export 'src/sequence_models.dart';
+export 'src/source_models.dart';
 export 'src/platform_error_mapping.dart';
 export 'src/player_command_exception.dart';
 export 'src/performance_diagnostics_exception.dart';

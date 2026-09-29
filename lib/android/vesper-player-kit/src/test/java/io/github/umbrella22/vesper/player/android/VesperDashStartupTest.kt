@@ -1,6 +1,7 @@
 package io.github.umbrella22.vesper.player.android
 
 import java.nio.ByteBuffer
+import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -10,6 +11,49 @@ class VesperDashStartupTest {
     private val manifest = """<MPD type="static"><Period><AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="100" codecs="avc1.640028"><BaseURL>v.mp4</BaseURL><SegmentBase indexRange="10-53"><Initialization range="0-9"/></SegmentBase></Representation></AdaptationSet></Period></MPD>""".toByteArray()
     private fun sidx() = ByteBuffer.allocate(44).putInt(44).putInt(0x73696478).putInt(0).putInt(1)
         .putInt(1000).putInt(0).putInt(0).putShort(0).putShort(1).putInt(20).putInt(1000).putInt(0).array()
+
+    @Test fun localManifestWarmsRemoteRangesWithSourceHeaders() = runBlocking {
+        val file = Files.createTempFile("vesper manifest ", ".mpd").toFile()
+        try {
+            val bytes = String(manifest).replace("v.mp4", "https://media.test/v.mp4?signature=one").toByteArray()
+            file.writeBytes(bytes)
+            val headers = mapOf("Referer" to "https://app.test/", "User-Agent" to "VesperTest")
+            val source = VesperPlayerSource.localDash(file.toURI().toString(), "local", headers)
+            val cache = VesperDashStartupCache()
+            val scope = DashStartupScope()
+            val requests = mutableListOf<DashStartupResource>()
+            val transport = DashStartupTransport { resource, actualHeaders, _, _ ->
+                assertEquals(headers, actualHeaders)
+                assertEquals("https://media.test/v.mp4?signature=one", resource.uri)
+                requests += resource
+                DashStartupBytes(resource, when (resource.position) {
+                    10L -> sidx()
+                    0L -> ByteArray(10)
+                    else -> ByteArray(20)
+                })
+            }
+            warmDashStartup(source, scope, 1000, transport, cache)
+            assertEquals(3, requests.size)
+            assertArrayEquals(bytes, cache.read(scope, DashStartupResource(source.uri), headers)?.bytes)
+            assertEquals(source.uri, cache.read(scope, DashStartupResource(source.uri), headers)?.finalUri)
+            assertTrue(warmDashStartup(source, scope, 1000, transport, cache).second)
+            assertEquals(3, requests.size)
+        } finally { file.delete() }
+    }
+
+    @Test fun oversizedLocalManifestFailsBeforeRemoteRequestsOrCommit() = runBlocking {
+        val file = Files.createTempFile("vesper-large", ".mpd").toFile()
+        try {
+            file.writeBytes(ByteArray(1024 * 1024 + 1))
+            val cache = VesperDashStartupCache()
+            try {
+                warmDashStartup(VesperPlayerSource.localDash(file.toURI().toString(), "local"), DashStartupScope(),
+                    1000, DashStartupTransport { _, _, _, _ -> error("Unexpected network request") }, cache)
+                fail("Oversized file was accepted")
+            } catch (_: IllegalArgumentException) { }
+            assertEquals(0, cache.inventory().first)
+        } finally { file.delete() }
+    }
 
     @Test fun warmupCommitsAllResourcesAndFormalReadsReuseExactBytes() = runBlocking {
         var now = 100L

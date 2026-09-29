@@ -64,7 +64,7 @@ void main() {
   test('duplicate source notifications produce one resolution and submit',
       () async {
     platform.pending = _sourceRequestPending();
-    final resolve = Completer<VesperResolvedSource>();
+    final resolve = Completer<VesperSourceReference>();
     var resolveCalls = 0;
     final controller = await VesperPlayerController.create();
     final sequence = await controller.attachPlaybackSequence(
@@ -92,8 +92,63 @@ void main() {
     expect(resolveCalls, 1);
     expect(platform.resolveCommands, 1);
     expect(sequence.snapshot.pendingRequests, isEmpty);
+    final response = vesperDecodeMap(platform.commands.single['source']);
+    expect(response['source'], _resolvedSource().toMap());
+    expect(response.containsKey('cacheIdentity'), isFalse);
+    expect(response.containsKey('sourceRevision'), isFalse);
 
     await sequence.dispose();
+    await controller.dispose();
+  });
+
+  test(
+      'list replacement is metadata only and activation waits for native readiness',
+      () async {
+    final controller = await VesperPlayerController.create();
+    final sequence = await controller.attachPlaybackSequence();
+    await sequence.replace(<VesperPlaybackSequenceItem>[_item('a')]);
+    expect(platform.commands.single['type'], 'replace');
+    expect(platform.commands.single.containsKey('activeItemId'), isFalse);
+    platform.navigation = Completer<Map<String, Object?>>();
+    var finished = false;
+    final activation = sequence
+        .activate('a',
+            options: const VesperSourceActivationOptions(
+                playWhenReady: false, startPosition: Duration(seconds: 4)))
+        .then((value) {
+      finished = true;
+      return value;
+    });
+    await Future<void>.delayed(Duration.zero);
+    expect(finished, isFalse);
+    expect(platform.commands.last['options'],
+        containsPair('playWhenReady', false));
+    platform.navigation!.complete(<String, Object?>{
+      'activation': <String, Object?>{
+        ..._resolvedSource().toMap(),
+        'activationId': 'activation',
+        'playbackEpoch': 7
+      },
+    });
+    expect((await activation).playbackEpoch, 7);
+    await sequence.dispose();
+    await controller.dispose();
+  });
+
+  test('a provider completing after disposal cannot submit a source or failure',
+      () async {
+    platform.pending = _sourceRequestPending();
+    final provider = Completer<VesperSourceReference>();
+    final controller = await VesperPlayerController.create();
+    final sequence = await controller.attachPlaybackSequence(
+        configuration:
+            const VesperPlaybackSequenceConfiguration(sequenceId: 'feed'),
+        provider: _Provider(resolveSource: (_) => provider.future));
+    await Future<void>.delayed(Duration.zero);
+    await sequence.dispose();
+    provider.completeError(StateError('provider finished after disposal'));
+    await Future<void>.delayed(Duration.zero);
+    expect(platform.commands, isEmpty);
     await controller.dispose();
   });
 }
@@ -102,7 +157,7 @@ final class _Provider implements VesperPlaybackSequenceProvider {
   _Provider({
     Future<VesperPlaybackSequencePage> Function(VesperItemsRequested request)?
         loadItems,
-    Future<VesperResolvedSource> Function(
+    Future<VesperSourceReference> Function(
       VesperSourceResolutionRequired request,
     )? resolveSource,
   })  : _loadItems = loadItems,
@@ -110,7 +165,7 @@ final class _Provider implements VesperPlaybackSequenceProvider {
 
   final Future<VesperPlaybackSequencePage> Function(
       VesperItemsRequested request)? _loadItems;
-  final Future<VesperResolvedSource> Function(
+  final Future<VesperSourceReference> Function(
     VesperSourceResolutionRequired request,
   )? _resolveSource;
 
@@ -124,7 +179,7 @@ final class _Provider implements VesperPlaybackSequenceProvider {
   }
 
   @override
-  Future<VesperResolvedSource> resolveSource(
+  Future<VesperSourceReference> resolveSource(
     VesperSourceResolutionRequired request,
   ) {
     final callback = _resolveSource;
@@ -144,6 +199,8 @@ final class _SequenceFakePlatform extends VesperPlayerPlatform {
   VesperPlaybackSequenceSnapshot? pending;
   int appendCommands = 0;
   int resolveCommands = 0;
+  final commands = <Map<String, Object?>>[];
+  Completer<Map<String, Object?>>? navigation;
 
   Future<void> close() async {
     await _playerEvents.close();
@@ -356,6 +413,10 @@ final class _SequenceFakePlatform extends VesperPlayerPlatform {
     String sequenceId,
     Map<String, Object?> command,
   ) async {
+    commands.add(command);
+    if (command['type'] == 'activate' && navigation != null) {
+      return navigation!.future;
+    }
     final snapshot = pending ?? _emptySnapshot(sequenceId);
     final type = command['type'];
     final envelope =
@@ -512,17 +573,5 @@ VesperPlaybackSequenceItemState _itemState(String itemId) =>
       sourceRevision: 0,
     );
 
-VesperResolvedSource _resolvedSource() => VesperResolvedSource(
-      itemId: 'a',
-      expectedSourceRevision: 0,
-      sourceRevision: 1,
-      source: VesperPlayerSource.remote(uri: 'https://example.com/a.mp4'),
-      cacheIdentity: const VesperPlaybackSequenceCacheIdentity(
-        providerNamespace: 'example.provider',
-        contentIdentity: 'a',
-        renditionIdentity: '720p',
-        resourceIdentity: 'progressive',
-        accessPartition: 'public',
-        sourceRevision: 1,
-      ),
-    );
+VesperSourceReference _resolvedSource() => const VesperSourceReference(
+    sessionId: 'source-session', sourceId: 'resolved-source');

@@ -1,5 +1,10 @@
 package io.github.umbrella22.vesper.player.android
 
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.withTimeout
 import android.content.Context
 import android.net.Uri
 import android.widget.FrameLayout
@@ -26,8 +31,9 @@ class VesperPlaybackSequenceDeviceInstrumentationTest {
         check(fixtureRoot.mkdirs()) { "failed to create sequence playback fixture directory" }
         val firstFile = copyFixture(context, File(fixtureRoot, "item-a.m4v"))
         val secondFile = copyFixture(context, File(fixtureRoot, "item-b.m4v"))
-        val firstItem = item("item-a", "device item A", firstFile)
-        val secondItem = item("item-b", "device item B", secondFile)
+        val sourceSession = VesperSourceSession(context)
+        val firstItem = item(sourceSession, "item-a", "device item A", firstFile)
+        val secondItem = item(sourceSession, "item-b", "device item B", secondFile)
 
         var controller: VesperPlayerController? = null
         var sequence: VesperPlaybackSequence? = null
@@ -54,19 +60,19 @@ class VesperPlaybackSequenceDeviceInstrumentationTest {
                         requireNotNull(sequence).attach(requireNotNull(controller))
                         requireNotNull(sequence).replace(
                             listOf(firstItem, secondItem),
-                            activeItemId = firstItem.itemId,
                         )
                     }
                     val activeController = requireNotNull(controller)
                     val activeSequence = requireNotNull(sequence)
 
+                    runBlocking { activeSequence.activate(firstItem.itemId) }
                     awaitPlayback(activeController, activeSequence, firstItem.itemId, "device item A")
                     awaitWarmup(activeSequence, expectedCompleted = 2L)
 
-                    scenario.onActivity { activeSequence.next() }
+                    runBlocking { activeSequence.next() }
                     awaitPlayback(activeController, activeSequence, secondItem.itemId, "device item B")
 
-                    scenario.onActivity { activeSequence.previous() }
+                    runBlocking { activeSequence.previous() }
                     awaitPlayback(activeController, activeSequence, firstItem.itemId, "device item A")
 
                     val warmup = activeSequence.warmupSnapshot()
@@ -77,8 +83,6 @@ class VesperPlaybackSequenceDeviceInstrumentationTest {
                     assertEquals(2L, warmup.cacheMisses)
                     assertEquals(0, warmup.activeJobs)
                     assertTrue(warmup.actualBytes > 0L)
-                    assertTrue(warmup.cacheEntries >= 2)
-                    assertTrue(warmup.cacheBytes > 0L)
                 } finally {
                     scenario.onActivity {
                         sequence?.dispose()
@@ -89,7 +93,127 @@ class VesperPlaybackSequenceDeviceInstrumentationTest {
                 }
             }
         } finally {
+            sourceSession.close()
             fixtureRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun sameHandleReorderPreservesResolvedRevisionTwoWithoutPlayback() {
+        withMetadataSequence { scenario, controller, sequence, session ->
+            val unresolved = unresolvedItem("item-a")
+            val other = unresolvedItem("item-b")
+            val handle = session.register(VesperPlayerSource(
+                uri = "file:///unused-sequence-metadata-fixture.mp4",
+                label = "must not play",
+                kind = VesperPlayerSourceKind.Local,
+                protocol = VesperPlayerSourceProtocol.Progressive,
+            ))
+            val originalLabel = controller.uiState.value.sourceLabel
+            val originalEpoch = controller.playbackDiagnostics?.value?.playbackEpoch
+            scenario.onActivity { sequence.replace(listOf(unresolved, other)) }
+            runBlocking {
+                val navigation = async(Dispatchers.Default) { sequence.activate(unresolved.itemId) }
+                try {
+                    val firstRequest = awaitSourceRequest(sequence, unresolved.itemId)
+                    // Cancel the explicit playback continuation, leaving its native resolution request.
+                    navigation.cancelAndJoin()
+                    scenario.onActivity { sequence.submitResolvedSource(firstRequest, handle) }
+                } finally {
+                    navigation.cancelAndJoin()
+                }
+            }
+            assertEquals(1L, sequence.snapshot.value.items.first { it.itemId == unresolved.itemId }.sourceRevision)
+            scenario.onActivity { sequence.markSourceExpired(unresolved.itemId, 1L) }
+            val secondRequest = awaitSourceRequest(sequence, unresolved.itemId)
+            scenario.onActivity { sequence.submitResolvedSource(secondRequest, handle) }
+            assertEquals(2L, sequence.snapshot.value.items.first { it.itemId == unresolved.itemId }.sourceRevision)
+            scenario.onActivity { sequence.replace(listOf(other, unresolved.copy(source = handle))) }
+            assertEquals(listOf("item-b", "item-a"), sequence.snapshot.value.items.map { it.itemId })
+            assertEquals(2L, sequence.snapshot.value.items.first { it.itemId == unresolved.itemId }.sourceRevision)
+            assertEquals(originalLabel, controller.uiState.value.sourceLabel)
+            assertEquals(originalEpoch, controller.playbackDiagnostics?.value?.playbackEpoch)
+        }
+    }
+
+    @Test
+    fun replacementAndRemovalSettlePendingNavigationWithoutPlayback() {
+        withMetadataSequence { scenario, controller, sequence, _ ->
+            val originalLabel = controller.uiState.value.sourceLabel
+            val originalEpoch = controller.playbackDiagnostics?.value?.playbackEpoch
+            for (replace in listOf(true, false)) {
+                val unresolved = unresolvedItem("item-a")
+                scenario.onActivity { sequence.replace(listOf(unresolved)) }
+                runBlocking {
+                    val navigation = async(Dispatchers.Default) {
+                        runCatching { sequence.activate(unresolved.itemId) }
+                    }
+                    try {
+                        awaitSourceRequest(sequence, unresolved.itemId)
+                        scenario.onActivity {
+                            if (replace) sequence.replace(listOf(unresolvedItem("item-b")))
+                            else assertTrue(sequence.remove(unresolved.itemId))
+                        }
+                        val failure = runCatching { withTimeout(2_000L) { navigation.await() } }
+                        assertTrue("pending navigation must settle before timeout", navigation.isCompleted)
+                        assertTrue("superseded navigation must fail", failure.isFailure || failure.getOrThrow().isFailure)
+                        val error = failure.exceptionOrNull() ?: failure.getOrThrow().exceptionOrNull()
+                        assertTrue("unexpected cancellation reason: $error",
+                            error?.message in setOf("activation_superseded", "activation_item_removed"))
+                    } finally {
+                        navigation.cancelAndJoin()
+                    }
+                }
+                assertEquals(originalLabel, controller.uiState.value.sourceLabel)
+                assertEquals(originalEpoch, controller.playbackDiagnostics?.value?.playbackEpoch)
+            }
+        }
+    }
+
+    private fun unresolvedItem(id: String) = VesperPlaybackSequenceItem(
+        itemId = id,
+        contentIdentity = VesperPlaybackSequenceContentIdentity("device.metadata", id),
+    )
+
+    private fun awaitSourceRequest(
+        sequence: VesperPlaybackSequence,
+        itemId: String,
+    ): VesperPlaybackSequenceSourceRequest {
+        fun requestMap() = sequence.snapshot.value.pendingRequests.map { pending ->
+            @Suppress("UNCHECKED_CAST")
+            (pending["request"] as? Map<String, Any?>) ?: pending
+        }.firstOrNull { it["type"] == "sourceResolutionRequired" && it["itemId"] == itemId }
+        assertTrue("source resolution request did not arrive", awaitCondition(5) { requestMap() != null })
+        return VesperPlaybackSequenceSourceRequest.fromWireMap(requireNotNull(requestMap()))
+    }
+
+    private fun withMetadataSequence(
+        block: (ActivityScenario<VesperSurfaceLayoutTestActivity>, VesperPlayerController,
+            VesperPlaybackSequence, VesperSourceSession) -> Unit,
+    ) {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val session = VesperSourceSession(context, VesperSourceSessionConfiguration(maxMemoryBytes = 0))
+        var controller: VesperPlayerController? = null
+        var sequence: VesperPlaybackSequence? = null
+        try {
+            ActivityScenario.launch(VesperSurfaceLayoutTestActivity::class.java).use { scenario ->
+                try {
+                    scenario.onActivity { activity ->
+                        controller = VesperPlayerControllerFactory.createDefault(context = activity.applicationContext)
+                        sequence = VesperPlaybackSequence(VesperPlaybackSequenceConfiguration(
+                            sequenceId = "android-device-metadata-sequence", forwardWindow = 0,
+                        )).also { it.attach(requireNotNull(controller)) }
+                    }
+                    block(scenario, requireNotNull(controller), requireNotNull(sequence), session)
+                } finally {
+                    scenario.onActivity {
+                        sequence?.dispose()
+                        controller?.dispose()
+                    }
+                }
+            }
+        } finally {
+            session.close()
         }
     }
 
@@ -148,11 +272,11 @@ class VesperPlaybackSequenceDeviceInstrumentationTest {
     }
 
     private fun item(
+        session: VesperSourceSession,
         itemId: String,
         label: String,
         file: File,
     ): VesperPlaybackSequenceItem {
-        val revision = 1L
         return VesperPlaybackSequenceItem(
             itemId = itemId,
             contentIdentity =
@@ -161,22 +285,12 @@ class VesperPlaybackSequenceDeviceInstrumentationTest {
                     value = itemId,
                 ),
             source =
-                VesperPlayerSource(
+                session.register(VesperPlayerSource(
                     uri = Uri.fromFile(file).toString(),
                     label = label,
                     kind = VesperPlayerSourceKind.Local,
                     protocol = VesperPlayerSourceProtocol.Progressive,
-                ),
-            cacheIdentity =
-                VesperPlaybackSequenceCacheIdentity(
-                    providerNamespace = "device.fixture",
-                    contentIdentity = itemId,
-                    renditionIdentity = "h264-aac-128x96",
-                    resourceIdentity = "progressive-file",
-                    accessPartition = "instrumentation",
-                    sourceRevision = revision,
-                ),
-            sourceRevision = revision,
+                )),
             preloadProfile =
                 VesperPlaybackSequencePreloadProfile(
                     expectedDiskBytes = 64L * 1024L,

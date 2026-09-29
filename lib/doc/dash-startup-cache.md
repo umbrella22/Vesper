@@ -1,18 +1,20 @@
-# DASH sequence startup cache
+# DASH startup cache
 
-Playback sequences can warm static, single-period, unencrypted DASH SegmentBase
-sources before activation. The native hosts fetch the MPD, SIDX, initialization
+Independent source sessions and playback sequences can warm static, single-period,
+unencrypted DASH SegmentBase sources before activation. The native hosts fetch the MPD, SIDX, initialization
 range and first media range for one startup audio/video candidate. A new formal
 playback session can consume those same bytes. The feature does not retain a
 player, decoder, surface or audio output session.
 
 ## Activation and reports
 
-Use the existing playback-sequence API with a resolved DASH source, cache
-identity and source revision. Android and iOS assign the native goal
-`dashSegmentBaseStartup`; progressive sources retain `progressiveRange`.
-Flutter uses these host APIs through the existing sequence channels. Hosts do
-not need a separate DASH prewarm call.
+Register a descriptor with `VesperSourceSession` and optionally call
+`handle.preload()`. The native goal is `dashSegmentBaseStartup`; supported
+progressive prefixes use `progressiveRange`. Pass the same handle to ordinary
+controller activation or to a playback-sequence item. Native hosts assign cache
+scope and revisions; hosts no longer provide cache identities. See the
+[source lifecycle and 0.7 migration](source-lifecycle.md) for ownership, APIs,
+preload states and explicit navigation.
 
 Rust binds the goal to the source revision, session generation and warmup task
 identity. A report using another goal is rejected. Old bridge payloads that
@@ -24,13 +26,14 @@ cache. It does not mean that a decoder is ready or that a first frame exists.
 `cacheHit` describes whether every resource in that warmup was already cached;
 byte counters include bytes read from cache. Cache inventory describes the
 shared startup cache, not bytes transferred over the network or a playback-hit
-ratio. Progressive warmup inventory continues to describe its existing cache.
+ratio. Progressive preloads report `downloadOnly`; their completion does not claim
+that the formal player reuses the prefix.
 
 ## Formal playback reuse
 
 ```mermaid
 flowchart LR
-    A[Sequence source and revision] --> B[Bounded startup requests]
+    A[Accepted source handle] --> B[Bounded startup requests]
     B --> C{All resources valid and task current?}
     C -->|Yes| D[Atomic cache commit]
     C -->|No| E[Discard staged bytes]
@@ -69,18 +72,21 @@ playback representation will hit it.
 
 ## Bounds and invalidation
 
-The effective startup budget is the minimum of the host's sequence memory and
-disk cache budgets and 16 MiB. Unspecified sequence budgets default to 8 MiB
-memory and 256 MiB disk; preset values still apply. Zero disables startup warmup.
-The same budget limits staged bytes and resident bytes owned by that sequence,
-across accepted source revisions. The process-wide cache is capped at 32 MiB
-and 64 entries. The MPD, initialization and SIDX requests are each capped at
-1 MiB; one first media range is capped at 8 MiB.
+Source sessions default to 8 MiB of memory, two physical workers and four pending
+preloads. The memory budget may be 0–16 MiB; zero disables preload. Each task's
+byte cap defaults to 8 MiB and may be 1 byte–16 MiB. The session budget separately
+bounds aggregate staged bytes and resident bytes across its accepted sources.
+A task timeout includes queue time. Physical slots and staging reservations
+remain occupied until a cancelled or timed-out worker actually exits.
+The process-wide cache is capped at 32 MiB and 64 entries. The MPD, initialization
+and SIDX requests are each capped at 1 MiB; a first media range is capped at
+8 MiB. Player disk-cache policy is independent of this memory preload budget.
 
 Entries live for at most thirty seconds on a monotonic clock and never beyond
 the supplied source-expiry time. Each accepted source receives a fresh scope.
-Keys include that scope, full resource URL and effective header values. Signed
-URL, credential and revision changes cannot reuse another scope's startup data.
+Keys include that scope, full resource URL and effective header values. Reusing the same handle preserves its scope across list changes and activation.
+A replacement registration, including changed credentials or URLs, cannot reuse
+another registration's startup data.
 The key digest and task reports do not expose those credentials. Internal cache
 clearing invalidates in-flight commits; there is no new public clear-cache API.
 
@@ -95,13 +101,24 @@ Dynamic or multi-period MPDs, SegmentTemplate/List warmup, DRM and player instan
 pooling are outside this cache contract. Warmup failure leaves formal playback
 available through the host's existing supported route.
 
-## Rust migration
+A local MPD is a separate manifest input role. Android and iOS preload it through
+a bounded file reader (1 MiB maximum), preserve its file URL as the relative
+resolution base, and apply accepted HTTP headers to absolute HTTPS media URLs.
+Only the manifest loader gains local file access; initialization, index and
+media preload range transport remains HTTPS-only. Keep the file available for
+normal cold playback and eviction fallback. Removing it after preloading is a
+test technique for proving a manifest hit, not an application lifecycle policy.
 
-`SequenceWarmupGoal` now includes `DashSegmentBaseStartup`.
-`SequenceResolvedSource` struct literals must specify `warmup_goal`;
+## Rust integration
+
+`SequenceWarmupGoal` includes `DashSegmentBaseStartup`.
+`SequenceResolvedSource` literals specify `warmup_goal`;
 `SequenceSourceState::Resolved` patterns can use `..` when the goal is not needed.
-`SequenceItem::resolved(...)` still defaults to progressive warmup; Rust callers
+`SequenceItem::resolved(...)` defaults to progressive warmup; Rust callers
 can use `.with_warmup_goal(SequenceWarmupGoal::DashSegmentBaseStartup)`.
+In 0.8, replacing a list or accepting a resolved source does not activate it.
+Call `set_active` or navigation explicitly; the optional replacement cursor is
+only a scheduling hint.
 
 See [native playback diagnostics](../flutter/vesper_player_platform_interface/doc/playback-diagnostics.md)
 for the separate first-frame, audio evidence, decoder probe and suspected-stall
@@ -110,8 +127,8 @@ contracts. Startup cache reports must not be treated as those observations.
 ## Reproducing native delivery checks
 
 `VesperDashStartupDataSourceTest` uses the formal Media3 factory and a counting
-HTTP origin under Robolectric. It checks warmed-byte reuse, disabled-cache
-behavior, credential isolation and normal disk caching of later reads.
+HTTP origin under Robolectric. It checks warmed-byte reuse independently of
+controller cache policy, credential isolation and normal disk caching of later reads.
 `VesperDashStartupTests` checks new iOS session reuse, exact loopback bytes,
 segment-local ranges, expiration/clear behavior, budgets and cancellation.
 

@@ -14,6 +14,7 @@ import '../download/example_download_sections.dart';
 import '../device/example_local_media_picker.dart';
 import 'example_dolby_acceptance_catalog.dart';
 import 'example_player_helpers.dart';
+import 'example_source_activation.dart';
 import 'example_player_models.dart';
 import 'example_player_sections.dart';
 import 'example_player_sheet.dart';
@@ -55,6 +56,11 @@ class _PlayerHostPageState extends State<PlayerHostPage>
   Future<VesperDownloadManager>? _downloadManagerFuture;
 
   VesperPlayerController? _controller;
+  final Set<VesperPlayerController> _pendingControllers =
+      <VesperPlayerController>{};
+  int _sourceRequestGeneration = 0;
+  int _pictureInPictureBindingGeneration = 0;
+  bool _isClosing = false;
   VesperDownloadManager? _downloadManager;
   StreamSubscription<VesperDownloadManagerEvent>? _downloadEventsSubscription;
   StreamSubscription<VesperPlayerPictureInPictureEvent>?
@@ -171,6 +177,13 @@ class _PlayerHostPageState extends State<PlayerHostPage>
 
   @override
   void dispose() {
+    _isClosing = true;
+    _sourceRequestGeneration++;
+    _pictureInPictureBindingGeneration++;
+    for (final pending in _pendingControllers.toList()) {
+      _disposeControllerSilently(pending);
+    }
+    _pendingControllers.clear();
     WidgetsBinding.instance.removeObserver(this);
     _pictureInPictureHostChannel.setMethodCallHandler(null);
     _observedController?.snapshotListenable.removeListener(

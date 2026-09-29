@@ -211,6 +211,12 @@ public final class VesperPlayerController: ObservableObject {
     private let selectSourceImpl: (VesperPlayerSource) -> Void
     private let startSourceSelectionImpl: (VesperPlayerSource) -> Task<Void, Error>
     private let selectSourceAsyncImpl: (VesperPlayerSource) async throws -> Void
+    internal let startHandleActivationImpl: (VesperPlayerSource) -> Task<Void, Error>
+    internal let cancelHandleActivationImpl: () -> Void
+    internal let seekHandlePositionImpl: (Int64) async throws -> Void
+    internal let handlePlaybackEpochImpl: () -> UInt64?
+    internal var pendingHandleActivation: VesperPendingSourceActivation?
+    internal var activeSourceLease: VesperSourceLease?
     private let attachSurfaceHostImpl: (UIView) -> Void
     private let detachSurfaceHostImpl: () -> Void
     private let detachSurfaceHostForHostImpl: (UIView) -> Void
@@ -268,7 +274,7 @@ public final class VesperPlayerController: ObservableObject {
     private var pendingTimelineOnlyUpdate = false
     private var publishingHdrOutputUpdate = false
     private var systemPlaybackCoordinatorStorage: VesperSystemPlaybackCoordinator?
-    private var isDisposed = false
+    internal private(set) var isDisposed = false
     private weak var sequenceAttachment: VesperPlaybackSequenceAttachment?
     private weak var attachedSurfaceHost: UIView?
     private var surfaceContainerHosts: [SurfaceContainerHost] = []
@@ -325,6 +331,20 @@ public final class VesperPlayerController: ObservableObject {
         selectSourceImpl = bridge.selectSource
         startSourceSelectionImpl = bridge.startSourceSelection
         selectSourceAsyncImpl = bridge.selectSourceAsync
+        if let native = bridge as? VesperNativePlayerBridge {
+            startHandleActivationImpl = { native.startSourceSelection($0, shouldAutoPlay: false) }
+            cancelHandleActivationImpl = {
+                native.cancelSourceLoadTask(reason: "sourceActivationCancelled")
+                native.cancelPendingSeekCommand(reason: "sourceActivationCancelled")
+            }
+            seekHandlePositionImpl = { try await native.executeSeekCommand(to: $0) }
+            handlePlaybackEpochImpl = { native.playbackEpochSnapshot() }
+        } else {
+            startHandleActivationImpl = { _ in Task { throw VesperSourceActivationError.unsupported } }
+            cancelHandleActivationImpl = bridge.stop
+            seekHandlePositionImpl = { try await bridge.seekAsync(by: $0 - bridge.uiState.timeline.positionMs) }
+            handlePlaybackEpochImpl = { nil }
+        }
         attachSurfaceHostImpl = { host in
             bridge.attachSurfaceHost(host)
         }
@@ -450,6 +470,9 @@ public final class VesperPlayerController: ObservableObject {
     public func dispose() {
         guard !isDisposed else { return }
         isDisposed = true
+        cancelSourceActivation(reason: .disposed)
+        activeSourceLease?.release()
+        activeSourceLease = nil
         let attachment = sequenceAttachment
         sequenceAttachment = nil
         attachment?.onControllerDisposed(self)
@@ -493,6 +516,8 @@ public final class VesperPlayerController: ObservableObject {
             )
             return
         }
+        cancelSourceActivation(reason: .superseded)
+        activeSourceLease?.release(); activeSourceLease = nil
         selectSourceImpl(source)
     }
 
@@ -507,6 +532,8 @@ public final class VesperPlayerController: ObservableObject {
                 details: ["code": "sequence_attached_conflict"]
             )
         }
+        cancelSourceActivation(reason: .superseded)
+        activeSourceLease?.release(); activeSourceLease = nil
         selectSourceImpl(source)
     }
 
@@ -523,6 +550,8 @@ public final class VesperPlayerController: ObservableObject {
                 details: ["code": "sequence_attached_conflict"]
             )
         }
+        cancelSourceActivation(reason: .superseded)
+        activeSourceLease?.release(); activeSourceLease = nil
         return startSourceSelectionImpl(source)
     }
 
@@ -537,7 +566,17 @@ public final class VesperPlayerController: ObservableObject {
                 details: ["code": "sequence_attached_conflict"]
             )
         }
+        cancelSourceActivation(reason: .superseded)
+        activeSourceLease?.release(); activeSourceLease = nil
         try await selectSourceAsyncImpl(source)
+    }
+
+    internal func ensureStandaloneSourceActivation() throws {
+        guard !isDisposed else { throw VesperSourceActivationError.disposed }
+        guard sequenceAttachment == nil else {
+            throw VesperPlayerError(message: "sequence_attached_conflict", code: .invalidState,
+                                    category: .playback, retriable: false, details: ["code": "sequence_attached_conflict"])
+        }
     }
 
     internal func attachPlaybackSequence(_ attachment: VesperPlaybackSequenceAttachment) throws {

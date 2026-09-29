@@ -81,7 +81,19 @@ actor VesperDashStartupCache {
     }
 
     func store(scope: VesperDashStartupScope, values: [VesperDashStartupBytes], headers: [String: String], expectedGeneration: UInt64,
-               maximumBytes: Int = maxWarmupBytes) throws -> Bool {
+               maximumBytes: Int = maxWarmupBytes, commitToken: VesperPreloadCommitToken? = nil) throws -> Bool {
+        if let commitToken {
+            return try commitToken.withValidity {
+                try storeValidated(scope: scope, values: values, headers: headers,
+                                   expectedGeneration: expectedGeneration, maximumBytes: maximumBytes)
+            }
+        }
+        return try storeValidated(scope: scope, values: values, headers: headers,
+                                  expectedGeneration: expectedGeneration, maximumBytes: maximumBytes)
+    }
+
+    private func storeValidated(scope: VesperDashStartupScope, values: [VesperDashStartupBytes], headers: [String: String],
+                                expectedGeneration: UInt64, maximumBytes: Int) throws -> Bool {
         try Task.checkCancellation()
         guard expectedGeneration == generation else { return false }
         let total = values.reduce(0, { $0 + $1.data.count })
@@ -103,7 +115,7 @@ actor VesperDashStartupCache {
                 }
             }
         }
-        // The budget belongs to the sequence, across all of its accepted source revisions.
+        // The budget belongs to the source session, across all of its registrations.
         while entries.values.filter({ $0.owner == scope.owner }).reduce(0, { $0 + $1.value.data.count }) + total > budget {
             guard let oldest = entries.filter({ $0.value.owner == scope.owner }).min(by: { $0.value.order < $1.value.order })?.key else { break }
             remove(oldest)
