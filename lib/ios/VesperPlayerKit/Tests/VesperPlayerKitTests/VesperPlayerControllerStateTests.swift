@@ -402,6 +402,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
                 mode: .preferNativeFrame
             )
         )
+        defer { bridge.dispose() }
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
 
@@ -657,6 +658,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
                 decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
+        defer { bridge.dispose() }
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
 
@@ -1174,12 +1176,13 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             ),
             nativeFramePipelineCoordinator: coordinator
         )
+        defer { bridge.dispose() }
 
         bridge.initialize()
         bridge.seek(toRatio: 0.5)
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
-        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+        _ = await waitForNativeFrameSmoke(timeout: 10.0) {
             backend.seekRequests == [30_000] &&
                 bridge.uiState.timeline.positionMs == 30_000 &&
                 audioOutput.events.contains("seek:30000") &&
@@ -1224,12 +1227,13 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             ),
             nativeFramePipelineCoordinator: coordinator
         )
+        defer { bridge.dispose() }
 
         bridge.initialize()
         bridge.seek(by: 12_000)
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
-        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+        _ = await waitForNativeFrameSmoke(timeout: 10.0) {
             backend.seekRequests == [12_000]
         }
 
@@ -1276,13 +1280,14 @@ final class VesperPlayerControllerStateTests: XCTestCase {
             ),
             nativeFramePipelineCoordinator: coordinator
         )
+        defer { bridge.dispose() }
 
         bridge.initialize()
         bridge.seek(by: 12_000)
         bridge.selectSource(secondSource)
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
-        _ = await waitForNativeFrameSmoke(timeout: 1.0) {
+        _ = await waitForNativeFrameSmoke(timeout: 10.0) {
             backend.openSourceUris == ["file:///tmp/second.mov"] &&
                 bridge.uiState.sourceLabel == "Second MOV" &&
                 bridge.uiState.timeline.durationMs == 60_000
@@ -3133,7 +3138,9 @@ final class VesperPlayerControllerStateTests: XCTestCase {
 
     private func waitForDiagnostic(
         in bridge: VesperNativePlayerBridge,
-        timeout: TimeInterval = 1.0,
+        // Route assertions allow bounded simulator scheduling delays; they do
+        // not measure startup latency.
+        timeout: TimeInterval = 10.0,
         matching predicate: @escaping ([String: Any]) -> Bool
     ) async -> Bool {
         await waitForNativeFrameSmoke(timeout: timeout) {
