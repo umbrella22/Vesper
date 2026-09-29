@@ -11693,10 +11693,15 @@ fn contract_boundary_preserves_default_and_warning_output_channels() {
         .lines()
         .filter(|line| line.starts_with("WARN: "))
         .count();
-    assert!(warning_count > 0, "the fixture must exercise warning output");
+    assert!(
+        warning_count > 0,
+        "the fixture must exercise warning output"
+    );
     assert_eq!(
         clean_stdout,
-        format!("Boundary invariant scan passed. Re-run with --warnings to inspect {warning_count} focused warning candidates, or --all-warnings for the broad scan.\n")
+        format!(
+            "Boundary invariant scan passed. Re-run with --warnings to inspect {warning_count} focused warning candidates, or --all-warnings for the broad scan.\n"
+        )
     );
     assert!(stdout.starts_with("WARN: "));
     assert!(stdout.ends_with(&format!(

@@ -333,6 +333,9 @@ mod tests {
                 clock(),
             )
             .expect("replace sequence");
+        coordinator
+            .set_active(&SequenceItemId::new("a"), clock())
+            .expect("explicitly activate current item");
         let snapshot = coordinator.snapshot();
         let intents = coordinator.preload_intents(clock().wall_epoch_ms);
         assert_eq!(intents.len(), 2);
