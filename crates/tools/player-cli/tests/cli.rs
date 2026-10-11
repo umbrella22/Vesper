@@ -2097,7 +2097,7 @@ fn ios_ffmpeg_runtime_fixture_command(
     )
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 fn read_zip_fixture_entry(archive: &std::path::Path, name: &str) -> Vec<u8> {
     use std::io::Read;
 

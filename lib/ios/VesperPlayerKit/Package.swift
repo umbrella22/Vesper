@@ -69,7 +69,9 @@ let package = Package(
         .testTarget(
             name: "VesperPlayerKitTests",
             dependencies: ["VesperPlayerKit"],
-            path: "Tests/VesperPlayerKitTests"
+            path: "Tests/VesperPlayerKitTests",
+            // UIApplication idle-timer tests run in the Xcode application host.
+            exclude: ["VesperScreenSleepRegressionTests.swift"]
         ),
     ]
 )

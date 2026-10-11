@@ -152,8 +152,15 @@ credential with an interactive `cargo login`, run `plugin-sdk-release.sh
 publish`, and confirm the complete package set with `plugin-sdk-release.sh
 status`. A partially published tag can instead be resumed in the protected
 GitHub Environment by dispatching the release workflow from `main` with its
-existing `plugin-sdk-v<version>` tag. That recovery path refuses any diff from
-the tag outside the release workflow, publisher, and this script guide.
+existing `plugin-sdk-v<version>` tag. Recovery requires the current `origin/main`
+commit and an ancestor release tag. It checks that the Plugin SDK production
+sources, manifests, lockfile, toolchain, public plugin resources, and CLI archive
+documents match the tag; CLI integration tests and unrelated platform wrappers
+may contain fixes. The workflow validates the repaired checkout, publishes the
+Rust package set, rebuilds all three CLI archives, and completes the GitHub
+Release. Release notes record both the original tag commit and the commit used
+to build the artifacts. Existing registry archives must still match their
+published checksums before publication can resume.
 Product tags such as `v0.5.0` are never moved or reused for this distribution.
 
 `ios bootstrap-bridge-shim` is an explicit migration/import command. It

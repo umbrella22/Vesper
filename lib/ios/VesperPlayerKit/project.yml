@@ -174,6 +174,7 @@ targets:
           - VesperDashStartupPlaybackDeviceTests.swift
           - VesperDashStartupPlaybackScenario.swift
           - VesperSourceLifecyclePlaybackScenario.swift
+          - VesperScreenSleepRegressionTests.swift
       - path: ../../../fixtures/media/dash-startup-video.mp4
         buildPhase: resources
     settings:
@@ -196,6 +197,7 @@ targets:
       - path: Tests/VesperPlayerKitTests/VesperDashStartupTestSupport.swift
       - path: Tests/VesperPlayerKitTests/VesperDashStartupPlaybackDeviceTests.swift
       - path: Tests/VesperPlayerKitTests/VesperDashStartupPlaybackScenario.swift
+      - path: Tests/VesperPlayerKitTests/VesperScreenSleepRegressionTests.swift
       - path: ../../../fixtures/media/dash-startup-video.mp4
         buildPhase: resources
       - path: ../../../fixtures/media/device-720p-h264-aac.m4v

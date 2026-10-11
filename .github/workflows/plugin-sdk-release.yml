@@ -41,7 +41,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing plugin SDK tag to resume publishing from
+        description: Existing plugin SDK tag to resume publishing from current main
         required: false
         type: string
 
@@ -49,7 +49,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: plugin-sdk-${{ inputs.release_tag != '' && inputs.release_tag || github.ref }}
+  group: plugin-sdk-${{ inputs.release_tag != '' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
   cancel-in-progress: ${{ github.ref_type != 'tag' && inputs.release_tag == '' }}
 
 jobs:
@@ -58,6 +58,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      tag_commit: ${{ steps.version.outputs.tag_commit }}
+      source_commit: ${{ steps.version.outputs.source_commit }}
 
     steps:
       - name: Checkout
@@ -75,6 +78,8 @@ jobs:
 
       - name: Resolve and verify release identity
         id: version
+        env:
+          RECOVERY_TAG: ${{ inputs.release_tag }}
         shell: bash
         run: |
           set -euo pipefail
@@ -92,9 +97,11 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          release_tag=""
+          tag_commit=""
+          expected_tag="plugin-sdk-v$version"
 
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            expected_tag="plugin-sdk-v$version"
             if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
               echo "Expected tag $expected_tag, got $GITHUB_REF_NAME." >&2
               exit 1
@@ -104,7 +111,48 @@ jobs:
               echo "Plugin SDK tag is not reachable from origin/main." >&2
               exit 1
             fi
+            release_tag="$GITHUB_REF_NAME"
+            tag_commit="$GITHUB_SHA"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -n "$RECOVERY_TAG" ]]; then
+            if [[ "$RECOVERY_TAG" != "$expected_tag" ]]; then
+              echo "Expected recovery tag $expected_tag, got $RECOVERY_TAG." >&2
+              exit 1
+            fi
+
+            git fetch --no-tags origin main:refs/remotes/origin/main
+            git fetch --force origin "refs/tags/${RECOVERY_TAG}:refs/tags/${RECOVERY_TAG}"
+            if [[ "$GITHUB_REF_NAME" != "main" || "$(git rev-parse HEAD)" != "$GITHUB_SHA" || \
+                  "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
+              echo "Manual recovery requires the current origin/main commit." >&2
+              exit 1
+            fi
+
+            tag_commit="$(git rev-parse --verify "refs/tags/${RECOVERY_TAG}^{commit}")"
+            if ! git merge-base --is-ancestor "$tag_commit" HEAD; then
+              echo "$RECOVERY_TAG is not an ancestor of the recovery commit." >&2
+              exit 1
+            fi
+
+            release_paths=(
+              Cargo.toml Cargo.lock rust-toolchain.toml
+              crates/plugin crates/platform/common/player-platform-process
+              crates/tools/player-cli schemas templates wit
+              README.md LICENSE NOTICE THIRD_PARTY_NOTICES.md
+              ':(exclude)crates/tools/player-cli/tests/**'
+            )
+            if ! git diff --quiet "$tag_commit" HEAD -- "${release_paths[@]}"; then
+              echo "Manual recovery commit changes Plugin SDK production inputs:" >&2
+              git diff --name-status "$tag_commit" HEAD -- "${release_paths[@]}" >&2
+              exit 1
+            fi
+            release_tag="$RECOVERY_TAG"
           fi
+
+          {
+            echo "release_tag=$release_tag"
+            echo "tag_commit=$tag_commit"
+            echo "source_commit=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
@@ -117,7 +165,6 @@ jobs:
 
   build-cli:
     name: Build CLI (${{ matrix.target }})
-    if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
     needs: validate
     strategy:
       fail-fast: false
@@ -203,45 +250,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify manual recovery identity
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          VERSION: ${{ needs.validate.outputs.version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected_tag="plugin-sdk-v${VERSION}"
-          if [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
-            echo "Expected recovery tag $expected_tag, got $RELEASE_TAG." >&2
-            exit 1
-          fi
-
-          git fetch --no-tags origin main:refs/remotes/origin/main
-          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
-          if [[ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]]; then
-            echo "Manual recovery requires the current origin/main commit." >&2
-            exit 1
-          fi
-
-          tag_commit="$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")"
-          if ! git merge-base --is-ancestor "$tag_commit" HEAD; then
-            echo "$RELEASE_TAG is not an ancestor of the recovery commit." >&2
-            exit 1
-          fi
-
-          release_paths=(
-            .
-            ':(exclude).github/workflows/plugin-sdk-release.yml'
-            ':(exclude)scripts/plugin-sdk-release.sh'
-            ':(exclude)scripts/README.md'
-          )
-          if ! git diff --quiet "$tag_commit" HEAD -- "${release_paths[@]}"; then
-            echo "Manual recovery commit changes package-relevant files:" >&2
-            git diff --name-status "$tag_commit" HEAD -- "${release_paths[@]}" >&2
-            exit 1
-          fi
-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@1.99.0
 
@@ -264,7 +272,9 @@ jobs:
 
   publish-release:
     name: Publish plugin SDK GitHub release
-    if: github.ref_type == 'tag' && startsWith(github.ref_name, 'plugin-sdk-v')
+    if: >-
+      (github.ref_type == 'tag' && startsWith(github.ref_name, 'plugin-sdk-v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     needs:
       - validate
       - build-cli
@@ -289,6 +299,9 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+          TAG_COMMIT: ${{ needs.validate.outputs.tag_commit }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
         run: |
           set -euo pipefail
           cd release-assets
@@ -311,15 +324,25 @@ jobs:
           Native author projects depend on the \`vesper-player-plugin\` package while retaining the \`player_plugin\` Rust import name. WASM guest projects use \`vesper-player-plugin-wasm\` and \`player_plugin_wasm\` respectively.
 
           This release also publishes the ABI, macro, packaging, loader, WASM host, and process-supervision support crates at the same version. Prebuilt \`vesper\` CLI archives for Linux x86_64, Apple Silicon macOS, and Windows x86_64 are attached with \`SHA256SUMS.txt\`.
+
+          Release tag: \`${RELEASE_TAG}\` at \`${TAG_COMMIT}\`.
+          CLI and registry artifacts were built from \`${SOURCE_COMMIT}\`.
           EOF
 
       - name: Reconcile immutable GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_TAG: ${{ needs.validate.outputs.release_tag }}
+          TAG_COMMIT: ${{ needs.validate.outputs.tag_commit }}
         shell: bash
         run: |
           set -euo pipefail
+          git fetch --force origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          if [[ "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" != "$TAG_COMMIT" ]]; then
+            echo "Release tag changed after validation." >&2
+            exit 1
+          fi
           temp_dir="$(mktemp -d)"
           trap 'rm -rf "$temp_dir"' EXIT
           expected_assets="$temp_dir/expected-assets.txt"
@@ -338,16 +361,16 @@ jobs:
           verify_remote_assets() {
             rm -rf "$remote_assets"
             mkdir -p "$remote_assets"
-            gh release download "$GITHUB_REF_NAME" --dir "$remote_assets"
+            gh release download "$RELEASE_TAG" --dir "$remote_assets"
             find "$remote_assets" -maxdepth 1 -type f -printf '%f\n' \
               | LC_ALL=C sort > "$actual_assets"
             diff -u "$expected_assets" "$actual_assets"
             (cd "$remote_assets" && sha256sum --check SHA256SUMS.txt)
           }
 
-          if gh release view "$GITHUB_REF_NAME" \
+          if gh release view "$RELEASE_TAG" \
             --json tagName,isDraft,isPrerelease,assets > "$release_json" 2>/dev/null; then
-            if [[ "$(jq -r '.tagName' "$release_json")" != "$GITHUB_REF_NAME" ]]; then
+            if [[ "$(jq -r '.tagName' "$release_json")" != "$RELEASE_TAG" ]]; then
               echo "GitHub returned a release for an unexpected tag." >&2
               exit 1
             fi
@@ -361,7 +384,7 @@ jobs:
               exit 0
             fi
           else
-            gh release create "$GITHUB_REF_NAME" \
+            gh release create "$RELEASE_TAG" \
               --verify-tag \
               --draft \
               --latest=false \
@@ -369,15 +392,15 @@ jobs:
               --notes-file release-assets/RELEASE_NOTES.md
           fi
 
-          gh release edit "$GITHUB_REF_NAME" \
+          gh release edit "$RELEASE_TAG" \
             --verify-tag \
             --draft \
             --latest=false \
             --title "Vesper Plugin SDK ${VERSION}" \
             --notes-file release-assets/RELEASE_NOTES.md
-          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           verify_remote_assets
-          gh release edit "$GITHUB_REF_NAME" \
+          gh release edit "$RELEASE_TAG" \
             --verify-tag \
             --draft=false \
             --prerelease=false \

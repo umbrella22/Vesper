@@ -92,7 +92,10 @@ final class VesperDashSupportedRouteRegressionTests: XCTestCase {
         session = nil
         try healthRequire(released != nil, "in-flight finite work may temporarily own the session")
         client.releaseMedia()
-        try await healthWait { released == nil }
+        // Weak references can clear before deinit finishes its file cleanup.
+        try await healthWait {
+            released == nil && !FileManager.default.fileExists(atPath: directory.path)
+        }
         try healthRequire(!FileManager.default.fileExists(atPath: directory.path), "deinit must remove private session cache")
         try healthRequire(client.mediaRequestCount == 3, "teardown probe must not grow beyond bounded prefetch")
     }
