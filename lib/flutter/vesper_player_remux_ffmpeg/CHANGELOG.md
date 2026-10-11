@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-10-12
+
+- Align native remux and Flutter dependencies with the 0.9.1 SDK.
+
 ## 0.9.0 - 2026-10-11
 
 - Align native remux dependencies with the 0.9.0 SDK.

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-10-12
+
+- Align the Flutter UI package dependency with the 0.9.1 SDK.
+
 ## 0.9.0 - 2026-10-11
 
 - Align the UI package dependency with the 0.9.0 SDK.

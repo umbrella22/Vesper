@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-10-12
+
+- Align native performance-diagnostics and Flutter dependencies with the 0.9.1 SDK.
+
 ## 0.9.0 - 2026-10-11
 
 - Align native performance-diagnostics dependencies with the 0.9.0 SDK.

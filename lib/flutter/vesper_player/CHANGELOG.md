@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-10-12
+
+- Align federated package dependencies with the 0.9.1 SDK, including the iOS
+  fix for DASH error classification after AVFoundation copies an SDK error.
+
 ## 0.9.0 - 2026-10-11
 
 - Align federated package dependencies with the 0.9.0 SDK.

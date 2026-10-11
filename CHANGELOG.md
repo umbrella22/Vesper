@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-10-12
+
+<!-- release-notes:en -->
+
+### Fixed
+
+- Recover the original iOS DASH resource failure when AVFoundation copies an
+  SDK error into a plain `NSError`. Preserve the network category, original
+  message, retry policy and DASH diagnostics after checking the current item,
+  session and source load epoch; reject unrelated and stale error matches.
+- Restore Linux CLI fixture compilation, run iOS screen-sleep regressions in
+  an application host, and synchronize cache cleanup, route-error delivery and
+  Android relay-close assertions with their actual completion callbacks.
+- Complete Plugin SDK release recovery after test-only build repairs, with
+  validated tag ancestry, production-input identity and explicit original-tag
+  and artifact-source provenance.
+
+<!-- release-notes:zh-CN -->
+
+### 修复
+
+- AVFoundation 将 SDK 错误复制为普通 `NSError` 后，恢复原始 iOS DASH 资源
+  失败。校验当前 item、session 和 source load epoch 后保留网络分类、原始
+  消息、重试策略与 DASH 诊断；拒绝无关错误及过期来源的匹配。
+- 修复 Linux CLI 素材辅助函数的编译，在应用宿主中执行 iOS 屏幕休眠回归，
+  并根据实际完成回调同步缓存清理、路由错误交付和 Android relay 关闭断言。
+- 支持测试构建修复后的完整 Plugin SDK 发布恢复，校验 tag 祖先关系及生产
+  输入身份，明确记录原始 tag 和制品构建来源。
+
 ## 0.9.0 - 2026-10-12
 
 <!-- release-notes:en -->

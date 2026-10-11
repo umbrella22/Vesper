@@ -229,6 +229,48 @@ final class VesperDashPlaybackErrorRegressionTests: XCTestCase {
         XCTAssertNil(store.failure(sessionID: session.id, sourceLoadEpoch: 3, itemURL: url))
     }
 
+    func testCopiedSDKNSErrorRecoversOnlyTheCurrentResourceCause() throws {
+        let url = URL(string: "http://127.0.0.1:9/manifest.mpd")!
+        let source = VesperPlayerSource.dash(url: url, label: "insecure")
+        let bridge = VesperNativePlayerBridge(initialSource: source)
+        defer { bridge.dispose() }
+        let session = VesperDashSession(sourceURL: url)
+        let loader = VesperDashResourceLoaderDelegate(session: session, sourceLoadEpoch: bridge.sourceLoadEpoch)
+        bridge.currentDashSession = session
+        bridge.dashResourceLoaderDelegate = loader
+        bridge.player = AVPlayer(playerItem: AVPlayerItem(url: session.masterPlaylistURL))
+        let request = NSObject()
+        let cause = VesperDashBridgeError.network(
+            "\(vesperDashATSFailureMessage) URL: \(diagnosticURLDescription(url.absoluteString))")
+        let resource = try XCTUnwrap(loader.playbackFailures.record(error: cause,
+            requestID: ObjectIdentifier(request), requestURL: session.masterPlaylistURL))
+        let native = cause as NSError
+        // AVFoundation can copy the SDK error fields and discard its Swift type or wrapper.
+        let copiedCause = NSError(domain: native.domain, code: native.code,
+            userInfo: [NSLocalizedDescriptionKey: "Wrapped custom resource failure"])
+        let copiedResource = NSError(domain: resource.domain, code: resource.code,
+            userInfo: [NSLocalizedDescriptionKey: "Flattened resource failure"])
+        for copied in [copiedCause, copiedResource] {
+            let result = bridge.resolvedPlaybackFailure(error: copied, fallbackMessage: "AVPlayer failed")
+            XCTAssertEqual(result.code, .backendFailure)
+            XCTAssertEqual(result.category, .network)
+            XCTAssertFalse(result.retriable)
+            XCTAssertEqual(result.message, cause.errorDescription)
+            XCTAssertEqual(result.details["dashErrorKind"], "network")
+            XCTAssertEqual(result.details["dashFailurePhase"], "resourceLoader")
+            XCTAssertEqual(result.details["dashSessionId"], session.id)
+        }
+
+        let unrelated = NSError(domain: native.domain, code: native.code + 1,
+            userInfo: [NSLocalizedDescriptionKey: "Unrelated SDK failure"])
+        XCTAssertEqual(bridge.resolvedPlaybackFailure(error: unrelated, fallbackMessage: "unrelated").category, .platform)
+        XCTAssertNil(bridge.resolvedPlaybackFailure(error: unrelated, fallbackMessage: "unrelated").details["dashFailurePhase"])
+        bridge.sourceLoadEpoch += 1
+        let stale = bridge.resolvedPlaybackFailure(error: copiedCause, fallbackMessage: "stale")
+        XCTAssertEqual(stale.category, .platform)
+        XCTAssertNil(stale.details["dashFailurePhase"])
+    }
+
     func testResourceWrappingKeepsRealNetworkAndMissingFileClassification() throws {
         let file = URL(fileURLWithPath: "/tmp/missing-\(UUID().uuidString).mpd")
         let source = VesperPlayerSource(uri: file.absoluteString, label: "local", kind: .local, protocol: .dash)

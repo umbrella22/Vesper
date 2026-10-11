@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-10-12
+
+- Preserve typed DASH resource failures when AVFoundation copies an SDK error
+  into a plain `NSError`, retaining network classification, the original
+  message, retry policy and DASH diagnostics under current-source ownership
+  checks. Unrelated errors and stale source epochs keep their own classification.
+- Run screen-sleep regressions in an application host and synchronize cache
+  cleanup and route-error assertions with completion.
+
 ## 0.9.0 - 2026-10-11
 
 - Propagate DASH rendition and download recovery failures, retain cancellation

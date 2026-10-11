@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-10-12
+
+- Synchronize relay resource-close and cancellation-isolation regression
+  assertions with the server cleanup callback.
+- Align native and optional-plugin publication versions with the 0.9.1 SDK.
+
 ## 0.9.0 - 2026-10-11
 
 - Resolve the latest OpenSSL 3.5 LTS and libxml2 2.15 patches even with older

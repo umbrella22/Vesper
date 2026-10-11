@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-10-12
+
+- Align the Android external-playback and Flutter dependencies with the 0.9.1 SDK.
+
 ## 0.9.0 - 2026-10-11
 
 - Align the Android external-playback dependency with the 0.9.0 SDK.

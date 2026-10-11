@@ -87,12 +87,19 @@ extension VesperNativePlayerBridge {
         if let error {
             if error is VesperPlayerError || error is VesperDashBridgeError || error is VesperDashResourceFailure
                 || isVesperDashCancellation(error) { return error }
-            let native = error as NSError
-            guard native.domain == NSURLErrorDomain || native.domain == AVFoundationErrorDomain
-                || native.domain == "CoreMediaErrorDomain" else { return error }
         }
         guard let item = item ?? player?.currentItem,
               let failure = currentDashResourceFailure(item: item) else { return error }
+        if let error {
+            let native = error as NSError
+            let original = failure.cause as NSError
+            // AVFoundation can copy the SDK NSError and discard its Swift type or wrapper.
+            // Match copied error fields only after the item, session and load epoch fence passes.
+            guard native.domain == NSURLErrorDomain || native.domain == AVFoundationErrorDomain
+                || native.domain == "CoreMediaErrorDomain"
+                || (native.domain == original.domain && native.code == original.code)
+                || (native.domain == failure.domain && native.code == failure.code) else { return error }
+        }
         return failure
     }
 
