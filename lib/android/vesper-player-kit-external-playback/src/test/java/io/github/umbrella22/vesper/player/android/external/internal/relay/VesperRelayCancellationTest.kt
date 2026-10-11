@@ -180,6 +180,7 @@ class VesperRelayCancellationTest {
         val readingB = CountDownLatch(1)
         val unblockA = CountDownLatch(1)
         val unblockB = CountDownLatch(1)
+        val closedB = CountDownLatch(1)
         val closesA = AtomicInteger()
         val closesB = AtomicInteger()
         val adapter = object : VesperRelayFormatAdapter {
@@ -195,7 +196,7 @@ class VesperRelayCancellationTest {
                     }
                     override fun close() {
                         (if (isA) closesA else closesB).incrementAndGet()
-                        if (isA) unblockA.countDown()
+                        if (isA) unblockA.countDown() else closedB.countDown()
                     }
                 }
                 return VesperRelayFormatAdaptationResult.Stream(VesperRelayAdaptedStream(input, "video/mp2t", 10))
@@ -224,6 +225,8 @@ class VesperRelayCancellationTest {
             assertEquals(0, closesB.get())
             unblockB.countDown()
             assertEquals("complete B", responseB.get(5, TimeUnit.SECONDS))
+            // Receiving all bytes can precede cleanup on the relay request executor.
+            assertTrue("Uncancelled token should close after its response", closedB.await(5, TimeUnit.SECONDS))
             assertEquals(1, closesB.get())
         } finally {
             unblockA.countDown()
