@@ -16,6 +16,7 @@ internal fun VesperPlayerSource.toFormatAdaptationRequest(
     headOnly: Boolean,
     range: ByteRangeRequest?,
     requestHeaders: Map<String, String>,
+    lifetime: VesperRelayLifetime = VesperRelayLifetime(),
 ): VesperRelayFormatAdaptationRequest =
     VesperRelayFormatAdaptationRequest(
         sessionId = token,
@@ -34,7 +35,7 @@ internal fun VesperPlayerSource.toFormatAdaptationRequest(
         headOnly = headOnly,
         routeId = adaptation.routeId,
         routeName = adaptation.routeName,
-    )
+    ).also { it.lifetime = lifetime }
 
 internal fun VesperRelayDiagnostic.withHttpStatus(status: Int): VesperRelayDiagnostic =
     copy(details = details + ("httpStatus" to status.toString()))

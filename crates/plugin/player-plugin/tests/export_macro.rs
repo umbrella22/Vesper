@@ -1,17 +1,17 @@
 #![deny(unsafe_code)]
 
 use player_plugin::{
-    PipelineEvent, PipelineEventHook, PipelineEventHookError, PipelineEventHookOutcome, Plugin,
-    PluginBuildError,
+    PipelineEvent, PipelineEventHookFailure, PipelineEventHookOutcome, Plugin, PluginBuildError,
+    PluginEventHook,
 };
 
 struct Hook;
 
-impl PipelineEventHook for Hook {
+impl PluginEventHook for Hook {
     fn on_event(
         &self,
         _event: &PipelineEvent,
-    ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+    ) -> Result<PipelineEventHookOutcome, PipelineEventHookFailure> {
         Ok(PipelineEventHookOutcome::accepted())
     }
 }

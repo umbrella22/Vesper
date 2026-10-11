@@ -1,13 +1,13 @@
 # Source registration, preload and activation
 
-Vesper 0.8 separates an accepted media source from the player that eventually
+Vesper separates an accepted media source from the player that eventually
 uses it. A source session owns registrations and optional bounded preloads.
 A controller performs explicit, awaited activation. A playback sequence owns
 list navigation and source-resolution requests, and uses the same activation
 path as ordinary playback.
 
 The mobile implementations use Media3 and AVPlayer. Source sessions do not
-create players, decoders, surfaces or audio output sessions. The new lifecycle
+create players, decoders, surfaces or audio output sessions. This lifecycle
 is supported by Android, iOS and their Flutter mobile adapters. Experimental
 backends without the required native activation contract reject it explicitly.
 
@@ -179,13 +179,15 @@ disk-cache policies. An accepted DASH handle can consume its warm bytes even
 when the controller's general cache is disabled, including when the descriptor
 is a local MPD. Disable preloading through the source session's memory budget.
 
-## Sequences and migration from 0.7
+## Playback sequences
 
-Sequence items now reference accepted source handles. Flutter's provider
-`resolveSource(request)` returns a `VesperSourceReference` directly; a
-`VesperSourceHandle` is such a reference. The old public cache-identity and
-resolved-source DTOs are removed. Native resolvers submit the typed request
-and handle; the SDK carries request fences and assigns the next revision.
+Sequence items reference accepted source handles. Flutter's provider
+`resolveSource(request)` returns a `VesperSourceReference`; a
+`VesperSourceHandle` is such a reference. Native resolvers submit the typed
+request and handle; the SDK carries request fences and assigns the next
+revision. Provider responses remain subject to the request deadline, session
+generation, request identity, and resolution attempt. Stale responses cannot
+replace an active registration or start playback.
 
 ```dart
 final sequence = await controller.attachPlaybackSequence(
@@ -204,8 +206,9 @@ await sequence.activate('clip-a');
 ```
 
 `replace`, append/prepend, removal, reorder and accepted resolver responses
-update list state only. `replace` no longer accepts `activeItemId`. These
-operations never select a neighboring item or restart an existing player.
+update list state only. `replace` accepts the item list without an activation
+argument. These operations never select a neighboring item or restart an
+existing player.
 The sequence cursor is list metadata and can be empty while earlier playback
 continues. Only `activate`, `next` and `previous` request playback.
 
@@ -226,15 +229,10 @@ the hint no longer counts as activation or advances the activation epoch. Rust
 hosts must call `set_active` or navigation explicitly. Source acceptance alone
 also does not advance the activation epoch.
 
-Upgrade the native host kits, Flutter facade and platform packages together to
-0.8.0. This is a deliberate sequence/source contract break; old channel payloads
-that provide source descriptors and host-built cache identities are not the
-0.8 source-registration contract.
-
-The old iOS `VesperPlaybackSequenceWarmupSnapshot` and both platforms' internal
-sequence preload executors are removed. Source sessions own physical work;
-sequence warmup events describe scheduling and observation. Use each source's
-`VesperPreloadTask` to inspect its current state and completion.
+Source sessions perform physical preload work; sequence warmup events describe
+scheduling and observation. Each source's `VesperPreloadTask` exposes its current
+state and retained completion. Native host kits, the Flutter facade, and platform
+adapters must implement the same accepted-handle channel contract.
 
 ## Local manifests and playback evidence
 

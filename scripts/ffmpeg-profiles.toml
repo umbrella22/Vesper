@@ -29,6 +29,14 @@ tls = "none"
 forbid_network = true
 forbid_openssl = true
 
+# Probe raw AAC and AudioSpecificConfig in FLV before copying stream timing.
+[profile.download-remux.platform_overrides.android]
+decoders = ["aac"]
+
+# iOS device and Apple Silicon Simulator need the same local AAC timing probe.
+[profile.download-remux.platform_overrides.ios]
+decoders = ["aac"]
+
 [profile.default]
 extends = ["download-remux", "relay-remux"]
 libraries = ["avcodec", "avformat", "avutil"]

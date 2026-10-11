@@ -25,7 +25,8 @@ extension VesperPlaylistCoordinator {
         }
 
         let hintByItemId = Dictionary(
-            uniqueKeysWithValues: viewportHints.map { ($0.itemId, $0.kind) }
+            viewportHints.map { ($0.itemId, $0.kind) },
+            uniquingKeysWith: { _, latest in latest }
         )
         let activeItemId = activeItem?.itemId
 

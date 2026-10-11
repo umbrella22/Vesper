@@ -527,7 +527,7 @@ internal fun findTrackLocation(
         for (trackIndex in 0 until group.length) {
             val format = group.getTrackFormat(trackIndex)
             if (trackType == C.TRACK_TYPE_TEXT) {
-                val stableId = subtitleTrackId(format, isDashSource, externalSubtitleIds)
+                val stableId = subtitleTrackId(format, isDashSource, externalSubtitleIds, group.mediaTrackGroup)
                 if (stableId.isNotEmpty() &&
                     stableId !in unavailableExternalSubtitleIds &&
                     stableId == trackId
@@ -565,7 +565,7 @@ internal fun findAutomaticSubtitleOverride(
         for (index in 0 until group.length) {
             if (!group.isTrackSupported(index, true)) continue
             val format = group.getTrackFormat(index)
-            val id = subtitleTrackId(format, isDashSource, externalSubtitleIds)
+            val id = subtitleTrackId(format, isDashSource, externalSubtitleIds, group.mediaTrackGroup)
             if (id.isBlank() || id in unavailableExternalSubtitleIds) continue
             val languageRank =
                 parameters.preferredTextLanguages.indexOfFirst { preferred ->

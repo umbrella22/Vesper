@@ -2174,18 +2174,17 @@ fn resolve_build_source_for_platform_key(
             .map_err(map_source_resolution_error);
     }
     let cached_archive_names = source_cache_archive_names(root)?;
-    let mut remote_index = None;
     let series = inputs
         .platform_series
         .as_deref()
         .or(inputs.generic_series.as_deref())
         .unwrap_or(policy.default_series());
-    let cached_resolution = policy
-        .resolve_series_version(series, cached_archive_names.clone(), None)
+    policy
+        .parse_compatible_series(series)
         .map_err(map_source_resolution_error)?;
-    if cached_resolution.used_fallback {
-        remote_index = fetch_release_index()?;
-    }
+    // Query the release index even when a cache entry exists. The cache is an
+    // offline fallback; it must not hide a newer patch published upstream.
+    let remote_index = fetch_release_index()?;
 
     policy
         .resolve_build_source(&inputs, cached_archive_names, remote_index.as_deref())
@@ -2631,7 +2630,7 @@ forbid_openssl = true
     }
 
     #[test]
-    fn checked_in_profile_resolution_preserves_legacy_order_and_hashes() {
+    fn checked_in_profile_resolution_preserves_order_and_platform_hashes() {
         let Some(root) = crate::source_checkout_root() else {
             return;
         };
@@ -2651,19 +2650,141 @@ forbid_openssl = true
             .expect("resolve Android profile");
         assert_eq!(
             android.profile_hash(FfmpegPlatform::Android),
-            "custom-adf812db3806"
+            "custom-5887758ff8a3"
         );
         let ios = profiles
             .resolve("source-normalizer", FfmpegPlatform::Ios)
             .expect("resolve iOS profile");
-        assert_eq!(ios.profile_hash(FfmpegPlatform::Ios), "custom-e1eabc3db7bc");
+        assert_eq!(ios.profile_hash(FfmpegPlatform::Ios), "custom-fb7025638cb3");
         let ios_default = profiles
             .resolve("default", FfmpegPlatform::Ios)
             .expect("resolve default iOS profile");
         assert_eq!(
             ios_default.profile_hash(FfmpegPlatform::Ios),
-            "custom-e1eabc3db7bc"
+            "custom-fb7025638cb3"
         );
+    }
+
+    #[test]
+    fn checked_in_android_remux_profiles_enable_aac_probing_without_network_or_openssl() {
+        let root = crate::source_checkout_root().expect("test requires the source checkout");
+        let profiles = FfmpegProfiles::load(&root).expect("load checked-in profiles");
+        for name in ["download-remux", "default", "source-normalizer"] {
+            let resolved = profiles
+                .resolve(name, FfmpegPlatform::Android)
+                .expect("resolve Android remux profile");
+            assert_eq!(resolved.decoders, ["aac"], "Android {name}");
+            assert!(resolved.parsers.iter().any(|parser| parser == "aac"));
+            assert_eq!(resolved.protocols, ["file", "pipe"]);
+            assert_eq!(resolved.tls, "none");
+            assert!(resolved.forbid_network);
+            assert!(resolved.forbid_openssl);
+            resolved
+                .validate(FfmpegPlatform::Android, false)
+                .expect("accept local AAC probing profile");
+
+            let prepared = PreparedProfile {
+                name: name.to_owned(),
+                resolved: resolved.clone(),
+                force: false,
+                acknowledge_gpl_nonfree: false,
+            };
+            let native = NativeFfmpegProfile::from_prepared(FfmpegPlatform::Android, &prepared);
+            let arguments = native.configure_arguments(FfmpegPlatform::Android);
+            assert_eq!(
+                arguments
+                    .iter()
+                    .filter(|argument| argument.starts_with("--enable-decoder="))
+                    .collect::<Vec<_>>(),
+                [&"--enable-decoder=aac".to_owned()],
+                "Android {name} must enable only the AAC decoder"
+            );
+            for flag in [
+                "--disable-encoders",
+                "--disable-network",
+                "--disable-openssl",
+            ] {
+                assert!(
+                    arguments.iter().any(|argument| argument == flag),
+                    "{name}: {flag}"
+                );
+            }
+
+            let mut http = request();
+            http.extra_protocols.push("http".to_owned());
+            let mut network = request();
+            network
+                .extra_configure_args
+                .push("--enable-network".to_owned());
+            let mut openssl = request();
+            openssl
+                .extra_configure_args
+                .push("--enable-openssl".to_owned());
+            let mut tls = request();
+            tls.tls_backend = Some("openssl".to_owned());
+            for overlay in [http, network, openssl, tls] {
+                let mut overlaid = resolved.clone();
+                overlaid.apply_request_overlays(&overlay);
+                let error = overlaid
+                    .validate(FfmpegPlatform::Android, false)
+                    .expect_err("checked-in Android remux policy must reject network/OpenSSL");
+                assert_eq!(error.kind(), FfmpegErrorKind::Conformance);
+            }
+        }
+    }
+
+    #[test]
+    fn checked_in_ios_remux_selectors_enable_only_aac_probing() {
+        let root = crate::source_checkout_root().expect("test requires the source checkout");
+        for name in ["download-remux", "default", "source-normalizer"] {
+            for slice in ["ios-arm64", "ios-simulator-arm64"] {
+                let resolved = resolve_apple_release_profile(&root, name, &[slice.to_owned()])
+                    .expect("resolve local iOS release profile and slice");
+                let native = &resolved.native_profile;
+                assert_eq!(native.decoders, ["aac"], "{name}/{slice}");
+                assert_eq!(native.protocols, ["file", "pipe"]);
+                assert!(native.parsers.iter().any(|parser| parser == "aac"));
+                let arguments = native.configure_arguments(FfmpegPlatform::Ios);
+                assert_eq!(
+                    arguments
+                        .iter()
+                        .filter(|arg| arg.starts_with("--enable-decoder="))
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                    ["--enable-decoder=aac"]
+                );
+                for flag in [
+                    "--disable-encoders",
+                    "--disable-network",
+                    "--disable-openssl",
+                ] {
+                    assert!(
+                        arguments.iter().any(|arg| arg == flag),
+                        "{name}/{slice}: {flag}"
+                    );
+                }
+                let metadata = native.metadata_text(
+                    "apple",
+                    slice,
+                    "9.0.2",
+                    Path::new("fixture.tar.xz"),
+                    "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+                    "fixture-sha256",
+                    &arguments,
+                );
+                assert!(metadata.contains("decoders=aac\n"));
+                assert!(metadata.contains("declared_platform=ios\n"));
+                assert!(metadata.contains(&format!("target={slice}\n")));
+                assert!(metadata.contains("--enable-decoder=aac"));
+                assert!(metadata.contains("external_dependencies=libxml2\n"));
+                let expected = if name == "download-remux" {
+                    "custom-6a8fcf064bd0"
+                } else {
+                    "custom-fb7025638cb3"
+                };
+                assert_eq!(resolved.profile_hash, expected);
+            }
+        }
     }
 
     #[test]

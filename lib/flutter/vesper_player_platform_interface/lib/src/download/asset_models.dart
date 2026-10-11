@@ -13,15 +13,17 @@ final class VesperDownloadResourceRecord {
   });
 
   factory VesperDownloadResourceRecord.fromMap(Map<Object?, Object?> map) {
-    final normalized = vesperDecodeMap(map);
+    final normalized =
+        _decodeRequiredDownloadMap(map, 'VesperDownloadResourceRecord');
     return VesperDownloadResourceRecord(
-      resourceId: normalized['resourceId'] as String? ?? '',
-      uri: normalized['uri'] as String? ?? '',
+      resourceId:
+          _decodeRequiredDownloadString(normalized['resourceId'], 'resourceId'),
+      uri: _decodeRequiredDownloadString(normalized['uri'], 'uri'),
       relativePath: normalized['relativePath'] as String?,
       byteRange: normalized['byteRange'] == null
           ? null
           : VesperDownloadByteRange.fromMap(
-              vesperDecodeMap(normalized['byteRange']),
+              _decodeDownloadMap(normalized['byteRange'], 'byteRange'),
             ),
       generatedText: normalized['generatedText'] as String?,
       sizeBytes: _decodeInt(normalized['sizeBytes']),
@@ -65,16 +67,18 @@ final class VesperDownloadSegmentRecord {
   });
 
   factory VesperDownloadSegmentRecord.fromMap(Map<Object?, Object?> map) {
-    final normalized = vesperDecodeMap(map);
+    final normalized =
+        _decodeRequiredDownloadMap(map, 'VesperDownloadSegmentRecord');
     return VesperDownloadSegmentRecord(
-      segmentId: normalized['segmentId'] as String? ?? '',
-      uri: normalized['uri'] as String? ?? '',
+      segmentId:
+          _decodeRequiredDownloadString(normalized['segmentId'], 'segmentId'),
+      uri: _decodeRequiredDownloadString(normalized['uri'], 'uri'),
       relativePath: normalized['relativePath'] as String?,
       sequence: _decodeInt(normalized['sequence']),
       byteRange: normalized['byteRange'] == null
           ? null
           : VesperDownloadByteRange.fromMap(
-              vesperDecodeMap(normalized['byteRange']),
+              _decodeDownloadMap(normalized['byteRange'], 'byteRange'),
             ),
       sizeBytes: _decodeInt(normalized['sizeBytes']),
       checksum: normalized['checksum'] as String?,
@@ -127,17 +131,19 @@ final class VesperDownloadAssetStream {
   });
 
   factory VesperDownloadAssetStream.fromMap(Map<Object?, Object?> map) {
-    final normalized = vesperDecodeMap(map);
+    final normalized =
+        _decodeRequiredDownloadMap(map, 'VesperDownloadAssetStream');
     return VesperDownloadAssetStream(
-      streamId: normalized['streamId'] as String? ?? '',
+      streamId:
+          _decodeRequiredDownloadString(normalized['streamId'], 'streamId'),
       kind: _decodeStreamKind(normalized['kind']),
       kindRawValue: normalized['kind'] as String?,
       language: normalized['language'] as String?,
       codec: normalized['codec'] as String?,
       label: normalized['label'] as String?,
       qualityRank: _decodeInt(normalized['qualityRank']),
-      resourceIds: _decodeStringList(normalized['resourceIds']),
-      segmentIds: _decodeStringList(normalized['segmentIds']),
+      resourceIds: _decodeStringList(normalized['resourceIds'], 'resourceIds'),
+      segmentIds: _decodeStringList(normalized['segmentIds'], 'segmentIds'),
       metadata: _decodeStringMap(normalized['metadata']),
     );
   }
@@ -183,7 +189,8 @@ final class VesperDownloadAssetIndex {
   });
 
   factory VesperDownloadAssetIndex.fromMap(Map<Object?, Object?> map) {
-    final normalized = vesperDecodeMap(map);
+    final normalized =
+        _decodeRequiredDownloadMap(map, 'VesperDownloadAssetIndex');
     final rawResources = normalized['resources'];
     final rawSegments = normalized['segments'];
     final rawStreams = normalized['streams'];
@@ -199,39 +206,21 @@ final class VesperDownloadAssetIndex {
       etag: normalized['etag'] as String?,
       checksum: normalized['checksum'] as String?,
       totalSizeBytes: _decodeInt(normalized['totalSizeBytes']),
-      resources: switch (rawResources) {
-        final List<dynamic> values => values
-            .whereType<Map>()
-            .map(
-              (value) => VesperDownloadResourceRecord.fromMap(
-                Map<Object?, Object?>.from(value),
-              ),
-            )
-            .toList(growable: false),
-        _ => const <VesperDownloadResourceRecord>[],
-      },
-      segments: switch (rawSegments) {
-        final List<dynamic> values => values
-            .whereType<Map>()
-            .map(
-              (value) => VesperDownloadSegmentRecord.fromMap(
-                Map<Object?, Object?>.from(value),
-              ),
-            )
-            .toList(growable: false),
-        _ => const <VesperDownloadSegmentRecord>[],
-      },
-      streams: switch (rawStreams) {
-        final List<dynamic> values => values
-            .whereType<Map>()
-            .map(
-              (value) => VesperDownloadAssetStream.fromMap(
-                Map<Object?, Object?>.from(value),
-              ),
-            )
-            .toList(growable: false),
-        _ => const <VesperDownloadAssetStream>[],
-      },
+      resources: _decodeDownloadRecordList(
+        rawResources,
+        'resources',
+        VesperDownloadResourceRecord.fromMap,
+      ),
+      segments: _decodeDownloadRecordList(
+        rawSegments,
+        'segments',
+        VesperDownloadSegmentRecord.fromMap,
+      ),
+      streams: _decodeDownloadRecordList(
+        rawStreams,
+        'streams',
+        VesperDownloadAssetStream.fromMap,
+      ),
       completedPath: normalized['completedPath'] as String?,
     );
   }

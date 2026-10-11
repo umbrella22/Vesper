@@ -193,7 +193,7 @@ impl FrameProcessorPluginFactory for NativeAbiFrameProcessorPluginFactory {
                         return Err(map_frame_processor_boundary(error));
                     }
                 };
-                let session_token = match self.inner.next_session_token.fetch_update(
+                let session_token = match self.inner.next_session_token.try_update(
                     Ordering::Relaxed,
                     Ordering::Relaxed,
                     |current| current.checked_add(1),

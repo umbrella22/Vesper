@@ -805,22 +805,16 @@ pub fn template_segments(
             "SegmentTemplate timescale must be positive".to_owned(),
         ));
     }
-    let total_duration = duration_ms as f64 / 1_000.0;
-    let segment_duration = normalized_fixed_template_duration(
-        declared_duration as f64 / segment_template.timescale as f64,
-    );
-    if !total_duration.is_finite() || !segment_duration.is_finite() || segment_duration <= 0.0 {
+    if declared_duration == 0 {
         return Err(DashHlsError::InvalidMpd(
-            "invalid SegmentTemplate duration".to_owned(),
+            "SegmentTemplate duration must be positive".to_owned(),
         ));
     }
-    let segment_count = (total_duration / segment_duration).ceil();
-    if !segment_count.is_finite() || segment_count <= 0.0 || segment_count > usize::MAX as f64 {
-        return Err(DashHlsError::InvalidMpd(
-            "invalid SegmentTemplate segment count".to_owned(),
-        ));
-    }
-    let segment_count = segment_count as usize;
+    // Segment numbers are protocol identities. Derive their count in ticks,
+    // without rounding the per-segment duration for presentation.
+    let total_ticks_ms = u128::from(duration_ms) * u128::from(segment_template.timescale);
+    let segment_ticks_ms = u128::from(declared_duration) * 1_000;
+    let segment_count = total_ticks_ms.div_ceil(segment_ticks_ms);
     // Bound the total number of segments we are willing to materialize from a
     // single SegmentTemplate. `segment_count` is derived from the MPD's declared
     // media presentation duration and per-segment duration; a malicious or
@@ -828,11 +822,12 @@ pub fn template_segments(
     // billions of entries and exhaust memory. 100k covers any realistic
     // multi-day presentation at sub-second granularity.
     const MAX_TEMPLATE_SEGMENTS: usize = 100_000;
-    if segment_count > MAX_TEMPLATE_SEGMENTS {
+    if segment_count > MAX_TEMPLATE_SEGMENTS as u128 {
         return Err(DashHlsError::UnsupportedMpd(format!(
             "SegmentTemplate produced more than {MAX_TEMPLATE_SEGMENTS} segments"
         )));
     }
+    let segment_count = segment_count as usize;
     let mut segments = Vec::with_capacity(segment_count);
     for index in 0..segment_count {
         let number = checked_add(
@@ -840,8 +835,15 @@ pub fn template_segments(
             index as u64,
             "SegmentTemplate segment number",
         )?;
-        let remaining = total_duration - (index as f64 * segment_duration);
-        let duration = segment_duration.min(remaining);
+        let remaining_ticks_ms = total_ticks_ms - index as u128 * segment_ticks_ms;
+        let duration = remaining_ticks_ms.min(segment_ticks_ms) as f64
+            / 1_000.0
+            / segment_template.timescale as f64;
+        let presentation_time = (index as u64)
+            .checked_mul(declared_duration)
+            .ok_or_else(|| {
+                DashHlsError::InvalidMpd("SegmentTemplate presentation time overflow".to_owned())
+            })?;
         if !duration.is_finite() || duration <= 0.0 {
             return Err(DashHlsError::InvalidMpd(
                 "invalid SegmentTemplate segment duration".to_owned(),
@@ -851,7 +853,7 @@ pub fn template_segments(
             duration,
             number,
             time: None,
-            presentation_time: index as u64 * declared_duration,
+            presentation_time,
         });
     }
     Ok(segments)
@@ -1022,19 +1024,6 @@ fn ceil_div(value: u64, divisor: u64) -> u64 {
         quotient
     } else {
         quotient + 1
-    }
-}
-
-fn normalized_fixed_template_duration(value: f64) -> f64 {
-    if !value.is_finite() || value <= 0.0 {
-        return value;
-    }
-    let rounded = value.round();
-    let tolerance = 0.010_f64.max(value * 0.005);
-    if rounded > 0.0 && (rounded - value).abs() <= tolerance {
-        rounded
-    } else {
-        value
     }
 }
 

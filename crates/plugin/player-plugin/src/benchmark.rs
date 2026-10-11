@@ -175,7 +175,60 @@ impl BenchmarkSinkReport {
     }
 }
 
-/// Error payload shared by benchmark sink plugins and host-side adapters.
+/// A failure reported by Native benchmark-sink author code.
+///
+/// `Failed` retains the established Native `sinkFailed` wire code. This type does
+/// not add a message limit to the existing BenchmarkSink contract.
+#[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "code", content = "message")]
+pub enum BenchmarkSinkFailure {
+    #[serde(rename = "sinkFailed")]
+    #[error("sink failed: {0}")]
+    Failed(String),
+}
+
+impl From<BenchmarkSinkFailure> for BenchmarkSinkError {
+    fn from(value: BenchmarkSinkFailure) -> Self {
+        match value {
+            BenchmarkSinkFailure::Failed(message) => Self::SinkFailed(message),
+        }
+    }
+}
+
+/// A Native plugin's benchmark sink, registered with [`crate::PluginBuilder`].
+///
+/// Host ABI errors cannot be returned by author code:
+///
+/// ```compile_fail,E0308
+/// use player_plugin::{
+///     BenchmarkEventBatch, BenchmarkSinkError, BenchmarkSinkFailure,
+///     BenchmarkSinkStatus, PluginBenchmarkSink,
+/// };
+///
+/// struct Sink;
+/// impl PluginBenchmarkSink for Sink {
+///     fn name(&self) -> &str { "example" }
+///     fn on_event_batch(&self, _: &BenchmarkEventBatch)
+///         -> Result<BenchmarkSinkStatus, BenchmarkSinkFailure>
+///     {
+///         Err(BenchmarkSinkError::AbiViolation("host-only error".to_owned()))
+///     }
+/// }
+/// ```
+pub trait PluginBenchmarkSink: Send + Sync {
+    fn name(&self) -> &str;
+
+    fn on_event_batch(
+        &self,
+        batch: &BenchmarkEventBatch,
+    ) -> Result<BenchmarkSinkStatus, BenchmarkSinkFailure>;
+
+    fn flush(&self) -> Result<BenchmarkSinkReport, BenchmarkSinkFailure> {
+        Ok(BenchmarkSinkReport::default())
+    }
+}
+
+/// Host-facing errors, including failures reported by a plugin.
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "code", content = "message")]
 pub enum BenchmarkSinkError {
@@ -195,6 +248,7 @@ impl From<PluginProtocolViolation> for BenchmarkSinkError {
     }
 }
 
+/// A checked host capability. Native authors implement [`PluginBenchmarkSink`].
 pub trait BenchmarkSink: Send + Sync {
     fn name(&self) -> &str;
 

@@ -106,6 +106,19 @@ or locale sections fail generation. Prerelease tags require their exact version
 entry. `release set-version` moves these blocks from `Unreleased` into the new
 version along with the rest of its changelog content.
 
+## Rust Toolchain
+
+The workspace MSRV and development toolchain are Rust 1.99.0.
+`rust-toolchain.toml` selects that release with the `rustfmt` and `clippy`
+components. CI toolchain pins, release scripts, and generated plugin manifests
+use the same version. Cross-compilation targets are installed by each platform
+build setup rather than required for every checkout.
+
+A directory-level `rustup override` takes precedence over the toolchain file.
+`rustup show active-toolchain` reports the selected toolchain and its source;
+`rustup override unset` from the repository root removes an obsolete override
+without changing the global default toolchain.
+
 ## Rust Plugin SDK Release
 
 The public Rust packages use `vesper-player-*` crates.io identities while their
@@ -117,7 +130,7 @@ Run `plugin-sdk-release.sh verify` before pushing the release commit. The
 command tests all public packages and creates their `.crate` archives in an
 isolated source snapshot, so local Git submodule metadata and working-tree build
 artifacts cannot affect the package contents. The script invokes the exact Rust
-1.98.1 toolchain through `rustup`, independent of the caller's default or local
+1.99.0 toolchain through `rustup`, independent of the caller's default or local
 directory override. Pre-publication archives resolve same-release dependencies
 through temporary Cargo config patches; those patches are not written into the
 source tree or published manifests. After the release commit is on `main` and
@@ -179,7 +192,7 @@ release jobs.
 
 Every workflow that invokes `./scripts/vesper` first runs the local
 `.github/actions/setup-vesper-cli` composite action. The action installs Rust
-1.98.1, builds `player-cli` once with `cargo build --locked --release`, and
+1.99.0, builds `player-cli` once with `cargo build --locked --release`, and
 exports the resulting executable through `VESPER_CLI`. The thin
 `scripts/vesper` launcher then executes that prebuilt binary instead of running
 Cargo for every command. On Windows, CLI steps that use the launcher explicitly
@@ -292,6 +305,16 @@ profile inheritance, platform overrides, validation policy, and command-line
 overlays. `download-remux`, `relay-remux`, and `default` keep local remux
 semantics by validating `--disable-network` and `--disable-openssl`.
 
+On Android and iOS, `download-remux` enables `--enable-decoder=aac` for format probing
+of raw AAC and its AudioSpecificConfig in local FLV files. This lets
+`avformat_find_stream_info` determine the AAC sample rate and frame size before
+stream-copy remuxing. Their `default` and `source-normalizer` profiles inherit this
+override. Encoders remain disabled, networking and OpenSSL remain forbidden,
+and the Media3 and AVPlayer hardware playback paths are unchanged. The iOS
+override applies to both device (`ios-arm64`) and Apple Silicon Simulator
+(`ios-simulator-arm64`) slices. It enables only the built-in AAC probe decoder;
+video decoding and desktop FFmpeg profiles are unchanged.
+
 ```sh
 ./scripts/vesper ffmpeg \
   --platform android \
@@ -345,8 +368,9 @@ and Flutter hosts use one canonical optional staging entrypoint:
 
 This produces three FFmpeg component XCFrameworks (`VesperFFmpegAVCodec`,
 `VesperFFmpegAVFormat`, and `VesperFFmpegAVUtil`) plus Remux,
-SourceNormalizer, VideoToolbox Decoder, and diagnostic FrameProcessor plugin
-XCFrameworks. The App target embeds and signs them as seven top-level sibling
+SourceNormalizer, VideoToolbox Decoder, diagnostic FrameProcessor, and
+performance-diagnostics plugin XCFrameworks. The App target embeds and signs
+them as eight top-level sibling
 frameworks. Flat dylibs, nested frameworks, and the legacy umbrella runtime are
 not distributable layouts. The release verifier also requires exactly one
 device framework slice and one Simulator framework slice, each with exactly one
@@ -426,16 +450,24 @@ tarballs somewhere else.
   directory overrides continue to use the existing `VESPER_*` environment
   variable semantics.
 - FFmpeg source builds default to the shared audited source series declared in
-  `scripts/ffmpeg-source-policy.toml` (currently FFmpeg 9.0.1 / 9.0 series). The
-  resolver selects the highest matching patch from `third_party/_cache` before
-  consulting upstream release indexes. Use
+  `scripts/ffmpeg-source-policy.toml` (9.0 series, with a separate 9.0.2 release
+  lock). The resolver checks upstream release indexes even with a populated
+  cache and selects the highest matching patch available upstream or locally.
+  It downloads missing versioned archives into `third_party/_cache`; an index
+  failure falls back to the highest matching cached patch. Use
   `VESPER_FFMPEG_SERIES` / `VESPER_<PLATFORM>_FFMPEG_SERIES` for intentional
   series moves, and `VESPER_FFMPEG_VERSION` /
   `VESPER_<PLATFORM>_FFMPEG_VERSION` only for exact-version reproduction.
 - Android OpenSSL provisioning is opt-in through FFmpeg TLS overlays and uses
-  the OpenSSL 3.5 LTS series by default. The resolver uses the same cache-first
+  the OpenSSL 3.5 LTS series by default. The resolver uses the same upstream and cache
   patch selection as FFmpeg. Override `VESPER_ANDROID_OPENSSL_SERIES` only for
   intentional LTS-series moves and `VESPER_ANDROID_OPENSSL_VERSION` only for
   exact-version reproduction.
+- Android DASH source builds resolve the latest patch in the libxml2 2.15
+  series using the same policy. `VESPER_ANDROID_LIBXML2_SERIES` selects a series,
+  and `VESPER_ANDROID_LIBXML2_VERSION` selects an exact release. Exact version
+  overrides skip release-index queries. Dependency receipts record actual
+  archive and installed-file digests, so dependency patch changes invalidate
+  the dependency install and FFmpeg output built against it.
 - Shell implementation helpers are not part of the supported interface. Keep
   argument parsing and build behavior in the Rust CLI.

@@ -5,11 +5,10 @@ import XCTest
 /// Regression tests for the download HTTP stream back-pressure boundary.
 ///
 /// `VesperURLSessionDataStreamDelegate` carries a lossless byte payload via an
-/// `AsyncThrowingStream` with `bufferingNewest(256)`. If the consumer falls
-/// behind and a chunk is dropped, the downloaded file would be silently
-/// corrupted (a hole in the middle of the byte stream). These tests verify that
-/// a dropped chunk is detected and surfaces as a failure instead of silent
-/// corruption.
+/// `AsyncThrowingStream` with `bufferingOldest(256)`. If the consumer falls
+/// behind, it rejects the newest chunk and surfaces an error. The retained
+/// bytes must remain a contiguous prefix, including when a pause or cancellation
+/// occurs before the consumer observes the failure.
 final class VesperDownloadHTTPStreamOverflowTests: XCTestCase {
     /// When the consumer is slow enough to overflow the 256-chunk buffer, the
     /// next yielded chunk is reported as `.dropped` and the delegate must finish
@@ -27,19 +26,20 @@ final class VesperDownloadHTTPStreamOverflowTests: XCTestCase {
         let task = session.dataTask(with: URL(string: "https://example.com")!)
 
         // Fill the 256-slot buffer without draining. The 257th yield overflows
-        // `bufferingNewest(256)`, so the oldest chunk is dropped.
-        let chunk = Data(repeating: 0x41, count: 1)
-        for _ in 0..<256 {
+        // `bufferingOldest(256)`, so the newest chunk is rejected.
+        let expectedPrefix = (0..<256).map { Data([UInt8($0)]) }
+        for chunk in expectedPrefix {
             delegate.urlSession(session, dataTask: task, didReceive: chunk)
         }
         // This 257th deliver triggers the dropped-detection path.
-        delegate.urlSession(session, dataTask: task, didReceive: chunk)
+        delegate.urlSession(session, dataTask: task, didReceive: Data([0xFF]))
 
         // The stream must terminate with an error, not deliver a truncated
         // payload. Drain whatever the consumer would see.
+        var received: [Data] = []
         do {
-            for try await _ in delegate.chunks {
-                // Discard; we only care that iteration ends with a throw.
+            for try await chunk in delegate.chunks {
+                received.append(chunk)
             }
             XCTFail("Stream completed normally; expected an overflow failure after a dropped chunk")
         } catch {
@@ -54,6 +54,9 @@ final class VesperDownloadHTTPStreamOverflowTests: XCTestCase {
             XCTAssertFalse(message.contains("secret"))
         }
 
+        // A pause/cancel before the error is observed may retain these bytes.
+        // They must be exactly the contiguous prefix, not chunks 1...256.
+        XCTAssertEqual(received, expectedPrefix)
         task.cancel()
         session.invalidateAndCancel()
     }

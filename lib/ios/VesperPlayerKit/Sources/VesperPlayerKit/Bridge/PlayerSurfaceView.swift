@@ -137,6 +137,9 @@ public final class PlayerSurfaceView: UIView {
         "io.github.umbrella22.vesper.player.subtitle-overlay"
 
     private weak var attachedPlayer: AVPlayer?
+    private weak var attachedItem: AVPlayerItem?
+    private weak var confirmedReadyPlayer: AVPlayer?
+    private weak var confirmedReadyItem: AVPlayerItem?
     private var readyForDisplayObservation: NSKeyValueObservation?
     private var videoRectObservation: NSKeyValueObservation?
     /// The current picture rectangle in this view's local points.
@@ -148,7 +151,7 @@ public final class PlayerSurfaceView: UIView {
     private func publishGeometry() {
         let rect = playerLayer.videoRect
         let valid = window != nil && playerLayer.player?.currentItem?.status == .readyToPlay
-            && playerLayer.isReadyForDisplay && !isNativeFramePresentationActive
+            && isReadyForDisplay && !isNativeFramePresentationActive
             && bounds.width > 0 && bounds.height > 0 && !rect.isEmpty && !rect.isInfinite && !rect.isNull
         let next = valid ? VesperVideoSurfaceGeometry(
             width: Double(bounds.width), height: Double(bounds.height), contentRect: rect
@@ -157,7 +160,10 @@ public final class PlayerSurfaceView: UIView {
         geometry = next
         onGeometryChanged?(next)
     }
-    private let playerLayer = AVPlayerLayer()
+    private var playerLayer = AVPlayerLayer()
+    private var bindingGeneration: UInt64 = 0
+    private var hasBoundPlayer = false
+    private var requiresReadinessReset = false
     private var metalLayer: CAMetalLayer?
     private var metalDevice: MTLDevice?
     private var metalCommandQueue: MTLCommandQueue?
@@ -182,6 +188,15 @@ public final class PlayerSurfaceView: UIView {
         configurePlayerLayer()
         configureSubtitleLabel()
         configureOutputPathObservation()
+    }
+
+    // Tests inject one primary layer before any binding. Production retains
+    // its original layer so system Picture in Picture references remain valid.
+    convenience init(frame: CGRect, playerLayerFactory: () -> AVPlayerLayer) {
+        self.init(frame: frame)
+        playerLayer.removeFromSuperlayer()
+        playerLayer = playerLayerFactory()
+        configurePlayerLayer()
     }
 
     private func configureOutputPathObservation() {
@@ -286,7 +301,10 @@ public final class PlayerSurfaceView: UIView {
     }
 
     var isReadyForDisplay: Bool {
-        playerLayer.isReadyForDisplay
+        !requiresReadinessReset && attachedItem != nil
+            && playerLayer.player === attachedPlayer
+            && attachedPlayer?.currentItem === attachedItem
+            && playerLayer.isReadyForDisplay
     }
 
     /// Returns the AVPlayerLayer that can be handed to system Picture in Picture.
@@ -308,46 +326,81 @@ public final class PlayerSurfaceView: UIView {
 
     func attach(player: AVPlayer?) {
         setNativeFramePresentationEnabled(false)
-        if attachedPlayer === player, playerLayer.player === player {
+        let item = player?.currentItem
+        if attachedPlayer === player, attachedItem === item, playerLayer.player === player {
+            // A bridge can install a callback after this binding became ready.
+            deliverReadiness(player: player, item: item, generation: bindingGeneration)
             return
         }
         onOutputPathChanged?()
+        bindingGeneration &+= 1
+        let generation = bindingGeneration
         readyForDisplayObservation = nil
         videoRectObservation = nil
+        // A reused layer can retain its old picture while a replacement loads.
+        // Accept initial readiness on the first binding; subsequent bindings
+        // need a readiness reset before a true value can describe their item.
+        if hasBoundPlayer && playerLayer.isReadyForDisplay {
+            requiresReadinessReset = true
+        }
+        if !playerLayer.isReadyForDisplay { requiresReadinessReset = false }
+        // Reattaching the same previously confirmed item can reuse its picture.
+        // An unconfirmed replacement never receives this late-attach exception.
+        if let player, let item, confirmedReadyPlayer === player, confirmedReadyItem === item {
+            requiresReadinessReset = false
+        }
+        if player != nil { hasBoundPlayer = true }
         attachedPlayer = player
+        attachedItem = item
+        let readinessObservation = playerLayer.observe(
+            \.isReadyForDisplay, options: [.initial, .new]
+        ) { [weak self, weak player, weak item] layer, _ in
+            guard let self, self.bindingGeneration == generation,
+                  self.playerLayer === layer else { return }
+            if !layer.isReadyForDisplay { self.requiresReadinessReset = false }
+            self.publishGeometry()
+            self.deliverReadiness(player: player, item: item, generation: generation)
+        }
+        guard bindingGeneration == generation else {
+            readinessObservation.invalidate()
+            return
+        }
+        readyForDisplayObservation = readinessObservation
+        // Observe readiness changes during rebinding, including a synchronous
+        // false notification on detach. PiP retains the primary layer identity.
         playerLayer.player = player
+        guard bindingGeneration == generation else { return }
         playerLayer.videoGravity = .resizeAspect
         videoRectObservation = playerLayer.observe(\.videoRect, options: [.initial, .new]) { [weak self] _, _ in
-            Task { @MainActor [weak self] in self?.publishGeometry() }
+            Task { @MainActor [weak self] in
+                guard let self, self.bindingGeneration == generation else { return }
+                self.publishGeometry()
+            }
         }
         publishGeometry()
-        let item = player?.currentItem
-        readyForDisplayObservation = playerLayer.observe(
-            \.isReadyForDisplay, options: [.initial, .new]
-        ) {
-            [weak self, weak player, weak item] layer, _
-            in
-            self?.publishGeometry()
-            guard layer.isReadyForDisplay, let player, let item,
-                  layer.player === player, player.currentItem === item else { return }
-            self?.onReadyForDisplay?(player, item)
-        }
+        deliverReadiness(player: player, item: item, generation: generation)
+    }
+
+    private func deliverReadiness(player: AVPlayer?, item: AVPlayerItem?, generation: UInt64) {
+        guard bindingGeneration == generation, isReadyForDisplay,
+              let player, let item,
+              attachedPlayer === player, attachedItem === item,
+              player.currentItem === item else { return }
+        confirmedReadyPlayer = player
+        confirmedReadyItem = item
+        onReadyForDisplay?(player, item)
     }
 
     func attachNativeFramePresenter() {
         onOutputPathChanged?()
-        readyForDisplayObservation = nil
-        attachedPlayer = nil
-        playerLayer.player = nil
+        attach(player: nil)
         playerLayer.videoGravity = .resizeAspect
         setNativeFramePresentationEnabled(true)
         publishGeometry()
     }
 
     public func detachBridgeIfNeeded() {
-        attachedPlayer = nil
         clearReadyCallback()
-        readyForDisplayObservation = nil
         setNativeFramePresentationEnabled(false)
         attach(player: nil)
     }

@@ -35,8 +35,8 @@ Use the hosted packages for normal application integration:
 
 ```yaml
 dependencies:
-  vesper_player: 0.6.0
-  vesper_player_ui: 0.6.0
+  vesper_player: 0.8.0
+  vesper_player_ui: 0.8.0
 ```
 
 Repository development first runs
@@ -144,17 +144,16 @@ VesperPlayerStage(
 ## Stage skins
 
 `VesperPlayerStage.skin` configures semantic icons, colors, button roles, timeline,
-and gesture feedback. Omit it for the default skin. Public icon buttons now take
-widget content and named styles. See the [three-platform skin contract and detailed
-migration guide](https://github.com/umbrella22/Vesper/blob/main/lib/doc/stage-skins.md)
-for the breaking Flutter button changes and native host examples.
+and gesture feedback. Omit it for the default skin. Public icon buttons take
+widget content and named styles. See the [Stage skin contract](https://github.com/umbrella22/Vesper/blob/main/lib/doc/stage-skins.md)
+for public action-button usage and native host examples.
 
-## Portrait playback and migration
+## Portrait playback
 
-Version 0.6.0 separates `controlLayout` from `isFullscreen` and renames the
-expanded control-row slot. See the [video presentation contract and migration
-guide](../vesper_player_platform_interface/doc/video-presentation.md) for
-per-view picture geometry, coordinate mapping, gestures, and PiP.
+`controlLayout` selects control density independently of `isFullscreen`.
+`expandedControlBarLeading` supplies the expanded control-row slot. See the
+[video presentation contract](../vesper_player_platform_interface/doc/video-presentation.md)
+for per-view picture geometry, coordinate mapping, gestures, and PiP.
 
 ## Minimum Requirements
 

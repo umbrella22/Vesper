@@ -5,12 +5,13 @@ extension VesperForegroundDownloadExecutor {
         task: VesperDownloadTaskSnapshot,
         reporter: any VesperDownloadExecutionReporter
     ) {
-        let work = Task.detached(priority: .utility) { [weak self] in
+        launchExecution(taskId: task.taskId, clearsRecoveredSource: false) { [weak self] in
             guard let self else {
                 return
             }
             do {
                 let assetIndex = try await self.prepareAssetIndexWithRecovery(task: task, reporter: reporter)
+                try Task.checkCancellation()
                 await reporter.completePreparation(taskId: task.taskId, assetIndex: assetIndex)
             } catch is CancellationError {
                 return
@@ -25,15 +26,7 @@ extension VesperForegroundDownloadExecutor {
                     )
                 )
             }
-            await MainActor.run {
-                self.lock.lock()
-                self.tasks.removeValue(forKey: task.taskId)
-                self.lock.unlock()
-            }
         }
-        lock.lock()
-        tasks[task.taskId] = work
-        lock.unlock()
     }
 
     public func start(
@@ -54,7 +47,7 @@ extension VesperForegroundDownloadExecutor {
         lock.lock()
         let task = tasks.removeValue(forKey: taskId)
         lock.unlock()
-        task?.cancel()
+        task?.work.cancel()
     }
 
     public func remove(task: VesperDownloadTaskSnapshot?) {
@@ -79,7 +72,7 @@ extension VesperForegroundDownloadExecutor {
 
     public func dispose() {
         lock.lock()
-        let activeTasks = Array(tasks.values)
+        let activeTasks = tasks.values.map(\.work)
         tasks.removeAll(keepingCapacity: false)
         recoveredSources.removeAll(keepingCapacity: false)
         lock.unlock()
@@ -90,9 +83,7 @@ extension VesperForegroundDownloadExecutor {
         task: VesperDownloadTaskSnapshot,
         reporter: any VesperDownloadExecutionReporter
     ) {
-        pause(taskId: task.taskId)
-
-        let work = Task.detached(priority: .utility) { [weak self] in
+        launchExecution(taskId: task.taskId, clearsRecoveredSource: true) { [weak self] in
             guard let self else {
                 return
             }
@@ -193,6 +184,8 @@ extension VesperForegroundDownloadExecutor {
                     if recovered {
                         return
                     }
+                } catch is CancellationError {
+                    return
                 } catch {
                     await reporter.fail(
                         taskId: task.taskId,
@@ -226,17 +219,7 @@ extension VesperForegroundDownloadExecutor {
                 )
             }
 
-            await MainActor.run {
-                self.lock.lock()
-                self.tasks.removeValue(forKey: task.taskId)
-                self.recoveredSources.removeValue(forKey: task.taskId)
-                self.lock.unlock()
-            }
         }
-
-        lock.lock()
-        tasks[task.taskId] = work
-        lock.unlock()
     }
 
     func recoverStaleDownload(
@@ -254,11 +237,16 @@ extension VesperForegroundDownloadExecutor {
             phase: .download,
             receivedBytes: receivedBytes
         )
-        guard let recoveredPlan = await recoverTaskPlan(task: task, staleResource: staleResource) else {
+        let recoveredPlan = await recoverTaskPlan(task: task, staleResource: staleResource)
+        // A cancelled nonthrowing recovery callback can return nil instead of a plan.
+        try Task.checkCancellation()
+        guard let recoveredPlan else {
             return false
         }
 
-        pause(taskId: task.taskId)
+        // The current execution remains registered during recovery preparation.
+        // Host pause/removal can cancel it; cancelling it here would cancel its
+        // own manifest and length probes before a replacement can start.
         try? fileManager.removeItem(at: defaultBaseDirectory(for: task))
 
         let materializedRecoveredIndex = try materializeGeneratedResources(
@@ -284,13 +272,16 @@ extension VesperForegroundDownloadExecutor {
             assetIndex: materializedRecoveredIndex
         )
 
+        try Task.checkCancellation()
         let preparedIndex = try await prepareAssetIndex(task: recoveredTask)
+        try Task.checkCancellation()
         let materializedPreparedIndex = try materializeGeneratedResources(
             assetId: task.assetId,
             taskId: task.taskId,
             profile: recoveredPlan.profile,
             assetIndex: preparedIndex
         )
+        try Task.checkCancellation()
         await reporter.completePreparation(taskId: task.taskId, assetIndex: materializedPreparedIndex)
         return true
     }

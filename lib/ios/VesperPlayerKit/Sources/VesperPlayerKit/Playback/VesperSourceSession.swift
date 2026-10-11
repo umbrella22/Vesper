@@ -381,7 +381,6 @@ public final class VesperSourceSession {
                 task.update(.failed, reason: (error as? VesperSourceSessionError)?.rawValue ?? "source_unavailable")
                 continue
             }
-            task.update(.running)
             let source = handle.registration.source
             let scope = handle.registration.scope
             let token = task.commitToken
@@ -400,6 +399,8 @@ public final class VesperSourceSession {
                     await self.finish(task, bytes: 0, hit: nil, error: error)
                 }
             }
+            // Synchronous subscribers must observe a fully reserved execution.
+            task.update(.running)
         }
     }
 

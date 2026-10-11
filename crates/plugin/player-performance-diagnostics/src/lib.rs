@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use player_plugin::{
-    BenchmarkEvent, BenchmarkEventBatch, BenchmarkSink, BenchmarkSinkError, BenchmarkSinkReport,
-    BenchmarkSinkStatus, Plugin, PluginBuildError, PluginDiagnostic, PluginDiagnosticSeverity,
-    PluginMeasurement,
+    BenchmarkEvent, BenchmarkEventBatch, BenchmarkSinkFailure, BenchmarkSinkReport,
+    BenchmarkSinkStatus, Plugin, PluginBenchmarkSink, PluginBuildError, PluginDiagnostic,
+    PluginDiagnosticSeverity, PluginMeasurement,
 };
 
 const PLUGIN_ID: &str = "io.github.umbrella22.vesper.performance-diagnostics";
@@ -518,7 +518,7 @@ pub struct PerformanceDiagnosticsSink {
     state: Mutex<DiagnosticsState>,
 }
 
-impl BenchmarkSink for PerformanceDiagnosticsSink {
+impl PluginBenchmarkSink for PerformanceDiagnosticsSink {
     fn name(&self) -> &str {
         PLUGIN_NAME
     }
@@ -526,7 +526,7 @@ impl BenchmarkSink for PerformanceDiagnosticsSink {
     fn on_event_batch(
         &self,
         batch: &BenchmarkEventBatch,
-    ) -> Result<BenchmarkSinkStatus, BenchmarkSinkError> {
+    ) -> Result<BenchmarkSinkStatus, BenchmarkSinkFailure> {
         let mut state = self
             .state
             .lock()
@@ -545,7 +545,7 @@ impl BenchmarkSink for PerformanceDiagnosticsSink {
         })
     }
 
-    fn flush(&self) -> Result<BenchmarkSinkReport, BenchmarkSinkError> {
+    fn flush(&self) -> Result<BenchmarkSinkReport, BenchmarkSinkFailure> {
         let state = self
             .state
             .lock()

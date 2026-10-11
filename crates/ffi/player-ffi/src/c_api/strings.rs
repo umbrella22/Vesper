@@ -1,3 +1,5 @@
+use std::ptr::NonNull;
+
 use super::*;
 
 pub(crate) fn owned_bridge_error(error: BridgeError) -> PlayerFfiError {
@@ -54,11 +56,9 @@ pub(crate) fn into_owned_bytes(bytes: Vec<u8>) -> (*mut u8, usize) {
         return (ptr::null_mut(), 0);
     }
 
-    let mut boxed = bytes.into_boxed_slice();
-    let len = boxed.len();
-    let ptr = boxed.as_mut_ptr();
-    mem::forget(boxed);
-    (ptr, len)
+    let slice = Box::into_non_null(bytes.into_boxed_slice());
+    let len = slice.len();
+    (slice.as_ptr().cast(), len)
 }
 
 pub(crate) fn into_owned_struct_array<T>(values: Vec<T>) -> (*mut T, usize) {
@@ -66,11 +66,9 @@ pub(crate) fn into_owned_struct_array<T>(values: Vec<T>) -> (*mut T, usize) {
         return (ptr::null_mut(), 0);
     }
 
-    let mut boxed = values.into_boxed_slice();
-    let len = boxed.len();
-    let ptr = boxed.as_mut_ptr();
-    mem::forget(boxed);
-    (ptr, len)
+    let slice = Box::into_non_null(values.into_boxed_slice());
+    let len = slice.len();
+    (slice.as_ptr().cast(), len)
 }
 
 pub(crate) fn into_owned_c_string_array(values: Vec<String>) -> (*mut *mut c_char, usize) {
@@ -86,16 +84,14 @@ pub(crate) fn free_c_string(ptr_ref: &mut *mut c_char) {
 }
 
 pub(crate) fn free_c_string_array(ptr_ref: &mut *mut *mut c_char, len: usize) {
-    if !ptr_ref.is_null() && !(*ptr_ref).is_null() {
-        // SAFETY: the array pointer is produced by `into_owned_struct_array` with
-        // len as both length and capacity. Each element is an owned C string or
-        // null and is freed before the boxed slice is dropped.
-        // SAFETY: caller upholds the FFI contract for this pointer operation
-        unsafe {
-            let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(*ptr_ref, len));
-            for value in boxed.iter_mut() {
-                free_c_string(value);
-            }
+    if let Some(strings) = NonNull::new(*ptr_ref) {
+        let slice = NonNull::slice_from_raw_parts(strings, len);
+        // SAFETY: the caller supplies the boxed slice from `into_owned_struct_array`
+        // with its original length and transfers sole responsibility for release.
+        // Nested C strings are freed before the containing slice is dropped.
+        let mut strings = unsafe { Box::from_non_null(slice) };
+        for value in strings.iter_mut() {
+            free_c_string(value);
         }
     }
     *ptr_ref = ptr::null_mut();

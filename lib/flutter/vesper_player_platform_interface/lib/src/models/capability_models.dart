@@ -226,6 +226,7 @@ final class VesperPlaybackCapabilityProbeRequest {
   factory VesperPlaybackCapabilityProbeRequest.fromMap(
     Map<Object?, Object?> map,
   ) {
+    _validateCallerMapKeys(map, 'VesperPlaybackCapabilityProbeRequest');
     final rawSource = vesperDecodeMap(map['source']);
     return VesperPlaybackCapabilityProbeRequest(
       source: rawSource.isEmpty ? null : VesperPlayerSource.fromMap(rawSource),
@@ -236,14 +237,17 @@ final class VesperPlaybackCapabilityProbeRequest {
       requiresNativeFrame: _decodeBool(map, 'requiresNativeFrame'),
       sourceNormalizerConfiguration:
           VesperSourceNormalizerConfiguration.fromMap(
-        vesperDecodeMap(map['sourceNormalizer']),
+        _decodeCallerMap(map['sourceNormalizer'], 'sourceNormalizer') ??
+            const <Object?, Object?>{},
       ),
       frameProcessorConfiguration: VesperFrameProcessorConfiguration.fromMap(
-        vesperDecodeMap(map['frameProcessor']),
+        _decodeCallerMap(map['frameProcessor'], 'frameProcessor') ??
+            const <Object?, Object?>{},
       ),
       nativeFramePipelineConfiguration:
           VesperNativeFramePipelineConfiguration.fromMap(
-        vesperDecodeMap(map['nativeFramePipeline']),
+        _decodeCallerMap(map['nativeFramePipeline'], 'nativeFramePipeline') ??
+            const <Object?, Object?>{},
       ),
     );
   }

@@ -973,20 +973,19 @@ class VesperPlayerAndroidPlugin :
         runCatching {
             val arguments = call.argumentMap()
             val initialSourceMap = arguments["initialSource"] as? Map<*, *>
-            val resiliencePolicyMap = arguments["resiliencePolicy"] as? Map<*, *>
-            val trackPreferencePolicyMap = arguments["trackPreferencePolicy"] as? Map<*, *>
+            val resiliencePolicy = arguments.optionalInputMap("resiliencePolicy")
+                ?.toResiliencePolicy() ?: VesperPlaybackResiliencePolicy()
+            val trackPreferencePolicy = arguments.optionalInputMap("trackPreferencePolicy")
+                ?.toTrackPreferencePolicy() ?: VesperTrackPreferencePolicy()
             val preloadBudgetPolicyMap = arguments["preloadBudgetPolicy"] as? Map<*, *>
             val sourceNormalizerConfiguration =
-                (arguments["sourceNormalizer"] as? Map<*, *>)
-                    ?.stringMap()
+                arguments.optionalInputMap("sourceNormalizer")
                     .toSourceNormalizerConfiguration()
             val frameProcessorConfiguration =
-                (arguments["frameProcessor"] as? Map<*, *>)
-                    ?.stringMap()
+                arguments.optionalInputMap("frameProcessor")
                     .toFrameProcessorConfiguration()
             val nativeFramePipelineConfiguration =
-                (arguments["nativeFramePipeline"] as? Map<*, *>)
-                    ?.stringMap()
+                arguments.optionalInputMap("nativeFramePipeline")
                     .toNativeFramePipelineConfiguration()
             val pipelineEventHookConfiguration =
                 arguments.toPipelineEventHookConfiguration()
@@ -1004,11 +1003,8 @@ class VesperPlayerAndroidPlugin :
                 controller = VesperPlayerControllerFactory.createDefault(
                     context = applicationContext,
                     initialSource = initialSourceMap?.stringMap()?.toVesperPlayerSource(),
-                    resiliencePolicy = resiliencePolicyMap?.stringMap()?.toResiliencePolicy()
-                        ?: VesperPlaybackResiliencePolicy(),
-                    trackPreferencePolicy =
-                        trackPreferencePolicyMap?.stringMap()?.toTrackPreferencePolicy()
-                            ?: VesperTrackPreferencePolicy(),
+                    resiliencePolicy = resiliencePolicy,
+                    trackPreferencePolicy = trackPreferencePolicy,
                     preloadBudgetPolicy =
                         preloadBudgetPolicyMap?.stringMap()?.toPreloadBudgetPolicy()
                             ?: VesperPreloadBudgetPolicy(),
@@ -1072,31 +1068,34 @@ class VesperPlayerAndroidPlugin :
         val hasStaleResourceRecovery = arguments["hasStaleResourceRecovery"] as? Boolean ?: false
         scope.launch {
             runCatching {
-                val manager =
-                    withContext(Dispatchers.IO) {
-                        VesperDownloadManager(
-                            context = applicationContext,
-                            configuration = configurationMap.toDownloadConfiguration(),
-                            staleResourcePlanRecoverer =
-                                if (hasStaleResourceRecovery) {
-                                    object : VesperDownloadStaleResourcePlanRecoverer {
-                                        override suspend fun recoverPlan(
-                                            task: VesperDownloadTaskSnapshot,
-                                            staleResource: VesperDownloadStaleResource,
-                                        ): VesperDownloadRecoveredTaskPlan? =
-                                            recoverDownloadTaskPlan(downloadId, task, staleResource)
-                                    }
-                                } else {
-                                    null
-                                },
-                        )
-                    }
                 val session =
-                    DownloadSession(
-                        id = downloadId,
-                        manager = manager,
+                    createAndRegisterDownloadManager(
+                        createManager = {
+                            VesperDownloadManager(
+                                context = applicationContext,
+                                configuration = configurationMap.toDownloadConfiguration(),
+                                staleResourcePlanRecoverer =
+                                    if (hasStaleResourceRecovery) {
+                                        object : VesperDownloadStaleResourcePlanRecoverer {
+                                            override suspend fun recoverPlan(
+                                                task: VesperDownloadTaskSnapshot,
+                                                staleResource: VesperDownloadStaleResource,
+                                            ): VesperDownloadRecoveredTaskPlan? =
+                                                recoverDownloadTaskPlan(downloadId, task, staleResource)
+                                        }
+                                    } else {
+                                        null
+                                    },
+                            )
+                        },
+                        registerManager = { manager ->
+                            DownloadSession(
+                                id = downloadId,
+                                manager = manager,
+                            ).also { session -> downloadSessions[session.id] = session }
+                        },
+                        disposeManager = VesperDownloadManager::dispose,
                     )
-                downloadSessions[session.id] = session
                 observeDownloadSession(session)
                 mapOf(
                     "downloadId" to session.id,
@@ -1128,28 +1127,7 @@ class VesperPlayerAndroidPlugin :
                         "task" to task.toMap(),
                         "staleResource" to staleResource.toMap(),
                     ),
-                    object : MethodChannel.Result {
-                        override fun success(result: Any?) {
-                            val plan =
-                                (result as? Map<*, *>)
-                                    ?.entries
-                                    ?.associate { (key, value) -> key.toString() to value }
-                                    ?.toDownloadRecoveredTaskPlan()
-                            deferred.complete(plan)
-                        }
-
-                        override fun error(
-                            errorCode: String,
-                            errorMessage: String?,
-                            errorDetails: Any?,
-                        ) {
-                            deferred.complete(null)
-                        }
-
-                        override fun notImplemented() {
-                            deferred.complete(null)
-                        }
-                    },
+                    DownloadRecoveryResult(deferred),
                 )
                 deferred.await()
             }
@@ -1286,8 +1264,11 @@ class VesperPlayerAndroidPlugin :
             check(sequenceSessions[configuration.sequenceId] == null) {
                 "sequence id is already attached"
             }
-            val sequence = VesperPlaybackSequence(configuration)
-            sequence.attach(player.controller)
+            val sequence = createAttachedPlaybackSequence<VesperPlaybackSequence>(
+                create = { VesperPlaybackSequence(configuration) },
+                attach = { it.attach(player.controller) },
+                dispose = { it.dispose() },
+            )
             val session = PlaybackSequenceSession(configuration.sequenceId, playerId, sequence)
             session.observerJob = scope.launch {
                 sequence.events.collect { event ->

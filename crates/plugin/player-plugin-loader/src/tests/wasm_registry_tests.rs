@@ -756,11 +756,14 @@ fn component(world_name: &str, core_wat: &str) -> Vec<u8> {
         .select_world(&[package], Some(world_name))
         .expect("fixture WIT world");
     let mut module = wat::parse_str(core_wat).expect("fixture core module");
+    // Match ComponentEncoder's default full interface names.
+    let canonical_names = false;
     wit_component::embed_component_metadata(
         &mut module,
         &resolve,
         world,
         wit_component::StringEncoding::UTF8,
+        canonical_names,
     )
     .expect("embedded component metadata");
     wit_component::ComponentEncoder::default()

@@ -3923,7 +3923,9 @@ mod implementation {
             cancellation,
         ) {
             Ok(result) if result.status.success() => {
-                Ok(String::from_utf8_lossy(&result.stdout).trim().to_owned())
+                Ok(String::from_utf8_lossy_owned(result.stdout)
+                    .trim()
+                    .to_owned())
             }
             Ok(_) => Ok(String::new()),
             Err(error) if error.kind() == ExternalProcessErrorKind::Compatibility => {
@@ -8079,6 +8081,49 @@ mod implementation {
             fs::write(path, source).expect("write fixture executable");
             fs::set_permissions(path, fs::Permissions::from_mode(0o700))
                 .expect("make fixture executable");
+        }
+
+        #[test]
+        fn optional_tool_value_consumes_lossy_stdout_and_trims_unicode() {
+            let temp = tempfile::tempdir().expect("temporary tool directory");
+            let executable = temp.path().join("metadata-query");
+            let cancellation =
+                crate::external_process::InterruptDeferral::start("metadata fixture")
+                    .expect("start interrupt deferral");
+            let cases: &[(&[u8], &str)] = &[
+                (b" Tool metadata\r\n", "Tool metadata"),
+                ("\u{2003}SDK 字幕\u{3000}\n".as_bytes(), "SDK 字幕"),
+                (b" \xffSDK\n", "\u{fffd}SDK"),
+                (b"\xc3(", "\u{fffd}("),
+                (b"\xe2\x82", "\u{fffd}"),
+                ("\u{2003}\t\r\n".as_bytes(), ""),
+                (b"", ""),
+            ];
+            for (bytes, expected) in cases {
+                let escaped = bytes
+                    .iter()
+                    .map(|byte| format!("\\{byte:03o}"))
+                    .collect::<String>();
+                write_executable(&executable, &format!("#!/bin/sh\nprintf '{escaped}'\n"));
+                let actual = super::optional_tool_value(&executable, &[], &cancellation)
+                    .expect("capture metadata output");
+                assert_eq!(&actual, expected, "input bytes: {bytes:?}");
+            }
+            assert!(!cancellation.finish());
+        }
+
+        #[test]
+        fn optional_tool_value_ignores_output_from_failed_query() {
+            let temp = tempfile::tempdir().expect("temporary tool directory");
+            let executable = temp.path().join("metadata-query");
+            write_executable(&executable, "#!/bin/sh\nprintf '\\377'\nexit 1\n");
+            let cancellation =
+                crate::external_process::InterruptDeferral::start("metadata fixture")
+                    .expect("start interrupt deferral");
+            let value = super::optional_tool_value(&executable, &[], &cancellation)
+                .expect("optional failed query");
+            assert!(value.is_empty());
+            assert!(!cancellation.finish());
         }
 
         fn native_profile(

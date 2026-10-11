@@ -1,13 +1,12 @@
 # Vesper Stage Skin Contract
 
-## Version and placement
+## Package placement
 
-The Stage skin API is introduced in 0.6.4. Check the consumer's resolved package
-and the current source before proposing it. Packages at 0.6.3 or earlier cannot
-replace built-in transport icons through this API; upgrade to 0.6.4 or later
-or implement the SDK change in its own checkout.
+Check the consumer's resolved UI package and current source before integrating
+Stage skins. The current API configures built-in semantic icons and reusable
+controls in each platform's optional UI module.
 
-The maintained migration guide is `lib/doc/stage-skins.md` when a Vesper checkout
+The maintained Stage skin contract is `lib/doc/stage-skins.md` when a Vesper checkout
 is available. This card carries the integration rules for installed plugin
 copies that have no repository documentation.
 
@@ -62,7 +61,7 @@ inactive/thumb, and HUD background/foreground. Control opacity multiplies the
 configured color alpha. Default dimensions follow each platform's existing
 visuals; they are not a promise of identical glyph geometry across platforms.
 
-## Host controls and migration to 0.6.4
+## Host controls
 
 Stage slots inherit their Stage's skin. Standalone controls use these scopes:
 
@@ -73,10 +72,9 @@ Stage slots inherit their Stage's skin. Standalone controls use these scopes:
 - SwiftUI: `control.vesperPlayerStageSkin(skin)`;
   `@Environment(\.vesperPlayerStageSkin)` reads it.
 
-Flutter `VesperStageIconButton.icon` changes from `IconData` to `Widget`.
-Replace `icon: Icons.favorite` with `icon: const Icon(Icons.favorite)`.
-Replace `size`, `iconSize`, and `containerAlpha` with a named variant or an
-explicit style. The mechanical equivalent is:
+Flutter `VesperStageIconButton.icon` accepts a decorative `Widget`, such as
+`const Icon(Icons.favorite)`. A named variant follows the active skin; an
+explicit `VesperStageButtonStyle` sets button geometry:
 
 ```dart
 VesperStageIconButton(
@@ -91,19 +89,19 @@ VesperStageIconButton(
 
 Use `variant: VesperStageButtonVariant.toolbar` to follow the skin's toolbar
 style. Use `VesperStageIcon(VesperStageIconRole.play)` when a host action should
-use the configured SDK role renderer. `VesperStagePrimaryPlayButton` replaces
-its size/iconSize arguments with `style` and accepts localized `strings`.
+use the configured SDK role renderer. `VesperStagePrimaryPlayButton` accepts
+optional `style` and localized `strings`.
 Tests tap the action button or semantic label, not decorative icon content.
 
 Compose exposes `VesperStageIconButton(label, variant, onClick) { icon() }`
 and `VesperStagePrimaryPlayButton`. A generic icon slot inherits
 `LocalContentColor` and a bounded box; semantic `VesperStageIcon` also receives
-the resolved icon style. Recompile Kotlin consumers for the extended Stage
-signature; old compiled default-argument calls are not binary compatible.
+the resolved icon style. Compile consumers with matching UI and host-kit AARs;
+Kotlin default-argument calls depend on generated JVM signatures.
 
 SwiftUI exposes `VesperStageIconButton(label:variant:action:) { image }` and
 `VesperStagePrimaryPlayButton`. Rebuild consumers with the matching UI framework
-or Swift package after the Stage initializer change. Host asset catalogs stay
+or Swift package used by the host. Host asset catalogs stay
 in the host; SF Symbols are configured by name. Primary buttons accept a
 `label` override; skin configuration does not localize text.
 

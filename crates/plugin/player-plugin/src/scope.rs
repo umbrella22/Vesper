@@ -625,7 +625,7 @@ impl PluginScope {
         let raw = self
             .context
             .next_owner_token
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .map_err(|_| PluginScopeError::OwnerTokenExhausted)?;
@@ -923,7 +923,7 @@ fn validate_failure_reason(reason: String) -> Result<String, PluginScopeError> {
 
 fn reserve_bounded(counter: &AtomicUsize, limit: usize) -> bool {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             (current < limit).then_some(current + 1)
         })
         .is_ok()

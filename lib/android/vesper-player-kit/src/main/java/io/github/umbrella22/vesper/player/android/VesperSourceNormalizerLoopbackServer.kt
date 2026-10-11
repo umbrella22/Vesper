@@ -230,13 +230,13 @@ internal class VesperSourceNormalizerLoopbackServer(
         }
     }
 
-    private fun handleClientSafely(client: Socket) {
+    internal fun handleClientSafely(client: Socket) {
         try {
             client.use(::handleClient)
         } catch (error: IOException) {
-            Log.d(TAG, "normalized loopback client disconnected: ${error.message}")
+            Log.d(TAG, "normalized loopback client disconnected failure=${diagnosticPlaybackFailure(error)}")
         } catch (error: Exception) {
-            Log.w(TAG, "normalized loopback request failed", error)
+            Log.w(TAG, "normalized loopback request failed failure=${diagnosticPlaybackFailure(error)}")
         }
     }
 

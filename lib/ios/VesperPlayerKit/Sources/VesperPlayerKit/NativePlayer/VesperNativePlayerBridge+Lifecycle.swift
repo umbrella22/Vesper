@@ -79,6 +79,7 @@ extension VesperNativePlayerBridge {
         pendingNativeFrameSurfaceLoad = false
         pendingNativeFrameSeek = nil
         tearDownActivePlayback(cancelSourceCommand: false)
+        preloadCoordinator.close()
         deactivateAudioSessionIfNeeded()
         benchmarkRecorder.dispose(player: player)
         if let session = pipelineEventHookSession {
@@ -469,7 +470,7 @@ extension VesperNativePlayerBridge {
         releaseDashStartupAbrLimitIfNeeded(reason: "tearDown", item: player?.currentItem)
         _ = advancePlaybackEpoch()
         cancelStopSeekTimeout()
-        preloadCoordinator.cancelAll()
+        preloadCoordinator.cancelCurrent()
         VesperSharedUrlCacheCoordinator.shared.remove(token: cachePolicyToken)
         pendingPlaybackStart = false
         pendingNativeFrameSurfaceLoad = false

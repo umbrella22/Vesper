@@ -246,7 +246,7 @@ fn event_hook_queue_reports_success_and_quarantines_a_trapping_guest() {
             .expect("success queue");
     assert_eq!(
         success_queue.enqueue(pipeline_event()).expect("enqueue"),
-        WasmPipelineEventEnqueueStatus::Enqueued
+        WasmPipelineEventEnqueueStatus::Enqueued { invocation_id: 1 }
     );
     success_queue
         .flush(Duration::from_secs(1))
@@ -263,7 +263,9 @@ fn event_hook_queue_reports_success_and_quarantines_a_trapping_guest() {
         .expect("idempotent success close");
     assert!(matches!(
         success_queue.enqueue(pipeline_event()),
-        Err(WasmPluginHostError::Queue(message)) if message.contains("not open")
+        Err(WasmPluginHostError::Queue(
+            player_plugin_wasm_host::WasmQueueError::Closed
+        ))
     ));
 
     let trapping_component = event_fixture_component(TRAPPING_CORE_WAT);
@@ -274,7 +276,7 @@ fn event_hook_queue_reports_success_and_quarantines_a_trapping_guest() {
         trapping_queue
             .enqueue(pipeline_event())
             .expect("enqueue trap"),
-        WasmPipelineEventEnqueueStatus::Enqueued
+        WasmPipelineEventEnqueueStatus::Enqueued { invocation_id: 1 }
     );
     trapping_queue
         .flush(Duration::from_secs(1))
@@ -290,7 +292,7 @@ fn event_hook_queue_reports_success_and_quarantines_a_trapping_guest() {
         trapping_queue
             .enqueue(pipeline_event())
             .expect("enqueue quarantined event"),
-        WasmPipelineEventEnqueueStatus::Enqueued
+        WasmPipelineEventEnqueueStatus::Enqueued { invocation_id: 2 }
     );
     trapping_queue
         .flush(Duration::from_secs(1))
@@ -299,11 +301,153 @@ fn event_hook_queue_reports_success_and_quarantines_a_trapping_guest() {
     assert_eq!(quarantined.reports.len(), 1);
     assert!(matches!(
         quarantined.reports[0].result,
-        Err(WasmPluginHostError::Quarantined)
+        Err(WasmPluginHostError::Quarantined { .. })
     ));
     trapping_queue
         .close(Duration::from_secs(1))
         .expect("trapping close");
+}
+
+#[test]
+fn event_tickets_preserve_direct_result_and_logs_and_settle_dropped_receipts() {
+    let component = event_fixture_component(SUCCESS_CORE_WAT);
+    let runtime = WasmPluginRuntime::new().expect("WASM runtime");
+    let mut direct = WasmPipelineEventHookSession::from_component_bytes(&runtime, &component)
+        .expect("direct session");
+    let expected = direct.on_event(&pipeline_event()).expect("direct outcome");
+    let expected_logs = direct.take_logs();
+    let queue = WasmPipelineEventHookQueue::from_component_bytes(&runtime, &component)
+        .expect("checked queue");
+    let first = queue.submit(pipeline_event()).expect("accepted receipt");
+    assert_eq!(first.invocation_id(), 1);
+    let report = first
+        .wait(Duration::from_secs(2))
+        .expect("completed receipt");
+    assert_eq!(report.invocation_id, 1);
+    assert_eq!(report.result, Ok(expected.clone()));
+    assert_eq!(report.logs, expected_logs);
+    let second = queue.submit(pipeline_event()).expect("dropped receipt");
+    assert_eq!(second.invocation_id(), 2);
+    drop(second);
+    let barrier = queue
+        .flush(Duration::from_secs(2))
+        .expect("settled barrier");
+    assert_eq!(barrier.accepted_invocations, 2);
+    assert_eq!(barrier.completed_invocations, 2);
+    assert_eq!(barrier.pending_invocations, 0);
+    assert_eq!(barrier.failed_invocations, 0);
+    assert_eq!(barrier.wait_expirations, 0);
+    let reports = queue.drain_reports();
+    assert_eq!(reports.reports.len(), 2);
+    assert_eq!(reports.reports[1].invocation_id, 2);
+    assert_eq!(reports.reports[1].result, Ok(expected));
+    assert_eq!(reports.reports[1].logs, expected_logs);
+    let closed = queue.close(Duration::from_secs(2)).expect("joined close");
+    assert_eq!(
+        closed.lifecycle,
+        player_plugin_wasm_host::WasmQueueLifecycle::Closed
+    );
+    assert!(closed.worker_joined);
+    assert_eq!(
+        closed,
+        queue.close(Duration::ZERO).expect("idempotent close")
+    );
+}
+
+#[test]
+fn event_admission_rejects_invalid_input_before_guest_execution_or_id_allocation() {
+    let component = event_fixture_component(SUCCESS_CORE_WAT);
+    let runtime = WasmPluginRuntime::new().expect("WASM runtime");
+    let queue = WasmPipelineEventHookQueue::from_component_bytes(&runtime, &component)
+        .expect("checked queue");
+    let mut invalid = pipeline_event();
+    invalid.run_id.clear();
+    assert!(matches!(
+        queue.submit(invalid),
+        Err(WasmPluginHostError::LocalValidation(_))
+    ));
+    assert_eq!(queue.settlement().accepted_invocations, 0);
+    assert!(queue.drain_reports().reports.is_empty());
+    let ticket = queue.submit(pipeline_event()).expect("valid receipt");
+    assert_eq!(ticket.invocation_id(), 1);
+    let report = ticket.wait(Duration::from_secs(2)).expect("valid result");
+    assert!(report.result.is_ok());
+    assert_eq!(report.logs.len(), 2);
+    assert!(
+        queue
+            .close(Duration::from_secs(2))
+            .expect("close")
+            .worker_joined
+    );
+}
+
+#[test]
+fn non_finite_guest_measurement_preserves_protocol_quarantine_cause() {
+    let component = event_component_with_return_stores(
+        r#"
+    i32.const 8 i32.const 640 i32.store
+    i32.const 12 i32.const 1 i32.store
+    i32.const 640 i32.const 1024 i32.store
+    i32.const 644 i32.const 16 i32.store
+    i32.const 648 f64.const nan f64.store
+    i32.const 656 i32.const 1050 i32.store
+    i32.const 660 i32.const 14 i32.store
+    "#,
+    );
+    assert_protocol_quarantine(&component, "finite");
+}
+
+#[test]
+fn duplicate_guest_attributes_are_not_silently_overwritten() {
+    let component = event_component_with_return_stores(
+        r#"
+    i32.const 532 i32.const 704 i32.store
+    i32.const 536 i32.const 2 i32.store
+    i32.const 704 i32.const 1024 i32.store
+    i32.const 708 i32.const 16 i32.store
+    i32.const 712 i32.const 1050 i32.store
+    i32.const 716 i32.const 14 i32.store
+    i32.const 720 i32.const 1024 i32.store
+    i32.const 724 i32.const 16 i32.store
+    i32.const 728 i32.const 1050 i32.store
+    i32.const 732 i32.const 14 i32.store
+    "#,
+    );
+    assert_protocol_quarantine(&component, "duplicate");
+}
+
+fn event_component_with_return_stores(stores: &str) -> Vec<u8> {
+    let anchor = "    i32.const 0)\n  (export \"vesper:plugin/event-hook#on-event\"";
+    assert_eq!(SUCCESS_CORE_WAT.matches(anchor).count(), 1);
+    event_fixture_component(&SUCCESS_CORE_WAT.replace(anchor, &format!("{stores}\n{anchor}")))
+}
+
+fn assert_protocol_quarantine(component: &[u8], diagnostic: &str) {
+    let runtime = WasmPluginRuntime::new().expect("WASM runtime");
+    let mut direct = WasmPipelineEventHookSession::from_component_bytes(&runtime, component)
+        .expect("direct session");
+    let failure = direct
+        .on_event(&pipeline_event())
+        .expect_err("invalid guest outcome");
+    assert!(
+        matches!(&failure, WasmPluginHostError::ProtocolViolation(message) if message.contains(diagnostic))
+    );
+    assert_eq!(direct.quarantine_reason(), Some(&failure));
+    assert!(
+        matches!(direct.on_event(&pipeline_event()), Err(WasmPluginHostError::Quarantined { reason }) if reason.as_ref() == &failure)
+    );
+    let queue = WasmPipelineEventHookQueue::from_component_bytes(&runtime, component)
+        .expect("checked queue");
+    let report = queue
+        .submit_and_wait(pipeline_event(), Duration::from_secs(2))
+        .expect("completed receipt");
+    assert_eq!(report.result, Err(failure.clone()));
+    assert_eq!(report.logs, direct.take_logs());
+    let settlement = queue.close(Duration::from_secs(2)).expect("joined close");
+    assert_eq!(settlement.quarantine_reason, Some(failure));
+    assert_eq!(settlement.failed_invocations, 1);
+    assert_eq!(settlement.completed_invocations, 1);
+    assert!(settlement.worker_joined);
 }
 
 fn pipeline_event() -> PipelineEvent {
@@ -335,11 +479,14 @@ fn event_fixture_component(core_wat: &str) -> Vec<u8> {
         .select_world(&[package], Some("event-hook-plugin"))
         .expect("event-hook fixture world");
     let mut module = wat::parse_str(core_wat).expect("fixture core module");
+    // Match ComponentEncoder's default full interface names.
+    let canonical_names = false;
     wit_component::embed_component_metadata(
         &mut module,
         &resolve,
         world,
         wit_component::StringEncoding::UTF8,
+        canonical_names,
     )
     .expect("embedded component metadata");
     wit_component::ComponentEncoder::default()

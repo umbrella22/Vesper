@@ -5,6 +5,74 @@ import VesperPlayerKitBridgeShim
 
 @MainActor
 final class VesperDownloadManagerTests: XCTestCase {
+    func testPreparationCompletionCannotUnregisterReplacementTransfer() async throws {
+        let executor = VesperForegroundDownloadExecutor()
+        let handoff = expectation(description: "preparation handed off")
+        let gate = AsyncStream<Void>.makeStream()
+        let task = VesperDownloadTaskSnapshot(
+            taskId: 71,
+            assetId: "execution-handoff",
+            source: VesperDownloadSource(source: .remoteUrl(URL(string: "https://example.com/video.mp4")!)),
+            profile: VesperDownloadProfile(),
+            state: .queued,
+            progress: VesperDownloadProgressSnapshot(),
+            assetIndex: VesperDownloadAssetIndex(
+                contentFormat: .singleFile,
+                resources: [VesperDownloadResourceRecord(
+                    resourceId: "body", uri: "https://example.com/video.mp4", sizeBytes: 8
+                )]
+            )
+        )
+        let reporter = ExecutionHandoffReporter {
+            executor.launchExecution(taskId: task.taskId, clearsRecoveredSource: true) {
+                for await _ in gate.stream {}
+            }
+            handoff.fulfill()
+        }
+        executor.prepare(task: task, reporter: reporter)
+        let preparation = try XCTUnwrap(executor.lock.withLock { executor.tasks[task.taskId]?.work })
+        defer { gate.continuation.finish(); executor.dispose() }
+        await fulfillment(of: [handoff], timeout: 5)
+        await preparation.value
+        let transfer = try XCTUnwrap(executor.lock.withLock { executor.tasks[task.taskId]?.work })
+        XCTAssertFalse(transfer.isCancelled)
+        executor.pause(taskId: task.taskId)
+        XCTAssertTrue(transfer.isCancelled)
+        await transfer.value
+    }
+
+    func testCancelledExecutionCannotUnregisterResumedWork() async throws {
+        let executor = VesperForegroundDownloadExecutor()
+        let oldGate = AsyncStream<Void>.makeStream()
+        let newGate = AsyncStream<Void>.makeStream()
+        let oldStarted = expectation(description: "old execution started")
+        executor.launchExecution(taskId: 72, clearsRecoveredSource: true) {
+            oldStarted.fulfill()
+            // Cancellation-ignoring work models a callback already in flight.
+            await withCheckedContinuation { continuation in
+                Task.detached {
+                    for await _ in oldGate.stream {}
+                    continuation.resume()
+                }
+            }
+        }
+        let old = try XCTUnwrap(executor.lock.withLock { executor.tasks[72]?.work })
+        defer { oldGate.continuation.finish(); newGate.continuation.finish(); executor.dispose() }
+        await fulfillment(of: [oldStarted], timeout: 5)
+        executor.pause(taskId: 72)
+        executor.launchExecution(taskId: 72, clearsRecoveredSource: true) {
+            for await _ in newGate.stream {}
+        }
+        let resumed = try XCTUnwrap(executor.lock.withLock { executor.tasks[72]?.work })
+        oldGate.continuation.finish()
+        await old.value
+        XCTAssertNotNil(executor.lock.withLock { executor.tasks[72] })
+        executor.pause(taskId: 72)
+        XCTAssertTrue(resumed.isCancelled)
+        await resumed.value
+        XCTAssertNil(executor.lock.withLock { executor.tasks[72] })
+    }
+
     func testResolvedDownloadDirectoryUsesConfiguredBaseDirectory() {
         let configured = URL(fileURLWithPath: "/configured-downloads", isDirectory: true)
 
@@ -1669,6 +1737,16 @@ private final class RecordingDownloadExecutor: VesperDownloadExecutor {
     func dispose() {
         disposeCount += 1
     }
+}
+
+@MainActor
+private final class ExecutionHandoffReporter: VesperDownloadExecutionReporter {
+    let onPrepared: () -> Void
+    init(onPrepared: @escaping () -> Void) { self.onPrepared = onPrepared }
+    func completePreparation(taskId: VesperDownloadTaskId, assetIndex: VesperDownloadAssetIndex) { onPrepared() }
+    func updateProgress(taskId: VesperDownloadTaskId, receivedBytes: UInt64, receivedSegments: UInt32) {}
+    func complete(taskId: VesperDownloadTaskId, completedPath: String?) {}
+    func fail(taskId: VesperDownloadTaskId, error: VesperDownloadError) { XCTFail(error.message) }
 }
 
 @MainActor

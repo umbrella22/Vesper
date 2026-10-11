@@ -3110,6 +3110,51 @@ class VesperNativePlayerBridgeTest {
         }
 
     @Test
+    fun canceledPublicInitializeAtDispatcherHandoffReleasesPreparedResource() = runBlocking {
+        val caller = QueuedSourceLoadCallerDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + caller)
+        val prepared = NativeSourceNormalizerResourcePreparedOpenOutcome(
+            resource = NativeSourceNormalizerResource(
+                handle = 42L,
+                playbackSource = VesperPlayerSource.local("file:///tmp/normalized.mp4", "Normalized"),
+                outputRoute = "fmp4LocalStream",
+                loopbackToken = null,
+                diagnostics = emptyList(),
+            ),
+        )
+        val bindings = FakeBindings(sourceNormalizerPrepareOutcome = prepared)
+        val bridge = VesperNativePlayerBridge(
+            bindings = bindings,
+            initialSource = VesperPlayerSource.local("file:///tmp/original.mp4", "Original"),
+            sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(
+                mode = VesperSourceNormalizerMode.RequireNormalized,
+                pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
+            ),
+        )
+        val controller = VesperPlayerController(bridge)
+        try {
+            val initialize = scope.async { controller.initializeAsync() }
+            caller.runAvailable()
+            // An executor barrier proves the preparation has returned and its
+            // caller continuation is queued, not still inside the prepare hook.
+            val preparationReturned = CountDownLatch(1)
+            bridge.sourceLoadDispatcher.executor.execute { preparationReturned.countDown() }
+            assertTrue(preparationReturned.await(5, TimeUnit.SECONDS))
+            assertEquals(1, bindings.prepareSourceNormalizerForPlaybackCount)
+            assertFalse(initialize.isCompleted)
+            initialize.cancel(CancellationException("cancel at dispatcher handoff"))
+            assertTrue(waitUntil { caller.runAvailable(); initialize.isCompleted })
+            assertTrue(runCatching { initialize.await() }.exceptionOrNull() is CancellationException)
+            assertNull(bindings.lastInitializedSource)
+            assertEquals(1, bindings.disposePreparedSourceNormalizerResourceCount)
+        } finally {
+            scope.cancel()
+            caller.runAvailable()
+            controller.dispose()
+        }
+    }
+
+    @Test
     fun nativeFramePipelineDiagnosticsReportPresenterSurfaceState() {
         val initialSource =
             VesperPlayerSource.remote(
@@ -6879,4 +6924,292 @@ private class ThreadedNativeFramePipelinePumpScheduler(
     }
 
     fun awaitRun(): Boolean = latch.await(5, TimeUnit.SECONDS)
+}
+
+
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28], manifest = org.robolectric.annotation.Config.NONE)
+@org.robolectric.annotation.LooperMode(org.robolectric.annotation.LooperMode.Mode.PAUSED)
+class VesperSourceLoadOwnershipTest {
+    @Test
+    fun publicInitializeFailureDoesNotDisposeBindingOwnedPreparationTwice() = runBlocking {
+        val caller = QueuedSourceLoadCallerDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + caller)
+        val prepared = preparedResource()
+        val failure = IllegalStateException("source startup failed")
+        val fake = FakeBindings(sourceNormalizerPrepareOutcome = prepared).apply {
+            onInitialize = { throw failure }
+        }
+        val controller = VesperPlayerController(bridge(PreparedResourceOwningTestBindings(fake)))
+        try {
+            val initialize = scope.async { runCatching { controller.initializeAsync() } }
+            caller.runAvailable()
+            assertTrue(waitUntil { runCallerAwayFromMain(caller); org.robolectric.shadows.ShadowLooper.idleMainLooper(); initialize.isCompleted })
+            val reportedFailure = initialize.await().exceptionOrNull()
+            assertTrue(reportedFailure is IllegalStateException)
+            assertEquals(failure.message, reportedFailure?.message)
+            assertTrue(fake.lastPreparedSourceNormalizer === prepared)
+            assertEquals(1, fake.disposePreparedSourceNormalizerResourceCount)
+            assertNotNull(controller.uiState.value.lastError)
+            assertFalse(controller.uiState.value.isBuffering)
+            controller.dispose()
+            assertEquals(1, fake.disposePreparedSourceNormalizerResourceCount)
+        } finally {
+            scope.cancel()
+            runCallerAwayFromMain(caller)
+            controller.dispose()
+        }
+    }
+
+    @Test
+    fun canceledPublicInitializeAtMainReturnKeepsAcceptedResourceUntilDispose() = runBlocking {
+        val caller = QueuedSourceLoadCallerDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + caller)
+        val prepared = preparedResource()
+        val fake = FakeBindings(sourceNormalizerPrepareOutcome = prepared)
+        val bridge = bridge(PreparedResourceOwningTestBindings(fake))
+        val controller = VesperPlayerController(bridge)
+        try {
+            val initialize = scope.async { controller.initializeAsync() }
+            caller.runAvailable()
+            val preparationReturned = CountDownLatch(1)
+            bridge.sourceLoadDispatcher.executor.execute { preparationReturned.countDown() }
+            assertTrue(preparationReturned.await(5, TimeUnit.SECONDS))
+            // Resume off the owner looper so apply must post to the actual main
+            // looper, rather than taking the JVM-stub direct-execution shortcut.
+            runCallerAwayFromMain(caller)
+            assertNull(fake.lastInitializedSource)
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            assertTrue(fake.lastPreparedSourceNormalizer === prepared)
+            assertFalse(initialize.isCompleted)
+            initialize.cancel(CancellationException("cancel after main apply before caller delivery"))
+            assertTrue(waitUntil { runCallerAwayFromMain(caller); initialize.isCompleted })
+            assertTrue(runCatching { initialize.await() }.exceptionOrNull() is CancellationException)
+            assertEquals(0, fake.disposePreparedSourceNormalizerResourceCount)
+            assertTrue(bridge.hasInitializedSource)
+            assertNull(controller.uiState.value.lastError)
+            controller.dispose()
+            controller.dispose()
+            assertEquals(1, fake.disposePreparedSourceNormalizerResourceCount)
+        } finally {
+            scope.cancel()
+            runCallerAwayFromMain(caller)
+            controller.dispose()
+        }
+    }
+
+    private fun preparedResource() = NativeSourceNormalizerResourcePreparedOpenOutcome(
+        resource = NativeSourceNormalizerResource(
+            handle = 42L,
+            playbackSource = VesperPlayerSource.local("file:///tmp/normalized.mp4", "Normalized"),
+            outputRoute = "fmp4LocalStream",
+            loopbackToken = null,
+            diagnostics = emptyList(),
+        ),
+    )
+
+    private fun bridge(bindings: VesperNativeBindings) = VesperNativePlayerBridge(
+        bindings = bindings,
+        initialSource = VesperPlayerSource.local("file:///tmp/original.mp4", "Original"),
+        sourceNormalizerConfiguration = VesperSourceNormalizerConfiguration(
+            mode = VesperSourceNormalizerMode.RequireNormalized,
+            pluginReferences = listOf(VesperBundledPluginReferences.sourceNormalizerFfmpeg),
+        ),
+    )
+
+    private fun runCallerAwayFromMain(caller: QueuedSourceLoadCallerDispatcher) {
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val thread = Thread {
+            try {
+                caller.runAvailable()
+            } catch (error: Throwable) {
+                failure.set(error)
+            }
+        }
+        thread.start()
+        thread.join(5_000)
+        assertFalse("caller dispatcher must not block", thread.isAlive)
+        failure.get()?.let { throw it }
+    }
+}
+
+// Model the binding contract: initialize accepts prepared ownership on entry;
+// failed startup releases it, while successful startup retains it until dispose.
+private class PreparedResourceOwningTestBindings(
+    private val fake: FakeBindings,
+) : VesperNativeBindings by fake {
+    private var ownedPreparation: NativeSourceNormalizerResourcePreparedOpenOutcome? = null
+
+    override fun initialize(
+        source: VesperPlayerSource,
+        resiliencePolicy: VesperPlaybackResiliencePolicy,
+        trackPreferencePolicy: VesperTrackPreferencePolicy,
+        systemPlaybackUsesSourceNormalizerResource: Boolean,
+        systemPlaybackVideoEnabled: Boolean,
+        preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
+    ): NativeBridgeStartup {
+        disposeOwnedPreparation()
+        ownedPreparation = preparedSourceNormalizer
+        try {
+            return fake.initialize(
+                source, resiliencePolicy, trackPreferencePolicy,
+                systemPlaybackUsesSourceNormalizerResource, systemPlaybackVideoEnabled,
+                preparedSourceNormalizer,
+            )
+        } catch (error: Throwable) {
+            disposeOwnedPreparation()
+            throw error
+        }
+    }
+
+    override fun dispose() {
+        disposeOwnedPreparation()
+        fake.dispose()
+    }
+
+    private fun disposeOwnedPreparation() {
+        val prepared = ownedPreparation ?: return
+        ownedPreparation = null
+        fake.disposePreparedSourceNormalizerResource(prepared)
+    }
+}
+
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [28], manifest = org.robolectric.annotation.Config.NONE)
+class VesperPlaybackLogPrivacyTest {
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun selectionAndPreparationFailuresDoNotLogSourceSecrets() = runBlocking {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        org.robolectric.shadows.ShadowLog.clear()
+        val uri = "https://secret-user:secret-password@example.com/private-path.mp4?signature=secret-signature#secret-fragment"
+        val source = VesperPlayerSource.remote(uri, label = "secret-label", headers = mapOf("Authorization" to "secret-header"))
+        val fake = FakeBindings()
+        val bridge = VesperNativePlayerBridge(bindings = fake)
+        suspend fun select(value: VesperPlayerSource): Result<Unit> = kotlinx.coroutines.coroutineScope {
+            val command = async(Dispatchers.Default) { runCatching { bridge.selectSourceAsync(value) } }
+            kotlinx.coroutines.withTimeout(5_000) {
+                while (!command.isCompleted) {
+                    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                    kotlinx.coroutines.delay(1)
+                }
+            }
+            command.await()
+        }
+        try {
+            select(source).getOrThrow()
+            assertEquals("Logging must not rewrite the actual request", source, fake.lastInitializedSource)
+            fake.onInitialize = { throw IllegalStateException("failed $uri secret-header") }
+            assertTrue(select(source.copy(label = "retry")).isFailure)
+            val logs = org.robolectric.shadows.ShadowLog.getLogs()
+            assertTrue(logs.any { it.msg.contains("selecting source=id=") })
+            assertTrue(logs.any { it.msg.contains("failed to initialize") })
+            val emitted = logs.joinToString("\n") { it.msg + (it.throwable?.stackTraceToString() ?: "") }
+            for (secret in listOf("secret-user", "secret-password", "private-path", "secret-signature", "secret-fragment", "secret-label", "secret-header")) {
+                assertFalse("log leaked $secret", emitted.contains(secret))
+            }
+        } finally {
+            bridge.dispose()
+            Dispatchers.resetMain()
+        }
+    }
+
+    @Test
+    fun terminalPlayerCallbackDoesNotLogSecretsAndPreservesHostError() {
+        org.robolectric.shadows.ShadowLog.clear()
+        val bindings = VesperNativeJniBindings(
+            org.robolectric.RuntimeEnvironment.getApplication(),
+            preloadBindings = object : VesperNativePreloadCoordinator.PreloadBindings by
+                VesperNativePreloadCoordinator.NativeJniPreloadBindings {
+                override fun resolvePreloadBudget(preloadBudget: NativePreloadBudget) =
+                    NativeResolvedPreloadBudgetPolicy(1, 64 * 1024, 0, 1_000)
+            },
+        )
+        val secretUri = "https://secret-user:secret-password@example.com/private-path.mp4?signature=secret-signature"
+        val message = "load failed $secretUri"
+        val error = androidx.media3.common.PlaybackException(
+            message,
+            java.io.IOException("Authorization: secret-header $secretUri"),
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        try {
+            val listener = bindings.buildPlayerListener(
+                VesperTrackPreferencePolicy(),
+                bindings.systemPlaybackCallbackGeneration.get(),
+            )
+            listener.onPlayerError(error)
+            val logs = org.robolectric.shadows.ShadowLog.getLogs()
+            assertTrue(logs.any { it.msg.contains("onPlayerError ERROR_CODE_IO_BAD_HTTP_STATUS") })
+            val emitted = logs.joinToString("\n") { it.msg + (it.throwable?.stackTraceToString() ?: "") }
+            for (secret in listOf("secret-user", "secret-password", "private-path", "secret-signature", "secret-header")) {
+                assertFalse("terminal callback log leaked $secret", emitted.contains(secret))
+            }
+            val hostError = bindings.localBridgeEvents.filterIsInstance<NativeBridgeEvent.Error>().single()
+            assertEquals("Log formatting must not rewrite the host error", message, hostError.message)
+        } finally {
+            bindings.dispose()
+        }
+    }
+
+    @Test
+    fun normalizedLoopbackFailuresDoNotLogExceptionSecrets() {
+        val server = VesperSourceNormalizerLoopbackServer()
+        val secret = "https://secret-user@example.com/private-path?signature=secret-signature Authorization: secret-header"
+        val errors = listOf(java.io.IOException(secret), IllegalStateException(secret))
+        for (error in errors) {
+            org.robolectric.shadows.ShadowLog.clear()
+            val socket = object : java.net.Socket() {
+                override fun getInputStream(): java.io.InputStream = throw error
+            }
+            server.handleClientSafely(socket)
+            assertTrue("Request failure must still release its socket", socket.isClosed)
+            val emitted = org.robolectric.shadows.ShadowLog.getLogs()
+                .joinToString("\n") { it.msg + (it.throwable?.stackTraceToString() ?: "") }
+            for (value in listOf("secret-user", "private-path", "secret-signature", "secret-header")) {
+                assertFalse("loopback failure log leaked $value", emitted.contains(value))
+            }
+            assertTrue("Failure type must remain available", emitted.contains(error.javaClass.simpleName))
+        }
+    }
+
+    @Test
+    fun downloadDataSourceCloseFailureDoesNotLogSourceOrExceptionSecrets() {
+        org.robolectric.shadows.ShadowLog.clear()
+        val uri = "https://secret-user@example.com/private-path?signature=secret-signature"
+        val executor = VesperForegroundDownloadExecutor(context = null, baseDirectory = null)
+        val dataSource = object : androidx.media3.datasource.DataSource {
+            override fun addTransferListener(listener: androidx.media3.datasource.TransferListener) = Unit
+            override fun open(dataSpec: androidx.media3.datasource.DataSpec): Long = 0
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int = -1
+            override fun getUri(): android.net.Uri? = null
+            override fun close() { throw java.io.IOException("$uri Authorization: secret-header") }
+        }
+        try {
+            executor.closeDataSourceQuietly(dataSource, "copy", uri)
+            val emitted = org.robolectric.shadows.ShadowLog.getLogs()
+                .joinToString("\n") { it.msg + (it.throwable?.stackTraceToString() ?: "") }
+            for (value in listOf("secret-user", "private-path", "secret-signature", "secret-header")) {
+                assertFalse("download close log leaked $value", emitted.contains(value))
+            }
+            assertTrue("Operation and failure type must remain available", emitted.contains("copy") && emitted.contains("IOException"))
+        } finally {
+            executor.dispose()
+        }
+    }
+
+    @Test
+    fun errorDescriptionIgnoresMessagesIncludingNestedCauses() {
+        val error = IllegalStateException("https://example.com?token=secret", java.io.IOException("Authorization: secret"))
+        assertEquals("IllegalStateException <- IOException", diagnosticPlaybackFailure(error))
+    }
+}
+
+private class QueuedSourceLoadCallerDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
+    private val queue = java.util.concurrent.ConcurrentLinkedQueue<Runnable>()
+    override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) {
+        queue.add(block)
+    }
+    fun runAvailable() {
+        while (true) (queue.poll() ?: return).run()
+    }
 }

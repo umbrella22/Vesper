@@ -156,6 +156,9 @@ internal class VesperRelayClientHandler(
                 .removePrefix("/")
 
             val range = headers["range"]?.let(::parseRangeHeader)
+            val ownedClient = VesperRelayCloseOnce { client.close() }
+            if (!entry.lifetime.attach(ownedClient)) return
+            try {
             relaySource.relay(
                 token = token,
                 entry = entry,
@@ -165,6 +168,7 @@ internal class VesperRelayClientHandler(
                 headers = headers,
                 output = output,
             )
+            } finally { entry.lifetime.detach(ownedClient) }
         }
     }
 }
@@ -216,7 +220,7 @@ internal class VesperRelaySourceRelay(
         if (entry.adaptation != null) {
             relayAdaptedSource(token, entry, resourcePath, headOnly, range, headers, output)
         } else {
-            relaySource(entry.source, headOnly, range, output)
+            relaySource(entry.source, headOnly, range, output, entry.lifetime)
         }
     }
 
@@ -229,7 +233,7 @@ internal class VesperRelaySourceRelay(
         headers: Map<String, String>,
         output: OutputStream,
     ) {
-        val adaptation = entry.adaptation ?: return relaySource(entry.source, headOnly, range, output)
+        val adaptation = entry.adaptation ?: return relaySource(entry.source, headOnly, range, output, entry.lifetime)
         val request = entry.source.toFormatAdaptationRequest(
             token = token,
             adaptation = adaptation,
@@ -237,6 +241,7 @@ internal class VesperRelaySourceRelay(
             headOnly = headOnly,
             range = range,
             requestHeaders = headers,
+            lifetime = entry.lifetime,
         )
         when (val result = formatAdapter.open(request)) {
             is VesperRelayFormatAdaptationResult.Failure -> {
@@ -246,6 +251,11 @@ internal class VesperRelaySourceRelay(
             }
             is VesperRelayFormatAdaptationResult.Stream -> {
                 val adapted = result.stream
+                val owned = VesperRelayCloseOnce {
+                    runCatching { adapted.input.close() }
+                    runCatching { adapted.closeable?.close() }
+                }
+                if (!entry.lifetime.attach(owned)) return
                 try {
                     val responseHeaders = linkedMapOf(
                         "Content-Type" to adapted.contentType,
@@ -287,8 +297,8 @@ internal class VesperRelaySourceRelay(
                         ),
                     )
                 } finally {
-                    runCatching { adapted.input.close() }
-                    runCatching { adapted.closeable?.close() }
+                    entry.lifetime.detach(owned)
+                    owned.close()
                 }
             }
         }
@@ -299,11 +309,12 @@ internal class VesperRelaySourceRelay(
         headOnly: Boolean,
         range: ByteRangeRequest?,
         output: OutputStream,
+        lifetime: VesperRelayLifetime? = null,
     ) {
         when {
             source.uri.startsWith("http://", ignoreCase = true) ||
                 source.uri.startsWith("https://", ignoreCase = true) ->
-                relayRemote(source, headOnly, range, output)
+                relayRemote(source, headOnly, range, output, lifetime)
             source.uri.startsWith("content://", ignoreCase = true) ->
                 relayContent(source, headOnly, range, output)
             else ->
@@ -316,12 +327,14 @@ internal class VesperRelaySourceRelay(
         headOnly: Boolean,
         range: ByteRangeRequest?,
         output: OutputStream,
+        lifetime: VesperRelayLifetime? = null,
     ) {
         remoteTransport.open(
             uri = source.uri,
             method = if (headOnly) "HEAD" else "GET",
             headers = source.headers,
             rangeHeader = range?.toHeaderValue(),
+            lifetime = lifetime,
         ).use { exchange ->
             val status = exchange.responseCode
             val responseHeaders = linkedMapOf<String, String>()

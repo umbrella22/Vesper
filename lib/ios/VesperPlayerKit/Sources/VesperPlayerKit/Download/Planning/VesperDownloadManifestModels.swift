@@ -11,7 +11,7 @@ struct HlsVariant {
 }
 
 struct HlsRendition {
-    let uri: String
+    let uri: String?
     let attributes: [String: String]
 }
 
@@ -32,6 +32,8 @@ struct HlsSegment {
     let duration: String?
     let byteRange: VesperDownloadByteRange?
     let sequence: UInt64
+    let mapIndex: Int?
+    let discontinuity: Bool
 }
 
 struct DashPlannedRepresentation {

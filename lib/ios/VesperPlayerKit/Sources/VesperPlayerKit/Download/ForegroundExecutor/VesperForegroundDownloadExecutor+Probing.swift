@@ -62,7 +62,7 @@ extension VesperForegroundDownloadExecutor {
         var request = URLRequest(url: sourceURL)
         request.applyDownloadHttpHeaders(requestHeaders)
         request.httpMethod = "HEAD"
-        let (_, response) = try await httpData(for: request, sourceURL: sourceURL)
+        let response = try await httpResponse(for: request, sourceURL: sourceURL)
         if let http = response as? HTTPURLResponse,
            isExpiredHttpStatus(http.statusCode) {
             throw expiredDownloadResource(
@@ -71,7 +71,7 @@ extension VesperForegroundDownloadExecutor {
                 phase: .prepare
             )
         }
-        if let http = response as? HTTPURLResponse,
+        if let http = response as? HTTPURLResponse, http.statusCode == 200,
            let value = http.value(forHTTPHeaderField: "Content-Length"),
            let size = UInt64(value), size > 0
         {
@@ -81,7 +81,8 @@ extension VesperForegroundDownloadExecutor {
         var rangeRequest = URLRequest(url: sourceURL)
         rangeRequest.applyDownloadHttpHeaders(requestHeaders)
         rangeRequest.setValue("bytes=0-0", forHTTPHeaderField: "Range")
-        let (_, rangeResponse) = try await httpData(for: rangeRequest, sourceURL: sourceURL)
+        rangeRequest.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        let rangeResponse = try await httpResponse(for: rangeRequest, sourceURL: sourceURL)
         if let http = rangeResponse as? HTTPURLResponse,
            isExpiredHttpStatus(http.statusCode) {
             throw expiredDownloadResource(
@@ -90,15 +91,32 @@ extension VesperForegroundDownloadExecutor {
                 phase: .prepare
             )
         }
-        if let http = rangeResponse as? HTTPURLResponse,
-           let contentRange = parseHttpContentRange(http.value(forHTTPHeaderField: "Content-Range")),
-           let size = contentRange.total,
-           size > 0
-        {
-            return size
+        if let http = rangeResponse as? HTTPURLResponse {
+            if http.statusCode == 206 {
+                guard http.value(forHTTPHeaderField: "Content-Encoding").map({ $0.lowercased() == "identity" }) ?? true else {
+                    throw VesperForegroundDownloadPreparationError.invalidSource("range probe returned encoded content")
+                }
+                let contentRange = try validateHTTPPartialContentRange(
+                    contentRangeHeader: http.value(forHTTPHeaderField: "Content-Range"),
+                    contentLengthHeader: http.value(forHTTPHeaderField: "Content-Length"),
+                    requestedStart: 0, requestedEndInclusive: 0, expectedBodyLength: 1,
+                    expectedTotalSizeBytes: nil, sourceURL: sourceURL
+                )
+                if let size = contentRange.total, size > 0 { return size }
+            } else if http.statusCode == 200,
+                      let size = parseHttpContentLength(http.value(forHTTPHeaderField: "Content-Length")), size > 0 {
+                return size
+            }
         }
 
         throw CocoaError(.fileReadUnknown)
+    }
+
+    func httpResponse(for request: URLRequest, sourceURL: URL) async throws -> URLResponse {
+        let stream = try await httpBodyStream(for: request, sourceURL: sourceURL)
+        defer { stream.cancel() }
+        try Task.checkCancellation()
+        return stream.response
     }
 
     func inferredFileName(_ uri: String) -> String {

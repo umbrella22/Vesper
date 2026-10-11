@@ -3,11 +3,14 @@ import Foundation
 @_implementationOnly import VesperPlayerKitBridgeShim
 
 extension VesperDashSession {
-    func isSubtitleRendition(renditionId: String) async -> Bool {
-        guard let playable = try? await playableRepresentation(renditionId: renditionId) else {
-            return false
-        }
+    func isSubtitleRendition(renditionId: String) async throws -> Bool {
+        try Task.checkCancellation()
+        let playable = try await playableRepresentation(renditionId: renditionId)
         return playable.adaptationSet.kind == .subtitle
+    }
+
+    func isSubtitleRenditionSnapshot(renditionId: String) -> Bool {
+        playableByRenditionId[renditionId]?.adaptationSet.kind == .subtitle
     }
 
     func dashSegmentContentType(

@@ -142,11 +142,13 @@ final class VesperBufferingPolicy {
         bufferForPlaybackAfterRebufferMs = null;
 
   factory VesperBufferingPolicy.fromMap(Map<Object?, Object?> map) {
+    _validateCallerMapKeys(map, 'VesperBufferingPolicy');
     return VesperBufferingPolicy(
-      preset: _decodeEnum(
+      preset: _decodeCallerEnum(
         VesperBufferingPreset.values,
-        map['preset'],
+        map['preset'] == 'default' ? 'defaultPreset' : map['preset'],
         VesperBufferingPreset.defaultPreset,
+        'buffering.preset',
       ),
       minBufferMs: _decodeInt(map, 'minBufferMs'),
       maxBufferMs: _decodeInt(map, 'maxBufferMs'),
@@ -199,11 +201,14 @@ final class VesperRetryPolicy {
         _backoff = VesperRetryBackoff.exponential;
 
   factory VesperRetryPolicy.fromMap(Map<Object?, Object?> map) {
+    _validateCallerMapKeys(map, 'VesperRetryPolicy');
     final rawMaxAttempts = map['maxAttempts'];
     final maxAttempts = switch (rawMaxAttempts) {
       int value => value,
       null when map.containsKey('maxAttempts') => null,
-      _ => _vesperRetryMaxAttemptsUnset,
+      null => _vesperRetryMaxAttemptsUnset,
+      _ => throw const FormatException(
+          'retry.maxAttempts must be an integer or null'),
     };
     return VesperRetryPolicy(
       maxAttempts: maxAttempts,
@@ -213,7 +218,8 @@ final class VesperRetryPolicy {
         'fixed' => VesperRetryBackoff.fixed,
         'linear' => VesperRetryBackoff.linear,
         'exponential' => VesperRetryBackoff.exponential,
-        _ => null,
+        null => null,
+        _ => throw const FormatException('Invalid retry.backoff'),
       },
     );
   }
@@ -227,7 +233,8 @@ final class VesperRetryPolicy {
         _vesperRetryMaxAttemptsUnset => 3,
         int value => value,
         null => null,
-        _ => 3,
+        _ => throw ArgumentError.value(
+            _maxAttempts, 'maxAttempts', 'must be an integer or null'),
       };
 
   bool get hasMaxAttemptsOverride =>
@@ -239,7 +246,7 @@ final class VesperRetryPolicy {
 
   Map<String, Object?> toMap() {
     return <String, Object?>{
-      if (hasMaxAttemptsOverride) 'maxAttempts': _maxAttempts as int?,
+      if (hasMaxAttemptsOverride) 'maxAttempts': maxAttempts,
       'baseDelayMs': _baseDelayMs,
       'maxDelayMs': _maxDelayMs,
       'backoff': _backoff?.name,
@@ -270,11 +277,13 @@ final class VesperCachePolicy {
         maxDiskBytes = null;
 
   factory VesperCachePolicy.fromMap(Map<Object?, Object?> map) {
+    _validateCallerMapKeys(map, 'VesperCachePolicy');
     return VesperCachePolicy(
-      preset: _decodeEnum(
+      preset: _decodeCallerEnum(
         VesperCachePreset.values,
-        map['preset'],
+        map['preset'] == 'default' ? 'defaultPreset' : map['preset'],
         VesperCachePreset.defaultPreset,
+        'cache.preset',
       ),
       maxMemoryBytes: _decodeInt(map, 'maxMemoryBytes'),
       maxDiskBytes: _decodeInt(map, 'maxDiskBytes'),
@@ -322,12 +331,13 @@ final class VesperPlaybackResiliencePolicy {
         cache = const VesperCachePolicy.disabled();
 
   factory VesperPlaybackResiliencePolicy.fromMap(Map<Object?, Object?> map) {
+    _validateCallerMapKeys(map, 'VesperPlaybackResiliencePolicy');
     final rawBuffering = map['buffering'];
     final rawRetry = map['retry'];
     final rawCache = map['cache'];
-    final buffering = _rawMap(rawBuffering);
-    final retry = _rawMap(rawRetry);
-    final cache = _rawMap(rawCache);
+    final buffering = _decodeCallerMap(rawBuffering, 'buffering');
+    final retry = _decodeCallerMap(rawRetry, 'retry');
+    final cache = _decodeCallerMap(rawCache, 'cache');
     return VesperPlaybackResiliencePolicy(
       buffering: buffering != null
           ? VesperBufferingPolicy.fromMap(buffering)

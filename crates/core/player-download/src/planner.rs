@@ -98,7 +98,7 @@ where
             self.plan_hls_master(manifest_uri, &manifest, profile)
         } else {
             let media = parse_hls_media_playlist(manifest_uri, &manifest)?;
-            build_hls_media_asset_index(self, "index.m3u8", vec![("media", media)])
+            build_hls_media_asset_index(self, "index.m3u8", vec![("media", media)], true)
         }
     }
 
@@ -108,6 +108,7 @@ where
         manifest: &str,
         profile: &DownloadProfile,
     ) -> PlayerResult<DownloadAssetIndex> {
+        validate_hls_encryption(manifest)?;
         let master = parse_hls_master_playlist(manifest_uri, manifest)?;
         let variant = select_hls_variant(&master.variants, profile).ok_or_else(|| {
             planning_error(
@@ -120,13 +121,13 @@ where
         let variant_media = parse_hls_media_playlist(&variant.uri, &variant_text)?;
 
         let mut media = vec![("video", variant_media)];
-        let selected_audio = select_hls_audio(&master.audio, profile);
-        if let Some(audio) = selected_audio {
-            let audio_text = self.client.fetch_text(&audio.uri)?;
-            media.push(("audio", parse_hls_media_playlist(&audio.uri, &audio_text)?));
+        let selected_audio = select_hls_audio(&master.audio, &variant.attributes, profile);
+        if let Some(audio_uri) = selected_audio.and_then(|audio| audio.uri.as_deref()) {
+            let audio_text = self.client.fetch_text(audio_uri)?;
+            media.push(("audio", parse_hls_media_playlist(audio_uri, &audio_text)?));
         }
 
-        let mut index = build_hls_media_asset_index(self, "index.m3u8", media)?;
+        let mut index = build_hls_media_asset_index(self, "index.m3u8", media, false)?;
         let media_resource_ids = index
             .resources
             .iter()
@@ -430,6 +431,7 @@ fn build_hls_media_asset_index<C>(
     planner: &DownloadPlanner<C>,
     manifest_path: &str,
     media_playlists: Vec<(&str, HlsMediaPlaylist)>,
+    root_is_media_playlist: bool,
 ) -> PlayerResult<DownloadAssetIndex>
 where
     C: DownloadPlanningClient,
@@ -452,7 +454,7 @@ where
     for (media_id, playlist) in &media_playlists {
         let mut stream_resource_ids = Vec::new();
         let mut stream_segment_ids = Vec::new();
-        let playlist_path = if media_playlists.len() == 1 && manifest_path == "index.m3u8" {
+        let playlist_path = if root_is_media_playlist && media_playlists.len() == 1 {
             PathBuf::from("index.m3u8")
         } else {
             PathBuf::from(format!("{media_id}.m3u8"))
@@ -534,7 +536,8 @@ where
         });
     }
 
-    if media_playlists.len() == 1
+    if root_is_media_playlist
+        && media_playlists.len() == 1
         && let Some(media_playlist) = resources
             .iter()
             .position(|resource| resource.resource_id.ends_with("-playlist"))
@@ -599,7 +602,7 @@ struct HlsVariant {
 
 #[derive(Debug, Clone)]
 struct HlsRendition {
-    uri: String,
+    uri: Option<String>,
     attributes: HashMap<String, String>,
 }
 
@@ -623,6 +626,8 @@ struct HlsSegment {
     duration: Option<String>,
     byte_range: Option<DownloadByteRange>,
     sequence: u64,
+    map_index: Option<usize>,
+    discontinuity: bool,
 }
 
 fn parse_hls_master_playlist(
@@ -647,10 +652,11 @@ fn parse_hls_master_playlist(
             if attributes
                 .get("TYPE")
                 .is_some_and(|kind| kind.eq_ignore_ascii_case("AUDIO"))
-                && let Some(uri) = attributes.get("URI")
             {
                 audio.push(HlsRendition {
-                    uri: resolve_uri(manifest_uri, uri),
+                    uri: attributes
+                        .get("URI")
+                        .map(|uri| resolve_uri(manifest_uri, uri)),
                     attributes,
                 });
             }
@@ -682,6 +688,9 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
     let mut previous_map_range_end = 0_u64;
     let mut previous_segment_range_end = 0_u64;
     let mut sequence = 0_u64;
+    let mut current_map_index = None;
+    let mut pending_discontinuity = false;
+    validate_hls_encryption(manifest)?;
 
     for line in manifest
         .lines()
@@ -708,6 +717,10 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
             playlist_type_vod = value.trim().eq_ignore_ascii_case("VOD");
             continue;
         }
+        if line == "#EXT-X-DISCONTINUITY" {
+            pending_discontinuity = true;
+            continue;
+        }
         if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
             let attributes = parse_hls_attributes(value);
             let Some(uri) = attributes.get("URI") else {
@@ -720,6 +733,7 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
             let byte_range = attributes
                 .get("BYTERANGE")
                 .and_then(|value| parse_hls_byte_range(value, &mut previous_map_range_end));
+            current_map_index = Some(maps.len());
             maps.push(HlsMap {
                 uri: resolve_uri(manifest_uri, uri),
                 byte_range,
@@ -751,6 +765,8 @@ fn parse_hls_media_playlist(manifest_uri: &str, manifest: &str) -> PlayerResult<
             duration: pending_duration.take(),
             byte_range: pending_byte_range.take(),
             sequence,
+            map_index: current_map_index,
+            discontinuity: std::mem::take(&mut pending_discontinuity),
         });
         sequence = next_hls_media_sequence(sequence)?;
     }
@@ -799,13 +815,17 @@ fn select_hls_variant<'a>(
 
 fn select_hls_audio<'a>(
     audio: &'a [HlsRendition],
+    variant_attributes: &HashMap<String, String>,
     profile: &DownloadProfile,
 ) -> Option<&'a HlsRendition> {
+    let group = variant_attributes.get("AUDIO")?;
+    let matches_group =
+        |rendition: &&HlsRendition| rendition.attributes.get("GROUP-ID") == Some(group);
     profile
         .preferred_audio_language
         .as_deref()
         .and_then(|language| {
-            audio.iter().find(|rendition| {
+            audio.iter().filter(matches_group).find(|rendition| {
                 rendition
                     .attributes
                     .get("LANGUAGE")
@@ -813,14 +833,14 @@ fn select_hls_audio<'a>(
             })
         })
         .or_else(|| {
-            audio.iter().find(|rendition| {
+            audio.iter().filter(matches_group).find(|rendition| {
                 rendition
                     .attributes
                     .get("DEFAULT")
                     .is_some_and(|value| value.eq_ignore_ascii_case("YES"))
             })
         })
-        .or_else(|| audio.first())
+        .or_else(|| audio.iter().find(matches_group))
 }
 
 fn rewrite_hls_master(
@@ -874,13 +894,20 @@ fn rewrite_hls_media(
     if let Some(target_duration) = playlist.target_duration.as_deref() {
         text.push_str(&format!("#EXT-X-TARGETDURATION:{target_duration}\n"));
     }
-    if let Some(map) = playlist.maps.last() {
-        let key = format!("{}:{:?}", map.uri, map.byte_range);
-        if let Some(path) = local_maps.get(&key) {
-            text.push_str(&format!("#EXT-X-MAP:URI=\"{}\"\n", path.display()));
-        }
-    }
+    let mut previous_map_key = None;
     for segment in &playlist.segments {
+        if segment.discontinuity {
+            text.push_str("#EXT-X-DISCONTINUITY\n");
+        }
+        if let Some(map) = segment.map_index.and_then(|index| playlist.maps.get(index)) {
+            let key = format!("{}:{:?}", map.uri, map.byte_range);
+            if previous_map_key.as_ref() != Some(&key) {
+                if let Some(path) = local_maps.get(&key) {
+                    text.push_str(&format!("#EXT-X-MAP:URI=\"{}\"\n", path.display()));
+                }
+                previous_map_key = Some(key);
+            }
+        }
         text.push_str(&format!(
             "#EXTINF:{},\nsegments/{media_id}-{:05}.{}\n",
             segment.duration.as_deref().unwrap_or("0"),
@@ -890,6 +917,25 @@ fn rewrite_hls_media(
     }
     text.push_str("#EXT-X-ENDLIST\n");
     text
+}
+
+fn validate_hls_encryption(manifest: &str) -> PlayerResult<()> {
+    for line in manifest.lines().map(str::trim) {
+        if let Some(value) = line
+            .strip_prefix("#EXT-X-KEY:")
+            .or_else(|| line.strip_prefix("#EXT-X-SESSION-KEY:"))
+            && !parse_hls_attributes(value)
+                .get("METHOD")
+                .is_some_and(|method| method.eq_ignore_ascii_case("NONE"))
+        {
+            return Err(planning_error(
+                PlayerErrorCode::Unsupported,
+                PlayerErrorCategory::Source,
+                "encrypted HLS download planning is not supported",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn parse_hls_attributes(input: &str) -> HashMap<String, String> {
@@ -1764,7 +1810,20 @@ fn split_quoted(input: &str, delimiter: char) -> Vec<&str> {
 
 fn resolve_uri(base: &str, reference: &str) -> String {
     let reference = reference.trim();
-    if reference.contains("://") || reference.starts_with("data:") {
+    if reference.starts_with("//")
+        && let Some((scheme, _)) = base.split_once("://")
+    {
+        return format!("{scheme}:{reference}");
+    }
+    if reference.split_once(':').is_some_and(|(scheme, _)| {
+        let mut characters = scheme.bytes();
+        characters
+            .next()
+            .is_some_and(|character| character.is_ascii_alphabetic())
+            && characters.all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, b'+' | b'-' | b'.')
+            })
+    }) {
         return reference.to_owned();
     }
     if !base.contains("://") {

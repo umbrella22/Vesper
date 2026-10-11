@@ -35,38 +35,8 @@ private let runtimeHdrCapabilityDiagnosticKeys: [String] = [
     "avPlayerItemErrorComment",
 ]
 
-private final class DownloadRecoveryContinuationBox {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<VesperDownloadRecoveredTaskPlan?, Never>?
-    private var didResume = false
-
-    func activate(_ continuation: CheckedContinuation<VesperDownloadRecoveredTaskPlan?, Never>) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard !didResume else {
-            continuation.resume(returning: nil)
-            return
-        }
-        self.continuation = continuation
-    }
-
-    func resume(returning value: VesperDownloadRecoveredTaskPlan?) {
-        lock.lock()
-        guard !didResume else {
-            lock.unlock()
-            return
-        }
-        didResume = true
-        let pending = continuation
-        continuation = nil
-        lock.unlock()
-        pending?.resume(returning: value)
-    }
-}
-
 public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     private static let hostDetachGraceDelayNanoseconds: UInt64 = 250_000_000
-    private static let downloadRecoveryTimeoutNanoseconds: UInt64 = 30_000_000_000
     private static let benchmarkShutdownTimeoutSeconds: TimeInterval = 2
 
     private var methodChannel: FlutterMethodChannel?
@@ -505,7 +475,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 )
                 session.lastError = nil
                 session.controller.configureSystemPlayback(
-                    configurationMap.toSystemPlaybackConfiguration()
+                    try configurationMap.toSystemPlaybackConfiguration()
                 )
                 emitSnapshot(for: session)
                 return nil
@@ -582,8 +552,8 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
                 return try session.manager.createTask(
                     assetId: assetId,
                     source: source,
-                    profile: profileMap.toDownloadProfile(),
-                    assetIndex: assetIndexMap.toDownloadAssetIndex()
+                    profile: try profileMap.toDownloadProfile(),
+                    assetIndex: try assetIndexMap.toDownloadAssetIndex()
                 )
             }
         case "startDownloadTask":
@@ -945,23 +915,13 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         result: @escaping FlutterResult
     ) {
         let args = arguments(of: call)
-        let request = VesperPlaybackCapabilityProbeRequest(
-            source: (try? nestedMap(args["source"])?.toRawVesperPlayerSource()) ?? nil,
-            codec: args["codec"] as? String,
-            width: (args["width"] as? NSNumber)?.intValue,
-            height: (args["height"] as? NSNumber)?.intValue,
-            frameRate: (args["frameRate"] as? NSNumber)?.doubleValue,
-            requiresNativeFrame: args["requiresNativeFrame"] as? Bool ?? false,
-            sourceNormalizerConfiguration: (try? nestedMap(args["sourceNormalizer"])?
-                .toSourceNormalizerConfiguration())
-                ?? VesperSourceNormalizerConfiguration(),
-            frameProcessorConfiguration: (try? nestedMap(args["frameProcessor"])?
-                .toFrameProcessorConfiguration())
-                ?? VesperFrameProcessorConfiguration(),
-            nativeFramePipelineConfiguration: (try? nestedMap(args["nativeFramePipeline"])?
-                .toNativeFramePipelineConfiguration())
-                ?? VesperNativeFramePipelineConfiguration()
-        )
+        let request: VesperPlaybackCapabilityProbeRequest
+        do {
+            request = try args.toPlaybackCapabilityProbeRequest()
+        } catch {
+            result(asFlutterError(error, code: "invalid_probe_request"))
+            return
+        }
         let probeResult = VesperPlayerControllerFactory.probePlaybackCapability(request)
         Task { @MainActor in
             let enrichedResult = await enrichPlaybackCapabilityProbeResult(
@@ -997,11 +957,20 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             let recoveryHandler: VesperDownloadStaleResourcePlanRecoveryHandler?
             if hasStaleResourceRecovery {
                 recoveryHandler = { [weak self] task, staleResource in
-                    await self?.recoverDownloadTaskPlan(
-                        downloadId: downloadId,
-                        task: task,
-                        staleResource: staleResource
-                    )
+                    guard let self else { return nil }
+                    do {
+                        return try await self.recoverDownloadTaskPlan(
+                            downloadId: downloadId,
+                            task: task,
+                            staleResource: staleResource
+                        )
+                    } catch is CancellationError {
+                        // The native executor checks cancellation after this nonthrowing callback.
+                        return nil
+                    } catch {
+                        await self.reportDownloadRecoveryFailure(error, downloadId: downloadId)
+                        return nil
+                    }
                 }
             } else {
                 recoveryHandler = nil
@@ -1031,7 +1000,7 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
         downloadId: String,
         task: VesperDownloadTaskSnapshot,
         staleResource: VesperDownloadStaleResource
-    ) async -> VesperDownloadRecoveredTaskPlan? {
+    ) async throws -> VesperDownloadRecoveredTaskPlan? {
         guard let methodChannel else {
             return nil
         }
@@ -1040,24 +1009,16 @@ public final class VesperPlayerIosPlugin: NSObject, FlutterPlugin, FlutterStream
             "task": task.toMap,
             "staleResource": staleResource.toMap,
         ]
-        let continuationBox = DownloadRecoveryContinuationBox()
-        var timeoutTask: Task<Void, Never>?
-        let recoveredPlan = await withCheckedContinuation { continuation in
-            continuationBox.activate(continuation)
-            timeoutTask = Task {
-                try? await Task.sleep(nanoseconds: Self.downloadRecoveryTimeoutNanoseconds)
-                continuationBox.resume(returning: nil)
-            }
-            methodChannel.invokeMethod("recoverDownloadTaskPlan", arguments: payload) { value in
-                guard let map = value as? [String: Any] else {
-                    continuationBox.resume(returning: nil)
-                    return
-                }
-                continuationBox.resume(returning: try? map.toDownloadRecoveredTaskPlan())
-            }
+        return try await awaitDownloadRecoveryResponse { callback in
+            methodChannel.invokeMethod("recoverDownloadTaskPlan", arguments: payload, result: callback)
         }
-        timeoutTask?.cancel()
-        return recoveredPlan
+    }
+
+    @MainActor
+    private func reportDownloadRecoveryFailure(_ error: Error, downloadId: String) {
+        guard let session = downloadSessions[downloadId] else { return }
+        session.lastError = downloadErrorMap(from: error)
+        emitDownloadError(for: session, error: error)
     }
 
     @MainActor

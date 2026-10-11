@@ -18,10 +18,16 @@ internal class VesperDashStartupDataSource(
     override fun addTransferListener(listener: TransferListener) = upstream.addTransferListener(listener)
     override fun open(dataSpec: DataSpec): Long {
         offset = 0
-        cached = if (dataSpec.httpMethod == DataSpec.HTTP_METHOD_GET && dataSpec.httpBody == null) {
-            val requestHeaders = dashStartupRequestHeaders(headers, dataSpec.httpRequestHeaders)
-            cache.read(scope, DashStartupResource(dataSpec.uri.toString(), dataSpec.position,
-                dataSpec.length.takeIf { it != C.LENGTH_UNSET.toLong() }), requestHeaders)
+        // Warmup and Media3 apply properties differently when HTTP field spellings conflict.
+        val canReplayStartupBytes =
+            dataSpec.httpMethod == DataSpec.HTTP_METHOD_GET && dataSpec.httpBody == null &&
+                !hasConflictingResourceHeaderNames(headers + dataSpec.httpRequestHeaders)
+        cached = if (canReplayStartupBytes) {
+            val resource = DashStartupResource(
+                dataSpec.uri.toString(), dataSpec.position,
+                dataSpec.length.takeIf { it != C.LENGTH_UNSET.toLong() },
+            )
+            cache.read(scope, resource, headers, dataSpec.httpRequestHeaders)
         } else null
         return cached?.bytes?.size?.toLong() ?: upstream.open(dataSpec)
     }
@@ -42,11 +48,3 @@ internal class VesperDashStartupDataSource(
         offset = 0
     }
 }
-
-internal fun dashStartupRequestHeaders(defaults: Map<String, String>, request: Map<String, String>): Map<String, String> =
-    defaults.toMutableMap().apply {
-        request.forEach { (key, value) ->
-            keys.filter { it.equals(key, true) }.forEach(::remove)
-            put(key, value)
-        }
-    }

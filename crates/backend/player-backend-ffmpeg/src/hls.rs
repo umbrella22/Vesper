@@ -207,7 +207,7 @@ fn fetch_text_resource_via_ffmpeg(
         }
 
         ffmpeg::ffi::avio_closep(&mut io_context);
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
+        Ok(String::from_utf8_lossy_owned(bytes))
     }
 }
 
@@ -393,4 +393,29 @@ fn parse_remote_hls_http_url(value: &str) -> Result<Url> {
 
 fn is_remote_hls_http_url(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::{Url, fetch_text_resource_via_ffmpeg};
+
+    #[test]
+    fn manifest_reader_consumes_owned_lossy_utf8() {
+        let cases: &[(&[u8], &str)] = &[
+            ("#EXTM3U\n# 字幕\n".as_bytes(), "#EXTM3U\n# 字幕\n"),
+            (b"#EXTM3U\n# \xff\n", "#EXTM3U\n# \u{fffd}\n"),
+            (b"#EXTM3U\n# \xe2\x82", "#EXTM3U\n# \u{fffd}"),
+            (b"", ""),
+        ];
+        for (bytes, expected) in cases {
+            let mut manifest = tempfile::NamedTempFile::new().expect("temporary manifest");
+            manifest.write_all(bytes).expect("write manifest bytes");
+            let uri = Url::from_file_path(manifest.path()).expect("manifest file URL");
+            let actual =
+                fetch_text_resource_via_ffmpeg(&uri, None).expect("read manifest via FFmpeg");
+            assert_eq!(&actual, expected, "input bytes: {bytes:?}");
+        }
+    }
 }

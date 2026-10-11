@@ -43,8 +43,20 @@ extension VesperNativePlayerBridge {
                 with: trackState.subtitleState
             )
             await self.applyDefaultTrackPreferencesIfNeeded(for: item)
+            guard self.isCurrentSubtitleCatalogLoad(
+                item: item,
+                sourceEpoch: capturedSourceEpoch,
+                playbackEpoch: capturedPlaybackEpoch,
+                generation: capturedGeneration
+            ) else { return }
             self.enforceSubtitleVisibility(for: item)
             await self.applyPendingResilienceRestore(ifNeededFor: item, phase: .trackSelection)
+            guard self.isCurrentSubtitleCatalogLoad(
+                item: item,
+                sourceEpoch: capturedSourceEpoch,
+                playbackEpoch: capturedPlaybackEpoch,
+                generation: capturedGeneration
+            ) else { return }
             self.refreshEffectiveVideoTrackObservation(for: item)
             self.refreshAudioDiagnostics()
         }

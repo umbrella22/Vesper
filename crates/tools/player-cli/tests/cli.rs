@@ -174,7 +174,7 @@ fn prepare_native_android_ffmpeg_fixture(
         .expect("append fake FFmpeg configure script");
     let encoder = archive.into_inner().expect("finish fake FFmpeg tar");
     encoder.finish().expect("finish fake FFmpeg xz stream");
-    let libxml2_archive_path = cache.join("libxml2-2.14.6.tar.xz");
+    let libxml2_archive_path = cache.join("libxml2-2.15.4.tar.xz");
     let libxml2_archive_file =
         fs::File::create(&libxml2_archive_path).expect("create fake libxml2 source archive");
     let libxml2_encoder = xz2::write::XzEncoder::new(libxml2_archive_file, 6);
@@ -186,7 +186,7 @@ fn prepare_native_android_ffmpeg_fixture(
     libxml2_archive
         .append_data(
             &mut libxml2_header,
-            "libxml2-2.14.6/configure",
+            "libxml2-2.15.4/configure",
             &configure[..],
         )
         .expect("append fake libxml2 configure script");
@@ -196,6 +196,13 @@ fn prepare_native_android_ffmpeg_fixture(
     libxml2_encoder
         .finish()
         .expect("finish fake libxml2 xz stream");
+    fs::write(
+        root.join("libxml2-fixture-source-sha256.txt"),
+        hex::encode(Sha256::digest(
+            fs::read(&libxml2_archive_path).expect("read fake libxml2 archive"),
+        )),
+    )
+    .expect("record fake libxml2 source checksum");
     let source_sha256 = hex::encode(Sha256::digest(
         fs::read(&archive_path).expect("read fake FFmpeg archive"),
     ));
@@ -241,7 +248,10 @@ if [ "$install" = 1 ]; then
   fi
   case "$prefix" in
     */libxml2/*)
-      printf 'prefix=%s\nName: libxml2\nVersion: 2.14.6\n' "$prefix" > "$destination/lib/pkgconfig/libxml-2.0.pc"
+      xml_version=${VESPER_LIBXML2_FIXTURE_VERSION:-2.15.4}
+      printf 'prefix=%s\nName: libxml2\nVersion: %s\n' "$prefix" "$xml_version" > "$destination/lib/pkgconfig/libxml-2.0.pc"
+      mkdir -p "$destination/include/libxml2/libxml"
+      printf '#define LIBXML_DOTTED_VERSION "%s"\n' "$xml_version" > "$destination/include/libxml2/libxml/xmlversion.h"
       printf 'fixture libxml2 runtime\n' > "$destination/lib/libxml2.so"
       ;;
     *)
@@ -272,6 +282,37 @@ fi
         curl_marker,
         shell_marker,
     }
+}
+
+#[cfg(unix)]
+fn android_ffmpeg_fixture_environment(
+    root: &std::path::Path,
+) -> [(&'static str, std::ffi::OsString); 4] {
+    let policy: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join("scripts/ffmpeg-source-policy.toml"))
+            .expect("read fake source policy"),
+    )
+    .expect("parse fake source policy");
+    [
+        (
+            "VESPER_FFMPEG_VERSION",
+            policy["release"]["version"]
+                .as_str()
+                .expect("exact fixture FFmpeg version")
+                .into(),
+        ),
+        ("VESPER_ANDROID_LIBXML2_VERSION", "2.15.4".into()),
+        (
+            "VESPER_ANDROID_LIBXML2_SOURCE_SHA256",
+            fs::read_to_string(root.join("libxml2-fixture-source-sha256.txt"))
+                .expect("read fake libxml2 source checksum")
+                .into(),
+        ),
+        (
+            "VESPER_CURL_MARKER",
+            root.join("curl-called").into_os_string(),
+        ),
+    ]
 }
 
 #[cfg(unix)]
@@ -1545,10 +1586,10 @@ fn configure_ios_plugin_ffmpeg_fixture(fixture: &IosPluginFixture) {
         (
             fixture
                 .root
-                .join("third_party/ffmpeg/apple/profiles/custom-e1eabc3db7bc"),
+                .join("third_party/ffmpeg/apple/profiles/custom-fb7025638cb3"),
             "custom",
             "default",
-            "custom-e1eabc3db7bc",
+            "custom-fb7025638cb3",
         ),
     ] {
         for platform in ["ios", "ios-simulator"] {
@@ -1576,22 +1617,24 @@ fn configure_ios_plugin_ffmpeg_fixture(fixture: &IosPluginFixture) {
                         "demuxers=\n",
                         "muxers=\n",
                         "protocols=file\n",
-                        "decoders=\n",
+                        "decoders={}\n",
                         "parsers=\n",
                         "bsfs=\n",
                         "external_dependencies=none\n",
                         "license_flags=\n",
-                        "ffmpeg_version=9.0.1\n",
+                        "ffmpeg_version=9.0.2\n",
                         "source_archive=fixture.tar.xz\n",
-                        "source_url=https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz\n",
-                        "source_sha256=cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635\n",
-                        "configure_line=--enable-shared\n",
+                        "source_url=https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz\n",
+                        "source_sha256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e\n",
+                        "configure_line=--enable-shared {}\n",
                         "shared_library_link_flags=-dynamiclib -Wl,-install_name,$(INSTALL_NAME_DIR)/$(SLIBNAME_WITH_MAJOR),-current_version,$(LIBVERSION),-compatibility_version,$(LIBMAJOR)\n"
                     ),
                     target,
                     metadata_profile,
                     metadata_declared_profile,
                     metadata_profile_hash,
+                    if metadata_profile == "custom" { "aac" } else { "" },
+                    if metadata_profile == "custom" { "--enable-decoder=aac" } else { "" },
                 ),
             )
             .expect("write FFmpeg fixture metadata");
@@ -1791,7 +1834,7 @@ fn seed_ios_ffmpeg_runtime_profiles_root(
                 value => panic!("unsupported runtime fixture slice: {value}"),
             };
             let source = root_path
-                .join("third_party/ffmpeg/apple/profiles/custom-e1eabc3db7bc")
+                .join("third_party/ffmpeg/apple/profiles/custom-fb7025638cb3")
                 .join(source_directory);
             let metadata = fs::read(source.join("vesper-ffmpeg-build-metadata.txt"))
                 .expect("read FFmpeg fixture metadata");
@@ -1846,7 +1889,7 @@ fn seed_ios_ffmpeg_runtime_profiles_root(
                 ),
                 ("input-fingerprint.txt", fingerprint.clone().into_bytes()),
                 (metadata_name, metadata.clone()),
-                ("profile-hash.txt", b"custom-e1eabc3db7bc\n".to_vec()),
+                ("profile-hash.txt", b"custom-fb7025638cb3\n".to_vec()),
             ] {
                 archive
                     .start_file(format!("{framework_root}/{name}"), file_options)
@@ -1864,7 +1907,7 @@ fn seed_ios_ffmpeg_runtime_profiles_root(
 fn rewrite_ios_ffmpeg_root_declared_profile(root: &std::path::Path, declared_profile: &str) {
     for platform in ["ios", "ios-simulator"] {
         let metadata = root
-            .join("third_party/ffmpeg/apple/profiles/custom-e1eabc3db7bc")
+            .join("third_party/ffmpeg/apple/profiles/custom-fb7025638cb3")
             .join(platform)
             .join("vesper-ffmpeg-build-metadata.txt");
         let text = fs::read_to_string(&metadata).expect("read iOS release FFmpeg metadata");
@@ -1884,7 +1927,7 @@ fn rewrite_ios_ffmpeg_root_declared_profile(root: &std::path::Path, declared_pro
 fn configure_ios_release_source_fixture(root: &std::path::Path) {
     use sha2::{Digest, Sha256};
 
-    let version = "9.0.1";
+    let version = "9.0.2";
     let relative_archive = format!("third_party/_cache/ffmpeg-{version}.tar.xz");
     let archive_path = root.join(&relative_archive);
     fs::create_dir_all(archive_path.parent().expect("source archive parent"))
@@ -1936,7 +1979,7 @@ fn configure_ios_release_source_fixture(root: &std::path::Path) {
 
     for platform in ["ios", "ios-simulator"] {
         let metadata = root
-            .join("third_party/ffmpeg/apple/profiles/custom-e1eabc3db7bc")
+            .join("third_party/ffmpeg/apple/profiles/custom-fb7025638cb3")
             .join(platform)
             .join("vesper-ffmpeg-build-metadata.txt");
         let mut text = fs::read_to_string(&metadata).expect("read iOS release source metadata");
@@ -2009,7 +2052,7 @@ fn ios_ffmpeg_input_fingerprint(root: &std::path::Path, slice: &str) -> String {
         value => panic!("unsupported FFmpeg fingerprint slice: {value}"),
     };
     let source = root
-        .join("third_party/ffmpeg/apple/profiles/custom-e1eabc3db7bc")
+        .join("third_party/ffmpeg/apple/profiles/custom-fb7025638cb3")
         .join(platform);
     let metadata = fs::read(source.join("vesper-ffmpeg-build-metadata.txt"))
         .expect("read FFmpeg fingerprint metadata");
@@ -2986,7 +3029,7 @@ fn ios_plugin_release_dry_run_preserves_declared_profiles_and_does_not_write() {
         match declared_profile {
             Some(profile) => {
                 assert!(stdout.contains(profile));
-                assert!(stdout.contains("profile_hash=custom-e1eabc3db7bc"));
+                assert!(stdout.contains("profile_hash=custom-fb7025638cb3"));
             }
             None => assert!(!stdout.contains("profile_hash=")),
         }
@@ -4159,9 +4202,12 @@ fn ios_ffmpeg_plugin_release_applies_environment_overlays_once_after_config() {
     );
     assert!(result.stderr.is_empty());
     let stdout = String::from_utf8(result.stdout).expect("UTF-8 overlay release dry-run");
-    assert!(stdout.contains("profile_hash=custom-41a785688541"));
+    assert!(
+        stdout.contains("profile_hash=custom-5f3c5c0f0b89"),
+        "{stdout}"
+    );
     assert!(stdout.contains("  --tls-backend\n  securetransport\n"));
-    assert!(stdout.contains("  --enable-decoders\n  h264,hevc\n"));
+    assert!(stdout.contains("  --enable-decoders\n  aac,h264,hevc\n"));
     assert!(stdout.contains("  --enable-dash\n"));
     assert_eq!(stdout.matches("  --disable-doc\n").count(), 1);
     assert_eq!(stdout.matches("  --disable-debug\n").count(), 1);
@@ -4215,7 +4261,7 @@ fn ios_ffmpeg_plugin_release_roots_relative_config_and_output_overrides() {
         String::from_utf8_lossy(&result.stderr)
     );
     let stdout = String::from_utf8(result.stdout).expect("UTF-8 relative path release dry-run");
-    assert!(stdout.contains("profile_hash=custom-e1eabc3db7bc"));
+    assert!(stdout.contains("profile_hash=custom-fb7025638cb3"));
     let canonical_root =
         fs::canonicalize(&fixture.root).expect("canonical relative path fixture root");
     assert!(stdout.contains(&format!(
@@ -4246,7 +4292,7 @@ fn ios_ffmpeg_plugin_release_roots_relative_config_and_output_overrides() {
         String::from_utf8_lossy(&empty_config.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&empty_config.stdout).contains("profile_hash=custom-e1eabc3db7bc")
+        String::from_utf8_lossy(&empty_config.stdout).contains("profile_hash=custom-fb7025638cb3")
     );
 }
 
@@ -4291,7 +4337,7 @@ fn ios_ffmpeg_plugin_release_preserves_declared_profile_and_framework_provenance
     assert_eq!(
         fs::read_to_string(framework.join("profile-hash.txt"))
             .expect("read remux framework profile hash"),
-        "custom-e1eabc3db7bc\n"
+        "custom-fb7025638cb3\n"
     );
     assert_eq!(
         fs::read_to_string(framework.join("ios-arm64-vesper-ffmpeg-build-metadata.txt"))
@@ -4299,7 +4345,7 @@ fn ios_ffmpeg_plugin_release_preserves_declared_profile_and_framework_provenance
         fs::read_to_string(
             fixture
                 .root
-                .join("third_party/ffmpeg/apple/profiles/custom-e1eabc3db7bc/ios/vesper-ffmpeg-build-metadata.txt")
+                .join("third_party/ffmpeg/apple/profiles/custom-fb7025638cb3/ios/vesper-ffmpeg-build-metadata.txt")
         )
         .expect("read source FFmpeg fixture metadata")
     );
@@ -4344,7 +4390,7 @@ fn ios_ffmpeg_plugin_release_builds_runtime_and_plugin_from_one_snapshot() {
 
     let source = fixture
         .root
-        .join("third_party/ffmpeg/apple/profiles/custom-e1eabc3db7bc/ios");
+        .join("third_party/ffmpeg/apple/profiles/custom-fb7025638cb3/ios");
     let metadata = fs::read(source.join("vesper-ffmpeg-build-metadata.txt"))
         .expect("read full release FFmpeg metadata");
     let expected_fingerprint = format!(
@@ -4391,7 +4437,7 @@ fn ios_ffmpeg_plugin_release_builds_runtime_and_plugin_from_one_snapshot() {
         );
         assert_eq!(
             read_zip_fixture_entry(&archive, &format!("{framework_root}/profile-hash.txt")),
-            b"custom-e1eabc3db7bc\n"
+            b"custom-fb7025638cb3\n"
         );
     }
     let log = fs::read_to_string(&fixture.log).expect("read full FFmpeg release tool log");
@@ -4426,7 +4472,7 @@ fn ios_ffmpeg_plugin_release_rejects_a_symlinked_slice_directory() {
     );
     let slice = fixture
         .root
-        .join("third_party/ffmpeg/apple/profiles/custom-e1eabc3db7bc/ios");
+        .join("third_party/ffmpeg/apple/profiles/custom-fb7025638cb3/ios");
     fs::remove_dir_all(&slice).expect("remove the regular FFmpeg slice fixture");
     symlink("../../ios", &slice).expect("replace the FFmpeg slice with an alias");
 
@@ -5072,7 +5118,7 @@ fn ios_ffmpeg_plugin_builder_rejects_raw_profile_hash_mismatch() {
     rewrite_ios_ffmpeg_fixture_profile_hash(
         &fixture,
         "third_party/ffmpeg/apple",
-        "custom-e1eabc3db7bc",
+        "custom-fb7025638cb3",
     );
     let output = fixture.directory.path().join("mismatched raw output");
     let result = run_ios_plugin_fixture_for(
@@ -5742,29 +5788,30 @@ fn ios_kit_lock_and_ctrl_c_reap_the_xcode_process_group_and_preserve_output() {
     let first_pid = i32::try_from(first.id()).expect("Vesper iOS kit parent pid");
 
     let ready_deadline = Instant::now() + Duration::from_secs(15);
-    while (!xcodebuild_pid_path.is_file() || !descendant_pid_path.is_file())
-        && Instant::now() < ready_deadline
-    {
+    let (xcodebuild_pid, descendant_pid) = loop {
+        let xcodebuild_pid = fs::read_to_string(&xcodebuild_pid_path)
+            .ok()
+            .and_then(|record| record.trim().parse::<i32>().ok())
+            .filter(|pid| *pid > 0);
+        let descendant_pid = fs::read_to_string(&descendant_pid_path)
+            .ok()
+            .and_then(|record| record.trim().parse::<i32>().ok())
+            .filter(|pid| *pid > 0);
+        if let (Some(xcodebuild_pid), Some(descendant_pid)) = (xcodebuild_pid, descendant_pid) {
+            break (xcodebuild_pid, descendant_pid);
+        }
+        if Instant::now() >= ready_deadline {
+            let _ = kill(Pid::from_raw(first_pid), Signal::SIGINT);
+            let result = first
+                .wait_with_output()
+                .expect("wait after iOS kit readiness failure");
+            panic!(
+                "iOS kit Xcode process group was not ready; stderr: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
         std::thread::sleep(Duration::from_millis(20));
-    }
-    if !xcodebuild_pid_path.is_file() || !descendant_pid_path.is_file() {
-        let _ = kill(Pid::from_raw(first_pid), Signal::SIGINT);
-        let result = first
-            .wait_with_output()
-            .expect("wait after iOS kit readiness failure");
-        panic!(
-            "iOS kit Xcode process group was not ready; stderr: {}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-    }
-    let xcodebuild_pid: i32 = fs::read_to_string(&xcodebuild_pid_path)
-        .expect("read iOS kit Xcode pid")
-        .parse()
-        .expect("parse iOS kit Xcode pid");
-    let descendant_pid: i32 = fs::read_to_string(&descendant_pid_path)
-        .expect("read iOS kit Xcode descendant pid")
-        .parse()
-        .expect("parse iOS kit Xcode descendant pid");
+    };
 
     let second_tmp_text = second_tmp.to_string_lossy().into_owned();
     let second = run_ios_kit_fixture(&fixture, &[("TMPDIR", &second_tmp_text)]);
@@ -5846,7 +5893,7 @@ fn write_invalid_optional_ios_release_assets(release: &std::path::Path) {
         "VesperPlayerFrameProcessorDiagnosticPlugin.xcframework.zip",
         "VesperPlayerPerformanceDiagnosticsPlugin.xcframework.zip",
         "VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip",
-        "VesperPlayerOptionalPlugins-FFmpeg-9.0.1-source.tar.xz",
+        "VesperPlayerOptionalPlugins-FFmpeg-9.0.2-source.tar.xz",
     ] {
         fs::write(release.join(asset), b"invalid preflight fixture\n")
             .expect("write malformed optional iOS release asset");
@@ -6737,7 +6784,7 @@ fn ios_release_stage_command(
         )
         .env(
             "VESPER_APPLE_FFMPEG_OUTPUT_DIR",
-            root.join("third_party/ffmpeg/apple/profiles/custom-e1eabc3db7bc"),
+            root.join("third_party/ffmpeg/apple/profiles/custom-fb7025638cb3"),
         )
         .args(["ios", "--root"])
         .arg(root)
@@ -7040,8 +7087,8 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 10]
         fs::copy(source, target).expect("copy Android plugin descriptor");
     }
     let abi = "arm64-v8a";
-    let profile_hash = "custom-adf812db3806";
-    let runtime_metadata = b"ffmpeg_version=8.1.2\nsource_url=https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz\nsource_sha256=464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c\n";
+    let profile_hash = "custom-5887758ff8a3";
+    let runtime_metadata = b"ffmpeg_version=9.0.2\nsource_url=https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz\nsource_sha256=8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e\n";
     let plugin_specs = [
         ("decoder-mediacodec", "vesper_decoder_mediacodec"),
         (
@@ -7109,7 +7156,7 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 10]
             ("jni/arm64-v8a/libvesper_player_relay_ffmpeg.so", b"relay\n"),
             (
                 "assets/vesper-relay-ffmpeg/profile-hash.txt",
-                b"custom-adf812db3806\n",
+                b"custom-5887758ff8a3\n",
             ),
         ],
     );
@@ -7125,7 +7172,7 @@ fn prepare_android_stage_release_fixture(root: &std::path::Path) -> [String; 10]
             ("jni/arm64-v8a/libavutil.so", b"runtime util\n"),
             (
                 "assets/vesper-ffmpeg-runtime/profile-hash.txt",
-                b"custom-adf812db3806\n",
+                b"custom-5887758ff8a3\n",
             ),
             (
                 "assets/vesper-ffmpeg-runtime/arm64-v8a-metadata.txt",
@@ -7369,6 +7416,11 @@ fn ffmpeg_command() -> Command {
 }
 
 fn expected_ffmpeg_dry_run(profile: &str, platform: &str, hash: &str) -> String {
+    let (decoders, decoder_arguments) = if matches!(platform, "android" | "ios") {
+        ("aac", "--enable-decoders\naac\n")
+    } else {
+        ("", "")
+    };
     let unindented = format!(
         "Resolved FFmpeg profile:\n\
 profile={profile}\n\
@@ -7377,7 +7429,7 @@ libraries=avcodec,avformat,avutil\n\
 demuxers=hls,dash,concat,flv,mov,matroska,mpegts,aac\n\
 muxers=mp4,mov,matroska,hls,mpegts\n\
 protocols=file,pipe\n\
-decoders=\n\
+decoders={decoders}\n\
 parsers=aac,ac3,av1,flac,h264,hevc,mpeg4video,opus,vp8,vp9\n\
 bsfs=aac_adtstoasc,extract_extradata,h264_metadata,hevc_metadata,h264_mp4toannexb,hevc_mp4toannexb\n\
 tls=none\n\
@@ -7397,6 +7449,7 @@ Build arguments:\n\
   mp4\\,mov\\,matroska\\,hls\\,mpegts\n\
   --enable-protocols\n\
   file\\,pipe\n\
+{decoder_arguments}\
   --enable-parsers\n\
   aac\\,ac3\\,av1\\,flac\\,h264\\,hevc\\,mpeg4video\\,opus\\,vp8\\,vp9\n\
   --enable-bsfs\n\
@@ -7415,6 +7468,58 @@ Build arguments:\n\
         expected.push('\n');
     }
     expected
+}
+
+#[test]
+fn ffmpeg_ios_remux_selectors_inherit_only_aac_format_probing() {
+    for profile in ["download-remux", "default", "source-normalizer"] {
+        for slice in ["ios-arm64", "ios-simulator-arm64"] {
+            let output = ffmpeg_command()
+                .args([
+                    "--platform",
+                    "ios",
+                    "--profile",
+                    profile,
+                    "--slice",
+                    slice,
+                    "--dry-run",
+                ])
+                .output()
+                .expect("resolve iOS remux selector");
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{profile}/{slice}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stderr.is_empty());
+            let stdout = String::from_utf8(output.stdout).expect("UTF-8 iOS remux resolution");
+            assert!(
+                stdout.contains("decoders=aac\n"),
+                "{profile}/{slice}: {stdout}"
+            );
+            assert!(stdout.contains("protocols=file,pipe\n"));
+            assert!(stdout.contains("tls=none\n"));
+            assert!(stdout.contains("validation.forbid_network=true\n"));
+            assert!(stdout.contains("validation.forbid_openssl=true\n"));
+            assert!(stdout.contains("  --enable-decoders\n  aac\n"));
+            let expected_hash = if profile == "download-remux" {
+                "custom-6a8fcf064bd0"
+            } else {
+                "custom-fb7025638cb3"
+            };
+            assert!(stdout.contains(&format!("profile_hash={expected_hash}\n")));
+        }
+    }
+    // The relay-only profile does not consume finite FLV and retains no decoder.
+    let relay = ffmpeg_command()
+        .args(["--platform", "ios", "--profile", "relay-remux", "--dry-run"])
+        .output()
+        .expect("resolve unchanged iOS relay profile");
+    assert_eq!(relay.status.code(), Some(0));
+    let stdout = String::from_utf8(relay.stdout).expect("UTF-8 relay resolution");
+    assert!(stdout.contains("decoders=\n"));
+    assert!(!stdout.contains("--enable-decoders"));
 }
 
 #[test]
@@ -7438,7 +7543,7 @@ fn ffmpeg_profile_list_and_dry_run_match_golden_contract() {
     assert!(android.stderr.is_empty());
     assert_eq!(
         String::from_utf8(android.stdout).expect("UTF-8 Android dry-run"),
-        expected_ffmpeg_dry_run("default", "android", "custom-adf812db3806")
+        expected_ffmpeg_dry_run("default", "android", "custom-5887758ff8a3")
     );
 
     let ios = ffmpeg_command()
@@ -7455,7 +7560,7 @@ fn ffmpeg_profile_list_and_dry_run_match_golden_contract() {
     assert!(ios.stderr.is_empty());
     assert_eq!(
         String::from_utf8(ios.stdout).expect("UTF-8 iOS dry-run"),
-        expected_ffmpeg_dry_run("source-normalizer", "ios", "custom-e1eabc3db7bc")
+        expected_ffmpeg_dry_run("source-normalizer", "ios", "custom-fb7025638cb3")
     );
 }
 
@@ -7532,7 +7637,7 @@ fn ffmpeg_cli_profile_precedence_beats_platform_environment() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8(output.stdout).expect("UTF-8 precedence dry-run");
     assert!(stdout.contains("profile=default\n"));
-    assert!(stdout.contains("profile_hash=custom-adf812db3806\n"));
+    assert!(stdout.contains("profile_hash=custom-5887758ff8a3\n"));
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -7548,6 +7653,7 @@ fn ffmpeg_native_executor_honors_cli_output_without_shell_evaluation() {
 
     let result = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("PATH", &fixture.path)
+        .envs(android_ffmpeg_fixture_environment(&root))
         .env("ANDROID_SDK_ROOT", &fixture.sdk)
         .env(
             "VESPER_FAKE_RUST_TARGET_LIBDIR",
@@ -7595,7 +7701,7 @@ fn ffmpeg_native_executor_honors_cli_output_without_shell_evaluation() {
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
-fn ffmpeg_native_source_resolution_is_cache_first_and_records_the_exact_patch() {
+fn ffmpeg_native_source_resolution_uses_cache_when_the_release_index_is_unavailable() {
     let directory = tempfile::tempdir().expect("create native FFmpeg source fixture");
     let root = directory.path().join("repository");
     let tools = directory.path().join("tools");
@@ -7604,6 +7710,8 @@ fn ffmpeg_native_source_resolution_is_cache_first_and_records_the_exact_patch() 
 
     let result = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("PATH", &fixture.path)
+        .envs(android_ffmpeg_fixture_environment(&root))
+        .env_remove("VESPER_FFMPEG_VERSION")
         .env("ANDROID_SDK_ROOT", &fixture.sdk)
         .env(
             "VESPER_FAKE_RUST_TARGET_LIBDIR",
@@ -7634,8 +7742,168 @@ fn ffmpeg_native_source_resolution_is_cache_first_and_records_the_exact_patch() 
             .expect("read resolved FFmpeg metadata");
     assert!(metadata.contains("ffmpeg_version=8.1.10\n"));
     assert!(metadata.contains("source_url=https://ffmpeg.org/releases/ffmpeg-8.1.10.tar.xz\n"));
-    assert!(!fixture.curl_marker.exists());
+    assert!(
+        fixture.curl_marker.exists(),
+        "cached source must still check for updates"
+    );
     assert!(!fixture.shell_marker.exists());
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn ffmpeg_native_patch_updates_download_new_cache_entries_and_rebuild_dependents() {
+    use sha2::{Digest, Sha256};
+
+    let directory = tempfile::tempdir().expect("source refresh fixture");
+    let root = directory.path().join("repository");
+    let tools = directory.path().join("tools");
+    let fixture = prepare_native_android_ffmpeg_fixture(&root, &tools, "8.1.2");
+    let upstream = root.join("upstream-sources");
+    fs::create_dir_all(&upstream).expect("upstream archive directory");
+    let configure = b"#!/bin/sh\nset -eu\nprefix=\nfor argument in \"$@\"; do\ncase \"$argument\" in --prefix=*) prefix=${argument#--prefix=} ;; esac\ndone\nprintf '%s\\n' \"$prefix\" > .vesper-prefix\n";
+    for (package, version) in [("ffmpeg", "8.1.10"), ("libxml2", "2.15.5")] {
+        let file = fs::File::create(upstream.join(format!("{package}-{version}.tar.xz")))
+            .expect("upstream archive");
+        let mut archive = tar::Builder::new(xz2::write::XzEncoder::new(file, 6));
+        let mut header = tar::Header::new_gnu();
+        header.set_size(configure.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        archive
+            .append_data(
+                &mut header,
+                format!("{package}-{version}/configure"),
+                &configure[..],
+            )
+            .expect("upstream configure script");
+        archive
+            .into_inner()
+            .expect("finish tar")
+            .finish()
+            .expect("finish xz");
+    }
+    write_executable_script(
+        &tools.join("curl"),
+        r#"#!/bin/sh
+set -eu
+destination=
+url=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output) destination=$2; shift ;;
+    https://*) url=$1 ;;
+  esac
+  shift
+done
+printf '%s\n' "$url" >> "$VESPER_REFRESH_ROOT/curl-requests"
+case "$url" in
+  https://ffmpeg.org/releases/)
+    cat "$VESPER_REFRESH_ROOT/ffmpeg-index" ;;
+  https://download.gnome.org/sources/libxml2/2.15/)
+    cat "$VESPER_REFRESH_ROOT/libxml2-index" ;;
+  *.tar.xz)
+    cp "$VESPER_REFRESH_ROOT/upstream-sources/${url##*/}" "$destination" ;;
+  *) exit 97 ;;
+esac
+"#,
+    );
+    let output_directory = root.join("resolved output");
+    let build_log = root.join("build-install.log");
+    let run = |xml_version: &str| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_vesper"));
+        command
+            .env("PATH", &fixture.path)
+            .envs(android_ffmpeg_fixture_environment(&root))
+            .env_remove("VESPER_FFMPEG_VERSION")
+            .env_remove("VESPER_ANDROID_LIBXML2_VERSION")
+            .env("ANDROID_SDK_ROOT", &fixture.sdk)
+            .env(
+                "VESPER_FAKE_RUST_TARGET_LIBDIR",
+                &fixture.rust_target_libdir,
+            )
+            .env("VESPER_REFRESH_ROOT", &root)
+            .env("VESPER_LIBXML2_FIXTURE_VERSION", xml_version)
+            .env("ANDROID_OPTIONAL_LOG", &build_log)
+            .args(["ffmpeg", "--root"])
+            .arg(&root)
+            .args([
+                "--platform",
+                "android",
+                "--android-artifact",
+                "prebuilts",
+                "--extra-demuxers",
+                "dash",
+                "--output-dir",
+            ])
+            .arg(&output_directory);
+        if xml_version != "2.15.4" {
+            command.env_remove("VESPER_ANDROID_LIBXML2_SOURCE_SHA256");
+        }
+        let result = command.output().expect("run source refresh fixture");
+        assert_eq!(
+            result.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    };
+    let install_count = || {
+        fs::read_to_string(&build_log)
+            .expect("install log")
+            .lines()
+            .count()
+    };
+    let metadata_path = output_directory.join("arm64-v8a/vesper-ffmpeg-build-metadata.txt");
+    fs::write(root.join("ffmpeg-index"), "ffmpeg-8.1.2.tar.xz").expect("initial index");
+    fs::write(root.join("libxml2-index"), "libxml2-2.15.4.tar.xz").expect("initial index");
+    run("2.15.4");
+    assert_eq!(install_count(), 2, "initial dependency and FFmpeg installs");
+    let initial = fs::read(&metadata_path).expect("initial receipt");
+    run("2.15.4");
+    assert_eq!(
+        install_count(),
+        2,
+        "unchanged source must reuse both installs"
+    );
+    assert_eq!(initial, fs::read(&metadata_path).expect("reused receipt"));
+
+    fs::write(root.join("ffmpeg-index"), "ffmpeg-8.1.10.tar.xz").expect("FFmpeg patch update");
+    run("2.15.4");
+    assert_eq!(install_count(), 3, "new FFmpeg patch must rebuild FFmpeg");
+    let updated = fs::read_to_string(&metadata_path).expect("updated FFmpeg receipt");
+    assert!(updated.contains("ffmpeg_version=8.1.10\n"));
+    let new_ffmpeg = root.join("third_party/_cache/ffmpeg-8.1.10.tar.xz");
+    assert!(
+        new_ffmpeg.is_file(),
+        "new source must enter the shared cache"
+    );
+    assert!(
+        root.join("third_party/_cache/ffmpeg-8.1.2.tar.xz")
+            .is_file()
+    );
+
+    fs::write(root.join("libxml2-index"), "libxml2-2.15.5.tar.xz").expect("libxml2 patch update");
+    run("2.15.5");
+    assert_eq!(
+        install_count(),
+        5,
+        "new dependency patch must rebuild libxml2 and FFmpeg"
+    );
+    let new_xml = root.join("third_party/_cache/libxml2-2.15.5.tar.xz");
+    assert!(new_xml.is_file());
+    let digest = hex::encode(Sha256::digest(
+        fs::read(&new_xml).expect("updated cached archive"),
+    ));
+    let updated = fs::read_to_string(&metadata_path).expect("updated dependency receipt");
+    assert!(updated.contains("ffmpeg_version=8.1.10\n"));
+    assert!(updated.contains("libxml2_version=2.15.5\n"));
+    assert!(updated.contains(&format!("libxml2_source_sha256={digest}\n")));
+    run("2.15.5");
+    assert_eq!(
+        install_count(),
+        5,
+        "the latest cached patch must be reusable"
+    );
 }
 
 #[cfg(unix)]
@@ -7682,6 +7950,7 @@ fn android_worker_commands_route_through_the_rust_cli() {
         command
             .env("VESPER_CLI", env!("CARGO_BIN_EXE_vesper"))
             .env("PATH", &path)
+            .envs(android_ffmpeg_fixture_environment(&root))
             .env(
                 "ANDROID_TEST_TARGET_LIBDIR",
                 root.join("fake rust target/lib"),
@@ -7718,6 +7987,7 @@ fn android_worker_commands_preserve_stable_cli_exit_codes() {
     for expected in [2, 3, 4, 5, 6] {
         let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
             .env("PATH", &path)
+            .envs(android_ffmpeg_fixture_environment(&root))
             .env(
                 "ANDROID_TEST_TARGET_LIBDIR",
                 root.join("fake rust target/lib"),
@@ -7757,6 +8027,7 @@ fn android_ffmpeg_plugin_worker_uses_shared_profile_and_preserves_outputs_on_fai
     );
     let success = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("PATH", &fixture.path)
+        .envs(android_ffmpeg_fixture_environment(&root))
         .env(
             "VESPER_FAKE_RUST_TARGET_LIBDIR",
             &fixture.rust_target_libdir,
@@ -7784,6 +8055,7 @@ fn android_ffmpeg_plugin_worker_uses_shared_profile_and_preserves_outputs_on_fai
         .expect("seed previous Android metadata");
     let failure = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("PATH", &fixture.path)
+        .envs(android_ffmpeg_fixture_environment(&root))
         .env(
             "VESPER_FAKE_RUST_TARGET_LIBDIR",
             &fixture.rust_target_libdir,
@@ -7888,7 +8160,7 @@ fn ios_ffmpeg_runtime_release_routes_directly_to_rust() {
     assert!(result.stderr.is_empty());
     let stdout = String::from_utf8(result.stdout).expect("UTF-8 runtime dry-run output");
     assert!(stdout.contains("Resolved iOS FFmpeg component framework release:"));
-    assert!(stdout.contains("profile_hash=custom-e1eabc3db7bc"));
+    assert!(stdout.contains("profile_hash=custom-fb7025638cb3"));
     assert!(stdout.contains("ios-arm64"));
     assert!(stdout.contains("ios-simulator-arm64"));
     assert!(!output.exists());
@@ -9169,7 +9441,7 @@ fn ios_stage_release_stages_core_and_optional_outputs_transactionally() {
         "VesperPlayerKit-ios-simulator-arm64.framework.zip",
         "VesperPlayerKit.xcframework.zip",
         "VesperPlayerOptionalPlugins-FFmpeg-Compliance.zip",
-        "VesperPlayerOptionalPlugins-FFmpeg-9.0.1-source.tar.xz",
+        "VesperPlayerOptionalPlugins-FFmpeg-9.0.2-source.tar.xz",
     ] {
         let metadata =
             fs::symlink_metadata(output.join(asset)).expect("inspect staged release asset");
@@ -9330,7 +9602,7 @@ fn ios_stage_release_preserves_previous_outputs_when_build_or_optional_staging_f
 #[test]
 fn ios_stage_release_preserves_previous_outputs_when_ffmpeg_source_drifts() {
     let (_directory, root, tools) = ios_stage_release_fixture();
-    let source = root.join("third_party/_cache/ffmpeg-9.0.1.tar.xz");
+    let source = root.join("third_party/_cache/ffmpeg-9.0.2.tar.xz");
     fs::OpenOptions::new()
         .append(true)
         .open(&source)
@@ -12647,6 +12919,7 @@ fn android_sample_apks_use_release_lock_and_publish_both_apps_atomically() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("PATH", path)
+        .envs(android_ffmpeg_fixture_environment(&root))
         .env("ANDROID_SAMPLE_LOG", &log)
         .env("ANDROID_SDK_ROOT", &fixture.sdk)
         .env(
@@ -12731,6 +13004,7 @@ fn android_sample_apks_reject_missing_flutter_aot_without_replacing_previous_out
 
     let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("PATH", path)
+        .envs(android_ffmpeg_fixture_environment(&root))
         .env("ANDROID_SAMPLE_LOG", &log)
         .env("ANDROID_SDK_ROOT", &fixture.sdk)
         .env(
@@ -13112,6 +13386,7 @@ printf 'replacement host\n' > "$VESPER_ANDROID_HOST_JNI_LIBS/arm64-v8a/libvesper
     );
     let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("PATH", path)
+        .envs(android_ffmpeg_fixture_environment(&root))
         .env(
             "ANDROID_TEST_TARGET_LIBDIR",
             root.join("fake rust target/lib"),
@@ -13531,6 +13806,7 @@ fn android_aar_optional_build_failure_preserves_all_previous_outputs() {
     let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env_remove("CI")
         .env("PATH", path)
+        .envs(android_ffmpeg_fixture_environment(&root))
         .env(
             "ANDROID_TEST_TARGET_LIBDIR",
             root.join("fake rust target/lib"),
@@ -13614,6 +13890,7 @@ exit 23
 
     let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("PATH", path)
+        .envs(android_ffmpeg_fixture_environment(&root))
         .env(
             "ANDROID_TEST_TARGET_LIBDIR",
             root.join("fake rust target/lib"),
@@ -13854,6 +14131,7 @@ while :; do /bin/sleep 1; done
 
     let mut process = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("PATH", path)
+        .envs(android_ffmpeg_fixture_environment(&root))
         .env(
             "ANDROID_TEST_TARGET_LIBDIR",
             root.join("fake rust target/lib"),
@@ -13976,6 +14254,7 @@ cat "$VESPER_ANDROID_SOURCE_NORMALIZER_ASSETS/vesper-source-normalizer-ffmpeg/pr
     );
     let output = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("PATH", path)
+        .envs(android_ffmpeg_fixture_environment(&root))
         .env("ANDROID_OPTIONAL_LOG", &log_path)
         .env(
             "ANDROID_TEST_TARGET_LIBDIR",
@@ -14147,6 +14426,7 @@ exit "${ANDROID_STAGE_RELEASE_GRADLE_STATUS:-0}"
 
     let result = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("PATH", path)
+        .envs(android_ffmpeg_fixture_environment(&root))
         .env(
             "ANDROID_TEST_TARGET_LIBDIR",
             root.join("fake rust target/lib"),
@@ -14168,6 +14448,23 @@ exit "${ANDROID_STAGE_RELEASE_GRADLE_STATUS:-0}"
         String::from_utf8_lossy(&result.stderr)
     );
     assert!(result.stderr.is_empty());
+    assert!(
+        !root.join("curl-called").exists(),
+        "fixture must use its cached dependency"
+    );
+    let runtime = output_directory.join("VesperPlayerKitFfmpegRuntime-android-arm64-v8a.aar");
+    assert_eq!(
+        read_zip_fixture_entry(&runtime, "assets/vesper-ffmpeg-runtime/profile-hash.txt"),
+        b"custom-5887758ff8a3\n"
+    );
+    let metadata = String::from_utf8(read_zip_fixture_entry(
+        &runtime,
+        "assets/vesper-ffmpeg-runtime/arm64-v8a-metadata.txt",
+    ))
+    .expect("UTF-8 staged runtime metadata");
+    assert!(metadata.contains("decoders=aac\n"));
+    assert!(metadata.contains("--enable-decoder=aac"));
+    assert!(metadata.contains("libxml2_version=2.15.4\n"));
     let mut names = fs::read_dir(&output_directory)
         .expect("read complete Android release output")
         .map(|entry| {
@@ -14220,6 +14517,7 @@ exit 23
 
     let result = Command::new(env!("CARGO_BIN_EXE_vesper"))
         .env("PATH", path)
+        .envs(android_ffmpeg_fixture_environment(&root))
         .env(
             "ANDROID_TEST_TARGET_LIBDIR",
             root.join("fake rust target/lib"),

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-11
+
+- Propagate DASH rendition and download recovery failures, retain cancellation
+  through preparation, and release native resources after failed registration.
+- Reject segmented export when post-processing has not produced a single-file
+  output, preserving the source and destination.
+
 ## 0.8.0 - 2026-09-29
 
 - Add throwing source sessions, observable preload tasks and awaited handle activation with native epoch correlation.

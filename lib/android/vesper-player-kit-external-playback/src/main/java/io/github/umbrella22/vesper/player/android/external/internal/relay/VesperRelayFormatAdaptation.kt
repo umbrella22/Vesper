@@ -41,7 +41,9 @@ data class VesperRelayFormatAdaptationRequest(
     val headOnly: Boolean = false,
     val routeId: String? = null,
     val routeName: String? = null,
-)
+) {
+    internal var lifetime = VesperRelayLifetime()
+}
 
 data class VesperRelayDashRemoteMediaPolicy(
     val allowRemoteReferences: Boolean = false,

@@ -1110,7 +1110,7 @@ fn copy_packet_data(
 
 fn allocate_host_packet_token() -> Result<usize, SourceNormalizerError> {
     let token = NEXT_HOST_PACKET_TOKEN
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .map_err(|_| {

@@ -48,7 +48,7 @@ impl Default for LeaseSequence {
 impl LeaseSequence {
     fn allocate(&self) -> Result<u64, ExportFailure> {
         self.next
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .map_err(|_| ExportFailure::with_status(status::EXHAUSTED, Vec::new()))

@@ -1,7 +1,6 @@
 use std::any::Any;
 use std::ffi::{CStr, c_char};
-use std::mem;
-use std::ptr;
+use std::ptr::{self, NonNull};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::{
@@ -1081,17 +1080,13 @@ pub unsafe extern "C" fn player_ffi_video_frame_free(frame: *mut PlayerFfiVideoF
 pub unsafe extern "C" fn player_ffi_event_list_free(events: *mut PlayerFfiEventList) {
     ffi_void(|| {
         let _ = with_event_list_mut(events, |events| {
-            if !events.ptr.is_null() {
-                // SAFETY: event lists are returned as boxed slices by this FFI
-                // layer with len as both length and capacity. Each event owns its
-                // nested allocations and is freed before dropping the slice.
-                // SAFETY: caller upholds the FFI contract for this pointer operation
-                unsafe {
-                    let mut boxed =
-                        Box::from_raw(ptr::slice_from_raw_parts_mut(events.ptr, events.len));
-                    for event in boxed.iter_mut() {
-                        free_event(event);
-                    }
+            if let Some(event_ptr) = NonNull::new(events.ptr) {
+                let slice = NonNull::slice_from_raw_parts(event_ptr, events.len);
+                // SAFETY: the caller supplies this FFI layer's boxed slice and original
+                // length. Nested fields are freed before the list is reset below.
+                let mut event_slice = unsafe { Box::from_non_null(slice) };
+                for event in event_slice.iter_mut() {
+                    free_event(event);
                 }
             }
             *events = PlayerFfiEventList::default();

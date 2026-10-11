@@ -8,9 +8,16 @@ func selectDashRepresentations(
         .map { resolveRemoteReference(baseUri: manifestUri, reference: $0) }
         ?? manifestUri
     var result: [DashPlannedRepresentation] = []
-    let adaptationSets = xmlBlocks(manifestText, tag: "AdaptationSet")
+    let periods = xmlBlocks(manifestText, tag: "Period")
+    let containers = periods.isEmpty ? [manifestText] : periods
+    let adaptationContexts: [(adaptationSet: String, parentBase: String)] = containers.flatMap { container in
+        let periodBase = periods.isEmpty ? mpdBase : directXmlText(container, tag: "BaseURL", before: ["AdaptationSet", "Representation"])
+            .map { resolveRemoteReference(baseUri: mpdBase, reference: $0) } ?? mpdBase
+        return xmlBlocks(container, tag: "AdaptationSet").map { ($0, periodBase) }
+    }
 
-    for (index, adaptationSet) in adaptationSets.enumerated() {
+    for (index, context) in adaptationContexts.enumerated() {
+        let adaptationSet = context.adaptationSet
         let adaptationOpenTag = xmlOpenTag(adaptationSet, tag: "AdaptationSet") ?? ""
         let adaptationMimeType = xmlAttrFromTag(adaptationOpenTag, attr: "mimeType")
         let adaptationContentType = xmlAttrFromTag(adaptationOpenTag, attr: "contentType")
@@ -21,8 +28,8 @@ func selectDashRepresentations(
         }
 
         let adaptationBase = directXmlText(adaptationSet, tag: "BaseURL", before: ["Representation"])
-            .map { resolveRemoteReference(baseUri: mpdBase, reference: $0) }
-            ?? mpdBase
+            .map { resolveRemoteReference(baseUri: context.parentBase, reference: $0) }
+            ?? context.parentBase
         let adaptationTemplate = findDashTemplate(prefixBeforeTag(adaptationSet, tag: "Representation"))
         let representations = xmlBlocks(adaptationSet, tag: "Representation")
         guard !representations.isEmpty else {
@@ -60,7 +67,7 @@ func selectDashRepresentations(
                 codecs: xmlAttrFromTag(representationOpenTag, attr: "codecs"),
                 bandwidth: xmlAttrFromTag(representationOpenTag, attr: "bandwidth"),
                 baseUri: representationBase.map { resolveRemoteReference(baseUri: adaptationBase, reference: $0) } ?? adaptationBase,
-                baseUrl: template == nil ? representationBase : nil,
+                baseUrl: template == nil ? representationBase.map { resolveRemoteReference(baseUri: adaptationBase, reference: $0) } : nil,
                 template: template
             )
         )
@@ -75,8 +82,8 @@ func selectDashRepresentations(
                 mimeType: nil,
                 codecs: nil,
                 bandwidth: nil,
-                baseUri: manifestUri,
-                baseUrl: baseURL,
+                baseUri: resolveRemoteReference(baseUri: manifestUri, reference: baseURL),
+                baseUrl: resolveRemoteReference(baseUri: manifestUri, reference: baseURL),
                 template: nil
             )
         )
@@ -99,4 +106,17 @@ func findDashTemplate(_ input: String) -> DashTemplate? {
         timescale: xmlAttrFromTag(tag, attr: "timescale").flatMap(UInt64.init) ?? 1,
         duration: xmlAttrFromTag(tag, attr: "duration").flatMap(UInt64.init) ?? 0
     )
+}
+
+func plannedDashSegmentCount(durationSeconds: Double, segmentSeconds: Double, startNumber: UInt64) throws -> UInt64 {
+    guard durationSeconds.isFinite, durationSeconds > 0,
+          segmentSeconds.isFinite, segmentSeconds > 0,
+          let count = UInt64(exactly: ceil(durationSeconds / segmentSeconds)), count > 0 else {
+        throw VesperForegroundDownloadPreparationError.invalidSource("DASH segment count is not representable")
+    }
+    let (_, overflow) = startNumber.addingReportingOverflow(count - 1)
+    guard !overflow else {
+        throw VesperForegroundDownloadPreparationError.invalidSource("DASH segment numbering overflows")
+    }
+    return count
 }

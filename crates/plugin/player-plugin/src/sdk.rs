@@ -20,8 +20,8 @@ use thiserror::Error;
 
 use crate::plugin_reference::is_reverse_dns;
 use crate::{
-    BenchmarkEventBatch, BenchmarkSink, BenchmarkSinkError, MAX_PIPELINE_EVENT_INPUT_BYTES,
-    PipelineEvent, PipelineEventHook, PipelineEventHookError, PostDownloadProcessor,
+    BenchmarkEventBatch, BenchmarkSinkError, MAX_PIPELINE_EVENT_INPUT_BYTES, PipelineEvent,
+    PipelineEventHookError, PluginBenchmarkSink, PluginEventHook, PostDownloadProcessor,
     ProcessorError, ProcessorProgress,
 };
 
@@ -122,13 +122,23 @@ impl PluginBuilder {
         )
     }
 
+    /// Registers a Native author hook. Checked host capabilities are not author implementations.
+    ///
+    /// ```compile_fail,E0277
+    /// use player_plugin::{PipelineEventHook, PluginBuildError, PluginBuilder};
+    ///
+    /// fn register<H: PipelineEventHook + 'static>(hook: H) -> Result<PluginBuilder, PluginBuildError> {
+    ///     PluginBuilder::new("dev.example.plugin", "Example")?
+    ///         .with_pipeline_event_hook("dev.example.plugin.hook", hook)
+    /// }
+    /// ```
     pub fn with_pipeline_event_hook<H>(
         self,
         instance_id: impl Into<String>,
         hook: H,
     ) -> Result<Self, PluginBuildError>
     where
-        H: PipelineEventHook + 'static,
+        H: PluginEventHook + 'static,
     {
         let instance_id = instance_id.into();
         self.with_interface(
@@ -138,13 +148,23 @@ impl PluginBuilder {
         )
     }
 
+    /// Registers a Native author sink. Checked host capabilities are not author implementations.
+    ///
+    /// ```compile_fail,E0277
+    /// use player_plugin::{BenchmarkSink, PluginBuildError, PluginBuilder};
+    ///
+    /// fn register<S: BenchmarkSink + 'static>(sink: S) -> Result<PluginBuilder, PluginBuildError> {
+    ///     PluginBuilder::new("dev.example.plugin", "Example")?
+    ///         .with_benchmark_sink("dev.example.plugin.benchmark", sink)
+    /// }
+    /// ```
     pub fn with_benchmark_sink<S>(
         self,
         instance_id: impl Into<String>,
         sink: S,
     ) -> Result<Self, PluginBuildError>
     where
-        S: BenchmarkSink + 'static,
+        S: PluginBenchmarkSink + 'static,
     {
         let instance_id = instance_id.into();
         self.with_interface(
@@ -424,7 +444,7 @@ struct PipelineEventHookAdapter<H> {
 
 impl<H> RawExportInterface for PipelineEventHookAdapter<H>
 where
-    H: PipelineEventHook,
+    H: PluginEventHook,
 {
     fn kind(&self) -> ExportInterfaceKind {
         ExportInterfaceKind::PipelineEventHook
@@ -458,10 +478,16 @@ where
         let outcome = match self.hook.on_event(&event) {
             Ok(outcome) => outcome,
             Err(error) => {
-                if let Err(protocol_error) = error.validate_author_failure() {
-                    return Err(failure(status::ABI_VIOLATION, &protocol_error));
+                if let Err(protocol_error) = error.validate() {
+                    return Err(failure(
+                        status::ABI_VIOLATION,
+                        &PipelineEventHookError::from(protocol_error),
+                    ));
                 }
-                return Err(failure(status::FAILURE, &error));
+                return Err(failure(
+                    status::FAILURE,
+                    &PipelineEventHookError::from(error),
+                ));
             }
         };
         outcome
@@ -478,7 +504,7 @@ struct BenchmarkSinkAdapter<S> {
 
 impl<S> RawExportInterface for BenchmarkSinkAdapter<S>
 where
-    S: BenchmarkSink,
+    S: PluginBenchmarkSink,
 {
     fn kind(&self) -> ExportInterfaceKind {
         ExportInterfaceKind::BenchmarkSink
@@ -503,7 +529,7 @@ where
                 let sink_status = self
                     .sink
                     .on_event_batch(&batch)
-                    .map_err(|error| failure(status::FAILURE, &error))?;
+                    .map_err(|error| failure(status::FAILURE, &BenchmarkSinkError::from(error)))?;
                 sink_status
                     .validate_for_batch(batch.events.len())
                     .map_err(|error| failure(status::ABI_VIOLATION, &error))?;
@@ -513,7 +539,7 @@ where
                 let report = self
                     .sink
                     .flush()
-                    .map_err(|error| failure(status::FAILURE, &error))?;
+                    .map_err(|error| failure(status::FAILURE, &BenchmarkSinkError::from(error)))?;
                 report
                     .validate()
                     .map_err(|error| failure(status::ABI_VIOLATION, &error))?;
@@ -565,7 +591,7 @@ fn unexpected_operation(interface: &str) -> ExportFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PipelineEventHookOutcome, PluginDiagnostic};
+    use crate::{PipelineEventHookFailure, PipelineEventHookOutcome, PluginDiagnostic};
 
     fn pipeline_event(event_name: &str) -> PipelineEvent {
         PipelineEvent {
@@ -584,11 +610,11 @@ mod tests {
 
     struct Hook;
 
-    impl PipelineEventHook for Hook {
+    impl PluginEventHook for Hook {
         fn on_event(
             &self,
             _event: &PipelineEvent,
-        ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+        ) -> Result<PipelineEventHookOutcome, PipelineEventHookFailure> {
             Ok(PipelineEventHookOutcome::accepted())
         }
     }
@@ -632,11 +658,11 @@ mod tests {
     fn hook_adapter_rejects_protocol_violations() {
         struct InvalidHook;
 
-        impl PipelineEventHook for InvalidHook {
+        impl PluginEventHook for InvalidHook {
             fn on_event(
                 &self,
                 _event: &PipelineEvent,
-            ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+            ) -> Result<PipelineEventHookOutcome, PipelineEventHookFailure> {
                 Ok(PipelineEventHookOutcome {
                     accepted: true,
                     measurements: Vec::new(),
@@ -671,11 +697,11 @@ mod tests {
 
         struct CountingHook(Arc<AtomicUsize>);
 
-        impl PipelineEventHook for CountingHook {
+        impl PluginEventHook for CountingHook {
             fn on_event(
                 &self,
                 _event: &PipelineEvent,
-            ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+            ) -> Result<PipelineEventHookOutcome, PipelineEventHookFailure> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(PipelineEventHookOutcome::accepted())
             }
@@ -722,16 +748,114 @@ mod tests {
     }
 
     #[test]
-    fn hook_adapter_marks_host_owned_author_errors_as_abi_violations() {
+    fn author_hook_failures_keep_failure_status_and_existing_json_payloads() {
+        struct FailingHook(PipelineEventHookFailure);
+        impl PluginEventHook for FailingHook {
+            fn on_event(
+                &self,
+                _: &PipelineEvent,
+            ) -> Result<PipelineEventHookOutcome, PipelineEventHookFailure> {
+                Err(self.0.clone())
+            }
+        }
+
+        let input = serde_json::to_vec(&pipeline_event("download.task.completed"))
+            .expect("serialize event");
+        for (failure_kind, code) in [
+            (
+                PipelineEventHookFailure::InvalidInput("input".to_owned()),
+                "invalidInput",
+            ),
+            (
+                PipelineEventHookFailure::Rejected("rejected".to_owned()),
+                "rejected",
+            ),
+            (
+                PipelineEventHookFailure::Failed("failed".to_owned()),
+                "failed",
+            ),
+        ] {
+            let expected = serde_json::to_value(&failure_kind).expect("serialize failure");
+            let plugin = PluginBuilder::new("dev.vesper.fixture", "Fixture")
+                .and_then(|builder| {
+                    builder.with_pipeline_event_hook(
+                        "dev.vesper.fixture.hook",
+                        FailingHook(failure_kind),
+                    )
+                })
+                .and_then(PluginBuilder::build)
+                .expect("plugin");
+            let error = plugin.interfaces[0]
+                .invoke(ExportOperation::PipelineEvent { event_json: &input })
+                .expect_err("author failure");
+            assert_eq!(error.status(), status::FAILURE);
+            let payload: serde_json::Value =
+                serde_json::from_slice(error.payload()).expect("decode failure payload");
+            assert_eq!(payload, expected);
+            assert_eq!(payload["code"], code);
+        }
+    }
+
+    #[test]
+    fn author_benchmark_failures_keep_sink_failed_for_batch_and_flush() {
+        use crate::{BenchmarkSinkFailure, BenchmarkSinkReport, BenchmarkSinkStatus};
+
+        struct FailingSink(String);
+        impl PluginBenchmarkSink for FailingSink {
+            fn name(&self) -> &str {
+                "fixture"
+            }
+            fn on_event_batch(
+                &self,
+                _: &BenchmarkEventBatch,
+            ) -> Result<BenchmarkSinkStatus, BenchmarkSinkFailure> {
+                Err(BenchmarkSinkFailure::Failed(self.0.clone()))
+            }
+            fn flush(&self) -> Result<BenchmarkSinkReport, BenchmarkSinkFailure> {
+                Err(BenchmarkSinkFailure::Failed(self.0.clone()))
+            }
+        }
+
+        let input = serde_json::to_vec(&BenchmarkEventBatch { events: Vec::new() })
+            .expect("serialize batch");
+        for message in [String::new(), "  保留 \n".to_owned(), "界".repeat(86)] {
+            let plugin = PluginBuilder::new("dev.vesper.fixture", "Fixture")
+                .and_then(|builder| {
+                    builder.with_benchmark_sink(
+                        "dev.vesper.fixture.benchmark",
+                        FailingSink(message.clone()),
+                    )
+                })
+                .and_then(PluginBuilder::build)
+                .expect("plugin");
+            for operation in [
+                ExportOperation::BenchmarkBatch { batch_json: &input },
+                ExportOperation::BenchmarkFlush,
+            ] {
+                let error = plugin.interfaces[0]
+                    .invoke(operation)
+                    .expect_err("author failure");
+                assert_eq!(error.status(), status::FAILURE);
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(error.payload())
+                        .expect("decode failure payload"),
+                    serde_json::json!({ "code": "sinkFailed", "message": message }),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hook_adapter_marks_invalid_author_messages_as_abi_violations() {
         struct InvalidErrorHook;
 
-        impl PipelineEventHook for InvalidErrorHook {
+        impl PluginEventHook for InvalidErrorHook {
             fn on_event(
                 &self,
                 _event: &PipelineEvent,
-            ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
-                Err(PipelineEventHookError::AbiViolation(
-                    "forged by author code".to_owned(),
+            ) -> Result<PipelineEventHookOutcome, PipelineEventHookFailure> {
+                Err(PipelineEventHookFailure::Failed(
+                    "x".repeat(crate::MAX_PLUGIN_ERROR_MESSAGE_BYTES + 1),
                 ))
             }
         }
@@ -746,7 +870,7 @@ mod tests {
             .expect("serialize event");
         let error = plugin.interfaces[0]
             .invoke(ExportOperation::PipelineEvent { event_json: &input })
-            .expect_err("host-owned error kind must fail the ABI contract");
+            .expect_err("invalid author message must fail the ABI contract");
 
         assert_eq!(error.status(), status::ABI_VIOLATION);
     }

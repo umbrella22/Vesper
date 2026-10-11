@@ -17,13 +17,46 @@ At the source-repository level, Vesper does not currently ship generated
 FFmpeg binaries or any other vendored third-party binary bundle inside the
 repository root.
 
-The checked-in FFmpeg source policy currently locks the optional build inputs
-to FFmpeg **9.0.1** from
-<https://ffmpeg.org/releases/ffmpeg-9.0.1.tar.xz>. The archive SHA-256 is
-`cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635`; local
-source-build helpers reuse `third_party/_cache/ffmpeg-9.0.1.tar.xz` when it is
+The checked-in FFmpeg source policy locks release source inputs
+to FFmpeg **9.0.2** from
+<https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz>. The archive SHA-256 is
+`8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e`; local
+source-build helpers reuse `third_party/_cache/ffmpeg-9.0.2.tar.xz` when it is
 present. This source lock does not by itself constitute a redistributed FFmpeg
 binary or satisfy the release obligations below.
+
+Ordinary source builds resolve the latest patch in the configured FFmpeg series
+(9.0 by default) independently of this release lock. Android DASH source builds
+resolve the latest patch in the **libxml2 2.15** series, and optional Android
+OpenSSL overlays resolve the latest patch in the **OpenSSL 3.5 LTS** series.
+Release-index checks compare upstream and cached patches; missing versioned
+archives are downloaded into the shared cache. An unavailable index falls back
+to the highest matching cached patch. Exact-version overrides skip discovery.
+
+The worker carries a known digest for **libxml2 2.15.4** from
+[the official GNOME source archive](https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz),
+with SHA-256
+`98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821`.
+It also carries a known digest for **OpenSSL 3.5.9** from
+[the official OpenSSL release archive](https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz),
+with SHA-256
+`603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a`.
+These digests verify their corresponding archives without fixing ordinary
+builds to those patches. Explicit source checksum overrides remain supported;
+newly resolved patches without a checked-in digest record the actual archive
+SHA-256 in their build receipts.
+The standard profiles remain local-only and keep OpenSSL disabled; libxml2 is
+included where DASH is enabled. Dependency install receipts and Android FFmpeg
+metadata record exact source identity and installed-file digests for rebuild
+decisions. These source choices are build inputs, not evidence that generated
+artifacts have been rebuilt or redistributed. When distributing those libraries,
+retain libxml2's MIT license and OpenSSL's Apache-2.0 license and notices alongside
+the FFmpeg obligations below.
+
+An OpenSSL 3.x FFmpeg overlay built with `--enable-version3` uses the
+LGPL-3.0-or-later configuration. Preserve the corresponding FFmpeg
+`COPYING.LGPLv3` and referenced `COPYING.GPLv3` texts when distributing that
+overlay; the standard no-OpenSSL profiles keep their separate license flags.
 
 Release gate:
 
@@ -105,6 +138,13 @@ Default Vesper scripts are intended to stay on the LGPL-oriented side:
   FFmpeg build entrypoint. The `download-remux`, `relay-remux`, and `default`
   profiles validate local-only, no-OpenSSL builds and do not pass
   `--enable-gpl` or `--enable-nonfree`.
+- Android and iOS `download-remux` add `--enable-decoder=aac` for local AAC format
+  probing before stream-copy remuxing; their `default` and
+  `source-normalizer` inherit this override. It enables FFmpeg's built-in AAC
+  decoder without adding external libraries or enabling encoders, networking,
+  or OpenSSL. The iOS override covers device and Apple Silicon Simulator
+  slices. Media3 and AVPlayer hardware playback, video decoder selection,
+  desktop FFmpeg profiles and LGPL-oriented license flags are unchanged.
 - Android and Apple FFmpeg implementation scripts still support private
   lower-level arguments for Gradle/Xcode integration, but release workflows and
   public documentation should use the root `ffmpeg` command.

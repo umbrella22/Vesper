@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-11
+
+- Align federated package dependencies with the 0.9.0 SDK.
+
 ## 0.8.0 - 2026-09-29
 
 - Add VesperSourceSession, VesperSourceHandle and retained independent preload tasks.

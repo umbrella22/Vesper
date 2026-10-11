@@ -5,9 +5,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use player_plugin::{
-    BenchmarkEventBatch, BenchmarkSink, BenchmarkSinkError, BenchmarkSinkReport,
-    BenchmarkSinkStatus, CompletedDownloadInfo, ContentFormatKind, PipelineEvent,
-    PipelineEventHook, PipelineEventHookError, PipelineEventHookOutcome, Plugin, PluginBuildError,
+    BenchmarkEventBatch, BenchmarkSinkFailure, BenchmarkSinkReport, BenchmarkSinkStatus,
+    CompletedDownloadInfo, ContentFormatKind, PipelineEvent, PipelineEventHookFailure,
+    PipelineEventHookOutcome, Plugin, PluginBenchmarkSink, PluginBuildError, PluginEventHook,
     PostDownloadProcessor, ProcessorError, ProcessorOutput, ProcessorProgress,
 };
 
@@ -34,18 +34,18 @@ impl PostDownloadProcessor for FixturePostDownloadProcessor {
 
 struct FixtureEventHook;
 
-impl PipelineEventHook for FixtureEventHook {
+impl PluginEventHook for FixtureEventHook {
     fn on_event(
         &self,
         _event: &PipelineEvent,
-    ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+    ) -> Result<PipelineEventHookOutcome, PipelineEventHookFailure> {
         Ok(PipelineEventHookOutcome::accepted())
     }
 }
 
 struct FixtureBenchmarkSink;
 
-impl BenchmarkSink for FixtureBenchmarkSink {
+impl PluginBenchmarkSink for FixtureBenchmarkSink {
     fn name(&self) -> &str {
         "fixture-benchmark"
     }
@@ -53,13 +53,13 @@ impl BenchmarkSink for FixtureBenchmarkSink {
     fn on_event_batch(
         &self,
         batch: &BenchmarkEventBatch,
-    ) -> Result<BenchmarkSinkStatus, BenchmarkSinkError> {
+    ) -> Result<BenchmarkSinkStatus, BenchmarkSinkFailure> {
         Ok(BenchmarkSinkStatus {
             accepted_events: batch.events.len() as u64,
         })
     }
 
-    fn flush(&self) -> Result<BenchmarkSinkReport, BenchmarkSinkError> {
+    fn flush(&self) -> Result<BenchmarkSinkReport, BenchmarkSinkFailure> {
         Ok(BenchmarkSinkReport::default())
     }
 }

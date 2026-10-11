@@ -107,8 +107,7 @@ private object VesperSourceNormalizerResourceDisposer {
     ) {
         Log.w(
             NATIVE_JNI_BINDINGS_TAG,
-            "source normalizer dispose queue saturated; running fallback close path",
-            error,
+            "source normalizer dispose queue saturated; running fallback close path failure=${diagnosticPlaybackFailure(error)}",
         )
         if (Looper.myLooper() == Looper.getMainLooper()) {
             Log.w(
@@ -470,7 +469,7 @@ internal fun VesperNativeJniBindings.buildPlayerListener(
         override fun onPlayerError(error: PlaybackException) {
             if (!isCurrentSystemPlaybackCallback(callbackGeneration)) return
             cancelBehindLiveWindowStableReset()
-            Log.e(NATIVE_JNI_BINDINGS_TAG, "onPlayerError ${error.errorCodeName}: ${error.message}", error)
+            Log.e(NATIVE_JNI_BINDINGS_TAG, "onPlayerError ${error.errorCodeName} failure=${diagnosticPlaybackFailure(error)}")
             recordBenchmark(
                 "playback_error",
                 mapOf(
@@ -589,8 +588,7 @@ internal fun VesperNativeJniBindings.handleBehindLiveWindowError(
             Log.e(
                 NATIVE_JNI_BINDINGS_TAG,
                 "behind-live-window recovery action failed attempt=${decision.observedFailure} " +
-                    "sourceEpoch=$callbackGeneration",
-                recoveryError,
+                    "sourceEpoch=$callbackGeneration failure=${diagnosticPlaybackFailure(recoveryError)}",
             )
             false
         },
@@ -717,9 +715,7 @@ internal fun VesperNativeJniBindings.handleRuntimeFixedTrackCapabilityFailure(
     }.onFailure { retryError ->
         Log.w(
             NATIVE_JNI_BINDINGS_TAG,
-            "failed to recover from fixed-track capability failure; keeping auto policy",
-            retryError,
-        )
+            "failed to recover from fixed-track capability failure; keeping auto policy failure=${diagnosticPlaybackFailure(retryError)}")
     }
     pushTrackStateToRust()
     return true
@@ -955,7 +951,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(
             val drm = source.drmConfiguration ?: return
             Log.i(
                 NATIVE_JNI_BINDINGS_TAG,
-                "onDrmSessionAcquired keySystem=${drm.keySystem} state=$state source=${source.uri}",
+                "onDrmSessionAcquired keySystem=${drm.keySystem} state=$state source=${diagnosticSourceDescription(source)}",
             )
             recordBenchmark(
                 "drm_session_acquired",
@@ -976,7 +972,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(
             val drm = source.drmConfiguration ?: return
             Log.i(
                 NATIVE_JNI_BINDINGS_TAG,
-                "onDrmKeysLoaded keySystem=${drm.keySystem} source=${source.uri}",
+                "onDrmKeysLoaded keySystem=${drm.keySystem} source=${diagnosticSourceDescription(source)}",
             )
             recordBenchmark(
                 "drm_keys_loaded",
@@ -1000,10 +996,9 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(
             val maxAttemptsLabel = maxAttempts?.toString() ?: "unlimited"
             Log.e(
                 NATIVE_JNI_BINDINGS_TAG,
-                "onDrmSessionManagerError keySystem=${drm?.keySystem ?: "none"} source=${source?.uri ?: ""} " +
+                "onDrmSessionManagerError keySystem=${drm?.keySystem ?: "none"} source=${source?.let(::diagnosticSourceDescription) ?: "none"} " +
                     "attempt=$currentDrmRuntimeErrorCount/$maxAttemptsLabel exhausted=$attemptsExhausted " +
-                    "error=${error::class.java.name}: ${error.message}",
-                error,
+                    "failure=${diagnosticPlaybackFailure(error)}",
             )
             recordBenchmark(
                 "drm_session_manager_error",
@@ -1066,7 +1061,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(
             val drm = source.drmConfiguration ?: return
             Log.i(
                 NATIVE_JNI_BINDINGS_TAG,
-                "onDrmSessionReleased keySystem=${drm.keySystem} source=${source.uri}",
+                "onDrmSessionReleased keySystem=${drm.keySystem} source=${diagnosticSourceDescription(source)}",
             )
             recordBenchmark(
                 "drm_session_released",
@@ -1112,8 +1107,7 @@ internal fun VesperNativeJniBindings.buildAnalyticsListener(
                 "onLoadError dataType=${mediaLoadData.dataType.media3DataTypeName()} " +
                     "trackType=${mediaLoadData.trackType.media3TrackTypeName()} canceled=$wasCanceled " +
                     "uriHost=${loadEventInfo.uri.toString().hostForDiagnostics()} bytesLoaded=${loadEventInfo.bytesLoaded} " +
-                    "error=${error::class.java.name}: ${error.message}",
-                error,
+                    "failure=${diagnosticPlaybackFailure(error)}",
             )
             recordBenchmark(
                 "load_error",
@@ -1802,7 +1796,7 @@ internal fun VesperNativeJniBindings.prepareSourceNormalizerResourceForPlayback(
             if (sourceNormalizerConfiguration.mode == VesperSourceNormalizerMode.RequireNormalized) {
                 throw error
             }
-            Log.w(NATIVE_JNI_BINDINGS_TAG, "source normalizer normalized resource open failed; using original source", error)
+            Log.w(NATIVE_JNI_BINDINGS_TAG, "source normalizer normalized resource open failed; using original source failure=${diagnosticPlaybackFailure(error)}")
             null
         } ?: return NativeSourceNormalizerResourcePreparedOpenOutcome()
 
@@ -1833,7 +1827,7 @@ internal fun VesperNativeJniBindings.openPreparedSourceNormalizerResourceForPlay
     currentSourceNormalizerResource = resource
     Log.i(
         NATIVE_JNI_BINDINGS_TAG,
-        "source normalizer resource selected route=${resource.outputRoute} playbackUri=${resource.playbackSource.uri}",
+        "source normalizer resource selected route=${resource.outputRoute} source=${diagnosticSourceDescription(resource.playbackSource)}",
     )
     return NativeSourceNormalizerResourceOpenOutcome(resource = resource)
 }
@@ -1865,7 +1859,7 @@ private fun disposeSourceNormalizerResourceHandle(
     }
     runCatching { VesperNativeJni.disposeSourceNormalizerResource(handle) }
         .onFailure { error ->
-            Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose $context", error)
+            Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose $context failure=${diagnosticPlaybackFailure(error)}")
         }
 }
 
@@ -1892,7 +1886,7 @@ internal fun VesperNativeJniBindings.detachPlayerFromSourceNormalizerResource(
         exoPlayer.stop()
         exoPlayer.clearMediaItems()
     }.onFailure { error ->
-        Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to detach ExoPlayer from normalized resource playback", error)
+        Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to detach ExoPlayer from normalized resource playback failure=${diagnosticPlaybackFailure(error)}")
     }
 }
 

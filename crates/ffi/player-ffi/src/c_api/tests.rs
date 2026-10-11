@@ -36,6 +36,130 @@ use std::ptr;
 use std::time::Duration;
 
 #[test]
+fn owned_buffer_exports_keep_null_empty_sentinel() {
+    let (bytes, len) = super::into_owned_bytes(Vec::with_capacity(64));
+    assert!(bytes.is_null());
+    assert_eq!(len, 0);
+
+    let (values, len) = super::into_owned_struct_array(Vec::<PlayerFfiEvent>::with_capacity(64));
+    assert!(values.is_null());
+    assert_eq!(len, 0);
+}
+
+#[test]
+fn owned_video_frame_with_spare_capacity_resets_after_release() {
+    let mut bytes = Vec::with_capacity(64);
+    bytes.extend_from_slice(&[1, 2, 3, 4]);
+    assert!(bytes.capacity() > bytes.len());
+    let (bytes, len) = super::into_owned_bytes(bytes);
+    let mut frame = PlayerFfiVideoFrame {
+        width: 1,
+        height: 1,
+        bytes_per_row: 4,
+        bytes,
+        len,
+        ..PlayerFfiVideoFrame::default()
+    };
+    assert_eq!(
+        // SAFETY: the exported pointer is live for its original element count.
+        unsafe { std::slice::from_raw_parts(frame.bytes, frame.len) },
+        &[1, 2, 3, 4]
+    );
+
+    // SAFETY: the frame holds the boxed slice returned by `into_owned_bytes`.
+    unsafe { player_ffi_video_frame_free(&mut frame) };
+    assert!(frame.bytes.is_null());
+    assert_eq!(frame.len, 0);
+    assert_eq!(frame.width, 0);
+    assert_eq!(frame.height, 0);
+    assert_eq!(frame.bytes_per_row, 0);
+
+    // SAFETY: the first release reset the frame to the documented empty value.
+    unsafe { player_ffi_video_frame_free(&mut frame) };
+}
+
+#[test]
+fn owned_struct_array_drops_each_element_once() {
+    use std::ptr::NonNull;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct DropCounter(Arc<AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    let drops = Arc::new(AtomicUsize::new(0));
+    let mut values = Vec::with_capacity(64);
+    for _ in 0..3 {
+        values.push(DropCounter(Arc::clone(&drops)));
+    }
+    let (values, len) = super::into_owned_struct_array(values);
+    assert_eq!(len, 3);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    let values = NonNull::new(values).expect("nonempty exported array");
+    let slice = NonNull::slice_from_raw_parts(values, len);
+    // SAFETY: this is the sole release of the exported boxed slice, with its original length.
+    let values = unsafe { Box::from_non_null(slice) };
+    drop(values);
+    assert_eq!(drops.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn owned_track_catalog_with_spare_capacity_resets_nested_fields() {
+    let mut tracks = Vec::with_capacity(64);
+    tracks.push(super::PlayerFfiTrack {
+        id: super::into_c_string_ptr("track-字幕".to_owned()),
+        label: super::into_c_string_ptr("English".to_owned()),
+        ..super::PlayerFfiTrack::default()
+    });
+    let (tracks, len) = super::into_owned_struct_array(tracks);
+    let mut media_info = PlayerFfiMediaInfo {
+        track_catalog: super::PlayerFfiTrackCatalog {
+            tracks,
+            len,
+            playback_path: super::into_c_string_ptr("native".to_owned()),
+            ..super::PlayerFfiTrackCatalog::default()
+        },
+        ..PlayerFfiMediaInfo::default()
+    };
+
+    // SAFETY: the catalog and nested strings were allocated by this FFI layer.
+    unsafe { player_ffi_media_info_free(&mut media_info) };
+    assert!(media_info.track_catalog.tracks.is_null());
+    assert!(media_info.track_catalog.playback_path.is_null());
+    assert_eq!(media_info.track_catalog.len, 0);
+
+    // SAFETY: all released fields were reset to their documented default values.
+    unsafe { player_ffi_media_info_free(&mut media_info) };
+}
+
+#[test]
+fn owned_c_string_array_release_resets_pointer() {
+    let (mut strings, len) = super::into_owned_c_string_array(vec![
+        "字幕".to_owned(),
+        String::new(),
+        "codec".to_owned(),
+    ]);
+    assert_eq!(len, 3);
+    {
+        // SAFETY: the exported array is live and contains exactly `len` pointers.
+        let values = unsafe { std::slice::from_raw_parts(strings, len) };
+        let values = values
+            .iter()
+            .map(|value| copy_c_string(*value))
+            .collect::<Vec<_>>();
+        assert_eq!(values, ["字幕", "", "codec"]);
+    }
+    super::free_c_string_array(&mut strings, len);
+    assert!(strings.is_null());
+    super::free_c_string_array(&mut strings, len);
+}
+
+#[test]
 fn initializer_probe_uri_rejects_null_output_pointer() {
     // SAFETY: `uri` and `error` remain live for the call, while the null output pointer is the
     // documented invalid input exercised by this test.
@@ -394,7 +518,9 @@ fn player_ffi_event_list_free_releases_nested_error_and_resets_list() {
     assert_eq!(event.kind, PlayerFfiEventKind::Error);
     assert!(!event.error.message.is_null());
     assert!(!event.error.details_json.is_null());
-    let (ptr, len) = super::into_owned_struct_array(vec![event]);
+    let mut event_values = Vec::with_capacity(64);
+    event_values.push(event);
+    let (ptr, len) = super::into_owned_struct_array(event_values);
     let mut events = PlayerFfiEventList { ptr, len };
 
     // SAFETY: the list owns the allocation returned by `into_owned_struct_array`, including its

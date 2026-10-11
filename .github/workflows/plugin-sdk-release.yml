@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/plugin-sdk-release.yml"
       - "Cargo.toml"
+      - "rust-toolchain.toml"
       - "Cargo.lock"
       - "README.md"
       - "README.zh-CN.md"
@@ -25,6 +26,7 @@ on:
     paths:
       - ".github/workflows/plugin-sdk-release.yml"
       - "Cargo.toml"
+      - "rust-toolchain.toml"
       - "Cargo.lock"
       - "README.md"
       - "README.zh-CN.md"
@@ -64,7 +66,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: rustfmt
 
@@ -140,7 +142,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: ${{ matrix.target }}
 
@@ -241,7 +243,7 @@ jobs:
           fi
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.99.0
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2

@@ -17,7 +17,8 @@ struct VesperHTTPContentRange: Equatable {
         guard let start, let end, end >= start else {
             return nil
         }
-        return end - start + 1
+        let (length, overflow) = (end - start).addingReportingOverflow(1)
+        return overflow ? nil : length
     }
 }
 
@@ -90,7 +91,13 @@ func validateHTTPPartialContentRange(
             "remote server reported Content-Range total \(total), expected \(expectedTotalSizeBytes) for \(sourceDescription)"
         )
     }
-    if let length = contentRange.length {
+    guard let length = contentRange.length,
+          contentRange.total.map({ $0 > responseEnd }) ?? true else {
+        throw VesperForegroundDownloadPreparationError.invalidSource(
+            "remote server returned an invalid Content-Range length or total for \(sourceDescription)"
+        )
+    }
+    do {
         if let expectedBodyLength, length != expectedBodyLength {
             throw VesperForegroundDownloadPreparationError.invalidSource(
                 "remote server returned \(length) range bytes, expected \(expectedBodyLength) for \(sourceDescription)"

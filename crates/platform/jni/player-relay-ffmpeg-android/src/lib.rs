@@ -8,6 +8,7 @@ use std::fs::{self, File};
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -41,6 +42,8 @@ const JNI_READ_CANCELLED: jint = -5;
 #[serde(rename_all = "camelCase")]
 struct OpenRequest {
     session_id: String,
+    #[serde(default)]
+    session_handle: i64,
     #[serde(default)]
     input_mode: Option<String>,
     #[serde(default)]
@@ -107,6 +110,7 @@ struct RelayError {
 struct SessionCache {
     root_dir: PathBuf,
     state: Mutex<SessionState>,
+    lease_count: AtomicUsize,
 }
 
 struct SessionCacheEntry {
@@ -128,14 +132,35 @@ impl SessionCacheEntry {
     }
 }
 
+impl SessionCache {
+    fn new(root_dir: PathBuf) -> Self {
+        Self {
+            root_dir,
+            state: Mutex::new(SessionState::default()),
+            lease_count: AtomicUsize::new(0),
+        }
+    }
+
+    fn acquire_lease(&self) {
+        self.lease_count.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn release_lease(&self) -> bool {
+        self.lease_count.fetch_sub(1, Ordering::AcqRel) == 1
+    }
+}
+
 #[derive(Default)]
 struct SessionState {
+    cancelled: bool,
     mpeg_ts_cache: Option<Arc<GrowingCache>>,
     hls_cache: Option<Arc<GrowingCache>>,
 }
 
 struct GrowingCache {
     path: PathBuf,
+    cancelled: Arc<AtomicBool>,
+    worker: Mutex<Option<thread::JoinHandle<()>>>,
     state: Mutex<GrowingCacheState>,
     ready: Condvar,
 }
@@ -152,6 +177,8 @@ impl GrowingCache {
     fn new(path: PathBuf) -> Self {
         Self {
             path,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            worker: Mutex::new(None),
             state: Mutex::new(GrowingCacheState {
                 available_len: 0,
                 complete: false,
@@ -200,22 +227,50 @@ impl GrowingCache {
     }
 
     fn mark_cancelled(&self) {
+        self.cancelled.store(true, Ordering::Release);
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.cancelled = true;
         self.ready.notify_all();
     }
+
+    fn join_worker(&self) {
+        let worker = lock_or_recover(&self.worker).take();
+        if let Some(worker) = worker {
+            let _ = worker.join();
+        }
+    }
+
+    fn check_cancelled(&self, request: &OpenRequest) -> Result<(), RelayError> {
+        if self.cancelled.load(Ordering::Acquire) {
+            Err(cancelled_error(request))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn cancelled_error(request: &OpenRequest) -> RelayError {
+    relay_error(
+        "host_input_cancelled",
+        499,
+        "Host-prepared DASH input was cancelled.",
+        request.base_details(),
+    )
 }
 
 impl SessionCache {
     fn cancel(&self) {
         let caches = {
-            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.cancelled = true;
             [state.mpeg_ts_cache.clone(), state.hls_cache.clone()]
         };
-        caches
-            .into_iter()
-            .flatten()
-            .for_each(|cache| cache.mark_cancelled());
+        for cache in caches.iter().flatten() {
+            cache.mark_cancelled();
+        }
+        for cache in caches.into_iter().flatten() {
+            cache.join_worker();
+        }
     }
 }
 
@@ -245,6 +300,7 @@ enum NativeReadOutcome {
 
 struct NativeStreamEntry {
     stream: NativeStream,
+    cancellation: Option<Arc<GrowingCache>>,
     last_access: Instant,
 }
 
@@ -252,6 +308,7 @@ impl NativeStreamEntry {
     fn new(stream: NativeStream) -> Self {
         Self {
             stream,
+            cancellation: None,
             last_access: Instant::now(),
         }
     }
@@ -266,10 +323,13 @@ impl NativeStreamEntry {
         stall_timeout: Duration,
     ) -> NativeReadOutcome {
         self.last_access = Instant::now();
+        if self.is_cancelled() {
+            return NativeReadOutcome::Cancelled;
+        }
         if buffer.is_empty() {
             return NativeReadOutcome::Bytes(0);
         }
-        match &mut self.stream {
+        let outcome = match &mut self.stream {
             NativeStream::Bytes(cursor) => read_static_stream(cursor, buffer),
             NativeStream::File(file) => read_static_stream(file, buffer),
             NativeStream::LimitedFile { file, remaining } => {
@@ -307,7 +367,18 @@ impl NativeStreamEntry {
                 buffer,
                 stall_timeout,
             ),
+        };
+        if self.is_cancelled() {
+            NativeReadOutcome::Cancelled
+        } else {
+            outcome
         }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|cache| cache.cancelled.load(Ordering::Acquire))
     }
 }
 
@@ -514,6 +585,9 @@ fn read_growing_file_with_timeout(
     buffer: &mut [u8],
     stall_timeout: Duration,
 ) -> NativeReadOutcome {
+    if cache.cancelled.load(Ordering::Acquire) {
+        return NativeReadOutcome::Cancelled;
+    }
     if buffer.is_empty() || remaining.as_ref().is_some_and(|remaining| *remaining == 0) {
         return NativeReadOutcome::Complete;
     }
@@ -524,6 +598,9 @@ fn read_growing_file_with_timeout(
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        if state.cancelled {
+            return NativeReadOutcome::Cancelled;
+        }
         let readable_end = remaining
             .map(|remaining| position.saturating_add(remaining))
             .map(|end| end.min(state.available_len))
@@ -531,6 +608,7 @@ fn read_growing_file_with_timeout(
         if *position < readable_end {
             let max_read = (readable_end - *position) as usize;
             let max_read = max_read.min(buffer.len());
+            drop(state);
             if let Err(error) = file.seek(SeekFrom::Start(*position)) {
                 return native_read_failure(
                     "relay_stream_read_failed",
@@ -538,9 +616,14 @@ fn read_growing_file_with_timeout(
                     Some(error),
                 );
             }
-            drop(state);
+            if cache.cancelled.load(Ordering::Acquire) {
+                return NativeReadOutcome::Cancelled;
+            }
             match file.read(&mut buffer[..max_read]) {
                 Ok(read) if read > 0 => {
+                    if cache.cancelled.load(Ordering::Acquire) {
+                        return NativeReadOutcome::Cancelled;
+                    }
                     *position += read as u64;
                     if let Some(remaining_bytes) = remaining.as_mut() {
                         *remaining_bytes = remaining_bytes.saturating_sub(read as u64);
@@ -604,6 +687,31 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_external_
         });
         output
     })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_reserveSession(
+    mut unowned_env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    session_id: JString<'_>,
+) -> jlong {
+    run_jni_entry(&mut unowned_env, |unowned_env| {
+        let mut handle = 0;
+        let _ = unowned_env.with_env(|env| -> JniResult<()> {
+            handle = reserve_session(session_id.try_to_string(env)?.to_string());
+            Ok(())
+        });
+        handle
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_external_internal_relay_ffmpeg_VesperRelayFfmpegNative_retireSession(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) {
+    retire_session(handle);
 }
 
 #[unsafe(no_mangle)]
@@ -846,11 +954,8 @@ pub extern "system" fn Java_io_github_umbrella22_vesper_player_android_external_
 ) {
     let _ = unowned_env.with_env(|env| -> JniResult<()> {
         let session_id = session_id.try_to_string(env)?.to_string();
-        if let Some(cache) = sessions()
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .remove(&session_id)
-        {
+        let removed = lock_or_recover(sessions()).remove(&session_id);
+        if let Some(cache) = removed {
             cache.cache.cancel();
             let _ = fs::remove_dir_all(&cache.cache.root_dir);
         }
@@ -1043,22 +1148,113 @@ fn initialize_ffmpeg() -> Result<(), RelayError> {
     })
 }
 
-fn session_cache(request: &OpenRequest) -> Result<Arc<SessionCache>, RelayError> {
+struct NativeSessionLease {
+    session_id: String,
+    cache: Arc<SessionCache>,
+    created: Instant,
+}
+
+fn session_leases() -> &'static Mutex<HandleRegistry<NativeSessionLease>> {
+    static LEASES: OnceLock<Mutex<HandleRegistry<NativeSessionLease>>> = OnceLock::new();
+    LEASES.get_or_init(|| Mutex::new(HandleRegistry::default()))
+}
+
+fn reserve_session(session_id: String) -> i64 {
     cleanup_stale_caches_once();
-
-    let mut guard = sessions().lock().unwrap_or_else(|error| error.into_inner());
-    if let Some(existing) = guard.get_mut(&request.session_id) {
-        return Ok(existing.touch());
+    static NEXT_ROOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let (cache, evicted) = {
+        let mut registry = lock_or_recover(sessions());
+        let result = if let Some(entry) = registry.get_mut(&session_id) {
+            (entry.touch(), Vec::new())
+        } else {
+            let root_dir = relay_cache_root().join(format!(
+                "{}-{}-{}",
+                safe_file_component(&session_id),
+                std::process::id(),
+                NEXT_ROOT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let cache = Arc::new(SessionCache::new(root_dir));
+            let evicted = insert_session_cache(&mut registry, session_id.clone(), cache.clone());
+            (cache, evicted)
+        };
+        // Serialize acquisition with the last release and canonical removal.
+        result.0.acquire_lease();
+        result
+    };
+    let (handle, retired) = {
+        let mut leases = lock_or_recover(session_leases());
+        let handle = leases.insert(NativeSessionLease {
+            session_id: session_id.clone(),
+            cache: cache.clone(),
+            created: Instant::now(),
+        });
+        let mut retired = Vec::new();
+        while leases.len() > MAX_SESSION_CACHES {
+            let Some(oldest) = leases.oldest_handle_by_key(|lease| lease.created) else {
+                break;
+            };
+            if let Some(lease) = leases.remove(oldest) {
+                retired.push(lease);
+            }
+        }
+        (handle, retired)
+    };
+    for lease in retired {
+        release_session_lease(lease);
     }
+    for cache in evicted {
+        cache.cancel();
+        let _ = fs::remove_dir_all(&cache.root_dir);
+    }
+    if handle == 0 {
+        release_session_lease(NativeSessionLease {
+            session_id,
+            cache,
+            created: Instant::now(),
+        });
+    }
+    handle
+}
 
-    let root_dir = relay_cache_root().join(safe_file_component(&request.session_id));
-    // Drop the registry lock before performing blocking filesystem I/O
-    // (AGENTS.md: do not hold a mutex/global registry lock while performing
-    // blocking I/O). We re-acquire the registry lock only to insert the newly
-    // built cache; another opener racing us may create a duplicate directory,
-    // which is harmless because the directory is per-session-id and idempotent.
-    drop(guard);
-    fs::create_dir_all(&root_dir).map_err(|error| {
+fn retire_session(handle: i64) {
+    let lease = lock_or_recover(session_leases()).remove(handle);
+    if let Some(lease) = lease {
+        release_session_lease(lease);
+    }
+}
+
+fn release_session_lease(lease: NativeSessionLease) {
+    {
+        let mut registry = lock_or_recover(sessions());
+        if !lease.cache.release_lease() {
+            return;
+        }
+        if registry
+            .get(&lease.session_id)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.cache, &lease.cache))
+        {
+            registry.remove(&lease.session_id);
+        }
+    }
+    lease.cache.cancel();
+    let _ = fs::remove_dir_all(&lease.cache.root_dir);
+}
+
+fn session_cache(request: &OpenRequest) -> Result<Arc<SessionCache>, RelayError> {
+    // A generation-checked lease is reserved before Kotlin starts preparing
+    // inputs. Invalidating it cannot be undone by a late open or mkdir.
+    let cache = {
+        let leases = lock_or_recover(session_leases());
+        let lease = leases
+            .get(request.session_handle)
+            .filter(|lease| lease.session_id == request.session_id)
+            .ok_or_else(|| cancelled_error(request))?;
+        lease.cache.clone()
+    };
+    if lock_or_recover(&cache.state).cancelled {
+        return Err(cancelled_error(request));
+    }
+    fs::create_dir_all(&cache.root_dir).map_err(|error| {
         relay_error(
             "ffmpeg_open_failed",
             503,
@@ -1069,18 +1265,9 @@ fn session_cache(request: &OpenRequest) -> Result<Arc<SessionCache>, RelayError>
                 .chain([("ioError".to_owned(), error.to_string())]),
         )
     })?;
-
-    let cache = Arc::new(SessionCache {
-        root_dir,
-        state: Mutex::new(SessionState::default()),
-    });
-    let mut guard = sessions().lock().unwrap_or_else(|error| error.into_inner());
-    let evicted_roots = insert_session_cache(&mut guard, request.session_id.clone(), cache.clone());
-    drop(guard);
-    // Drop the registry lock before performing blocking filesystem I/O
-    // (AGENTS.md: no blocking I/O under a global registry lock).
-    for root_dir in evicted_roots {
-        let _ = fs::remove_dir_all(&root_dir);
+    if lock_or_recover(&cache.state).cancelled {
+        let _ = fs::remove_dir_all(&cache.root_dir);
+        return Err(cancelled_error(request));
     }
     Ok(cache)
 }
@@ -1090,6 +1277,9 @@ fn ensure_mpeg_ts_cache(
     root_dir: &Path,
     state: &mut SessionState,
 ) -> Result<Arc<GrowingCache>, RelayError> {
+    if state.cancelled {
+        return Err(cancelled_error(request));
+    }
     if let Some(cache) = state.mpeg_ts_cache.as_ref() {
         return Ok(cache.clone());
     }
@@ -1107,12 +1297,14 @@ fn ensure_hls_cache(
     root_dir: &Path,
     state: &mut SessionState,
 ) -> Result<Arc<GrowingCache>, RelayError> {
+    if state.cancelled {
+        return Err(cancelled_error(request));
+    }
     if let Some(cache) = state.hls_cache.as_ref() {
         return Ok(cache.clone());
     }
 
     ensure_muxer("hls", request)?;
-    clean_hls_outputs(root_dir);
     let output_path = root_dir.join("playlist.m3u8");
     let cache = Arc::new(GrowingCache::new(output_path));
     spawn_remux_worker(request.clone(), cache.clone(), OutputKind::Hls)?;
@@ -1126,16 +1318,23 @@ fn spawn_remux_worker(
     kind: OutputKind,
 ) -> Result<(), RelayError> {
     let request_for_error = request.clone();
-    thread::Builder::new()
+    let worker_cache = cache.clone();
+    let worker = thread::Builder::new()
         .name("vesper-relay-ffmpeg-remux".to_owned())
         .spawn(move || {
+            let cache = worker_cache;
+            if matches!(kind, OutputKind::Hls)
+                && !cache.cancelled.load(Ordering::Acquire)
+                && let Some(root) = cache.path.parent()
+            {
+                clean_hls_outputs(root);
+            }
             let result = remux_to_file(&request, &cache.path, kind, Some(cache.as_ref()));
             match result {
                 Ok(()) => cache.mark_complete(),
                 Err(error) => cache.mark_error(error),
             }
         })
-        .map(|_| ())
         .map_err(|error| {
             relay_error(
                 "ffmpeg_open_failed",
@@ -1146,7 +1345,9 @@ fn spawn_remux_worker(
                     .into_iter()
                     .chain([("ioError".to_owned(), error.to_string())]),
             )
-        })
+        })?;
+    *lock_or_recover(&cache.worker) = Some(worker);
+    Ok(())
 }
 
 fn relay_cache_root() -> PathBuf {
@@ -1160,8 +1361,15 @@ fn cleanup_stale_caches_once() {
             .lock()
             .map(|sessions| {
                 sessions
-                    .keys()
-                    .map(|session_id| safe_file_component(session_id))
+                    .values()
+                    .filter_map(|entry| {
+                        entry
+                            .cache
+                            .root_dir
+                            .file_name()?
+                            .to_str()
+                            .map(str::to_owned)
+                    })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -1241,6 +1449,10 @@ fn remux_to_file(
     kind: OutputKind,
     progress_cache: Option<&GrowingCache>,
 ) -> Result<(), RelayError> {
+    let cancellation = progress_cache
+        .map(|cache| cache.cancelled.clone())
+        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+    check_worker_cancelled(request, &cancellation)?;
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             relay_error(
@@ -1254,6 +1466,7 @@ fn remux_to_file(
             )
         })?;
     }
+    check_worker_cancelled(request, &cancellation)?;
     let _ = fs::remove_file(output_path);
 
     let output_path_string = output_path.to_string_lossy().into_owned();
@@ -1274,7 +1487,8 @@ fn remux_to_file(
     })?;
     enable_incremental_output(&mut output_context);
 
-    let mut inputs = open_prepared_inputs(request)?;
+    let mut inputs = open_prepared_inputs(request, cancellation.clone())?;
+    check_worker_cancelled(request, &cancellation)?;
     let mut output_stream_index = 0;
 
     for input in &mut inputs {
@@ -1327,6 +1541,7 @@ fn remux_to_file(
     if let Some(first_input) = inputs.first() {
         output_context.set_metadata(first_input.context.metadata().to_owned());
     }
+    check_worker_cancelled(request, &cancellation)?;
     match kind {
         OutputKind::MpegTs => output_context.write_header().map(|_| ()),
         OutputKind::Hls => {
@@ -1371,10 +1586,11 @@ fn remux_to_file(
         .collect::<Vec<_>>();
 
     for input in &mut inputs {
-        read_next_pending_packet(request, input)?;
+        read_next_pending_packet(request, input, &cancellation)?;
     }
 
     while let Some(input_index) = select_next_input(&inputs) {
+        check_worker_cancelled(request, &cancellation)?;
         let pending = inputs[input_index].pending.take().ok_or_else(|| {
             relay_error(
                 "ffmpeg_open_failed",
@@ -1394,9 +1610,10 @@ fn remux_to_file(
         if let Some(cache) = progress_cache {
             cache.refresh_available_len();
         }
-        read_next_pending_packet(request, &mut inputs[input_index])?;
+        read_next_pending_packet(request, &mut inputs[input_index], &cancellation)?;
     }
 
+    check_worker_cancelled(request, &cancellation)?;
     output_context.write_trailer().map_err(|error| {
         relay_error(
             "ffmpeg_open_failed",
@@ -1412,13 +1629,112 @@ fn remux_to_file(
     if let Some(cache) = progress_cache {
         cache.refresh_available_len();
     }
-    Ok(())
+    check_worker_cancelled(request, &cancellation)
 }
 
-fn open_prepared_inputs(request: &OpenRequest) -> Result<Vec<PreparedInput>, RelayError> {
+fn check_worker_cancelled(
+    request: &OpenRequest,
+    cancellation: &AtomicBool,
+) -> Result<(), RelayError> {
+    if cancellation.load(Ordering::Acquire) {
+        Err(cancelled_error(request))
+    } else {
+        Ok(())
+    }
+}
+
+fn open_prepared_track(
+    track: &PreparedTrack,
+    cancellation: Arc<AtomicBool>,
+) -> Result<format::context::Input, ffmpeg::Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+        if fs::metadata(&track.pipe_path)
+            .map(|metadata| metadata.file_type().is_fifo())
+            .unwrap_or(false)
+        {
+            // POSIX FIFO open/read may block inside a syscall that FFmpeg cannot
+            // interrupt. Nonblocking OS I/O plus a blocking, cancellable AVIO
+            // adapter keeps each rendezvous and refill bounded by the poll tick.
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&track.pipe_path)
+                .map_err(|error| ffmpeg::Error::Other {
+                    errno: error.raw_os_error().unwrap_or(libc::EIO),
+                })?;
+            let reader = CancellableFifoReader {
+                file,
+                cancellation: cancellation.clone(),
+                connected: false,
+                last_progress: Instant::now(),
+            };
+            let io = format::context::StreamIo::from_read(reader)?;
+            return format::input_from_stream_with_interrupt(
+                io,
+                Some(&track.pipe_path),
+                None,
+                move || cancellation.load(Ordering::Acquire),
+            );
+        }
+    }
+    format::input_with_interrupt(&track.pipe_path, move || {
+        cancellation.load(Ordering::Acquire)
+    })
+}
+
+#[cfg(unix)]
+struct CancellableFifoReader {
+    file: File,
+    cancellation: Arc<AtomicBool>,
+    connected: bool,
+    last_progress: Instant,
+}
+
+#[cfg(unix)]
+impl Read for CancellableFifoReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self.cancellation.load(Ordering::Acquire) {
+                // StreamIo polls the mirrored FFmpeg callback before retrying EINTR.
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            match self.file.read(buffer) {
+                Ok(0) if self.connected => return Ok(0),
+                Ok(0) => {} // No writer has rendezvoused yet; this is not EOF.
+                Ok(read) => {
+                    self.connected = true;
+                    self.last_progress = Instant::now();
+                    return Ok(read);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    self.connected = true;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
+            if self.last_progress.elapsed() >= DEFAULT_REMUX_TIMEOUT {
+                return Err(std::io::ErrorKind::TimedOut.into());
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+}
+
+fn open_prepared_inputs(
+    request: &OpenRequest,
+    cancellation: Arc<AtomicBool>,
+) -> Result<Vec<PreparedInput>, RelayError> {
     let mut inputs = Vec::with_capacity(request.tracks.len());
     for track in &request.tracks {
-        let input_context = format::input(&track.pipe_path).map_err(|error| {
+        check_worker_cancelled(request, &cancellation)?;
+        let input_result = open_prepared_track(track, cancellation.clone());
+        check_worker_cancelled(request, &cancellation)?;
+        let input_context = input_result.map_err(|error| {
             relay_error(
                 "ffmpeg_open_failed",
                 503,
@@ -1445,14 +1761,19 @@ fn open_prepared_inputs(request: &OpenRequest) -> Result<Vec<PreparedInput>, Rel
 fn read_next_pending_packet(
     request: &OpenRequest,
     input: &mut PreparedInput,
+    cancellation: &AtomicBool,
 ) -> Result<(), RelayError> {
+    check_worker_cancelled(request, cancellation)?;
     if input.eof {
         return Ok(());
     }
 
     loop {
+        check_worker_cancelled(request, cancellation)?;
         let mut packet = ffmpeg::Packet::empty();
-        match packet.read(&mut input.context) {
+        let result = packet.read(&mut input.context);
+        check_worker_cancelled(request, cancellation)?;
+        match result {
             Ok(()) => {
                 let input_stream_index = packet.stream();
                 if input_stream_index >= input.stream_mapping.len() {
@@ -1598,12 +1919,16 @@ fn open_growing_cache_file(
                 .chain([("ioError".to_owned(), error.to_string())]),
         )
     })?;
-    let handle = insert_native_stream(NativeStream::GrowingFile {
-        file,
+    let handle = insert_bound_native_stream(
+        NativeStream::GrowingFile {
+            file,
+            cache: cache.clone(),
+            position: 0,
+            remaining: None,
+        },
         cache,
-        position: 0,
-        remaining: None,
-    })?;
+        request,
+    )?;
 
     Ok(OpenedStream {
         handle,
@@ -1663,12 +1988,16 @@ fn open_growing_cache_range(
         "bytes {}-{}/{}",
         resolved.range.start, resolved.range.end, total
     );
-    let handle = insert_native_stream(NativeStream::GrowingFile {
-        file,
+    let handle = insert_bound_native_stream(
+        NativeStream::GrowingFile {
+            file,
+            cache: cache.clone(),
+            position: resolved.range.start,
+            remaining: Some(length),
+        },
         cache,
-        position: resolved.range.start,
-        remaining: Some(length),
-    })?;
+        request,
+    )?;
 
     Ok(OpenedStream {
         handle,
@@ -1703,6 +2032,9 @@ fn wait_for_initial_cache_bytes(
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        if state.cancelled {
+            return Err(cancelled_error(request));
+        }
         if let Some(error) = state.error.clone() {
             return Err(error);
         }
@@ -1742,6 +2074,9 @@ fn wait_for_cache_range(
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        if state.cancelled {
+            return Err(cancelled_error(request));
+        }
         if let Some(error) = state.error.clone() {
             return Err(error);
         }
@@ -1825,13 +2160,14 @@ fn open_hls_cache_resource(
             Vec::new(),
             complete,
             available_len,
+            cache,
         );
     }
 
     let segment_name = safe_file_component(resource);
     let segment_path = root_dir.join(&segment_name);
     wait_for_hls_segment(request, &cache, &segment_path, &segment_name)?;
-    open_cached_file(request, segment_path, "video/mp2t".to_owned())
+    open_cached_file(request, segment_path, "video/mp2t".to_owned(), cache)
 }
 
 fn wait_for_hls_playlist_snapshot(
@@ -1847,6 +2183,9 @@ fn wait_for_hls_playlist_snapshot(
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        if state.cancelled {
+            return Err(cancelled_error(request));
+        }
         if let Some(error) = state.error.clone() {
             return Err(error);
         }
@@ -1865,6 +2204,7 @@ fn wait_for_hls_playlist_snapshot(
                 )
             })?
         {
+            cache.check_cancelled(request)?;
             return Ok((playlist, available_len, complete));
         }
 
@@ -1872,6 +2212,9 @@ fn wait_for_hls_playlist_snapshot(
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        if state.cancelled {
+            return Err(cancelled_error(request));
+        }
         if let Some(error) = state.error.clone() {
             return Err(error);
         }
@@ -1943,16 +2286,21 @@ fn wait_for_hls_segment(
 ) -> Result<(), RelayError> {
     let deadline = Instant::now() + HLS_SEGMENT_WAIT;
     loop {
+        cache.check_cancelled(request)?;
         if fs::metadata(segment_path)
             .map(|metadata| metadata.len() > 0)
             .unwrap_or(false)
         {
+            cache.check_cancelled(request)?;
             return Ok(());
         }
         let mut state = cache
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        if state.cancelled {
+            return Err(cancelled_error(request));
+        }
         if let Some(error) = state.error.clone() {
             return Err(error);
         }
@@ -1983,9 +2331,12 @@ fn open_bytes_stream(
     headers: Vec<(String, String)>,
     complete: bool,
     available_len: u64,
+    cache: Arc<GrowingCache>,
 ) -> Result<OpenedStream, RelayError> {
+    cache.check_cancelled(request)?;
     let content_length = bytes.len() as i64;
-    let handle = insert_native_stream(NativeStream::Bytes(Cursor::new(bytes)))?;
+    let handle =
+        insert_bound_native_stream(NativeStream::Bytes(Cursor::new(bytes)), cache, request)?;
     Ok(OpenedStream {
         handle,
         status: 200,
@@ -2016,10 +2367,30 @@ fn response_headers(
     if request.debug_diagnostics {
         headers.push((
             "X-Vesper-FFmpeg-Configure-Metadata".to_owned(),
-            configure_metadata().to_owned(),
+            encode_configure_metadata_header(configure_metadata()),
+        ));
+        headers.push((
+            "X-Vesper-FFmpeg-Configure-Metadata-Encoding".to_owned(),
+            "percent-encoded-utf8".to_owned(),
         ));
     }
     headers
+}
+
+// Encode UTF-8 bytes for one HTTP field without changing the metadata contents.
+fn encode_configure_metadata_header(metadata: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(metadata.len());
+    for byte in metadata.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
 }
 
 fn streaming_details(
@@ -2050,7 +2421,9 @@ fn open_cached_file(
     request: &OpenRequest,
     path: PathBuf,
     content_type: String,
+    cache: Arc<GrowingCache>,
 ) -> Result<OpenedStream, RelayError> {
+    cache.check_cancelled(request)?;
     let total = fs::metadata(&path)
         .map_err(|error| {
             relay_error(
@@ -2121,7 +2494,8 @@ fn open_cached_file(
         (200, total as i64, Vec::new(), NativeStream::File(file))
     };
 
-    let handle = insert_native_stream(stream)?;
+    cache.check_cancelled(request)?;
+    let handle = insert_bound_native_stream(stream, cache, request)?;
 
     Ok(OpenedStream {
         handle,
@@ -2250,37 +2624,55 @@ fn insert_session_cache(
     sessions: &mut HashMap<String, SessionCacheEntry>,
     session_id: String,
     cache: Arc<SessionCache>,
-) -> Vec<PathBuf> {
+) -> Vec<Arc<SessionCache>> {
     sessions.insert(session_id, SessionCacheEntry::new(cache));
     evict_oldest_session_caches(sessions)
 }
 
 /// Removes oldest session cache entries while the registry is over capacity and
-/// returns their root directories. Callers MUST drop the registry lock before
-/// invoking `fs::remove_dir_all` on the returned paths (AGENTS.md: no blocking
-/// I/O under a global registry lock).
-fn evict_oldest_session_caches(sessions: &mut HashMap<String, SessionCacheEntry>) -> Vec<PathBuf> {
+/// returns their lifetimes. Callers cancel and join their workers and delete
+/// their directories after releasing the registry lock.
+fn evict_oldest_session_caches(
+    sessions: &mut HashMap<String, SessionCacheEntry>,
+) -> Vec<Arc<SessionCache>> {
     let mut evicted_roots = Vec::new();
     while sessions.len() > MAX_SESSION_CACHES {
         let Some(oldest_key) = sessions
             .iter()
+            .filter(|(_, entry)| entry.cache.lease_count.load(Ordering::Acquire) == 0)
             .min_by_key(|(_, entry)| entry.last_access)
             .map(|(session_id, _)| session_id.clone())
         else {
             return evicted_roots;
         };
         if let Some(entry) = sessions.remove(&oldest_key) {
-            // Collected for the caller to `fs::remove_dir_all` after releasing
-            // the registry lock; do NOT block on I/O here.
-            evicted_roots.push(entry.cache.root_dir.clone());
+            // Cancellation, joining, and filesystem cleanup happen at the caller.
+            evicted_roots.push(entry.cache);
         }
     }
     evicted_roots
 }
 
-fn insert_native_stream(stream: NativeStream) -> Result<i64, RelayError> {
+fn insert_bound_native_stream(
+    stream: NativeStream,
+    cache: Arc<GrowingCache>,
+    request: &OpenRequest,
+) -> Result<i64, RelayError> {
+    cache.check_cancelled(request)?;
+    let mut entry = NativeStreamEntry::new(stream);
+    entry.cancellation = Some(cache.clone());
+    let handle = insert_stream_entry(entry)?;
+    if let Err(error) = cache.check_cancelled(request) {
+        let removed = lock_or_recover(streams()).remove(handle);
+        drop(removed);
+        return Err(error);
+    }
+    Ok(handle)
+}
+
+fn insert_stream_entry(entry: NativeStreamEntry) -> Result<i64, RelayError> {
     let mut streams = lock_or_recover(streams());
-    let handle = streams.insert(Arc::new(Mutex::new(NativeStreamEntry::new(stream))));
+    let handle = streams.insert(Arc::new(Mutex::new(entry)));
     if handle == 0 {
         return Err(relay_error(
             "ffmpeg_open_failed",
@@ -2464,11 +2856,16 @@ fn ffmpeg_error_text(code: i32) -> String {
 }
 
 #[cfg(test)]
+#[path = "cancellation_regressions.rs"]
+mod cancellation_regressions;
+
+#[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::io::Cursor;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
@@ -2480,8 +2877,110 @@ mod tests {
         cleanup_stale_caches_in, evict_oldest_native_streams, evict_oldest_session_caches,
         hls_playlist_snapshot, insert_native_stream_entry, lock_or_recover,
         open_growing_cache_file, open_growing_cache_range, packet_sort_timestamp_us,
-        prewarm_stream, resolve_range, safe_file_component, sessions, streams, validate_request,
+        prewarm_stream, reserve_session, resolve_range, retire_session, safe_file_component,
+        session_cache, session_leases, sessions, streams, validate_request,
     };
+
+    #[test]
+    fn configure_metadata_header_encodes_multiline_utf8_without_loss() {
+        let metadata = "flags=100%\r\nconfigure=\té 中文\n";
+        let encoded = super::encode_configure_metadata_header(metadata);
+
+        assert_eq!(
+            encoded,
+            "flags%3D100%25%0D%0Aconfigure%3D%09%C3%A9%20%E4%B8%AD%E6%96%87%0A"
+        );
+        assert!(encoded.bytes().all(|byte| byte.is_ascii_graphic()));
+        assert_eq!(decode_configure_metadata_header(&encoded), metadata);
+
+        for (metadata, expected) in [
+            ("", ""),
+            ("stable-._~AZaz09", "stable-._~AZaz09"),
+            ("already%0Aencoded", "already%250Aencoded"),
+        ] {
+            let encoded = super::encode_configure_metadata_header(metadata);
+            assert_eq!(encoded, expected);
+            assert_eq!(decode_configure_metadata_header(&encoded), metadata);
+        }
+    }
+
+    #[test]
+    fn configure_metadata_header_debug_response_declares_encoding_and_preserves_other_fields() {
+        let mut request = test_request(None);
+        request.debug_diagnostics = true;
+        let original = vec![("Content-Range".to_owned(), "bytes 0-5/128".to_owned())];
+
+        let headers = super::response_headers(original.clone(), &request, false, 128);
+
+        assert_eq!(&headers[..original.len()], original.as_slice());
+        assert_eq!(
+            headers
+                .iter()
+                .filter(|(key, _)| key == "X-Vesper-FFmpeg-Configure-Metadata")
+                .count(),
+            1
+        );
+        let fields: HashMap<_, _> = headers.into_iter().collect();
+        assert_eq!(
+            fields["X-Vesper-FFmpeg-Configure-Metadata-Encoding"],
+            "percent-encoded-utf8"
+        );
+        let encoded = &fields["X-Vesper-FFmpeg-Configure-Metadata"];
+        assert!(encoded.bytes().all(|byte| byte.is_ascii_graphic()));
+        assert_eq!(
+            decode_configure_metadata_header(encoded),
+            super::configure_metadata()
+        );
+        assert_eq!(
+            fields["X-Vesper-FFmpeg-Profile-Hash"],
+            super::profile_hash()
+        );
+        assert_eq!(fields["X-Vesper-Remux-Cache-State"], "active");
+        assert_eq!(fields["X-Vesper-Remux-Available-Length"], "128");
+
+        let headers = super::response_headers(original.clone(), &test_request(None), true, 128);
+        assert_eq!(&headers[..original.len()], original.as_slice());
+        assert!(!headers.iter().any(|(key, _)| {
+            key == "X-Vesper-FFmpeg-Configure-Metadata"
+                || key == "X-Vesper-FFmpeg-Configure-Metadata-Encoding"
+        }));
+    }
+
+    #[test]
+    fn configure_metadata_header_keeps_diagnostic_details_raw() {
+        let error = super::relay_error(
+            "ffmpeg_open_failed",
+            500,
+            "fixture",
+            [] as [(String, String); 0],
+        );
+        let details: HashMap<_, _> = error.details.into_iter().collect();
+        if super::configure_metadata().is_empty() {
+            assert!(!details.contains_key("ffmpegConfigureMetadata"));
+        } else {
+            assert_eq!(
+                details["ffmpegConfigureMetadata"],
+                super::configure_metadata()
+            );
+        }
+    }
+
+    fn decode_configure_metadata_header(encoded: &str) -> String {
+        let mut decoded = Vec::new();
+        let mut index = 0;
+        while index < encoded.len() {
+            if encoded.as_bytes()[index] == b'%' {
+                decoded.push(
+                    u8::from_str_radix(&encoded[index + 1..index + 3], 16).expect("hex byte"),
+                );
+                index += 3;
+            } else {
+                decoded.push(encoded.as_bytes()[index]);
+                index += 1;
+            }
+        }
+        String::from_utf8(decoded).expect("original UTF-8 metadata")
+    }
 
     #[test]
     fn jni_read_errors_and_panics_are_failures_not_end_of_stream() {
@@ -2574,6 +3073,7 @@ mod tests {
                     cache: Arc::new(SessionCache {
                         root_dir,
                         state: Default::default(),
+                        lease_count: AtomicUsize::new(0),
                     }),
                     last_access: Instant::now()
                         + Duration::from_millis(u64::try_from(index).expect("index")),
@@ -2585,8 +3085,9 @@ mod tests {
         // The eviction helper collects evicted cache directories without removing
         // them from disk; the registry lock must be released before the host
         // performs the blocking `fs::remove_dir_all` calls.
-        for evicted_root in evicted_roots {
-            let _ = fs::remove_dir_all(&evicted_root);
+        for evicted in evicted_roots {
+            evicted.cancel();
+            let _ = fs::remove_dir_all(&evicted.root_dir);
         }
 
         assert_eq!(sessions.len(), MAX_SESSION_CACHES);
@@ -2594,6 +3095,38 @@ mod tests {
         assert!(!root.join("session-0").exists());
         assert!(root.join(format!("session-{MAX_SESSION_CACHES}")).exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shared_session_leases_keep_the_cache_alive_until_the_last_retire() {
+        let session_id = format!("shared-{}", unique_temp_dir("lease").display());
+        let first_handle = reserve_session(session_id.clone());
+        let second_handle = reserve_session(session_id.clone());
+        assert_ne!(first_handle, second_handle);
+        let first_cache = {
+            let leases = lock_or_recover(session_leases());
+            leases.get(first_handle).expect("first lease").cache.clone()
+        };
+        let second_cache = {
+            let leases = lock_or_recover(session_leases());
+            leases
+                .get(second_handle)
+                .expect("second lease")
+                .cache
+                .clone()
+        };
+        assert!(Arc::ptr_eq(&first_cache, &second_cache));
+
+        retire_session(first_handle);
+        assert!(!lock_or_recover(&first_cache.state).cancelled);
+
+        let mut request = test_request(None);
+        request.session_id = session_id;
+        request.session_handle = second_handle;
+        assert!(session_cache(&request).is_ok());
+
+        retire_session(second_handle);
+        assert!(lock_or_recover(&first_cache.state).cancelled);
     }
 
     #[test]
@@ -2951,13 +3484,16 @@ mod tests {
 
     #[test]
     fn prewarm_stream_validates_request() {
-        let request = test_request(None);
+        let mut request = test_request(None);
 
+        request.session_handle = super::reserve_session(request.session_id.clone());
         prewarm_stream(&request).expect("prewarm");
 
         let session_key = request.session_id.clone();
         let sessions = sessions().lock().unwrap_or_else(|error| error.into_inner());
         assert!(sessions.contains_key(&session_key));
+        drop(sessions);
+        super::retire_session(request.session_handle);
     }
 
     #[test]
@@ -2975,6 +3511,7 @@ mod tests {
     fn test_request(range: Option<RangeRequest>) -> OpenRequest {
         OpenRequest {
             session_id: "session".to_owned(),
+            session_handle: 0,
             input_mode: Some(HOST_PREPARED_DASH_INPUT_MODE.to_owned()),
             tracks: vec![PreparedTrack {
                 kind: "video".to_owned(),

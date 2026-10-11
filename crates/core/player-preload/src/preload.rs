@@ -900,7 +900,10 @@ where
         Ok(None)
     }
 
-    /// Expires all non-terminal tasks whose time-to-live has elapsed.
+    /// Expires due tasks after their executor accepts cancellation.
+    ///
+    /// Rejected cancellation leaves the task active, retaining its budget and
+    /// deduplication key. A later expiration pass retries cancellation.
     pub fn expire_due_tasks(&mut self, now: Instant) {
         let mut expired_ids = self
             .tasks
@@ -919,8 +922,8 @@ where
                 .tasks
                 .get(&task_id)
                 .is_some_and(PreloadTaskRecord::is_active);
-            if should_cancel {
-                let _ = self.executor.cancel(task_id);
+            if should_cancel && self.executor.cancel(task_id).is_err() {
+                continue;
             }
 
             if let Some(record) = self.tasks.get_mut(&task_id) {
@@ -1051,9 +1054,12 @@ impl PreloadBudgetUsage {
         self.active_tasks < budget.max_concurrent_tasks
             && self
                 .memory_bytes
-                .saturating_add(config.expected_memory_bytes)
-                <= budget.max_memory_bytes
-            && self.disk_bytes.saturating_add(config.expected_disk_bytes) <= budget.max_disk_bytes
+                .checked_add(config.expected_memory_bytes)
+                .is_some_and(|total| total <= budget.max_memory_bytes)
+            && self
+                .disk_bytes
+                .checked_add(config.expected_disk_bytes)
+                .is_some_and(|total| total <= budget.max_disk_bytes)
     }
 }
 

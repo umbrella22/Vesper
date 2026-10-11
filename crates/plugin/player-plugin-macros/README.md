@@ -5,7 +5,9 @@ Rust Native plugin factory through Vesper's fixed `vesper_plugin_entry` symbol.
 
 Most plugin authors should not depend on this crate directly. The public
 `vesper-player-plugin` SDK re-exports the macro as `#[player_plugin::export]`
-and supplies the safe `Plugin` builder used by the factory.
+and supplies the safe `Plugin` builder used by the factory. Native EventHook and
+BenchmarkSink implementations use `PluginEventHook` and `PluginBenchmarkSink`;
+see the [author API migration guide](../../../lib/doc/plugin-author-api.md).
 
 ```rust
 use player_plugin::{Plugin, PluginBuildError};

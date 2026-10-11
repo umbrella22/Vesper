@@ -419,6 +419,7 @@ public final class VesperPlayerController: ObservableObject {
             guard let self else { return }
             let timelineOnlyUpdate = bridge.consumeTimelineOnlyUpdate()
             Task { @MainActor in
+                guard !self.isDisposed else { return }
                 self.pendingTimelineOnlyUpdate =
                     self.pendingTimelineOnlyUpdate || timelineOnlyUpdate
                 self.publishedUiState = bridge.publishedUiState
@@ -459,11 +460,16 @@ public final class VesperPlayerController: ObservableObject {
     }
 
     public func initialize() {
+        if let error = controllerDisposedError {
+            publishedLastError = error
+            return
+        }
         initializeImpl()
     }
 
     @_spi(VesperFlutter)
     public func initializeAsync() async throws {
+        if let error = controllerDisposedError { throw error }
         try await initializeAsyncImpl()
     }
 
@@ -506,14 +512,8 @@ public final class VesperPlayerController: ObservableObject {
     }
 
     public func selectSource(_ source: VesperPlayerSource) {
-        guard sequenceAttachment == nil else {
-            publishedLastError = VesperPlayerError(
-                message: "direct source selection is blocked while a playback sequence is attached",
-                code: .invalidState,
-                category: .playback,
-                retriable: false,
-                details: ["code": "sequence_attached_conflict"]
-            )
+        if let error = directSourceSelectionError {
+            publishedLastError = error
             return
         }
         cancelSourceActivation(reason: .superseded)
@@ -523,15 +523,7 @@ public final class VesperPlayerController: ObservableObject {
 
     /// Checked source-selection entry point for hosts that need typed conflict handling.
     public func selectSourceChecked(_ source: VesperPlayerSource) throws {
-        guard sequenceAttachment == nil else {
-            throw VesperPlayerError(
-                message: "direct source selection is blocked while a playback sequence is attached",
-                code: .invalidState,
-                category: .playback,
-                retriable: false,
-                details: ["code": "sequence_attached_conflict"]
-            )
-        }
+        if let error = directSourceSelectionError { throw error }
         cancelSourceActivation(reason: .superseded)
         activeSourceLease?.release(); activeSourceLease = nil
         selectSourceImpl(source)
@@ -541,15 +533,7 @@ public final class VesperPlayerController: ObservableObject {
     public func startSourceSelection(
         _ source: VesperPlayerSource
     ) throws -> Task<Void, Error> {
-        guard sequenceAttachment == nil else {
-            throw VesperPlayerError(
-                message: "direct source selection is blocked while a playback sequence is attached",
-                code: .invalidState,
-                category: .playback,
-                retriable: false,
-                details: ["code": "sequence_attached_conflict"]
-            )
-        }
+        if let error = directSourceSelectionError { throw error }
         cancelSourceActivation(reason: .superseded)
         activeSourceLease?.release(); activeSourceLease = nil
         return startSourceSelectionImpl(source)
@@ -557,26 +541,38 @@ public final class VesperPlayerController: ObservableObject {
 
     @_spi(VesperFlutter)
     public func selectSourceAsync(_ source: VesperPlayerSource) async throws {
-        guard sequenceAttachment == nil else {
-            throw VesperPlayerError(
-                message: "direct source selection is blocked while a playback sequence is attached",
-                code: .invalidState,
-                category: .playback,
-                retriable: false,
-                details: ["code": "sequence_attached_conflict"]
-            )
-        }
+        if let error = directSourceSelectionError { throw error }
         cancelSourceActivation(reason: .superseded)
         activeSourceLease?.release(); activeSourceLease = nil
         try await selectSourceAsyncImpl(source)
     }
 
+    private var controllerDisposedError: VesperPlayerError? {
+        guard isDisposed else { return nil }
+        return VesperPlayerError(
+            message: "player controller has been disposed",
+            code: .invalidState,
+            category: .playback,
+            retriable: false,
+            details: ["code": "controller_disposed"]
+        )
+    }
+
+    private var directSourceSelectionError: VesperPlayerError? {
+        if let error = controllerDisposedError { return error }
+        guard sequenceAttachment != nil else { return nil }
+        return VesperPlayerError(
+            message: "direct source selection is blocked while a playback sequence is attached",
+            code: .invalidState,
+            category: .playback,
+            retriable: false,
+            details: ["code": "sequence_attached_conflict"]
+        )
+    }
+
     internal func ensureStandaloneSourceActivation() throws {
         guard !isDisposed else { throw VesperSourceActivationError.disposed }
-        guard sequenceAttachment == nil else {
-            throw VesperPlayerError(message: "sequence_attached_conflict", code: .invalidState,
-                                    category: .playback, retriable: false, details: ["code": "sequence_attached_conflict"])
-        }
+        if let error = directSourceSelectionError { throw error }
     }
 
     internal func attachPlaybackSequence(_ attachment: VesperPlaybackSequenceAttachment) throws {
@@ -611,6 +607,7 @@ public final class VesperPlayerController: ObservableObject {
         _ attachment: VesperPlaybackSequenceAttachment,
         source: VesperPlayerSource
     ) throws {
+        if let error = controllerDisposedError { throw error }
         guard sequenceAttachment === attachment else {
             throw VesperPlayerError(
                 message: "sequence no longer owns the player controller",
@@ -899,16 +896,16 @@ public final class VesperPlayerController: ObservableObject {
 
     private func updateScreenSleepPolicy() {
         VesperScreenSleepCoordinator.setActive(
-            keepScreenOnDuringPlayback && publishedUiState.playbackState == .playing,
+            !isDisposed && keepScreenOnDuringPlayback && publishedUiState.playbackState == .playing,
             for: screenSleepToken
         )
     }
 }
 
-private final class VesperScreenSleepToken {}
+final class VesperScreenSleepToken {}
 
 @MainActor
-private enum VesperScreenSleepCoordinator {
+enum VesperScreenSleepCoordinator {
     private static var activeTokens: Set<ObjectIdentifier> = []
     private static var previousIdleTimerDisabled: Bool?
 
@@ -924,9 +921,10 @@ private enum VesperScreenSleepCoordinator {
             return
         }
 
-        activeTokens.remove(identifier)
-        guard activeTokens.isEmpty else { return }
-        UIApplication.shared.isIdleTimerDisabled = previousIdleTimerDisabled ?? false
+        guard activeTokens.remove(identifier) != nil, activeTokens.isEmpty else { return }
+        if let previousIdleTimerDisabled {
+            UIApplication.shared.isIdleTimerDisabled = previousIdleTimerDisabled
+        }
         previousIdleTimerDisabled = nil
     }
 

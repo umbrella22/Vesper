@@ -9,7 +9,7 @@ Use `VesperSourceSession` to register immutable sources and preload independentl
 of a controller. `controller.activate(handle, options)` suspends until native
 readiness and the requested initial seek/play state. Sequence items now reference
 handles; list changes and resolver responses never implicitly start playback.
-See the [source lifecycle and migration guide](../doc/source-lifecycle.md) and
+See the [source lifecycle contract](../doc/source-lifecycle.md) and
 [DASH startup cache contract](../doc/dash-startup-cache.md). The session memory
 budget owns startup preloading independently of player disk-cache settings.
 
@@ -254,6 +254,13 @@ new source declarations use `externalSubtitles`.
 
 External playback (`vesper-player-kit-external-playback`):
 
+Direct HLS remains available on compatible receivers. Raw HLS sources that require
+relay (for example, sources with request headers or forced proxying) return
+`unsupported_hls_relay`: the relay does not rewrite their playlists and child
+resources. Successfully adapted sources use their implemented adaptation route.
+Active relay tokens remain valid until source replacement or session termination;
+unclaimed registrations retain their bounded expiry policy.
+
 - `VesperExternalPlaybackController` — unified Cast/DLNA route discovery and playback control
 - `routes: StateFlow<List<VesperExternalPlaybackRoute>>` — route snapshots
 - `events: SharedFlow<VesperExternalPlaybackEvent>` — route, playback, and diagnostic events
@@ -445,7 +452,7 @@ local assets back into the SDK.
 
 The optional `vesper-player-kit-compose-ui` module exposes `VesperPlayerStageSkin`,
 semantic icon overrides, custom composable icon content, and reusable skinned
-action buttons. See the [skin contract and migration guide](../doc/stage-skins.md).
+action buttons. See the [Stage skin contract](../doc/stage-skins.md).
 Recompile UI consumers with the matching AAR after upgrading.
 
 ## Minimal Compose Usage
@@ -574,12 +581,35 @@ makes the host responsible for FFmpeg notices, corresponding source, configure
 flags, and LGPL relinking rights. The default Vesper `download-remux`,
 `relay-remux`, and `default` profiles validate no-network/no-OpenSSL builds; any
 overlay that enables GPL, nonfree, OpenSSL, or network capability must be
-reviewed before release. Android OpenSSL overlays default to the OpenSSL 3.5 LTS
-series, resolve the highest matching patch from `third_party/_cache` first, and
-rebuild stale local prebuilts when their recorded version differs from the
-selected version. See
+reviewed before release. Android DASH builds use the **libxml2 2.15** series,
+and optional OpenSSL overlays use the **OpenSSL 3.5 LTS** series. Each ordinary
+build checks the release index even when an older patch is cached and selects
+the highest patch available upstream or locally. Missing versioned archives
+are downloaded into `third_party/_cache`. An index failure falls back to the
+highest matching cached patch; without one, the failure remains an error.
+Known official source URLs and SHA-256 values are recorded in
+[THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
+
+`VESPER_ANDROID_OPENSSL_VERSION` (or `VESPER_OPENSSL_VERSION`) selects an exact
+release and skips discovery. `VESPER_ANDROID_OPENSSL_SERIES`,
+`VESPER_OPENSSL_SERIES`, and `VESPER_OPENSSL_LTS_SERIES` select a different
+series. `VESPER_ANDROID_LIBXML2_VERSION` selects an exact libxml2 release and
+skips discovery; `VESPER_ANDROID_LIBXML2_SERIES` selects a series. Optional
+`VESPER_ANDROID_OPENSSL_SOURCE_SHA256` (or `VESPER_OPENSSL_SOURCE_SHA256`) and
+`VESPER_ANDROID_LIBXML2_SOURCE_SHA256` overrides verify specific source bytes.
+The worker records actual archive digests for new patches without a checked-in
+digest. Dependency source archive, URL, and output-directory overrides remain
+available; known-version URL/archive overrides retain their known checksum
+unless explicitly replaced.
+
+Dependency installs record the release, source URL and checksum, ABI, Android API
+level, and digests of the installed pkg-config file, version header, and shared
+libraries in `vesper-dependency-build-metadata.txt`. Reuse checks both the
+installed files and that receipt. Android FFmpeg build metadata includes these
+dependency records, so a missing receipt, old release, changed source, or changed
+dependency build invalidates reuse of FFmpeg built against it. See
 [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) before publishing such an
-artifact. The current shared FFmpeg source lock is 9.0.1; the exact URL and
+artifact. The current shared FFmpeg source lock is 9.0.2; the exact URL and
 checksum are recorded in the repository policy and third-party notices.
 
 ## JNI Artifacts
@@ -622,7 +652,7 @@ evidence. Hosts managing system PiP call `invalidateHdrOutput()` at each handoff
 
 Native display dimensions and per-view content rectangles are separate APIs.
 The mobile renderer preserves aspect ratio with centered letterboxing.
-See the [video presentation contract and 0.6.0 migration guide](../flutter/vesper_player_platform_interface/doc/video-presentation.md)
+See the [video presentation contract](../flutter/vesper_player_platform_interface/doc/video-presentation.md)
 for control layout, fullscreen state, geometry lifecycle, and PiP.
 
 ### DASH sequence startup cache

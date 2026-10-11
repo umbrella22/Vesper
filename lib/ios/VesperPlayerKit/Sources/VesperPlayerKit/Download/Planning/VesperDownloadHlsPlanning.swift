@@ -14,11 +14,10 @@ func parseHlsMasterPlaylist(
         }
         if let value = valueAfterPrefix("#EXT-X-MEDIA:", in: line) {
             let attributes = parseHlsAttributes(value)
-            if attributes["TYPE"]?.caseInsensitiveCompare("AUDIO") == .orderedSame,
-               let uri = attributes["URI"] {
+            if attributes["TYPE"]?.caseInsensitiveCompare("AUDIO") == .orderedSame {
                 audio.append(
                     HlsRendition(
-                        uri: resolveRemoteReference(baseUri: manifestUri, reference: uri),
+                        uri: attributes["URI"].map { resolveRemoteReference(baseUri: manifestUri, reference: $0) },
                         attributes: attributes
                     )
                 )
@@ -53,6 +52,10 @@ func parseHlsMediaPlaylist(
     var pendingDuration: String?
     var pendingByteRange: VesperDownloadByteRange?
     var previousRangeEnd: UInt64 = 0
+    var previousMapRangeEnd: UInt64 = 0
+    var currentMapIndex: Int?
+    var pendingDiscontinuity = false
+    try validateHlsEncryption(playlistText)
     var sequence: UInt64 = 0
     var maps: [HlsMap] = []
     var segments: [HlsSegment] = []
@@ -75,14 +78,23 @@ func parseHlsMediaPlaylist(
                 .caseInsensitiveCompare("VOD") == .orderedSame
             continue
         }
+        if line == "#EXT-X-DISCONTINUITY" {
+            pendingDiscontinuity = true
+            continue
+        }
         if let value = valueAfterPrefix("#EXT-X-MAP:", in: line) {
             let attributes = parseHlsAttributes(value)
             guard let uri = attributes["URI"] else {
                 throw VesperForegroundDownloadPreparationError.invalidSource("HLS EXT-X-MAP was missing URI")
             }
-            let byteRange = attributes["BYTERANGE"].flatMap {
-                parseHlsByteRange($0, previousRangeEnd: &previousRangeEnd)
+            var byteRange: VesperDownloadByteRange?
+            if let value = attributes["BYTERANGE"] {
+                guard let parsed = parseHlsByteRange(value, previousRangeEnd: &previousMapRangeEnd) else {
+                    throw VesperForegroundDownloadPreparationError.invalidSource("HLS EXT-X-MAP had an invalid byte range")
+                }
+                byteRange = parsed
             }
+            currentMapIndex = maps.count
             maps.append(
                 HlsMap(
                     uri: resolveRemoteReference(baseUri: playlistUri, reference: uri),
@@ -92,7 +104,10 @@ func parseHlsMediaPlaylist(
             continue
         }
         if let value = valueAfterPrefix("#EXT-X-BYTERANGE:", in: line) {
-            pendingByteRange = parseHlsByteRange(value, previousRangeEnd: &previousRangeEnd)
+            guard let parsed = parseHlsByteRange(value, previousRangeEnd: &previousRangeEnd) else {
+                throw VesperForegroundDownloadPreparationError.invalidSource("HLS segment had an invalid byte range")
+            }
+            pendingByteRange = parsed
             continue
         }
         if let value = valueAfterPrefix("#EXTINF:", in: line) {
@@ -110,9 +125,12 @@ func parseHlsMediaPlaylist(
                 uri: resolveRemoteReference(baseUri: playlistUri, reference: line),
                 duration: pendingDuration,
                 byteRange: pendingByteRange,
-                sequence: sequence
+                sequence: sequence,
+                mapIndex: currentMapIndex,
+                discontinuity: pendingDiscontinuity
             )
         )
+        pendingDiscontinuity = false
         pendingDuration = nil
         pendingByteRange = nil
     }
@@ -163,16 +181,41 @@ func rewriteHlsMedia(
     if let targetDuration = playlist.targetDuration {
         text += "#EXT-X-TARGETDURATION:\(targetDuration)\n"
     }
-    if let map = playlist.maps.last,
-       let path = localMaps[hlsByteRangeKey(uri: map.uri, byteRange: map.byteRange)] {
-        text += "#EXT-X-MAP:URI=\"\(path)\"\n"
-    }
+    var previousMapKey: String?
     for segment in playlist.segments {
+        if segment.discontinuity { text += "#EXT-X-DISCONTINUITY\n" }
+        if let index = segment.mapIndex {
+            let map = playlist.maps[index]
+            let key = hlsByteRangeKey(uri: map.uri, byteRange: map.byteRange)
+            if key != previousMapKey, let path = localMaps[key] {
+                text += "#EXT-X-MAP:URI=\"\(path)\"\n"
+                previousMapKey = key
+            }
+        }
         text += "#EXTINF:\(segment.duration ?? "0"),\n"
         text += "segments/\(mediaId)-\(padded(segment.sequence, width: 5)).\(extensionFromUri(segment.uri, fallback: "ts"))\n"
     }
     text += "#EXT-X-ENDLIST\n"
     return text
+}
+
+func validateHlsEncryption(_ manifestText: String) throws {
+    for line in nonEmptyTrimmedLines(manifestText) {
+        if let value = valueAfterPrefix("#EXT-X-KEY:", in: line)
+            ?? valueAfterPrefix("#EXT-X-SESSION-KEY:", in: line),
+           parseHlsAttributes(value)["METHOD"]?.caseInsensitiveCompare("NONE") != .orderedSame {
+            throw VesperForegroundDownloadPreparationError.unsupported("Encrypted HLS download preparation is not supported")
+        }
+    }
+}
+
+func selectHlsAudio(master: HlsMasterPlaylist, variant: HlsVariant, profile: VesperDownloadProfile) -> HlsRendition? {
+    guard let group = variant.attributes["AUDIO"] else { return nil }
+    let audio = master.audio.filter { $0.attributes["GROUP-ID"] == group }
+    return profile.preferredAudioLanguage.flatMap { language in
+        audio.first { $0.attributes["LANGUAGE"]?.caseInsensitiveCompare(language) == .orderedSame }
+    } ?? audio.first { $0.attributes["DEFAULT"]?.caseInsensitiveCompare("YES") == .orderedSame }
+        ?? audio.first
 }
 
 func parseHlsAttributes(_ input: String) -> [String: String] {
@@ -197,12 +240,17 @@ func parseHlsByteRange(
 ) -> VesperDownloadByteRange? {
     let parts = value.trimmingCharacters(in: .whitespacesAndNewlines)
         .split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
-    guard let length = UInt64(parts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") else {
-        return nil
+    guard let length = UInt64(parts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""),
+          length > 0 else { return nil }
+    let offset: UInt64
+    if parts.count > 1 {
+        guard let explicitOffset = UInt64(parts[1].trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+        offset = explicitOffset
+    } else {
+        offset = previousRangeEnd
     }
-    let offset = parts.count > 1
-        ? UInt64(parts[1].trimmingCharacters(in: .whitespacesAndNewlines)) ?? previousRangeEnd
-        : previousRangeEnd
-    previousRangeEnd = offset + length
+    let (end, overflow) = offset.addingReportingOverflow(length)
+    guard !overflow else { return nil }
+    previousRangeEnd = end
     return VesperDownloadByteRange(offset: offset, length: length)
 }

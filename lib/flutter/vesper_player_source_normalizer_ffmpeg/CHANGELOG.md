@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-11
+
+- Align native SourceNormalizer dependencies with the 0.9.0 SDK.
+
 ## 0.8.0 - 2026-09-29
 
 - Align mobile host and Flutter dependencies with the 0.8.0 source lifecycle contract.

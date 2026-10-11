@@ -1,7 +1,5 @@
 package io.github.umbrella22.vesper.player.android
 
-import java.security.MessageDigest
-import java.util.Locale
 import java.util.UUID
 
 internal data class DashStartupScope(
@@ -34,8 +32,13 @@ internal class VesperDashStartupCache(private val nowMs: () -> Long = { System.n
     private var generation = 0L
     fun currentGeneration(): Long = synchronized(lock) { generation }
 
-    fun read(scope: DashStartupScope, resource: DashStartupResource, headers: Map<String, String>): DashStartupBytes? {
-        val key = resourceKey(scope, resource.uri, headers)
+    fun read(
+        scope: DashStartupScope,
+        resource: DashStartupResource,
+        headers: Map<String, String>,
+        requestHeaders: Map<String, String> = emptyMap(),
+    ): DashStartupBytes? {
+        val key = resourceKey(scope, resource.uri, headers, requestHeaders)
         return synchronized(lock) {
             expire()
             if (scope.sourceExpiresAtMs?.let { it <= wallNowMs() } == true) return@synchronized null
@@ -106,21 +109,14 @@ internal class VesperDashStartupCache(private val nowMs: () -> Long = { System.n
         entries.filterValues { it.expiresAt <= now }.keys.toList().forEach(::remove)
     }
 
-    internal fun resourceKey(scope: DashStartupScope, uri: String, headers: Map<String, String>): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        fun field(value: String) {
-            val bytes = value.toByteArray(Charsets.UTF_8)
-            digest.update(bytes.size.toString().toByteArray(Charsets.US_ASCII))
-            digest.update(0.toByte())
-            digest.update(bytes)
-        }
-        field(scope.namespace)
-        field(uri)
-        headers.entries.sortedWith(compareBy({ it.key.lowercase(Locale.ROOT) }, { it.value })).forEach {
-            field(it.key.lowercase(Locale.ROOT)); field(it.value)
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
+    internal fun resourceKey(
+        scope: DashStartupScope,
+        uri: String,
+        headers: Map<String, String>,
+        requestHeaders: Map<String, String> = emptyMap(),
+    ): String = mediaResourceCacheKey(
+        "dash-startup:${scope.namespace}", uri, headers, requestHeaders = requestHeaders,
+    )
 
     companion object {
         const val MAX_ENTRIES = 64

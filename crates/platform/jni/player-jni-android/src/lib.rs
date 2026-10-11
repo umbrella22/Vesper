@@ -1271,7 +1271,7 @@ fn pipeline_event_hook_reports_json(batch: PipelineEventHookReportBatch) -> Stri
                 }),
                 Err(error) => serde_json::json!({
                     "status": "error",
-                    "error": error,
+                    "error": error.report_projection(),
                 }),
             };
             serde_json::json!({
@@ -1740,6 +1740,47 @@ mod tests {
         PlayerRetryBackoff, PlayerRetryPolicy, PlayerTrackPreferencePolicy, SubtitleErrorDetails,
     };
     use std::time::Duration;
+
+    #[test]
+    fn pipeline_event_report_json_bounds_only_the_outward_utf8_diagnostic() {
+        let full_message = "界".repeat(100);
+        let original = player_plugin::PipelineEventHookError::AbiViolation(full_message.clone());
+        let report = player_runtime::PipelineEventHookReport {
+            reference: player_plugin::PluginReference::new(
+                "dev.vesper.fixture",
+                Some("dev.vesper.fixture.events".to_owned()),
+                player_plugin::PluginTransport::Native,
+            )
+            .expect("plugin reference"),
+            run_id: "run".to_owned(),
+            session_id: "session".to_owned(),
+            event_name: "fixture.event".to_owned(),
+            result: Err(original.clone()),
+        };
+        let batch = player_runtime::PipelineEventHookReportBatch {
+            reports: vec![report.clone()],
+            dropped_events: 2,
+            dropped_reports: 3,
+            dispatcher_error: None,
+        };
+        let json: serde_json::Value =
+            serde_json::from_str(&super::pipeline_event_hook_reports_json(batch))
+                .expect("report JSON");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "reports": [{
+                    "pluginId": "dev.vesper.fixture", "capabilityInstanceId": "dev.vesper.fixture.events",
+                    "transport": "native", "runId": "run", "sessionId": "session",
+                    "eventName": "fixture.event",
+                    "result": {"status": "error", "error": {"code": "abiViolation", "message": "界".repeat(85)}},
+                }],
+                "droppedEvents": 2, "droppedReports": 3, "dispatcherError": null,
+            })
+        );
+        assert_eq!(report.result, Err(original));
+        assert_eq!(full_message.len(), 300);
+    }
 
     #[test]
     fn handle_registry_reuses_slot_with_new_generation_and_rejects_stale_handle() {

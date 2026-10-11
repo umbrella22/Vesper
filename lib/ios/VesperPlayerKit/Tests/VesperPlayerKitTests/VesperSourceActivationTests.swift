@@ -1,9 +1,40 @@
 import AVFoundation
+import Combine
 import XCTest
 @testable import VesperPlayerKit
 
 @MainActor
 final class VesperSourceActivationTests: XCTestCase {
+    func testSynchronousSnapshotCancellationSettlesNavigationExactlyOnce() async throws {
+        for dispose in [false, true] {
+            for hasTarget in [false, true] {
+                let bridge = VesperNativePlayerBridge(sourceLoadAttemptOverride: { _, _, _, _ in })
+                let controller = VesperPlayerController(bridge)
+                let sequence = try VesperPlaybackSequence(configuration: .init(sequenceId: UUID().uuidString))
+                defer { sequence.dispose(); controller.dispose() }
+                if hasTarget {
+                    try sequence.replace([.init(itemId: "pending", contentIdentity: .init(providerNamespace: "test", value: "pending"))])
+                }
+                try sequence.attach(to: controller)
+                var cancelled = false
+                let observation = sequence.$snapshot.dropFirst().sink { _ in
+                    guard !cancelled else { return }
+                    cancelled = true
+                    if dispose { sequence.dispose() } else { sequence.detach() }
+                }
+                defer { observation.cancel() }
+                do {
+                    if hasTarget { _ = try await sequence.activate("pending") }
+                    else { _ = try await sequence.next() }
+                    XCTFail("A navigation cancelled by its synchronous snapshot subscriber must not succeed")
+                } catch {
+                    XCTAssertEqual(error as? VesperSourceActivationError, dispose ? .disposed : .detached)
+                }
+                XCTAssertTrue(cancelled)
+            }
+        }
+    }
+
     private func source(_ label: String) -> VesperPlayerSource {
         .remoteUrl(URL(string: "https://fixture.test/\(label).mp4")!, label: label)
     }
@@ -50,6 +81,7 @@ final class VesperSourceActivationTests: XCTestCase {
     func testActivationAwaitsInitialSeekBeforeApplyingRateAndPause() async throws {
         var completion: (@Sendable (Bool) -> Void)?
         var requestedPosition: Double?
+        let seekSubmitted = expectation(description: "initial seek submitted")
         let bridge = VesperNativePlayerBridge(sourceLoadAttemptOverride: { bridge, _, _, _ in
             bridge.player = AVPlayer()
             bridge.publishedUiState = PlayerHostUiState(title: "test", subtitle: "test", sourceLabel: "seek",
@@ -59,6 +91,7 @@ final class VesperSourceActivationTests: XCTestCase {
         }, systemPlayerSeekSubmitter: { _, target, _, _, callback in
             requestedPosition = target.seconds
             completion = callback
+            seekSubmitted.fulfill()
         })
         let controller = VesperPlayerController(bridge)
         let session = try VesperSourceSession()
@@ -70,7 +103,7 @@ final class VesperSourceActivationTests: XCTestCase {
             settled = true
             return result
         }
-        for _ in 0..<1000 { if completion != nil { break }; await Task.yield() }
+        await fulfillment(of: [seekSubmitted], timeout: 3)
         XCTAssertEqual(requestedPosition, 1.25)
         XCTAssertFalse(settled)
         let callback = try XCTUnwrap(completion)

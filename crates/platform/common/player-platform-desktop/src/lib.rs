@@ -440,7 +440,7 @@ impl AudioStreamWorkerPermit {
     fn try_acquire() -> Option<Self> {
         reap_finished_audio_stream_workers();
         ACTIVE_AUDIO_STREAM_WORKERS
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
                 (active < MAX_MANAGED_AUDIO_STREAM_WORKERS).then_some(active + 1)
             })
             .ok()

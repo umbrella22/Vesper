@@ -69,18 +69,6 @@ Map<String, Object?> _decodeObjectMap(Object? raw) {
   return _toStringKeyedMap(map);
 }
 
-Set<String> _decodeStringSet(
-  Object? raw, {
-  Set<String> fallback = const <String>{},
-}) {
-  if (raw is! Iterable) {
-    return fallback;
-  }
-  final decoded =
-      raw.whereType<String>().where((value) => value.isNotEmpty).toSet();
-  return decoded.isEmpty ? fallback : decoded;
-}
-
 List<String> _decodeStringList(Object? raw) {
   if (raw is! Iterable) {
     return const <String>[];

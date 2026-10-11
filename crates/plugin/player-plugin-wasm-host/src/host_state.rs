@@ -12,6 +12,14 @@ const MAX_HOST_LOG_CODE_BYTES: usize = 64;
 const MAX_HOST_LOG_MESSAGE_BYTES: usize = 256;
 const MAX_HOST_LOG_BYTES_PER_CALL: usize = 32 * 1024;
 
+#[derive(Debug, thiserror::Error)]
+#[error("structured host log rejected: {0}")]
+pub(crate) struct WasmHostCallFailure(pub(crate) String);
+
+fn host_call_failure(message: String) -> wasmtime::Error {
+    wasmtime::Error::from(WasmHostCallFailure(message))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WasmPluginLogLevel {
     Trace,
@@ -67,32 +75,32 @@ impl WasmHostState {
         message: String,
     ) -> wasmtime::Result<()> {
         if code.is_empty() || code.len() > MAX_HOST_LOG_CODE_BYTES {
-            return Err(wasmtime::format_err!(
+            return Err(host_call_failure(format!(
                 "host.log code must contain 1 to {MAX_HOST_LOG_CODE_BYTES} UTF-8 bytes"
-            ));
+            )));
         }
         if message.is_empty() || message.len() > MAX_HOST_LOG_MESSAGE_BYTES {
-            return Err(wasmtime::format_err!(
+            return Err(host_call_failure(format!(
                 "host.log message must contain 1 to {MAX_HOST_LOG_MESSAGE_BYTES} UTF-8 bytes"
-            ));
+            )));
         }
         if self.logs.len() >= MAX_HOST_LOG_RECORDS_PER_CALL {
-            return Err(wasmtime::format_err!(
+            return Err(host_call_failure(format!(
                 "host.log exceeds the {MAX_HOST_LOG_RECORDS_PER_CALL}-record call limit"
-            ));
+            )));
         }
         let added_bytes = code
             .len()
             .checked_add(message.len())
-            .ok_or_else(|| wasmtime::format_err!("host.log byte count overflow"))?;
+            .ok_or_else(|| host_call_failure("host.log byte count overflow".to_owned()))?;
         let log_bytes = self
             .log_bytes
             .checked_add(added_bytes)
-            .ok_or_else(|| wasmtime::format_err!("host.log byte count overflow"))?;
+            .ok_or_else(|| host_call_failure("host.log byte count overflow".to_owned()))?;
         if log_bytes > MAX_HOST_LOG_BYTES_PER_CALL {
-            return Err(wasmtime::format_err!(
+            return Err(host_call_failure(format!(
                 "host.log exceeds the {MAX_HOST_LOG_BYTES_PER_CALL}-byte call limit"
-            ));
+            )));
         }
         self.log_bytes = log_bytes;
         self.logs.push(WasmPluginLogRecord {

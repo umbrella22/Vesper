@@ -2,6 +2,7 @@
 // compatibility diagnostics even though the release implementation is absent.
 #![cfg_attr(not(target_os = "macos"), allow(dead_code))]
 
+use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -262,18 +263,12 @@ impl FfmpegSourcePolicy {
     ) -> Result<SeriesResolution, FfmpegSourcePolicyError> {
         let (major, minor) = self.parse_compatible_series(series)?;
         let series = format!("{major}.{minor}");
-        if let Some(version) =
-            latest_series_archive_version(&series, cached_archive_names, FFMPEG_ARCHIVE_SUFFIX)
-        {
-            return Ok(SeriesResolution {
-                version,
-                used_fallback: false,
-            });
-        }
-        if let Some(index) = remote_index
-            && let Some(version) =
-                latest_series_archive_version_from_index(&series, index, FFMPEG_ARCHIVE_SUFFIX)
-        {
+        let cached =
+            latest_series_archive_version(&series, cached_archive_names, FFMPEG_ARCHIVE_SUFFIX);
+        let remote = remote_index.and_then(|index| {
+            latest_series_archive_version_from_index(&series, index, FFMPEG_ARCHIVE_SUFFIX)
+        });
+        if let Some(version) = select_latest_series_version(cached, remote) {
             return Ok(SeriesResolution {
                 version,
                 used_fallback: false,
@@ -531,6 +526,38 @@ pub(crate) fn latest_package_series_archive_version_from_index(
     latest_package_series_archive_version(package, &canonical_series, names, extension)
 }
 
+/// Select the newest patch from cache and upstream candidates. A successful
+/// upstream lookup must win over an older cache entry, while a lookup failure
+/// can still be represented by `None` so callers can build offline from cache.
+pub(crate) fn select_latest_series_version(
+    cached: Option<String>,
+    remote: Option<String>,
+) -> Option<String> {
+    match (cached, remote) {
+        (Some(cached), Some(remote)) => match compare_series_versions(&cached, &remote) {
+            Ordering::Less => Some(remote),
+            Ordering::Greater => Some(cached),
+            Ordering::Equal => Some(cached.max(remote)),
+        },
+        (Some(version), None) | (None, Some(version)) => Some(version),
+        (None, None) => None,
+    }
+}
+
+fn compare_series_versions(left: &str, right: &str) -> Ordering {
+    let left_key = series_version_key(left);
+    let right_key = series_version_key(right);
+    left_key.cmp(&right_key).then_with(|| left.cmp(right))
+}
+
+fn series_version_key(value: &str) -> (u64, u64, u64) {
+    let mut parts = value.split('.');
+    let major = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    let minor = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    let patch = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    (major, minor, patch)
+}
+
 fn is_archive_name_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
 }
@@ -617,19 +644,27 @@ mod tests {
         };
         let policy = FfmpegSourcePolicy::load(&root).expect("load checked-in policy");
         assert_eq!(policy.default_series(), "9.0");
-        assert_eq!(policy.release().version(), &Version::new(9, 0, 1));
+        assert_eq!(policy.release().version(), &Version::new(9, 0, 2));
         let source = policy
             .resolve_build_source(
                 &FfmpegBuildSourceInputs::default(),
-                ["ffmpeg-9.0.1.tar.xz".to_owned()],
+                [
+                    "ffmpeg-8.1.2.tar.xz".to_owned(),
+                    "ffmpeg-9.0.1.tar.xz".to_owned(),
+                    "ffmpeg-9.0.2.tar.xz".to_owned(),
+                ],
                 None,
             )
             .expect("resolve the checked-in FFmpeg cache entry");
-        assert_eq!(source.version, "9.0.1");
-        assert_eq!(source.archive_name, "ffmpeg-9.0.1.tar.xz");
+        assert_eq!(source.version, "9.0.2");
+        assert_eq!(source.archive_name, "ffmpeg-9.0.2.tar.xz");
+        assert_eq!(
+            source.source_url,
+            "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz"
+        );
         assert_eq!(
             source.expected_sha256.as_deref(),
-            Some("cf38e0e28c7e5605942c4a77755349b0145804a397af37eb1fb4c77cb237f635")
+            Some("8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e")
         );
     }
 
@@ -742,6 +777,30 @@ mod tests {
             assert_eq!(source.version, "8.1.0");
             assert_eq!(source.archive_name, "ffmpeg-8.1.0.tar.xz");
         }
+    }
+
+    #[test]
+    fn remote_patch_updates_an_existing_cache_without_moving_the_series_or_release_lock() {
+        let policy = parse(TEST_FFMPEG_SOURCE_POLICY).expect("parse policy");
+        let source = policy
+            .resolve_build_source(
+                &FfmpegBuildSourceInputs::default(),
+                ["ffmpeg-8.1.9.tar.xz".to_owned()],
+                Some("ffmpeg-8.1.10.tar.xz ffmpeg-8.2.99.tar.xz"),
+            )
+            .expect("resolve newest patch instead of stale cache");
+        assert_eq!(source.version, "8.1.10");
+        assert_eq!(source.archive_name, "ffmpeg-8.1.10.tar.xz");
+        assert_eq!(policy.release().locked_build_source().version, "8.1.2");
+
+        let source = policy
+            .resolve_build_source(
+                &FfmpegBuildSourceInputs::default(),
+                ["ffmpeg-8.1.11.tar.xz".to_owned()],
+                Some("ffmpeg-8.1.10.tar.xz"),
+            )
+            .expect("an older upstream index must not downgrade the cache");
+        assert_eq!(source.version, "8.1.11");
     }
 
     #[test]

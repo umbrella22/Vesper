@@ -8,7 +8,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly REPO_ROOT
 readonly CRATES_IO_API="https://crates.io/api/v1/crates"
 readonly CRATES_IO_USER_AGENT="vesper-player-sdk-release (https://github.com/umbrella22/Vesper)"
-readonly RUST_TOOLCHAIN="1.98.1"
+readonly RUST_TOOLCHAIN="1.99.0"
+readonly REGISTRY_CONNECT_TIMEOUT_SECONDS=10
+readonly REGISTRY_REQUEST_TIMEOUT_SECONDS=30
 
 readonly PACKAGES=(
   vesper-player-plugin-abi
@@ -227,6 +229,8 @@ crate_version_status() {
   local http_code
 
   if ! http_code="$(curl --silent --show-error \
+    --connect-timeout "$REGISTRY_CONNECT_TIMEOUT_SECONDS" \
+    --max-time "$REGISTRY_REQUEST_TIMEOUT_SECONDS" \
     --user-agent "$CRATES_IO_USER_AGENT" \
     --output /dev/null \
     --write-out '%{http_code}' \
@@ -250,6 +254,8 @@ registry_version_checksum() {
   local response
 
   response="$(curl --silent --show-error --fail \
+    --connect-timeout "$REGISTRY_CONNECT_TIMEOUT_SECONDS" \
+    --max-time "$REGISTRY_REQUEST_TIMEOUT_SECONDS" \
     --user-agent "$CRATES_IO_USER_AGENT" \
     "$CRATES_IO_API/$package/$version")" || return 2
   printf '%s' "$response" | jq --exit-status --raw-output \

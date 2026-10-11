@@ -1,0 +1,1747 @@
+[
+  {
+    "name": "video",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 10000,
+      "segmentTemplate": {
+        "timescale": 1,
+        "duration": 4,
+        "startNumber": 1,
+        "presentationTimeOffset": 0,
+        "initialization": "init-$RepresentationID$.mp4",
+        "media": "chunk-$Number%05d$.m4s",
+        "timeline": []
+      }
+    },
+    "response": [
+      {
+        "duration": 4.0,
+        "number": 1,
+        "time": null,
+        "presentationTime": 0
+      },
+      {
+        "duration": 4.0,
+        "number": 2,
+        "time": null,
+        "presentationTime": 4
+      },
+      {
+        "duration": 2.0,
+        "number": 3,
+        "time": null,
+        "presentationTime": 8
+      }
+    ]
+  },
+  {
+    "name": "audio",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 10000,
+      "segmentTemplate": {
+        "timescale": 1,
+        "duration": 4,
+        "startNumber": 7,
+        "presentationTimeOffset": 0,
+        "initialization": "audio-$RepresentationID$-init.mp4",
+        "media": "audio-$Number$.m4s",
+        "timeline": []
+      }
+    },
+    "response": [
+      {
+        "duration": 4.0,
+        "number": 7,
+        "time": null,
+        "presentationTime": 0
+      },
+      {
+        "duration": 4.0,
+        "number": 8,
+        "time": null,
+        "presentationTime": 4
+      },
+      {
+        "duration": 2.0,
+        "number": 9,
+        "time": null,
+        "presentationTime": 8
+      }
+    ]
+  },
+  {
+    "name": "representation",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 4000,
+      "segmentTemplate": {
+        "timescale": 1,
+        "duration": 4,
+        "startNumber": 3,
+        "presentationTimeOffset": 0,
+        "initialization": "init-$RepresentationID$.mp4",
+        "media": "chunk-$Number%02d$.m4s",
+        "timeline": []
+      }
+    },
+    "response": [
+      {
+        "duration": 4.0,
+        "number": 3,
+        "time": null,
+        "presentationTime": 0
+      }
+    ]
+  },
+  {
+    "name": "dynamic-snapshot",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 8000,
+      "segmentTemplate": {
+        "timescale": 1,
+        "duration": 4,
+        "startNumber": 1,
+        "presentationTimeOffset": 0,
+        "initialization": "init-$RepresentationID$.mp4",
+        "media": "chunk-$Number$.m4s",
+        "timeline": []
+      }
+    },
+    "response": [
+      {
+        "duration": 4.0,
+        "number": 1,
+        "time": null,
+        "presentationTime": 0
+      },
+      {
+        "duration": 4.0,
+        "number": 2,
+        "time": null,
+        "presentationTime": 4
+      }
+    ]
+  },
+  {
+    "name": "local-relative",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 4000,
+      "segmentTemplate": {
+        "timescale": 1,
+        "duration": 4,
+        "startNumber": 1,
+        "presentationTimeOffset": 0,
+        "initialization": "init.mp4",
+        "media": "segments/chunk-$Number$.m4s",
+        "timeline": []
+      }
+    },
+    "response": [
+      {
+        "duration": 4.0,
+        "number": 1,
+        "time": null,
+        "presentationTime": 0
+      }
+    ]
+  },
+  {
+    "name": "hybrid",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 4000,
+      "segmentTemplate": {
+        "timescale": 1,
+        "duration": 4,
+        "startNumber": 1,
+        "presentationTimeOffset": 0,
+        "initialization": "init.mp4",
+        "media": "chunk-$Number$.m4s",
+        "timeline": []
+      }
+    },
+    "response": [
+      {
+        "duration": 4.0,
+        "number": 1,
+        "time": null,
+        "presentationTime": 0
+      }
+    ]
+  },
+  {
+    "name": "outside",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 4000,
+      "segmentTemplate": {
+        "timescale": 1,
+        "duration": 4,
+        "startNumber": 1,
+        "presentationTimeOffset": 0,
+        "initialization": "../init.mp4",
+        "media": "chunk-$Number$.m4s",
+        "timeline": []
+      }
+    },
+    "response": [
+      {
+        "duration": 4.0,
+        "number": 1,
+        "time": null,
+        "presentationTime": 0
+      }
+    ]
+  },
+  {
+    "name": "init-v1",
+    "request": {
+      "operation": "expand_template",
+      "template": "init-$RepresentationID$.mp4",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": null
+    },
+    "response": "init-v1.mp4"
+  },
+  {
+    "name": "init-tmpl",
+    "request": {
+      "operation": "expand_template",
+      "template": "init-$RepresentationID$.mp4",
+      "representation": {
+        "id": "tmpl",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": null
+    },
+    "response": "init-tmpl.mp4"
+  },
+  {
+    "name": "init-v1-number3",
+    "request": {
+      "operation": "expand_template",
+      "template": "init-$RepresentationID$.mp4",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 3,
+      "time": null
+    },
+    "response": "init-v1.mp4"
+  },
+  {
+    "name": "audio-init",
+    "request": {
+      "operation": "expand_template",
+      "template": "audio-$RepresentationID$-init.mp4",
+      "representation": {
+        "id": "a1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 7,
+      "time": null
+    },
+    "response": "audio-a1-init.mp4"
+  },
+  {
+    "name": "video-1",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Number%05d$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": null
+    },
+    "response": "chunk-00001.m4s"
+  },
+  {
+    "name": "video-2",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Number%05d$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 2,
+      "time": null
+    },
+    "response": "chunk-00002.m4s"
+  },
+  {
+    "name": "video-3",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Number%05d$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 3,
+      "time": null
+    },
+    "response": "chunk-00003.m4s"
+  },
+  {
+    "name": "representation-03",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Number%02d$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 3,
+      "time": null
+    },
+    "response": "chunk-03.m4s"
+  },
+  {
+    "name": "audio-7",
+    "request": {
+      "operation": "expand_template",
+      "template": "audio-$Number$.m4s",
+      "representation": {
+        "id": "a1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 7,
+      "time": null
+    },
+    "response": "audio-7.m4s"
+  },
+  {
+    "name": "audio-8",
+    "request": {
+      "operation": "expand_template",
+      "template": "audio-$Number$.m4s",
+      "representation": {
+        "id": "a1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 8,
+      "time": null
+    },
+    "response": "audio-8.m4s"
+  },
+  {
+    "name": "audio-9",
+    "request": {
+      "operation": "expand_template",
+      "template": "audio-$Number$.m4s",
+      "representation": {
+        "id": "a1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 9,
+      "time": null
+    },
+    "response": "audio-9.m4s"
+  },
+  {
+    "name": "dynamic-1",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Number$.m4s",
+      "representation": {
+        "id": "tmpl",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": null
+    },
+    "response": "chunk-1.m4s"
+  },
+  {
+    "name": "dynamic-2",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Number$.m4s",
+      "representation": {
+        "id": "tmpl",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 2,
+      "time": null
+    },
+    "response": "chunk-2.m4s"
+  },
+  {
+    "name": "chunk-1",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Number$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": null
+    },
+    "response": "chunk-1.m4s"
+  },
+  {
+    "name": "segments-chunk-1",
+    "request": {
+      "operation": "expand_template",
+      "template": "segments/chunk-$Number$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": null
+    },
+    "response": "segments/chunk-1.m4s"
+  },
+  {
+    "name": "local-init",
+    "request": {
+      "operation": "expand_template",
+      "template": "init.mp4",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": null
+    },
+    "response": "init.mp4"
+  },
+  {
+    "name": "outside-init",
+    "request": {
+      "operation": "expand_template",
+      "template": "../init.mp4",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": null
+    },
+    "response": "../init.mp4"
+  },
+  {
+    "name": "dlna-track-0",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 12000,
+      "segmentTemplate": {
+        "timescale": 15360,
+        "duration": null,
+        "startNumber": 1,
+        "presentationTimeOffset": 0,
+        "initialization": "init-stream$RepresentationID$.m4s",
+        "media": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+        "timeline": [
+          {
+            "startTime": 0,
+            "duration": 30720,
+            "repeatCount": 5
+          }
+        ]
+      }
+    },
+    "response": [
+      {
+        "duration": 2.0,
+        "number": 1,
+        "time": 0,
+        "presentationTime": 0
+      },
+      {
+        "duration": 2.0,
+        "number": 2,
+        "time": 30720,
+        "presentationTime": 30720
+      },
+      {
+        "duration": 2.0,
+        "number": 3,
+        "time": 61440,
+        "presentationTime": 61440
+      },
+      {
+        "duration": 2.0,
+        "number": 4,
+        "time": 92160,
+        "presentationTime": 92160
+      },
+      {
+        "duration": 2.0,
+        "number": 5,
+        "time": 122880,
+        "presentationTime": 122880
+      },
+      {
+        "duration": 2.0,
+        "number": 6,
+        "time": 153600,
+        "presentationTime": 153600
+      }
+    ]
+  },
+  {
+    "name": "dlna-init-0",
+    "request": {
+      "operation": "expand_template",
+      "template": "init-stream$RepresentationID$.m4s",
+      "representation": {
+        "id": "0",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 1027040,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": 0
+    },
+    "response": "init-stream0.m4s"
+  },
+  {
+    "name": "dlna-media-0-1",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+      "representation": {
+        "id": "0",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 1027040,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": 0
+    },
+    "response": "chunk-stream0-00001.m4s"
+  },
+  {
+    "name": "dlna-media-0-2",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+      "representation": {
+        "id": "0",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 1027040,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 2,
+      "time": 30720
+    },
+    "response": "chunk-stream0-00002.m4s"
+  },
+  {
+    "name": "dlna-media-0-3",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+      "representation": {
+        "id": "0",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 1027040,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 3,
+      "time": 61440
+    },
+    "response": "chunk-stream0-00003.m4s"
+  },
+  {
+    "name": "dlna-media-0-4",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+      "representation": {
+        "id": "0",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 1027040,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 4,
+      "time": 92160
+    },
+    "response": "chunk-stream0-00004.m4s"
+  },
+  {
+    "name": "dlna-media-0-5",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+      "representation": {
+        "id": "0",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 1027040,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 5,
+      "time": 122880
+    },
+    "response": "chunk-stream0-00005.m4s"
+  },
+  {
+    "name": "dlna-media-0-6",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+      "representation": {
+        "id": "0",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 1027040,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 6,
+      "time": 153600
+    },
+    "response": "chunk-stream0-00006.m4s"
+  },
+  {
+    "name": "dlna-track-1",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 12000,
+      "segmentTemplate": {
+        "timescale": 48000,
+        "duration": null,
+        "startNumber": 1,
+        "presentationTimeOffset": 0,
+        "initialization": "init-stream$RepresentationID$.m4s",
+        "media": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+        "timeline": [
+          {
+            "startTime": 0,
+            "duration": 95232,
+            "repeatCount": 0
+          },
+          {
+            "startTime": null,
+            "duration": 96256,
+            "repeatCount": 3
+          },
+          {
+            "startTime": null,
+            "duration": 95744,
+            "repeatCount": 0
+          }
+        ]
+      }
+    },
+    "response": [
+      {
+        "duration": 1.984,
+        "number": 1,
+        "time": 0,
+        "presentationTime": 0
+      },
+      {
+        "duration": 2.005333333333333,
+        "number": 2,
+        "time": 95232,
+        "presentationTime": 95232
+      },
+      {
+        "duration": 2.005333333333333,
+        "number": 3,
+        "time": 191488,
+        "presentationTime": 191488
+      },
+      {
+        "duration": 2.005333333333333,
+        "number": 4,
+        "time": 287744,
+        "presentationTime": 287744
+      },
+      {
+        "duration": 2.005333333333333,
+        "number": 5,
+        "time": 384000,
+        "presentationTime": 384000
+      },
+      {
+        "duration": 1.9946666666666666,
+        "number": 6,
+        "time": 480256,
+        "presentationTime": 480256
+      }
+    ]
+  },
+  {
+    "name": "dlna-init-1",
+    "request": {
+      "operation": "expand_template",
+      "template": "init-stream$RepresentationID$.m4s",
+      "representation": {
+        "id": "1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 96255,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": 0
+    },
+    "response": "init-stream1.m4s"
+  },
+  {
+    "name": "dlna-media-1-1",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+      "representation": {
+        "id": "1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 96255,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": 0
+    },
+    "response": "chunk-stream1-00001.m4s"
+  },
+  {
+    "name": "dlna-media-1-2",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+      "representation": {
+        "id": "1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 96255,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 2,
+      "time": 95232
+    },
+    "response": "chunk-stream1-00002.m4s"
+  },
+  {
+    "name": "dlna-media-1-3",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+      "representation": {
+        "id": "1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 96255,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 3,
+      "time": 191488
+    },
+    "response": "chunk-stream1-00003.m4s"
+  },
+  {
+    "name": "dlna-media-1-4",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+      "representation": {
+        "id": "1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 96255,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 4,
+      "time": 287744
+    },
+    "response": "chunk-stream1-00004.m4s"
+  },
+  {
+    "name": "dlna-media-1-5",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+      "representation": {
+        "id": "1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 96255,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 5,
+      "time": 384000
+    },
+    "response": "chunk-stream1-00005.m4s"
+  },
+  {
+    "name": "dlna-media-1-6",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-stream$RepresentationID$-$Number%05d$.m4s",
+      "representation": {
+        "id": "1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 96255,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 6,
+      "time": 480256
+    },
+    "response": "chunk-stream1-00006.m4s"
+  },
+  {
+    "name": "time-offset",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 7000,
+      "segmentTemplate": {
+        "timescale": 1000,
+        "duration": null,
+        "startNumber": 7,
+        "presentationTimeOffset": 5000,
+        "initialization": "init.mp4",
+        "media": "chunk-$Time%05d$-$Number$.m4s",
+        "timeline": [
+          {
+            "startTime": 5000,
+            "duration": 2000,
+            "repeatCount": 2
+          },
+          {
+            "startTime": null,
+            "duration": 1000,
+            "repeatCount": 0
+          }
+        ]
+      }
+    },
+    "response": [
+      {
+        "duration": 2.0,
+        "number": 7,
+        "time": 5000,
+        "presentationTime": 0
+      },
+      {
+        "duration": 2.0,
+        "number": 8,
+        "time": 7000,
+        "presentationTime": 2000
+      },
+      {
+        "duration": 2.0,
+        "number": 9,
+        "time": 9000,
+        "presentationTime": 4000
+      },
+      {
+        "duration": 1.0,
+        "number": 10,
+        "time": 11000,
+        "presentationTime": 6000
+      }
+    ]
+  },
+  {
+    "name": "offset-init",
+    "request": {
+      "operation": "expand_template",
+      "template": "init.mp4",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 7,
+      "time": 5000
+    },
+    "response": "init.mp4"
+  },
+  {
+    "name": "offset-7",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time%05d$-$Number$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 7,
+      "time": 5000
+    },
+    "response": "chunk-05000-7.m4s"
+  },
+  {
+    "name": "offset-8",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time%05d$-$Number$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 8,
+      "time": 7000
+    },
+    "response": "chunk-07000-8.m4s"
+  },
+  {
+    "name": "offset-9",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time%05d$-$Number$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 9,
+      "time": 9000
+    },
+    "response": "chunk-09000-9.m4s"
+  },
+  {
+    "name": "offset-10",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time%05d$-$Number$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 10,
+      "time": 11000
+    },
+    "response": "chunk-11000-10.m4s"
+  },
+  {
+    "name": "repeat-next-time",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "dynamic",
+      "durationMs": null,
+      "segmentTemplate": {
+        "timescale": 1000,
+        "duration": null,
+        "startNumber": 20,
+        "presentationTimeOffset": 1000,
+        "initialization": "init.mp4",
+        "media": "chunk-$Time$.m4s",
+        "timeline": [
+          {
+            "startTime": 1000,
+            "duration": 1000,
+            "repeatCount": -1
+          },
+          {
+            "startTime": 4000,
+            "duration": 500,
+            "repeatCount": 0
+          }
+        ]
+      }
+    },
+    "response": [
+      {
+        "duration": 1.0,
+        "number": 20,
+        "time": 1000,
+        "presentationTime": 0
+      },
+      {
+        "duration": 1.0,
+        "number": 21,
+        "time": 2000,
+        "presentationTime": 1000
+      },
+      {
+        "duration": 1.0,
+        "number": 22,
+        "time": 3000,
+        "presentationTime": 2000
+      },
+      {
+        "duration": 0.5,
+        "number": 23,
+        "time": 4000,
+        "presentationTime": 3000
+      }
+    ]
+  },
+  {
+    "name": "next-init",
+    "request": {
+      "operation": "expand_template",
+      "template": "init.mp4",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 20,
+      "time": 1000
+    },
+    "response": "init.mp4"
+  },
+  {
+    "name": "next-20",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 20,
+      "time": 1000
+    },
+    "response": "chunk-1000.m4s"
+  },
+  {
+    "name": "next-21",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 21,
+      "time": 2000
+    },
+    "response": "chunk-2000.m4s"
+  },
+  {
+    "name": "next-22",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 22,
+      "time": 3000
+    },
+    "response": "chunk-3000.m4s"
+  },
+  {
+    "name": "next-23",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 23,
+      "time": 4000
+    },
+    "response": "chunk-4000.m4s"
+  },
+  {
+    "name": "repeat-end-time",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 5000,
+      "segmentTemplate": {
+        "timescale": 1000,
+        "duration": null,
+        "startNumber": 1,
+        "presentationTimeOffset": 5000,
+        "initialization": "init.mp4",
+        "media": "chunk-$Time$.m4s",
+        "timeline": [
+          {
+            "startTime": 5000,
+            "duration": 2000,
+            "repeatCount": -1
+          }
+        ]
+      }
+    },
+    "response": [
+      {
+        "duration": 2.0,
+        "number": 1,
+        "time": 5000,
+        "presentationTime": 0
+      },
+      {
+        "duration": 2.0,
+        "number": 2,
+        "time": 7000,
+        "presentationTime": 2000
+      },
+      {
+        "duration": 1.0,
+        "number": 3,
+        "time": 9000,
+        "presentationTime": 4000
+      }
+    ]
+  },
+  {
+    "name": "end-init",
+    "request": {
+      "operation": "expand_template",
+      "template": "init.mp4",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": 5000
+    },
+    "response": "init.mp4"
+  },
+  {
+    "name": "end-1",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": 5000
+    },
+    "response": "chunk-5000.m4s"
+  },
+  {
+    "name": "end-2",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 2,
+      "time": 7000
+    },
+    "response": "chunk-7000.m4s"
+  },
+  {
+    "name": "end-3",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 3,
+      "time": 9000
+    },
+    "response": "chunk-9000.m4s"
+  },
+  {
+    "name": "unbounded",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "dynamic",
+      "durationMs": null,
+      "segmentTemplate": {
+        "timescale": 1000,
+        "duration": null,
+        "startNumber": 1,
+        "presentationTimeOffset": 0,
+        "initialization": "init.mp4",
+        "media": "chunk-$Time$.m4s",
+        "timeline": [
+          {
+            "startTime": 0,
+            "duration": 4,
+            "repeatCount": -1
+          }
+        ]
+      }
+    },
+    "errorContains": "requires next S@t or mediaPresentationDuration"
+  },
+  {
+    "name": "backwards",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 4000,
+      "segmentTemplate": {
+        "timescale": 1000,
+        "duration": null,
+        "startNumber": 1,
+        "presentationTimeOffset": 0,
+        "initialization": "init.mp4",
+        "media": "chunk-$Time$.m4s",
+        "timeline": [
+          {
+            "startTime": 2000,
+            "duration": 1000,
+            "repeatCount": 0
+          },
+          {
+            "startTime": 1000,
+            "duration": 1000,
+            "repeatCount": 0
+          }
+        ]
+      }
+    },
+    "errorContains": "next S@t"
+  },
+  {
+    "name": "duplicate",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": 4000,
+      "segmentTemplate": {
+        "timescale": 1000,
+        "duration": null,
+        "startNumber": 1,
+        "presentationTimeOffset": 0,
+        "initialization": "init.mp4",
+        "media": "chunk-$Time$.m4s",
+        "timeline": [
+          {
+            "startTime": 1000,
+            "duration": 1000,
+            "repeatCount": 0
+          },
+          {
+            "startTime": 1000,
+            "duration": 1000,
+            "repeatCount": 0
+          }
+        ]
+      }
+    },
+    "errorContains": "next S@t"
+  },
+  {
+    "name": "tick-overflow",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": null,
+      "segmentTemplate": {
+        "timescale": 1000,
+        "duration": null,
+        "startNumber": 1,
+        "presentationTimeOffset": 0,
+        "initialization": "init.mp4",
+        "media": "chunk-$Time$.m4s",
+        "timeline": [
+          {
+            "startTime": 18446744073709551614,
+            "duration": 4,
+            "repeatCount": 0
+          }
+        ]
+      }
+    },
+    "errorContains": "overflow"
+  },
+  {
+    "name": "number-overflow",
+    "request": {
+      "operation": "template_segments",
+      "manifestType": "static",
+      "durationMs": null,
+      "segmentTemplate": {
+        "timescale": 1000,
+        "duration": null,
+        "startNumber": 18446744073709551615,
+        "presentationTimeOffset": 0,
+        "initialization": "init.mp4",
+        "media": "chunk-$Time$.m4s",
+        "timeline": [
+          {
+            "startTime": 0,
+            "duration": 4,
+            "repeatCount": 1
+          }
+        ]
+      }
+    },
+    "errorContains": "overflow"
+  },
+  {
+    "name": "all-tokens",
+    "request": {
+      "operation": "expand_template",
+      "template": "cash-$$-$RepresentationID$-$Bandwidth%08d$-$Number%03d$-$Time$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": 1234,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 7,
+      "time": 5000
+    },
+    "response": "cash-$-v1-00001234-007-5000.m4s"
+  },
+  {
+    "name": "time-requires-timeline",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": null
+    },
+    "errorContains": "Time requires SegmentTimeline"
+  },
+  {
+    "name": "unknown-token",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Unknown$.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": 0
+    },
+    "errorContains": "unsupported SegmentTemplate token"
+  },
+  {
+    "name": "unclosed-token",
+    "request": {
+      "operation": "expand_template",
+      "template": "chunk-$Time.m4s",
+      "representation": {
+        "id": "v1",
+        "baseURL": "",
+        "mimeType": "application/mp4",
+        "codecs": "",
+        "bandwidth": null,
+        "width": null,
+        "height": null,
+        "frameRate": null,
+        "audioSamplingRate": null,
+        "segmentBase": null,
+        "segmentTemplate": null
+      },
+      "number": 1,
+      "time": 0
+    },
+    "errorContains": "unterminated SegmentTemplate token"
+  }
+]

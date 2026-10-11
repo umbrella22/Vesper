@@ -54,6 +54,14 @@ target, format, architecture, ABI minor range, interface capabilities,
 `requires`, `provides`, runtime dependency declarations, resource policy, and
 `migration_version`.
 
+Current canonical descriptors use
+`migration_version = "vesper-plugin-runtime-rewrite-v1"`, generated from
+`PLUGIN_CATALOG_MIGRATION_VERSION`. The field identifies the catalog/runtime
+compatibility transition. It does not override schema, SDK or ABI validation.
+Compatibility failures preserve the plugin identity, required and actual SDK/ABI
+values, and the migration identity so an upgrade error remains actionable.
+Package metadata cannot authorize executing an incompatible artifact.
+
 `PluginCatalogRecord` adds a safe artifact path, SHA-256 digest, source
 provenance (`Package`, `Installed`, `Embedded`, or `Development`), and bounded
 redacted diagnostics. `PluginCatalog::from_records` validates limits and unique

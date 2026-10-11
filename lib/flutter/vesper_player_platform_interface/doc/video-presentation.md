@@ -77,7 +77,7 @@ VesperPlayerStage(
 The viewport API still describes screen visibility and preload hints. It is not
 an alternative source of video content geometry.
 
-## Control migration in 0.6.0
+## Control layout and fullscreen state
 
 Control density and fullscreen state are separate required inputs on all three
 UI surfaces. Compact controls can be used in portrait fullscreen; expanded
@@ -85,11 +85,9 @@ controls can be used in a wide embedded player. Fullscreen icons and labels
 always reflect `isFullscreen`. The Stage does not set OS orientation or resize
 its host. Hosts provide safe-area layout for their chosen fullscreen container.
 
-| Previous API | 0.6.0 API |
-| --- | --- |
-| Flutter/Compose `isPortrait` | Required `controlLayout` and `isFullscreen` |
-| SwiftUI `isCompactLayout` | Required `controlLayout`; retain explicit `isFullscreen` |
-| `landscapeControlBarLeading` | `expandedControlBarLeading` |
+`expandedControlBarLeading` supplies host content for the expanded control-row
+slot. Its placement follows `controlLayout`; fullscreen actions and labels
+follow `isFullscreen`.
 
 Use `VesperStageControlLayout.compact` / `.expanded` in Dart and Swift,
 `VesperStageControlLayout.Compact` / `.Expanded` in Kotlin. Select control density

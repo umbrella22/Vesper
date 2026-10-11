@@ -7,6 +7,7 @@ extension VesperForegroundDownloadExecutor {
     ) async throws -> VesperDownloadAssetIndex {
         do {
             let assetIndex = try await prepareAssetIndex(task: task)
+            try Task.checkCancellation()
             return try materializeGeneratedResources(
                 assetId: task.assetId,
                 taskId: task.taskId,
@@ -15,7 +16,9 @@ extension VesperForegroundDownloadExecutor {
             )
         } catch let error as VesperStaleDownloadResourceError {
             let staleResource = error.staleResource(taskId: task.taskId, phase: .prepare)
-            guard let recoveredPlan = await recoverTaskPlan(task: task, staleResource: staleResource) else {
+            let recoveredPlan = await recoverTaskPlan(task: task, staleResource: staleResource)
+            try Task.checkCancellation()
+            guard let recoveredPlan else {
                 throw error
             }
             let materializedRecoveredIndex = try materializeGeneratedResources(
@@ -40,7 +43,9 @@ extension VesperForegroundDownloadExecutor {
                 profile: recoveredPlan.profile,
                 assetIndex: materializedRecoveredIndex
             )
+            try Task.checkCancellation()
             let assetIndex = try await prepareAssetIndex(task: recoveredTask)
+            try Task.checkCancellation()
             let materializedAssetIndex = try materializeGeneratedResources(
                 assetId: task.assetId,
                 taskId: task.taskId,

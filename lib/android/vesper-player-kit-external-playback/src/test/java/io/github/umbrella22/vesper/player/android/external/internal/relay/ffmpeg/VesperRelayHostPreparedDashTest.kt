@@ -11,12 +11,31 @@ import java.net.Socket
 import java.nio.file.Files
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Before
 import org.junit.Test
 
 class VesperRelayHostPreparedDashTest {
+    private var bridgeApiBeforeTests: VesperRelayDashBridgeApi? = null
+    private var bridgeExecutorBeforeTests: ((String) -> String)? = null
+
+    @Before
+    fun installTemplateBridgeForJvmTests() {
+        bridgeApiBeforeTests = VesperRelayDashBridgeApiProvider
+        bridgeExecutorBeforeTests = VesperRelayDashBridgeExecutor
+        VesperRelayDashBridgeApiProvider = JniVesperRelayDashBridgeApi
+        VesperRelayDashBridgeExecutor = RecordedDashTemplateBridge()
+    }
+
+    @After
+    fun restoreTemplateBridgeAfterJvmTests() {
+        VesperRelayDashBridgeApiProvider = bridgeApiBeforeTests ?: JniVesperRelayDashBridgeApi
+        bridgeExecutorBeforeTests?.let { VesperRelayDashBridgeExecutor = it }
+    }
+
     @Test
     fun ffmpegInputStreamReadsIntoRequestedOffset() {
         val native = RecordingFfmpegNativeApi(byteArrayOf(1, 2, 3))
@@ -647,31 +666,6 @@ class VesperRelayHostPreparedDashTest {
     }
 
     @Test
-    fun rejectsSegmentTimeline() {
-        val error = unsupported {
-            planHostPreparedDash(
-                manifestText = """
-                    <MPD type="static" mediaPresentationDuration="PT10S">
-                      <Period>
-                        <AdaptationSet mimeType="video/mp4">
-                          <Representation id="v1">
-                            <SegmentTemplate media="v-${'$'}Time${'$'}.m4s" initialization="init.mp4">
-                              <SegmentTimeline><S t="0" d="4" /></SegmentTimeline>
-                            </SegmentTemplate>
-                          </Representation>
-                        </AdaptationSet>
-                      </Period>
-                    </MPD>
-                """.trimIndent(),
-                manifestUri = "https://example.com/timeline.mpd",
-            )
-        }
-
-        assertEquals("unsupported_dash_layout", error.diagnostic.code)
-        assertTrue(error.diagnostic.message.contains("SegmentTimeline"))
-    }
-
-    @Test
     fun rejectsMissingFiniteDuration() {
         val error = unsupported {
             planHostPreparedDash(
@@ -697,28 +691,35 @@ class VesperRelayHostPreparedDashTest {
 
     @Test
     fun rejectsSegmentTemplatePlansThatExceedBoundedSegmentList() {
-        val error = unsupported {
-            planHostPreparedDash(
-                manifestText = """
-                    <MPD type="static" mediaPresentationDuration="PT9000S">
-                      <Period>
-                        <AdaptationSet mimeType="video/mp4">
-                          <Representation id="v1">
-                            <SegmentTemplate timescale="1" duration="1"
-                              initialization="init.mp4" media="v-${'$'}Number${'$'}.m4s" />
-                          </Representation>
-                        </AdaptationSet>
-                      </Period>
-                    </MPD>
-                """.trimIndent(),
-                manifestUri = "https://example.com/too-many-segments.mpd",
-            )
+        val oversized = org.json.JSONArray()
+        repeat(9000) {
+            oversized.put(org.json.JSONObject()
+                .put("duration", 1.0).put("number", 1L)
+                .put("time", org.json.JSONObject.NULL).put("presentationTime", 0L))
         }
-
-        assertEquals("unsupported_dash_layout", error.diagnostic.code)
-        assertTrue(error.diagnostic.message.contains("too many segments"))
-        assertEquals("9000", error.diagnostic.details["segmentCount"])
-        assertEquals("8192", error.diagnostic.details["maxSegmentsPerTrack"])
+        withDashTemplateBridgeExecutor({ oversized.toString() }) {
+            val error = unsupported {
+                planHostPreparedDash(
+                    manifestText = """
+                        <MPD type="static" mediaPresentationDuration="PT9000S">
+                          <Period>
+                            <AdaptationSet mimeType="video/mp4">
+                              <Representation id="v1">
+                                <SegmentTemplate timescale="1" duration="1"
+                                  initialization="init.mp4" media="v-${'$'}Number${'$'}.m4s" />
+                              </Representation>
+                            </AdaptationSet>
+                          </Period>
+                        </MPD>
+                    """.trimIndent(),
+                    manifestUri = "https://example.com/too-many-segments.mpd",
+                )
+            }
+            assertEquals("unsupported_dash_layout", error.diagnostic.code)
+            assertTrue(error.diagnostic.message.contains("too many segments"))
+            assertEquals("9000", error.diagnostic.details["segmentCount"])
+            assertEquals("8192", error.diagnostic.details["maxSegmentsPerTrack"])
+        }
     }
 
     @Test
@@ -1068,7 +1069,7 @@ private fun withBridgeApi(
     }
 }
 
-private object FakeSegmentBaseBridgeApi : VesperRelayDashBridgeApi {
+private object FakeSegmentBaseBridgeApi : VesperRelayDashBridgeApi by JniVesperRelayDashBridgeApi {
     override fun parseSidx(data: ByteArray): VesperRelayDashSidxBox =
         VesperRelayDashSidxBox(
             timescale = 1000,
@@ -1110,7 +1111,7 @@ private object FakeSegmentBaseBridgeApi : VesperRelayDashBridgeApi {
         )
 }
 
-private object FakeOversizedSegmentBaseBridgeApi : VesperRelayDashBridgeApi {
+private object FakeOversizedSegmentBaseBridgeApi : VesperRelayDashBridgeApi by JniVesperRelayDashBridgeApi {
     override fun parseSidx(data: ByteArray): VesperRelayDashSidxBox =
         FakeSegmentBaseBridgeApi.parseSidx(data)
 

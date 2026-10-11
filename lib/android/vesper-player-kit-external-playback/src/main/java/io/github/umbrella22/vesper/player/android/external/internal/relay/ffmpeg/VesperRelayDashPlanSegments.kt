@@ -10,39 +10,63 @@ internal fun selectRepresentation(
     if (!isDynamic) {
         return representations.firstOrNull()
     }
-    return representations.firstOrNull { dashTemplateFromElement(it) != null }
+    return representations.firstOrNull { childElementsByTagName(it, "SegmentTemplate").isNotEmpty() }
         ?: representations.firstOrNull()
 }
 
 internal fun planSegmentTemplateTrack(
     context: DashTrackContext,
     template: DashTemplate,
-    durationSeconds: Double?,
+    manifestType: String,
+    durationMs: Long?,
     baseDetails: Map<String, String>,
     referenceResolver: DashReferenceResolver,
 ): VesperRelayDashTrackPlan {
-    val finiteDurationSeconds = durationSeconds
-        ?: throw VesperRelayHostInputException(
-            status = 415,
-            diagnostic = VesperRelayDiagnostic(
-                code = "unsupported_dash_layout",
-                message = "Host-prepared relay remux requires a finite DASH mediaPresentationDuration.",
-                details = baseDetails + mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
-            ),
-        )
     validateTemplate(template, baseDetails, context.kind, context.representationId)
-    val segmentSeconds = template.duration.toDouble() / template.timescale.coerceAtLeast(1L).toDouble()
-    val segmentCount = kotlin.math.ceil(finiteDurationSeconds / segmentSeconds)
-        .toLong()
-        .coerceAtLeast(1L)
-    if (segmentCount > MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK.toLong()) {
+    if (template.timeline.isEmpty() && durationMs == null) {
+        throw unsupportedDashLayout(
+            baseDetails = baseDetails,
+            message = "Host-prepared relay remux requires a finite DASH mediaPresentationDuration for fixed-duration templates.",
+            details = mapOf("trackKind" to context.kind, "mediaId" to context.mediaId),
+        )
+    }
+    val templateSegments = try {
+        VesperRelayDashBridgeApiProvider.templateSegments(
+            // Preserve the existing finite snapshot route for dynamic fixed-duration MPDs.
+            manifestType = if (template.timeline.isEmpty()) "static" else manifestType,
+            durationMs = durationMs,
+            template = template,
+        )
+    } catch (error: VesperRelayDashSegmentLimitException) {
         throw unsupportedDashLayout(
             baseDetails = baseDetails,
             message = "DASH SegmentTemplate expands to too many segments for relay remux v1.",
             details = mapOf(
                 "trackKind" to context.kind,
                 "mediaId" to context.representationId,
-                "segmentCount" to segmentCount.toString(),
+                "segmentCount" to error.segmentCount.toString(),
+                "maxSegmentsPerTrack" to MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK.toString(),
+            ),
+        )
+    } catch (error: Exception) {
+        throw unsupportedDashLayout(
+            baseDetails = baseDetails,
+            message = "DASH SegmentTemplate could not be expanded for host-prepared relay remux.",
+            details = mapOf(
+                "trackKind" to context.kind,
+                "mediaId" to context.representationId,
+                "hostError" to (error.message ?: error.javaClass.simpleName),
+            ),
+        )
+    }
+    if (templateSegments.size > MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK) {
+        throw unsupportedDashLayout(
+            baseDetails = baseDetails,
+            message = "DASH SegmentTemplate expands to too many segments for relay remux v1.",
+            details = mapOf(
+                "trackKind" to context.kind,
+                "mediaId" to context.representationId,
+                "segmentCount" to templateSegments.size.toString(),
                 "maxSegmentsPerTrack" to MAX_HOST_PREPARED_DASH_SEGMENTS_PER_TRACK.toString(),
             ),
         )
@@ -50,16 +74,27 @@ internal fun planSegmentTemplateTrack(
     val initializationUri = template.initialization?.let { initialization ->
         referenceResolver.reference(
             context.mediaBaseUri,
-            expandDashTemplate(initialization, context.representationId, template.startNumber),
+            expandDashTemplate(
+                template = initialization,
+                context = context,
+                number = templateSegments.firstOrNull()?.number ?: template.startNumber,
+                time = templateSegments.firstOrNull()?.time,
+                baseDetails = baseDetails,
+            ),
         )
     }
-    val segments = (0 until segmentCount).map { offset ->
-        val number = template.startNumber + offset
+    val segments = templateSegments.map { segment ->
         VesperRelayDashSegment(
-            index = number,
+            index = segment.number,
             uri = referenceResolver.reference(
                 context.mediaBaseUri,
-                expandDashTemplate(template.media, context.representationId, number),
+                expandDashTemplate(
+                    template = template.media,
+                    context = context,
+                    number = segment.number,
+                    time = segment.time,
+                    baseDetails = baseDetails,
+                ),
             ),
         )
     }
@@ -147,10 +182,35 @@ private fun validateTemplate(
     kind: String,
     mediaId: String,
 ) {
-    if (template.duration <= 0L || template.timescale <= 0L) {
+    if (template.timescale <= 0L || (template.duration != null && template.duration <= 0L)) {
         throw unsupportedDashLayout(
             baseDetails = baseDetails,
             message = "DASH SegmentTemplate duration and timescale must be greater than zero.",
+            details = mapOf("trackKind" to kind, "mediaId" to mediaId),
+        )
+    }
+    if (template.duration == null && template.timeline.isEmpty()) {
+        throw unsupportedDashLayout(
+            baseDetails = baseDetails,
+            message = "DASH SegmentTemplate requires duration or SegmentTimeline.",
+            details = mapOf("trackKind" to kind, "mediaId" to mediaId),
+        )
+    }
+    if (template.startNumber < 0L || template.presentationTimeOffset < 0L) {
+        throw unsupportedDashLayout(
+            baseDetails = baseDetails,
+            message = "DASH SegmentTemplate numbering values must be non-negative.",
+            details = mapOf("trackKind" to kind, "mediaId" to mediaId),
+        )
+    }
+    if (template.timeline.any { entry ->
+            entry.startTime != null && entry.startTime < 0L ||
+                entry.duration <= 0L || entry.repeatCount < -1
+        }
+    ) {
+        throw unsupportedDashLayout(
+            baseDetails = baseDetails,
+            message = "DASH SegmentTimeline contains an invalid entry.",
             details = mapOf("trackKind" to kind, "mediaId" to mediaId),
         )
     }
@@ -161,28 +221,32 @@ private fun validateTemplate(
             details = mapOf("trackKind" to kind, "mediaId" to mediaId),
         )
     }
-    if (!DASH_NUMBER_TOKEN.containsMatchIn(template.media) || template.media.contains("${'$'}Time")) {
-        throw unsupportedDashLayout(
-            baseDetails = baseDetails,
-            message = "Host-prepared relay remux v1 requires SegmentTemplate media with Number tokens.",
-            details = mapOf("trackKind" to kind, "mediaId" to mediaId),
-        )
-    }
 }
-
-private val DASH_NUMBER_TOKEN = Regex("""\${'$'}Number(?:%0(\d+)d)?\${'$'}""")
 
 private fun expandDashTemplate(
     template: String,
-    representationId: String,
-    number: Long,
+    context: DashTrackContext,
+    number: Long?,
+    time: Long?,
+    baseDetails: Map<String, String>,
 ): String =
-    DASH_NUMBER_TOKEN
-        .replace(template.replace("${'$'}RepresentationID${'$'}", representationId)) { match ->
-            val width = match.groupValues.getOrNull(1)?.toIntOrNull()
-            if (width == null) {
-                number.toString()
-            } else {
-                number.toString().padStart(width, '0')
-            }
-        }
+    try {
+        VesperRelayDashBridgeApiProvider.expandTemplate(
+            template = template,
+            representationId = context.representationId,
+            bandwidth = context.bandwidth,
+            number = number,
+            time = time,
+        )
+    } catch (error: Exception) {
+        throw unsupportedDashLayout(
+            baseDetails = baseDetails,
+            message = "DASH SegmentTemplate URI could not be expanded for host-prepared relay remux.",
+            details = mapOf(
+                "trackKind" to context.kind,
+                "mediaId" to context.representationId,
+                "templateHash" to hashForDiagnostic(template),
+                "hostError" to (error.message ?: error.javaClass.simpleName),
+            ),
+        )
+    }

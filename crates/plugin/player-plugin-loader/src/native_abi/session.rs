@@ -147,7 +147,7 @@ impl NativeAbiDecoderPluginFactory {
 impl NativeAbiDecoderFactoryInner {
     fn allocate_session_token(&self) -> Result<u64, DecoderError> {
         self.next_session_token
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .map_err(|_| DecoderError::internal("host decoder session token space is exhausted"))

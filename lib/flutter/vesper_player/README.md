@@ -20,7 +20,7 @@ across platforms.
 | Live streams             | ✅                                           | ✅                                                  |
 | Live DVR                 | ✅                                           | ✅                                                  |
 | Track selection          | ✅                                           | ✅                                                  |
-| Adaptive bitrate (ABR)   | ✅                                           | ⚠️ Constrained + best-effort fixed-track on iOS 15+ |
+| Adaptive bitrate (ABR)   | ✅                                           | ⚠️ Constrained + best-effort fixed-track on iOS 17+ |
 | Buffering / retry policy | ✅                                           | ✅                                                  |
 | Download management      | ✅                                           | ✅                                                  |
 | Preload                  | ✅                                           | ✅                                                  |
@@ -221,7 +221,7 @@ List replacement, reorder and resolver responses never implicitly select
 playback. Activation supplies explicit play/position/rate intent and returns a
 native playback epoch for later diagnostic correlation. Dispose the source
 session when its registrations are no longer needed; acquired playback leases
-survive ordinary disposal. See the [source lifecycle and 0.7 migration guide](../../doc/source-lifecycle.md).
+survive ordinary disposal. See the [source lifecycle contract](../../doc/source-lifecycle.md).
 
 Mobile source and seek commands have native completion semantics. A successful
 `selectSource` completes only after the current source publishes a stable VOD,
@@ -536,7 +536,7 @@ await controller.setAbrPolicy(
   `code`, `phase`, `trackId`, `retriable`, `commandId`, and `sourceEpoch`.
 
 On iOS, `VesperAbrPolicy.fixedTrack(...)` is implemented as best-effort HLS
-variant pinning on iOS 15+, not exact AVPlayer video-track switching. Single-
+variant pinning on iOS 17+, not exact AVPlayer video-track switching. Single-
 axis constraints such as `VesperAbrPolicy.constrained(maxHeight: 720)` are also
 supported on iOS HLS, but they are restored only after the current variant
 catalog is ready so the missing dimension can be inferred safely. Check
@@ -904,7 +904,7 @@ if (caps.isExperimental) {
 
 Native display dimensions and per-view content rectangles are separate APIs.
 The mobile renderer preserves aspect ratio with centered letterboxing.
-See the [video presentation contract and 0.6.0 migration guide](../vesper_player_platform_interface/doc/video-presentation.md)
+See the [video presentation contract](../vesper_player_platform_interface/doc/video-presentation.md)
 for control layout, fullscreen state, geometry lifecycle, and PiP.
 
 ### DASH sequence startup cache

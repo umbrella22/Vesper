@@ -2,6 +2,7 @@ package io.github.umbrella22.vesper.player.android.external.internal.relay
 
 import android.content.Context
 import io.github.umbrella22.vesper.player.android.VesperPlayerSource
+import io.github.umbrella22.vesper.player.android.VesperPlayerSourceProtocol
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.security.SecureRandom
@@ -210,6 +211,15 @@ class VesperRelayServer @JvmOverloads constructor(
         adaptation: VesperRelayFormatAdaptationRegistration? = null,
         preferredAddress: InetAddress? = null,
     ): VesperRelayHandle {
+        if (source.protocol == VesperPlayerSourceProtocol.Hls && adaptation == null) {
+            val diagnostic = VesperRelayDiagnostic(
+                code = "unsupported_hls_relay",
+                message = "Raw HLS relay requires playlist and subresource rewriting, which is not supported.",
+                details = mapOf("protocol" to "hls"),
+            )
+            emitDiagnostic(diagnostic)
+            throw VesperRelayRegistrationException(415, diagnostic)
+        }
         pruneExpiredEntries()
         val token = nextToken()
         adaptation?.let { registration ->
@@ -234,7 +244,7 @@ class VesperRelayServer @JvmOverloads constructor(
         val host = advertisedHost(preferredAddress, activeBind)
             ?: throw IllegalStateException("No LAN address is available for relay.")
         val relayPath = source.relayPath(token, adaptation)
-        stateLock.withLock {
+        val registeredEntry = stateLock.withLock {
             if (
                 lifecycleEpoch.get() != registerEpoch ||
                     !running.get() ||
@@ -253,6 +263,7 @@ class VesperRelayServer @JvmOverloads constructor(
                     headOnly = false,
                     range = null,
                     requestHeaders = emptyMap(),
+                    lifetime = registeredEntry.lifetime,
                 )
                 formatAdapter.prewarm(prewarmRequest)?.let { failure ->
                     val diagnostic = failure.diagnostic.withHttpStatus(failure.status)
@@ -273,7 +284,7 @@ class VesperRelayServer @JvmOverloads constructor(
             lifecycleEpoch.get() == registerEpoch &&
                 running.get() &&
                 serverSocket === socket
-        }
+        } && registeredEntry.lifetime.isActive && entries.entryForToken(token)?.lifetime === registeredEntry.lifetime
         if (!stillRegistered) {
             entries.remove(token)
             formatAdapter.invalidate(token)
@@ -300,6 +311,8 @@ class VesperRelayServer @JvmOverloads constructor(
         }
         return address?.toRelayHost()
     }
+
+    internal fun pin(token: String): Boolean = entries.pin(token)
 
     fun invalidate(token: String) {
         entries.invalidate(token)

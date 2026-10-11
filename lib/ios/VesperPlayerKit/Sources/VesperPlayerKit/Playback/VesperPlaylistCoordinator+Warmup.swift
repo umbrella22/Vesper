@@ -35,22 +35,28 @@ extension VesperPlaylistCoordinator {
         let headers = source.source.headers
         warmupTasks[task.taskId] = Task.detached(priority: .utility) {
             guard !Task.isCancelled else { return }
+            guard task.expectedMemoryBytes > 0 else {
+                _ = vesper_runtime_playlist_session_complete_preload_task(handle, task.taskId)
+                _ = await MainActor.run { if !Task.isCancelled { self.warmupTasks.removeValue(forKey: task.taskId) } }
+                return
+            }
             var request = URLRequest(url: source.url)
             applyHttpHeaders(headers, to: &request)
             request.cachePolicy = .returnCacheDataElseLoad
             let clampedWarmupWindowMs = Int64(min(task.warmupWindowMs, UInt64(Int64.max)))
             request.timeoutInterval = TimeInterval(max(clampedWarmupWindowMs, 1_000)) / 1000.0
             let clampedExpectedMemoryBytes = Int64(min(task.expectedMemoryBytes, UInt64(Int64.max)))
-            let warmupBytes = max(clampedExpectedMemoryBytes, 1)
+            let warmupBytes = Int(clampedExpectedMemoryBytes)
             request.setValue("bytes=0-\(max(warmupBytes - 1, 0))", forHTTPHeaderField: "Range")
 
             do {
                 try Task.checkCancellation()
-                _ = try await URLSession.shared.data(for: request)
+                _ = try await VesperSequenceURLSessionWarmupLoader().load(request: request, maximumBytes: warmupBytes)
                 try Task.checkCancellation()
                 _ = vesper_runtime_playlist_session_complete_preload_task(handle, task.taskId)
             } catch is CancellationError {
             } catch {
+                guard !Task.isCancelled else { return }
                 error.localizedDescription.withCString { message in
                     _ = vesper_runtime_playlist_session_fail_preload_task(
                         handle,

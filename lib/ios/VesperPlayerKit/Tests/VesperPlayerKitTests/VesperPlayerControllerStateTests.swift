@@ -1,9 +1,76 @@
 import UIKit
 import XCTest
-@testable import VesperPlayerKit
+@_spi(VesperFlutter) @testable import VesperPlayerKit
 
 @MainActor
 final class VesperPlayerControllerStateTests: XCTestCase {
+    func testQueuedBridgePublicationCannotReanimateDisposedController() async throws {
+        let previousIdleTimer = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = false
+        defer { UIApplication.shared.isIdleTimerDisabled = previousIdleTimer }
+        let bridge = TestObservablePlayerBridge()
+        let controller = VesperPlayerController(bridge)
+        controller.setKeepScreenOnDuringPlayback(true)
+        let previousState = controller.publishedUiState
+        let previousPolicy = controller.resiliencePolicy
+        bridge.publishedUiState = PlayerHostUiState(
+            title: "Queued after dispose", subtitle: "Playing", sourceLabel: "Test",
+            playbackState: .playing, playbackRate: 1, isBuffering: false,
+            isInterrupted: false, timeline: bridge.publishedUiState.timeline
+        )
+        bridge.publishedResiliencePolicy = .resilient()
+        // Both publications enqueue MainActor work. Dispose before that work runs.
+        controller.dispose()
+        for _ in 0..<10 { await Task.yield() }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(controller.publishedUiState.title, previousState.title)
+        XCTAssertEqual(controller.publishedUiState.playbackState, previousState.playbackState)
+        XCTAssertEqual(controller.resiliencePolicy, previousPolicy)
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
+        XCTAssertEqual(bridge.disposeCount, 1)
+    }
+
+    func testDisposedControllerRejectsEverySelectionEntryPointWithoutForwarding() async throws {
+        let bridge = TestObservablePlayerBridge()
+        let controller = VesperPlayerController(bridge)
+        let source = VesperPlayerSource.remoteUrl(URL(string: "https://example.com/source.mp4")!)
+        controller.initialize()
+        controller.selectSource(source)
+        XCTAssertEqual(bridge.initializeCount, 1)
+        XCTAssertEqual(bridge.selectSourceCount, 1)
+        controller.dispose()
+
+        controller.selectSource(source)
+        XCTAssertEqual(controller.lastError?.details["code"] as? String, "controller_disposed")
+        for selection in [
+            { try controller.selectSourceChecked(source) },
+            { _ = try controller.startSourceSelection(source) }
+        ] {
+            XCTAssertThrowsError(try selection()) { error in
+                let typed = error as? VesperPlayerError
+                XCTAssertEqual(typed?.code, .invalidState)
+                XCTAssertEqual(typed?.details["code"] as? String, "controller_disposed")
+            }
+        }
+        do {
+            try await controller.selectSourceAsync(source)
+            XCTFail("disposed async selection must be rejected")
+        } catch {
+            XCTAssertEqual((error as? VesperPlayerError)?.details["code"] as? String, "controller_disposed")
+        }
+        controller.initialize()
+        do {
+            try await controller.initializeAsync()
+            XCTFail("disposed async initialization must be rejected")
+        } catch {
+            XCTAssertEqual((error as? VesperPlayerError)?.code, .invalidState)
+        }
+        controller.dispose()
+        XCTAssertEqual(bridge.selectSourceCount, 1)
+        XCTAssertEqual(bridge.initializeCount, 1)
+        XCTAssertEqual(bridge.disposeCount, 1)
+    }
+
     func testFirstVideoFrameDeferralAppliesOnlyToLocalVideo() {
         XCTAssertFalse(
             shouldDeferPlaybackUntilFirstVideoFrame(
@@ -324,7 +391,7 @@ final class VesperPlayerControllerStateTests: XCTestCase {
 
         bridge.dispose()
 
-        XCTAssertEqual(bridge.playbackEpochSnapshot(), 1)
+        XCTAssertEqual(bridge.currentPlaybackEpoch(), 1)
         XCTAssertLessThanOrEqual(bridge.readyForDisplayEpochCountSnapshot(), 1)
     }
 
@@ -3336,14 +3403,16 @@ private final class TestObservablePlayerBridge: ObservableObject, ObservablePlay
     var lastError: VesperPlayerError? { publishedLastError }
     var pluginDiagnostics: [[String: Any]] { [] }
 
-    func initialize() {}
+    private(set) var initializeCount = 0
+    private(set) var selectSourceCount = 0
+    func initialize() { initializeCount += 1 }
     private(set) var disposeCount = 0
 
     func dispose() {
         disposeCount += 1
     }
     func refresh() {}
-    func selectSource(_ source: VesperPlayerSource) {}
+    func selectSource(_ source: VesperPlayerSource) { selectSourceCount += 1 }
     func attachSurfaceHost(_ host: UIView) {}
     func detachSurfaceHost() {}
     func play() {}

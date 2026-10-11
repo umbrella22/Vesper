@@ -45,7 +45,7 @@ extension VesperForegroundDownloadExecutor {
             } else {
                 sizeBytes = try await probeRequiredSize(resource.uri, byteRange: resource.byteRange, requestHeaders: requestHeaders)
             }
-            totalSizeBytes += sizeBytes
+            totalSizeBytes = try checkedPlannedSize(totalSizeBytes, adding: sizeBytes)
             resources.append(resource.withSizeBytes(sizeBytes))
         }
 
@@ -58,7 +58,7 @@ extension VesperForegroundDownloadExecutor {
             } else {
                 sizeBytes = try await probeRequiredSize(segment.uri, byteRange: segment.byteRange, requestHeaders: requestHeaders)
             }
-            totalSizeBytes += sizeBytes
+            totalSizeBytes = try checkedPlannedSize(totalSizeBytes, adding: sizeBytes)
             segments.append(segment.withSizeBytes(sizeBytes))
         }
 
@@ -70,6 +70,7 @@ extension VesperForegroundDownloadExecutor {
             totalSizeBytes: assetIndex.totalSizeBytes ?? totalSizeBytes,
             resources: resources,
             segments: segments,
+            streams: assetIndex.streams,
             completedPath: assetIndex.completedPath
         )
     }
@@ -113,6 +114,7 @@ extension VesperForegroundDownloadExecutor {
         return try await buildHlsMediaAssetIndex(
             manifestPath: "index.m3u8",
             mediaPlaylists: [("media", media)],
+            rootIsMediaPlaylist: true,
             requestHeaders: requestHeaders
         )
     }
@@ -123,6 +125,7 @@ extension VesperForegroundDownloadExecutor {
         profile: VesperDownloadProfile,
         requestHeaders: [String: String]
     ) async throws -> VesperDownloadAssetIndex {
+        try validateHlsEncryption(manifestText)
         let master = parseHlsMasterPlaylist(manifestUri: manifestUri, manifestText: manifestText)
         guard
             let variant = profile.variantId.flatMap({ variantId in
@@ -142,25 +145,20 @@ extension VesperForegroundDownloadExecutor {
             )
         ]
 
-        let audio = profile.preferredAudioLanguage.flatMap { language in
-            master.audio.first { $0.attributes["LANGUAGE"]?.caseInsensitiveCompare(language) == .orderedSame }
-        } ?? master.audio.first { $0.attributes["DEFAULT"]?.caseInsensitiveCompare("YES") == .orderedSame }
-            ?? master.audio.first
-        if let audio {
-            mediaPlaylists.append(
-                (
-                    "audio",
-                    try parseHlsMediaPlaylist(
-                        playlistUri: audio.uri,
-                        playlistText: try await fetchText(audio.uri, requestHeaders: requestHeaders)
-                    )
+        if let audioUri = selectHlsAudio(master: master, variant: variant, profile: profile)?.uri {
+            mediaPlaylists.append((
+                "audio",
+                try parseHlsMediaPlaylist(
+                    playlistUri: audioUri,
+                    playlistText: try await fetchText(audioUri, requestHeaders: requestHeaders)
                 )
-            )
+            ))
         }
 
         let planned = try await buildHlsMediaAssetIndex(
             manifestPath: "index.m3u8",
             mediaPlaylists: mediaPlaylists,
+            rootIsMediaPlaylist: false,
             requestHeaders: requestHeaders
         )
         let mediaResourceNames = planned.resources.compactMap { resource -> String? in
@@ -189,6 +187,7 @@ extension VesperForegroundDownloadExecutor {
     func buildHlsMediaAssetIndex(
         manifestPath: String,
         mediaPlaylists: [(String, HlsMediaPlaylist)],
+        rootIsMediaPlaylist: Bool,
         requestHeaders: [String: String]
     ) async throws -> VesperDownloadAssetIndex {
         var resources = [
@@ -199,21 +198,23 @@ extension VesperForegroundDownloadExecutor {
             )
         ]
         var segments: [VesperDownloadSegmentRecord] = []
-        var seenMaps = Set<String>()
+        var mapPaths: [String: String] = [:]
         var totalSizeBytes: UInt64 = 0
 
         for (mediaId, playlist) in mediaPlaylists {
             let playlistPath =
-                mediaPlaylists.count == 1 && manifestPath == "index.m3u8"
+                rootIsMediaPlaylist && mediaPlaylists.count == 1
                     ? "index.m3u8"
                     : "\(mediaId).m3u8"
             var localMaps: [String: String] = [:]
 
             for (index, map) in playlist.maps.enumerated() {
                 let key = hlsByteRangeKey(uri: map.uri, byteRange: map.byteRange)
-                if seenMaps.insert(key).inserted {
+                if let existingPath = mapPaths[key] {
+                    localMaps[key] = existingPath
+                } else {
                     let sizeBytes = try await probeRequiredSize(map.uri, byteRange: map.byteRange, requestHeaders: requestHeaders)
-                    totalSizeBytes += sizeBytes
+                    totalSizeBytes = try checkedPlannedSize(totalSizeBytes, adding: sizeBytes)
                     let relativePath = "segments/\(mediaId)-init-\(index).\(extensionFromUri(map.uri, fallback: "mp4"))"
                     resources.append(
                         VesperDownloadResourceRecord(
@@ -225,12 +226,13 @@ extension VesperForegroundDownloadExecutor {
                         )
                     )
                     localMaps[key] = relativePath
+                    mapPaths[key] = relativePath
                 }
             }
 
             for segment in playlist.segments {
                 let sizeBytes = try await probeRequiredSize(segment.uri, byteRange: segment.byteRange, requestHeaders: requestHeaders)
-                totalSizeBytes += sizeBytes
+                totalSizeBytes = try checkedPlannedSize(totalSizeBytes, adding: sizeBytes)
                 segments.append(
                     VesperDownloadSegmentRecord(
                         segmentId: "hls-\(mediaId)-\(segment.sequence)",
@@ -253,7 +255,7 @@ extension VesperForegroundDownloadExecutor {
             )
         }
 
-        if mediaPlaylists.count == 1,
+        if rootIsMediaPlaylist, mediaPlaylists.count == 1,
            let mediaResourceIndex = resources.firstIndex(where: { $0.resourceId.hasSuffix("-playlist") }) {
             let mediaResource = resources.remove(at: mediaResourceIndex)
             resources[0] = resources[0].withGeneratedText(mediaResource.generatedText ?? "")
@@ -303,14 +305,20 @@ extension VesperForegroundDownloadExecutor {
                     throw VesperForegroundDownloadPreparationError.invalidSource("DASH SegmentTemplate duration must be greater than zero")
                 }
                 let segmentSeconds = Double(template.duration) / Double(max(template.timescale, 1))
-                let segmentCount = max(UInt64(ceil(durationSeconds / segmentSeconds)), 1)
+                let segmentCount = try plannedDashSegmentCount(
+                    durationSeconds: durationSeconds, segmentSeconds: segmentSeconds, startNumber: template.startNumber
+                )
+                let (_, sequenceOverflow) = globalSequence.addingReportingOverflow(segmentCount)
+                guard !sequenceOverflow else {
+                    throw VesperForegroundDownloadPreparationError.invalidSource("DASH global segment sequence overflows")
+                }
                 if let initialization = template.initialization, !initialization.isEmpty {
                     let remote = resolveRemoteReference(
                         baseUri: representation.baseUri,
                         reference: expandDashTemplate(initialization, representationId: representation.id, number: template.startNumber)
                     )
                     let sizeBytes = try await probeRequiredSize(remote, byteRange: nil, requestHeaders: requestHeaders)
-                    totalSizeBytes += sizeBytes
+                    totalSizeBytes = try checkedPlannedSize(totalSizeBytes, adding: sizeBytes)
                     resources.append(
                         VesperDownloadResourceRecord(
                             resourceId: "dash-\(mediaId)-init",
@@ -328,7 +336,7 @@ extension VesperForegroundDownloadExecutor {
                         reference: expandDashTemplate(template.media, representationId: representation.id, number: number)
                     )
                     let sizeBytes = try await probeRequiredSize(remote, byteRange: nil, requestHeaders: requestHeaders)
-                    totalSizeBytes += sizeBytes
+                    totalSizeBytes = try checkedPlannedSize(totalSizeBytes, adding: sizeBytes)
                     segments.append(
                         VesperDownloadSegmentRecord(
                             segmentId: "dash-\(mediaId)-segment-\(number)",
@@ -350,9 +358,9 @@ extension VesperForegroundDownloadExecutor {
                     )
                 )
             } else if let baseUrl = representation.baseUrl {
-                let remote = resolveRemoteReference(baseUri: representation.baseUri, reference: baseUrl)
+                let remote = baseUrl
                 let sizeBytes = try await probeRequiredSize(remote, byteRange: nil, requestHeaders: requestHeaders)
-                totalSizeBytes += sizeBytes
+                totalSizeBytes = try checkedPlannedSize(totalSizeBytes, adding: sizeBytes)
                 let localName = "media-\(mediaId).\(extensionFromUri(remote, fallback: "mp4"))"
                 resources.append(
                     VesperDownloadResourceRecord(
@@ -408,7 +416,7 @@ extension VesperForegroundDownloadExecutor {
         for (index, clipUri) in clipUris.enumerated() {
             let sequence = UInt64(index + 1)
             let sizeBytes = try await probeRequiredSize(clipUri, byteRange: nil, requestHeaders: requestHeaders)
-            totalSizeBytes += sizeBytes
+            totalSizeBytes = try checkedPlannedSize(totalSizeBytes, adding: sizeBytes)
             let localPath = "clips/clip-\(padded(sequence, width: 5)).\(extensionFromUri(clipUri, fallback: "flv"))"
             concat += "file '\(escapeFfconcatPath(localPath))'\n"
             segments.append(
@@ -435,5 +443,13 @@ extension VesperForegroundDownloadExecutor {
             ],
             segments: segments
         )
+    }
+
+    func checkedPlannedSize(_ total: UInt64, adding size: UInt64) throws -> UInt64 {
+        let (result, overflow) = total.addingReportingOverflow(size)
+        guard !overflow else {
+            throw VesperForegroundDownloadPreparationError.invalidSource("download planned byte total overflows")
+        }
+        return result
     }
 }

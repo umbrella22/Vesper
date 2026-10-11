@@ -129,8 +129,7 @@ internal fun VesperNativePlayerBridge.postNativeFramePipelineCleanupCommand(
                             if (isDisposed.get()) {
                                 Log.w(
                                     NATIVE_PLAYER_BRIDGE_TAG,
-                                    "native-frame pipeline $operation failed after dispose",
-                                    error,
+                                    "native-frame pipeline $operation failed after dispose failure=${diagnosticPlaybackFailure(error)}",
                                 )
                             } else {
                                 handleNativeFramePipelineRuntimeFailure(operation, error)
@@ -147,8 +146,7 @@ internal fun VesperNativePlayerBridge.postNativeFramePipelineCleanupCommand(
                     if (isDisposed.get()) {
                         Log.w(
                             NATIVE_PLAYER_BRIDGE_TAG,
-                            "native-frame pipeline $operation rejected after dispose",
-                            error,
+                            "native-frame pipeline $operation rejected after dispose failure=${diagnosticPlaybackFailure(error)}",
                         )
                     } else {
                         handleNativeFramePipelineRuntimeFailure(operation, error)

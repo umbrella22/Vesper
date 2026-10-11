@@ -27,9 +27,9 @@ pub use audio::{
     AudioProcessorSubmitStatus,
 };
 pub use benchmark::{
-    BenchmarkEvent, BenchmarkEventBatch, BenchmarkSink, BenchmarkSinkError, BenchmarkSinkReport,
-    BenchmarkSinkStatus, BenchmarkThresholdViolation, MAX_BENCHMARK_BATCH_EVENTS,
-    MAX_BENCHMARK_THRESHOLD_VIOLATIONS,
+    BenchmarkEvent, BenchmarkEventBatch, BenchmarkSink, BenchmarkSinkError, BenchmarkSinkFailure,
+    BenchmarkSinkReport, BenchmarkSinkStatus, BenchmarkThresholdViolation,
+    MAX_BENCHMARK_BATCH_EVENTS, MAX_BENCHMARK_THRESHOLD_VIOLATIONS, PluginBenchmarkSink,
 };
 pub use capability::ProcessorCapabilities;
 pub use catalog::{
@@ -65,7 +65,8 @@ pub use frame_processor::{
     FrameProcessorSubmitResult, FrameProcessorSubmitStatus,
 };
 pub use hook::{
-    PipelineEvent, PipelineEventHook, PipelineEventHookError, PipelineEventHookOutcome,
+    PipelineEvent, PipelineEventHook, PipelineEventHookError, PipelineEventHookFailure,
+    PipelineEventHookOutcome, PluginEventHook,
 };
 pub use invocation::{
     PluginInvocationPolicy, PluginInvocationPolicyError, PluginInvocationWorkload,

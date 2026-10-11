@@ -88,21 +88,27 @@ loop do
     end
 
     grace_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
+    leader_reaped = false
     loop do
-      waited_pid = Process.waitpid(pid, Process::WNOHANG)
-      break if waited_pid
+      unless leader_reaped
+        leader_reaped = !Process.waitpid(pid, Process::WNOHANG).nil?
+      end
+      begin
+        Process.kill(0, -pid)
+      rescue Errno::ESRCH
+        break
+      end
       break if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= grace_deadline
       sleep 0.25
     end
 
-    unless waited_pid
-      begin
-        Process.kill("KILL", -pid)
-      rescue Errno::ESRCH
-        nil
-      end
-      Process.waitpid(pid)
+    # Reaping the leader does not imply its process group is empty.
+    begin
+      Process.kill("KILL", -pid)
+    rescue Errno::ESRCH
+      nil
     end
+    Process.waitpid(pid) unless leader_reaped
 
     warn "Command timed out after #{timeout_seconds}s: #{command.join(" ")}"
     exit 124

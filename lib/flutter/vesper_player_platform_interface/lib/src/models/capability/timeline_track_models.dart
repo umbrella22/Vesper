@@ -513,11 +513,13 @@ final class VesperTrackSelection {
       : mode = VesperTrackSelectionMode.track;
 
   factory VesperTrackSelection.fromMap(Map<Object?, Object?> map) {
+    _validateCallerMapKeys(map, 'VesperTrackSelection');
     return VesperTrackSelection(
-      mode: _decodeEnum(
+      mode: _decodeCallerEnum(
         VesperTrackSelectionMode.values,
         map['mode'],
         VesperTrackSelectionMode.auto,
+        'trackSelection.mode',
       ),
       trackId: map['trackId'] as String?,
     );
@@ -561,8 +563,10 @@ final class VesperAbrPolicy {
         maxHeight = null;
 
   factory VesperAbrPolicy.fromMap(Map<Object?, Object?> map) {
+    _validateCallerMapKeys(map, 'VesperAbrPolicy');
     return VesperAbrPolicy(
-      mode: _decodeEnum(VesperAbrMode.values, map['mode'], VesperAbrMode.auto),
+      mode: _decodeCallerEnum(
+          VesperAbrMode.values, map['mode'], VesperAbrMode.auto, 'abr.mode'),
       trackId: map['trackId'] as String?,
       maxBitRate: _decodeInt(map, 'maxBitRate'),
       maxWidth: _decodeInt(map, 'maxWidth'),
@@ -659,12 +663,15 @@ final class VesperTrackPreferencePolicy {
   });
 
   factory VesperTrackPreferencePolicy.fromMap(Map<Object?, Object?> map) {
+    _validateCallerMapKeys(map, 'VesperTrackPreferencePolicy');
     final rawAudioSelection = map['audioSelection'];
     final rawSubtitleSelection = map['subtitleSelection'];
     final rawAbrPolicy = map['abrPolicy'];
-    final audioSelection = _rawMap(rawAudioSelection);
-    final subtitleSelection = _rawMap(rawSubtitleSelection);
-    final abrPolicy = _rawMap(rawAbrPolicy);
+    final audioSelection =
+        _decodeCallerMap(rawAudioSelection, 'audioSelection');
+    final subtitleSelection =
+        _decodeCallerMap(rawSubtitleSelection, 'subtitleSelection');
+    final abrPolicy = _decodeCallerMap(rawAbrPolicy, 'abrPolicy');
     return VesperTrackPreferencePolicy(
       preferredAudioLanguage: map['preferredAudioLanguage'] as String?,
       preferredSubtitleLanguage: map['preferredSubtitleLanguage'] as String?,

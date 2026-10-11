@@ -521,6 +521,49 @@ final class VesperNativeSubtitleStateTests: XCTestCase {
     }
 
     @MainActor
+    func testDefaultSubtitleCancellationDoesNotResetNewSourceAbrPolicy() async throws {
+        let track = externalSubtitle(
+            id: "old-default-track",
+            url: URL(fileURLWithPath: "/tmp/old-default-track.vtt")
+        )
+        let (bridge, oldItem) = makeLoadingSubtitleBridge(
+            tracks: [track],
+            waitPolicy: VesperSubtitleSelectionWaitPolicy(
+                timeout: .milliseconds(500),
+                pollInterval: .milliseconds(1)
+            )
+        )
+        defer { bridge.dispose() }
+        bridge.resolvedTrackPreferencePolicy = VesperTrackPreferencePolicy(
+            subtitleSelection: .auto()
+        )
+        let defaultsTask = Task { @MainActor in
+            await bridge.applyDefaultTrackPreferencesIfNeeded(for: oldItem)
+        }
+        try await waitForPendingSubtitleSelection(bridge)
+
+        // Use the same cancellation/epoch teardown as an A -> B source switch.
+        bridge.tearDownActivePlayback(cancelSourceCommand: false)
+        bridge.advanceSubtitleSourceEpoch()
+        bridge.currentSource = .localFile(
+            url: URL(fileURLWithPath: "/tmp/new-default-source.mp4"),
+            label: "New Default Source"
+        )
+        let newItem = AVPlayerItem(
+            url: URL(fileURLWithPath: "/tmp/new-default-source.mp4")
+        )
+        bridge.player = AVPlayer(playerItem: newItem)
+        let newPolicy = VesperAbrPolicy.constrained(maxBitRate: 123_456)
+        try bridge.applyAbrPolicy(newPolicy, origin: .manual, clearLastReportedError: true)
+
+        await defaultsTask.value
+
+        XCTAssertEqual(bridge.publishedTrackSelection.abrPolicy, newPolicy)
+        XCTAssertEqual(newItem.preferredPeakBitRate, 123_456)
+        XCTAssertNil(bridge.publishedLastError)
+    }
+
+    @MainActor
     private func makeLoadingSubtitleBridge(
         tracks: [VesperExternalSubtitleSource],
         waitPolicy: VesperSubtitleSelectionWaitPolicy

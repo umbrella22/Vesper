@@ -264,7 +264,9 @@ fn benchmark_queue_preserves_fifo_reports_and_idempotent_close() {
     );
     assert!(matches!(
         queue.enqueue(benchmark_batch(30)),
-        Err(WasmPluginHostError::Queue(message)) if message.contains("not open")
+        Err(WasmPluginHostError::Queue(
+            player_plugin_wasm_host::WasmQueueError::Closed
+        ))
     ));
 }
 
@@ -293,7 +295,7 @@ fn benchmark_queue_quarantines_after_execution_timeout() {
         .expect("quarantine flush");
     assert!(matches!(
         flush.result,
-        Err(WasmPluginHostError::Quarantined)
+        Err(WasmPluginHostError::Quarantined { .. })
     ));
     let reports = queue.drain_reports();
     assert_eq!(reports.reports.len(), 2);
@@ -305,7 +307,7 @@ fn benchmark_queue_quarantines_after_execution_timeout() {
     assert_eq!(reports.reports[1].batch_id, 2);
     assert!(matches!(
         reports.reports[1].result,
-        Err(WasmPluginHostError::Quarantined)
+        Err(WasmPluginHostError::Quarantined { .. })
     ));
 
     let close = queue
@@ -313,8 +315,170 @@ fn benchmark_queue_quarantines_after_execution_timeout() {
         .expect("quarantined close");
     assert!(matches!(
         close.result,
-        Err(WasmPluginHostError::Quarantined)
+        Err(WasmPluginHostError::Quarantined { .. })
     ));
+}
+
+#[test]
+fn benchmark_tickets_match_direct_execution_and_complete_after_receipt_drop() {
+    let component = benchmark_fixture_component(FIXTURE_CORE_WAT);
+    let runtime = WasmPluginRuntime::new().expect("WASM runtime");
+    let mut direct = WasmBenchmarkSinkSession::from_component_bytes(&runtime, &component)
+        .expect("direct session");
+    let expected = direct
+        .on_event_batch(&benchmark_batch(10))
+        .expect("direct status");
+    let expected_logs = direct.take_logs();
+    let queue =
+        WasmBenchmarkSinkQueue::from_component_bytes(&runtime, &component).expect("checked queue");
+    let first = queue.submit(benchmark_batch(10)).expect("first receipt");
+    assert_eq!(first.invocation_id(), 1);
+    let report = first.wait(Duration::from_secs(2)).expect("first result");
+    assert_eq!(report.batch_id, 1);
+    assert_eq!(report.result, Ok(expected.clone()));
+    assert_eq!(report.logs, expected_logs);
+    let second = queue.submit(benchmark_batch(20)).expect("dropped receipt");
+    assert_eq!(second.invocation_id(), 2);
+    drop(second);
+    let barrier = queue.flush(Duration::from_secs(2)).expect("flush barrier");
+    assert_eq!(barrier.result.expect("guest flush").accepted_events, 2);
+    assert_eq!(barrier.settlement.accepted_invocations, 2);
+    assert_eq!(barrier.settlement.completed_invocations, 2);
+    assert_eq!(barrier.settlement.pending_invocations, 0);
+    assert_eq!(barrier.settlement.wait_expirations, 0);
+    let reports = queue.drain_reports();
+    assert_eq!(reports.reports.len(), 2);
+    assert_eq!(reports.reports[1].batch_id, 2);
+    assert_eq!(reports.reports[1].result, Ok(expected));
+    assert_eq!(reports.reports[1].logs, expected_logs);
+    let close = queue.close(Duration::from_secs(2)).expect("joined close");
+    assert!(close.settlement.worker_joined);
+    assert_eq!(close.settlement.failed_invocations, 0);
+}
+
+#[test]
+fn benchmark_admission_accepts_empty_and_512_events_but_rejects_513_without_an_id() {
+    // This fixed allocator needs enough fixture memory for the largest valid input.
+    let wat = FIXTURE_CORE_WAT.replace(
+        "(memory (export \"memory\") 1)",
+        "(memory (export \"memory\") 8)",
+    );
+    let component = benchmark_fixture_component(&wat);
+    let runtime = WasmPluginRuntime::new().expect("WASM runtime");
+    let queue =
+        WasmBenchmarkSinkQueue::from_component_bytes(&runtime, &component).expect("checked queue");
+    let too_many = BenchmarkEventBatch {
+        events: vec![benchmark_batch(10).events.remove(0); 513],
+    };
+    assert!(matches!(
+        queue.submit(too_many),
+        Err(WasmPluginHostError::LocalValidation(_))
+    ));
+    assert_eq!(queue.settlement().accepted_invocations, 0);
+    assert!(queue.drain_reports().reports.is_empty());
+    let empty = queue
+        .submit(BenchmarkEventBatch::default())
+        .expect("empty receipt");
+    assert_eq!(empty.invocation_id(), 1);
+    assert_eq!(
+        empty
+            .wait(Duration::from_secs(2))
+            .expect("empty result")
+            .result
+            .expect("empty status")
+            .accepted_events,
+        0
+    );
+    let full = queue
+        .submit(BenchmarkEventBatch {
+            events: vec![benchmark_batch(10).events.remove(0); 512],
+        })
+        .expect("full receipt");
+    assert_eq!(full.invocation_id(), 2);
+    assert_eq!(
+        full.wait(Duration::from_secs(2))
+            .expect("full result")
+            .result
+            .expect("full status")
+            .accepted_events,
+        512
+    );
+    let close = queue.close(Duration::from_secs(2)).expect("close");
+    assert_eq!(close.result.expect("flush report").accepted_events, 512);
+    assert_eq!(close.settlement.completed_invocations, 2);
+    assert_eq!(close.settlement.failed_invocations, 0);
+    assert!(close.settlement.worker_joined);
+}
+
+#[test]
+fn benchmark_acknowledgement_is_bound_to_the_actual_batch_count() {
+    let runtime = WasmPluginRuntime::new().expect("WASM runtime");
+    let anchor = "    i32.const 8\n    local.get $events-len\n    i64.extend_i32_u\n    i64.store";
+    assert_eq!(FIXTURE_CORE_WAT.matches(anchor).count(), 1);
+    for (accepted, valid) in [(0, true), (2, false)] {
+        let wat = FIXTURE_CORE_WAT.replace(
+            anchor,
+            &format!("    i32.const 8\n    i64.const {accepted}\n    i64.store"),
+        );
+        let component = benchmark_fixture_component(&wat);
+        let queue = WasmBenchmarkSinkQueue::from_component_bytes(&runtime, &component)
+            .expect("checked queue");
+        let report = queue
+            .submit_and_wait(benchmark_batch(10), Duration::from_secs(2))
+            .expect("completed receipt");
+        if valid {
+            assert_eq!(
+                report
+                    .result
+                    .expect("partial acknowledgement")
+                    .accepted_events,
+                accepted
+            );
+        } else {
+            let failure = report.result.expect_err("invalid acknowledgement");
+            assert!(matches!(
+                &failure,
+                WasmPluginHostError::ProtocolViolation(_)
+            ));
+            assert_eq!(queue.settlement().quarantine_reason, Some(failure));
+        }
+        let close = queue.close(Duration::from_secs(2)).expect("joined close");
+        assert!(close.settlement.worker_joined);
+        assert_eq!(close.settlement.failed_invocations, u64::from(!valid));
+    }
+}
+
+#[test]
+fn benchmark_flush_trap_retains_cause_without_counting_a_failed_batch() {
+    let component = benchmark_fixture_component(&FIXTURE_CORE_WAT.replace(
+        "  (func $flush (result i32)",
+        "  (func $flush (result i32)\n    unreachable",
+    ));
+    let runtime = WasmPluginRuntime::new().expect("WASM runtime");
+    let queue =
+        WasmBenchmarkSinkQueue::from_component_bytes(&runtime, &component).expect("checked queue");
+    assert!(
+        queue
+            .submit_and_wait(benchmark_batch(10), Duration::from_secs(2))
+            .expect("completed receipt")
+            .result
+            .is_ok()
+    );
+    let flush = queue.flush(Duration::from_secs(2)).expect("flush receipt");
+    let failure = flush.result.expect_err("guest flush trap");
+    assert!(matches!(&failure, WasmPluginHostError::Execution(cause)
+        if cause.kind == player_plugin_wasm_host::WasmExecutionFailureKind::GuestTrap
+        && cause.cause.error().downcast_ref::<wasmtime::Trap>() == Some(&wasmtime::Trap::UnreachableCodeReached)));
+    assert_eq!(flush.settlement.quarantine_reason, Some(failure.clone()));
+    assert_eq!(flush.settlement.failed_invocations, 0);
+    let close = queue.close(Duration::from_secs(2)).expect("joined close");
+    assert!(
+        matches!(close.result, Err(WasmPluginHostError::Quarantined { reason }) if reason.as_ref() == &failure)
+    );
+    assert_eq!(close.settlement.quarantine_reason, Some(failure));
+    assert_eq!(close.settlement.completed_invocations, 1);
+    assert_eq!(close.settlement.failed_invocations, 0);
+    assert!(close.settlement.worker_joined);
 }
 
 fn benchmark_batch(timestamp_ns: u64) -> BenchmarkEventBatch {
@@ -342,11 +506,14 @@ fn benchmark_fixture_component(core_wat: &str) -> Vec<u8> {
         .select_world(&[package], Some("benchmark-sink-plugin"))
         .expect("benchmark fixture world");
     let mut module = wat::parse_str(core_wat).expect("fixture core module");
+    // Match ComponentEncoder's default full interface names.
+    let canonical_names = false;
     wit_component::embed_component_metadata(
         &mut module,
         &resolve,
         world,
         wit_component::StringEncoding::UTF8,
+        canonical_names,
     )
     .expect("embedded component metadata");
     wit_component::ComponentEncoder::default()

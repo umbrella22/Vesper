@@ -24,11 +24,22 @@ internal fun replaceActiveRelayTokens(
         .forEach(invalidate)
 }
 
+internal fun pinAndReplaceActiveRelayTokens(
+    activeRelayTokens: MutableSet<String>,
+    relayToken: String?,
+    pin: (String) -> Boolean,
+    invalidate: (String) -> Unit,
+): Boolean {
+    if (relayToken != null && !pin(relayToken)) return false
+    replaceActiveRelayTokens(activeRelayTokens, relayToken, invalidate)
+    return true
+}
+
 internal fun VesperExternalPlaybackController.activateRelayForLoadedSource(
     prepared: VesperExternalSourcePreparationResult.Prepared,
-) {
-    replaceActiveRelayTokens(activeRelayTokens, prepared.relayToken, relayServer::invalidate)
-}
+): Boolean = pinAndReplaceActiveRelayTokens(
+    activeRelayTokens, prepared.relayToken, relayServer::pin, relayServer::invalidate,
+)
 
 internal fun VesperExternalPlaybackController.emitRoutes() {
     val next = mutableListOf<VesperExternalPlaybackRoute>()

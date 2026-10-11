@@ -92,7 +92,7 @@ internal fun VesperSourceNormalizerConfiguration.shouldOpenNormalizedResourceFor
     if (source.isHostHandledNetworkSource) {
         Log.i(
             NATIVE_JNI_BINDINGS_TAG,
-            "source normalizer resource playback skipped for host-handled network source=${source.uri}",
+            "source normalizer resource playback skipped for host-handled network source=${diagnosticSourceDescription(source)}",
         )
         return false
     }
@@ -189,7 +189,7 @@ internal fun parseSourceNormalizerResource(
             } ?: emptyList(),
         )
     }.onFailure { error ->
-        Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to parse source normalizer resource open result", error)
+        Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to parse source normalizer resource open result failure=${diagnosticPlaybackFailure(error)}")
     }.getOrNull()
 
 internal fun sourceNormalizerResourceHandle(json: String): Long =
@@ -220,5 +220,5 @@ internal fun parseNativeFramePipelineJson(json: String): Map<String, Any?>? =
     runCatching {
         jsonObjectToMap(JSONObject(json))
     }.onFailure { error ->
-        Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to parse native-frame pipeline result", error)
+        Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to parse native-frame pipeline result failure=${diagnosticPlaybackFailure(error)}")
     }.getOrNull()

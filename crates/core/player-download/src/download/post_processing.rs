@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use player_plugin::{
     AssemblyMode, CompletedContentFormat, CompletedDownloadInfo, CompletedStream, DownloadMetadata,
@@ -176,18 +177,27 @@ fn export_processed_output(
         progress,
     )?;
     if run.ran_processor
+        && run.has_single_file_output
         && let Some(path) = run.completed_path
     {
+        if let Some(output_path) = output_path {
+            if !paths_refer_to_same_file(&path, output_path) {
+                copy_single_file_export(&path, output_path, progress)?;
+            }
+            return Ok(output_path.to_path_buf());
+        }
         return Ok(path);
     }
 
+    let detail = if run.ran_processor {
+        "no post-download processor produced a single-file output for export"
+    } else {
+        "no post-download processor available for export"
+    };
     Err(PlayerError::with_category(
         PlayerErrorCode::Unsupported,
         PlayerErrorCategory::Capability,
-        format!(
-            "download task {} has no post-download processor available for export",
-            snapshot.task_id.get()
-        ),
+        format!("download task {}: {detail}", snapshot.task_id.get()),
     ))
 }
 
@@ -298,6 +308,10 @@ fn run_post_processor_chain(
     Ok(PostProcessorRun {
         completed_path: current_completed_path,
         ran_processor,
+        has_single_file_output: matches!(
+            current_input.content_format,
+            CompletedContentFormat::SingleFile { .. }
+        ),
     })
 }
 
@@ -488,6 +502,7 @@ impl ProcessorOutputPathPolicy<'_> {
 struct PostProcessorRun {
     completed_path: Option<PathBuf>,
     ran_processor: bool,
+    has_single_file_output: bool,
 }
 
 fn assembly_required_error(
@@ -988,10 +1003,12 @@ fn copy_single_file_export(
 
     let mut input = File::open(source_path)
         .map_err(|error| export_io_error(source_path, "open export source", error))?;
-    let mut output = File::create(output_path)
-        .map_err(|error| export_io_error(output_path, "create export output", error))?;
+    // Never truncate the destination inode: it may be a hard link to the source.
+    // Publish an independent file only after a complete, successful copy.
+    let (staging, mut output) = create_export_staging_file(output_path)?;
     let mut copied_bytes = 0_u64;
-    let mut buffer = [0_u8; 1024 * 1024];
+    // Native worker stacks can be smaller than this copy chunk.
+    let mut buffer = vec![0_u8; 1024 * 1024];
 
     loop {
         if progress.is_cancelled() {
@@ -1018,8 +1035,51 @@ fn copy_single_file_export(
     output
         .sync_all()
         .map_err(|error| export_io_error(output_path, "flush export output", error))?;
+    drop(output);
+    if progress.is_cancelled() {
+        return Err(PlayerError::with_category(
+            PlayerErrorCode::BackendFailure,
+            PlayerErrorCategory::Platform,
+            "download export was cancelled",
+        ));
+    }
+    fs::rename(&staging.path, output_path)
+        .map_err(|error| export_io_error(output_path, "publish export output", error))?;
     progress.on_progress(1.0);
     Ok(())
+}
+
+struct ExportStagingFile {
+    path: PathBuf,
+}
+
+impl Drop for ExportStagingFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn create_export_staging_file(output_path: &Path) -> PlayerResult<(ExportStagingFile, File)> {
+    static NEXT_EXPORT_ID: AtomicU64 = AtomicU64::new(0);
+    let parent = output_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty());
+    let parent = parent.unwrap_or_else(|| Path::new("."));
+    loop {
+        let id = NEXT_EXPORT_ID.fetch_add(1, Ordering::Relaxed);
+        let path = parent.join(format!(".vesper-export-{}-{id}.tmp", std::process::id()));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Ok((ExportStagingFile { path }, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(export_io_error(
+                    &path,
+                    "create export staging output",
+                    error,
+                ));
+            }
+        }
+    }
 }
 
 fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {

@@ -91,6 +91,49 @@ class AnalyzeReportTests(unittest.TestCase):
         self.assertEqual(result["status"], "valid")
         self.assertEqual(result["diagnosis"], "playbackPressure")
 
+    def test_invalid_sample_counts_are_reported_without_metric_arithmetic(self) -> None:
+        for value in ["bad", None, {}, [], False]:
+            with self.subTest(value=value):
+                report = ANALYZER.load_report(FIXTURES / "healthy.json")
+                report["cohorts"]["overlayInactive"]["sampleCount"] = value
+                result = ANALYZER.validate_report(report)
+                self.assertEqual(result["status"], "invalid")
+                self.assertFalse(result["sampleSufficient"])
+                self.assertIsNone(result["cohorts"]["overlayInactive"]["sampleCount"])
+
+    def test_huge_metrics_produce_structured_invalid_cli_results(self) -> None:
+        for section, field in [("cohorts", "jankRatio"), ("playback", "activeDurationNs")]:
+            report = ANALYZER.load_report(FIXTURES / "healthy.json")
+            if section == "cohorts":
+                report[section]["overlayInactive"][field] = 10 ** 400
+            else:
+                report[section][field] = 10 ** 400
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "huge.json"
+                path.write_text(json.dumps(report), encoding="utf-8")
+                result = subprocess.run([sys.executable, str(SCRIPT), str(path), "--format", "json"], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["status"], "invalid")
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_sensitive_unknown_diagnosis_is_redacted_in_all_output_formats(self) -> None:
+        report = ANALYZER.load_report(FIXTURES / "healthy.json")
+        original = "https://private.example/media?token=fake-private-value"
+        report["diagnosis"]["kind"] = original
+        result = ANALYZER.validate_report(report)
+        self.assertEqual(report["diagnosis"]["kind"], original)
+        self.assertEqual(result["diagnosis"], "<redacted>")
+        for rendered in [json.dumps(result), ANALYZER.render_markdown(result)]:
+            self.assertNotIn("fake-private-value", rendered)
+            self.assertNotIn("https://private.example", rendered)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sensitive.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            for output_format in ["json", "markdown"]:
+                cli = subprocess.run([sys.executable, str(SCRIPT), str(path), "--format", output_format], capture_output=True, text=True)
+                self.assertEqual(cli.returncode, 0, cli.stderr)
+                self.assertNotIn("fake-private-value", cli.stdout)
+
     def test_cli_json_exit_codes(self) -> None:
         valid = subprocess.run(
             [sys.executable, str(SCRIPT), str(FIXTURES / "healthy.json"),

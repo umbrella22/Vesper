@@ -9,7 +9,9 @@ import io.github.umbrella22.vesper.player.android.external.internal.relay.Vesper
 import io.github.umbrella22.vesper.player.android.external.internal.relay.VesperRelayFormatAdapter
 import io.github.umbrella22.vesper.player.android.external.internal.relay.contentType
 import java.io.ByteArrayInputStream
-import java.util.concurrent.ConcurrentHashMap
+import java.io.Closeable
+import java.io.InterruptedIOException
+import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONObject
 
 class VesperRelayFfmpegAdapter @JvmOverloads constructor(
@@ -17,7 +19,7 @@ class VesperRelayFfmpegAdapter @JvmOverloads constructor(
 ) : VesperRelayFormatAdapter {
     private val appContext = context?.applicationContext
     private val runtimeProfileHash = appContext?.readRuntimeProfileHash()
-    private val hostInputSessions = ConcurrentHashMap<String, VesperRelayHostInputSession>()
+    private val hostInputSessions = VesperRelaySessionRegistry<PreparedSession>()
 
     init {
         VesperRelayFfmpegNative.ensureLoaded()
@@ -90,12 +92,11 @@ class VesperRelayFfmpegAdapter @JvmOverloads constructor(
                 )
             }
 
-        val nativeRequest = request.toNativeJson(hostSession.tracks)
+        val nativeRequest = request.toNativeJson(hostSession.host.tracks, hostSession.lease.handle.get())
         val opened = runCatching {
             VesperRelayFfmpegNative.prewarm(nativeRequest)
         }.getOrElse { error ->
-            hostInputSessions.remove(request.sessionId, hostSession)
-            hostSession.close()
+            hostInputSessions.invalidate(request.sessionId)
             return VesperRelayFormatAdaptationResult.Failure(
                 status = 503,
                 diagnostic = VesperRelayDiagnostic(
@@ -106,11 +107,16 @@ class VesperRelayFfmpegAdapter @JvmOverloads constructor(
             )
         }
 
+        if (!request.lifetime.isActive || hostSession.lease.handle.get() == 0L) {
+            if (opened.handle != 0L) VesperRelayFfmpegNative.close(opened.handle)
+            return cancelledFailure(request)
+        }
         val errorCode = opened.errorCode
         if (!errorCode.isNullOrBlank()) {
-            val hostDiagnostic = hostSession.failureDiagnostic()
-            hostInputSessions.remove(request.sessionId, hostSession)
-            hostSession.close()
+            val hostDiagnostic = hostSession.host.failureDiagnostic()
+            if (hostDiagnostic != null || opened.status !in listOf(404, 416)) {
+                hostInputSessions.invalidate(request.sessionId)
+            }
             if (hostDiagnostic != null) {
                 return VesperRelayFormatAdaptationResult.Failure(
                     status = hostDiagnosticStatus(hostDiagnostic),
@@ -149,6 +155,7 @@ class VesperRelayFfmpegAdapter @JvmOverloads constructor(
             )
         }
 
+        if (!request.lifetime.isActive) return cancelledFailure(request)
         if (request.headOnly) {
             return VesperRelayFormatAdaptationResult.Stream(
                 VesperRelayAdaptedStream(
@@ -179,12 +186,11 @@ class VesperRelayFfmpegAdapter @JvmOverloads constructor(
                 )
             }
 
-        val nativeRequest = request.toNativeJson(hostSession.tracks)
+        val nativeRequest = request.toNativeJson(hostSession.host.tracks, hostSession.lease.handle.get())
         val opened = runCatching {
             VesperRelayFfmpegNative.open(nativeRequest)
         }.getOrElse { error ->
-            hostInputSessions.remove(request.sessionId, hostSession)
-            hostSession.close()
+            hostInputSessions.invalidate(request.sessionId)
             return VesperRelayFormatAdaptationResult.Failure(
                 status = 503,
                 diagnostic = VesperRelayDiagnostic(
@@ -195,11 +201,16 @@ class VesperRelayFfmpegAdapter @JvmOverloads constructor(
             )
         }
 
+        if (!request.lifetime.isActive || hostSession.lease.handle.get() == 0L) {
+            if (opened.handle != 0L) VesperRelayFfmpegNative.close(opened.handle)
+            return cancelledFailure(request)
+        }
         val errorCode = opened.errorCode
         if (!errorCode.isNullOrBlank()) {
-            val hostDiagnostic = hostSession.failureDiagnostic()
-            hostInputSessions.remove(request.sessionId, hostSession)
-            hostSession.close()
+            val hostDiagnostic = hostSession.host.failureDiagnostic()
+            if (hostDiagnostic != null || opened.status !in listOf(404, 416)) {
+                hostInputSessions.invalidate(request.sessionId)
+            }
             if (hostDiagnostic != null) {
                 return VesperRelayFormatAdaptationResult.Failure(
                     status = hostDiagnosticStatus(hostDiagnostic),
@@ -223,35 +234,48 @@ class VesperRelayFfmpegAdapter @JvmOverloads constructor(
                 contentLength = opened.contentLength.takeIf { it >= 0 },
                 headers = opened.headers,
                 status = opened.status.takeIf { it > 0 } ?: 200,
-                closeable = hostSession,
             ),
         )
     }
 
     override fun invalidate(sessionId: String) {
-        hostInputSessions.remove(sessionId)?.close()
-        runCatching { VesperRelayFfmpegNative.invalidate(sessionId) }
+        hostInputSessions.invalidate(sessionId)
     }
 
-    private fun hostInputSession(
-        context: Context,
-        request: VesperRelayFormatAdaptationRequest,
-    ): VesperRelayHostInputSession {
-        hostInputSessions[request.sessionId]?.let { existing ->
-            if (existing.failureDiagnostic() == null) {
-                return existing
-            }
-            hostInputSessions.remove(request.sessionId, existing)
-            existing.close()
-            runCatching { VesperRelayFfmpegNative.invalidate(request.sessionId) }
+    private class NativeLease(handle: Long) : Closeable {
+        val handle = AtomicLong(handle)
+        override fun close() {
+            val current = handle.getAndSet(0)
+            if (current != 0L) VesperRelayFfmpegNative.retireSession(current)
         }
-        val created = VesperRelayHostInputSession.create(context, request)
-        val previous = hostInputSessions.putIfAbsent(request.sessionId, created)
-        if (previous != null) {
-            created.close()
-            return previous
-        }
-        created.start()
-        return created
     }
+
+    private class PreparedSession(val host: VesperRelayHostInputSession, val lease: NativeLease) : Closeable {
+        override fun close() {
+            lease.close()
+            host.close()
+        }
+    }
+
+    private fun hostInputSession(context: Context, request: VesperRelayFormatAdaptationRequest): PreparedSession {
+        try {
+            return hostInputSessions.acquire(request.sessionId, request.lifetime) { lifetime ->
+                val lease = NativeLease(VesperRelayFfmpegNative.reserveSession(request.sessionId))
+                if (lease.handle.get() == 0L || !lifetime.attach(lease)) throw HostInputCancelledException()
+                val host = VesperRelayHostInputSession.create(context, request, lifetime = lifetime)
+                if (!lifetime.attach(host)) throw HostInputCancelledException()
+                host.start()
+                lifetime.checkActive()
+                PreparedSession(host, lease)
+            }
+        } catch (error: InterruptedIOException) {
+            throw request.hostInputException("host_input_cancelled", 499, "Host-prepared DASH input was cancelled.", emptyMap())
+        } catch (error: HostInputCancelledException) {
+            throw request.hostInputException("host_input_cancelled", 499, "Host-prepared DASH input was cancelled.", emptyMap())
+        }
+    }
+
+    private fun cancelledFailure(request: VesperRelayFormatAdaptationRequest) = VesperRelayFormatAdaptationResult.Failure(
+        499, VesperRelayDiagnostic("host_input_cancelled", "Host-prepared DASH input was cancelled.", details = request.baseDiagnosticDetails()),
+    )
 }

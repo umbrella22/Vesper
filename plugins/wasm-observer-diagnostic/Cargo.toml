@@ -1,8 +1,8 @@
 [package]
 name = "vesper-plugin-wasm-observer-diagnostic"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
-rust-version = "1.98.1"
+rust-version = "1.99.0"
 license = "Apache-2.0"
 
 [lib]

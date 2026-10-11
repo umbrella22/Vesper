@@ -26,7 +26,15 @@ internal data class DashTemplate(
     val initialization: String?,
     val startNumber: Long,
     val timescale: Long,
+    val duration: Long?,
+    val presentationTimeOffset: Long,
+    val timeline: List<DashTimelineEntry>,
+)
+
+internal data class DashTimelineEntry(
+    val startTime: Long?,
     val duration: Long,
+    val repeatCount: Int,
 )
 
 internal data class DashSegmentBase(
@@ -44,6 +52,7 @@ internal data class DashTrackContext(
     val kind: String,
     val mediaId: String,
     val representationId: String,
+    val bandwidth: Long?,
     val mimeType: String?,
     val codecs: String?,
     val mediaBaseUri: String,

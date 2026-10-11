@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-11
+
+- Align the Android external-playback dependency with the 0.9.0 SDK.
+- Propagate external-playback cancellation through native worker and wait
+  boundaries, bind HLS/cache stream handles to the token lifetime, and retire
+  every token before blocking teardown. Adapted input close is idempotent and
+  native session leases reject stale generations.
+
 ## 0.8.0 - 2026-09-29
 
 - Align mobile host and Flutter dependencies with the 0.8.0 source lifecycle contract.

@@ -133,8 +133,7 @@ internal suspend fun VesperNativePlayerBridge.restorePlaybackState(
         } catch (error: VesperPlayerUnsupportedOperation) {
             Log.w(
                 NATIVE_PLAYER_BRIDGE_TAG,
-                "failed to restore confirmed subtitle selection",
-                error,
+                "failed to restore confirmed subtitle selection failure=${diagnosticPlaybackFailure(error)}",
             )
         }
     }

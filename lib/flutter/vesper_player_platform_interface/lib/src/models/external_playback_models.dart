@@ -61,28 +61,33 @@ final class VesperExternalFormatAdaptationConfig {
   factory VesperExternalFormatAdaptationConfig.fromMap(
     Map<Object?, Object?> map,
   ) {
+    _validateCallerMapKeys(map, 'VesperExternalFormatAdaptationConfig');
     return VesperExternalFormatAdaptationConfig(
-      enabled: _decodeBool(map, 'enabled'),
-      preferredFallback: _decodeEnum(
+      enabled: _decodeExternalConfigurationBool(map, 'enabled'),
+      preferredFallback: _decodeCallerEnum(
         VesperExternalFallbackFormat.values,
         map['preferredFallback'],
         VesperExternalFallbackFormat.mpegTs,
+        'preferredFallback',
       ),
-      allowHls: _decodeBool(map, 'allowHls', fallback: true),
-      enableRangeCache: _decodeBool(map, 'enableRangeCache', fallback: true),
-      allowRemoteDashMediaReferences: _decodeBool(
+      allowHls:
+          _decodeExternalConfigurationBool(map, 'allowHls', fallback: true),
+      enableRangeCache: _decodeExternalConfigurationBool(
+          map, 'enableRangeCache',
+          fallback: true),
+      allowRemoteDashMediaReferences: _decodeExternalConfigurationBool(
         map,
         'allowRemoteDashMediaReferences',
       ),
-      allowPrivateRemoteDashMediaAddresses: _decodeBool(
+      allowPrivateRemoteDashMediaAddresses: _decodeExternalConfigurationBool(
         map,
         'allowPrivateRemoteDashMediaAddresses',
       ),
-      remoteDashMediaRequestHeaders: _decodeStringSet(
+      remoteDashMediaRequestHeaders: _decodeRemoteDashMediaRequestHeaders(
         map['remoteDashMediaRequestHeaders'],
-        fallback: _defaultRemoteDashMediaRequestHeaders,
       ),
-      debugDiagnostics: _decodeBool(map, 'debugDiagnostics'),
+      debugDiagnostics:
+          _decodeExternalConfigurationBool(map, 'debugDiagnostics'),
     );
   }
 
@@ -123,6 +128,34 @@ final class VesperExternalFormatAdaptationConfig {
       'debugDiagnostics': debugDiagnostics,
     };
   }
+}
+
+bool _decodeExternalConfigurationBool(
+  Map<Object?, Object?> map,
+  String field, {
+  bool fallback = false,
+}) {
+  final raw = map[field];
+  if (raw == null) return fallback;
+  if (raw is! bool) throw FormatException('$field must be a boolean');
+  return raw;
+}
+
+Set<String> _decodeRemoteDashMediaRequestHeaders(Object? raw) {
+  if (raw == null) return _defaultRemoteDashMediaRequestHeaders;
+  if (raw is! Iterable) {
+    throw FormatException('remoteDashMediaRequestHeaders must be an iterable');
+  }
+  final headers = <String>{};
+  for (final (index, value) in raw.indexed) {
+    if (value is! String) {
+      throw FormatException(
+        'remoteDashMediaRequestHeaders[$index] must be a string',
+      );
+    }
+    headers.add(value);
+  }
+  return headers;
 }
 
 const Set<String> _defaultRemoteDashMediaRequestHeaders = <String>{

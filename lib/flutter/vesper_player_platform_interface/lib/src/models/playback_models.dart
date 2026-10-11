@@ -95,14 +95,16 @@ final class VesperSystemPlaybackConfiguration {
   factory VesperSystemPlaybackConfiguration.fromMap(
     Map<Object?, Object?> map,
   ) {
+    _validateCallerMapKeys(map, 'VesperSystemPlaybackConfiguration');
     final rawMetadata = _rawMap(map['metadata']);
-    final rawControls = _rawMap(map['controls']);
+    final rawControls = _decodeCallerMap(map['controls'], 'controls');
     return VesperSystemPlaybackConfiguration(
       enabled: _decodeBool(map, 'enabled', fallback: true),
-      backgroundMode: _decodeEnum(
+      backgroundMode: _decodeCallerEnum(
         VesperBackgroundPlaybackMode.values,
         map['backgroundMode'],
         VesperBackgroundPlaybackMode.continueAudio,
+        'systemPlayback.backgroundMode',
       ),
       showSystemControls: _decodeBool(
         map,

@@ -917,7 +917,7 @@ fn classify_wasm_call_error(
     error: WasmPluginHostError,
 ) {
     match error {
-        WasmPluginHostError::InvalidInput(message)
+        WasmPluginHostError::GuestInvalidInput(message)
         | WasmPluginHostError::Rejected(message)
         | WasmPluginHostError::PluginFailed(message) => report.warning(
             check_id,
@@ -1025,6 +1025,33 @@ mod tests {
             requires: Vec::new(),
             provides: Vec::new(),
             redistribution: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn wasm_call_classification_does_not_label_local_validation_as_author_failure() {
+        let descriptor = descriptor(interface_uuid(PIPELINE_EVENT_HOOK_INTERFACE_ID).to_string());
+        for (error, expected_status, expected_outcome) in [
+            (
+                WasmPluginHostError::GuestInvalidInput("guest input".to_owned()),
+                PluginInspectionCheckStatus::Warning,
+                PluginInspectionOutcome::Passed,
+            ),
+            (
+                WasmPluginHostError::LocalValidation("local input".to_owned()),
+                PluginInspectionCheckStatus::Failed,
+                PluginInspectionOutcome::ConformanceFailure,
+            ),
+        ] {
+            let mut report = PluginInspectionReport::new(
+                &descriptor,
+                PluginInspectionOperation::Check,
+                Some(PluginArtifactTransport::Wasm),
+            );
+            classify_wasm_call_error(&mut report, "fixture.call".to_owned(), error);
+            assert_eq!(report.outcome, expected_outcome);
+            assert_eq!(report.checks.len(), 1);
+            assert_eq!(report.checks[0].status, expected_status);
         }
     }
 

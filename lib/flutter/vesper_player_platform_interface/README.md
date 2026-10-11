@@ -142,10 +142,37 @@ reject malformed options instead of truncating them into valid limits.
 Sequence items and source-provider responses reference registrations. Native
 hosts assign cache identity and source revisions; list mutation never starts
 playback. Navigation returns a nullable activation at paging/end boundaries.
-See the [source lifecycle and 0.7 migration guide](../../doc/source-lifecycle.md)
+See the [source lifecycle contract](../../doc/source-lifecycle.md)
 for the wire ownership, bounds and capability distinctions.
 
 ## Implementing A New Platform Package
+
+Caller configuration decoders reject explicit unknown modes and malformed
+collection elements. Optional fields retain their documented defaults when
+omitted or null. Track and ABR modes, plugin pipeline modes, system playback
+controls, resilience presets, external proxy policies, and external fallback
+formats must use recognized tokens; an invalid token does not select an
+automatic or disabled mode. Explicit external request-header collections keep
+all string entries, including an empty collection; invalid elements do not
+restore the default header set.
+
+Download plans preserve every resource, segment, stream, and string identity
+reference. A malformed element rejects the entire plan, including recovered
+plans, instead of producing a shorter asset graph. Byte-range fields require
+integers and never convert malformed values into zero offsets or lengths.
+Native channels return decoding failures through their command or download
+error path before starting the affected operation.
+
+Download recovery distinguishes a declined or unavailable plan from a failed
+provider or malformed response. Android returns provider and response errors
+to the awaiting download operation. The iOS plugin exposes those failures
+through its download error event while preserving the native
+nonthrowing recovery-handler contract. Cancellation and the bounded recovery
+timeout retain their existing contracts.
+
+Diagnostic and capability models that define an `unknown` state continue to
+preserve unknown wire values as documented. That compatibility contract applies
+to observations and does not make invalid caller configuration valid.
 
 Extend `VesperPlayerPlatform` and register your implementation in
 `registerWith()`:
@@ -220,5 +247,5 @@ fine-grained mode. Platform plugins should populate fields like
 
 Native display dimensions and per-view content rectangles are separate APIs.
 The mobile renderer preserves aspect ratio with centered letterboxing.
-See the [video presentation contract and 0.6.0 migration guide](doc/video-presentation.md)
+See the [video presentation contract](doc/video-presentation.md)
 for control layout, fullscreen state, geometry lifecycle, and PiP.

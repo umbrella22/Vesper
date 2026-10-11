@@ -61,6 +61,13 @@ extension VesperNativePlayerBridge {
             )
             if let observedFailure = pendingSourceCommandFailure {
                 pendingSourceCommandFailure = nil
+                if let cause = currentDashResourceFailure(item: item) {
+                    if let playerFailure = observedFailure as? VesperPlayerError {
+                        throw classifyPlaybackFailure(cause, fallbackMessage: playerFailure.message)
+                            .enrichedWithDetails(playerFailure.details).toPlayerError()
+                    }
+                    throw cause
+                }
                 throw observedFailure
             }
 
@@ -145,7 +152,7 @@ extension VesperNativePlayerBridge {
         switch item.status {
         case .failed:
             return .failed(
-                item.error ?? VesperPlayerError(
+                item.error ?? currentDashResourceFailure(item: item) ?? VesperPlayerError(
                     message: "iOS player item failed before source commands became available.",
                     code: .invalidSource,
                     category: .source,

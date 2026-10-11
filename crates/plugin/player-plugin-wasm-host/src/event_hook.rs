@@ -1,17 +1,17 @@
+use crate::invocation::WasmWorker;
+use crate::{WasmInvocationTicket, WasmQueueLifecycle, WasmQueueSettlement, WasmWaitOperation};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use player_plugin::{
-    MAX_PIPELINE_EVENT_INPUT_BYTES, MAX_PLUGIN_ATTRIBUTE_KEY_BYTES,
-    MAX_PLUGIN_ATTRIBUTE_VALUE_BYTES, MAX_PLUGIN_ATTRIBUTES, MAX_PLUGIN_DIAGNOSTICS,
-    MAX_PLUGIN_ERROR_MESSAGE_BYTES, MAX_PLUGIN_MEASUREMENTS, PipelineEvent,
-    PipelineEventHookOutcome, PluginDiagnostic, PluginDiagnosticSeverity, PluginMeasurement,
+    MAX_PIPELINE_EVENT_INPUT_BYTES, MAX_PLUGIN_DIAGNOSTICS, MAX_PLUGIN_ERROR_MESSAGE_BYTES,
+    MAX_PLUGIN_MEASUREMENTS, PipelineEvent, PipelineEventHookOutcome, PluginDiagnostic,
+    PluginDiagnosticSeverity, PluginMeasurement,
 };
 use wasmtime::Store;
 use wasmtime::component::{HasSelf, Linker};
@@ -27,11 +27,32 @@ use crate::{
 pub const WASM_PLUGIN_EVENT_QUEUE_CAPACITY: usize = 1_024;
 pub const WASM_PLUGIN_EVENT_REPORT_QUEUE_CAPACITY: usize = 1_024;
 
+/// Immutable owned input whose semantic and transport checks have succeeded.
+#[derive(Debug)]
+struct CheckedPipelineEvent(PipelineEvent);
+
+impl CheckedPipelineEvent {
+    fn new(event: PipelineEvent) -> Result<Self, WasmPluginHostError> {
+        validate_event_input(&event)?;
+        Ok(Self(event))
+    }
+
+    fn copy_from(event: &PipelineEvent) -> Result<Self, WasmPluginHostError> {
+        // Bound borrowed data before allocating an owned queue copy.
+        validate_event_input(event)?;
+        Ok(Self(event.clone()))
+    }
+
+    fn event(&self) -> &PipelineEvent {
+        &self.0
+    }
+}
+
 pub struct WasmPipelineEventHookSession {
     runtime: WasmPluginRuntime,
     store: Store<WasmHostState>,
     bindings: event_hook::EventHookPlugin,
-    quarantined: bool,
+    quarantined: Option<WasmPluginHostError>,
 }
 
 impl fmt::Debug for WasmPipelineEventHookSession {
@@ -51,16 +72,16 @@ impl WasmPipelineEventHookSession {
         let component = runtime.compile_component(bytes)?;
         let mut linker = Linker::new(runtime.engine());
         event_hook::EventHookPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)
-            .map_err(|error| WasmPluginHostError::Instantiation(error.to_string()))?;
+            .map_err(|error| WasmPluginHostError::Instantiation(error.into()))?;
         let mut store =
             runtime.new_store(Duration::from_millis(WASM_PLUGIN_EVENT_TIMEOUT_MILLIS))?;
         let bindings = event_hook::EventHookPlugin::instantiate(&mut store, &component, &linker)
-            .map_err(|error| WasmPluginHostError::Instantiation(error.to_string()))?;
+            .map_err(|error| WasmPluginHostError::Instantiation(error.into()))?;
         Ok(Self {
             runtime: runtime.clone(),
             store,
             bindings,
-            quarantined: false,
+            quarantined: None,
         })
     }
 
@@ -70,6 +91,22 @@ impl WasmPipelineEventHookSession {
     ) -> Result<PipelineEventHookOutcome, WasmPluginHostError> {
         self.ensure_available()?;
         validate_event_input(event)?;
+        self.execute_event(event)
+    }
+
+    fn on_checked_event(
+        &mut self,
+        event: &CheckedPipelineEvent,
+    ) -> Result<PipelineEventHookOutcome, WasmPluginHostError> {
+        self.ensure_available()?;
+        self.execute_event(event.event())
+    }
+
+    /// Both callers have established the input invariant at their boundary.
+    fn execute_event(
+        &mut self,
+        event: &PipelineEvent,
+    ) -> Result<PipelineEventHookOutcome, WasmPluginHostError> {
         let input = pipeline_event_to_wit(event);
         self.runtime.prepare_store(
             &mut self.store,
@@ -85,9 +122,6 @@ impl WasmPipelineEventHookSession {
                 .map_err(|message| self.quarantine_protocol(message))?,
             Err(error) => return Err(self.map_plugin_error(error)),
         };
-        if let Err(error) = outcome.validate() {
-            return Err(self.quarantine_protocol(error.to_string()));
-        }
         Ok(outcome)
     }
 
@@ -96,30 +130,40 @@ impl WasmPipelineEventHookSession {
     }
 
     pub fn is_quarantined(&self) -> bool {
-        self.quarantined
+        self.quarantined.is_some()
+    }
+
+    pub fn quarantine_reason(&self) -> Option<&WasmPluginHostError> {
+        self.quarantined.as_ref()
     }
 
     fn ensure_available(&self) -> Result<(), WasmPluginHostError> {
-        if self.quarantined {
-            Err(WasmPluginHostError::Quarantined)
+        if let Some(reason) = &self.quarantined {
+            Err(WasmPluginHostError::Quarantined {
+                reason: Arc::new(reason.clone()),
+            })
         } else {
             Ok(())
         }
     }
 
     fn quarantine_execution(&mut self, error: wasmtime::Error) -> WasmPluginHostError {
-        self.quarantined = true;
-        WasmPluginHostError::Execution(error.to_string())
+        let failure = WasmPluginHostError::execution(error);
+        self.quarantined = Some(failure.clone());
+        failure
     }
 
     fn quarantine_protocol(&mut self, message: String) -> WasmPluginHostError {
-        self.quarantined = true;
-        WasmPluginHostError::ProtocolViolation(message)
+        let failure = WasmPluginHostError::ProtocolViolation(message);
+        self.quarantined = Some(failure.clone());
+        failure
     }
 
     fn map_plugin_error(&mut self, error: wit::PluginError) -> WasmPluginHostError {
         let (message, map): (String, fn(String) -> WasmPluginHostError) = match error {
-            wit::PluginError::InvalidInput(message) => (message, WasmPluginHostError::InvalidInput),
+            wit::PluginError::InvalidInput(message) => {
+                (message, WasmPluginHostError::GuestInvalidInput)
+            }
             wit::PluginError::Rejected(message) => (message, WasmPluginHostError::Rejected),
             wit::PluginError::Failed(message) => (message, WasmPluginHostError::PluginFailed),
         };
@@ -135,7 +179,7 @@ impl WasmPipelineEventHookSession {
 fn validate_event_input(event: &PipelineEvent) -> Result<(), WasmPluginHostError> {
     event
         .validate()
-        .map_err(|error| WasmPluginHostError::InvalidInput(error.to_string()))?;
+        .map_err(|error| WasmPluginHostError::LocalValidation(error.to_string()))?;
     let mut size = 128_usize;
     for value in [
         Some(event.run_id.as_str()),
@@ -174,7 +218,7 @@ fn validate_event_input(event: &PipelineEvent) -> Result<(), WasmPluginHostError
         )?;
     }
     if size > MAX_PIPELINE_EVENT_INPUT_BYTES {
-        return Err(WasmPluginHostError::InvalidInput(format!(
+        return Err(WasmPluginHostError::LocalValidation(format!(
             "pipeline event exceeds the {MAX_PIPELINE_EVENT_INPUT_BYTES}-byte transport limit"
         )));
     }
@@ -233,7 +277,7 @@ fn event_hook_outcome_from_wit(
         ));
     }
     validate_output_size(&outcome)?;
-    Ok(PipelineEventHookOutcome {
+    let outcome = PipelineEventHookOutcome {
         accepted: outcome.accepted,
         measurements: outcome
             .measurements
@@ -245,7 +289,9 @@ fn event_hook_outcome_from_wit(
             .into_iter()
             .map(diagnostic_from_wit)
             .collect::<Result<_, _>>()?,
-    })
+    };
+    outcome.validate().map_err(|error| error.to_string())?;
+    Ok(outcome)
 }
 
 fn validate_output_size(outcome: &wit::EventHookOutcome) -> Result<(), String> {
@@ -297,34 +343,11 @@ fn diagnostic_from_wit(diagnostic: wit::Diagnostic) -> Result<PluginDiagnostic, 
 fn attributes_from_wit(
     attributes: Vec<wit::Attribute>,
 ) -> Result<BTreeMap<String, String>, String> {
-    if attributes.len() > MAX_PLUGIN_ATTRIBUTES {
-        return Err(format!(
-            "plugin attributes exceed the {MAX_PLUGIN_ATTRIBUTES}-entry protocol limit"
-        ));
-    }
-    let mut result = BTreeMap::new();
-    for attribute in attributes {
-        if attribute.key.is_empty() || attribute.key.len() > MAX_PLUGIN_ATTRIBUTE_KEY_BYTES {
-            return Err(format!(
-                "attribute.key must contain 1 to {MAX_PLUGIN_ATTRIBUTE_KEY_BYTES} UTF-8 bytes"
-            ));
-        }
-        if attribute.value.is_empty() || attribute.value.len() > MAX_PLUGIN_ATTRIBUTE_VALUE_BYTES {
-            return Err(format!(
-                "attribute.value must contain 1 to {MAX_PLUGIN_ATTRIBUTE_VALUE_BYTES} UTF-8 bytes"
-            ));
-        }
-        if result
-            .insert(attribute.key.clone(), attribute.value)
-            .is_some()
-        {
-            return Err(format!(
-                "plugin returned duplicate attribute key '{}'",
-                attribute.key
-            ));
-        }
-    }
-    Ok(result)
+    crate::attributes::decode_attributes(
+        attributes
+            .into_iter()
+            .map(|attribute| (attribute.key, attribute.value)),
+    )
 }
 
 fn add_attribute_bytes(
@@ -347,7 +370,7 @@ fn add_payload_bytes(
 ) -> Result<(), WasmPluginHostError> {
     *size = size
         .checked_add(added)
-        .ok_or_else(|| WasmPluginHostError::InvalidInput(overflow_message.to_owned()))?;
+        .ok_or_else(|| WasmPluginHostError::LocalValidation(overflow_message.to_owned()))?;
     Ok(())
 }
 
@@ -369,12 +392,13 @@ fn add_wit_attribute_bytes(size: &mut usize, attributes: &[wit::Attribute]) -> R
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WasmPipelineEventEnqueueStatus {
-    Enqueued,
+    Enqueued { invocation_id: u64 },
     Dropped,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WasmPipelineEventHookReport {
+    pub invocation_id: u64,
     pub run_id: String,
     pub session_id: String,
     pub event_name: String,
@@ -392,37 +416,58 @@ pub struct WasmPipelineEventHookReportBatch {
 #[derive(Debug)]
 enum QueueMessage {
     Event {
-        event: Box<PipelineEvent>,
+        invocation_id: u64,
+        event: Box<CheckedPipelineEvent>,
         completion: Option<SyncSender<WasmPipelineEventHookReport>>,
     },
-    Barrier(SyncSender<()>),
+    Barrier(SyncSender<WasmQueueSettlement>),
     Close,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EventQueueLifecycle {
-    Open,
-    Closing,
-    Closed,
 }
 
 #[derive(Debug)]
 struct EventQueueState {
-    lifecycle: EventQueueLifecycle,
+    lifecycle: WasmQueueLifecycle,
     messages: VecDeque<QueueMessage>,
     queued_events: usize,
+    accepted_invocations: u64,
+    completed_invocations: u64,
+    failed_invocations: u64,
+    quarantine_reason: Option<WasmPluginHostError>,
+    next_event_id: u64,
     flush_pending: bool,
-    worker_error: Option<String>,
+    worker_error: Option<WasmPluginHostError>,
 }
 
 impl Default for EventQueueState {
     fn default() -> Self {
         Self {
-            lifecycle: EventQueueLifecycle::Open,
+            lifecycle: WasmQueueLifecycle::Open,
             messages: VecDeque::new(),
             queued_events: 0,
+            next_event_id: 1,
+            accepted_invocations: 0,
+            completed_invocations: 0,
+            failed_invocations: 0,
+            quarantine_reason: None,
             flush_pending: false,
             worker_error: None,
+        }
+    }
+}
+
+impl EventQueueState {
+    fn settlement(&self, wait_expirations: u64, worker_joined: bool) -> WasmQueueSettlement {
+        WasmQueueSettlement {
+            lifecycle: self.lifecycle,
+            accepted_invocations: self.accepted_invocations,
+            completed_invocations: self.completed_invocations,
+            failed_invocations: self.failed_invocations,
+            wait_expirations,
+            pending_invocations: self
+                .accepted_invocations
+                .saturating_sub(self.completed_invocations),
+            worker_joined,
+            quarantine_reason: self.quarantine_reason.clone(),
         }
     }
 }
@@ -440,7 +485,7 @@ impl QueueReportSink {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if reports.len() >= WASM_PLUGIN_EVENT_REPORT_QUEUE_CAPACITY {
-            self.dropped_reports.fetch_add(1, Ordering::Relaxed);
+            saturating_atomic_increment(&self.dropped_reports);
             return;
         }
         reports.push_back(report);
@@ -458,8 +503,7 @@ impl QueueReportSink {
 #[derive(Debug)]
 struct WasmPipelineEventHookQueueInner {
     shared: Arc<EventQueueShared>,
-    worker: Mutex<EventWorkerJoinState>,
-    worker_changed: Condvar,
+    worker: WasmWorker,
 }
 
 impl Drop for WasmPipelineEventHookQueueInner {
@@ -470,17 +514,11 @@ impl Drop for WasmPipelineEventHookQueueInner {
 
 #[derive(Debug, Default)]
 struct EventQueueShared {
+    wait_expirations: Arc<AtomicU64>,
     state: Mutex<EventQueueState>,
     message_available: Condvar,
     reports: QueueReportSink,
     dropped_events: AtomicU64,
-}
-
-#[derive(Debug)]
-enum EventWorkerJoinState {
-    Running(JoinHandle<()>),
-    Joining,
-    Joined(Result<(), String>),
 }
 
 #[derive(Debug, Clone)]
@@ -500,15 +538,12 @@ impl WasmPipelineEventHookQueue {
             .name("vesper-wasm-event-hook".to_owned())
             .spawn(move || run_queue_worker(worker_shared, session))
             .map_err(|error| {
-                WasmPluginHostError::Instantiation(format!(
-                    "failed to start WASM event-hook worker: {error}"
-                ))
+                WasmPluginHostError::Instantiation(wasmtime::Error::from(error).into())
             })?;
         Ok(Self {
             inner: Arc::new(WasmPipelineEventHookQueueInner {
                 shared,
-                worker: Mutex::new(EventWorkerJoinState::Running(worker)),
-                worker_changed: Condvar::new(),
+                worker: WasmWorker::new(worker),
             }),
         })
     }
@@ -517,52 +552,67 @@ impl WasmPipelineEventHookQueue {
         &self,
         event: PipelineEvent,
     ) -> Result<WasmPipelineEventEnqueueStatus, WasmPluginHostError> {
-        validate_event_input(&event)?;
-        enqueue_event(&self.inner.shared, event, None)
+        enqueue_event(&self.inner.shared, CheckedPipelineEvent::new(event)?, None)
     }
 
-    /// Executes one event through the bounded worker queue and waits for its
-    /// matching result for at most `timeout`.
-    pub fn invoke(
+    /// Accepts one event without waiting for guest execution.
+    pub fn submit(
+        &self,
+        event: PipelineEvent,
+    ) -> Result<WasmInvocationTicket<WasmPipelineEventHookReport>, WasmPluginHostError> {
+        self.submit_checked(CheckedPipelineEvent::new(event)?)
+    }
+
+    pub(crate) fn submit_borrowed(
+        &self,
+        event: &PipelineEvent,
+    ) -> Result<WasmInvocationTicket<WasmPipelineEventHookReport>, WasmPluginHostError> {
+        self.submit_checked(CheckedPipelineEvent::copy_from(event)?)
+    }
+
+    fn submit_checked(
+        &self,
+        event: CheckedPipelineEvent,
+    ) -> Result<WasmInvocationTicket<WasmPipelineEventHookReport>, WasmPluginHostError> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let invocation_id = match enqueue_event(&self.inner.shared, event, Some(sender))? {
+            WasmPipelineEventEnqueueStatus::Enqueued { invocation_id } => invocation_id,
+            WasmPipelineEventEnqueueStatus::Dropped => {
+                return Err(WasmPluginHostError::Queue(crate::WasmQueueError::Full));
+            }
+        };
+        Ok(WasmInvocationTicket::new(
+            invocation_id,
+            receiver,
+            WasmWaitOperation::EventResult,
+            Arc::clone(&self.inner.shared.wait_expirations),
+        ))
+    }
+
+    /// Accepts work, then waits. Expiry does not cancel accepted work.
+    pub fn submit_and_wait(
         &self,
         event: PipelineEvent,
         timeout: Duration,
     ) -> Result<WasmPipelineEventHookReport, WasmPluginHostError> {
-        validate_event_input(&event)?;
-        let (sender, receiver) = mpsc::sync_channel(1);
-        match enqueue_event(&self.inner.shared, event, Some(sender))? {
-            WasmPipelineEventEnqueueStatus::Enqueued => {}
-            WasmPipelineEventEnqueueStatus::Dropped => {
-                return Err(WasmPluginHostError::Queue(
-                    "WASM event-hook queue is full".to_owned(),
-                ));
-            }
-        }
-        match receiver.recv_timeout(timeout) {
-            Ok(report) => Ok(report),
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(WasmPluginHostError::QueueTimeout(
-                "event hook result".to_owned(),
-            )),
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(WasmPluginHostError::Queue(
-                "WASM event-hook worker stopped before returning a result".to_owned(),
-            )),
-        }
+        self.submit(event)?.wait(timeout)
     }
 
-    pub fn flush(&self, timeout: Duration) -> Result<(), WasmPluginHostError> {
+    pub fn flush(&self, timeout: Duration) -> Result<WasmQueueSettlement, WasmPluginHostError> {
         let barrier = begin_event_queue_flush(&self.inner.shared)?;
         match barrier.recv_timeout(timeout) {
-            Ok(()) => Ok(()),
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(WasmPluginHostError::QueueTimeout(
-                "event hook flush".to_owned(),
-            )),
+            Ok(settlement) => Ok(settlement),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(WasmPluginHostError::WaitExpired {
+                operation: crate::WasmWaitOperation::Flush,
+                invocation_id: None,
+            }),
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(WasmPluginHostError::Queue(
-                "WASM event-hook worker stopped before flush completed".to_owned(),
+                crate::WasmQueueError::WorkerStopped,
             )),
         }
     }
 
-    pub fn close(&self, timeout: Duration) -> Result<(), WasmPluginHostError> {
+    pub fn close(&self, timeout: Duration) -> Result<WasmQueueSettlement, WasmPluginHostError> {
         request_event_queue_close(&self.inner.shared);
         let started = Instant::now();
         let mut state = self
@@ -571,37 +621,39 @@ impl WasmPipelineEventHookQueue {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if state.lifecycle != EventQueueLifecycle::Closed {
+        if state.lifecycle != WasmQueueLifecycle::Closed {
             let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
-                return Err(WasmPluginHostError::QueueTimeout(
-                    "event hook close".to_owned(),
-                ));
+                return Err(WasmPluginHostError::WaitExpired {
+                    operation: crate::WasmWaitOperation::Close,
+                    invocation_id: None,
+                });
             };
             let waited =
                 self.inner
                     .shared
                     .message_available
                     .wait_timeout_while(state, remaining, |state| {
-                        state.lifecycle != EventQueueLifecycle::Closed
+                        state.lifecycle != WasmQueueLifecycle::Closed
                     });
             let (next_state, timeout_result) = match waited {
                 Ok(result) => result,
                 Err(poisoned) => poisoned.into_inner(),
             };
             state = next_state;
-            if timeout_result.timed_out() && state.lifecycle != EventQueueLifecycle::Closed {
-                return Err(WasmPluginHostError::QueueTimeout(
-                    "event hook close".to_owned(),
-                ));
+            if timeout_result.timed_out() && state.lifecycle != WasmQueueLifecycle::Closed {
+                return Err(WasmPluginHostError::WaitExpired {
+                    operation: crate::WasmWaitOperation::Close,
+                    invocation_id: None,
+                });
             }
         }
         let worker_error = state.worker_error.clone();
         drop(state);
         self.join_worker(started, timeout)?;
         if let Some(error) = worker_error {
-            return Err(WasmPluginHostError::Execution(error));
+            return Err(error);
         }
-        Ok(())
+        Ok(self.settlement())
     }
 
     pub fn drain_reports(&self) -> WasmPipelineEventHookReportBatch {
@@ -618,132 +670,74 @@ impl WasmPipelineEventHookQueue {
     }
 
     fn join_worker(&self, started: Instant, timeout: Duration) -> Result<(), WasmPluginHostError> {
-        loop {
-            let mut worker_state = self
-                .inner
-                .worker
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match &*worker_state {
-                EventWorkerJoinState::Joined(result) => {
-                    return result.clone().map_err(WasmPluginHostError::Execution);
-                }
-                EventWorkerJoinState::Joining => {
-                    let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
-                        return Err(WasmPluginHostError::QueueTimeout(
-                            "event hook worker join".to_owned(),
-                        ));
-                    };
-                    let waited = self
-                        .inner
-                        .worker_changed
-                        .wait_timeout(worker_state, remaining);
-                    let (next_state, timeout_result) = match waited {
-                        Ok(result) => result,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-                    worker_state = next_state;
-                    if timeout_result.timed_out()
-                        && !matches!(*worker_state, EventWorkerJoinState::Joined(_))
-                    {
-                        return Err(WasmPluginHostError::QueueTimeout(
-                            "event hook worker join".to_owned(),
-                        ));
-                    }
-                    drop(worker_state);
-                }
-                EventWorkerJoinState::Running(worker) if worker.is_finished() => {
-                    let previous =
-                        std::mem::replace(&mut *worker_state, EventWorkerJoinState::Joining);
-                    let worker = match previous {
-                        EventWorkerJoinState::Running(worker) => worker,
-                        other => {
-                            *worker_state = other;
-                            return Err(WasmPluginHostError::Queue(
-                                "WASM event-hook worker join state changed unexpectedly".to_owned(),
-                            ));
-                        }
-                    };
-                    drop(worker_state);
-                    let result = worker
-                        .join()
-                        .map_err(|_| "WASM event-hook worker panicked while joining".to_owned());
-                    let mut worker_state = self
-                        .inner
-                        .worker
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    *worker_state = EventWorkerJoinState::Joined(result.clone());
-                    self.inner.worker_changed.notify_all();
-                    return result.map_err(WasmPluginHostError::Execution);
-                }
-                EventWorkerJoinState::Running(_) => {
-                    let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
-                        return Err(WasmPluginHostError::QueueTimeout(
-                            "event hook worker join".to_owned(),
-                        ));
-                    };
-                    let poll_interval = remaining.min(Duration::from_millis(1));
-                    let waited = self
-                        .inner
-                        .worker_changed
-                        .wait_timeout(worker_state, poll_interval);
-                    worker_state = match waited {
-                        Ok((state, _)) => state,
-                        Err(poisoned) => poisoned.into_inner().0,
-                    };
-                    drop(worker_state);
-                }
-            }
-        }
+        self.inner.worker.join(started, timeout)
+    }
+
+    /// Returns current accounting, including work isolated by an expired close wait.
+    pub fn settlement(&self) -> WasmQueueSettlement {
+        let state = self
+            .inner
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        state.settlement(
+            self.inner.shared.wait_expirations.load(Ordering::Relaxed),
+            self.inner.worker.is_joined(),
+        )
     }
 }
 
 fn enqueue_event(
     shared: &EventQueueShared,
-    event: PipelineEvent,
+    event: CheckedPipelineEvent,
     completion: Option<SyncSender<WasmPipelineEventHookReport>>,
 ) -> Result<WasmPipelineEventEnqueueStatus, WasmPluginHostError> {
     let mut state = shared
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if state.lifecycle != EventQueueLifecycle::Open {
-        return Err(WasmPluginHostError::Queue(
-            "WASM event-hook queue is not open".to_owned(),
-        ));
+    if state.lifecycle != WasmQueueLifecycle::Open {
+        return Err(WasmPluginHostError::Queue(crate::WasmQueueError::Closed));
     }
     if state.queued_events >= WASM_PLUGIN_EVENT_QUEUE_CAPACITY {
         saturating_atomic_increment(&shared.dropped_events);
         return Ok(WasmPipelineEventEnqueueStatus::Dropped);
     }
+    if state.next_event_id == 0 {
+        return Err(WasmPluginHostError::Queue(
+            crate::WasmQueueError::IdExhausted,
+        ));
+    }
+    let invocation_id = state.next_event_id;
+    state.next_event_id = invocation_id.checked_add(1).unwrap_or(0);
+    state.accepted_invocations = state.accepted_invocations.saturating_add(1);
     state.queued_events += 1;
     state.messages.push_back(QueueMessage::Event {
+        invocation_id,
         event: Box::new(event),
         completion,
     });
     shared.message_available.notify_one();
-    Ok(WasmPipelineEventEnqueueStatus::Enqueued)
+    Ok(WasmPipelineEventEnqueueStatus::Enqueued { invocation_id })
 }
 
 fn begin_event_queue_flush(
     shared: &EventQueueShared,
-) -> Result<mpsc::Receiver<()>, WasmPluginHostError> {
+) -> Result<mpsc::Receiver<WasmQueueSettlement>, WasmPluginHostError> {
     let mut state = shared
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if state.lifecycle != EventQueueLifecycle::Open {
-        return Err(WasmPluginHostError::Queue(
-            "WASM event-hook queue is not open".to_owned(),
-        ));
+    if state.lifecycle != WasmQueueLifecycle::Open {
+        return Err(WasmPluginHostError::Queue(crate::WasmQueueError::Closed));
     }
     if state.flush_pending {
         return Err(WasmPluginHostError::Queue(
-            "WASM event-hook flush is already pending".to_owned(),
+            crate::WasmQueueError::FlushPending,
         ));
     }
-    let (barrier_tx, barrier_rx) = mpsc::sync_channel(0);
+    let (barrier_tx, barrier_rx) = mpsc::sync_channel(1);
     state.flush_pending = true;
     state.messages.push_back(QueueMessage::Barrier(barrier_tx));
     shared.message_available.notify_one();
@@ -755,8 +749,8 @@ fn request_event_queue_close(shared: &EventQueueShared) {
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if state.lifecycle == EventQueueLifecycle::Open {
-        state.lifecycle = EventQueueLifecycle::Closing;
+    if state.lifecycle == WasmQueueLifecycle::Open {
+        state.lifecycle = WasmQueueLifecycle::Closing;
         state.messages.push_back(QueueMessage::Close);
         shared.message_available.notify_one();
     }
@@ -774,7 +768,7 @@ fn take_event_queue_message(shared: &EventQueueShared) -> Option<QueueMessage> {
             }
             return Some(message);
         }
-        if state.lifecycle == EventQueueLifecycle::Closed {
+        if state.lifecycle == WasmQueueLifecycle::Closed {
             return None;
         }
         state = shared
@@ -784,42 +778,90 @@ fn take_event_queue_message(shared: &EventQueueShared) -> Option<QueueMessage> {
     }
 }
 
-fn complete_event_queue_flush(shared: &EventQueueShared, acknowledge: SyncSender<()>) {
-    {
-        let mut state = shared
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+fn complete_event_queue_flush(
+    shared: &EventQueueShared,
+    acknowledge: SyncSender<WasmQueueSettlement>,
+) {
+    let settlement = {
+        let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
         state.flush_pending = false;
         shared.message_available.notify_all();
+        state.settlement(shared.wait_expirations.load(Ordering::Relaxed), false)
+    };
+    // A discarded/expired waiter must never block the worker.
+    let _ = acknowledge.try_send(settlement);
+}
+
+struct ActiveEvent {
+    invocation_id: u64,
+    run_id: String,
+    session_id: String,
+    event_name: String,
+    completion: Option<SyncSender<WasmPipelineEventHookReport>>,
+}
+
+fn publish_event_report(
+    shared: &EventQueueShared,
+    report: WasmPipelineEventHookReport,
+    completion: Option<SyncSender<WasmPipelineEventHookReport>>,
+) {
+    {
+        let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.completed_invocations = state.completed_invocations.saturating_add(1);
+        if report.result.is_err() {
+            state.failed_invocations = state.failed_invocations.saturating_add(1);
+        }
     }
-    let _ = acknowledge.send(());
+    if let Some(completion) = completion {
+        shared.reports.push(report.clone());
+        let _ = completion.try_send(report);
+    } else {
+        shared.reports.push(report);
+    }
 }
 
 fn run_queue_worker(shared: Arc<EventQueueShared>, mut session: WasmPipelineEventHookSession) {
+    let mut active_event = None;
     let worker_result = catch_unwind(AssertUnwindSafe(|| {
         while let Some(message) = take_event_queue_message(&shared) {
             match message {
-                QueueMessage::Event { event, completion } => {
-                    let result = catch_unwind(AssertUnwindSafe(|| session.on_event(&event)))
-                        .unwrap_or_else(|_| {
-                            session.quarantined = true;
-                            Err(WasmPluginHostError::Execution(
-                                "WASM event-hook worker panicked".to_owned(),
-                            ))
-                        });
+                QueueMessage::Event {
+                    invocation_id,
+                    event,
+                    completion,
+                } => {
+                    active_event = Some(ActiveEvent {
+                        invocation_id,
+                        run_id: event.event().run_id.clone(),
+                        session_id: event.event().session_id.clone(),
+                        event_name: event.event().event_name.clone(),
+                        completion,
+                    });
+                    let result =
+                        catch_unwind(AssertUnwindSafe(|| session.on_checked_event(&event)))
+                            .unwrap_or_else(|_| {
+                                let failure = WasmPluginHostError::WorkerPanic(
+                                    "event-hook invocation".to_owned(),
+                                );
+                                session.quarantined = Some(failure.clone());
+                                Err(failure)
+                            });
+                    {
+                        let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+                        state.quarantine_reason = session.quarantined.clone();
+                    }
                     let logs = session.take_logs();
+                    let event = event.0;
                     let report = WasmPipelineEventHookReport {
+                        invocation_id,
                         run_id: event.run_id,
                         session_id: event.session_id,
                         event_name: event.event_name,
                         result,
                         logs,
                     };
-                    if let Some(completion) = completion {
-                        let _ = completion.send(report.clone());
-                    }
-                    shared.reports.push(report);
+                    let completion = active_event.take().and_then(|active| active.completion);
+                    publish_event_report(&shared, report, completion);
                 }
                 QueueMessage::Barrier(acknowledge) => {
                     complete_event_queue_flush(&shared, acknowledge);
@@ -829,47 +871,73 @@ fn run_queue_worker(shared: Arc<EventQueueShared>, mut session: WasmPipelineEven
         }
     }));
     let worker_error = if worker_result.is_err() {
-        fail_event_queue_after_worker_panic(&shared);
-        Some("WASM event-hook queue worker panicked".to_owned())
+        let reason = WasmPluginHostError::WorkerPanic("event-hook queue worker".to_owned());
+        fail_event_queue_after_worker_panic(&shared, active_event.take(), &reason);
+        Some(reason)
     } else {
         None
     };
     drop(session);
-    let mut state = shared
-        .state
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    state.lifecycle = EventQueueLifecycle::Closed;
+    let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+    state.lifecycle = WasmQueueLifecycle::Closed;
     state.flush_pending = false;
     state.worker_error = worker_error;
     shared.message_available.notify_all();
 }
 
-fn fail_event_queue_after_worker_panic(shared: &EventQueueShared) {
+fn fail_event_queue_after_worker_panic(
+    shared: &EventQueueShared,
+    active_event: Option<ActiveEvent>,
+    reason: &WasmPluginHostError,
+) {
     let pending = {
-        let mut state = shared
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.lifecycle = EventQueueLifecycle::Closing;
+        let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.lifecycle = WasmQueueLifecycle::Closing;
+        state.quarantine_reason = Some(reason.clone());
         state.queued_events = 0;
         state.flush_pending = false;
         state.messages.drain(..).collect::<Vec<_>>()
     };
+    if let Some(ActiveEvent {
+        invocation_id,
+        run_id,
+        session_id,
+        event_name,
+        completion,
+    }) = active_event
+    {
+        publish_event_report(
+            shared,
+            WasmPipelineEventHookReport {
+                invocation_id,
+                run_id,
+                session_id,
+                event_name,
+                result: Err(reason.clone()),
+                logs: Vec::new(),
+            },
+            completion,
+        );
+    }
     for message in pending {
         match message {
-            QueueMessage::Event { event, completion } => {
+            QueueMessage::Event {
+                invocation_id,
+                event,
+                completion,
+            } => {
+                let event = event.0;
                 let report = WasmPipelineEventHookReport {
+                    invocation_id,
                     run_id: event.run_id,
                     session_id: event.session_id,
                     event_name: event.event_name,
-                    result: Err(WasmPluginHostError::Quarantined),
+                    result: Err(WasmPluginHostError::Quarantined {
+                        reason: Arc::new(reason.clone()),
+                    }),
                     logs: Vec::new(),
                 };
-                if let Some(completion) = completion {
-                    let _ = completion.send(report.clone());
-                }
-                shared.reports.push(report);
+                publish_event_report(shared, report, completion);
             }
             QueueMessage::Barrier(_) | QueueMessage::Close => {}
         }
@@ -878,7 +946,7 @@ fn fail_event_queue_after_worker_panic(shared: &EventQueueShared) {
 }
 
 fn saturating_atomic_increment(counter: &AtomicU64) {
-    let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
         Some(value.saturating_add(1))
     });
 }
@@ -887,7 +955,7 @@ fn saturating_atomic_increment(counter: &AtomicU64) {
 mod tests {
     use super::*;
 
-    fn queue_test_event(timestamp_ns: u64) -> PipelineEvent {
+    fn queue_test_raw_event(timestamp_ns: u64) -> PipelineEvent {
         PipelineEvent {
             run_id: "run".to_owned(),
             session_id: "session".to_owned(),
@@ -902,6 +970,10 @@ mod tests {
         }
     }
 
+    fn queue_test_event(timestamp_ns: u64) -> CheckedPipelineEvent {
+        CheckedPipelineEvent::new(queue_test_raw_event(timestamp_ns)).expect("checked event")
+    }
+
     #[test]
     fn component_without_event_hook_exports_is_rejected() {
         let runtime = WasmPluginRuntime::new().expect("WASM runtime");
@@ -910,7 +982,7 @@ mod tests {
         assert!(matches!(
             WasmPipelineEventHookSession::from_component_bytes(&runtime, &bytes),
             Err(WasmPluginHostError::Instantiation(message))
-                if message.contains("event-hook")
+                if message.to_string().contains("event-hook")
         ));
     }
 
@@ -944,7 +1016,9 @@ mod tests {
                     None,
                 )
                 .expect("accepted enqueue"),
-                WasmPipelineEventEnqueueStatus::Enqueued
+                WasmPipelineEventEnqueueStatus::Enqueued {
+                    invocation_id: u64::try_from(timestamp_ns).expect("test id") + 1
+                }
             );
         }
         assert_eq!(
@@ -959,10 +1033,10 @@ mod tests {
         assert_eq!(state.queued_events, WASM_PLUGIN_EVENT_QUEUE_CAPACITY);
         assert_eq!(state.messages.len(), WASM_PLUGIN_EVENT_QUEUE_CAPACITY);
         assert!(
-            matches!(state.messages.front(), Some(QueueMessage::Event { event, .. }) if event.timestamp_ns == 0)
+            matches!(state.messages.front(), Some(QueueMessage::Event { event, .. }) if event.event().timestamp_ns == 0)
         );
         assert!(
-            matches!(state.messages.back(), Some(QueueMessage::Event { event, .. }) if event.timestamp_ns == 1_023)
+            matches!(state.messages.back(), Some(QueueMessage::Event { event, .. }) if event.event().timestamp_ns == 1_023)
         );
         assert_eq!(shared.dropped_events.load(Ordering::Relaxed), 1);
     }
@@ -986,7 +1060,7 @@ mod tests {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        assert_eq!(state.lifecycle, EventQueueLifecycle::Closing);
+        assert_eq!(state.lifecycle, WasmQueueLifecycle::Closing);
         assert_eq!(state.queued_events, WASM_PLUGIN_EVENT_QUEUE_CAPACITY);
         assert_eq!(state.messages.len(), WASM_PLUGIN_EVENT_QUEUE_CAPACITY + 2);
         assert!(matches!(
@@ -1051,22 +1125,23 @@ mod tests {
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.lifecycle = EventQueueLifecycle::Closed;
+            state.lifecycle = WasmQueueLifecycle::Closed;
             worker_shared.message_available.notify_all();
         });
         let queue = WasmPipelineEventHookQueue {
             inner: Arc::new(WasmPipelineEventHookQueueInner {
                 shared: Arc::clone(&shared),
-                worker: Mutex::new(EventWorkerJoinState::Running(worker)),
-                worker_changed: Condvar::new(),
+                worker: WasmWorker::new(worker),
             }),
         };
 
         request_event_queue_close(&shared);
         assert!(matches!(
             queue.close(Duration::from_millis(10)),
-            Err(WasmPluginHostError::QueueTimeout(message))
-                if message.contains("event hook close")
+            Err(WasmPluginHostError::WaitExpired {
+                operation: crate::WasmWaitOperation::Close,
+                ..
+            })
         ));
         assert_eq!(
             shared
@@ -1074,7 +1149,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .lifecycle,
-            EventQueueLifecycle::Closing
+            WasmQueueLifecycle::Closing
         );
 
         let (released, release_changed) = &*release_worker;
@@ -1087,5 +1162,202 @@ mod tests {
             .close(Duration::from_secs(1))
             .expect("close after release");
         queue.close(Duration::ZERO).expect("idempotent close");
+    }
+
+    #[test]
+    fn expired_result_wait_keeps_accepted_work_and_correlated_late_report() {
+        let shared = Arc::new(EventQueueShared::default());
+        let worker_shared = Arc::clone(&shared);
+        let (release, released) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            while let Some(message) = take_event_queue_message(&worker_shared) {
+                match message {
+                    QueueMessage::Event {
+                        invocation_id,
+                        event,
+                        completion,
+                    } => {
+                        released
+                            .recv_timeout(Duration::from_secs(1))
+                            .expect("release worker");
+                        let event = event.0;
+                        publish_event_report(
+                            &worker_shared,
+                            WasmPipelineEventHookReport {
+                                invocation_id,
+                                run_id: event.run_id,
+                                session_id: event.session_id,
+                                event_name: event.event_name,
+                                result: Ok(PipelineEventHookOutcome {
+                                    accepted: true,
+                                    ..Default::default()
+                                }),
+                                logs: Vec::new(),
+                            },
+                            completion,
+                        );
+                    }
+                    QueueMessage::Barrier(reply) => {
+                        complete_event_queue_flush(&worker_shared, reply)
+                    }
+                    QueueMessage::Close => break,
+                }
+            }
+            let mut state = worker_shared
+                .state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            state.lifecycle = WasmQueueLifecycle::Closed;
+            worker_shared.message_available.notify_all();
+        });
+        let queue = WasmPipelineEventHookQueue {
+            inner: Arc::new(WasmPipelineEventHookQueueInner {
+                shared,
+                worker: WasmWorker::new(worker),
+            }),
+        };
+        let ticket = queue
+            .submit(queue_test_raw_event(1))
+            .expect("accepted event");
+        let invocation_id = ticket.invocation_id();
+        assert_eq!(
+            ticket.wait(Duration::ZERO),
+            Err(WasmPluginHostError::WaitExpired {
+                operation: WasmWaitOperation::EventResult,
+                invocation_id: Some(invocation_id),
+            })
+        );
+        let pending = queue.settlement();
+        assert_eq!(pending.accepted_invocations, 1);
+        assert_eq!(pending.completed_invocations, 0);
+        assert_eq!(pending.pending_invocations, 1);
+        assert_eq!(pending.wait_expirations, 1);
+        release.send(()).expect("release worker");
+        let settled = queue.close(Duration::from_secs(1)).expect("settled close");
+        assert_eq!(settled.lifecycle, WasmQueueLifecycle::Closed);
+        assert!(settled.worker_joined);
+        assert_eq!(settled.completed_invocations, 1);
+        assert_eq!(settled.failed_invocations, 0);
+        assert_eq!(settled.pending_invocations, 0);
+        assert!(settled.quarantine_reason.is_none());
+        let reports = queue.drain_reports();
+        assert_eq!(reports.reports.len(), 1);
+        assert_eq!(reports.reports[0].invocation_id, invocation_id);
+        assert!(
+            reports.reports[0]
+                .result
+                .as_ref()
+                .expect("late result")
+                .accepted
+        );
+        assert_eq!(queue.settlement(), settled);
+    }
+
+    #[test]
+    fn worker_panic_settles_active_and_pending_event_tickets() {
+        let shared = EventQueueShared::default();
+        let (first_tx, first_rx) = mpsc::sync_channel(1);
+        let (second_tx, second_rx) = mpsc::sync_channel(1);
+        enqueue_event(&shared, queue_test_event(1), Some(first_tx)).expect("first event");
+        enqueue_event(&shared, queue_test_event(2), Some(second_tx)).expect("second event");
+        let active = match take_event_queue_message(&shared).expect("active event") {
+            QueueMessage::Event {
+                invocation_id,
+                event,
+                completion,
+            } => {
+                let event = event.0;
+                ActiveEvent {
+                    invocation_id,
+                    run_id: event.run_id,
+                    session_id: event.session_id,
+                    event_name: event.event_name,
+                    completion,
+                }
+            }
+            _ => panic!("expected event"),
+        };
+        let reason = WasmPluginHostError::WorkerPanic("event-hook queue worker".to_owned());
+        fail_event_queue_after_worker_panic(&shared, Some(active), &reason);
+        let first = first_rx
+            .recv_timeout(Duration::ZERO)
+            .expect("active receipt");
+        let second = second_rx
+            .recv_timeout(Duration::ZERO)
+            .expect("pending receipt");
+        assert_eq!(first.invocation_id, 1);
+        assert_eq!(first.result, Err(reason.clone()));
+        assert_eq!(second.invocation_id, 2);
+        assert_eq!(
+            second.result,
+            Err(WasmPluginHostError::Quarantined {
+                reason: Arc::new(reason.clone())
+            })
+        );
+        let state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(state.completed_invocations, state.accepted_invocations);
+        assert_eq!(state.failed_invocations, 2);
+        assert_eq!(state.quarantine_reason, Some(reason));
+    }
+
+    #[test]
+    fn event_flush_returns_the_worker_snapshot_not_a_later_caller_snapshot() {
+        let shared = EventQueueShared::default();
+        let receiver = begin_event_queue_flush(&shared).expect("barrier");
+        let sender = match take_event_queue_message(&shared).expect("barrier message") {
+            QueueMessage::Barrier(sender) => sender,
+            _ => panic!("expected barrier"),
+        };
+        complete_event_queue_flush(&shared, sender);
+        enqueue_event(&shared, queue_test_event(1), None).expect("later event");
+        let snapshot = receiver
+            .recv_timeout(Duration::ZERO)
+            .expect("worker snapshot");
+        assert_eq!(snapshot.accepted_invocations, 0);
+        assert_eq!(
+            shared
+                .state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .accepted_invocations,
+            1
+        );
+    }
+
+    #[test]
+    fn event_ids_never_wrap_and_report_storage_stays_bounded() {
+        let shared = EventQueueShared::default();
+        shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .next_event_id = u64::MAX;
+        assert_eq!(
+            enqueue_event(&shared, queue_test_event(1), None).expect("last id"),
+            WasmPipelineEventEnqueueStatus::Enqueued {
+                invocation_id: u64::MAX
+            }
+        );
+        assert_eq!(
+            enqueue_event(&shared, queue_test_event(2), None),
+            Err(WasmPluginHostError::Queue(
+                crate::WasmQueueError::IdExhausted
+            ))
+        );
+        for id in 0..=WASM_PLUGIN_EVENT_REPORT_QUEUE_CAPACITY {
+            shared.reports.push(WasmPipelineEventHookReport {
+                invocation_id: u64::try_from(id).expect("test id"),
+                run_id: "run".to_owned(),
+                session_id: "session".to_owned(),
+                event_name: "event".to_owned(),
+                result: Ok(PipelineEventHookOutcome::default()),
+                logs: Vec::new(),
+            });
+        }
+        assert_eq!(
+            shared.reports.drain().len(),
+            WASM_PLUGIN_EVENT_REPORT_QUEUE_CAPACITY
+        );
+        assert_eq!(shared.reports.dropped_reports.load(Ordering::Relaxed), 1);
     }
 }

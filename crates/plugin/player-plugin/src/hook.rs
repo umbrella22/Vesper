@@ -112,6 +112,33 @@ impl PipelineEventHookOutcome {
     }
 }
 
+/// A failure reported by Native event-hook author code.
+///
+/// Native adapters validate the message before exporting the existing error payload.
+#[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "code", content = "message")]
+pub enum PipelineEventHookFailure {
+    #[error("event hook rejected invalid input: {0}")]
+    InvalidInput(String),
+    #[error("event hook rejected the event: {0}")]
+    Rejected(String),
+    #[error("event hook failed: {0}")]
+    Failed(String),
+}
+
+impl PipelineEventHookFailure {
+    /// Checks the established 1–256 UTF-8 byte message limit without changing the text.
+    pub fn validate(&self) -> Result<(), PluginProtocolViolation> {
+        let message = match self {
+            Self::InvalidInput(message) | Self::Rejected(message) | Self::Failed(message) => {
+                message
+            }
+        };
+        validate_failure_message(message)
+    }
+}
+
+/// Host-facing errors, including failures reported by a plugin.
 #[derive(Debug, Error, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "code", content = "message")]
 pub enum PipelineEventHookError {
@@ -130,6 +157,29 @@ pub enum PipelineEventHookError {
 }
 
 impl PipelineEventHookError {
+    /// Projects a diagnostic into the existing mobile report message budget.
+    ///
+    /// The code is preserved. Only the outward copy is truncated on a UTF-8
+    /// boundary; internal reports retain the complete diagnostic. This is not
+    /// author-failure validation and must not be used when checking artifact bytes.
+    pub fn report_projection(&self) -> Self {
+        let project = |message: &str| {
+            if message.is_empty() {
+                "plugin host error".to_owned()
+            } else {
+                message[..message.floor_char_boundary(MAX_PLUGIN_ERROR_MESSAGE_BYTES)].to_owned()
+            }
+        };
+        match self {
+            Self::InvalidInput(message) => Self::InvalidInput(project(message)),
+            Self::PayloadCodec(message) => Self::PayloadCodec(project(message)),
+            Self::AbiViolation(message) => Self::AbiViolation(project(message)),
+            Self::Rejected(message) => Self::Rejected(project(message)),
+            Self::Failed(message) => Self::Failed(project(message)),
+            Self::ProtocolViolation(message) => Self::ProtocolViolation(project(message)),
+        }
+    }
+
     pub fn validate_author_failure(&self) -> Result<(), Self> {
         let message = match self {
             Self::InvalidInput(message) | Self::Rejected(message) | Self::Failed(message) => {
@@ -141,13 +191,52 @@ impl PipelineEventHookError {
                 ));
             }
         };
-        validate_text(
-            "event_hook.error.message",
-            message,
-            MAX_PLUGIN_ERROR_MESSAGE_BYTES,
-        )
-        .map_err(Self::from)
+        validate_failure_message(message).map_err(Self::from)
     }
+}
+
+fn validate_failure_message(message: &str) -> Result<(), PluginProtocolViolation> {
+    validate_text(
+        "event_hook.error.message",
+        message,
+        MAX_PLUGIN_ERROR_MESSAGE_BYTES,
+    )
+}
+
+impl From<PipelineEventHookFailure> for PipelineEventHookError {
+    fn from(value: PipelineEventHookFailure) -> Self {
+        match value {
+            PipelineEventHookFailure::InvalidInput(message) => Self::InvalidInput(message),
+            PipelineEventHookFailure::Rejected(message) => Self::Rejected(message),
+            PipelineEventHookFailure::Failed(message) => Self::Failed(message),
+        }
+    }
+}
+
+/// A Native plugin's event-hook implementation, registered with [`crate::PluginBuilder`].
+///
+/// Host ABI errors cannot be returned by author code:
+///
+/// ```compile_fail,E0308
+/// use player_plugin::{
+///     PipelineEvent, PipelineEventHookError, PipelineEventHookFailure,
+///     PipelineEventHookOutcome, PluginEventHook,
+/// };
+///
+/// struct Hook;
+/// impl PluginEventHook for Hook {
+///     fn on_event(&self, _: &PipelineEvent)
+///         -> Result<PipelineEventHookOutcome, PipelineEventHookFailure>
+///     {
+///         Err(PipelineEventHookError::AbiViolation("host-only error".to_owned()))
+///     }
+/// }
+/// ```
+pub trait PluginEventHook: Send + Sync {
+    fn on_event(
+        &self,
+        event: &PipelineEvent,
+    ) -> Result<PipelineEventHookOutcome, PipelineEventHookFailure>;
 }
 
 impl From<PluginProtocolViolation> for PipelineEventHookError {
@@ -156,6 +245,7 @@ impl From<PluginProtocolViolation> for PipelineEventHookError {
     }
 }
 
+/// A checked host capability. Native authors implement [`PluginEventHook`].
 pub trait PipelineEventHook: Send + Sync {
     fn on_event(
         &self,

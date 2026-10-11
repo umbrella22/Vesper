@@ -1812,11 +1812,21 @@ impl SequenceCoordinator {
         reason: SequenceActivationReason,
         now: SequenceClockSnapshot,
     ) -> SequenceResult<SequenceNavigationOutcome> {
-        if self.item_index(item_id).is_none() {
+        let Some(index) = self.item_index(item_id) else {
             return Err(SequenceError::new(
                 SequenceErrorCode::ItemNotFound,
                 "active item was not found",
             ));
+        };
+        // Reject a new provider request before invalidating the current host activation.
+        if matches!(
+            self.items[index].source_state,
+            SequenceSourceState::Unresolved
+                | SequenceSourceState::Expired { .. }
+                | SequenceSourceState::Failed { .. }
+        ) && self.pending_source_request(item_id).is_none()
+        {
+            self.ensure_pending_capacity()?;
         }
         self.active_item_id = Some(item_id.clone());
         self.bump_activation(reason);

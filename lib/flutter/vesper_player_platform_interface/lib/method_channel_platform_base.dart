@@ -733,7 +733,7 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
         'downloadId': downloadId,
         'assetId': assetId,
         'source': source.toMap(),
-        'profile': profile.toMap(),
+        'profile': _downloadCallerProfileMap(profile),
         'assetIndex': assetIndex.toMap(),
       },
     );
@@ -858,14 +858,36 @@ abstract class VesperMethodChannelPlatformBase extends VesperPlayerPlatform {
     }
     final plan = await Future<VesperDownloadRecoveredTaskPlan?>.sync(
       () => handler(
-        VesperDownloadTaskSnapshot.fromMap(vesperDecodeMap(arguments['task'])),
+        VesperDownloadTaskSnapshot.fromMap(
+          _downloadRecoveryTaskMap(arguments['task']),
+        ),
         VesperDownloadStaleResource.fromMap(
           vesperDecodeMap(arguments['staleResource']),
         ),
       ),
     ).timeout(_vesperDownloadRecoveryTimeout, onTimeout: () => null);
-    return plan?.toMap();
+    if (plan == null) return null;
+    final profile = _downloadCallerProfileMap(plan.profile);
+    return plan.toMap()..['profile'] = profile;
   }
+}
+
+Map<String, Object?> _downloadCallerProfileMap(VesperDownloadProfile profile) {
+  final wire = profile.toMap();
+  final format = wire['targetOutputFormat'];
+  if (format != null &&
+      !VesperDownloadOutputFormat.values.any((value) => value.name == format)) {
+    throw FormatException('Unknown caller targetOutputFormat: $format');
+  }
+  return wire;
+}
+
+Map<Object?, Object?> _downloadRecoveryTaskMap(Object? raw) {
+  if (raw is! Map) throw const FormatException('recovery.task must be a map');
+  if (raw.keys.any((key) => key is! String)) {
+    throw const FormatException('recovery.task keys must be strings');
+  }
+  return Map<Object?, Object?>.from(raw);
 }
 
 VesperPerformanceDiagnosticsReport _decodePerformanceDiagnosticsReport(

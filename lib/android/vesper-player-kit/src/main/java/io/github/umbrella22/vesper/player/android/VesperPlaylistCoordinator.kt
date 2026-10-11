@@ -393,7 +393,7 @@ private fun resolvePlaylistResiliencePolicy(
         cachePolicy = resiliencePolicy.cache.toNativePayload(),
     )
 
-private fun buildPlaylistDataSourceFactory(
+internal fun buildPlaylistDataSourceFactory(
     appContext: Context,
     cachePolicy: NativeCachePolicy,
 ): androidx.media3.datasource.DataSource.Factory {
@@ -413,6 +413,16 @@ private fun buildPlaylistDataSourceFactory(
         .setCache(cache)
         .setUpstreamDataSourceFactory(upstreamFactory)
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        .setCacheKeyFactory { spec ->
+            mediaResourceCacheKey(
+                namespace = "playlist",
+                uri = spec.uri.toString(),
+                headers = emptyMap(),
+                requestHeaders = spec.httpRequestHeaders,
+                httpMethod = spec.httpMethod,
+                httpBody = spec.httpBody,
+            )
+        }
 }
 
 private fun resolvePlaylistCachePolicy(

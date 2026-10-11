@@ -314,19 +314,17 @@ impl SharedPlaybackState {
         self.queued_samples
             .fetch_add(sample_count, Ordering::AcqRel);
         let generation_key = generation as u32;
-        let _ = self.played_accounting.fetch_update(
-            Ordering::AcqRel,
-            Ordering::Acquire,
-            |accounting| {
-                (played_generation(accounting) == generation_key).then(|| {
-                    pack_played_accounting_state(
-                        generation_key,
-                        played_sample_count(accounting),
-                        false,
-                    )
-                })
-            },
-        );
+        let _ =
+            self.played_accounting
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |accounting| {
+                    (played_generation(accounting) == generation_key).then(|| {
+                        pack_played_accounting_state(
+                            generation_key,
+                            played_sample_count(accounting),
+                            false,
+                        )
+                    })
+                });
         self.notify_backpressure_waiters();
         Ok(AudioPcmAppendStatus::Accepted)
     }
@@ -428,7 +426,7 @@ impl SharedPlaybackState {
         };
         if self
             .played_accounting
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |accounting| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |accounting| {
                 (played_generation(accounting) == generation).then(|| {
                     pack_played_accounting_state(generation, played_sample_count(accounting), true)
                 })
@@ -457,7 +455,7 @@ impl SharedPlaybackState {
         if played > 0
             && self
                 .played_accounting
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |accounting| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |accounting| {
                     (played_generation(accounting) == generation).then(|| {
                         pack_played_accounting(
                             generation,

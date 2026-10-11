@@ -30,6 +30,17 @@ key identity, and trust-store status before yielding a verified package.
 - `install_verified_plugin_package`, `list_installed_plugins`, and
   `uninstall_plugin` manage a verified installed catalog.
 
+## Verified Installation
+
+`install_verified_plugin_package` accepts a verified package and installs a
+separate plugin identity/version directory. It extracts into a staging directory,
+writes and synchronizes a marker containing the verified package SHA-256, and
+atomically renames staging into the destination. Reinstalling the same
+identity/version with the same package digest is idempotent; a different digest
+for an existing version is rejected. The installed marker records package bytes.
+Host selection, plan fingerprints and session generations remain separate
+runtime decisions.
+
 ## Security Boundary
 
 A valid package proves that an authorized publisher signed the recorded

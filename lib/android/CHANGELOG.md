@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-11
+
+- Resolve the latest OpenSSL 3.5 LTS and libxml2 2.15 patches even with older
+  archives cached. Download new versioned sources and invalidate dependency
+  and FFmpeg build receipts on patch or source changes; retain offline cache
+  fallback and explicit exact-version reproduction.
+- Reject segmented download export when post-processing produces no single-file
+  output, preserving the manifest and any existing destination.
+- Propagate external-playback cancellation through native worker and wait
+  boundaries, bind HLS/cache stream handles to the token lifetime, and retire
+  every token before blocking teardown. Adapted input close is idempotent and
+  native session leases reject stale generations.
+- Configure Maven signing with an empty password for unencrypted keys when
+  no passphrase is supplied.
+
 ## 0.8.0 - 2026-09-29
 
 - Add independent source sessions, handle registration, bounded preloading and awaited activation with native epoch correlation.

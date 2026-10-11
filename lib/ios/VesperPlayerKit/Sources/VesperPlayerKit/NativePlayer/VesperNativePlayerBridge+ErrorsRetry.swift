@@ -63,8 +63,9 @@ extension VesperNativePlayerBridge {
         itemStatusDetails: [String: String] = [:],
         itemErrorLogDetails: [String: String] = [:]
     ) -> ResolvedBridgeError {
+        let cause = playbackFailurePreservingDashCause(error)
         let classifiedError = reclassifyHTTPSourceError(
-            classifyPlaybackFailure(error, fallbackMessage: fallbackMessage),
+            classifyPlaybackFailure(cause, fallbackMessage: fallbackMessage),
             nativeError: error,
             itemStatusDetails: itemStatusDetails,
             itemErrorLogDetails: itemErrorLogDetails
@@ -80,6 +81,51 @@ extension VesperNativePlayerBridge {
             .enrichedWithDetails(itemErrorLogDetails)
             .enrichedWithDetails(diagnosticsTracker.snapshot.errorDetails)
             .enrichedWithHdrFailureEvidence(currentHdrFailureEvidence)
+    }
+
+    func playbackFailurePreservingDashCause(_ error: Error?, item: AVPlayerItem? = nil) -> Error? {
+        if let error {
+            if error is VesperPlayerError || error is VesperDashBridgeError || error is VesperDashResourceFailure
+                || isVesperDashCancellation(error) { return error }
+            let native = error as NSError
+            guard native.domain == NSURLErrorDomain || native.domain == AVFoundationErrorDomain
+                || native.domain == "CoreMediaErrorDomain" else { return error }
+        }
+        guard let item = item ?? player?.currentItem,
+              let failure = currentDashResourceFailure(item: item) else { return error }
+        return failure
+    }
+
+    private func dashResourceFailure(in error: Error) -> VesperDashResourceFailure? {
+        var candidate = error
+        var visited: Set<ObjectIdentifier> = []
+        while true {
+            if let resource = candidate as? VesperDashResourceFailure {
+                guard let source = currentSource, source.protocol == .dash,
+                      let session = currentDashSession, session.sourceURL == URL(string: source.uri),
+                      session.id == resource.sessionID, sourceLoadEpoch == resource.sourceLoadEpoch,
+                      session.route(for: resource.requestURL) != nil else { return nil }
+                return resource
+            }
+            let native = candidate as NSError
+            guard visited.insert(ObjectIdentifier(native)).inserted,
+                  let underlying = native.userInfo[NSUnderlyingErrorKey] as? Error else { return nil }
+            candidate = underlying
+        }
+    }
+
+    private func typedDashPlaybackCause(_ error: Error) -> VesperDashBridgeError? {
+        var candidate = error
+        var visited: Set<ObjectIdentifier> = []
+        while true {
+            if let dash = candidate as? VesperDashBridgeError { return dash }
+            // A resource wrapper must pass its ownership fence before unwrapping.
+            if candidate is VesperDashResourceFailure { return nil }
+            let native = candidate as NSError
+            guard visited.insert(ObjectIdentifier(native)).inserted,
+                  let underlying = native.userInfo[NSUnderlyingErrorKey] as? Error else { return nil }
+            candidate = underlying
+        }
     }
 
     func sourceCommandRetryDelay(
@@ -492,6 +538,46 @@ extension VesperNativePlayerBridge {
             )
         }
 
+        if let resource = dashResourceFailure(in: error) {
+            let original = resource.cause as NSError
+            return classifyPlaybackFailure(resource.cause, fallbackMessage: fallbackMessage)
+                .enrichedWithDetails([
+                    "dashFailurePhase": "resourceLoader",
+                    "dashSessionId": resource.sessionID,
+                    "dashSourceLoadEpoch": "\(resource.sourceLoadEpoch)",
+                    "dashResourceUri": diagnosticURLDescription(resource.requestURL.absoluteString),
+                    "dashUnderlyingErrorDomain": original.domain,
+                    "dashUnderlyingErrorCode": "\(original.code)",
+                ])
+        }
+
+        if let dash = typedDashPlaybackCause(error) {
+            let code: VesperPlayerErrorCode
+            let category: VesperPlayerErrorCategory
+            let retriable: Bool
+            let kind: String
+            switch dash {
+            case .unsupportedManifest:
+                (code, category, retriable, kind) = (.unsupported, .capability, false, "unsupportedManifest")
+            case .unsupportedMp4:
+                (code, category, retriable, kind) = (.unsupported, .capability, false, "unsupportedMp4")
+            case .invalidManifest:
+                (code, category, retriable, kind) = (.invalidSource, .source, false, "invalidManifest")
+            case .invalidMp4:
+                (code, category, retriable, kind) = (.invalidSource, .source, false, "invalidMp4")
+            case .network:
+                let mayRetry = currentSource.map {
+                    $0.kind == .remote && URL(string: $0.uri)?.scheme?.lowercased() != "http"
+                } ?? true
+                (code, category, retriable, kind) = (.backendFailure, .network, mayRetry, "network")
+            case .subtitle(let subtitle):
+                (code, category, retriable, kind) = (.backendFailure, .source, subtitle.retriable, "subtitle")
+            }
+            return ResolvedBridgeError(code: code, category: category, retriable: retriable,
+                message: dash.errorDescription ?? fallbackMessage,
+                details: ["dashErrorKind": kind])
+        }
+
         if let drmError = error as? VesperPlayerDrmUnsupportedError {
             return ResolvedBridgeError(
                 code: .unsupported,
@@ -679,7 +765,7 @@ extension VesperNativePlayerBridge {
         for error: ResolvedBridgeError,
         nativeError: Error?
     ) -> [String: String] {
-        guard error.category == .network || error.category == .source else {
+        guard error.category == .network || error.category == .source || error.details["dashErrorKind"] != nil else {
             return [:]
         }
 

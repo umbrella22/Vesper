@@ -108,11 +108,16 @@ internal fun buildDataSourceFactory(
                 .setCache(cache)
                 .setUpstreamDataSourceFactory(upstreamFactory)
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
-                .apply {
-                    if (dashStartupScope != null) setCacheKeyFactory { spec ->
-                        VesperDashStartupCache.shared.resourceKey(dashStartupScope, spec.uri.toString(),
-                            dashStartupRequestHeaders(headers, spec.httpRequestHeaders))
-                    }
+                .setCacheKeyFactory { spec ->
+                    // The v2 namespace deliberately leaves old URI-only spans unused.
+                    mediaResourceCacheKey(
+                        namespace = dashStartupScope?.let { "dash-startup:${it.namespace}" } ?: "standalone",
+                        uri = spec.uri.toString(),
+                        headers = headers,
+                        requestHeaders = spec.httpRequestHeaders,
+                        httpMethod = spec.httpMethod,
+                        httpBody = spec.httpBody,
+                    )
                 }
         }
     // Accepted source sessions own their startup budget independently of the controller cache.

@@ -1,16 +1,17 @@
+use crate::invocation::WasmWorker;
+use crate::{WasmInvocationTicket, WasmQueueLifecycle, WasmQueueSettlement, WasmWaitOperation};
 use std::collections::{BTreeMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use player_plugin::{
     BenchmarkEvent, BenchmarkEventBatch, BenchmarkSinkReport, BenchmarkSinkStatus,
-    BenchmarkThresholdViolation, MAX_BENCHMARK_THRESHOLD_VIOLATIONS,
-    MAX_PLUGIN_ATTRIBUTE_KEY_BYTES, MAX_PLUGIN_ATTRIBUTE_VALUE_BYTES, MAX_PLUGIN_ATTRIBUTES,
-    MAX_PLUGIN_DIAGNOSTICS, MAX_PLUGIN_ERROR_MESSAGE_BYTES, MAX_PLUGIN_MEASUREMENTS,
-    PluginDiagnostic, PluginDiagnosticSeverity, PluginMeasurement,
+    BenchmarkThresholdViolation, MAX_BENCHMARK_THRESHOLD_VIOLATIONS, MAX_PLUGIN_DIAGNOSTICS,
+    MAX_PLUGIN_ERROR_MESSAGE_BYTES, MAX_PLUGIN_MEASUREMENTS, PluginDiagnostic,
+    PluginDiagnosticSeverity, PluginMeasurement,
 };
 use wasmtime::Store;
 use wasmtime::component::{HasSelf, Linker};
@@ -26,11 +27,32 @@ use crate::{
 pub const WASM_PLUGIN_BENCHMARK_BATCH_QUEUE_CAPACITY: usize = 32;
 pub const WASM_PLUGIN_BENCHMARK_REPORT_QUEUE_CAPACITY: usize = 32;
 
+/// Immutable owned batch with semantic and WASM transport checks established.
+#[derive(Debug)]
+struct CheckedBenchmarkBatch(BenchmarkEventBatch);
+
+impl CheckedBenchmarkBatch {
+    fn new(batch: BenchmarkEventBatch) -> Result<Self, WasmPluginHostError> {
+        validate_benchmark_batch(&batch)?;
+        Ok(Self(batch))
+    }
+
+    fn copy_from(batch: &BenchmarkEventBatch) -> Result<Self, WasmPluginHostError> {
+        // Validate before cloning potentially large borrowed input.
+        validate_benchmark_batch(batch)?;
+        Ok(Self(batch.clone()))
+    }
+
+    fn batch(&self) -> &BenchmarkEventBatch {
+        &self.0
+    }
+}
+
 pub struct WasmBenchmarkSinkSession {
     runtime: WasmPluginRuntime,
     store: Store<WasmHostState>,
     bindings: benchmark_sink::BenchmarkSinkPlugin,
-    quarantined: bool,
+    quarantined: Option<WasmPluginHostError>,
 }
 
 impl std::fmt::Debug for WasmBenchmarkSinkSession {
@@ -52,17 +74,17 @@ impl WasmBenchmarkSinkSession {
         benchmark_sink::BenchmarkSinkPlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| {
             state
         })
-        .map_err(|error| WasmPluginHostError::Instantiation(error.to_string()))?;
+        .map_err(|error| WasmPluginHostError::Instantiation(error.into()))?;
         let mut store =
             runtime.new_store(Duration::from_millis(WASM_PLUGIN_FLUSH_TIMEOUT_MILLIS))?;
         let bindings =
             benchmark_sink::BenchmarkSinkPlugin::instantiate(&mut store, &component, &linker)
-                .map_err(|error| WasmPluginHostError::Instantiation(error.to_string()))?;
+                .map_err(|error| WasmPluginHostError::Instantiation(error.into()))?;
         Ok(Self {
             runtime: runtime.clone(),
             store,
             bindings,
-            quarantined: false,
+            quarantined: None,
         })
     }
 
@@ -71,10 +93,23 @@ impl WasmBenchmarkSinkSession {
         batch: &BenchmarkEventBatch,
     ) -> Result<BenchmarkSinkStatus, WasmPluginHostError> {
         self.ensure_available()?;
-        batch
-            .validate()
-            .map_err(|error| WasmPluginHostError::InvalidInput(error.to_string()))?;
-        validate_batch_input_size(batch)?;
+        validate_benchmark_batch(batch)?;
+        self.execute_batch(batch)
+    }
+
+    fn on_checked_batch(
+        &mut self,
+        batch: &CheckedBenchmarkBatch,
+    ) -> Result<BenchmarkSinkStatus, WasmPluginHostError> {
+        self.ensure_available()?;
+        self.execute_batch(batch.batch())
+    }
+
+    /// Availability and input validity are established by the entrypoint.
+    fn execute_batch(
+        &mut self,
+        batch: &BenchmarkEventBatch,
+    ) -> Result<BenchmarkSinkStatus, WasmPluginHostError> {
         let input = benchmark_batch_to_wit(batch);
         self.runtime.prepare_store(
             &mut self.store,
@@ -112,9 +147,6 @@ impl WasmBenchmarkSinkSession {
                 .map_err(|message| self.quarantine_protocol(message))?,
             Err(error) => return Err(self.map_plugin_error(error)),
         };
-        if let Err(error) = report.validate() {
-            return Err(self.quarantine_protocol(error.to_string()));
-        }
         Ok(report)
     }
 
@@ -123,31 +155,39 @@ impl WasmBenchmarkSinkSession {
     }
 
     pub fn is_quarantined(&self) -> bool {
-        self.quarantined
+        self.quarantined.is_some()
+    }
+
+    pub fn quarantine_reason(&self) -> Option<&WasmPluginHostError> {
+        self.quarantined.as_ref()
     }
 
     fn ensure_available(&self) -> Result<(), WasmPluginHostError> {
-        if self.quarantined {
-            Err(WasmPluginHostError::Quarantined)
+        if let Some(reason) = &self.quarantined {
+            Err(WasmPluginHostError::Quarantined {
+                reason: Arc::new(reason.clone()),
+            })
         } else {
             Ok(())
         }
     }
 
     fn quarantine_execution(&mut self, error: wasmtime::Error) -> WasmPluginHostError {
-        self.quarantined = true;
-        WasmPluginHostError::Execution(error.to_string())
+        let failure = WasmPluginHostError::execution(error);
+        self.quarantined = Some(failure.clone());
+        failure
     }
 
     fn quarantine_protocol(&mut self, message: String) -> WasmPluginHostError {
-        self.quarantined = true;
-        WasmPluginHostError::ProtocolViolation(message)
+        let failure = WasmPluginHostError::ProtocolViolation(message);
+        self.quarantined = Some(failure.clone());
+        failure
     }
 
     fn map_plugin_error(&mut self, error: wit::PluginError) -> WasmPluginHostError {
         match error {
             wit::PluginError::InvalidInput(message) => {
-                bounded_plugin_error(message, WasmPluginHostError::InvalidInput, self)
+                bounded_plugin_error(message, WasmPluginHostError::GuestInvalidInput, self)
             }
             wit::PluginError::Rejected(message) => {
                 bounded_plugin_error(message, WasmPluginHostError::Rejected, self)
@@ -183,22 +223,16 @@ pub struct WasmBenchmarkSinkQueueReportBatch {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WasmBenchmarkSinkFlushReport {
+    pub settlement: WasmQueueSettlement,
     pub result: Result<BenchmarkSinkReport, WasmPluginHostError>,
     pub logs: Vec<WasmPluginLogRecord>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BenchmarkQueueLifecycle {
-    Open,
-    Closing,
-    Closed,
 }
 
 #[derive(Debug)]
 enum BenchmarkQueueMessage {
     Batch {
         batch_id: u64,
-        batch: BenchmarkEventBatch,
+        batch: CheckedBenchmarkBatch,
         completion: Option<SyncSender<WasmBenchmarkSinkBatchReport>>,
     },
     Flush(Arc<BenchmarkFlushReply>),
@@ -228,9 +262,13 @@ struct BenchmarkFlushReply {
 
 #[derive(Debug)]
 struct BenchmarkQueueState {
-    lifecycle: BenchmarkQueueLifecycle,
+    lifecycle: WasmQueueLifecycle,
     messages: VecDeque<BenchmarkQueueMessage>,
     queued_batches: usize,
+    accepted_invocations: u64,
+    completed_invocations: u64,
+    failed_invocations: u64,
+    quarantine_reason: Option<WasmPluginHostError>,
     next_batch_id: u64,
     flush_pending: bool,
     completed_timed_out_flush: Option<WasmBenchmarkSinkFlushReport>,
@@ -240,9 +278,13 @@ struct BenchmarkQueueState {
 impl Default for BenchmarkQueueState {
     fn default() -> Self {
         Self {
-            lifecycle: BenchmarkQueueLifecycle::Open,
+            lifecycle: WasmQueueLifecycle::Open,
             messages: VecDeque::new(),
             queued_batches: 0,
+            accepted_invocations: 0,
+            completed_invocations: 0,
+            failed_invocations: 0,
+            quarantine_reason: None,
             next_batch_id: 1,
             flush_pending: false,
             completed_timed_out_flush: None,
@@ -252,10 +294,25 @@ impl Default for BenchmarkQueueState {
 }
 
 impl BenchmarkQueueState {
+    fn settlement(&self, wait_expirations: u64, worker_joined: bool) -> WasmQueueSettlement {
+        WasmQueueSettlement {
+            lifecycle: self.lifecycle,
+            accepted_invocations: self.accepted_invocations,
+            completed_invocations: self.completed_invocations,
+            failed_invocations: self.failed_invocations,
+            wait_expirations,
+            pending_invocations: self
+                .accepted_invocations
+                .saturating_sub(self.completed_invocations),
+            worker_joined,
+            quarantine_reason: self.quarantine_reason.clone(),
+        }
+    }
+
     fn allocate_batch_id(&mut self) -> Result<u64, WasmPluginHostError> {
         if self.next_batch_id == 0 {
             return Err(WasmPluginHostError::Queue(
-                "WASM benchmark sink batch id space was exhausted".to_owned(),
+                crate::WasmQueueError::IdExhausted,
             ));
         }
         let batch_id = self.next_batch_id;
@@ -315,6 +372,7 @@ impl BenchmarkQueueReportSink {
 
 #[derive(Debug)]
 struct WasmBenchmarkSinkQueueShared {
+    wait_expirations: Arc<AtomicU64>,
     state: Mutex<BenchmarkQueueState>,
     message_available: Condvar,
     reports: BenchmarkQueueReportSink,
@@ -323,6 +381,7 @@ struct WasmBenchmarkSinkQueueShared {
 impl Default for WasmBenchmarkSinkQueueShared {
     fn default() -> Self {
         Self {
+            wait_expirations: Arc::new(AtomicU64::new(0)),
             state: Mutex::new(BenchmarkQueueState::default()),
             message_available: Condvar::new(),
             reports: BenchmarkQueueReportSink::default(),
@@ -333,15 +392,7 @@ impl Default for WasmBenchmarkSinkQueueShared {
 #[derive(Debug)]
 struct WasmBenchmarkSinkQueueInner {
     shared: Arc<WasmBenchmarkSinkQueueShared>,
-    worker: Mutex<BenchmarkWorkerJoinState>,
-    worker_changed: Condvar,
-}
-
-#[derive(Debug)]
-enum BenchmarkWorkerJoinState {
-    Running(JoinHandle<()>),
-    Joining,
-    Joined(Result<(), String>),
+    worker: WasmWorker,
 }
 
 impl Drop for WasmBenchmarkSinkQueueInner {
@@ -367,15 +418,12 @@ impl WasmBenchmarkSinkQueue {
             .name("vesper-wasm-benchmark-sink".to_owned())
             .spawn(move || run_benchmark_queue_worker(worker_shared, session))
             .map_err(|error| {
-                WasmPluginHostError::Instantiation(format!(
-                    "failed to start WASM benchmark-sink worker: {error}"
-                ))
+                WasmPluginHostError::Instantiation(wasmtime::Error::from(error).into())
             })?;
         Ok(Self {
             inner: Arc::new(WasmBenchmarkSinkQueueInner {
                 shared,
-                worker: Mutex::new(BenchmarkWorkerJoinState::Running(worker)),
-                worker_changed: Condvar::new(),
+                worker: WasmWorker::new(worker),
             }),
         })
     }
@@ -384,36 +432,50 @@ impl WasmBenchmarkSinkQueue {
         &self,
         batch: BenchmarkEventBatch,
     ) -> Result<WasmBenchmarkBatchEnqueueStatus, WasmPluginHostError> {
-        validate_benchmark_batch(&batch)?;
-        enqueue_benchmark_batch(&self.inner.shared, batch, None)
+        enqueue_benchmark_batch(&self.inner.shared, CheckedBenchmarkBatch::new(batch)?, None)
     }
 
-    /// Executes one batch through the bounded worker queue and waits for its
-    /// matching result for at most `timeout`.
+    /// Accepts one batch without waiting for guest execution.
     pub fn submit(
+        &self,
+        batch: BenchmarkEventBatch,
+    ) -> Result<WasmInvocationTicket<WasmBenchmarkSinkBatchReport>, WasmPluginHostError> {
+        self.submit_checked(CheckedBenchmarkBatch::new(batch)?)
+    }
+
+    pub(crate) fn submit_borrowed(
+        &self,
+        batch: &BenchmarkEventBatch,
+    ) -> Result<WasmInvocationTicket<WasmBenchmarkSinkBatchReport>, WasmPluginHostError> {
+        self.submit_checked(CheckedBenchmarkBatch::copy_from(batch)?)
+    }
+
+    fn submit_checked(
+        &self,
+        batch: CheckedBenchmarkBatch,
+    ) -> Result<WasmInvocationTicket<WasmBenchmarkSinkBatchReport>, WasmPluginHostError> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let batch_id = match enqueue_benchmark_batch(&self.inner.shared, batch, Some(sender))? {
+            WasmBenchmarkBatchEnqueueStatus::Enqueued { batch_id } => batch_id,
+            WasmBenchmarkBatchEnqueueStatus::Dropped { .. } => {
+                return Err(WasmPluginHostError::Queue(crate::WasmQueueError::Full));
+            }
+        };
+        Ok(WasmInvocationTicket::new(
+            batch_id,
+            receiver,
+            WasmWaitOperation::BatchResult,
+            Arc::clone(&self.inner.shared.wait_expirations),
+        ))
+    }
+
+    /// Accepts work, then waits. Expiry does not cancel accepted work.
+    pub fn submit_and_wait(
         &self,
         batch: BenchmarkEventBatch,
         timeout: Duration,
     ) -> Result<WasmBenchmarkSinkBatchReport, WasmPluginHostError> {
-        validate_benchmark_batch(&batch)?;
-        let (sender, receiver) = mpsc::sync_channel(1);
-        match enqueue_benchmark_batch(&self.inner.shared, batch, Some(sender))? {
-            WasmBenchmarkBatchEnqueueStatus::Enqueued { .. } => {}
-            WasmBenchmarkBatchEnqueueStatus::Dropped { .. } => {
-                return Err(WasmPluginHostError::Queue(
-                    "WASM benchmark sink queue is full".to_owned(),
-                ));
-            }
-        }
-        match receiver.recv_timeout(timeout) {
-            Ok(report) => Ok(report),
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(WasmPluginHostError::QueueTimeout(
-                "benchmark sink batch result".to_owned(),
-            )),
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(WasmPluginHostError::Queue(
-                "WASM benchmark sink worker stopped before returning a batch result".to_owned(),
-            )),
-        }
+        self.submit(batch)?.wait(timeout)
     }
 
     pub fn flush(
@@ -442,9 +504,10 @@ impl WasmBenchmarkSinkQueue {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         while state.close_report.is_none() {
             let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
-                return Err(WasmPluginHostError::QueueTimeout(
-                    "benchmark sink close".to_owned(),
-                ));
+                return Err(WasmPluginHostError::WaitExpired {
+                    operation: crate::WasmWaitOperation::Close,
+                    invocation_id: None,
+                });
             };
             let waited = self
                 .inner
@@ -457,16 +520,16 @@ impl WasmBenchmarkSinkQueue {
             };
             state = next_state;
             if timeout_result.timed_out() && state.close_report.is_none() {
-                return Err(WasmPluginHostError::QueueTimeout(
-                    "benchmark sink close".to_owned(),
-                ));
+                return Err(WasmPluginHostError::WaitExpired {
+                    operation: crate::WasmWaitOperation::Close,
+                    invocation_id: None,
+                });
             }
         }
-        let report = state.close_report.clone().ok_or_else(|| {
-            WasmPluginHostError::Queue(
-                "WASM benchmark sink queue closed without a final report".to_owned(),
-            )
-        })?;
+        let mut report = state
+            .close_report
+            .clone()
+            .ok_or_else(|| WasmPluginHostError::Queue(crate::WasmQueueError::InvalidState))?;
         drop(state);
         self.join_worker(started, timeout)?;
         let mut state = self
@@ -475,8 +538,10 @@ impl WasmBenchmarkSinkQueue {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.lifecycle = BenchmarkQueueLifecycle::Closed;
+        state.lifecycle = WasmQueueLifecycle::Closed;
         self.inner.shared.message_available.notify_all();
+        drop(state);
+        report.settlement = self.settlement();
         Ok(report)
     }
 
@@ -485,115 +550,50 @@ impl WasmBenchmarkSinkQueue {
     }
 
     fn join_worker(&self, started: Instant, timeout: Duration) -> Result<(), WasmPluginHostError> {
-        loop {
-            let mut worker_state = self
-                .inner
-                .worker
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            match &*worker_state {
-                BenchmarkWorkerJoinState::Joined(result) => {
-                    return result.clone().map_err(WasmPluginHostError::Execution);
-                }
-                BenchmarkWorkerJoinState::Joining => {
-                    let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
-                        return Err(WasmPluginHostError::QueueTimeout(
-                            "benchmark sink worker join".to_owned(),
-                        ));
-                    };
-                    let waited = self
-                        .inner
-                        .worker_changed
-                        .wait_timeout(worker_state, remaining);
-                    let (next_state, timeout_result) = match waited {
-                        Ok(result) => result,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-                    worker_state = next_state;
-                    if timeout_result.timed_out()
-                        && !matches!(*worker_state, BenchmarkWorkerJoinState::Joined(_))
-                    {
-                        return Err(WasmPluginHostError::QueueTimeout(
-                            "benchmark sink worker join".to_owned(),
-                        ));
-                    }
-                    drop(worker_state);
-                }
-                BenchmarkWorkerJoinState::Running(worker) if worker.is_finished() => {
-                    let previous =
-                        std::mem::replace(&mut *worker_state, BenchmarkWorkerJoinState::Joining);
-                    let worker = match previous {
-                        BenchmarkWorkerJoinState::Running(worker) => worker,
-                        other => {
-                            *worker_state = other;
-                            return Err(WasmPluginHostError::Queue(
-                                "WASM benchmark sink worker join state changed unexpectedly"
-                                    .to_owned(),
-                            ));
-                        }
-                    };
-                    drop(worker_state);
-                    let result = worker.join().map_err(|_| {
-                        "WASM benchmark sink worker panicked while joining".to_owned()
-                    });
-                    let mut worker_state = self
-                        .inner
-                        .worker
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    *worker_state = BenchmarkWorkerJoinState::Joined(result.clone());
-                    self.inner.worker_changed.notify_all();
-                    return result.map_err(WasmPluginHostError::Execution);
-                }
-                BenchmarkWorkerJoinState::Running(_) => {
-                    let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
-                        return Err(WasmPluginHostError::QueueTimeout(
-                            "benchmark sink worker join".to_owned(),
-                        ));
-                    };
-                    let poll_interval = remaining.min(Duration::from_millis(1));
-                    let waited = self
-                        .inner
-                        .worker_changed
-                        .wait_timeout(worker_state, poll_interval);
-                    worker_state = match waited {
-                        Ok((state, _)) => state,
-                        Err(poisoned) => poisoned.into_inner().0,
-                    };
-                    drop(worker_state);
-                }
-            }
-        }
+        self.inner.worker.join(started, timeout)
+    }
+
+    /// Returns current accounting, including work isolated by an expired close wait.
+    pub fn settlement(&self) -> WasmQueueSettlement {
+        let state = self
+            .inner
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        state.settlement(
+            self.inner.shared.wait_expirations.load(Ordering::Relaxed),
+            self.inner.worker.is_joined(),
+        )
     }
 }
 
 fn validate_benchmark_batch(batch: &BenchmarkEventBatch) -> Result<(), WasmPluginHostError> {
     batch
         .validate()
-        .map_err(|error| WasmPluginHostError::InvalidInput(error.to_string()))?;
+        .map_err(|error| WasmPluginHostError::LocalValidation(error.to_string()))?;
     validate_batch_input_size(batch)
 }
 
 fn enqueue_benchmark_batch(
     shared: &WasmBenchmarkSinkQueueShared,
-    batch: BenchmarkEventBatch,
+    batch: CheckedBenchmarkBatch,
     completion: Option<SyncSender<WasmBenchmarkSinkBatchReport>>,
 ) -> Result<WasmBenchmarkBatchEnqueueStatus, WasmPluginHostError> {
-    let event_count = u64::try_from(batch.events.len()).unwrap_or(u64::MAX);
+    let event_count = u64::try_from(batch.batch().events.len()).unwrap_or(u64::MAX);
     let mut state = shared
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if state.lifecycle != BenchmarkQueueLifecycle::Open {
-        return Err(WasmPluginHostError::Queue(
-            "WASM benchmark sink queue is not open".to_owned(),
-        ));
+    if state.lifecycle != WasmQueueLifecycle::Open {
+        return Err(WasmPluginHostError::Queue(crate::WasmQueueError::Closed));
     }
     let batch_id = state.allocate_batch_id()?;
     if state.queued_batches >= WASM_PLUGIN_BENCHMARK_BATCH_QUEUE_CAPACITY {
         shared.reports.record_queue_drop(event_count);
         return Ok(WasmBenchmarkBatchEnqueueStatus::Dropped { batch_id });
     }
+    state.accepted_invocations = state.accepted_invocations.saturating_add(1);
     state.queued_batches += 1;
     state.messages.push_back(BenchmarkQueueMessage::Batch {
         batch_id,
@@ -616,17 +616,15 @@ fn begin_benchmark_queue_flush(
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if state.lifecycle != BenchmarkQueueLifecycle::Open {
-        return Err(WasmPluginHostError::Queue(
-            "WASM benchmark sink queue is not open".to_owned(),
-        ));
+    if state.lifecycle != WasmQueueLifecycle::Open {
+        return Err(WasmPluginHostError::Queue(crate::WasmQueueError::Closed));
     }
     if let Some(report) = state.completed_timed_out_flush.take() {
         return Ok(BenchmarkQueueFlushRequest::Completed(report));
     }
     if state.flush_pending {
         return Err(WasmPluginHostError::Queue(
-            "WASM benchmark sink flush is already pending".to_owned(),
+            crate::WasmQueueError::FlushPending,
         ));
     }
     let reply = Arc::new(BenchmarkFlushReply::default());
@@ -657,9 +655,10 @@ fn wait_for_benchmark_queue_flush(
         return Ok(report);
     }
     state.waiter_active = false;
-    Err(WasmPluginHostError::QueueTimeout(
-        "benchmark sink flush".to_owned(),
-    ))
+    Err(WasmPluginHostError::WaitExpired {
+        operation: crate::WasmWaitOperation::Flush,
+        invocation_id: None,
+    })
 }
 
 fn request_benchmark_queue_close(shared: &WasmBenchmarkSinkQueueShared) {
@@ -667,8 +666,8 @@ fn request_benchmark_queue_close(shared: &WasmBenchmarkSinkQueueShared) {
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if state.lifecycle == BenchmarkQueueLifecycle::Open {
-        state.lifecycle = BenchmarkQueueLifecycle::Closing;
+    if state.lifecycle == WasmQueueLifecycle::Open {
+        state.lifecycle = WasmQueueLifecycle::Closing;
         state.messages.push_back(BenchmarkQueueMessage::Close);
         shared.message_available.notify_one();
     }
@@ -688,13 +687,39 @@ fn take_benchmark_queue_message(
             }
             return Some(message);
         }
-        if state.lifecycle == BenchmarkQueueLifecycle::Closed {
+        if state.lifecycle == WasmQueueLifecycle::Closed {
             return None;
         }
         state = shared
             .message_available
             .wait(state)
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+}
+
+struct ActiveBenchmarkBatch {
+    batch_id: u64,
+    event_count: usize,
+    completion: Option<SyncSender<WasmBenchmarkSinkBatchReport>>,
+}
+
+fn publish_benchmark_batch_report(
+    shared: &WasmBenchmarkSinkQueueShared,
+    report: WasmBenchmarkSinkBatchReport,
+    completion: Option<SyncSender<WasmBenchmarkSinkBatchReport>>,
+) {
+    {
+        let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.completed_invocations = state.completed_invocations.saturating_add(1);
+        if report.result.is_err() {
+            state.failed_invocations = state.failed_invocations.saturating_add(1);
+        }
+    }
+    if let Some(completion) = completion {
+        shared.reports.push(report.clone());
+        let _ = completion.try_send(report);
+    } else {
+        shared.reports.push(report);
     }
 }
 
@@ -707,8 +732,9 @@ fn run_benchmark_queue_worker(
         loop {
             let Some(message) = take_benchmark_queue_message(&shared) else {
                 break WasmBenchmarkSinkFlushReport {
+                    settlement: WasmQueueSettlement::default(),
                     result: Err(WasmPluginHostError::Queue(
-                        "WASM benchmark sink worker stopped without a close message".to_owned(),
+                        crate::WasmQueueError::WorkerStopped,
                     )),
                     logs: session.take_logs(),
                 };
@@ -719,39 +745,45 @@ fn run_benchmark_queue_worker(
                     batch,
                     completion,
                 } => {
-                    let event_count = batch.events.len();
-                    active_batch = Some((batch_id, event_count));
+                    let event_count = batch.batch().events.len();
+                    active_batch = Some(ActiveBenchmarkBatch {
+                        batch_id,
+                        event_count,
+                        completion,
+                    });
                     let result = call_benchmark_batch(&mut session, &batch);
-                    let logs = session.take_logs();
+                    {
+                        let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+                        state.quarantine_reason = session.quarantined.clone();
+                    }
                     let report = WasmBenchmarkSinkBatchReport {
                         batch_id,
                         event_count,
                         result,
-                        logs,
+                        logs: session.take_logs(),
                     };
-                    if let Some(completion) = completion {
-                        let _ = completion.send(report.clone());
-                    }
-                    shared.reports.push(report);
-                    active_batch = None;
+                    let completion = active_batch.take().and_then(|active| active.completion);
+                    publish_benchmark_batch_report(&shared, report, completion);
                 }
                 BenchmarkQueueMessage::Flush(reply) => {
-                    let report = flush_benchmark_session(&mut session);
+                    let report = flush_benchmark_session(&shared, &mut session);
                     complete_benchmark_queue_flush(&shared, &reply, report);
                 }
-                BenchmarkQueueMessage::Close => break flush_benchmark_session(&mut session),
+                BenchmarkQueueMessage::Close => {
+                    break flush_benchmark_session(&shared, &mut session);
+                }
             }
         }
     }));
     let report = match worker_result {
         Ok(report) => report,
         Err(_) => {
-            session.quarantined = true;
-            fail_benchmark_queue_after_worker_panic(&shared, active_batch.take());
+            let reason = WasmPluginHostError::WorkerPanic("benchmark queue worker".to_owned());
+            session.quarantined = Some(reason.clone());
+            fail_benchmark_queue_after_worker_panic(&shared, active_batch.take(), &reason);
             WasmBenchmarkSinkFlushReport {
-                result: Err(WasmPluginHostError::Execution(
-                    "WASM benchmark sink worker panicked".to_owned(),
-                )),
+                settlement: WasmQueueSettlement::default(),
+                result: Err(reason),
                 logs: session.take_logs(),
             }
         }
@@ -763,7 +795,7 @@ fn run_benchmark_queue_worker(
 fn complete_benchmark_queue_flush(
     shared: &WasmBenchmarkSinkQueueShared,
     reply: &BenchmarkFlushReply,
-    report: WasmBenchmarkSinkFlushReport,
+    mut report: WasmBenchmarkSinkFlushReport,
 ) {
     let mut state = shared
         .state
@@ -773,6 +805,7 @@ fn complete_benchmark_queue_flush(
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    report.settlement = state.settlement(shared.wait_expirations.load(Ordering::Relaxed), false);
     if reply_state.waiter_active {
         reply_state.report = Some(report);
     } else {
@@ -785,24 +818,31 @@ fn complete_benchmark_queue_flush(
 
 fn call_benchmark_batch(
     session: &mut WasmBenchmarkSinkSession,
-    batch: &BenchmarkEventBatch,
+    batch: &CheckedBenchmarkBatch,
 ) -> Result<BenchmarkSinkStatus, WasmPluginHostError> {
-    catch_unwind(AssertUnwindSafe(|| session.on_event_batch(batch))).unwrap_or_else(|_| {
-        session.quarantined = true;
-        Err(WasmPluginHostError::Execution(
-            "WASM benchmark sink batch worker panicked".to_owned(),
-        ))
+    catch_unwind(AssertUnwindSafe(|| session.on_checked_batch(batch))).unwrap_or_else(|_| {
+        let failure = WasmPluginHostError::WorkerPanic("benchmark batch invocation".to_owned());
+        session.quarantined = Some(failure.clone());
+        Err(failure)
     })
 }
 
-fn flush_benchmark_session(session: &mut WasmBenchmarkSinkSession) -> WasmBenchmarkSinkFlushReport {
+fn flush_benchmark_session(
+    shared: &WasmBenchmarkSinkQueueShared,
+    session: &mut WasmBenchmarkSinkSession,
+) -> WasmBenchmarkSinkFlushReport {
     let result = catch_unwind(AssertUnwindSafe(|| session.flush())).unwrap_or_else(|_| {
-        session.quarantined = true;
-        Err(WasmPluginHostError::Execution(
-            "WASM benchmark sink flush worker panicked".to_owned(),
-        ))
+        let failure = WasmPluginHostError::WorkerPanic("benchmark flush invocation".to_owned());
+        session.quarantined = Some(failure.clone());
+        Err(failure)
     });
+    let settlement = {
+        let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.quarantine_reason = session.quarantined.clone();
+        state.settlement(shared.wait_expirations.load(Ordering::Relaxed), false)
+    };
     WasmBenchmarkSinkFlushReport {
+        settlement,
         result,
         logs: session.take_logs(),
     }
@@ -810,28 +850,34 @@ fn flush_benchmark_session(session: &mut WasmBenchmarkSinkSession) -> WasmBenchm
 
 fn fail_benchmark_queue_after_worker_panic(
     shared: &WasmBenchmarkSinkQueueShared,
-    active_batch: Option<(u64, usize)>,
+    active_batch: Option<ActiveBenchmarkBatch>,
+    reason: &WasmPluginHostError,
 ) {
-    if let Some((batch_id, event_count)) = active_batch {
-        shared.reports.push(WasmBenchmarkSinkBatchReport {
-            batch_id,
-            event_count,
-            result: Err(WasmPluginHostError::Execution(
-                "WASM benchmark sink worker panicked while processing the batch".to_owned(),
-            )),
-            logs: Vec::new(),
-        });
-    }
     let pending = {
-        let mut state = shared
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.lifecycle = BenchmarkQueueLifecycle::Closing;
+        let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.lifecycle = WasmQueueLifecycle::Closing;
+        state.quarantine_reason = Some(reason.clone());
         state.queued_batches = 0;
         state.flush_pending = false;
         state.messages.drain(..).collect::<Vec<_>>()
     };
+    if let Some(ActiveBenchmarkBatch {
+        batch_id,
+        event_count,
+        completion,
+    }) = active_batch
+    {
+        publish_benchmark_batch_report(
+            shared,
+            WasmBenchmarkSinkBatchReport {
+                batch_id,
+                event_count,
+                result: Err(reason.clone()),
+                logs: Vec::new(),
+            },
+            completion,
+        );
+    }
     for message in pending {
         match message {
             BenchmarkQueueMessage::Batch {
@@ -841,23 +887,21 @@ fn fail_benchmark_queue_after_worker_panic(
             } => {
                 let report = WasmBenchmarkSinkBatchReport {
                     batch_id,
-                    event_count: batch.events.len(),
-                    result: Err(WasmPluginHostError::Quarantined),
+                    event_count: batch.batch().events.len(),
+                    result: Err(WasmPluginHostError::Quarantined {
+                        reason: Arc::new(reason.clone()),
+                    }),
                     logs: Vec::new(),
                 };
-                if let Some(completion) = completion {
-                    let _ = completion.send(report.clone());
-                }
-                shared.reports.push(report);
+                publish_benchmark_batch_report(shared, report, completion);
             }
             BenchmarkQueueMessage::Flush(reply) => {
                 complete_benchmark_queue_flush(
                     shared,
                     &reply,
                     WasmBenchmarkSinkFlushReport {
-                        result: Err(WasmPluginHostError::Execution(
-                            "WASM benchmark sink worker panicked before flush".to_owned(),
-                        )),
+                        settlement: WasmQueueSettlement::default(),
+                        result: Err(reason.clone()),
                         logs: Vec::new(),
                     },
                 );
@@ -870,13 +914,16 @@ fn fail_benchmark_queue_after_worker_panic(
 
 fn publish_benchmark_queue_close_report(
     shared: &WasmBenchmarkSinkQueueShared,
-    report: WasmBenchmarkSinkFlushReport,
+    mut report: WasmBenchmarkSinkFlushReport,
 ) {
     let mut state = shared
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if state.close_report.is_none() {
+        state.lifecycle = WasmQueueLifecycle::Closed;
+        report.settlement =
+            state.settlement(shared.wait_expirations.load(Ordering::Relaxed), false);
         state.close_report = Some(report);
         state.flush_pending = false;
         shared.message_available.notify_all();
@@ -911,7 +958,7 @@ fn validate_batch_input_size(batch: &BenchmarkEventBatch) -> Result<(), WasmPlug
         .flatten()
         {
             size = size.checked_add(value.len()).ok_or_else(|| {
-                WasmPluginHostError::InvalidInput("benchmark input size overflow".to_owned())
+                WasmPluginHostError::LocalValidation("benchmark input size overflow".to_owned())
             })?;
         }
         for (key, value) in &event.attributes {
@@ -919,11 +966,11 @@ fn validate_batch_input_size(batch: &BenchmarkEventBatch) -> Result<(), WasmPlug
                 .checked_add(key.len())
                 .and_then(|size| size.checked_add(value.len()))
                 .ok_or_else(|| {
-                    WasmPluginHostError::InvalidInput("benchmark input size overflow".to_owned())
+                    WasmPluginHostError::LocalValidation("benchmark input size overflow".to_owned())
                 })?;
         }
         if size > MAX_WASM_PLUGIN_INPUT_BYTES {
-            return Err(WasmPluginHostError::InvalidInput(format!(
+            return Err(WasmPluginHostError::LocalValidation(format!(
                 "benchmark batch exceeds the {MAX_WASM_PLUGIN_INPUT_BYTES}-byte WASM input limit"
             )));
         }
@@ -975,7 +1022,7 @@ fn benchmark_report_from_wit(report: wit::BenchmarkReport) -> Result<BenchmarkSi
         ));
     }
     validate_benchmark_output_size(&report)?;
-    Ok(BenchmarkSinkReport {
+    let report = BenchmarkSinkReport {
         accepted_events: report.accepted_events,
         dropped_events: report.dropped_events,
         measurements: report
@@ -998,7 +1045,9 @@ fn benchmark_report_from_wit(report: wit::BenchmarkReport) -> Result<BenchmarkSi
             .into_iter()
             .map(diagnostic_from_wit)
             .collect::<Result<_, _>>()?,
-    })
+    };
+    report.validate().map_err(|error| error.to_string())?;
+    Ok(report)
 }
 
 fn validate_benchmark_output_size(report: &wit::BenchmarkReport) -> Result<(), String> {
@@ -1083,34 +1132,11 @@ fn diagnostic_from_wit(diagnostic: wit::Diagnostic) -> Result<PluginDiagnostic, 
 fn attributes_from_wit(
     attributes: Vec<wit::Attribute>,
 ) -> Result<BTreeMap<String, String>, String> {
-    if attributes.len() > MAX_PLUGIN_ATTRIBUTES {
-        return Err(format!(
-            "plugin attributes exceed the {MAX_PLUGIN_ATTRIBUTES}-entry protocol limit"
-        ));
-    }
-    let mut result = BTreeMap::new();
-    for attribute in attributes {
-        if attribute.key.is_empty() || attribute.key.len() > MAX_PLUGIN_ATTRIBUTE_KEY_BYTES {
-            return Err(format!(
-                "attribute.key must contain 1 to {MAX_PLUGIN_ATTRIBUTE_KEY_BYTES} UTF-8 bytes"
-            ));
-        }
-        if attribute.value.is_empty() || attribute.value.len() > MAX_PLUGIN_ATTRIBUTE_VALUE_BYTES {
-            return Err(format!(
-                "attribute.value must contain 1 to {MAX_PLUGIN_ATTRIBUTE_VALUE_BYTES} UTF-8 bytes"
-            ));
-        }
-        if result
-            .insert(attribute.key.clone(), attribute.value)
-            .is_some()
-        {
-            return Err(format!(
-                "plugin returned duplicate attribute key '{}'",
-                attribute.key
-            ));
-        }
-    }
-    Ok(result)
+    crate::attributes::decode_attributes(
+        attributes
+            .into_iter()
+            .map(|attribute| (attribute.key, attribute.value)),
+    )
 }
 
 #[cfg(test)]
@@ -1119,6 +1145,7 @@ mod tests {
     use std::sync::{Barrier, mpsc};
 
     use super::*;
+    use player_plugin::{MAX_PLUGIN_ATTRIBUTE_VALUE_BYTES, MAX_PLUGIN_ATTRIBUTES};
 
     fn queue_test_event(timestamp_ns: u64) -> BenchmarkEvent {
         BenchmarkEvent {
@@ -1151,11 +1178,23 @@ mod tests {
         }
     }
 
+    fn queue_test_checked_batch(event_count: usize) -> CheckedBenchmarkBatch {
+        CheckedBenchmarkBatch::new(queue_test_batch(event_count)).expect("checked batch")
+    }
+
     fn queue_test_flush_report() -> WasmBenchmarkSinkFlushReport {
         WasmBenchmarkSinkFlushReport {
+            settlement: WasmQueueSettlement::default(),
             result: Ok(BenchmarkSinkReport::default()),
             logs: Vec::new(),
         }
+    }
+
+    fn queue_test_closed_report() -> WasmBenchmarkSinkFlushReport {
+        let mut report = queue_test_flush_report();
+        report.settlement.lifecycle = WasmQueueLifecycle::Closed;
+        report.settlement.worker_joined = true;
+        report
     }
 
     #[test]
@@ -1166,7 +1205,7 @@ mod tests {
         assert!(matches!(
             WasmBenchmarkSinkSession::from_component_bytes(&runtime, &bytes),
             Err(WasmPluginHostError::Instantiation(message))
-                if message.contains("benchmark-sink")
+                if message.to_string().contains("benchmark-sink")
         ));
     }
 
@@ -1249,7 +1288,7 @@ mod tests {
 
         for expected_id in 1..=WASM_PLUGIN_BENCHMARK_BATCH_QUEUE_CAPACITY {
             assert_eq!(
-                enqueue_benchmark_batch(&shared, queue_test_batch(2), None)
+                enqueue_benchmark_batch(&shared, queue_test_checked_batch(2), None)
                     .expect("accepted batch"),
                 WasmBenchmarkBatchEnqueueStatus::Enqueued {
                     batch_id: u64::try_from(expected_id).expect("batch id"),
@@ -1257,7 +1296,8 @@ mod tests {
             );
         }
         assert_eq!(
-            enqueue_benchmark_batch(&shared, queue_test_batch(3), None).expect("dropped batch"),
+            enqueue_benchmark_batch(&shared, queue_test_checked_batch(3), None)
+                .expect("dropped batch"),
             WasmBenchmarkBatchEnqueueStatus::Dropped { batch_id: 33 }
         );
 
@@ -1290,7 +1330,8 @@ mod tests {
     fn full_batch_queue_still_accepts_fifo_flush_and_close_controls() {
         let shared = WasmBenchmarkSinkQueueShared::default();
         for _ in 0..WASM_PLUGIN_BENCHMARK_BATCH_QUEUE_CAPACITY {
-            enqueue_benchmark_batch(&shared, queue_test_batch(1), None).expect("accepted batch");
+            enqueue_benchmark_batch(&shared, queue_test_checked_batch(1), None)
+                .expect("accepted batch");
         }
         let _flush_reply = match begin_benchmark_queue_flush(&shared).expect("flush control") {
             BenchmarkQueueFlushRequest::Pending(reply) => reply,
@@ -1302,7 +1343,7 @@ mod tests {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        assert_eq!(state.lifecycle, BenchmarkQueueLifecycle::Closing);
+        assert_eq!(state.lifecycle, WasmQueueLifecycle::Closing);
         assert_eq!(
             state.queued_batches,
             WASM_PLUGIN_BENCHMARK_BATCH_QUEUE_CAPACITY
@@ -1424,16 +1465,16 @@ mod tests {
         let queue = WasmBenchmarkSinkQueue {
             inner: Arc::new(WasmBenchmarkSinkQueueInner {
                 shared: Arc::clone(&shared),
-                worker: Mutex::new(BenchmarkWorkerJoinState::Running(worker)),
-                worker_changed: Condvar::new(),
+                worker: WasmWorker::new(worker),
             }),
         };
 
         assert_eq!(
             queue.flush(Duration::from_millis(10)),
-            Err(WasmPluginHostError::QueueTimeout(
-                "benchmark sink flush".to_owned()
-            ))
+            Err(WasmPluginHostError::WaitExpired {
+                operation: crate::WasmWaitOperation::Flush,
+                invocation_id: None
+            })
         );
         assert_eq!(
             shared
@@ -1441,7 +1482,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .lifecycle,
-            BenchmarkQueueLifecycle::Open
+            WasmQueueLifecycle::Open
         );
 
         let (released, release_changed) = &*release_first_flush;
@@ -1472,49 +1513,77 @@ mod tests {
         assert_eq!(flush_calls.load(Ordering::Relaxed), 1);
         assert_eq!(
             queue.close(Duration::from_secs(1)),
-            Ok(queue_test_flush_report())
+            Ok(queue_test_closed_report())
         );
     }
 
     #[test]
     fn worker_panic_reports_the_active_batch_and_quarantines_pending_batches() {
         let shared = WasmBenchmarkSinkQueueShared::default();
-        enqueue_benchmark_batch(&shared, queue_test_batch(1), None).expect("first batch");
-        enqueue_benchmark_batch(&shared, queue_test_batch(2), None).expect("second batch");
+        let (first_tx, first_rx) = mpsc::sync_channel(1);
+        let (second_tx, second_rx) = mpsc::sync_channel(1);
+        enqueue_benchmark_batch(&shared, queue_test_checked_batch(1), Some(first_tx))
+            .expect("first batch");
+        enqueue_benchmark_batch(&shared, queue_test_checked_batch(2), Some(second_tx))
+            .expect("second batch");
         let active = match take_benchmark_queue_message(&shared).expect("active batch") {
             BenchmarkQueueMessage::Batch {
-                batch_id, batch, ..
-            } => (batch_id, batch.events.len()),
+                batch_id,
+                batch,
+                completion,
+            } => ActiveBenchmarkBatch {
+                batch_id,
+                event_count: batch.batch().events.len(),
+                completion,
+            },
             BenchmarkQueueMessage::Flush(_) | BenchmarkQueueMessage::Close => {
                 panic!("expected a batch message")
             }
         };
 
-        fail_benchmark_queue_after_worker_panic(&shared, Some(active));
+        let reason = WasmPluginHostError::WorkerPanic("benchmark queue worker".to_owned());
+        fail_benchmark_queue_after_worker_panic(&shared, Some(active), &reason);
 
+        assert_eq!(
+            first_rx
+                .recv_timeout(Duration::ZERO)
+                .expect("active receipt")
+                .batch_id,
+            1
+        );
+        assert_eq!(
+            second_rx
+                .recv_timeout(Duration::ZERO)
+                .expect("pending receipt")
+                .batch_id,
+            2
+        );
         let reports = shared.reports.drain().reports;
         assert_eq!(reports.len(), 2);
         assert_eq!(reports[0].batch_id, 1);
         assert!(matches!(
             reports[0].result,
-            Err(WasmPluginHostError::Execution(_))
+            Err(WasmPluginHostError::WorkerPanic(_))
         ));
         assert_eq!(reports[1].batch_id, 2);
         assert!(matches!(
             reports[1].result,
-            Err(WasmPluginHostError::Quarantined)
+            Err(WasmPluginHostError::Quarantined { .. })
         ));
         let state = shared
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        assert_eq!(state.lifecycle, BenchmarkQueueLifecycle::Closing);
+        assert_eq!(state.lifecycle, WasmQueueLifecycle::Closing);
         assert_eq!(state.queued_batches, 0);
         assert!(state.messages.is_empty());
+        assert_eq!(state.completed_invocations, state.accepted_invocations);
+        assert_eq!(state.failed_invocations, 2);
+        assert_eq!(state.quarantine_reason, Some(reason));
     }
 
     #[test]
-    fn close_timeout_keeps_closing_state_and_later_close_is_idempotent() {
+    fn closed_guest_state_does_not_claim_a_joined_worker() {
         let shared = Arc::new(WasmBenchmarkSinkQueueShared::default());
         let worker_shared = Arc::clone(&shared);
         let report_published = Arc::new(Barrier::new(2));
@@ -1539,8 +1608,7 @@ mod tests {
         let queue = WasmBenchmarkSinkQueue {
             inner: Arc::new(WasmBenchmarkSinkQueueInner {
                 shared: Arc::clone(&shared),
-                worker: Mutex::new(BenchmarkWorkerJoinState::Running(worker)),
-                worker_changed: Condvar::new(),
+                worker: WasmWorker::new(worker),
             }),
         };
 
@@ -1548,8 +1616,10 @@ mod tests {
         report_published.wait();
         assert!(matches!(
             queue.close(Duration::from_millis(10)),
-            Err(WasmPluginHostError::QueueTimeout(message))
-                if message.contains("worker join")
+            Err(WasmPluginHostError::WaitExpired {
+                operation: crate::WasmWaitOperation::WorkerJoin,
+                ..
+            })
         ));
         assert_eq!(
             shared
@@ -1557,8 +1627,9 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .lifecycle,
-            BenchmarkQueueLifecycle::Closing
+            WasmQueueLifecycle::Closed
         );
+        assert!(!queue.settlement().worker_joined);
 
         let (released, release_changed) = &*release_worker;
         *released
@@ -1566,7 +1637,7 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
         release_changed.notify_all();
 
-        let expected = queue_test_flush_report();
+        let expected = queue_test_closed_report();
         assert_eq!(queue.close(Duration::from_secs(1)), Ok(expected.clone()));
         assert_eq!(queue.close(Duration::ZERO), Ok(expected));
         assert_eq!(
@@ -1575,7 +1646,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .lifecycle,
-            BenchmarkQueueLifecycle::Closed
+            WasmQueueLifecycle::Closed
         );
     }
 
@@ -1605,8 +1676,7 @@ mod tests {
         let queue = WasmBenchmarkSinkQueue {
             inner: Arc::new(WasmBenchmarkSinkQueueInner {
                 shared,
-                worker: Mutex::new(BenchmarkWorkerJoinState::Running(worker)),
-                worker_changed: Condvar::new(),
+                worker: WasmWorker::new(worker),
             }),
         };
         let callers_ready = Arc::new(Barrier::new(3));
@@ -1637,7 +1707,7 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
         release_changed.notify_all();
 
-        let expected = Ok(queue_test_flush_report());
+        let expected = Ok(queue_test_closed_report());
         assert_eq!(
             result_rx.recv_timeout(Duration::from_secs(1)),
             Ok(expected.clone())
@@ -1646,5 +1716,140 @@ mod tests {
         for caller in callers {
             caller.join().expect("close caller");
         }
+    }
+
+    #[test]
+    fn expired_batch_wait_keeps_the_guest_work_and_correlated_report() {
+        let shared = Arc::new(WasmBenchmarkSinkQueueShared::default());
+        let worker_shared = Arc::clone(&shared);
+        let (release, released) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let mut accepted_events = 0;
+            while let Some(message) = take_benchmark_queue_message(&worker_shared) {
+                match message {
+                    BenchmarkQueueMessage::Batch {
+                        batch_id,
+                        batch,
+                        completion,
+                    } => {
+                        released
+                            .recv_timeout(Duration::from_secs(1))
+                            .expect("release worker");
+                        let event_count = batch.batch().events.len();
+                        accepted_events += u64::try_from(event_count).expect("event count");
+                        publish_benchmark_batch_report(
+                            &worker_shared,
+                            WasmBenchmarkSinkBatchReport {
+                                batch_id,
+                                event_count,
+                                result: Ok(BenchmarkSinkStatus { accepted_events }),
+                                logs: Vec::new(),
+                            },
+                            completion,
+                        );
+                    }
+                    BenchmarkQueueMessage::Flush(_) => panic!("unexpected flush"),
+                    BenchmarkQueueMessage::Close => {
+                        let mut report = queue_test_flush_report();
+                        report
+                            .result
+                            .as_mut()
+                            .expect("guest report")
+                            .accepted_events = accepted_events;
+                        publish_benchmark_queue_close_report(&worker_shared, report);
+                        break;
+                    }
+                }
+            }
+        });
+        let queue = WasmBenchmarkSinkQueue {
+            inner: Arc::new(WasmBenchmarkSinkQueueInner {
+                shared,
+                worker: WasmWorker::new(worker),
+            }),
+        };
+        let ticket = queue.submit(queue_test_batch(2)).expect("accepted batch");
+        let batch_id = ticket.invocation_id();
+        assert_eq!(
+            ticket.wait(Duration::ZERO),
+            Err(WasmPluginHostError::WaitExpired {
+                operation: WasmWaitOperation::BatchResult,
+                invocation_id: Some(batch_id),
+            })
+        );
+        assert_eq!(queue.settlement().pending_invocations, 1);
+        release.send(()).expect("release worker");
+        let close = queue.close(Duration::from_secs(1)).expect("settled close");
+        assert_eq!(
+            close
+                .result
+                .as_ref()
+                .expect("guest work completed")
+                .accepted_events,
+            2
+        );
+        assert_eq!(close.settlement.completed_invocations, 1);
+        assert_eq!(close.settlement.failed_invocations, 0);
+        assert_eq!(close.settlement.pending_invocations, 0);
+        assert_eq!(close.settlement.wait_expirations, 1);
+        assert!(close.settlement.worker_joined);
+        assert!(close.settlement.quarantine_reason.is_none());
+        let reports = queue.drain_reports();
+        assert_eq!(reports.reports.len(), 1);
+        assert_eq!(reports.reports[0].batch_id, batch_id);
+        assert_eq!(
+            reports.reports[0]
+                .result
+                .as_ref()
+                .expect("late result")
+                .accepted_events,
+            2
+        );
+        assert_eq!(
+            queue.close(Duration::ZERO).expect("idempotent close"),
+            close
+        );
+    }
+
+    #[test]
+    fn benchmark_flush_keeps_the_completed_barrier_snapshot() {
+        let shared = WasmBenchmarkSinkQueueShared::default();
+        let reply = match begin_benchmark_queue_flush(&shared).expect("flush") {
+            BenchmarkQueueFlushRequest::Pending(reply) => reply,
+            _ => panic!("expected pending flush"),
+        };
+        complete_benchmark_queue_flush(&shared, &reply, queue_test_flush_report());
+        enqueue_benchmark_batch(&shared, queue_test_checked_batch(1), None).expect("later batch");
+        let report =
+            wait_for_benchmark_queue_flush(&reply, Duration::ZERO).expect("flush snapshot");
+        assert_eq!(report.settlement.accepted_invocations, 0);
+        assert_eq!(
+            shared
+                .state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .accepted_invocations,
+            1
+        );
+    }
+
+    #[test]
+    fn benchmark_ids_never_wrap() {
+        let shared = WasmBenchmarkSinkQueueShared::default();
+        shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .next_batch_id = u64::MAX;
+        assert_eq!(
+            enqueue_benchmark_batch(&shared, queue_test_checked_batch(1), None).expect("last id"),
+            WasmBenchmarkBatchEnqueueStatus::Enqueued { batch_id: u64::MAX }
+        );
+        assert_eq!(
+            enqueue_benchmark_batch(&shared, queue_test_checked_batch(1), None),
+            Err(WasmPluginHostError::Queue(
+                crate::WasmQueueError::IdExhausted
+            ))
+        );
     }
 }

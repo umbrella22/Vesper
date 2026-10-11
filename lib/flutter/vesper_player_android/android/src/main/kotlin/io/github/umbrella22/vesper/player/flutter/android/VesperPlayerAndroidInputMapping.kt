@@ -89,12 +89,13 @@ internal fun Map<String, Any?>?.toSourceNormalizerConfiguration():
     }
     return VesperSourceNormalizerConfiguration(
         mode =
-            when (this["mode"] as? String) {
+            when (this.inputMode()) {
                 "diagnosticsOnly" -> VesperSourceNormalizerMode.DiagnosticsOnly
                 "preflightOnly" -> VesperSourceNormalizerMode.PreflightOnly
                 "preferNormalized" -> VesperSourceNormalizerMode.PreferNormalized
                 "requireNormalized" -> VesperSourceNormalizerMode.RequireNormalized
-                else -> VesperSourceNormalizerMode.Disabled
+                null, "disabled" -> VesperSourceNormalizerMode.Disabled
+                else -> throw IllegalArgumentException("Unknown VesperSourceNormalizerMode mode: ${this["mode"]}.")
             },
         pluginReferences = decodeVesperPluginReferences(this["pluginReferences"]),
         runtimeProfile = (this["runtimeProfile"] as? String)?.takeIf(String::isNotEmpty),
@@ -108,9 +109,10 @@ internal fun Map<String, Any?>?.toFrameProcessorConfiguration():
     }
     return VesperFrameProcessorConfiguration(
         mode =
-            when (this["mode"] as? String) {
+            when (this.inputMode()) {
                 "diagnosticsOnly" -> VesperFrameProcessorMode.DiagnosticsOnly
-                else -> VesperFrameProcessorMode.Disabled
+                null, "disabled" -> VesperFrameProcessorMode.Disabled
+                else -> throw IllegalArgumentException("Unknown VesperFrameProcessorMode mode: ${this["mode"]}.")
             },
         pluginReferences = decodeVesperPluginReferences(this["pluginReferences"]),
     )
@@ -123,11 +125,12 @@ internal fun Map<String, Any?>?.toNativeFramePipelineConfiguration():
     }
     return VesperNativeFramePipelineConfiguration(
         mode =
-            when (this["mode"] as? String) {
+            when (this.inputMode()) {
                 "diagnosticsOnly" -> VesperNativeFramePipelineMode.DiagnosticsOnly
                 "preferNativeFrame" -> VesperNativeFramePipelineMode.PreferNativeFrame
                 "requireNativeFrame" -> VesperNativeFramePipelineMode.RequireNativeFrame
-                else -> VesperNativeFramePipelineMode.Disabled
+                null, "disabled" -> VesperNativeFramePipelineMode.Disabled
+                else -> throw IllegalArgumentException("Unknown VesperNativeFramePipelineMode mode: ${this["mode"]}.")
             },
         decoderPluginReferences = decodeVesperPluginReferences(this["decoderPluginReferences"]),
         frameProcessorPluginReferences =
@@ -152,21 +155,18 @@ internal fun Map<String, Any?>.toPlaybackCapabilityProbeRequest():
         frameRate = (this["frameRate"] as? Number)?.toFloat(),
         requiresNativeFrame = this["requiresNativeFrame"] as? Boolean ?: false,
         sourceNormalizerConfiguration =
-            (this["sourceNormalizer"] as? Map<*, *>)
-                ?.stringMap()
+            optionalInputMap("sourceNormalizer")
                 .toSourceNormalizerConfiguration(),
         frameProcessorConfiguration =
-            (this["frameProcessor"] as? Map<*, *>)
-                ?.stringMap()
+            optionalInputMap("frameProcessor")
                 .toFrameProcessorConfiguration(),
         nativeFramePipelineConfiguration =
-            (this["nativeFramePipeline"] as? Map<*, *>)
-                ?.stringMap()
+            optionalInputMap("nativeFramePipeline")
                 .toNativeFramePipelineConfiguration(),
     )
 
 internal fun Any?.toVesperVideoSurfaceKind(): VesperVideoSurfaceKind =
-    when (this as? String ?: "auto") {
+    when (this ?: "auto") {
         "auto", "surfaceView" -> VesperVideoSurfaceKind.SurfaceView
         "textureView" -> VesperVideoSurfaceKind.TextureView
         else -> throw IllegalArgumentException("Unknown renderSurfaceKind: $this.")
@@ -200,12 +200,8 @@ internal fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
                 ?.stringMap()
                 ?.let(::vesperPlayerDrmConfigurationFromWireMap),
         externalSubtitles =
-            (externalSubtitleEntries as? List<*>)
-                ?.map { value ->
-                    (value as? Map<*, *>)?.stringMap()?.toVesperExternalSubtitleSource()
-                        ?: throw IllegalArgumentException("Invalid externalSubtitles entry.")
-                }
-                ?: emptyList(),
+            mapOf("externalSubtitles" to externalSubtitleEntries)
+                .decodeInputMapList("externalSubtitles").map { it.toVesperExternalSubtitleSource() },
     )
 }
 
@@ -245,9 +241,10 @@ internal fun Map<String, Any?>.toSystemPlaybackConfiguration(): VesperSystemPlay
     VesperSystemPlaybackConfiguration(
         enabled = this["enabled"] as? Boolean ?: true,
         backgroundMode =
-            when (this["backgroundMode"] as? String) {
+            when (this["backgroundMode"]) {
                 "disabled" -> VesperBackgroundPlaybackMode.Disabled
-                else -> VesperBackgroundPlaybackMode.ContinueAudio
+                null, "continueAudio" -> VesperBackgroundPlaybackMode.ContinueAudio
+                else -> throw IllegalArgumentException("Unknown backgroundMode: ${this["backgroundMode"]}.")
             },
         showSystemControls = this["showSystemControls"] as? Boolean ?: true,
         showSeekActions = this["showSeekActions"] as? Boolean ?: true,
@@ -256,8 +253,7 @@ internal fun Map<String, Any?>.toSystemPlaybackConfiguration(): VesperSystemPlay
                 ?.stringMap()
                 ?.toSystemPlaybackMetadata(),
         controls =
-            (this["controls"] as? Map<*, *>)
-                ?.stringMap()
+            optionalInputMap("controls")
                 ?.toSystemPlaybackControls()
                 ?: VesperSystemPlaybackControls.videoDefault(),
     )
@@ -276,17 +272,16 @@ internal fun Map<String, Any?>.toSystemPlaybackMetadata(): VesperSystemPlaybackM
 internal fun Map<String, Any?>.toSystemPlaybackControls(): VesperSystemPlaybackControls =
     VesperSystemPlaybackControls(
         compactButtons =
-            (this["compactButtons"] as? List<*>)
-                ?.mapNotNull { (it as? Map<*, *>)?.stringMap()?.toSystemPlaybackControlButton() }
-                ?: emptyList(),
+            decodeInputMapList("compactButtons").map { it.toSystemPlaybackControlButton() },
     )
 
 internal fun Map<String, Any?>.toSystemPlaybackControlButton(): VesperSystemPlaybackControlButton {
     val kind =
-        when (this["kind"] as? String) {
+        when (this["kind"]) {
             "seekBack" -> VesperSystemPlaybackControlKind.SeekBack
             "seekForward" -> VesperSystemPlaybackControlKind.SeekForward
-            else -> VesperSystemPlaybackControlKind.PlayPause
+            null, "playPause" -> VesperSystemPlaybackControlKind.PlayPause
+            else -> throw IllegalArgumentException("Unknown system playback control kind: ${this["kind"]}.")
         }
     return VesperSystemPlaybackControlButton(
         kind = kind,
@@ -340,15 +335,17 @@ internal fun Map<String, Any?>.toDownloadProfile(): VesperDownloadProfile =
         preferredAudioLanguage = this["preferredAudioLanguage"] as? String,
         preferredSubtitleLanguage = this["preferredSubtitleLanguage"] as? String,
         selectedTrackIds =
-            (this["selectedTrackIds"] as? List<*>)
-                ?.mapNotNull { value -> value?.toString() }
-                ?: emptyList(),
+            decodeInputStringList("selectedTrackIds"),
         targetOutputFormat =
             when (this["targetOutputFormat"] as? String) {
                 "mp4" -> VesperDownloadOutputFormat.Mp4
                 "mkv" -> VesperDownloadOutputFormat.Mkv
                 "original" -> VesperDownloadOutputFormat.Original
-                else -> null
+                null -> {
+                    require(this["targetOutputFormat"] == null) { "targetOutputFormat must be a string." }
+                    null
+                }
+                else -> throw IllegalArgumentException("Unknown targetOutputFormat: ${this["targetOutputFormat"]}.")
             },
         targetDirectory = this["targetDirectory"] as? String,
         allowMeteredNetwork = this["allowMeteredNetwork"] as? Boolean ?: false,
@@ -369,32 +366,22 @@ internal fun Map<String, Any?>.toDownloadAssetIndex(): VesperDownloadAssetIndex 
         checksum = this["checksum"] as? String,
         totalSizeBytes = (this["totalSizeBytes"] as? Number)?.toLong(),
         resources =
-            (this["resources"] as? List<*>)
-                ?.mapNotNull { value ->
-                    (value as? Map<*, *>)?.stringMap()?.toDownloadResourceRecord()
-                }
-                ?: emptyList(),
+            decodeInputMapList("resources").map { it.toDownloadResourceRecord() },
         segments =
-            (this["segments"] as? List<*>)
-                ?.mapNotNull { value ->
-                    (value as? Map<*, *>)?.stringMap()?.toDownloadSegmentRecord()
-                }
-                ?: emptyList(),
+            decodeInputMapList("segments").map { it.toDownloadSegmentRecord() },
         streams =
-            (this["streams"] as? List<*>)
-                ?.mapNotNull { value ->
-                    (value as? Map<*, *>)?.stringMap()?.toDownloadAssetStream()
-                }
-                ?: emptyList(),
+            decodeInputMapList("streams").map { it.toDownloadAssetStream() },
         completedPath = this["completedPath"] as? String,
     )
 
 internal fun Map<String, Any?>.toDownloadResourceRecord(): VesperDownloadResourceRecord =
     VesperDownloadResourceRecord(
-        resourceId = this["resourceId"] as? String ?: "",
-        uri = this["uri"] as? String ?: "",
+        resourceId = this["resourceId"] as? String
+            ?: throw IllegalArgumentException("resourceId must be a string."),
+        uri = this["uri"] as? String
+            ?: throw IllegalArgumentException("uri must be a string."),
         relativePath = this["relativePath"] as? String,
-        byteRange = (this["byteRange"] as? Map<*, *>)?.stringMap()?.toDownloadByteRange(),
+        byteRange = optionalInputMap("byteRange")?.toDownloadByteRange(),
         generatedText = this["generatedText"] as? String,
         sizeBytes = (this["sizeBytes"] as? Number)?.toLong(),
         etag = this["etag"] as? String,
@@ -403,50 +390,69 @@ internal fun Map<String, Any?>.toDownloadResourceRecord(): VesperDownloadResourc
 
 internal fun Map<String, Any?>.toDownloadSegmentRecord(): VesperDownloadSegmentRecord =
     VesperDownloadSegmentRecord(
-        segmentId = this["segmentId"] as? String ?: "",
-        uri = this["uri"] as? String ?: "",
+        segmentId = this["segmentId"] as? String
+            ?: throw IllegalArgumentException("segmentId must be a string."),
+        uri = this["uri"] as? String
+            ?: throw IllegalArgumentException("uri must be a string."),
         relativePath = this["relativePath"] as? String,
         sequence = (this["sequence"] as? Number)?.toLong(),
-        byteRange = (this["byteRange"] as? Map<*, *>)?.stringMap()?.toDownloadByteRange(),
+        byteRange = optionalInputMap("byteRange")?.toDownloadByteRange(),
         sizeBytes = (this["sizeBytes"] as? Number)?.toLong(),
         checksum = this["checksum"] as? String,
     )
 
 internal fun Map<String, Any?>.toDownloadAssetStream(): VesperDownloadAssetStream =
     VesperDownloadAssetStream(
-        streamId = this["streamId"] as? String ?: "",
+        streamId = this["streamId"] as? String
+            ?: throw IllegalArgumentException("streamId must be a string."),
         kind =
-            (this["kind"] as? String)?.let { wire ->
+            if (this["kind"] == null) VesperDownloadStreamKind.Combined else {
+                val wire = this["kind"] as? String
+                    ?: throw IllegalArgumentException("Download stream kind must be a string.")
                 VesperDownloadStreamKind.entries.find { it.name.equals(wire, ignoreCase = true) }
-            } ?: VesperDownloadStreamKind.Combined,
+                    ?: throw IllegalArgumentException("Unknown download stream kind: $wire.")
+            },
         language = this["language"] as? String,
         codec = this["codec"] as? String,
         label = this["label"] as? String,
         qualityRank = (this["qualityRank"] as? Number)?.toInt(),
-        resourceIds = (this["resourceIds"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
-        segmentIds = (this["segmentIds"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+        resourceIds = decodeInputStringList("resourceIds"),
+        segmentIds = decodeInputStringList("segmentIds"),
         metadata =
-            (this["metadata"] as? Map<*, *>)
-                ?.mapNotNull { (key, value) ->
-                    val name = key as? String ?: return@mapNotNull null
-                    val text = value as? String ?: return@mapNotNull null
-                    name to text
-                }
-                ?.toMap()
-                ?: emptyMap(),
+            optionalInputMap("metadata")?.mapValues { (key, value) ->
+                value as? String
+                    ?: throw IllegalArgumentException("Download stream metadata[$key] must be a string.")
+            } ?: emptyMap(),
     )
 
 internal fun Map<String, Any?>.toDownloadByteRange(): VesperDownloadByteRange =
     VesperDownloadByteRange(
-        offset = (this["offset"] as? Number)?.toLong() ?: 0L,
-        length = (this["length"] as? Number)?.toLong() ?: 0L,
+        offset = decodeByteRangeInteger("offset"),
+        length = decodeByteRangeInteger("length"),
     )
+
+private fun Map<String, Any?>.decodeByteRangeInteger(key: String): Long =
+    when (val value = this[key]) {
+        null -> 0L
+        is Int -> value.toLong()
+        is Long -> value
+        else -> throw IllegalArgumentException("byteRange.$key must be an integer.")
+    }
 
 internal fun Map<String, Any?>.toTrackSelection(
     isSubtitle: Boolean = false,
 ): VesperTrackSelection =
-    when (val mode = this["mode"] as? String) {
+    when (val mode = this["mode"]) {
         "auto" -> VesperTrackSelection.auto()
+        null -> {
+            if (isSubtitle) {
+                throw subtitleSelectionInputError(
+                    trackId = this["trackId"] as? String,
+                    message = "Missing subtitle selection mode.",
+                )
+            }
+            VesperTrackSelection.auto()
+        }
         "disabled" -> VesperTrackSelection.disabled()
         "track" -> {
             val trackId = (this["trackId"] as? String)?.takeIf { it.isNotBlank() }
@@ -464,10 +470,10 @@ internal fun Map<String, Any?>.toTrackSelection(
             if (isSubtitle) {
                 throw subtitleSelectionInputError(
                     trackId = this["trackId"] as? String,
-                    message = "Unknown subtitle selection mode: ${mode ?: "<missing>"}.",
+                    message = "Unknown subtitle selection mode: $mode.",
                 )
             }
-            VesperTrackSelection.auto()
+            throw IllegalArgumentException("Unknown track selection mode: $mode.")
         }
     }
 
@@ -487,7 +493,7 @@ private fun subtitleSelectionInputError(
     )
 
 internal fun Map<String, Any?>.toAbrPolicy(): VesperAbrPolicy =
-    when (this["mode"] as? String) {
+    when (this.inputMode()) {
         "constrained" -> VesperAbrPolicy.constrained(
             maxBitRate = (this["maxBitRate"] as? Number)?.toLong(),
             maxWidth = (this["maxWidth"] as? Number)?.toInt(),
@@ -498,15 +504,16 @@ internal fun Map<String, Any?>.toAbrPolicy(): VesperAbrPolicy =
                 ?: throw IllegalArgumentException("Missing trackId for fixed track policy.")
             VesperAbrPolicy.fixedTrack(trackId)
         }
-        else -> VesperAbrPolicy.auto()
+        null, "auto" -> VesperAbrPolicy.auto()
+        else -> throw IllegalArgumentException("Unknown ABR mode: ${this["mode"]}.")
     }
 
 internal fun Map<String, Any?>.toResiliencePolicy(): VesperPlaybackResiliencePolicy {
-    val buffering = (this["buffering"] as? Map<*, *>)?.stringMap()?.toBufferingPolicy()
+    val buffering = optionalInputMap("buffering")?.toBufferingPolicy()
         ?: VesperBufferingPolicy()
-    val retry = (this["retry"] as? Map<*, *>)?.stringMap()?.toRetryPolicy()
+    val retry = optionalInputMap("retry")?.toRetryPolicy()
         ?: VesperRetryPolicy()
-    val cache = (this["cache"] as? Map<*, *>)?.stringMap()?.toCachePolicy()
+    val cache = optionalInputMap("cache")?.toCachePolicy()
         ?: VesperCachePolicy()
     return VesperPlaybackResiliencePolicy(
         buffering = buffering,
@@ -517,13 +524,13 @@ internal fun Map<String, Any?>.toResiliencePolicy(): VesperPlaybackResiliencePol
 
 internal fun Map<String, Any?>.toTrackPreferencePolicy(): VesperTrackPreferencePolicy {
     val audioSelection =
-        (this["audioSelection"] as? Map<*, *>)?.stringMap()?.toTrackSelection()
+        optionalInputMap("audioSelection")?.toTrackSelection()
             ?: VesperTrackSelection.auto()
     val subtitleSelection =
-        (this["subtitleSelection"] as? Map<*, *>)?.stringMap()?.toTrackSelection(isSubtitle = true)
+        optionalInputMap("subtitleSelection")?.toTrackSelection(isSubtitle = true)
             ?: VesperTrackSelection.disabled()
     val abrPolicy =
-        (this["abrPolicy"] as? Map<*, *>)?.stringMap()?.toAbrPolicy()
+        optionalInputMap("abrPolicy")?.toAbrPolicy()
             ?: VesperAbrPolicy.auto()
     return VesperTrackPreferencePolicy(
         preferredAudioLanguage = this["preferredAudioLanguage"] as? String,
@@ -568,12 +575,13 @@ internal fun Map<String, Any?>.toFlutterViewportHint(): FlutterViewportHint =
 
 internal fun Map<String, Any?>.toBufferingPolicy(): VesperBufferingPolicy =
     VesperBufferingPolicy(
-        preset = when (this["preset"] as? String) {
+        preset = when (this["preset"]) {
             "balanced" -> VesperBufferingPreset.Balanced
             "streaming" -> VesperBufferingPreset.Streaming
             "resilient" -> VesperBufferingPreset.Resilient
             "lowLatency" -> VesperBufferingPreset.LowLatency
-            else -> VesperBufferingPreset.Default
+            null, "default", "defaultPreset" -> VesperBufferingPreset.Default
+            else -> throw IllegalArgumentException("Unknown buffering preset: ${this["preset"]}.")
         },
         minBufferMs = (this["minBufferMs"] as? Number)?.toInt(),
         maxBufferMs = (this["maxBufferMs"] as? Number)?.toInt(),
@@ -588,26 +596,41 @@ internal fun Map<String, Any?>.toRetryPolicy(): VesperRetryPolicy =
             when {
                 !containsKey("maxAttempts") -> 3
                 this["maxAttempts"] == null -> null
-                else -> (this["maxAttempts"] as? Number)?.toInt() ?: 3
+                else -> when (val value = this["maxAttempts"]) {
+                    is Int -> value
+                    is Long -> {
+                        require(value == value.toInt().toLong()) { "retry maxAttempts is outside the integer range." }
+                        value.toInt()
+                    }
+                    else -> throw IllegalArgumentException("retry maxAttempts must be an integer or null.")
+                }
             },
         baseDelayMs = (this["baseDelayMs"] as? Number)?.toLong(),
         maxDelayMs = (this["maxDelayMs"] as? Number)?.toLong(),
-        backoff = when (this["backoff"] as? String) {
+        backoff = when (this["backoff"]) {
             "fixed" -> VesperRetryBackoff.Fixed
             "linear" -> VesperRetryBackoff.Linear
             "exponential" -> VesperRetryBackoff.Exponential
-            else -> null
+            null -> null
+            else -> throw IllegalArgumentException("Unknown retry backoff: ${this["backoff"]}.")
         },
     )
 
 internal fun Map<String, Any?>.toCachePolicy(): VesperCachePolicy =
     VesperCachePolicy(
-        preset = when (this["preset"] as? String) {
+        preset = when (this["preset"]) {
             "disabled" -> VesperCachePreset.Disabled
             "streaming" -> VesperCachePreset.Streaming
             "resilient" -> VesperCachePreset.Resilient
-            else -> VesperCachePreset.Default
+            null, "default", "defaultPreset" -> VesperCachePreset.Default
+            else -> throw IllegalArgumentException("Unknown cache preset: ${this["preset"]}.")
         },
         maxMemoryBytes = (this["maxMemoryBytes"] as? Number)?.toLong(),
         maxDiskBytes = (this["maxDiskBytes"] as? Number)?.toLong(),
     )
+
+private fun Map<String, Any?>.inputMode(): String? {
+    if (this["mode"] == null) return null
+    return this["mode"] as? String
+        ?: throw IllegalArgumentException("mode must be a string.")
+}

@@ -1,21 +1,25 @@
 package io.github.umbrella22.vesper.player.android.external.internal.relay.ffmpeg
 
 import android.content.Context
+import android.os.ParcelFileDescriptor
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import io.github.umbrella22.vesper.player.android.VesperPlayerSourceProtocol
 import io.github.umbrella22.vesper.player.android.external.internal.relay.VesperRelayDiagnostic
 import io.github.umbrella22.vesper.player.android.external.internal.relay.VesperRelayFormatAdaptationRequest
+import io.github.umbrella22.vesper.player.android.external.internal.relay.VesperRelayLifetime
 import java.io.Closeable
 import java.io.File
-import java.io.FileOutputStream
+import java.io.FileDescriptor
 import java.io.IOException
 import java.io.InterruptedIOException
+import java.io.OutputStream
 import java.net.SocketTimeoutException
 import java.util.Collections
 import java.util.concurrent.Executors
 import java.util.concurrent.ThreadFactory
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -52,14 +56,24 @@ internal class VesperRelayHostInputSession private constructor(
         }
 
     private val cancelled = AtomicBoolean(false)
+    private val started = AtomicBoolean(false)
     private val failure = AtomicReference<VesperRelayDiagnostic?>()
     private val activeOutputs = Collections.synchronizedSet(mutableSetOf<Closeable>())
     private val executor =
         Executors.newFixedThreadPool(plannedTracks.size.coerceAtLeast(1), VesperHostInputThreadFactory())
 
     fun start() {
-        plannedTracks.forEach { track ->
-            executor.execute { writeTrack(track) }
+        if (cancelled.get()) throw HostInputCancelledException()
+        if (!started.compareAndSet(false, true)) return
+        try {
+            plannedTracks.forEach { track ->
+                if (cancelled.get()) throw HostInputCancelledException()
+                executor.execute { writeTrack(track) }
+            }
+        } catch (error: java.util.concurrent.RejectedExecutionException) {
+            if (cancelled.get()) throw HostInputCancelledException()
+            close()
+            throw error
         }
     }
 
@@ -70,7 +84,8 @@ internal class VesperRelayHostInputSession private constructor(
             return
         }
         resolver.cancel()
-        activeOutputs.toList().forEach { output ->
+        val outputs = synchronized(activeOutputs) { activeOutputs.toList() }
+        outputs.forEach { output ->
             runCatching { output.close() }
         }
         executor.shutdownNow()
@@ -80,11 +95,24 @@ internal class VesperRelayHostInputSession private constructor(
     private fun writeTrack(track: VesperRelayDashTrackPlan) {
         var currentSegmentDetails = track.baseTrackDetails()
         try {
-            val fd = Os.open(track.pipePath, OsConstants.O_RDWR, 0)
-            val output = FileOutputStream(fd)
-            activeOutputs += output
+            val output = openHostPreparedDashFifoWriter(track.pipePath, cancelled)
+            val registered = synchronized(activeOutputs) {
+                if (cancelled.get()) {
+                    false
+                } else {
+                    activeOutputs.add(output)
+                    true
+                }
+            }
+            if (!registered) {
+                output.close()
+                throw HostInputCancelledException()
+            }
             try {
                 output.use { stream ->
+                    if (cancelled.get()) {
+                        throw HostInputCancelledException()
+                    }
                     track.initializationUri?.let { uri ->
                         val initializationRange = track.initializationRange
                         currentSegmentDetails = track.segmentDetails("init", uri, initializationRange)
@@ -244,15 +272,23 @@ internal class VesperRelayHostInputSession private constructor(
             context: Context,
             request: VesperRelayFormatAdaptationRequest,
             resolverFactory: VesperRelayDashResourceResolverFactory = VesperRelayDashResourceResolverFactory(),
+            lifetime: VesperRelayLifetime = VesperRelayLifetime(),
         ): VesperRelayHostInputSession {
             validateDashSourceProtocol(request)
             val resolver = resolverFactory.create(context, request)
+            val ownedResolver = Closeable { resolver.cancel() }
+            if (!lifetime.attach(ownedResolver)) throw HostInputCancelledException()
+            var ownedRoot: File? = null
+            try {
+            lifetime.checkActive()
             val plan = planHostPreparedDash(request, resolver)
+            lifetime.checkActive()
             val rootDir = File(
                 context.cacheDir,
-                "vesper-relay-ffmpeg-host-input/${safeFileComponent(request.sessionId)}",
+                "vesper-relay-ffmpeg-host-input/${safeFileComponent(request.sessionId)}-${java.util.UUID.randomUUID()}",
             )
-            rootDir.deleteRecursively()
+            ownedRoot = rootDir
+            lifetime.checkActive()
             if (!rootDir.mkdirs() && !rootDir.isDirectory) {
                 throw request.hostInputException(
                     code = "ffmpeg_open_failed",
@@ -262,6 +298,7 @@ internal class VesperRelayHostInputSession private constructor(
                 )
             }
             val plannedTracks = plan.tracks.mapIndexed { index, track ->
+                lifetime.checkActive()
                 val pipe = File(rootDir, "${index}-${safeFileComponent(track.mediaId)}.fifo")
                 runCatching { pipe.delete() }
                 try {
@@ -281,12 +318,20 @@ internal class VesperRelayHostInputSession private constructor(
                 }
                 track.copy(pipePath = pipe.absolutePath)
             }
+            lifetime.checkActive()
             return VesperRelayHostInputSession(
                 rootDir = rootDir,
                 plannedTracks = plannedTracks,
                 baseDetails = request.hostInputBaseDetails(),
                 resolver = resolver,
             )
+            } catch (error: Throwable) {
+                resolver.cancel()
+                ownedRoot?.deleteRecursively()
+                throw error
+            } finally {
+                lifetime.detach(ownedResolver)
+            }
         }
 
         private fun validateDashSourceProtocol(request: VesperRelayFormatAdaptationRequest) {
@@ -335,7 +380,99 @@ internal class VesperRelayHostInputSession private constructor(
     }
 }
 
-private fun VesperRelayFormatAdaptationRequest.hostInputException(
+// Match defaultRelayHttpClient's connection-establishment budget. Waiting for
+// the native reader must not create an unbounded FIFO open before media fetch.
+private const val HOST_INPUT_FIFO_READER_TIMEOUT_MILLIS = 10_000L
+private const val HOST_INPUT_FIFO_READER_POLL_MILLIS = 25L
+
+internal fun openHostPreparedDashFifoWriter(
+    pipePath: String,
+    cancellation: AtomicBoolean,
+    readerTimeoutMillis: Long = HOST_INPUT_FIFO_READER_TIMEOUT_MILLIS,
+    createOutputStream: (ParcelFileDescriptor) -> OutputStream = { OwnedDashFifoOutputStream(it) },
+): OutputStream {
+    val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(readerTimeoutMillis)
+    val rawFd = awaitHostPreparedDashFifoReader(pipePath, cancellation, deadline)
+    var descriptor: ParcelFileDescriptor? = null
+    try {
+        checkFifoWriterCancellation(cancellation)
+        val flags = Os.fcntlInt(rawFd, OsConstants.F_GETFL, 0)
+        // Only the open is nonblocking; writes keep pipe backpressure.
+        Os.fcntlInt(rawFd, OsConstants.F_SETFL, flags and OsConstants.O_NONBLOCK.inv())
+        descriptor = ParcelFileDescriptor.dup(rawFd)
+    } finally {
+        try {
+            Os.close(rawFd)
+        } catch (error: Exception) {
+            descriptor?.close()
+            throw error
+        }
+    }
+    val ownedDescriptor = checkNotNull(descriptor)
+    var transferred = false
+    try {
+        checkFifoWriterCancellation(cancellation)
+        val output = createOutputStream(ownedDescriptor)
+        transferred = true
+        return output
+    } finally {
+        if (!transferred) {
+            ownedDescriptor.close()
+        }
+    }
+}
+
+private fun awaitHostPreparedDashFifoReader(
+    pipePath: String,
+    cancellation: AtomicBoolean,
+    deadline: Long,
+): FileDescriptor {
+    while (true) {
+        checkFifoWriterCancellation(cancellation)
+        try {
+            return Os.open(pipePath, OsConstants.O_WRONLY or OsConstants.O_NONBLOCK, 0)
+        } catch (error: ErrnoException) {
+            if (error.errno != OsConstants.ENXIO) {
+                throw error
+            }
+        }
+        val remaining = deadline - System.nanoTime()
+        if (remaining <= 0) {
+            throw SocketTimeoutException("Timed out waiting for the native DASH FIFO reader.")
+        }
+        try {
+            Thread.sleep(
+                minOf(
+                    HOST_INPUT_FIFO_READER_POLL_MILLIS,
+                    TimeUnit.NANOSECONDS.toMillis(remaining).coerceAtLeast(1L),
+                ),
+            )
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw HostInputCancelledException()
+        }
+    }
+}
+
+private fun checkFifoWriterCancellation(cancellation: AtomicBoolean) {
+    if (cancellation.get() || Thread.currentThread().isInterrupted) {
+        throw HostInputCancelledException()
+    }
+}
+
+private class OwnedDashFifoOutputStream(
+    descriptor: ParcelFileDescriptor,
+) : ParcelFileDescriptor.AutoCloseOutputStream(descriptor) {
+    private val closed = AtomicBoolean(false)
+
+    override fun close() {
+        if (closed.compareAndSet(false, true)) {
+            super.close()
+        }
+    }
+}
+
+internal fun VesperRelayFormatAdaptationRequest.hostInputException(
     code: String,
     status: Int,
     message: String,

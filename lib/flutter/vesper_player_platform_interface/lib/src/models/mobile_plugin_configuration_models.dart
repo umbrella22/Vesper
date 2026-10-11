@@ -221,11 +221,13 @@ final class VesperSourceNormalizerConfiguration {
   factory VesperSourceNormalizerConfiguration.fromMap(
     Map<Object?, Object?> map,
   ) {
+    _validateCallerMapKeys(map, 'VesperSourceNormalizerConfiguration');
     return VesperSourceNormalizerConfiguration(
-      mode: _decodeEnum(
+      mode: _decodeCallerEnum(
         VesperSourceNormalizerMode.values,
         map['mode'],
         VesperSourceNormalizerMode.disabled,
+        'sourceNormalizer.mode',
       ),
       pluginReferences: _decodePluginReferences(map['pluginReferences']),
       runtimeProfile: map['runtimeProfile'] as String?,
@@ -272,11 +274,13 @@ final class VesperFrameProcessorConfiguration {
   factory VesperFrameProcessorConfiguration.fromMap(
     Map<Object?, Object?> map,
   ) {
+    _validateCallerMapKeys(map, 'VesperFrameProcessorConfiguration');
     return VesperFrameProcessorConfiguration(
-      mode: _decodeEnum(
+      mode: _decodeCallerEnum(
         VesperFrameProcessorMode.values,
         map['mode'],
         VesperFrameProcessorMode.disabled,
+        'frameProcessor.mode',
       ),
       pluginReferences: _decodePluginReferences(map['pluginReferences']),
     );
@@ -308,11 +312,13 @@ final class VesperNativeFramePipelineConfiguration {
   factory VesperNativeFramePipelineConfiguration.fromMap(
     Map<Object?, Object?> map,
   ) {
+    _validateCallerMapKeys(map, 'VesperNativeFramePipelineConfiguration');
     return VesperNativeFramePipelineConfiguration(
-      mode: _decodeEnum(
+      mode: _decodeCallerEnum(
         VesperNativeFramePipelineMode.values,
         map['mode'],
         VesperNativeFramePipelineMode.disabled,
+        'nativeFramePipeline.mode',
       ),
       decoderPluginReferences:
           _decodePluginReferences(map['decoderPluginReferences']),

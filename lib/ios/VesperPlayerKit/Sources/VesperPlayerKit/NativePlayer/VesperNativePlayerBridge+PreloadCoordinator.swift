@@ -1,51 +1,62 @@
 import Foundation
 @_implementationOnly import VesperPlayerKitBridgeShim
 
+@MainActor
 final class VesperNativePreloadCoordinator {
+    struct WarmupRequest: Sendable {
+        let sessionHandle: UInt64
+        let taskId: UInt64
+        let memoryBytes: UInt64
+        let windowMs: UInt64
+        let url: URL
+        let headers: [String: String]
+    }
+
+    typealias WarmupExecution = @Sendable (WarmupRequest) async -> Void
     private let budgetPolicy: VesperPreloadBudgetPolicy
+    private let execute: WarmupExecution
     private var cachePolicy: ResolvedCachePolicy = .disabled
     private var warmupTask: Task<Void, Never>?
-    private var sessionHandle: UInt64 = 0
+    private(set) var sessionHandle: UInt64 = 0
+    private(set) var isClosed = false
 
-    init(budgetPolicy: VesperPreloadBudgetPolicy) {
+    init(
+        budgetPolicy: VesperPreloadBudgetPolicy,
+        execute: @escaping WarmupExecution = VesperNativePreloadCoordinator.executeWarmup
+    ) {
         self.budgetPolicy = budgetPolicy
-        sessionHandle = createPreloadSession(budgetPolicy)
+        self.execute = execute
     }
 
     func configure(cachePolicy: ResolvedCachePolicy) {
+        guard !isClosed else { return }
         self.cachePolicy = cachePolicy
     }
 
     func warmCurrentSource(source: VesperPlayerSource, url: URL) {
-        cancelWarmupOnly()
-        guard source.drmConfiguration == nil else {
-            return
-        }
-        // A sequence owns SegmentBase startup requests for this source scope.
-        guard source.dashStartupScope == nil else { return }
-        guard max(cachePolicy.memoryCapacity, cachePolicy.diskCapacity) > 0 else {
-            return
-        }
+        guard !isClosed else { return }
+        cancelCurrent()
+        guard source.drmConfiguration == nil, source.dashStartupScope == nil,
+              cachePolicy.enabled, max(cachePolicy.memoryCapacity, cachePolicy.diskCapacity) > 0 else { return }
 
+        sessionHandle = createPreloadSession(budgetPolicy)
+        guard sessionHandle != 0 else { return }
+        let handle = sessionHandle
         let candidate = runtimePreloadCandidate(source: source)
-        guard planPreloadCandidates(handle: sessionHandle, candidates: [candidate]) else {
-            return
-        }
+        guard planPreloadCandidates(handle: handle, candidates: [candidate]) else { return }
 
-        let commands = drainPreloadCommands(handle: sessionHandle)
-        for command in commands {
+        for command in drainPreloadCommands(handle: handle) {
             switch command.kind {
             case .start:
-                let task = command.task
-                let headers = source.headers
-                warmupTask = Task.detached(priority: .utility) {
-                    await Self.executeWarmup(
-                        handle: self.sessionHandle,
-                        task: task,
-                        url: url,
-                        headers: headers
-                    )
-                }
+                // Only copied scalar fields are used after the native command list is freed.
+                // Detached work uses this session identity, never a later replacement.
+                let request = WarmupRequest(
+                    sessionHandle: handle, taskId: command.task.task_id,
+                    memoryBytes: command.task.expected_memory_bytes, windowMs: command.task.warmup_window_ms,
+                    url: url, headers: source.headers
+                )
+                let execute = self.execute
+                warmupTask = Task.detached(priority: .utility) { await execute(request) }
             case .cancel:
                 warmupTask?.cancel()
             default:
@@ -54,25 +65,25 @@ final class VesperNativePreloadCoordinator {
         }
     }
 
-    deinit {
-        cancelWarmupOnly()
-        if sessionHandle != 0 {
-            vesper_runtime_preload_session_dispose(sessionHandle)
-            sessionHandle = 0
-        }
-    }
-
-    func cancelAll() {
-        cancelWarmupOnly()
-        if sessionHandle != 0 {
-            vesper_runtime_preload_session_dispose(sessionHandle)
-            sessionHandle = 0
-        }
-    }
-
-    private func cancelWarmupOnly() {
+    // A source switch ends this planner's reservations, but allows the next source to warm.
+    func cancelCurrent() {
         warmupTask?.cancel()
         warmupTask = nil
+        if sessionHandle != 0 {
+            vesper_runtime_preload_session_dispose(sessionHandle)
+            sessionHandle = 0
+        }
+    }
+
+    func close() {
+        guard !isClosed else { return }
+        isClosed = true
+        cancelCurrent()
+    }
+
+    deinit {
+        warmupTask?.cancel()
+        if sessionHandle != 0 { vesper_runtime_preload_session_dispose(sessionHandle) }
     }
 
     private func runtimePreloadCandidate(source: VesperPlayerSource) -> VesperRuntimePreloadCandidate {
@@ -92,37 +103,32 @@ final class VesperNativePreloadCoordinator {
         )
     }
 
-    private static func executeWarmup(
-        handle: UInt64,
-        task: VesperRuntimePreloadTask,
-        url: URL,
-        headers: [String: String]
-    ) async {
-        let warmupBytes = max(Int64(task.expected_memory_bytes), 1)
-        var request = URLRequest(url: url)
-        applyHttpHeaders(headers, to: &request)
-        request.cachePolicy = .returnCacheDataElseLoad
-        request.timeoutInterval = TimeInterval(max(Int64(task.warmup_window_ms), 1_000)) / 1000.0
-        request.setValue("bytes=0-\(max(warmupBytes - 1, 0))", forHTTPHeaderField: "Range")
+    nonisolated private static func executeWarmup(_ request: WarmupRequest) async {
+        guard request.memoryBytes > 0 else {
+            guard !Task.isCancelled else { return }
+            _ = vesper_runtime_preload_session_complete(request.sessionHandle, request.taskId)
+            return
+        }
+        let warmupBytes = Int(clamping: request.memoryBytes)
+        var httpRequest = URLRequest(url: request.url)
+        applyHttpHeaders(request.headers, to: &httpRequest)
+        httpRequest.cachePolicy = .returnCacheDataElseLoad
+        httpRequest.timeoutInterval = TimeInterval(max(Int64(clamping: request.windowMs), 1_000)) / 1000.0
+        httpRequest.setValue("bytes=0-\(max(warmupBytes - 1, 0))", forHTTPHeaderField: "Range")
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse {
-                iosHostLog(
-                    "preload warmup completed status=\(httpResponse.statusCode) url=\(diagnosticURLDescription(url.absoluteString))"
-                )
-            }
-            _ = vesper_runtime_preload_session_complete(handle, task.task_id)
+            try Task.checkCancellation()
+            let response = try await VesperSequenceURLSessionWarmupLoader().load(request: httpRequest, maximumBytes: warmupBytes)
+            try Task.checkCancellation()
+            iosHostLog("preload warmup completed status=\(response.statusCode) url=\(diagnosticURLDescription(request.url.absoluteString))")
+            _ = vesper_runtime_preload_session_complete(request.sessionHandle, request.taskId)
         } catch {
+            guard !Task.isCancelled else { return }
             iosHostLog("preload warmup failed: \(error.localizedDescription)")
             error.localizedDescription.withCString { message in
                 _ = vesper_runtime_preload_session_fail(
-                    handle,
-                    task.task_id,
-                    PlayerFfiErrorCodeBackendFailure,
-                    PlayerFfiErrorCategoryNetwork,
-                    false,
-                    message
+                    request.sessionHandle, request.taskId,
+                    PlayerFfiErrorCodeBackendFailure, PlayerFfiErrorCategoryNetwork, false, message
                 )
             }
         }

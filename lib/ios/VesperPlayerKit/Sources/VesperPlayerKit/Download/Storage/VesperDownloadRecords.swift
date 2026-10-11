@@ -78,6 +78,7 @@ extension VesperDownloadAssetIndex {
             totalSizeBytes: totalSizeBytes,
             resources: resources.map { $0.compactedForPersistence() },
             segments: segments,
+            streams: streams,
             completedPath: completedPath
         )
     }
@@ -91,6 +92,7 @@ extension VesperDownloadAssetIndex {
             totalSizeBytes: totalSizeBytes,
             resources: resources,
             segments: segments,
+            streams: streams,
             completedPath: completedPath
         )
     }
@@ -104,6 +106,7 @@ extension VesperDownloadAssetIndex {
             totalSizeBytes: totalSizeBytes,
             resources: resources,
             segments: segments,
+            streams: streams,
             completedPath: completedPath
         )
     }

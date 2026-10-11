@@ -145,24 +145,22 @@ final class VesperExternalPlaybackMediaItem {
   });
 
   factory VesperExternalPlaybackMediaItem.fromMap(Map<Object?, Object?> map) {
+    _validateCallerMapKeys(map, 'VesperExternalPlaybackMediaItem');
     final rawSources = map['sources'];
     final rawMetadata = _rawMap(map['metadata']);
-    final rawFormatAdaptation = _rawMap(map['formatAdaptation']);
+    final rawFormatAdaptation =
+        _decodeCallerMap(map['formatAdaptation'], 'formatAdaptation');
     return VesperExternalPlaybackMediaItem(
-      sources: rawSources is Iterable
-          ? rawSources
-              .map(_rawMap)
-              .whereType<Map<Object?, Object?>>()
-              .map(VesperPlayerSource.fromMap)
-              .toList(growable: false)
-          : const <VesperPlayerSource>[],
+      sources: _decodeCallerMapList(
+          rawSources, 'sources', VesperPlayerSource.fromMap),
       metadata: VesperSystemPlaybackMetadata.fromMap(
         rawMetadata ?? const <Object?, Object?>{},
       ),
-      proxyPolicy: _decodeEnum(
+      proxyPolicy: _decodeCallerEnum(
         VesperExternalProxyPolicy.values,
         map['proxyPolicy'],
         VesperExternalProxyPolicy.auto,
+        'proxyPolicy',
       ),
       formatAdaptation: rawFormatAdaptation == null
           ? const VesperExternalFormatAdaptationConfig.disabled()

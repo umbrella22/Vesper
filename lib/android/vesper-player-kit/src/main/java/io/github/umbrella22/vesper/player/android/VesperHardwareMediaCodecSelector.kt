@@ -47,7 +47,7 @@ internal object VesperHardwareMediaCodecSelector : MediaCodecSelector {
                 requiresTunnelingDecoder = false,
             ).isNotEmpty()
         }.onFailure { error ->
-            Log.w(TAG, "failed to probe hardware decoder for $mimeType", error)
+            Log.w(TAG, "failed to probe hardware decoder for $mimeType failure=${diagnosticPlaybackFailure(error)}")
         }.getOrDefault(false)
     }
 
@@ -62,7 +62,7 @@ internal object VesperHardwareMediaCodecSelector : MediaCodecSelector {
                 requiresTunnelingDecoder = false,
             ).firstOrNull()?.name
         }.onFailure { error ->
-            Log.w(TAG, "failed to select hardware decoder for $mimeType", error)
+            Log.w(TAG, "failed to select hardware decoder for $mimeType failure=${diagnosticPlaybackFailure(error)}")
         }.getOrNull()
     }
 
@@ -96,7 +96,7 @@ internal object VesperHardwareMediaCodecSelector : MediaCodecSelector {
                 "secureHardwareDecoders" to secureDecoders.joinToString(separator = ",") { it.name },
             ).also { decoderDiagnosticsCache[mimeType] = it }
         }.onFailure { error ->
-            Log.w(TAG, "failed to probe decoder diagnostics for $mimeType", error)
+            Log.w(TAG, "failed to probe decoder diagnostics for $mimeType failure=${diagnosticPlaybackFailure(error)}")
         }.getOrElse { error ->
             mapOf(
                 "mimeType" to mimeType,

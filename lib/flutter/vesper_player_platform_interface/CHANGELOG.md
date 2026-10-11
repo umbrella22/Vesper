@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-11
+
+- Align the platform-interface package version with the 0.9.0 SDK.
+
 ## 0.8.0 - 2026-09-29
 
 - Add source session, registration, preload and activation channel contracts with opaque references and strict result decoding.

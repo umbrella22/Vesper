@@ -10,9 +10,13 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runInterruptible
 
-internal fun VesperForegroundDownloadExecutor.closeDataSourceQuietly(dataSource: DataSource, context: String) {
+internal fun VesperForegroundDownloadExecutor.closeDataSourceQuietly(
+    dataSource: DataSource,
+    operation: String,
+    sourceUri: String,
+) {
     runCatching { dataSource.close() }
-        .onFailure { error -> Log.w(DOWNLOAD_TAG, "failed to close download data source for $context", error) }
+        .onFailure { error -> Log.w(DOWNLOAD_TAG, "failed to close download data source for $operation sourceId=${diagnosticResourceId(sourceUri)} failure=${diagnosticPlaybackFailure(error)}") }
 }
 
 internal suspend fun VesperForegroundDownloadExecutor.copyUriToFile(
@@ -169,7 +173,7 @@ internal suspend fun VesperForegroundDownloadExecutor.copyDataSourceUriToFile(
                 }
             }
         } finally {
-            closeDataSourceQuietly(dataSource, "copy $sourceUri")
+            closeDataSourceQuietly(dataSource, "copy", sourceUri)
         }
     }
     if (expected != null && totalWritten != expected) {

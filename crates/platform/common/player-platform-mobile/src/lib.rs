@@ -180,11 +180,12 @@ impl<T> MobileCommandQueue<T> {
             .unwrap_or_default()
     }
 
+    /// Maps the current FIFO batch without holding the queue lock.
+    ///
+    /// Commands enqueued by the mapper belong to the next batch. A mapper panic
+    /// drops the remaining detached batch without poisoning the shared queue.
     pub fn drain_map<U>(&self, map: impl FnMut(T) -> U) -> Vec<U> {
-        self.queue
-            .lock()
-            .map(|mut queue| queue.drain(..).map(map).collect())
-            .unwrap_or_default()
+        self.drain().into_iter().map(map).collect()
     }
 }
 

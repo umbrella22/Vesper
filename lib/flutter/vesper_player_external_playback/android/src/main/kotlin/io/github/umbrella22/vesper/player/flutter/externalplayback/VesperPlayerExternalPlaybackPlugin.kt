@@ -314,38 +314,65 @@ private fun VesperExternalPlaybackResult.toMap(): Map<String, Any?> =
             mapOf("status" to "failed", "message" to message)
     }
 
-private fun Map<String, Any?>.toMediaItem(): VesperExternalPlaybackMediaItem {
-    val rawSources = this["sources"] as? List<*> ?: emptyList<Any?>()
-    val sources = rawSources
-        .mapNotNull { (it as? Map<*, *>)?.stringMap()?.toVesperPlayerSource() }
+internal fun Map<String, Any?>.toMediaItem(): VesperExternalPlaybackMediaItem {
+    val rawSources = this["sources"] ?: emptyList<Any?>()
+    require(rawSources is List<*>) { "sources must be a list." }
+    val sources = rawSources.mapIndexed { index, source ->
+        require(source is Map<*, *>) { "sources[$index] must be a map." }
+        require(source.keys.all { it is String }) { "sources[$index] keys must be strings." }
+        source.stringMap().toVesperPlayerSource()
+    }
     val metadata = (this["metadata"] as? Map<*, *>)?.stringMap()?.toSystemPlaybackMetadata()
         ?: VesperSystemPlaybackMetadata(title = "")
-    val proxyPolicy = when (this["proxyPolicy"] as? String) {
+    val proxyPolicy = when (this["proxyPolicy"]) {
         "always" -> VesperExternalProxyPolicy.Always
         "never" -> VesperExternalProxyPolicy.Never
-        else -> VesperExternalProxyPolicy.Auto
+        null, "auto" -> VesperExternalProxyPolicy.Auto
+        else -> throw IllegalArgumentException("Unknown proxyPolicy: ${this["proxyPolicy"]}.")
     }
     val formatAdaptation =
-        (this["formatAdaptation"] as? Map<*, *>)?.stringMap()?.toFormatAdaptationConfig()
+        optionalExternalInputMap("formatAdaptation")?.toFormatAdaptationConfig()
             ?: VesperExternalFormatAdaptationConfig()
     return VesperExternalPlaybackMediaItem(sources, metadata, proxyPolicy, formatAdaptation)
 }
 
-private fun Map<String, Any?>.toFormatAdaptationConfig(): VesperExternalFormatAdaptationConfig =
+internal fun Map<String, Any?>.toFormatAdaptationConfig(): VesperExternalFormatAdaptationConfig =
     VesperExternalFormatAdaptationConfig(
-        enabled = this["enabled"] as? Boolean ?: false,
-        preferredFallback = when (this["preferredFallback"] as? String) {
+        enabled = externalInputBoolean("enabled", false),
+        preferredFallback = when (this["preferredFallback"]) {
             "hls" -> VesperExternalFallbackFormat.Hls
-            else -> VesperExternalFallbackFormat.MpegTs
+            null, "mpegTs" -> VesperExternalFallbackFormat.MpegTs
+            else -> throw IllegalArgumentException("Unknown preferredFallback: ${this["preferredFallback"]}.")
         },
-        allowHls = this["allowHls"] as? Boolean ?: true,
-        enableRangeCache = this["enableRangeCache"] as? Boolean ?: true,
-        allowRemoteDashMediaReferences = this["allowRemoteDashMediaReferences"] as? Boolean ?: false,
-        allowPrivateRemoteDashMediaAddresses = this["allowPrivateRemoteDashMediaAddresses"] as? Boolean ?: false,
+        allowHls = externalInputBoolean("allowHls", true),
+        enableRangeCache = externalInputBoolean("enableRangeCache", true),
+        allowRemoteDashMediaReferences = externalInputBoolean("allowRemoteDashMediaReferences", false),
+        allowPrivateRemoteDashMediaAddresses = externalInputBoolean("allowPrivateRemoteDashMediaAddresses", false),
         remoteDashMediaRequestHeaders =
-            this["remoteDashMediaRequestHeaders"].stringSet(DEFAULT_REMOTE_DASH_MEDIA_REQUEST_HEADERS),
-        debugDiagnostics = this["debugDiagnostics"] as? Boolean ?: false,
+            externalInputHeaderSet("remoteDashMediaRequestHeaders"),
+        debugDiagnostics = externalInputBoolean("debugDiagnostics", false),
     )
+
+private fun Map<String, Any?>.externalInputBoolean(key: String, fallback: Boolean): Boolean {
+    val value = this[key] ?: return fallback
+    return value as? Boolean ?: throw IllegalArgumentException("$key must be a boolean.")
+}
+
+private fun Map<String, Any?>.externalInputHeaderSet(key: String): Set<String> {
+    val value = this[key] ?: return DEFAULT_REMOTE_DASH_MEDIA_REQUEST_HEADERS
+    require(value is List<*>) { "$key must be a list." }
+    return value.mapIndexed { index, header ->
+        require(header is String) { "$key[$index] must be a string." }
+        header
+    }.toSet()
+}
+
+private fun Map<String, Any?>.optionalExternalInputMap(key: String): Map<String, Any?>? {
+    val value = this[key] ?: return null
+    require(value is Map<*, *>) { "$key must be a map." }
+    require(value.keys.all { it is String }) { "$key keys must be strings." }
+    return value.stringMap()
+}
 
 private fun Map<String, Any?>.toVesperPlayerSource(): VesperPlayerSource {
     val uri = this["uri"] as? String ?: throw IllegalArgumentException("Missing source uri.")
@@ -388,7 +415,7 @@ private fun MethodCall.argumentMap(): Map<String, Any?> =
     (arguments as? Map<*, *>)?.stringMap() ?: emptyMap()
 
 private fun requireNestedMap(map: Map<String, Any?>, key: String): Map<String, Any?> =
-    (map[key] as? Map<*, *>)?.stringMap()
+    map.optionalExternalInputMap(key)
         ?: throw IllegalArgumentException("Missing $key.")
 
 private fun Map<*, *>.stringMap(): Map<String, Any?> =
@@ -403,13 +430,6 @@ private fun Any?.stringStringMap(): Map<String, String> =
         }
         ?.toMap()
         ?: emptyMap()
-
-private fun Any?.stringSet(fallback: Set<String> = emptySet()): Set<String> =
-    (this as? Iterable<*>)
-        ?.mapNotNull { value -> value as? String }
-        ?.filter(String::isNotBlank)
-        ?.toSet()
-        ?: fallback
 
 private fun String.toRouteButtonBrightness(): VesperExternalRouteButtonBrightness? =
     when (this) {

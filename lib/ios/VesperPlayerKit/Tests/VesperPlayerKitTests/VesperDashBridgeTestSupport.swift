@@ -425,6 +425,13 @@ final class CountingDashNetworkClient: VesperDashNetworkClient {
         return payload.subdata(in: start..<(end + 1))
     }
 
+    override func dataWithFinalURL(
+        for url: URL,
+        byteRange: VesperDashByteRange? = nil
+    ) async throws -> (Data, URL) {
+        (try await data(for: url, byteRange: byteRange), url)
+    }
+
     override func download(
         for url: URL,
         byteRange: VesperDashByteRange? = nil,

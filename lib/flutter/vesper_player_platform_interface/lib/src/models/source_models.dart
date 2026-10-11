@@ -172,7 +172,12 @@ final class VesperPlayerSource {
   }
 
   factory VesperPlayerSource.fromMap(Map<Object?, Object?> map) {
-    final uri = map['uri'] as String? ?? '';
+    _validateCallerMapKeys(map, 'source');
+    final rawUri = map['uri'];
+    if (rawUri != null && rawUri is! String) {
+      throw const FormatException('source.uri must be a string');
+    }
+    final uri = rawUri as String? ?? '';
     final externalSubtitles = _decodeExternalSubtitles(
       map['externalSubtitles'] ?? map['subtitleConfigurations'],
     );

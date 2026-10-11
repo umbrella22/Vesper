@@ -3701,8 +3701,16 @@ impl<C: AndroidNativeCommandSink> AndroidNativePlayerSession for AndroidManagedN
                 }
             }
             if self.media_info.track_selection != previous_media_info.track_selection {
-                self.events
-                    .push_back(PlayerRuntimeEvent::MetadataReady(self.media_info.clone()));
+                if self.events.len() >= MAX_PENDING_RUNTIME_EVENTS {
+                    // Keep the latest command-applied track state observable.
+                    self.events.pop_front();
+                    self.dropped_events = self.dropped_events.saturating_add(1);
+                }
+                push_runtime_event_bounded(
+                    &mut self.events,
+                    &mut self.dropped_events,
+                    PlayerRuntimeEvent::MetadataReady(self.media_info.clone()),
+                );
             }
             self.tracker
                 .seed(self.presentation_state, self.playback_rate);

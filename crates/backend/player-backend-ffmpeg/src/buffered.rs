@@ -428,7 +428,7 @@ fn clamp_prefetch_limit(limit: usize, frame_capacity: usize) -> usize {
 }
 
 fn decrement_buffered_frame_count(buffered_frame_count: &AtomicUsize) {
-    let _ = buffered_frame_count.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+    let _ = buffered_frame_count.try_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
         Some(value.saturating_sub(1))
     });
 }

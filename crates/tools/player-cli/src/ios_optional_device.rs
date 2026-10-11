@@ -172,6 +172,7 @@ mod implementation {
         write_device_project_spec(
             &device_spec,
             resolved_spec,
+            &example_project_directory,
             &player_kit,
             &optional_package,
             verified.optional_frameworks(),
@@ -185,21 +186,10 @@ mod implementation {
         let derived_data = output_directory.join("DerivedData");
         let result_bundle = output_directory.join("VesperOptionalPlugins.xcresult");
 
-        let mut generate = Command::new(&tools.xcodegen);
-        generate
-            .arg("generate")
-            .arg("--spec")
-            .arg(&device_spec)
-            .arg("--project")
-            .arg(&acceptance_project_directory)
-            .arg("--project-root")
-            .arg(&example_project_directory)
-            .arg("--no-env")
-            .current_dir(&acceptance_project_directory)
-            .stdin(Stdio::null());
-        run_captured(
-            &mut generate,
-            "iOS optional-plugin Xcode project generation",
+        generate_device_project(
+            &tools.xcodegen,
+            &device_spec,
+            &acceptance_project_directory,
             diagnostics,
         )?;
 
@@ -367,10 +357,22 @@ mod implementation {
     fn write_device_project_spec(
         path: &Path,
         mut resolved_spec: Value,
+        source_directory: &Path,
         player_kit: &Path,
         optional_package: &Path,
         frameworks: &'static [&'static str],
     ) -> Result<(), IosError> {
+        let project_directory = path.parent().ok_or_else(|| {
+            IosError::storage(format!(
+                "isolated iOS optional-plugin project spec must have a parent: {}",
+                path.display()
+            ))
+        })?;
+        let project_directory =
+            require_regular_directory(project_directory, "isolated iOS optional-plugin project")?;
+        let output_directory = project_directory.parent().ok_or_else(|| {
+            IosError::storage("isolated iOS optional-plugin project has no output directory")
+        })?;
         let player_kit = require_regular_directory(player_kit, "VesperPlayerKit package")?;
         let player_kit = player_kit.to_str().ok_or_else(|| {
             IosError::storage(format!(
@@ -465,14 +467,21 @@ mod implementation {
                     &optional_artifacts.join(format!("{framework}.xcframework")),
                     &format!("verified {framework} XCFramework"),
                 )?;
-                let verified_framework = verified_framework.to_str().ok_or_else(|| {
+                let relative_framework = verified_framework
+                    .strip_prefix(output_directory)
+                    .map_err(|_| {
+                        IosError::conformance(format!(
+                            "verified {framework} XCFramework must belong to the isolated output directory"
+                        ))
+                    })?;
+                let project_framework = Path::new("..").join(relative_framework);
+                let project_framework = project_framework.to_str().ok_or_else(|| {
                     IosError::storage(format!(
-                        "verified {framework} XCFramework path is not valid UTF-8: {}",
-                        verified_framework.display()
+                        "verified {framework} XCFramework path is not valid UTF-8"
                     ))
                 })?;
                 *dependency = serde_json::json!({
-                    "framework": verified_framework,
+                    "framework": project_framework,
                     "embed": true,
                     "link": false,
                     "codeSign": true,
@@ -495,12 +504,6 @@ mod implementation {
             )));
         }
 
-        let project_directory = path.parent().ok_or_else(|| {
-            IosError::storage(format!(
-                "isolated iOS optional-plugin project spec must have a parent: {}",
-                path.display()
-            ))
-        })?;
         let generated_directory = project_directory.join("Generated");
         fs::create_dir(&generated_directory).map_err(|error| {
             IosError::storage(format!(
@@ -542,6 +545,7 @@ mod implementation {
                 )
             })?;
         info.insert("path".to_owned(), Value::String(generated_info.to_owned()));
+        resolve_device_project_source_paths(&mut resolved_spec, source_directory)?;
 
         if contains_workspace_optional_artifact_reference(&resolved_spec) {
             return Err(IosError::worker(
@@ -686,6 +690,76 @@ mod implementation {
                 .any(contains_workspace_optional_artifact_reference),
             Value::Null | Value::Bool(_) | Value::Number(_) => false,
         }
+    }
+
+    fn resolve_device_project_source_paths(
+        spec: &mut Value,
+        source_directory: &Path,
+    ) -> Result<(), IosError> {
+        let targets = spec
+            .get_mut("targets")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| IosError::conformance("XcodeGen project dump has no targets object"))?;
+        for (name, target) in targets {
+            let sources = target
+                .get_mut("sources")
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| {
+                    IosError::conformance(format!("XcodeGen target '{name}' has no source list"))
+                })?;
+            for source in sources {
+                let path = match source {
+                    Value::String(path) => path,
+                    Value::Object(object) => match object.get_mut("path") {
+                        Some(Value::String(path)) => path,
+                        _ => {
+                            return Err(IosError::conformance(format!(
+                                "XcodeGen target '{name}' source object has no path string"
+                            )));
+                        }
+                    },
+                    _ => {
+                        return Err(IosError::conformance(format!(
+                            "XcodeGen target '{name}' source must be a path or object"
+                        )));
+                    }
+                };
+                let resolved = source_directory.join(&*path);
+                *path = resolved
+                    .to_str()
+                    .ok_or_else(|| {
+                        IosError::conformance("XcodeGen source path is not valid UTF-8")
+                    })?
+                    .to_owned();
+            }
+        }
+        Ok(())
+    }
+
+    fn generate_device_project(
+        xcodegen: &Path,
+        device_spec: &Path,
+        project_directory: &Path,
+        diagnostics: &mut dyn Write,
+    ) -> Result<(), IosError> {
+        let mut generate = Command::new(xcodegen);
+        generate
+            .arg("generate")
+            .arg("--spec")
+            .arg(device_spec)
+            .arg("--project")
+            .arg(project_directory)
+            .arg("--project-root")
+            // XcodeGen also uses this directory to resolve framework references.
+            .arg(project_directory)
+            .arg("--no-env")
+            .current_dir(project_directory)
+            .stdin(Stdio::null());
+        run_captured(
+            &mut generate,
+            "iOS optional-plugin Xcode project generation",
+            diagnostics,
+        )
     }
 
     fn dump_project_spec(
@@ -1298,6 +1372,7 @@ mod implementation {
             write_device_project_spec(
                 &spec,
                 resolved_project_fixture(),
+                directory.path(),
                 &player_kit,
                 &package,
                 crate::ios_optional_release::optional_frameworks(),
@@ -1341,13 +1416,17 @@ mod implementation {
                 .iter()
                 .filter(|dependency| dependency["framework"].is_string())
             {
-                let framework = Path::new(
+                let framework = project.join(
                     dependency["framework"]
                         .as_str()
                         .expect("verified framework path"),
                 );
-                assert!(framework.starts_with(&verified_root));
                 assert!(framework.is_dir());
+                assert!(
+                    fs::canonicalize(&framework)
+                        .expect("resolve project-relative framework")
+                        .starts_with(&verified_root)
+                );
                 assert_eq!(dependency["embed"], true);
                 assert_eq!(dependency["link"], false);
                 assert_eq!(dependency["codeSign"], true);
@@ -1356,7 +1435,8 @@ mod implementation {
             }
             assert_eq!(
                 value["targets"]["VesperPlayerHostDemo"]["info"]["path"],
-                project
+                fs::canonicalize(&project)
+                    .expect("canonical isolated project directory")
                     .join("Generated/Info.plist")
                     .to_str()
                     .expect("UTF-8 fixture path")
@@ -1364,10 +1444,106 @@ mod implementation {
             assert_eq!(
                 value["targets"]["VesperPlayerHostDemo"]["sources"],
                 serde_json::json!([{
-                    "path": "Sources",
+                    "path": directory.path().join("Sources").to_str().expect("UTF-8 source path"),
                     "excludes": ["Info.plist"],
                 }])
             );
+        }
+
+        #[test]
+        #[ignore = "requires macOS XcodeGen and plutil; generates an isolated Xcode project"]
+        fn generated_device_project_resolves_isolated_frameworks_and_original_sources() {
+            let directory = tempfile::tempdir().expect("temporary device project fixture");
+            let workspace = fs::canonicalize(directory.path())
+                .expect("canonical temporary directory")
+                .join("workspace");
+            let example = workspace.join("examples/ios-host");
+            fs::create_dir_all(example.join("Sources")).expect("create example sources");
+            fs::write(example.join("Sources/Smoke.swift"), "import Foundation\n")
+                .expect("write example source");
+            let fixtures = workspace.join("fixtures");
+            fs::create_dir(&fixtures).expect("create fixture directory");
+            fs::write(fixtures.join("smoke.m4v"), b"fixture").expect("write media fixture");
+            let player_kit = workspace.join("VesperPlayerKit");
+            fs::create_dir(&player_kit).expect("create VesperPlayerKit fixture");
+            let output = workspace.join("devnotes/device acceptance 测试");
+            fs::create_dir_all(&output).expect("create isolated output directory");
+            let package = output.join("VerifiedOptionalPluginsPackage");
+            create_verified_package_fixture(&package);
+            let project = output.join("Project");
+            fs::create_dir(&project).expect("create isolated project directory");
+            let spec = project.join("device-project.json");
+            let mut value = resolved_project_fixture();
+            value["name"] = Value::String("VesperPlayerHostDemo".to_owned());
+            let target = &mut value["targets"]["VesperPlayerHostDemo"];
+            target["type"] = Value::String("application".to_owned());
+            target["platform"] = Value::String("iOS".to_owned());
+            value["targets"]["VesperPlayerHostDemoTests"] = serde_json::json!({
+                "type": "bundle.unit-test",
+                "platform": "iOS",
+                "sources": [{ "path": "../../fixtures/smoke.m4v", "buildPhase": "resources" }],
+                "dependencies": [{ "target": "VesperPlayerHostDemo" }]
+            });
+            write_device_project_spec(
+                &spec,
+                value,
+                &example,
+                &player_kit,
+                &package,
+                crate::ios_optional_release::optional_frameworks(),
+            )
+            .expect("write isolated project spec");
+            let xcodegen = require_path_command("xcodegen").expect("XcodeGen prerequisite");
+            generate_device_project(&xcodegen, &spec, &project, &mut Vec::new())
+                .expect("generate isolated Xcode project");
+            let converted = Command::new("plutil")
+                .args(["-convert", "json", "-o", "-"])
+                .arg(project.join("VesperPlayerHostDemo.xcodeproj/project.pbxproj"))
+                .output()
+                .expect("convert generated project to JSON");
+            assert!(converted.status.success());
+            let value: Value =
+                serde_json::from_slice(&converted.stdout).expect("parse generated Xcode project");
+            let objects = value["objects"].as_object().expect("project objects");
+            let frameworks = objects.values().filter(|object| {
+                object["isa"] == "PBXFileReference"
+                    && object["lastKnownFileType"] == "wrapper.xcframework"
+            });
+            let mut framework_count = 0;
+            for framework in frameworks {
+                let path = project.join(framework["path"].as_str().expect("framework path"));
+                assert!(
+                    path.is_dir(),
+                    "generated framework path is missing: {}",
+                    path.display()
+                );
+                assert!(
+                    fs::canonicalize(&path)
+                        .expect("resolve generated framework path")
+                        .starts_with(
+                            fs::canonicalize(package.join("Artifacts"))
+                                .expect("verified artifacts")
+                        )
+                );
+                framework_count += 1;
+            }
+            assert_eq!(
+                framework_count,
+                crate::ios_optional_release::optional_frameworks().len()
+            );
+            for (group, expected_path) in
+                [("Sources", example.join("Sources")), ("fixtures", fixtures)]
+            {
+                let object = objects
+                    .values()
+                    .find(|object| object["isa"] == "PBXGroup" && object["name"] == group)
+                    .expect("original source group");
+                let path = project.join(object["path"].as_str().expect("source group path"));
+                assert_eq!(
+                    fs::canonicalize(path).expect("resolve original source group"),
+                    fs::canonicalize(expected_path).expect("original source directory")
+                );
+            }
         }
 
         #[test]
@@ -1391,6 +1567,7 @@ mod implementation {
                 let error = write_device_project_spec(
                     &project.join("device-project.json"),
                     value,
+                    directory.path(),
                     &player_kit,
                     &package,
                     crate::ios_optional_release::optional_frameworks(),
@@ -1433,6 +1610,7 @@ mod implementation {
                 let error = write_device_project_spec(
                     &project.join("device-project.json"),
                     value,
+                    directory.path(),
                     &player_kit,
                     &package,
                     crate::ios_optional_release::optional_frameworks(),

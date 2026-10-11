@@ -49,6 +49,26 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun rawHlsRegistrationIsRejectedBeforeStartingRelay() {
+        val diagnostics = mutableListOf<VesperRelayDiagnostic>()
+        val isolated = VesperRelayServer(
+            advertisedAddressProvider = { loopback },
+            bindAddressProvider = { loopback },
+            diagnosticListener = diagnostics::add,
+        )
+        additionalRelays += isolated
+        try {
+            isolated.register(VesperPlayerSource.hls("https://example.com/master.m3u8", "HLS"))
+            fail("raw HLS relay must report its unsupported subresource route")
+        } catch (error: VesperRelayRegistrationException) {
+            assertEquals(415, error.status)
+            assertEquals("unsupported_hls_relay", error.diagnostic.code)
+            assertFalse(error.diagnostic.details.toString().contains("master.m3u8"))
+        }
+        assertEquals(listOf("unsupported_hls_relay"), diagnostics.map { it.code })
+    }
+
+    @Test
     fun forwardsGetHeadRangeAndSourceHeaders() {
         val requests = Collections.synchronizedList(mutableListOf<RecordedRequest>())
         upstream = startUpstream(requests)
@@ -250,6 +270,39 @@ class VesperRelayServerTest {
     }
 
     @Test
+    fun invalidateAllDuringPrewarmRejectsLateRegistration() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val adapter = object : VesperRelayFormatAdapter {
+            override fun prewarm(request: VesperRelayFormatAdaptationRequest): VesperRelayFormatAdaptationResult.Failure? {
+                entered.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+                return null
+            }
+            override fun open(request: VesperRelayFormatAdaptationRequest): VesperRelayFormatAdaptationResult =
+                VesperRelayFormatAdaptationResult.Stream("data".toByteArray().asRelayAdaptedStream("video/mp2t"))
+        }
+        val racing = VesperRelayServer(advertisedAddressProvider = { loopback }, bindAddressProvider = { loopback }, formatAdapter = adapter)
+        additionalRelays += racing
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val result = executor.submit(Callable<Throwable?> {
+                try {
+                    racing.register(VesperPlayerSource.dash("https://example.com/input.mpd", "Input"), VesperRelayFormatAdaptationRegistration(VesperRelayFallbackFormat.Hls))
+                    null
+                } catch (error: Throwable) { error }
+            })
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            racing.invalidateAll()
+            release.countDown()
+            assertTrue("a retired token must not be returned", result.get(5, TimeUnit.SECONDS) is IllegalStateException)
+        } finally {
+            release.countDown()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
     fun rejectsExpiredToken() {
         val file = File.createTempFile("vesper-relay", ".mp4")
         file.writeText("data")
@@ -423,15 +476,15 @@ class VesperRelayServerTest {
     @Test
     fun sourcePreparerRelaysHeadersAndRejectsDashRelay() {
         val preparer = VesperExternalPlaybackSourcePreparer(relay)
-        val hls = VesperPlayerSource.hls(
-            uri = "https://example.com/video.m3u8",
-            label = "HLS",
+        val progressive = VesperPlayerSource.remote(
+            uri = "https://example.com/video.mp4",
+            label = "Progressive",
             headers = mapOf("Cookie" to "secret"),
         )
         val prepared = preparer.prepare(
             VesperExternalSourcePreparationRequest(
                 target = VesperExternalPlaybackTarget.Cast,
-                sources = listOf(hls),
+                sources = listOf(progressive),
                 capabilities = VesperExternalRouteCapabilities(
                     supportsProgressive = true,
                     supportsHls = true,

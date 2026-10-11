@@ -1,5 +1,7 @@
 package io.github.umbrella22.vesper.player.android
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runInterruptible
 
 internal suspend fun VesperForegroundDownloadExecutor.prepareAssetIndexWithRecovery(
@@ -7,11 +9,13 @@ internal suspend fun VesperForegroundDownloadExecutor.prepareAssetIndexWithRecov
     reporter: VesperDownloadExecutionReporter,
 ): VesperDownloadAssetIndex {
     return try {
+        val preparedAssetIndex = prepareAssetIndex(task)
+        currentCoroutineContext().ensureActive()
         materializeGeneratedResources(
             assetId = task.assetId,
             taskId = task.taskId,
             profile = task.profile,
-            assetIndex = prepareAssetIndex(task),
+            assetIndex = preparedAssetIndex,
         )
     } catch (error: VesperStaleDownloadResourceException) {
         val recoveredPlan =
@@ -21,7 +25,9 @@ internal suspend fun VesperForegroundDownloadExecutor.prepareAssetIndexWithRecov
                     taskId = task.taskId,
                     fallbackPhase = VesperDownloadStaleResourcePhase.Prepare,
                 ),
-            ) ?: throw error
+            )
+        currentCoroutineContext().ensureActive()
+        if (recoveredPlan == null) throw error
         val recoveredAssetIndex =
             materializeGeneratedResources(
                 assetId = task.assetId,
@@ -35,12 +41,14 @@ internal suspend fun VesperForegroundDownloadExecutor.prepareAssetIndexWithRecov
             profile = recoveredPlan.profile,
             assetIndex = recoveredAssetIndex,
         )
+        val preparedAssetIndex = prepareAssetIndex(recoveredTask)
+        currentCoroutineContext().ensureActive()
         val assetIndex =
             materializeGeneratedResources(
                 assetId = task.assetId,
                 taskId = task.taskId,
                 profile = recoveredPlan.profile,
-                assetIndex = prepareAssetIndex(recoveredTask),
+                assetIndex = preparedAssetIndex,
             )
         synchronized(recoveredSourcesLock) {
             recoveredSources[task.taskId] = recoveredPlan.source
@@ -173,18 +181,21 @@ internal suspend fun VesperForegroundDownloadExecutor.planHlsMasterAssetIndex(
             ?: error("HLS master playlist did not contain a playable variant")
     val variantMedia = parseHlsMediaPlaylist(variant.uri, fetchText(variant.uri, requestHeaders))
     val media = mutableListOf("video" to variantMedia)
+    val audioCandidates = variant.attributes["AUDIO"]?.let { group ->
+        master.audio.filter { it.attributes["GROUP-ID"] == group }
+    }.orEmpty()
     val audio =
         profile.preferredAudioLanguage
             ?.let { language ->
-                master.audio.firstOrNull { it.attributes["LANGUAGE"]?.equals(language, ignoreCase = true) == true }
+                audioCandidates.firstOrNull { it.attributes["LANGUAGE"]?.equals(language, ignoreCase = true) == true }
             }
-            ?: master.audio.firstOrNull { it.attributes["DEFAULT"]?.equals("YES", ignoreCase = true) == true }
-            ?: master.audio.firstOrNull()
-    if (audio != null) {
-        media += "audio" to parseHlsMediaPlaylist(audio.uri, fetchText(audio.uri, requestHeaders))
+            ?: audioCandidates.firstOrNull { it.attributes["DEFAULT"]?.equals("YES", ignoreCase = true) == true }
+            ?: audioCandidates.firstOrNull()
+    audio?.uri?.let { uri ->
+        media += "audio" to parseHlsMediaPlaylist(uri, fetchText(uri, requestHeaders))
     }
 
-    val planned = buildHlsMediaAssetIndex("index.m3u8", media, requestHeaders)
+    val planned = buildHlsMediaAssetIndex("index.m3u8", media, requestHeaders, rootIsMediaPlaylist = false)
     val mediaResourceNames =
         planned.resources
             .mapNotNull { it.relativePath }
@@ -206,6 +217,7 @@ internal suspend fun VesperForegroundDownloadExecutor.buildHlsMediaAssetIndex(
     manifestPath: String,
     mediaPlaylists: List<Pair<String, HlsMediaPlaylist>>,
     requestHeaders: Map<String, String>,
+    rootIsMediaPlaylist: Boolean = true,
 ): VesperDownloadAssetIndex {
     val resources =
         mutableListOf(
@@ -216,20 +228,19 @@ internal suspend fun VesperForegroundDownloadExecutor.buildHlsMediaAssetIndex(
             ),
         )
     val segments = mutableListOf<VesperDownloadSegmentRecord>()
-    val seenMaps = linkedSetOf<String>()
+    val localMaps = linkedMapOf<String, String>()
     var totalSizeBytes = 0L
 
     mediaPlaylists.forEach { (mediaId, playlist) ->
         val playlistPath =
-            if (mediaPlaylists.size == 1 && manifestPath == "index.m3u8") {
+            if (rootIsMediaPlaylist && mediaPlaylists.size == 1 && manifestPath == "index.m3u8") {
                 "index.m3u8"
             } else {
                 "$mediaId.m3u8"
             }
-        val localMaps = linkedMapOf<String, String>()
         playlist.maps.forEachIndexed { index, map ->
             val key = "${map.uri}:${map.byteRange}"
-            if (seenMaps.add(key)) {
+            if (key !in localMaps) {
                 val size = probeRequiredSize(map.uri, map.byteRange, requestHeaders)
                 totalSizeBytes += size
                 val relativePath = "segments/$mediaId-init-$index.${extensionFromUri(map.uri, "mp4")}"
@@ -269,7 +280,7 @@ internal suspend fun VesperForegroundDownloadExecutor.buildHlsMediaAssetIndex(
             )
     }
 
-    if (mediaPlaylists.size == 1 && manifestPath == "index.m3u8") {
+    if (rootIsMediaPlaylist && mediaPlaylists.size == 1 && manifestPath == "index.m3u8") {
         val mediaResource = resources.firstOrNull { it.resourceId.endsWith("-playlist") }
         if (mediaResource != null) {
             resources.remove(mediaResource)
@@ -349,7 +360,7 @@ internal suspend fun VesperForegroundDownloadExecutor.planDashAssetIndex(
             }
             rewrittenAdaptationSets += rewriteDashTemplateAdaptationSet(representation, template, mediaId, segmentCount)
         } else if (representation.baseUrl != null) {
-            val remote = resolveRemoteReference(representation.baseUri, representation.baseUrl)
+            val remote = representation.baseUrl
             val size = probeRequiredSize(remote, null, requestHeaders)
             totalSizeBytes += size
             val localName = "media-$mediaId.${extensionFromUri(remote, "mp4")}"

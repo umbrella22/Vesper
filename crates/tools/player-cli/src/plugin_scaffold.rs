@@ -524,11 +524,11 @@ impl player_plugin::PostDownloadProcessor for PostDownload {
         PluginScaffoldCapability::EventHook => {
             r#"struct EventHook;
 
-impl player_plugin::PipelineEventHook for EventHook {
+impl player_plugin::PluginEventHook for EventHook {
     fn on_event(
         &self,
         _event: &player_plugin::PipelineEvent,
-    ) -> Result<player_plugin::PipelineEventHookOutcome, player_plugin::PipelineEventHookError> {
+    ) -> Result<player_plugin::PipelineEventHookOutcome, player_plugin::PipelineEventHookFailure> {
         Ok(player_plugin::PipelineEventHookOutcome::accepted())
     }
 }"#
@@ -536,7 +536,7 @@ impl player_plugin::PipelineEventHook for EventHook {
         PluginScaffoldCapability::Benchmark => {
             r#"struct Benchmark;
 
-impl player_plugin::BenchmarkSink for Benchmark {
+impl player_plugin::PluginBenchmarkSink for Benchmark {
     fn name(&self) -> &str {
         "benchmark"
     }
@@ -544,7 +544,7 @@ impl player_plugin::BenchmarkSink for Benchmark {
     fn on_event_batch(
         &self,
         batch: &player_plugin::BenchmarkEventBatch,
-    ) -> Result<player_plugin::BenchmarkSinkStatus, player_plugin::BenchmarkSinkError> {
+    ) -> Result<player_plugin::BenchmarkSinkStatus, player_plugin::BenchmarkSinkFailure> {
         Ok(player_plugin::BenchmarkSinkStatus {
             accepted_events: u64::try_from(batch.events.len()).unwrap_or(u64::MAX),
         })

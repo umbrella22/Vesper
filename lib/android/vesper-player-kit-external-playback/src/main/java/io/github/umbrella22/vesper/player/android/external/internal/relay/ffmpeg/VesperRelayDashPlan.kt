@@ -51,20 +51,12 @@ internal fun planHostPreparedDash(
             ),
         )
     }
-    if (document.getElementsByTagNameNS("*", "SegmentTimeline").length > 0) {
-        throw VesperRelayHostInputException(
-            status = 415,
-            diagnostic = VesperRelayDiagnostic(
-                code = "unsupported_dash_layout",
-                message = "DASH SegmentTimeline is not supported by host-prepared relay remux v1.",
-                details = baseDetails + mapOf("inputMode" to HOST_PREPARED_DASH_INPUT_MODE),
-            ),
-        )
-    }
-
-    val durationSeconds = parseIso8601DurationSeconds(
+    val durationMs = parseIso8601DurationMilliseconds(
         document.documentElement.getAttribute("mediaPresentationDuration"),
     )
+    if (document.documentElement.hasAttribute("mediaPresentationDuration") && durationMs == null) {
+        throw unsupportedDashLayout(baseDetails, "DASH mediaPresentationDuration must be finite and positive.", emptyMap())
+    }
 
     val periods = childElementsByTagName(document.documentElement, "Period")
     if (periods.size > 1) {
@@ -103,24 +95,27 @@ internal fun planHostPreparedDash(
         val mediaId = "$kind$index"
         val adaptationBase = referenceResolver.baseFor(periodBase, adaptation)
         val representationBase = referenceResolver.baseFor(adaptationBase, selectedRepresentation)
+        val trackDetails = baseDetails + mapOf("trackKind" to kind, "mediaId" to mediaId)
         val trackContext = DashTrackContext(
             kind = kind,
             mediaId = mediaId,
             representationId = representationId,
+            bandwidth = selectedRepresentation.dashLongAttribute("bandwidth", "Representation bandwidth", trackDetails),
             mimeType = selectedRepresentation.getAttribute("mimeType").takeIf(String::isNotBlank)
                 ?: adaptation.getAttribute("mimeType").takeIf(String::isNotBlank),
             codecs = selectedRepresentation.getAttribute("codecs").takeIf(String::isNotBlank)
                 ?: adaptation.getAttribute("codecs").takeIf(String::isNotBlank),
             mediaBaseUri = representationBase,
         )
-        val template = dashTemplateFromElement(selectedRepresentation)
-            ?: dashTemplateFromElement(adaptation)
+        val template = dashTemplateFromElement(selectedRepresentation, trackDetails)
+            ?: dashTemplateFromElement(adaptation, trackDetails)
         when {
             template != null ->
                 planned += planSegmentTemplateTrack(
                     context = trackContext,
                     template = template,
-                    durationSeconds = durationSeconds,
+                    manifestType = if (isDynamic) "dynamic" else "static",
+                    durationMs = durationMs,
                     baseDetails = baseDetails,
                     referenceResolver = referenceResolver,
                 )

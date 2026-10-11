@@ -253,7 +253,7 @@ impl PipelineEventContext {
     ) -> PlayerResult<Self> {
         let platform = resolve_pipeline_event_platform(&platform.into(), "mobile")?;
         let session_number = NEXT_PLAYBACK_PIPELINE_SESSION_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 Some(value.saturating_add(1).max(1))
             })
             .unwrap_or(1);
@@ -1576,7 +1576,7 @@ impl PlayerRuntime {
         } = bootstrap;
 
         let session_id = NEXT_PLAYBACK_PIPELINE_SESSION_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 Some(value.saturating_add(1).max(1))
             })
             .unwrap_or(1);
@@ -1798,126 +1798,6 @@ impl PlayerRuntime {
             self.inner.media_info().source_protocol,
             self.pipeline_event_started_at,
         )
-    }
-
-    #[allow(dead_code)]
-    fn pipeline_event_for_legacy(&self, event: &PlayerRuntimeEvent) -> PipelineEvent {
-        let mut attributes = BTreeMap::new();
-        let (event_name, diagnostic) = match event {
-            PlayerRuntimeEvent::Initialized(startup) => {
-                attributes.insert(
-                    "ffmpegInitialized".to_owned(),
-                    startup.ffmpeg_initialized.to_string(),
-                );
-                ("playback.initialized", None)
-            }
-            PlayerRuntimeEvent::MetadataReady(media_info) => {
-                attributes.insert(
-                    "sourceKind".to_owned(),
-                    playback_source_kind(media_info.source_kind).to_owned(),
-                );
-                attributes.insert(
-                    "sourceProtocol".to_owned(),
-                    playback_protocol(media_info.source_protocol).to_owned(),
-                );
-                attributes.insert(
-                    "audioStreams".to_owned(),
-                    media_info.audio_streams.to_string(),
-                );
-                attributes.insert(
-                    "videoStreams".to_owned(),
-                    media_info.video_streams.to_string(),
-                );
-                ("playback.metadata_ready", None)
-            }
-            PlayerRuntimeEvent::FirstFrameReady(frame) => {
-                attributes.insert("width".to_owned(), frame.width.to_string());
-                attributes.insert("height".to_owned(), frame.height.to_string());
-                attributes.insert(
-                    "presentationTimeMs".to_owned(),
-                    frame.presentation_time.as_millis().to_string(),
-                );
-                ("playback.first_frame_ready", None)
-            }
-            PlayerRuntimeEvent::PlaybackStateChanged(state) => {
-                attributes.insert("state".to_owned(), playback_state(*state).to_owned());
-                ("playback.state_changed", None)
-            }
-            PlayerRuntimeEvent::InterruptionChanged { interrupted } => {
-                attributes.insert("interrupted".to_owned(), interrupted.to_string());
-                ("playback.interruption_changed", None)
-            }
-            PlayerRuntimeEvent::BufferingChanged { buffering } => {
-                attributes.insert("buffering".to_owned(), buffering.to_string());
-                ("playback.buffering_changed", None)
-            }
-            PlayerRuntimeEvent::VideoSurfaceChanged { attached } => {
-                attributes.insert("attached".to_owned(), attached.to_string());
-                ("playback.video_surface_changed", None)
-            }
-            PlayerRuntimeEvent::AudioOutputChanged(output) => {
-                attributes.insert("available".to_owned(), output.is_some().to_string());
-                ("playback.audio_output_changed", None)
-            }
-            PlayerRuntimeEvent::PlaybackRateChanged { rate } => {
-                attributes.insert("rate".to_owned(), rate.to_string());
-                ("playback.rate_changed", None)
-            }
-            PlayerRuntimeEvent::SeekCompleted { position } => {
-                attributes.insert("positionMs".to_owned(), position.as_millis().to_string());
-                ("playback.seek_completed", None)
-            }
-            PlayerRuntimeEvent::RetryScheduled { attempt, delay } => {
-                attributes.insert("attempt".to_owned(), attempt.to_string());
-                attributes.insert("delayMs".to_owned(), delay.as_millis().to_string());
-                ("playback.retry_scheduled", None)
-            }
-            PlayerRuntimeEvent::Warning(warning) => {
-                attributes.insert(
-                    "domain".to_owned(),
-                    playback_warning_domain(warning.domain()).to_owned(),
-                );
-                ("playback.warning", None)
-            }
-            PlayerRuntimeEvent::Error(error) => {
-                attributes.insert(
-                    "code".to_owned(),
-                    playback_error_code(error.code()).to_owned(),
-                );
-                attributes.insert(
-                    "category".to_owned(),
-                    playback_error_category(error.category()).to_owned(),
-                );
-                attributes.insert("retriable".to_owned(), error.is_retriable().to_string());
-                (
-                    "playback.error",
-                    Some(PluginDiagnostic {
-                        code: "playback.error".to_owned(),
-                        severity: PluginDiagnosticSeverity::Error,
-                        message: "playback runtime error".to_owned(),
-                        attributes: BTreeMap::new(),
-                    }),
-                )
-            }
-            PlayerRuntimeEvent::Ended => ("playback.ended", None),
-        };
-        let timestamp_ns = self
-            .pipeline_event_started_at
-            .elapsed()
-            .as_nanos()
-            .min(u128::from(u64::MAX)) as u64;
-        PipelineEvent {
-            run_id: self.pipeline_event_run_id.clone(),
-            session_id: self.pipeline_event_session_id.clone(),
-            platform: self.pipeline_event_platform.clone(),
-            protocol: Some(playback_protocol(self.inner.media_info().source_protocol).to_owned()),
-            event_name: event_name.to_owned(),
-            timestamp_ns,
-            thread: None,
-            resource_identity: Some(self.pipeline_event_resource_identity.clone()),
-            attributes,
-            diagnostic,
-        }
     }
 
     /// Dispatches a command to the underlying adapter.
@@ -2249,17 +2129,18 @@ fn resolve_pipeline_event_platform(configured: &str, adapter_id: &str) -> Player
 pub fn register_default_runtime_adapter_factory(
     factory: &'static dyn PlayerRuntimeAdapterFactory,
 ) -> PlayerResult<()> {
-    match DEFAULT_RUNTIME_ADAPTER_FACTORY.set(factory) {
-        Ok(()) => Ok(()),
-        Err(existing) if existing.adapter_id() == factory.adapter_id() => Ok(()),
-        Err(existing) => Err(PlayerError::new(
+    let existing = DEFAULT_RUNTIME_ADAPTER_FACTORY.get_or_init(|| factory);
+    if existing.adapter_id() == factory.adapter_id() {
+        Ok(())
+    } else {
+        Err(PlayerError::new(
             PlayerErrorCode::InvalidState,
             format!(
                 "default runtime adapter factory is already registered as '{}'; cannot replace it with '{}'",
                 existing.adapter_id(),
                 factory.adapter_id()
             ),
-        )),
+        ))
     }
 }
 

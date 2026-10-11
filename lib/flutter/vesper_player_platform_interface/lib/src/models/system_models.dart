@@ -30,10 +30,12 @@ final class VesperSystemPlaybackControlButton {
   factory VesperSystemPlaybackControlButton.fromMap(
     Map<Object?, Object?> map,
   ) {
-    final kind = _decodeEnum(
+    _validateCallerMapKeys(map, 'VesperSystemPlaybackControlButton');
+    final kind = _decodeCallerEnum(
       VesperSystemPlaybackControlKind.values,
       map['kind'],
       VesperSystemPlaybackControlKind.playPause,
+      'compactButtons.kind',
     );
     final seekOffsetMs = _decodeInt(map, 'seekOffsetMs');
     return switch (kind) {
@@ -95,14 +97,13 @@ final class VesperSystemPlaybackControls {
         ];
 
   factory VesperSystemPlaybackControls.fromMap(Map<Object?, Object?> map) {
+    _validateCallerMapKeys(map, 'VesperSystemPlaybackControls');
     final rawButtons = map['compactButtons'];
-    final buttons = rawButtons is Iterable
-        ? rawButtons
-            .map(_rawMap)
-            .whereType<Map<Object?, Object?>>()
-            .map(VesperSystemPlaybackControlButton.fromMap)
-            .toList(growable: false)
-        : const <VesperSystemPlaybackControlButton>[];
+    final buttons = _decodeCallerMapList(
+      rawButtons,
+      'compactButtons',
+      VesperSystemPlaybackControlButton.fromMap,
+    );
     return VesperSystemPlaybackControls(compactButtons: buttons).normalized();
   }
 

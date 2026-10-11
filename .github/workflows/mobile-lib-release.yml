@@ -71,7 +71,7 @@ jobs:
         run: ./scripts/vesper release tag-channel "${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.99.0
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
@@ -128,7 +128,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-linux-android
 
@@ -245,7 +245,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-linux-android
 
@@ -388,7 +388,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 
@@ -777,7 +777,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-linux-android
 

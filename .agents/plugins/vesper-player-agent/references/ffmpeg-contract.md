@@ -18,6 +18,28 @@ capabilities, while platform selectors describe build targets. Preserve ordered
 deduplicated lists and apply platform overrides after inheritance. Validate
 network/OpenSSL restrictions and all CLI overlays before building.
 
+Ordinary FFmpeg source builds resolve patches within the 9.0 series; the
+release source lock remains 9.0.2. Android DASH builds use the libxml2 2.15
+series, and optional OpenSSL overlays use the 3.5 LTS series. Every ordinary
+build checks upstream even when archives are cached and selects the highest
+matching patch available upstream or locally. Missing versioned archives are
+downloaded into the shared cache. Standard profiles keep network access and
+OpenSSL disabled in the FFmpeg runtime.
+
+An unavailable index falls back to the highest matching cached patch. Without
+a cached dependency archive, an unsuccessful lookup preserves its cause and
+must never return a series as an exact release. Exact version overrides take
+precedence over series selectors and skip discovery. Known libxml2 2.15.4 and
+OpenSSL 3.5.9 archive digests remain enforced for those versions; newer patches
+can be resolved without a checked-in digest and record their actual source
+SHA-256. Explicit checksum overrides remain supported.
+
+Android dependency reuse requires matching source identity, ABI/API level, and
+installed pkg-config/header/library digests in
+`vesper-dependency-build-metadata.txt`. Android FFmpeg build metadata includes
+those records, so dependency upgrades or changed dependency sources/builds
+invalidate stale FFmpeg output even when the capability profile hash is unchanged.
+
 Typical fields include `extends`, `libraries`, `demuxers`, `muxers`,
 `protocols`, `parsers`, `bsfs`, `tls`, `forbid_network`, `forbid_openssl`, and
 `platform_overrides`.

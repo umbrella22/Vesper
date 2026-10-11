@@ -17,7 +17,7 @@ internal data class HlsVariant(
 )
 
 internal data class HlsRendition(
-    val uri: String,
+    val uri: String?,
     val attributes: Map<String, String>,
 )
 
@@ -38,6 +38,8 @@ internal data class HlsSegment(
     val duration: String?,
     val byteRange: VesperDownloadByteRange?,
     val sequence: Long,
+    val initMap: HlsMap? = null,
+    val discontinuity: Boolean = false,
 )
 
 internal data class DashPlannedRepresentation(
@@ -68,6 +70,7 @@ internal fun parseHlsMasterPlaylist(
     var pendingVariant: Map<String, String>? = null
 
     manifestText.lineSequence().map(String::trim).filter(String::isNotEmpty).forEach { line ->
+        validateHlsEncryptionDeclaration(line)
         when {
             line.startsWith("#EXT-X-STREAM-INF:", ignoreCase = true) -> {
                 pendingVariant = parseHlsAttributes(line.substringAfter(':', ""))
@@ -75,8 +78,8 @@ internal fun parseHlsMasterPlaylist(
             line.startsWith("#EXT-X-MEDIA:", ignoreCase = true) -> {
                 val attributes = parseHlsAttributes(line.substringAfter(':', ""))
                 val uri = attributes["URI"]
-                if (uri != null && attributes["TYPE"]?.equals("AUDIO", ignoreCase = true) == true) {
-                    audio += HlsRendition(resolveRemoteReference(manifestUri, uri), attributes)
+                if (attributes["TYPE"]?.equals("AUDIO", ignoreCase = true) == true) {
+                    audio += HlsRendition(uri?.let { resolveRemoteReference(manifestUri, it) }, attributes)
                 }
             }
             line.startsWith("#") -> Unit
@@ -102,10 +105,13 @@ internal fun parseHlsMediaPlaylist(
     var pendingByteRange: VesperDownloadByteRange? = null
     var previousRangeEnd = 0L
     var sequence = 0L
+    var currentMap: HlsMap? = null
+    var pendingDiscontinuity = false
     val maps = mutableListOf<HlsMap>()
     val segments = mutableListOf<HlsSegment>()
 
     playlistText.lineSequence().map(String::trim).filter(String::isNotEmpty).forEach { line ->
+        validateHlsEncryptionDeclaration(line)
         when {
             line.startsWith("#EXT-X-TARGETDURATION:", ignoreCase = true) -> {
                 targetDuration = line.substringAfter(':').trim()
@@ -126,8 +132,11 @@ internal fun parseHlsMediaPlaylist(
                 if (byteRange != null) {
                     previousRangeEnd = byteRange.offset + byteRange.length
                 }
-                maps += HlsMap(resolveRemoteReference(playlistUri, uri), byteRange)
+                val map = HlsMap(resolveRemoteReference(playlistUri, uri), byteRange)
+                currentMap = map
+                maps += map
             }
+            line.equals("#EXT-X-DISCONTINUITY", ignoreCase = true) -> pendingDiscontinuity = true
             line.startsWith("#EXT-X-BYTERANGE:", ignoreCase = true) -> {
                 pendingByteRange = parseHlsByteRange(line.substringAfter(':').trim(), previousRangeEnd)
                 pendingByteRange?.let { previousRangeEnd = it.offset + it.length }
@@ -144,9 +153,12 @@ internal fun parseHlsMediaPlaylist(
                         duration = pendingDuration,
                         byteRange = pendingByteRange,
                         sequence = sequence,
+                        initMap = currentMap,
+                        discontinuity = pendingDiscontinuity,
                     )
                 pendingDuration = null
                 pendingByteRange = null
+                pendingDiscontinuity = false
             }
         }
     }
@@ -163,6 +175,19 @@ internal fun parseHlsMediaPlaylist(
         maps = maps,
         segments = segments,
     )
+}
+
+private fun validateHlsEncryptionDeclaration(line: String) {
+    if (!line.startsWith("#EXT-X-KEY:", ignoreCase = true) &&
+        !line.startsWith("#EXT-X-SESSION-KEY:", ignoreCase = true)
+    ) return
+    val method = parseHlsAttributes(line.substringAfter(':', ""))["METHOD"]
+    if (method?.equals("NONE", ignoreCase = true) != true) {
+        throw VesperPlayerUnsupportedOperation(
+            "Encrypted HLS download preparation is not supported.",
+            mapOf("reason" to "hlsEncryptionUnsupported"),
+        )
+    }
 }
 
 private fun parseHlsAttributes(input: String): Map<String, String> {
@@ -233,12 +258,19 @@ internal fun rewriteHlsMedia(
         append("#EXT-X-VERSION:${playlist.version ?: "3"}\n")
         append("#EXT-X-PLAYLIST-TYPE:VOD\n")
         playlist.targetDuration?.let { append("#EXT-X-TARGETDURATION:$it\n") }
-        playlist.maps.lastOrNull()?.let { map ->
-            localMaps["${map.uri}:${map.byteRange}"]?.let { path ->
-                append("#EXT-X-MAP:URI=\"$path\"\n")
-            }
-        }
+        var previousMap: HlsMap? = null
         playlist.segments.forEach { segment ->
+            if (segment.discontinuity) {
+                append("#EXT-X-DISCONTINUITY\n")
+                previousMap = null
+            }
+            segment.initMap?.let { map ->
+                if (map != previousMap) {
+                    val path = checkNotNull(localMaps["${map.uri}:${map.byteRange}"]) { "HLS initialization map was not planned" }
+                    append("#EXT-X-MAP:URI=\"$path\"\n")
+                    previousMap = map
+                }
+            }
             append("#EXTINF:${segment.duration ?: "0"},\n")
             append("segments/$mediaId-${segment.sequence.toString().padStart(5, '0')}.${extensionFromUri(segment.uri, "ts")}\n")
         }
@@ -275,13 +307,18 @@ internal fun selectDashRepresentations(
         ) {
             continue
         }
+        val period = adaptation.parentNode as? Element
+        val periodBase = period?.takeIf { it.localName == "Period" || it.tagName == "Period" }
+            ?.let { childElementsByTagName(it, "BaseURL").firstOrNull() }
+            ?.textContent?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { resolveRemoteReference(mpdBase, it) } ?: mpdBase
         val adaptationBase = childElementsByTagName(adaptation, "BaseURL")
             .firstOrNull()
             ?.textContent
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
-            ?.let { resolveRemoteReference(mpdBase, it) }
-            ?: mpdBase
+            ?.let { resolveRemoteReference(periodBase, it) }
+            ?: periodBase
         val adaptationTemplate = dashTemplateFromElement(adaptation)
         val representations = childElementsByTagName(adaptation, "Representation")
         val selectedRepresentation =
@@ -310,7 +347,7 @@ internal fun selectDashRepresentations(
                 codecs = selectedRepresentation.getAttribute("codecs").takeIf(String::isNotBlank),
                 bandwidth = selectedRepresentation.getAttribute("bandwidth").takeIf(String::isNotBlank),
                 baseUri = representationBase?.let { resolveRemoteReference(adaptationBase, it) } ?: adaptationBase,
-                baseUrl = if (template == null) representationBase else null,
+                baseUrl = if (template == null) representationBase?.let { resolveRemoteReference(adaptationBase, it) } else null,
                 template = template,
             )
     }

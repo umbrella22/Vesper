@@ -68,15 +68,15 @@ final class VesperDownloadRecoveredTaskPlan {
   });
 
   factory VesperDownloadRecoveredTaskPlan.fromMap(Map<Object?, Object?> map) {
-    final normalized = vesperDecodeMap(map);
+    final normalized = _decodeRequiredDownloadMap(map, 'recoveredTaskPlan');
     return VesperDownloadRecoveredTaskPlan(
-      source:
-          VesperDownloadSource.fromMap(vesperDecodeMap(normalized['source'])),
+      source: VesperDownloadSource.fromMap(
+          _decodeRequiredDownloadMap(normalized['source'], 'source')),
       profile: VesperDownloadProfile.fromMap(
-        vesperDecodeMap(normalized['profile']),
+        _decodeRequiredDownloadMap(normalized['profile'], 'profile'),
       ),
       assetIndex: VesperDownloadAssetIndex.fromMap(
-        vesperDecodeMap(normalized['assetIndex']),
+        _decodeRequiredDownloadMap(normalized['assetIndex'], 'assetIndex'),
       ),
     );
   }
@@ -223,15 +223,16 @@ final class VesperDownloadTaskSnapshot {
   });
 
   factory VesperDownloadTaskSnapshot.fromMap(Map<Object?, Object?> map) {
-    final normalized = vesperDecodeMap(map);
+    final normalized =
+        _decodeRequiredDownloadMap(map, 'VesperDownloadTaskSnapshot');
     final rawError = normalized['error'];
     return VesperDownloadTaskSnapshot(
       taskId: _decodeInt(normalized['taskId']) ?? 0,
       assetId: normalized['assetId'] as String? ?? '',
-      source:
-          VesperDownloadSource.fromMap(vesperDecodeMap(normalized['source'])),
+      source: VesperDownloadSource.fromMap(
+          _decodeDownloadMap(normalized['source'], 'source')),
       profile: VesperDownloadProfile.fromMap(
-        vesperDecodeMap(normalized['profile']),
+        _decodeDownloadMap(normalized['profile'], 'profile'),
       ),
       state: _decodeDownloadState(normalized['state']),
       stateRawValue: normalized['state'] as String?,
@@ -239,7 +240,7 @@ final class VesperDownloadTaskSnapshot {
         vesperDecodeMap(normalized['progress']),
       ),
       assetIndex: VesperDownloadAssetIndex.fromMap(
-        vesperDecodeMap(normalized['assetIndex']),
+        _decodeDownloadMap(normalized['assetIndex'], 'assetIndex'),
       ),
       error: rawError == null
           ? null
@@ -373,20 +374,15 @@ final class VesperDownloadSnapshot {
       : tasks = const <VesperDownloadTaskSnapshot>[];
 
   factory VesperDownloadSnapshot.fromMap(Map<Object?, Object?> map) {
-    final normalized = vesperDecodeMap(map);
+    final normalized =
+        _decodeRequiredDownloadMap(map, 'VesperDownloadSnapshot');
     final rawTasks = normalized['tasks'];
     return VesperDownloadSnapshot(
-      tasks: switch (rawTasks) {
-        final List<dynamic> values => values
-            .whereType<Map>()
-            .map(
-              (value) => VesperDownloadTaskSnapshot.fromMap(
-                Map<Object?, Object?>.from(value),
-              ),
-            )
-            .toList(growable: false),
-        _ => const <VesperDownloadTaskSnapshot>[],
-      },
+      tasks: _decodeDownloadRecordList(
+        rawTasks,
+        'tasks',
+        VesperDownloadTaskSnapshot.fromMap,
+      ),
     );
   }
 

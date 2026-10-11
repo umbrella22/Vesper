@@ -16,8 +16,23 @@ library.
 crate-type = ["cdylib"]
 
 [dependencies]
-player-plugin = { package = "vesper-player-plugin", version = "0.5" }
+player-plugin = { package = "vesper-player-plugin", version = "0.9" }
 ```
+
+The author interfaces below require SDK 0.9.x. The
+[author API migration guide](../../../lib/doc/plugin-author-api.md) lists the
+source-breaking changes and the unchanged host and wire contracts.
+
+For local validation of a Native candidate scaffold, add the matching checkout
+SDK path to the generated dependency and preserve its exact version field:
+
+```toml
+player-plugin = { package = "vesper-player-plugin", version = "=0.9.0", path = "/path/to/Vesper/crates/plugin/player-plugin" }
+```
+
+The path must resolve to the matching source checkout. Checkout-backed builds
+validate the candidate API; they do not validate a registry-only consumer. A matching
+CLI/SDK release must also compile and check an unmodified generated project.
 
 ## Safe Native Export
 
@@ -26,17 +41,17 @@ zero-argument factory with `#[player_plugin::export]`:
 
 ```rust
 use player_plugin::{
-    PipelineEvent, PipelineEventHook, PipelineEventHookError,
-    PipelineEventHookOutcome, Plugin, PluginBuildError,
+    PipelineEvent, PipelineEventHookFailure, PipelineEventHookOutcome,
+    Plugin, PluginBuildError, PluginEventHook,
 };
 
 struct Hook;
 
-impl PipelineEventHook for Hook {
+impl PluginEventHook for Hook {
     fn on_event(
         &self,
         _event: &PipelineEvent,
-    ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+    ) -> Result<PipelineEventHookOutcome, PipelineEventHookFailure> {
         Ok(PipelineEventHookOutcome::accepted())
     }
 }
@@ -54,6 +69,11 @@ instance IDs are validated as reverse-DNS identities, and the builder rejects
 empty or duplicate interface definitions before the root is exported.
 
 ## Capability Surface
+
+Native EventHook and BenchmarkSink authors implement `PluginEventHook` and
+`PluginBenchmarkSink`. Their restricted failure types cannot report host codec,
+ABI, or protocol errors. Host integrations use `PipelineEventHook` and
+`BenchmarkSink` through checked loader adapters.
 
 Stable Native capability families are `PostDownloadProcessor`,
 `PipelineEventHook`, and `BenchmarkSink`. `NativeDecoder`, `FrameProcessor`,

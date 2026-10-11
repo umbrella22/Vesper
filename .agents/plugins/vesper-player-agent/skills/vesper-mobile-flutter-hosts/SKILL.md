@@ -1,6 +1,6 @@
 ---
 name: vesper-mobile-flutter-hosts
-description: Use when changing Vesper Android host kits, iOS VesperPlayerKit, Flutter packages, Stage skins, custom icons, control styles, UI migrations, MethodChannel/EventChannel behavior, system playback, AirPlay, Cast, DLNA, relay, video surfaces, SwiftUI/UIKit, or example mobile hosts.
+description: Use when changing Vesper Android host kits, iOS VesperPlayerKit, Flutter packages, Stage skins, custom icons, control styles, current UI contracts, MethodChannel/EventChannel behavior, system playback, AirPlay, Cast, DLNA, relay, video surfaces, SwiftUI/UIKit, or example mobile hosts.
 metadata:
   short-description: Mobile and Flutter host boundaries
 ---
@@ -14,7 +14,7 @@ metadata:
 - `../../references/plugin-runtime-contract.md` for plan, scope, slot, and
   participation boundaries
 - `../../references/platform-hosts.md`
-- `../../references/stage-skins.md` for skins, icons, control styling, or UI migration
+- `../../references/stage-skins.md` for skins, icons, control styling, or current UI usage
 - `../../references/defensive-boundaries.md` for lifecycle/channel changes
 - The current host-kit and Flutter package READMEs when a checkout is available
 - For command selection and release evidence: `$vesper-validation-playbook`
@@ -69,12 +69,12 @@ snapshots, unsupported errors, or internal strategy.
 
 ## Stage Skins
 
-Verify the installed package version before recommending the skin API; it is
-available from 0.6.4. Use `lib/doc/stage-skins.md` when present and the bundled
-skin reference for portable integration guidance. Keep host skin selection
-separate from controller creation. Preserve SDK input and accessibility when
-accepting custom icon views, and migrate Flutter button `IconData` arguments
-to widgets with named variants or `VesperStageButtonStyle`.
+Verify the installed UI package and current source before integrating skins.
+Use `lib/doc/stage-skins.md` when present and the bundled skin reference for
+portable integration guidance. Keep host skin selection separate from
+controller creation. Preserve SDK input and accessibility with custom icon
+views. Flutter public action buttons accept decorative widgets, named variants,
+and optional `VesperStageButtonStyle`.
 
 ## Rendering
 

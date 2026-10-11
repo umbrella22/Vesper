@@ -1,95 +1,92 @@
 package io.github.umbrella22.vesper.player.android.external.internal.relay
 
 import io.github.umbrella22.vesper.player.android.VesperPlayerSource
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 internal class VesperRelayEntryStore(
     private val tokenTtlMillis: Long?,
     private val nowMillisProvider: () -> Long,
     private val onInvalidate: (String) -> Unit,
 ) {
-    private val entries = ConcurrentHashMap<String, RelayEntry>()
+    private val lock = ReentrantLock()
+    private val entries = mutableMapOf<String, RelayEntry>()
+    val isNotEmpty: Boolean get() = lock.withLock { entries.isNotEmpty() }
 
-    val isNotEmpty: Boolean
-        get() = entries.isNotEmpty()
-
-    fun put(
-        token: String,
-        source: VesperPlayerSource,
-        adaptation: VesperRelayFormatAdaptationRegistration?,
-    ) {
-        entries[token] = RelayEntry(
-            source = source,
-            adaptation = adaptation,
-            expiresAtMillis = tokenExpiresAtMillis(),
-        )
+    fun put(token: String, source: VesperPlayerSource, adaptation: VesperRelayFormatAdaptationRegistration?): RelayEntry {
+        val entry = RelayEntry(source, adaptation, tokenExpiresAtMillis())
+        lock.withLock {
+            check(token !in entries) { "Relay token is already registered." }
+            entries[token] = entry
+        }
+        return entry
     }
 
     fun remove(token: String) {
-        entries.remove(token)
+        val detached = lock.withLock { entries.remove(token)?.let { detach(token, it) } }
+        detached?.cleanup?.forEach { resource -> runCatching { resource.close() } }
     }
 
     fun invalidate(token: String) {
-        entries.remove(token)
+        val detached = lock.withLock { entries.remove(token)?.let { detach(token, it) } }
+        detached?.cleanup?.forEach { resource -> runCatching { resource.close() } }
         onInvalidate(token)
     }
 
-    fun invalidateAll() {
-        entries.keys.forEach(onInvalidate)
-        entries.clear()
+    fun invalidateAll() = detachAllForInvalidation().forEach(::invalidateDetached)
+
+    // State is detached atomically; sockets, input operations, and JNI close
+    // only after the caller releases any server monitor.
+    fun detachAllForInvalidation(): List<DetachedRelayEntry> = lock.withLock {
+        entries.map { (token, entry) -> detach(token, entry) }.also { entries.clear() }
     }
 
-    /**
-     * Detaches every entry and returns its token without invoking
-     * [onInvalidate]. Callers that need to honor [onInvalidate] (which may
-     * perform blocking I/O or JNI) should iterate the returned tokens outside
-     * any held lock, keeping blocking teardown off the registry monitor.
-     */
-    fun detachAllForInvalidation(): List<String> {
-        val tokens = entries.keys.toList()
-        entries.clear()
-        return tokens
+    fun invalidateDetached(detached: DetachedRelayEntry) {
+        detached.cleanup.forEach { resource -> runCatching { resource.close() } }
+        onInvalidate(detached.token)
     }
 
-    /**
-     * Invokes [onInvalidate] for a token previously returned by
-     * [detachAllForInvalidation] without touching the entry map, which the
-     * detach already cleared. Pair this with [detachAllForInvalidation] to run
-     * blocking teardown outside a held lock.
-     */
-    fun invalidateDetached(token: String) {
-        onInvalidate(token)
+    fun pin(token: String): Boolean = lock.withLock {
+        val entry = entries[token] ?: return@withLock false
+        if (entry.expiresAtMillis?.let { it <= nowMillisProvider() } == true) return@withLock false
+        entries[token] = entry.copy(expiresAtMillis = null)
+        true
     }
 
     fun entryForToken(token: String): RelayEntry? {
-        val entry = entries[token] ?: return null
-        val expiresAtMillis = entry.expiresAtMillis ?: return entry
-        if (expiresAtMillis <= nowMillisProvider()) {
-            entries.remove(token, entry)
-            onInvalidate(token)
-            return null
+        var expired: DetachedRelayEntry? = null
+        val entry = lock.withLock {
+            val current = entries[token]
+            if (current?.expiresAtMillis?.let { it <= nowMillisProvider() } == true) {
+                expired = entries.remove(token)?.let { detach(token, it) }
+                null
+            } else { current }
         }
+        expired?.let(::invalidateDetached)
         return entry
     }
 
     fun pruneExpiredEntries() {
         val now = nowMillisProvider()
-        entries.forEach { (token, entry) ->
-            val expired = entry.expiresAtMillis?.let { it <= now } ?: false
-            if (expired && entries.remove(token, entry)) {
-                onInvalidate(token)
-            }
+        val expired = lock.withLock {
+            val removed = entries.filterValues { it.expiresAtMillis?.let { expiry -> expiry <= now } == true }
+            removed.keys.forEach(entries::remove)
+            removed.map { (token, entry) -> detach(token, entry) }
         }
+        expired.forEach(::invalidateDetached)
     }
 
-    private fun tokenExpiresAtMillis(): Long? {
-        val ttl = tokenTtlMillis?.takeIf { it > 0L } ?: return null
-        return nowMillisProvider() + ttl
-    }
+    private fun detach(token: String, entry: RelayEntry) =
+        DetachedRelayEntry(token, entry, entry.lifetime.retire())
+
+    private fun tokenExpiresAtMillis(): Long? = tokenTtlMillis?.takeIf { it > 0 }?.let { nowMillisProvider() + it }
 }
 
 internal data class RelayEntry(
     val source: VesperPlayerSource,
     val adaptation: VesperRelayFormatAdaptationRegistration?,
     val expiresAtMillis: Long?,
+    val lifetime: VesperRelayLifetime = VesperRelayLifetime(),
 )
+
+internal data class DetachedRelayEntry(val token: String, val entry: RelayEntry, val cleanup: List<java.io.Closeable> = emptyList())

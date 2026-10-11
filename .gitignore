@@ -104,6 +104,8 @@ examples/ios-swift-host/.build/*
 examples/ios-swift-host/build/*
 
 # iOS library generated artifacts
+# SwiftPM release manifest checks also create a repository-root cache.
+/.build/
 lib/ios/**/*.xcodeproj/
 lib/ios/**/*.xcworkspace/
 lib/ios/**/*.xcuserdata/

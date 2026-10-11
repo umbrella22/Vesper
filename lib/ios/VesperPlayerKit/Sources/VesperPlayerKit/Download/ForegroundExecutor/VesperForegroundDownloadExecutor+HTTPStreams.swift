@@ -4,7 +4,7 @@ extension VesperForegroundDownloadExecutor {
     func httpBodyStream(for request: URLRequest, sourceURL: URL) async throws -> VesperHTTPBodyStream {
         try rejectInsecureHTTPURL(sourceURL)
 
-        let configuration = URLSessionConfiguration.ephemeral
+        let configuration = (httpSessionConfiguration?.copy() as? URLSessionConfiguration) ?? .ephemeral
         configuration.waitsForConnectivity = true
         let timeoutSeconds = max(TimeInterval(stalledTransferTimeoutMs) / 1_000, 1)
         configuration.timeoutIntervalForRequest = timeoutSeconds
@@ -20,7 +20,20 @@ extension VesperForegroundDownloadExecutor {
         let task = session.dataTask(with: request)
         delegate.bind(session: session, task: task)
         task.resume()
-        let response = try await delegate.waitForResponse()
+        let response: URLResponse
+        do {
+            response = try await withTaskCancellationHandler {
+                let value = try await delegate.waitForResponse()
+                try Task.checkCancellation()
+                return value
+            } onCancel: {
+                delegate.cancel()
+            }
+        } catch {
+            delegate.cancel()
+            try Task.checkCancellation()
+            throw error
+        }
         return VesperHTTPBodyStream(
             response: response,
             chunks: delegate.chunks,

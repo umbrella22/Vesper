@@ -157,11 +157,13 @@ final class VesperDownloadSource {
   }
 
   factory VesperDownloadSource.fromMap(Map<Object?, Object?> map) {
-    final normalized = vesperDecodeMap(map);
+    final normalized = _decodeRequiredDownloadMap(map, 'VesperDownloadSource');
     final rawContentFormat = normalized['contentFormat'];
     final contentFormat = _decodeContentFormat(rawContentFormat);
     return VesperDownloadSource(
-      source: VesperPlayerSource.fromMap(vesperDecodeMap(normalized['source'])),
+      source: VesperPlayerSource.fromMap(
+        _decodeDownloadMap(normalized['source'], 'source'),
+      ),
       contentFormat: contentFormat,
       contentFormatRawValue: _unknownEnumRawValue(
         rawContentFormat,
@@ -217,22 +219,20 @@ final class VesperDownloadProfile {
   });
 
   factory VesperDownloadProfile.fromMap(Map<Object?, Object?> map) {
-    final normalized = vesperDecodeMap(map);
+    final normalized = _decodeRequiredDownloadMap(map, 'VesperDownloadProfile');
     final rawSelectedTrackIds = normalized['selectedTrackIds'];
     final rawTargetOutputFormat = normalized['targetOutputFormat'];
+    if (rawTargetOutputFormat != null && rawTargetOutputFormat is! String) {
+      throw const FormatException('targetOutputFormat must be a string');
+    }
     final targetOutputFormat = _decodeOutputFormat(rawTargetOutputFormat);
     return VesperDownloadProfile(
       variantId: normalized['variantId'] as String?,
       preferredAudioLanguage: normalized['preferredAudioLanguage'] as String?,
       preferredSubtitleLanguage:
           normalized['preferredSubtitleLanguage'] as String?,
-      selectedTrackIds: switch (rawSelectedTrackIds) {
-        final List<dynamic> values => values
-            .map((value) => value?.toString() ?? '')
-            .where((value) => value.isNotEmpty)
-            .toList(growable: false),
-        _ => const <String>[],
-      },
+      selectedTrackIds:
+          _decodeStringList(rawSelectedTrackIds, 'selectedTrackIds'),
       targetOutputFormat: targetOutputFormat,
       targetOutputFormatRawValue: _unknownEnumRawValue(
         rawTargetOutputFormat,
@@ -273,10 +273,11 @@ final class VesperDownloadByteRange {
   });
 
   factory VesperDownloadByteRange.fromMap(Map<Object?, Object?> map) {
-    final normalized = vesperDecodeMap(map);
+    final normalized =
+        _decodeRequiredDownloadMap(map, 'VesperDownloadByteRange');
     return VesperDownloadByteRange(
-      offset: _decodeInt(normalized['offset']) ?? 0,
-      length: _decodeInt(normalized['length']) ?? 0,
+      offset: _decodeByteRangeInt(normalized['offset'], 'offset'),
+      length: _decodeByteRangeInt(normalized['length'], 'length'),
     );
   }
 

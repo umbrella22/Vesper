@@ -3436,7 +3436,7 @@ fn pipeline_event_hook_reports_json(batch: PipelineEventHookReportBatch) -> Stri
                 }),
                 Err(error) => serde_json::json!({
                     "status": "error",
-                    "error": error,
+                    "error": error.report_projection(),
                 }),
             };
             serde_json::json!({

@@ -5,7 +5,7 @@ simulation or archive check. A protocol enum or capability probe is not proof
 that a host can play the media; public claims need a host route and regression
 evidence.
 
-The current workspace MSRV is Rust 1.98. Toolchain, cache, and device results
+The current workspace MSRV is Rust 1.99.0. Toolchain, cache, and device results
 bind to the checkout in which they were captured.
 
 Also separate committed baseline behavior from uncommitted worktree candidates.
@@ -107,7 +107,7 @@ AudioProcessor output that mutates host-owned timing metadata.
   **Enable UI Automation** passcode confirmation on the iPhone. Developer Mode
   and pairing do not replace it; inspect the device prompt if XCTest reports
   `Timed out while enabling automation mode`. The passcode is entered only on
-  the device. See `stage-skins.md` for the contract and migration.
+  the device. See `stage-skins.md` for the contract and current control usage.
 
 - Performance Diagnostics: run the Rust aggregator/ABI tests, bounded lifecycle
   and unknown-value host tests, Flutter batching/model tests, Android host-kit
@@ -135,7 +135,7 @@ AudioProcessor output that mutates host-owned timing metadata.
   external consumer from hosted coordinates/remote SwiftPM and inspect the final
   signed bundle on device.
 
-## Current Rewrite Evidence Snapshot
+## Dated Rewrite Evidence — 2026-08-27
 
 The 2026-08-27 checkout evidence records Rust/Cargo 1.98.0. Native
 AudioProcessor, FrameProcessor, and WASM observer/offline samples build, load,
@@ -156,7 +156,7 @@ fixture is available; this waiver does not become positive FairPlay evidence.
 Silent physical audio/A-V checks cover callback, generation, close, and bounded
 drift, but not subjective audible DSP quality.
 
-The rewrite remains `implemented_unverified`, not universal migration or full
+The rewrite remains `implemented_unverified`, not universal route acceptance or full
 feature parity. Open external observations are subjective audible DSP quality,
 audible end-to-end A/V synchronization, and playback through a discoverable
 Cast/DLNA/AirPlay receiver. Revalidate this snapshot after any related source,

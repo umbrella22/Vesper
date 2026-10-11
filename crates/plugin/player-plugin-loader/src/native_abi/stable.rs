@@ -554,7 +554,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use player_plugin::{
-        AssemblyMode, BenchmarkEvent, ContentFormatKind, DownloadMetadata, Plugin, PluginBuilder,
+        AssemblyMode, BenchmarkEvent, BenchmarkSinkFailure, ContentFormatKind, DownloadMetadata,
+        PipelineEventHookFailure, Plugin, PluginBenchmarkSink, PluginBuilder, PluginEventHook,
     };
 
     use super::*;
@@ -608,16 +609,22 @@ mod tests {
 
     struct FixtureHook;
 
-    impl PipelineEventHook for FixtureHook {
+    impl PluginEventHook for FixtureHook {
         fn on_event(
             &self,
             event: &PipelineEvent,
-        ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+        ) -> Result<PipelineEventHookOutcome, PipelineEventHookFailure> {
             match event.event_name.as_str() {
-                "fail" => Err(PipelineEventHookError::Failed("fixture failure".to_owned())),
-                "forged-abi-error" => Err(PipelineEventHookError::AbiViolation(
-                    "forged by author code".to_owned(),
+                "fail" => Err(PipelineEventHookFailure::Failed(
+                    "fixture failure".to_owned(),
                 )),
+                "reject" => Err(PipelineEventHookFailure::Rejected(
+                    "fixture rejection".to_owned(),
+                )),
+                "invalid-input" => Err(PipelineEventHookFailure::InvalidInput(
+                    "fixture input".to_owned(),
+                )),
+                "not-accepted" => Ok(PipelineEventHookOutcome::default()),
                 _ => Ok(PipelineEventHookOutcome::accepted()),
             }
         }
@@ -625,7 +632,7 @@ mod tests {
 
     struct FixtureBenchmark;
 
-    impl BenchmarkSink for FixtureBenchmark {
+    impl PluginBenchmarkSink for FixtureBenchmark {
         fn name(&self) -> &str {
             "fixture benchmark"
         }
@@ -633,9 +640,9 @@ mod tests {
         fn on_event_batch(
             &self,
             batch: &BenchmarkEventBatch,
-        ) -> Result<BenchmarkSinkStatus, BenchmarkSinkError> {
+        ) -> Result<BenchmarkSinkStatus, BenchmarkSinkFailure> {
             if batch.events.iter().any(|event| event.event_name == "fail") {
-                Err(BenchmarkSinkError::SinkFailed("fixture failure".to_owned()))
+                Err(BenchmarkSinkFailure::Failed("fixture failure".to_owned()))
             } else {
                 Ok(BenchmarkSinkStatus {
                     accepted_events: batch.events.len() as u64,
@@ -643,7 +650,7 @@ mod tests {
             }
         }
 
-        fn flush(&self) -> Result<BenchmarkSinkReport, BenchmarkSinkError> {
+        fn flush(&self) -> Result<BenchmarkSinkReport, BenchmarkSinkFailure> {
             Ok(BenchmarkSinkReport {
                 accepted_events: 3,
                 ..BenchmarkSinkReport::default()
@@ -829,18 +836,189 @@ mod tests {
         assert!(hook.on_event(&pipeline_event("still-usable")).is_ok());
     }
 
-    #[test]
-    fn host_owned_author_error_poisons_the_native_interface() {
-        let (_, hook, _) = stable_wrappers();
+    struct RawFailureInterface {
+        kind: player_plugin_abi::export::ExportInterfaceKind,
+        payload: Vec<u8>,
+        calls: Arc<AtomicUsize>,
+    }
 
-        assert!(matches!(
-            hook.on_event(&pipeline_event("forged-abi-error")),
-            Err(PipelineEventHookError::AbiViolation(_))
-        ));
-        assert!(matches!(
-            hook.on_event(&pipeline_event("after-poison")),
-            Err(PipelineEventHookError::AbiViolation(_))
-        ));
+    impl player_plugin_abi::export::ExportInterface for RawFailureInterface {
+        fn kind(&self) -> player_plugin_abi::export::ExportInterfaceKind {
+            self.kind
+        }
+
+        fn instance_id(&self) -> &str {
+            match self.kind {
+                player_plugin_abi::export::ExportInterfaceKind::PipelineEventHook => HOOK_INSTANCE,
+                player_plugin_abi::export::ExportInterfaceKind::BenchmarkSink => BENCHMARK_INSTANCE,
+                _ => panic!("unsupported raw fixture interface"),
+            }
+        }
+
+        fn invoke(
+            &self,
+            operation: player_plugin_abi::export::ExportOperation<'_>,
+        ) -> Result<
+            player_plugin_abi::export::ExportInvocation,
+            player_plugin_abi::export::ExportFailure,
+        > {
+            use player_plugin_abi::export::{ExportFailure, ExportInvocation, ExportOperation};
+
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(ExportFailure::failure(self.payload.clone()));
+            }
+            let output = match operation {
+                ExportOperation::PipelineEvent { .. } => {
+                    serde_json::to_vec(&PipelineEventHookOutcome::accepted())
+                }
+                ExportOperation::BenchmarkBatch { .. } => {
+                    serde_json::to_vec(&BenchmarkSinkStatus { accepted_events: 1 })
+                }
+                ExportOperation::BenchmarkFlush => {
+                    serde_json::to_vec(&BenchmarkSinkReport::default())
+                }
+                _ => panic!("unsupported raw fixture operation"),
+            };
+            Ok(ExportInvocation::Json(
+                output.expect("serialize raw fixture output"),
+            ))
+        }
+    }
+
+    struct RawFailurePlugin(Arc<RawFailureInterface>);
+
+    impl player_plugin_abi::export::ExportPlugin for RawFailurePlugin {
+        fn plugin_id(&self) -> &str {
+            "dev.vesper.raw-failure"
+        }
+        fn plugin_name(&self) -> &str {
+            "Raw failure fixture"
+        }
+        fn interfaces(&self) -> Vec<Arc<dyn player_plugin_abi::export::ExportInterface>> {
+            vec![self.0.clone()]
+        }
+    }
+
+    fn raw_failure_root(
+        kind: player_plugin_abi::export::ExportInterfaceKind,
+        payload: Vec<u8>,
+    ) -> (CheckedPluginRoot, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let interface = Arc::new(RawFailureInterface {
+            kind,
+            payload,
+            calls: calls.clone(),
+        });
+        let root_ptr = player_plugin_abi::export::export_plugin(|| RawFailurePlugin(interface));
+        // SAFETY: the raw exporter transfers a live root to the checked wrapper;
+        // its owner retains the interface and releases its buffers and context.
+        let root =
+            unsafe { CheckedPluginRoot::from_raw(root_ptr, None) }.expect("checked raw root");
+        (root, calls)
+    }
+
+    #[test]
+    fn forged_or_invalid_raw_event_hook_failures_poison_the_native_interface() {
+        use player_plugin_abi::export::ExportInterfaceKind;
+
+        for error in [
+            PipelineEventHookError::PayloadCodec("forged codec".to_owned()),
+            PipelineEventHookError::AbiViolation("forged ABI".to_owned()),
+            PipelineEventHookError::ProtocolViolation("forged protocol".to_owned()),
+            PipelineEventHookError::Failed(String::new()),
+            PipelineEventHookError::Failed("界".repeat(86)),
+        ] {
+            let payload = serde_json::to_vec(&error).expect("serialize forged failure");
+            let (root, calls) = raw_failure_root(ExportInterfaceKind::PipelineEventHook, payload);
+            let interface = &root.interfaces[0];
+            let CheckedInterfaceTable::PipelineEventHook(table) = interface.table else {
+                panic!("expected event hook table");
+            };
+            let hook = NativeAbiPipelineEventHook::new(
+                &root.plugin_id,
+                &interface.descriptor.instance_id,
+                root.owner.clone(),
+                table,
+            )
+            .expect("raw hook wrapper");
+
+            assert!(matches!(
+                hook.on_event(&pipeline_event("forged-failure")),
+                Err(PipelineEventHookError::AbiViolation(_))
+            ));
+            assert!(matches!(
+                hook.on_event(&pipeline_event("after-poison")),
+                Err(PipelineEventHookError::AbiViolation(_))
+            ));
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                1,
+                "poisoned interface must not call plugin again"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_raw_benchmark_failure_payloads_remain_accepted_without_poisoning() {
+        use player_plugin_abi::export::ExportInterfaceKind;
+
+        for error in [
+            BenchmarkSinkError::PayloadCodec("legacy codec".to_owned()),
+            BenchmarkSinkError::AbiViolation("legacy ABI".to_owned()),
+            BenchmarkSinkError::ProtocolViolation("legacy protocol".to_owned()),
+            BenchmarkSinkError::SinkFailed(String::new()),
+            BenchmarkSinkError::SinkFailed("界".repeat(86)),
+        ] {
+            for flush in [false, true] {
+                let payload = serde_json::to_vec(&error).expect("serialize legacy failure");
+                let (root, calls) = raw_failure_root(ExportInterfaceKind::BenchmarkSink, payload);
+                let interface = &root.interfaces[0];
+                let CheckedInterfaceTable::BenchmarkSink(table) = interface.table else {
+                    panic!("expected benchmark table");
+                };
+                let sink = NativeAbiBenchmarkSink::new(
+                    &root.plugin_id,
+                    root.plugin_name.clone(),
+                    &interface.descriptor.instance_id,
+                    root.owner.clone(),
+                    table,
+                )
+                .expect("raw benchmark wrapper");
+                if flush {
+                    assert_eq!(sink.flush(), Err(error.clone()));
+                    assert!(sink.flush().is_ok());
+                } else {
+                    assert_eq!(
+                        sink.on_event_batch(&benchmark_batch("fail")),
+                        Err(error.clone())
+                    );
+                    assert!(sink.on_event_batch(&benchmark_batch("tick")).is_ok());
+                }
+                assert_eq!(calls.load(Ordering::SeqCst), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn author_rejection_and_successful_nonacceptance_remain_distinct() {
+        let (_, hook, _) = stable_wrappers();
+        assert_eq!(
+            hook.on_event(&pipeline_event("reject")),
+            Err(PipelineEventHookError::Rejected(
+                "fixture rejection".to_owned()
+            ))
+        );
+        assert_eq!(
+            hook.on_event(&pipeline_event("invalid-input")),
+            Err(PipelineEventHookError::InvalidInput(
+                "fixture input".to_owned()
+            ))
+        );
+        assert_eq!(
+            hook.on_event(&pipeline_event("not-accepted")),
+            Ok(PipelineEventHookOutcome::default())
+        );
+        assert!(hook.on_event(&pipeline_event("still-usable")).is_ok());
     }
 
     static OWNER_DROP_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -853,11 +1031,11 @@ mod tests {
         }
     }
 
-    impl PipelineEventHook for DropCountingHook {
+    impl PluginEventHook for DropCountingHook {
         fn on_event(
             &self,
             _event: &PipelineEvent,
-        ) -> Result<PipelineEventHookOutcome, PipelineEventHookError> {
+        ) -> Result<PipelineEventHookOutcome, PipelineEventHookFailure> {
             Ok(PipelineEventHookOutcome::accepted())
         }
     }

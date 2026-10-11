@@ -474,6 +474,11 @@ fn extract_tar_reader(
             )));
         }
         let kind = entry.header().entry_type();
+        // Global PAX headers describe archive metadata, not filesystem members.
+        // Count their bytes above, but never unpack them or treat their label as a path.
+        if kind.is_pax_global_extensions() {
+            continue;
+        }
         if !kind.is_dir() && !kind.is_file() {
             return Err(SourceArchiveError::conformance(format!(
                 "{label} contains an unsupported entry type"
@@ -732,6 +737,96 @@ mod tests {
         )
         .expect_err("reject unexpected root");
         assert!(error.to_string().contains("top-level directory 'expected'"));
+    }
+
+    #[test]
+    fn extracts_openssl_style_global_pax_metadata_without_materializing_it() {
+        let directory = tempfile::tempdir().expect("create global PAX fixture");
+        let archive_path = directory.path().join("openssl.tar.gz");
+        write_global_pax_fixture(
+            &archive_path,
+            "openssl-3.5.9/Configure",
+            tar::EntryType::Regular,
+        );
+        let destination = directory.path().join("extraction");
+        let root = extract_single_root(
+            &archive_path,
+            &destination,
+            "openssl-3.5.9",
+            SourceArchiveFormat::TarGzip,
+            TEST_POLICY,
+            "OpenSSL source archive",
+        )
+        .expect("extract official OpenSSL archive shape");
+        assert_eq!(
+            fs::read(root.join("Configure")).expect("read source"),
+            b"source"
+        );
+        assert!(!destination.join("pax_global_header").exists());
+    }
+
+    #[test]
+    fn global_pax_metadata_does_not_allow_links_or_another_source_root() {
+        for (path, kind, expected_error) in [
+            (
+                "openssl-3.5.9/link",
+                tar::EntryType::Symlink,
+                "unsupported entry type",
+            ),
+            (
+                "other/Configure",
+                tar::EntryType::Regular,
+                "top-level directory",
+            ),
+        ] {
+            let directory = tempfile::tempdir().expect("create unsafe PAX fixture");
+            let archive_path = directory.path().join("source.tar.gz");
+            write_global_pax_fixture(&archive_path, path, kind);
+            let error = extract_single_root(
+                &archive_path,
+                &directory.path().join("extraction"),
+                "openssl-3.5.9",
+                SourceArchiveFormat::TarGzip,
+                TEST_POLICY,
+                "source archive",
+            )
+            .expect_err("reject unsafe source member after metadata");
+            assert!(error.to_string().contains(expected_error), "{error}");
+        }
+    }
+
+    fn write_global_pax_fixture(path: &Path, source_path: &str, kind: tar::EntryType) {
+        let file = File::create(path).expect("create PAX archive");
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        let comment = b"52 comment=45e844fa2a14ec92d146bd8f5778ac130b6625fb\n";
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::XGlobalHeader);
+        header.set_size(comment.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "pax_global_header", &comment[..])
+            .expect("append global metadata");
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(kind);
+        let bytes: &[u8] = if kind.is_file() { b"source" } else { b"" };
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        if kind.is_symlink() {
+            header
+                .set_link_name("../../outside")
+                .expect("set unsafe link target");
+        }
+        header.set_cksum();
+        archive
+            .append_data(&mut header, source_path, bytes)
+            .expect("append source member");
+        archive
+            .into_inner()
+            .expect("finish PAX tar")
+            .finish()
+            .expect("finish PAX gzip");
     }
 
     #[test]

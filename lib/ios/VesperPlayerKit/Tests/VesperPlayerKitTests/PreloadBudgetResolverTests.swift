@@ -1,5 +1,6 @@
 import XCTest
 @testable import VesperPlayerKit
+import VesperPlayerKitBridgeShim
 
 final class PreloadBudgetResolverTests: XCTestCase {
     func testRuntimeBridgeUInt32EncodingClampsNegativeAndOversizedValues() {
@@ -106,4 +107,88 @@ final class PreloadBudgetResolverTests: XCTestCase {
         XCTAssertEqual(resolved.maxDiskBytes, 0)
         XCTAssertEqual(resolved.warmupWindowMs, 0)
     }
+}
+
+
+@MainActor
+final class VesperNativePreloadCoordinatorLifecycleTests: XCTestCase {
+    func testWarmupRestartsAndOldCompletionCannotTargetTheNewSession() async throws {
+        let probe = WarmupExecutionProbe(test: self)
+        let coordinator = VesperNativePreloadCoordinator(
+            budgetPolicy: .init(maxConcurrentTasks: 1, maxMemoryBytes: 32 * 1024, maxDiskBytes: 0)
+        ) { request in await probe.execute(request) }
+        defer { probe.releaseAll(); coordinator.close() }
+        coordinator.configure(cachePolicy: .init(enabled: true, memoryCapacity: 64 * 1024, diskCapacity: 0))
+        let url = URL(string: "https://example.com/video.mp4")!
+        let source = VesperPlayerSource.remoteUrl(url)
+        coordinator.warmCurrentSource(source: source, url: url)
+        await fulfillment(of: [probe.started[0]], timeout: 5)
+        let first = try XCTUnwrap(probe.requests.first)
+        coordinator.cancelCurrent()
+        XCTAssertEqual(coordinator.sessionHandle, 0)
+        // The same locator must be admitted again; the cancelled planner owns no dedup reservation.
+        coordinator.warmCurrentSource(source: source, url: url)
+        await fulfillment(of: [probe.started[1]], timeout: 5)
+        XCTAssertEqual(probe.requests.count, 2)
+        let second = try XCTUnwrap(probe.requests.last)
+        XCTAssertNotEqual(first.sessionHandle, second.sessionHandle)
+        XCTAssertEqual(second.sessionHandle, coordinator.sessionHandle)
+        probe.gates[0].continuation.finish()
+        await fulfillment(of: [probe.finished[0]], timeout: 5)
+        XCTAssertEqual(probe.completions[0], false)
+        probe.gates[1].continuation.finish()
+        await fulfillment(of: [probe.finished[1]], timeout: 5)
+        XCTAssertEqual(probe.completions[1], true)
+        coordinator.close()
+        coordinator.close()
+        coordinator.configure(cachePolicy: .init(enabled: true, memoryCapacity: 64 * 1024, diskCapacity: 0))
+        coordinator.warmCurrentSource(source: source, url: url)
+        XCTAssertTrue(coordinator.isClosed)
+        XCTAssertEqual(coordinator.sessionHandle, 0)
+    }
+
+    func testAcceptedScopeAndDisabledCacheDoNotStartGenericWarmup() {
+        let coordinator = VesperNativePreloadCoordinator(budgetPolicy: .init()) { _ in
+            XCTFail("ineligible sources must not create a generic warmup")
+        }
+        defer { coordinator.close() }
+        let url = URL(string: "https://example.com/manifest.mpd")!
+        coordinator.warmCurrentSource(source: .remoteUrl(url), url: url)
+        XCTAssertEqual(coordinator.sessionHandle, 0)
+        coordinator.configure(cachePolicy: .init(enabled: true, memoryCapacity: 64 * 1024, diskCapacity: 0))
+        var scoped = VesperPlayerSource.remoteUrl(url)
+        scoped.dashStartupScope = .init(owner: "test")
+        coordinator.warmCurrentSource(source: scoped, url: url)
+        XCTAssertEqual(coordinator.sessionHandle, 0)
+    }
+}
+
+@MainActor
+private final class WarmupExecutionProbe {
+    let started: [XCTestExpectation]
+    let finished: [XCTestExpectation]
+    let gates = [AsyncStream<Void>.makeStream(), AsyncStream<Void>.makeStream()]
+    var requests: [VesperNativePreloadCoordinator.WarmupRequest] = []
+    var completions: [Bool] = []
+    init(test: XCTestCase) {
+        started = (0..<2).map { test.expectation(description: "warmup started \($0)") }
+        finished = (0..<2).map { test.expectation(description: "warmup settled \($0)") }
+    }
+    func execute(_ request: VesperNativePreloadCoordinator.WarmupRequest) async {
+        let index = requests.count
+        guard index < gates.count else { XCTFail("unexpected extra warmup"); return }
+        requests.append(request)
+        started[index].fulfill()
+        let gate = gates[index].stream
+        // Keep an old completion in flight even after cancellation.
+        await withCheckedContinuation { continuation in
+            Task.detached {
+                for await _ in gate {}
+                continuation.resume()
+            }
+        }
+        completions.append(vesper_runtime_preload_session_complete(request.sessionHandle, request.taskId))
+        finished[index].fulfill()
+    }
+    func releaseAll() { gates.forEach { $0.continuation.finish() } }
 }

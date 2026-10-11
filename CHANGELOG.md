@@ -2,6 +2,134 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-12
+
+<!-- release-notes:en -->
+
+### Changed
+
+- **Breaking (Native Rust author SDK):** EventHook and BenchmarkSink authors now
+  implement `PluginEventHook` and `PluginBenchmarkSink`, returning
+  `PipelineEventHookFailure` and `BenchmarkSinkFailure`. Export builder method
+  names remain unchanged. Checked host traits, Native ABI/WIT contracts, and
+  mobile public DTOs retain their existing forms. Follow the
+  [author API migration guide](lib/doc/plugin-author-api.md).
+
+- **Breaking (WASM host Rust APIs):** replace ambiguous synchronous queue calls
+  with accepted-work tickets and `submit_and_wait`; add correlated reports and
+  cumulative flush/close settlement. Waiting expiry and dropped receipts leave
+  accepted work running. Preserve typed Wasmtime causes, error provenance, and
+  quarantine reasons; distinguish queue failures from caller wait expiry.
+- Validate owned WASM queue input once through immutable checked values, share
+  duplicate-rejecting attribute decoding across generated worlds, and remove
+  the unused legacy runtime event mapper. Existing protocol/resource budgets
+  and native-first Media3/AVPlayer routes remain unchanged.
+- Raise the Rust toolchain and MSRV to 1.99.0 and align plugin scaffolds and CI.
+  Refresh the shared Rust dependency set and FFmpeg source/build policy.
+
+### Fixed
+
+- Refresh FFmpeg, Android OpenSSL, and Android libxml2 patch selection against
+  upstream release indexes even with populated source caches. Cache new
+  versioned archives and rebuild dependency installs and FFmpeg outputs when
+  source or patch identity changes; retain cached patches as an offline
+  fallback and exact-version overrides for reproduction.
+- Preserve checked host failure categories and full diagnostics in download
+  event reports. Bound only Android/iOS outward report messages on UTF-8
+  boundaries, retaining the established codes and public DTO schema.
+- Settle active and queued receipts after WASM worker panic; keep worker-time
+  flush snapshots and persist guest-flush quarantine causes. Bounded report loss
+  remains observable independently of invocation settlement.
+- Reject segmented exports when every compatible post-download processor skips;
+  return `Unsupported/Capability` and preserve the source manifest and target
+  file. Export remains available after a processor produces a real single-file
+  output.
+- Preserve exact integer catalog revisions at the iOS Flutter MethodChannel
+  boundary. Reject Boolean, fractional, non-finite, and out-of-range values
+  without lossy `NSNumber` conversion.
+- Preserve HLS resource identity, byte ranges and initialization maps, and
+  inherited DASH BaseURLs and template timing in download planning.
+- Propagate native DASH rendition and download recovery failures, and preserve
+  cancellation through recovery, preparation and resource handoff.
+- Reject malformed Flutter caller policies and download graphs with explicit
+  channel errors. Release native managers and sequence attachments when
+  construction or registration fails.
+- Preserve preload capacity through physical cancellation, check aggregate
+  staging budgets, and fence stale activation and source-session callbacks.
+- Restore native surface lifecycle and screen-sleep behavior, retain current
+  first-frame and track observations, and release detached native-frame leases.
+- Support bounded Android DLNA `SegmentTimeline` relay planning through the
+  shared Rust DASH bridge, including original `$Time$` ticks and finite negative
+  repeats. Correct the FFmpeg AAC probe profile used for MP4 remux.
+- Preserve terminal FFmpeg demux read errors as failures, remove failed staged
+  remux output without replacing an existing destination, and report progress
+  completion only after publication.
+- Propagate Android external-playback cancellation through open waits, FIFO
+  FFmpeg workers, HLS/cache stream handles, and generation-checked native
+  session leases. Retire all relay token lifetimes before blocking cleanup and
+  make adapted input teardown idempotent.
+- Configure the Maven signing provider with an empty password when an
+  unencrypted signing key has no passphrase, so valid key material still
+  creates a signatory.
+- Resolve iOS optional-plugin acceptance projects from their isolated directory,
+  preserving original Swift and fixture paths and verified framework identity.
+  Nested output directories now build the Release device test host correctly.
+
+<!-- release-notes:zh-CN -->
+
+### 变更
+
+- **破坏性变更（Native Rust 作者 SDK）：** EventHook 和 BenchmarkSink 作者现在
+  实现 `PluginEventHook` 和 `PluginBenchmarkSink`，返回
+  `PipelineEventHookFailure` 与 `BenchmarkSinkFailure`。导出 builder 方法名称
+  保持不变；checked host traits、Native ABI/WIT 契约及移动端公开 DTO 形式保持
+  不变。迁移方法见[作者 API 迁移指南](lib/doc/plugin-author-api.md)。
+- **破坏性变更（WASM host Rust API）：** 使用 accepted-work ticket 和
+  `submit_and_wait` 替代语义不明确的同步队列调用；增加关联报告和累计
+  flush/close 结算。等待超时和丢弃 receipt 不会停止已接受的工作；保留类型化
+  Wasmtime 原因、错误来源和隔离原因，并区分队列失败与调用方等待超时。
+- 通过不可变 checked 值一次性校验自有 WASM 队列输入，在生成的 world 之间共享
+  拒绝重复属性的解码逻辑，并移除未使用的旧运行时事件映射。现有协议和资源预算
+  以及 native-first Media3/AVPlayer 路径保持不变。
+- 将 Rust 工具链及 MSRV 提升至 1.99.0，同步插件模板与 CI，并更新共享 Rust
+  依赖及 FFmpeg 源码和构建策略。
+
+### 修复
+
+- 即使源缓存已填充，也根据上游发布索引刷新 FFmpeg、Android OpenSSL 和
+  Android libxml2 补丁选择。缓存新版本归档，并在源或补丁身份变化时重建依赖
+  安装和 FFmpeg 输出；保留缓存补丁作为离线回退和精确版本覆盖。
+- 在下载事件报告中保留已检查的宿主失败类别和完整诊断信息。仅在 UTF-8 边界
+  截断 Android/iOS 向外报告的消息，保留既有代码和公开 DTO schema。
+- WASM worker panic 后结算活动和排队 receipt；保留 worker-time flush 快照并
+  持久化 guest-flush 隔离原因。报告有界丢失独立于 invocation settlement 保持
+  可观测。
+- 当分段下载后的所有兼容处理器都跳过时，不再把 manifest 导出为 MP4；返回
+  `Unsupported/Capability` 并保留源文件和目标文件。处理器实际生成单文件输出
+  后仍允许导出。
+- 在 iOS Flutter MethodChannel 边界保留 NSNumber 整数 catalog revision 的精确
+  值；拒绝 Boolean、小数、非有限数和越界输入，避免有损转换。
+- 下载规划保留 HLS 资源身份、字节范围和初始化映射，以及继承的 DASH BaseURL
+  与模板时间信息。
+- 传播原生 DASH rendition 和下载 recovery 失败，保留 recovery、准备及资源
+  交接过程中的取消语义。
+- 对畸形 Flutter 调用策略及下载 graph 返回明确的通道错误，并在构造或注册
+  失败时释放原生下载 manager 和序列绑定。
+- 在实际取消工作退出前保留预加载容量，检查累计暂存预算，并隔离过期激活和
+  来源会话回调。
+- 修复原生 Surface 生命周期与屏幕休眠行为，保留当前首帧和轨道观测，并释放
+  已脱离的 native-frame 租约。
+- Android DLNA 的有界 `SegmentTimeline` relay 通过共享 Rust DASH bridge 规划，
+  保留原始 `$Time$` ticks 与有限负重复；修正 MP4 remux 的 FFmpeg AAC 探测 profile。
+- FFmpeg 终态 demux 读取错误现在保持为失败；失败的 remux 暂存文件会被清理且
+  不替换已有目标，只有发布成功后才报告完成进度。
+- Android external-playback 的取消语义贯穿等待、FIFO FFmpeg worker、HLS/cache
+  stream handle 和带代际校验的 native session lease；relay token 会先全部退役，
+  再执行可能阻塞的清理，adapted input 的释放具备幂等性。
+- Maven 签名在非加密密钥未提供口令时使用空字符串初始化，确保创建有效的签名者。
+- iOS optional-plugin 验收项目现在以隔离目录解析路径，保留原始 Swift 源码、
+  素材及已验证 framework 的身份，修复嵌套输出目录中的 Release 真机宿主构建。
+
 ## 0.8.0 - 2026-09-29
 
 <!-- release-notes:en -->
@@ -544,7 +672,7 @@ release.
 ### Migration
 
 0.4 requires a coordinated host, FFI binding, and plugin upgrade. Follow the
-[0.3 to 0.4 migration guide](lib/MIGRATION-0.3-TO-0.4.md) before replacing any
+[0.3 to 0.4 migration guide](https://github.com/umbrella22/Vesper/blob/1df8e84d64c9173018d6c047da60d46578b1ce6e/lib/MIGRATION-0.3-TO-0.4.md) before replacing any
 runtime artifact.
 
 ### Breaking Changes

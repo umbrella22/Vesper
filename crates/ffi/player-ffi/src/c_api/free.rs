@@ -1,3 +1,5 @@
+use std::ptr::NonNull;
+
 use super::*;
 
 fn free_video_info(video: &mut PlayerFfiVideoInfo) {
@@ -27,19 +29,13 @@ pub(crate) fn free_track(track: &mut PlayerFfiTrack) {
 }
 
 pub(crate) fn free_track_catalog(track_catalog: &mut PlayerFfiTrackCatalog) {
-    if !track_catalog.tracks.is_null() {
-        // SAFETY: `tracks` is produced by `into_owned_struct_array` with len as
-        // both length and capacity, and this free path runs at most once because
-        // the catalog is reset below.
-        // SAFETY: caller upholds the FFI contract for this pointer operation
-        unsafe {
-            let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(
-                track_catalog.tracks,
-                track_catalog.len,
-            ));
-            for track in boxed.iter_mut() {
-                free_track(track);
-            }
+    if let Some(tracks) = NonNull::new(track_catalog.tracks) {
+        let slice = NonNull::slice_from_raw_parts(tracks, track_catalog.len);
+        // SAFETY: the caller supplies the boxed slice from `into_owned_struct_array`
+        // with its original length. The catalog is reset after nested fields are freed.
+        let mut tracks = unsafe { Box::from_non_null(slice) };
+        for track in tracks.iter_mut() {
+            free_track(track);
         }
     }
     free_c_string(&mut track_catalog.playback_path);
@@ -97,18 +93,13 @@ pub(crate) fn free_plugin_codec_capability(codec: &mut PlayerFfiPluginCodecCapab
 pub(crate) fn free_plugin_decoder_capability(
     capability: &mut PlayerFfiPluginDecoderCapabilitySummary,
 ) {
-    if !capability.codecs.is_null() {
-        // SAFETY: `codecs` is an owned boxed slice returned by this FFI layer.
-        // Rebuilding the slice lets us free nested C strings before dropping it.
-        // SAFETY: caller upholds the FFI contract for this pointer operation
-        unsafe {
-            let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(
-                capability.codecs,
-                capability.codecs_len,
-            ));
-            for codec in boxed.iter_mut() {
-                free_plugin_codec_capability(codec);
-            }
+    if let Some(codecs) = NonNull::new(capability.codecs) {
+        let slice = NonNull::slice_from_raw_parts(codecs, capability.codecs_len);
+        // SAFETY: the caller supplies this FFI layer's boxed slice and original length.
+        // Nested C strings are freed before the containing slice is dropped.
+        let mut codecs = unsafe { Box::from_non_null(slice) };
+        for codec in codecs.iter_mut() {
+            free_plugin_codec_capability(codec);
         }
     }
     free_c_string_array(&mut capability.legacy_codecs, capability.legacy_codecs_len);
@@ -201,18 +192,13 @@ pub(crate) fn free_plugin_diagnostic(diagnostic: &mut PlayerFfiPluginDiagnostic)
 }
 
 pub(crate) fn free_plugin_diagnostics(startup: &mut PlayerFfiStartup) {
-    if !startup.plugin_diagnostics.is_null() {
-        // SAFETY: `plugin_diagnostics` is an owned boxed slice returned by this
-        // FFI layer. The startup object is reset after nested fields are freed.
-        // SAFETY: caller upholds the FFI contract for this pointer operation
-        unsafe {
-            let mut boxed = Box::from_raw(ptr::slice_from_raw_parts_mut(
-                startup.plugin_diagnostics,
-                startup.plugin_diagnostics_len,
-            ));
-            for diagnostic in boxed.iter_mut() {
-                free_plugin_diagnostic(diagnostic);
-            }
+    if let Some(diagnostics) = NonNull::new(startup.plugin_diagnostics) {
+        let slice = NonNull::slice_from_raw_parts(diagnostics, startup.plugin_diagnostics_len);
+        // SAFETY: the caller supplies this FFI layer's boxed slice and original length.
+        // Its pointer and length are reset after nested fields are freed.
+        let mut diagnostics = unsafe { Box::from_non_null(slice) };
+        for diagnostic in diagnostics.iter_mut() {
+            free_plugin_diagnostic(diagnostic);
         }
     }
     startup.plugin_diagnostics = ptr::null_mut();
@@ -252,16 +238,11 @@ pub(crate) fn free_snapshot(snapshot: &mut PlayerFfiSnapshot) {
 }
 
 pub(crate) fn free_video_frame(frame: &mut PlayerFfiVideoFrame) {
-    if !frame.bytes.is_null() {
-        // SAFETY: `bytes` is allocated as a boxed byte slice by `into_owned_bytes`
-        // with len as both length and capacity, and the frame is reset below.
-        // SAFETY: caller upholds the FFI contract for this pointer operation
-        unsafe {
-            drop(Box::from_raw(ptr::slice_from_raw_parts_mut(
-                frame.bytes,
-                frame.len,
-            )));
-        }
+    if let Some(bytes) = NonNull::new(frame.bytes) {
+        let slice = NonNull::slice_from_raw_parts(bytes, frame.len);
+        // SAFETY: the caller supplies the boxed slice from `into_owned_bytes`
+        // with its original length. The frame is reset immediately after release.
+        unsafe { drop(Box::from_non_null(slice)) };
     }
     *frame = PlayerFfiVideoFrame::default();
 }

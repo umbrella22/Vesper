@@ -113,7 +113,7 @@ check before exposing advanced controls.
 | Track selection            | ✅ video / audio / subtitles      | ✅ audio / subtitles                       | ✅                                                                                                                                                  | ✅ per-platform semantics                            |
 | External text subtitles    | ⚠️ SRT / WebVTT / SSA via Media3 | ⚠️ bounded SRT / WebVTT / SSA host overlay | ❌ not part of the experimental desktop contract                                                                                                    | ✅ Android / iOS channels                            |
 | ABR `constrained` policy   | ✅                                | ✅ HLS + DASH bridge variant catalogs      | ⚠️ policy DTO only for desktop FFmpeg HLS                                                                                                           | ✅ per-platform semantics                            |
-| ABR `fixedTrack` policy    | ✅ exact                          | ✅ best-effort HLS/DASH pinning on iOS 15+ | ⚠️ policy DTO only for desktop FFmpeg HLS                                                                                                           | ✅ per-platform semantics                            |
+| ABR `fixedTrack` policy    | ✅ exact                          | ✅ best-effort HLS/DASH pinning on iOS 17+ | ⚠️ policy DTO only for desktop FFmpeg HLS                                                                                                           | ✅ per-platform semantics                            |
 | Resilience policy          | ✅                                | ✅                                         | ✅                                                                                                                                                  | ✅ Android / iOS                                     |
 | Preload budget             | ✅                                | ✅                                         | ⚠️ shared policy/planner only; `player-host-desktop` uses a noop executor today                                                                      | ✅ Android / iOS                                     |
 | Download manager           | ✅ VOD prepare + restore + export | ✅ VOD prepare + restore + export          | ✅ public `player-host-desktop::download` service                                                                                                   | ✅ Android / iOS                                     |
@@ -263,7 +263,7 @@ scaffold templates, then use the Rust CLI for the complete local workflow.
 Install the versioned CLI from crates.io:
 
 ```sh
-cargo install vesper-player-cli --version 0.6.0 --locked
+cargo install vesper-player-cli --version 0.9.0 --locked
 vesper --version
 ```
 
@@ -272,7 +272,7 @@ short Rust dependency and import name:
 
 ```toml
 [dependencies]
-player-plugin = { package = "vesper-player-plugin", version = "=0.6.0" }
+player-plugin = { package = "vesper-player-plugin", version = "=0.9.0" }
 ```
 
 ```rust
@@ -281,7 +281,7 @@ use player_plugin::{Plugin, PluginBuildError};
 
 For a WASM Component guest, use
 `player-plugin-wasm = { package = "vesper-player-plugin-wasm", version =
-"=0.6.0" }`; its Rust import remains `player_plugin_wasm`. The dependency key
+"=0.9.0" }`; its Rust import remains `player_plugin_wasm`. The dependency key
 on the left defines the Rust import name, while `package` selects the published
 crates.io identity. All Vesper plugin SDK crates are released at one version so
 author projects can pin the complete contract exactly.
@@ -505,15 +505,22 @@ record the Darwin shared-library flags that replace FFmpeg's obsolete
 `-single_module` default without modifying the upstream source archive.
 
 Android builds that explicitly opt into `--tls-backend openssl` provision
-OpenSSL from the 3.5 LTS series by default. FFmpeg source builds default to the
-9.0.x series (currently locked to 9.0.1). Both defaults resolve the highest
-matching patch already present in `third_party/_cache` before consulting
-upstream release indexes; release metadata still records the exact resolved
-version. Use `VESPER_FFMPEG_VERSION`
-or `VESPER_ANDROID_OPENSSL_VERSION` for exact-version reproduction, and use
-`VESPER_FFMPEG_SERIES` or `VESPER_ANDROID_OPENSSL_SERIES` only for intentional
-series moves. Stale local OpenSSL prebuilts are rebuilt when their `openssl.pc`
-version does not match the selected version.
+OpenSSL from the 3.5 LTS series by default. Ordinary FFmpeg source builds use
+the 9.0 series, and Android DASH dependencies use the libxml2 2.15 series.
+Each build checks the upstream release index even when an archive is cached and
+selects the highest patch available upstream or in `third_party/_cache`.
+Missing archives are downloaded into the cache under their exact versioned
+filenames. If the index is unavailable, the highest matching cached patch
+remains usable. Exact `VESPER_FFMPEG_VERSION`,
+`VESPER_ANDROID_OPENSSL_VERSION`, and `VESPER_ANDROID_LIBXML2_VERSION`
+overrides skip release discovery for reproducible builds. Use the corresponding
+`*_SERIES` variables only for intentional series moves. The FFmpeg release
+policy retains its separate 9.0.2 source lock.
+
+Android dependency receipts record the resolved version, source URL, archive
+digest, ABI/API level, and installed-file digests. A changed patch or source
+invalidates the dependency install and FFmpeg built against it, even when the
+capability profile hash stays the same.
 
 ## Desktop FFmpeg
 
@@ -659,7 +666,7 @@ and release verification entry points.
 Android packaging is currently `arm64-v8a` only, including the downloadable
 sample APKs. The sample APKs are debug-signed for side-load evaluation only and
 are not production app-store artifacts. iOS binary packaging is arm64 only for
-iPhoneOS devices and Apple Silicon Simulator. Tagged releases include the seven
+iPhoneOS devices and Apple Silicon Simulator. Tagged releases include the eight
 optional iOS framework archives only as one verified set with the FFmpeg
 compliance asset and exactly one corresponding-source asset. Verification
 rejects extra top-level assets or XCFramework slices and compares the bundled
@@ -695,11 +702,13 @@ generation tasks during their own Gradle / Xcode build.
 
 ## Current Status
 
-The source tree and package metadata are frozen at `0.6.0`. Android and iOS host
-kits, the Flutter package family, plugin archives, and optional FFmpeg-backed
-artifacts have checked release paths for the modern arm64 platform boundary.
-Publishing starts only from the corresponding release tag; this source commit
-does not imply that every `0.6.0` coordinate is already available remotely.
+The workspace and package metadata identify the `0.9.0` source candidate. The
+[changelog](CHANGELOG.md) records source changes and current release limitations.
+Local source repairs and candidate
+artifacts remain unpublished until their release and registry gates pass. The
+[plugin author and host API contracts](lib/doc/plugin-author-api.md) identify
+0.9.x Rust APIs that require matching CLI and SDK dependencies; a version
+number alone does not establish registry compatibility.
 
 Mobile production playback remains Media3 and AVPlayer. Desktop playback,
 SDK-managed native-frame routes, Native `AudioProcessor`, decoder plugins,

@@ -231,8 +231,8 @@ internal fun collectTrackCatalog(
             var groupDefaultSubtitleTrackCount = 0
             for (trackIndex in 0 until group.length) {
                 val format = group.getTrackFormat(trackIndex)
-                val isExternal = externalSubtitleTrackId(format, externalSubtitleIds) != null
-                val candidateId = subtitleTrackId(format, isDashSource, externalSubtitleIds)
+                val isExternal = externalSubtitleTrackId(format, externalSubtitleIds, group.mediaTrackGroup) != null
+                val candidateId = subtitleTrackId(format, isDashSource, externalSubtitleIds, group.mediaTrackGroup)
                 if (candidateId.isBlank()) {
                     subtitleIdentityFailure =
                         subtitleIdentityFailure
@@ -297,7 +297,7 @@ internal fun collectTrackCatalog(
             }
             val format = group.getTrackFormat(trackIndex)
             if (kind == NativeTrackKind.Subtitle &&
-                subtitleTrackId(format, isDashSource, externalSubtitleIds) in unavailableExternalSubtitleIds
+                subtitleTrackId(format, isDashSource, externalSubtitleIds, group.mediaTrackGroup) in unavailableExternalSubtitleIds
             ) {
                 continue
             }
@@ -306,7 +306,7 @@ internal fun collectTrackCatalog(
             // ids are never used for subtitle tracks.
             val trackId =
                 if (kind == NativeTrackKind.Subtitle) {
-                    val candidateId = subtitleTrackId(format, isDashSource, externalSubtitleIds)
+                    val candidateId = subtitleTrackId(format, isDashSource, externalSubtitleIds, group.mediaTrackGroup)
                     candidateId.takeIf { it.isNotBlank() }
                         ?: nativeTrackId(group.mediaTrackGroup, trackIndex, format)
                 } else {
@@ -578,6 +578,7 @@ internal fun collectAppliedSubtitleSelection(
                 override.mediaTrackGroup.getFormat(index),
                 sourceProtocol == VesperPlayerSourceProtocol.Dash,
                 externalSubtitleIds,
+                override.mediaTrackGroup,
             ).takeIf { it.isNotBlank() && it !in unavailableExternalSubtitleIds }
         }
 
@@ -698,7 +699,7 @@ internal fun currentSelectedTrackId(
                 // Subtitle selections publish the stable id so the snapshot
                 // a Flutter consumer observes matches the catalog id.
                 if (trackType == C.TRACK_TYPE_TEXT) {
-                    val identity = subtitleTrackId(format, isDashSource, externalSubtitleIds)
+                    val identity = subtitleTrackId(format, isDashSource, externalSubtitleIds, group.mediaTrackGroup)
                     if (identity in unavailableExternalSubtitleIds) continue
                     val matchingIdentityCount =
                         tracks.groups.sumOf { candidateGroup ->
@@ -710,6 +711,7 @@ internal fun currentSelectedTrackId(
                                         candidateGroup.getTrackFormat(candidateIndex),
                                         isDashSource,
                                         externalSubtitleIds,
+                                        candidateGroup.mediaTrackGroup,
                                     ).let { candidateIdentity ->
                                         candidateIdentity == identity &&
                                             candidateIdentity !in unavailableExternalSubtitleIds
@@ -769,9 +771,10 @@ internal fun subtitleTrackId(
     format: Format,
     isDashSource: Boolean,
     externalSubtitleIds: List<String> = emptyList(),
+    trackGroup: TrackGroup? = null,
 ): String {
     val formatId = format.id?.takeIf { it.isNotBlank() }
-    externalSubtitleTrackId(format, externalSubtitleIds)?.let { return it }
+    externalSubtitleTrackId(format, externalSubtitleIds, trackGroup)?.let { return it }
     val primaryFormatId =
         formatId?.let { id ->
             if (externalSubtitleIds.isNotEmpty() && id.startsWith("0:")) {
@@ -818,17 +821,23 @@ internal fun subtitleTrackId(
 private fun externalSubtitleTrackId(
     format: Format,
     externalSubtitleIds: List<String>,
+    trackGroup: TrackGroup?,
 ): String? {
     val formatId = format.id?.takeIf { it.isNotBlank() } ?: return null
+    // A merged id can also equal another sidecar's raw id. Resolve all
+    // complete indexed matches before considering the unmerged raw fallback.
     externalSubtitleIds.forEachIndexed { index, externalId ->
-        // MergingMediaPeriod prefixes each child Format.id with its child
-        // index. Match the complete value so opaque ids containing ':' remain
-        // lossless and cannot collide through suffix matching.
-        if (formatId == externalId || formatId == "${index + 1}:$externalId") {
+        // Match the complete value so opaque ids containing ':' stay lossless.
+        if (formatId == "${index + 1}:$externalId") {
             return externalId
         }
     }
-    return null
+    // A merged primary child has both group and format prefixes. A raw
+    // caller-declared id starting with "0:" alone is not sufficient evidence.
+    if (trackGroup?.id?.startsWith("0:") == true && formatId.startsWith("0:")) {
+        return null
+    }
+    return externalSubtitleIds.firstOrNull { externalId -> formatId == externalId }
 }
 
 internal fun nativeTrackCodec(format: Format): String? =

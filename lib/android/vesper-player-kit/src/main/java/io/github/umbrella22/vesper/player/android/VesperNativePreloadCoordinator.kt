@@ -103,7 +103,7 @@ internal class VesperNativePreloadCoordinator(
             )
         if (taskIds.isNotEmpty()) {
             runCatching {
-                Log.i(TAG, "planned preload tasks=${taskIds.toList()} source=${source.uri}")
+                Log.i(TAG, "planned preload tasks=${taskIds.toList()} source=${diagnosticSourceDescription(source)}")
             }
         }
         return bindings.drainPreloadCommands(handle).toList()

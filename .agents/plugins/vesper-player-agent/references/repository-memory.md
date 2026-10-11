@@ -35,7 +35,7 @@ against them.
   rewrite it into cause, actual solution, design rationale, implementation
   evidence, and remaining gates, update the local indexes, and only then remove
   the draft. Do not archive a raw copy and call that absorption.
-- Rust uses Edition 2024 with MSRV 1.98. Pure business crates deny unsafe code;
+- Rust uses Edition 2024 with MSRV 1.99.0. Pure business crates deny unsafe code;
   FFI, plugin ABI, platform, and backend wrappers may use documented unsafe
   blocks only at their system boundaries.
 

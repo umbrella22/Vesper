@@ -105,6 +105,53 @@ void main() {
     expect(event.positionMs, 1234);
   });
 
+  test('candidate source list rejects malformed entries before load', () {
+    final source = VesperPlayerSource.remote(
+      uri: 'https://example.com/video.mp4',
+      label: 'MP4',
+    ).toMap();
+    for (final invalid in <Object?>[null, 7, false, 'source']) {
+      expect(
+          () => VesperExternalPlaybackMediaItem.fromMap({
+                'sources': [source, invalid],
+              }),
+          throwsFormatException);
+    }
+    for (final invalid in <Object?>[7, false, 'sources', <String, Object?>{}]) {
+      expect(
+          () => VesperExternalPlaybackMediaItem.fromMap({
+                'sources': invalid,
+              }),
+          throwsFormatException);
+    }
+    expect(VesperExternalPlaybackMediaItem.fromMap({'sources': null}).sources,
+        isEmpty);
+  });
+
+  test('candidate source order and headers survive caller round-trip', () {
+    final sources = [
+      VesperPlayerSource.remote(
+          uri: 'https://example.com/a.mp4',
+          label: 'First',
+          headers: {'X-Identity': '001'}),
+      VesperPlayerSource.hls(
+          uri: 'https://example.com/b.m3u8', label: 'Alternate'),
+    ];
+    final item = VesperExternalPlaybackMediaItem.fromMap({
+      'sources': sources.map((source) => source.toMap()).toList(),
+      'metadata': {'title': 'Episode'},
+    });
+    expect(item.sources.map((source) => source.uri),
+        sources.map((source) => source.uri));
+    expect((item.toMap()['sources']! as List).first, sources.first.toMap());
+    expect(VesperExternalPlaybackMediaItem.fromMap(item.toMap()).toMap(),
+        item.toMap());
+    expect(
+        () => VesperExternalPlaybackMediaItem.fromMap(
+            {'formatAdaptation': false}),
+        throwsFormatException);
+  });
+
   test('session event DTO decodes discovery diagnostics', () {
     final event = VesperExternalPlaybackSessionEvent.fromMap(
       <Object?, Object?>{

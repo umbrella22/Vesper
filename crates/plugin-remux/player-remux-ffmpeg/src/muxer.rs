@@ -1,6 +1,9 @@
 use std::ffi::CString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
 use ffmpeg::{Rational, codec, encoder, format, media};
 use ffmpeg_next as ffmpeg;
@@ -167,36 +170,34 @@ fn remux_input_to_mp4(
     output_path: &Path,
     progress: &dyn ProcessorProgress,
 ) -> Result<(), ProcessorError> {
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            FfmpegProcessorError::Io(format!(
-                "failed to create parent directory `{}`: {error}",
-                parent.display()
-            ))
-            .into_processor_error()
-        })?;
-    }
+    with_cancellation_token(progress, |progress, token| {
+        remux_input_to_mp4_with_opener(input_path, output_path, progress, |path| {
+            open_remux_input(path, progress, token.clone())
+        })
+    })
+}
 
-    if output_path.exists() {
-        fs::remove_file(output_path).map_err(|error| {
-            FfmpegProcessorError::Io(format!(
-                "failed to replace existing output `{}`: {error}",
-                output_path.display()
-            ))
-            .into_processor_error()
-        })?;
-    }
+fn remux_input_to_mp4_with_opener(
+    input_path: &Path,
+    output_path: &Path,
+    progress: &dyn ProcessorProgress,
+    mut open_input: impl FnMut(&Path) -> Result<format::context::Input, ProcessorError>,
+) -> Result<(), ProcessorError> {
+    publish_remux_output(output_path, progress, |staged_path| {
+        remux_single_input(input_path, staged_path, progress, &mut open_input)
+    })
+}
 
-    let input_path_string = input_path.to_string_lossy().into_owned();
+fn remux_single_input(
+    input_path: &Path,
+    output_path: &Path,
+    progress: &dyn ProcessorProgress,
+    open_input: &mut impl FnMut(&Path) -> Result<format::context::Input, ProcessorError>,
+) -> Result<(), ProcessorError> {
+    check_cancelled(progress)?;
     let output_path_string = output_path.to_string_lossy().into_owned();
-
-    let mut input_context = format::input(&input_path_string).map_err(|error| {
-        FfmpegProcessorError::Remux(format!(
-            "failed to open input `{}`: {error}",
-            input_path.display()
-        ))
-        .into_processor_error()
-    })?;
+    let mut input_context = open_input(input_path)?;
+    check_cancelled(progress)?;
     let mut output_context = format::output(&output_path_string).map_err(|error| {
         FfmpegProcessorError::InvalidPath(format!(
             "failed to create output `{}`: {error}",
@@ -260,13 +261,8 @@ fn remux_input_to_mp4(
     })?;
     progress.on_progress(0.05);
 
-    for (stream, mut packet) in input_context.packets() {
-        if progress.is_cancelled() {
-            let _ = fs::remove_file(output_path);
-            return Err(ProcessorError::Cancelled);
-        }
-
-        let input_stream_index = stream.index();
+    while let Some(mut packet) = read_next_packet(&mut input_context, input_path, progress)? {
+        let input_stream_index = packet.stream();
         let Some((mapped_stream_index, input_time_base)) =
             packet_stream_route(&stream_mapping, &input_time_bases, input_stream_index)?
         else {
@@ -300,6 +296,7 @@ fn remux_input_to_mp4(
             })?;
     }
 
+    check_cancelled(progress)?;
     output_context.write_trailer().map_err(|error| {
         FfmpegProcessorError::Remux(format!(
             "failed to finalize output `{}`: {error}",
@@ -307,7 +304,7 @@ fn remux_input_to_mp4(
         ))
         .into_processor_error()
     })?;
-    progress.on_progress(1.0);
+    check_cancelled(progress)?;
 
     Ok(())
 }
@@ -409,13 +406,45 @@ fn remux_sources_to_output(
     output_format: OutputFormat,
     progress: &dyn ProcessorProgress,
 ) -> Result<(), ProcessorError> {
+    with_cancellation_token(progress, |progress, token| {
+        remux_sources_to_output_with_opener(sources, output_path, output_format, progress, |path| {
+            open_remux_input(path, progress, token.clone())
+        })
+    })
+}
+
+fn remux_sources_to_output_with_opener(
+    sources: &[AssemblySource],
+    output_path: &Path,
+    output_format: OutputFormat,
+    progress: &dyn ProcessorProgress,
+    mut open_input: impl FnMut(&Path) -> Result<format::context::Input, ProcessorError>,
+) -> Result<(), ProcessorError> {
+    publish_remux_output(output_path, progress, |staged_path| {
+        remux_sources(
+            sources,
+            staged_path,
+            output_format,
+            progress,
+            &mut open_input,
+        )
+    })
+}
+
+fn remux_sources(
+    sources: &[AssemblySource],
+    output_path: &Path,
+    output_format: OutputFormat,
+    progress: &dyn ProcessorProgress,
+    open_input: &mut impl FnMut(&Path) -> Result<format::context::Input, ProcessorError>,
+) -> Result<(), ProcessorError> {
+    check_cancelled(progress)?;
     if sources.is_empty() {
         return Err(ProcessorError::AbiViolation(
             "assembly input must contain at least one stream".to_owned(),
         ));
     }
 
-    prepare_output_path(output_path)?;
     let output_path_string = output_path.to_string_lossy().into_owned();
     let mut output_context = format::output(&output_path_string).map_err(|error| {
         FfmpegProcessorError::InvalidPath(format!(
@@ -429,15 +458,10 @@ fn remux_sources_to_output(
     let mut output_stream_index = 0_i32;
 
     for source in sources {
+        check_cancelled(progress)?;
         ensure_demuxer_for_source(source)?;
-        let input_path_string = source.path.to_string_lossy().into_owned();
-        let input_context = format::input(&input_path_string).map_err(|error| {
-            FfmpegProcessorError::Remux(format!(
-                "failed to open input `{}`: {error}",
-                source.path.display()
-            ))
-            .into_processor_error()
-        })?;
+        let input_context = open_input(&source.path)?;
+        check_cancelled(progress)?;
 
         let mut stream_mapping = vec![-1; input_context.nb_streams() as usize];
         let mut input_time_bases = vec![Rational(0, 1); input_context.nb_streams() as usize];
@@ -499,13 +523,8 @@ fn remux_sources_to_output(
 
     let input_count = input_states.len().max(1);
     for (input_index, state) in input_states.iter_mut().enumerate() {
-        for (stream, mut packet) in state.context.packets() {
-            if progress.is_cancelled() {
-                let _ = fs::remove_file(output_path);
-                return Err(ProcessorError::Cancelled);
-            }
-
-            let input_stream_index = stream.index();
+        while let Some(mut packet) = read_next_packet(&mut state.context, &state.path, progress)? {
+            let input_stream_index = packet.stream();
             let Some((mapped_stream_index, input_time_base)) = packet_stream_route(
                 &state.stream_mapping,
                 &state.input_time_bases,
@@ -546,6 +565,7 @@ fn remux_sources_to_output(
         progress.on_progress(0.05 + 0.9 * ((input_index + 1) as f32 / input_count as f32));
     }
 
+    check_cancelled(progress)?;
     output_context.write_trailer().map_err(|error| {
         FfmpegProcessorError::Remux(format!(
             "failed to finalize output `{}`: {error}",
@@ -553,7 +573,7 @@ fn remux_sources_to_output(
         ))
         .into_processor_error()
     })?;
-    progress.on_progress(1.0);
+    check_cancelled(progress)?;
     Ok(())
 }
 
@@ -584,26 +604,168 @@ fn unsupported_dynamic_stream(input_stream_index: usize) -> ProcessorError {
     }
 }
 
-fn prepare_output_path(output_path: &Path) -> Result<(), ProcessorError> {
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            FfmpegProcessorError::Io(format!(
-                "failed to create parent directory `{}`: {error}",
-                parent.display()
-            ))
-            .into_processor_error()
-        })?;
+fn check_cancelled(progress: &dyn ProcessorProgress) -> Result<(), ProcessorError> {
+    if progress.is_cancelled() {
+        Err(ProcessorError::Cancelled)
+    } else {
+        Ok(())
     }
+}
 
-    if output_path.exists() {
-        fs::remove_file(output_path).map_err(|error| {
-            FfmpegProcessorError::Io(format!(
-                "failed to replace existing output `{}`: {error}",
+fn read_next_packet(
+    input: &mut format::context::Input,
+    path: &Path,
+    progress: &dyn ProcessorProgress,
+) -> Result<Option<ffmpeg::Packet>, ProcessorError> {
+    check_cancelled(progress)?;
+    let mut packet = ffmpeg::Packet::empty();
+    let result = packet.read(input);
+    check_cancelled(progress)?;
+    match result {
+        Ok(()) => Ok(Some(packet)),
+        Err(ffmpeg::Error::Eof) => Ok(None),
+        Err(error) => Err(FfmpegProcessorError::Remux(format!(
+            "failed to read packet from `{}`: {error}",
+            path.display()
+        ))
+        .into_processor_error()),
+    }
+}
+
+fn open_remux_input(
+    path: &Path,
+    progress: &dyn ProcessorProgress,
+    token: Arc<AtomicBool>,
+) -> Result<format::context::Input, ProcessorError> {
+    check_cancelled(progress)?;
+    let result = format::input_with_interrupt(path, move || token.load(Ordering::Acquire));
+    check_cancelled(progress)?;
+    result.map_err(|error| {
+        FfmpegProcessorError::Remux(format!(
+            "failed to open input `{}`: {error}",
+            path.display()
+        ))
+        .into_processor_error()
+    })
+}
+
+struct LatchedProgress<'a> {
+    progress: &'a dyn ProcessorProgress,
+    token: Arc<AtomicBool>,
+}
+
+impl ProcessorProgress for LatchedProgress<'_> {
+    fn on_progress(&self, ratio: f32) {
+        self.progress.on_progress(ratio);
+    }
+    fn is_cancelled(&self) -> bool {
+        if self.progress.is_cancelled() {
+            self.token.store(true, Ordering::Release);
+        }
+        self.token.load(Ordering::Acquire)
+    }
+}
+
+fn with_cancellation_token<T>(
+    progress: &dyn ProcessorProgress,
+    run: impl FnOnce(&dyn ProcessorProgress, Arc<AtomicBool>) -> Result<T, ProcessorError>,
+) -> Result<T, ProcessorError> {
+    // The FFmpeg callback owns only an atomic. The scoped watcher is the only
+    // borrower of progress and is stopped and joined on every return or unwind.
+    struct StopWatcher(std::sync::mpsc::Sender<()>);
+    impl Drop for StopWatcher {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+    check_cancelled(progress)?;
+    let token = Arc::new(AtomicBool::new(false));
+    std::thread::scope(|scope| {
+        let (stop, receiver) = std::sync::mpsc::channel();
+        let watcher_token = token.clone();
+        scope.spawn(move || {
+            loop {
+                if progress.is_cancelled() {
+                    watcher_token.store(true, Ordering::Release);
+                    return;
+                }
+                match receiver.recv_timeout(Duration::from_millis(25)) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    _ => return,
+                }
+            }
+        });
+        let _stop = StopWatcher(stop);
+        let latched = LatchedProgress {
+            progress,
+            token: token.clone(),
+        };
+        run(&latched, token)
+    })
+}
+
+struct StagedRemuxOutput(Option<PathBuf>);
+
+impl Drop for StagedRemuxOutput {
+    fn drop(&mut self) {
+        if let Some(path) = &self.0 {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn publish_remux_output(
+    output_path: &Path,
+    progress: &dyn ProcessorProgress,
+    remux: impl FnOnce(&Path) -> Result<(), ProcessorError>,
+) -> Result<(), ProcessorError> {
+    check_cancelled(progress)?;
+    let parent = output_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|error| {
+        ProcessorError::OutputPath(format!("failed to create `{}`: {error}", parent.display()))
+    })?;
+    static NEXT_OUTPUT: AtomicU64 = AtomicU64::new(0);
+    let mut name = output_path
+        .file_name()
+        .ok_or_else(|| ProcessorError::OutputPath("output path has no filename".into()))?
+        .to_os_string();
+    name.push(format!(
+        ".vesper-remux-{}-{}.",
+        std::process::id(),
+        NEXT_OUTPUT.fetch_add(1, Ordering::Relaxed)
+    ));
+    name.push(
+        output_path
+            .extension()
+            .unwrap_or_else(|| std::ffi::OsStr::new("mp4")),
+    );
+    let staged_path = parent.join(name);
+    // Reserve this invocation's sibling path without touching an existing target.
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staged_path)
+        .map_err(|error| {
+            ProcessorError::OutputPath(format!(
+                "failed to stage `{}`: {error}",
                 output_path.display()
             ))
-            .into_processor_error()
         })?;
-    }
+    let mut staged = StagedRemuxOutput(Some(staged_path.clone()));
+    // All FFmpeg handles close inside this call, before cleanup or publication.
+    remux(&staged_path)?;
+    check_cancelled(progress)?;
+    fs::rename(&staged_path, output_path).map_err(|error| {
+        ProcessorError::OutputPath(format!(
+            "failed to publish `{}`: {error}",
+            output_path.display()
+        ))
+    })?;
+    staged.0 = None;
+    progress.on_progress(1.0);
     Ok(())
 }
 
@@ -710,7 +872,6 @@ impl IntoProcessorError for FfmpegProcessorError {
     fn into_processor_error(self) -> ProcessorError {
         match self {
             FfmpegProcessorError::Initialization(message)
-            | FfmpegProcessorError::Io(message)
             | FfmpegProcessorError::Remux(message) => ProcessorError::MuxFailed(message),
             FfmpegProcessorError::MissingDemuxer(_) => {
                 ProcessorError::UnsupportedFormat(ContentFormatKind::Unknown)
@@ -719,6 +880,10 @@ impl IntoProcessorError for FfmpegProcessorError {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "muxer_read_regressions.rs"]
+mod read_regressions;
 
 #[cfg(test)]
 mod tests {

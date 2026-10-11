@@ -15,9 +15,11 @@ data class VesperRelayFfmpegOpenResult(
 )
 
 internal class VesperRelayFfmpegInputStream(
-    private var handle: Long,
+    handle: Long,
     private val native: VesperRelayFfmpegNativeApi = VesperRelayFfmpegNativeBridge,
 ) : InputStream() {
+    private val handle = java.util.concurrent.atomic.AtomicLong(handle)
+
     override fun read(): Int {
         val buffer = ByteArray(1)
         val read = read(buffer, 0, 1)
@@ -33,10 +35,11 @@ internal class VesperRelayFfmpegInputStream(
         if (length == 0) {
             return 0
         }
-        if (handle == 0L) {
+        val current = handle.get()
+        if (current == 0L) {
             return -1
         }
-        val read = native.read(handle, buffer, offset, length)
+        val read = native.read(current, buffer, offset, length)
         return when (read) {
             NATIVE_READ_COMPLETE -> -1
             NATIVE_READ_INVALID_HANDLE -> throw VesperRelayIOException(
@@ -64,8 +67,7 @@ internal class VesperRelayFfmpegInputStream(
     }
 
     override fun close() {
-        val current = handle
-        handle = 0
+        val current = handle.getAndSet(0)
         if (current != 0L) {
             native.close(current)
         }
@@ -117,6 +119,12 @@ internal object VesperRelayFfmpegNative {
 
     @JvmStatic
     external fun close(handle: Long)
+
+    @JvmStatic
+    external fun reserveSession(sessionId: String): Long
+
+    @JvmStatic
+    external fun retireSession(handle: Long)
 
     @JvmStatic
     external fun invalidate(sessionId: String)

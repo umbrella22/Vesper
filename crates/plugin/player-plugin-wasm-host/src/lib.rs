@@ -1,10 +1,12 @@
 #![deny(unsafe_code)]
 
+mod attributes;
 mod benchmark;
 mod bindings;
 mod capability;
 mod event_hook;
 mod host_state;
+mod invocation;
 mod runtime;
 
 pub use benchmark::{
@@ -21,7 +23,11 @@ pub use event_hook::{
     WasmPipelineEventHookReportBatch, WasmPipelineEventHookSession,
 };
 pub use host_state::{WasmPluginLogLevel, WasmPluginLogRecord};
-pub use runtime::{WasmPluginHostError, WasmPluginRuntime, WasmPluginRuntimeError};
+pub use invocation::{WasmInvocationTicket, WasmQueueLifecycle, WasmQueueSettlement};
+pub use runtime::{
+    WasmErrorCause, WasmExecutionFailure, WasmExecutionFailureKind, WasmPluginHostError,
+    WasmPluginRuntime, WasmPluginRuntimeError, WasmQueueError, WasmWaitOperation,
+};
 
 pub const MAX_WASM_PLUGIN_COMPONENT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_WASM_PLUGIN_INPUT_BYTES: usize = 4 * 1024 * 1024;

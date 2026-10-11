@@ -8,8 +8,6 @@ pub enum FfmpegProcessorError {
     MissingDemuxer(&'static str),
     #[error("invalid path: {0}")]
     InvalidPath(String),
-    #[error("i/o failure: {0}")]
-    Io(String),
     #[error("ffmpeg remux failure: {0}")]
     Remux(String),
 }

@@ -7,6 +7,7 @@ on:
       - ".github/actions/select-xcode/**"
       - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
+      - "rust-toolchain.toml"
       - "Cargo.lock"
       - "crates/tools/player-cli/**"
       - "scripts/**"
@@ -41,6 +42,7 @@ on:
       - ".github/actions/select-xcode/**"
       - ".github/actions/setup-vesper-cli/**"
       - "Cargo.toml"
+      - "rust-toolchain.toml"
       - "Cargo.lock"
       - "crates/tools/player-cli/**"
       - "scripts/**"
@@ -99,7 +101,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-linux-android
 
@@ -251,7 +253,7 @@ jobs:
         uses: ./.github/actions/setup-vesper-cli
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: aarch64-apple-ios,aarch64-apple-ios-sim
 

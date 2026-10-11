@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-11
+
+- Align the Swift package dependency with the 0.9.0 SDK.
+- Preserve exact integer catalog revisions received through Flutter's
+  `MethodChannel` and reject Boolean, fractional, non-finite, and out-of-range
+  values before native policy mapping.
+
 ## 0.8.0 - 2026-09-29
 
 - Implement independent source sessions and handle activation over VesperPlayerKit.

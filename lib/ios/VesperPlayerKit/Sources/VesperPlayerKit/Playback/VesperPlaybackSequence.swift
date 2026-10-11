@@ -224,15 +224,17 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
     }
 
     private final class PendingNavigation {
-        let id = UUID().uuidString
+        let id: String
         var itemId: String?
         let options: VesperSourceActivationOptions
         let continuation: CheckedContinuation<VesperSourceActivation?, Error>
         var worker: Task<Void, Never>?
         var timeout: Task<Void, Never>?
-        init(options: VesperSourceActivationOptions,
+        init(id: String, options: VesperSourceActivationOptions,
              continuation: CheckedContinuation<VesperSourceActivation?, Error>) {
-            self.options = options; self.continuation = continuation
+            self.id = id
+            self.options = options
+            self.continuation = continuation
         }
     }
     private var pendingNavigation: PendingNavigation?
@@ -415,16 +417,14 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
         let navigationId = UUID().uuidString
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                let pending = PendingNavigation(options: options, continuation: continuation)
+                let pending = PendingNavigation(id: navigationId, options: options, continuation: continuation)
                 pendingNavigation = pending
-                navigationCancellationId = navigationId
                 do {
                     let result = try execute(command)
                     let outcome = result["outcome"] as? String
                     if outcome == "empty" || outcome == "reachedEnd" || outcome == "awaitingItems" {
-                        pendingNavigation = nil
                         try refreshAndPump()
-                        continuation.resume(returning: nil)
+                        finishNavigation(pending, with: .success(nil))
                         return
                     }
                     pending.itemId = command["itemId"] as? String ?? result["itemId"] as? String
@@ -435,25 +435,30 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
                     }
                     try refreshAndPump()
                 } catch {
-                    pendingNavigation = nil
-                    pending.timeout?.cancel()
-                    continuation.resume(throwing: error)
+                    finishNavigation(pending, with: .failure(error))
                 }
             }
         } onCancel: {
             Task { @MainActor [weak self] in
-                guard let self, self.navigationCancellationId == navigationId else { return }
+                guard let self, self.pendingNavigation?.id == navigationId else { return }
                 self.cancelNavigation(.cancelled)
             }
         }
     }
-    private var navigationCancellationId = ""
+    private func finishNavigation(
+        _ pending: PendingNavigation,
+        with result: Result<VesperSourceActivation?, Error>
+    ) {
+        guard pendingNavigation === pending else { return }
+        pendingNavigation = nil
+        pending.worker?.cancel()
+        pending.timeout?.cancel()
+        pending.continuation.resume(with: result)
+    }
 
     private func cancelNavigation(_ reason: VesperSourceActivationError) {
         guard let pending = pendingNavigation else { return }
-        pendingNavigation = nil
-        pending.worker?.cancel(); pending.timeout?.cancel()
-        pending.continuation.resume(throwing: reason)
+        finishNavigation(pending, with: .failure(reason))
     }
 
     private func driveNavigation() {
@@ -466,13 +471,9 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
         pending.worker = Task { [weak self, pending] in
             do {
                 let activation = try await target.activateLease(entry.lease.retained(), options: pending.options)
-                guard let self, self.pendingNavigation === pending else { return }
-                self.pendingNavigation = nil; pending.timeout?.cancel()
-                pending.continuation.resume(returning: activation)
+                self?.finishNavigation(pending, with: .success(activation))
             } catch {
-                guard let self, self.pendingNavigation === pending else { return }
-                self.pendingNavigation = nil; pending.timeout?.cancel()
-                pending.continuation.resume(throwing: error)
+                self?.finishNavigation(pending, with: .failure(error))
             }
         }
     }
@@ -661,9 +662,13 @@ public final class VesperPlaybackSequence: ObservableObject, VesperPlaybackSeque
     }
 
     private func refreshAndPump() throws {
+        try checkActive()
         try refreshSnapshot()
+        // Published snapshots and events allow synchronous host reentry.
+        try checkActive()
         pruneRegistry()
         try drainEvents()
+        try checkActive()
         driveNavigation()
         try pumpPreloadIntents()
     }

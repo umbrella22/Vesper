@@ -14,7 +14,7 @@ use crate::ffmpeg::{
 };
 use crate::ffmpeg_source::{
     FfmpegBuildSource, latest_package_series_archive_version,
-    latest_package_series_archive_version_from_index,
+    latest_package_series_archive_version_from_index, select_latest_series_version,
 };
 use crate::source_archive::{
     self, SourceArchiveErrorKind, SourceArchiveFormat, SourceArchivePolicy,
@@ -24,7 +24,14 @@ use crate::{android, gradle};
 const ANDROID_RUST_TARGET: &str = "aarch64-linux-android";
 const DEFAULT_ANDROID_API_LEVEL: u32 = 26;
 const DEFAULT_OPENSSL_SERIES: &str = "3.5";
-const DEFAULT_LIBXML2_VERSION: &str = "2.14.6";
+const DEFAULT_LIBXML2_SERIES: &str = "2.15";
+const KNOWN_OPENSSL_VERSION: &str = "3.5.9";
+const KNOWN_LIBXML2_VERSION: &str = "2.15.4";
+const KNOWN_OPENSSL_SHA256: &str =
+    "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a";
+const KNOWN_LIBXML2_SHA256: &str =
+    "98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821";
+const DEPENDENCY_METADATA_FILE: &str = "vesper-dependency-build-metadata.txt";
 const MAX_SOURCE_CACHE_ENTRIES: usize = 10_000;
 const MAX_RELEASE_INDEX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_METADATA_BYTES: u64 = 64 * 1024;
@@ -78,11 +85,12 @@ pub(crate) fn run(
 
     if profile.tls_backend == "openssl" {
         let version = resolve_openssl_version(root)?;
+        let dependency = AndroidDependencySource::openssl(root, &version)?;
         for abi in &abis {
             ensure_openssl(
                 root,
                 abi,
-                &version,
+                &dependency,
                 api_level,
                 &toolchain,
                 &openssl_output,
@@ -91,12 +99,13 @@ pub(crate) fn run(
         }
     }
     if profile.enable_dash {
-        let version = libxml2_version()?;
+        let version = libxml2_version(root)?;
+        let dependency = AndroidDependencySource::libxml2(root, &version)?;
         for abi in &abis {
             ensure_libxml2(
                 root,
                 abi,
-                &version,
+                &dependency,
                 api_level,
                 &toolchain,
                 &libxml2_output,
@@ -119,7 +128,7 @@ pub(crate) fn run(
             &ffmpeg_archive,
             &source_sha256,
         )?;
-        if !profile.force && plan.is_current(profile)? {
+        if !profile.force && plan.is_current(&profile.libraries)? {
             println!("Android FFmpeg prebuilt for {abi} is up to date for profile custom.");
         } else {
             pending.push(plan);
@@ -269,7 +278,7 @@ impl AndroidAbiPlan {
             format!("--extra-ldflags={}", ldflags.join(" ")),
         ];
         configure_line.extend(profile.configure_arguments(FfmpegPlatform::Android));
-        let metadata = profile.metadata_text(
+        let mut metadata = profile.metadata_text(
             "android",
             abi,
             &source.version,
@@ -278,6 +287,12 @@ impl AndroidAbiPlan {
             source_sha256,
             &configure_line,
         );
+        if profile.tls_backend == "openssl" {
+            append_dependency_metadata(&mut metadata, &openssl_output.join(abi), "openssl")?;
+        }
+        if profile.enable_dash {
+            append_dependency_metadata(&mut metadata, &libxml2_output.join(abi), "libxml2")?;
+        }
         Ok(Self {
             abi: abi.to_owned(),
             install,
@@ -288,12 +303,12 @@ impl AndroidAbiPlan {
         })
     }
 
-    fn is_current(&self, profile: &NativeFfmpegProfile) -> Result<bool, FfmpegError> {
+    fn is_current(&self, libraries: &[String]) -> Result<bool, FfmpegError> {
         let metadata = self.install.join("vesper-ffmpeg-build-metadata.txt");
         if !regular_file_equals(&metadata, self.metadata.as_bytes())? {
             return Ok(false);
         }
-        for library in &profile.libraries {
+        for library in libraries {
             for relative in [
                 format!("lib/pkgconfig/lib{library}.pc"),
                 format!("lib/lib{library}.so"),
@@ -386,46 +401,262 @@ fn build_ffmpeg_abi(
     publish_directory(&staged, &plan.install, "Android FFmpeg prebuilt")
 }
 
+struct AndroidDependencySource {
+    name: &'static str,
+    version: String,
+    source_url: String,
+    sha256: Option<String>,
+}
+
+impl AndroidDependencySource {
+    fn openssl(root: &Path, version: &str) -> Result<Self, FfmpegError> {
+        Self::new(
+            "openssl",
+            version,
+            environment_text("VESPER_ANDROID_OPENSSL_SOURCE_URL")?,
+            environment_text("VESPER_ANDROID_OPENSSL_SOURCE_SHA256")?
+                .or(environment_text("VESPER_OPENSSL_SOURCE_SHA256")?),
+        )?
+        .record_source_digest(root)
+    }
+
+    fn libxml2(root: &Path, version: &str) -> Result<Self, FfmpegError> {
+        Self::new(
+            "libxml2",
+            version,
+            environment_text("VESPER_ANDROID_LIBXML2_SOURCE_URL")?,
+            environment_text("VESPER_ANDROID_LIBXML2_SOURCE_SHA256")?,
+        )?
+        .record_source_digest(root)
+    }
+
+    fn new(
+        name: &'static str,
+        version: &str,
+        source_url: Option<String>,
+        sha256: Option<String>,
+    ) -> Result<Self, FfmpegError> {
+        validate_exact_version(version, name)?;
+        let (url, pinned_sha256) = match name {
+            "openssl" => (
+                format!(
+                    "https://github.com/openssl/openssl/releases/download/openssl-{version}/openssl-{version}.tar.gz"
+                ),
+                (version == KNOWN_OPENSSL_VERSION).then_some(KNOWN_OPENSSL_SHA256),
+            ),
+            "libxml2" => {
+                let series = version
+                    .rsplit_once('.')
+                    .map(|(series, _)| series)
+                    .unwrap_or(version);
+                (
+                    format!(
+                        "https://download.gnome.org/sources/libxml2/{series}/libxml2-{version}.tar.xz"
+                    ),
+                    (version == KNOWN_LIBXML2_VERSION).then_some(KNOWN_LIBXML2_SHA256),
+                )
+            }
+            _ => {
+                return Err(FfmpegError::conformance(
+                    "unknown Android FFmpeg dependency",
+                ));
+            }
+        };
+        let sha256 = sha256
+            .or_else(|| pinned_sha256.map(str::to_owned))
+            .map(|value| value.trim().to_ascii_lowercase());
+        if sha256.as_deref().is_some_and(|value| {
+            value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }) {
+            return Err(FfmpegError::conformance(format!(
+                "invalid Android {name} source SHA-256"
+            )));
+        }
+        Ok(Self {
+            name,
+            version: version.to_owned(),
+            source_url: source_url.unwrap_or(url),
+            sha256,
+        })
+    }
+
+    fn ensure_archive(&self, root: &Path) -> Result<PathBuf, FfmpegError> {
+        let (variable, extension) = match self.name {
+            "openssl" => ("VESPER_ANDROID_OPENSSL_SOURCE_ARCHIVE", ".tar.gz"),
+            "libxml2" => ("VESPER_ANDROID_LIBXML2_SOURCE_ARCHIVE", ".tar.xz"),
+            _ => {
+                return Err(FfmpegError::conformance(
+                    "unknown Android FFmpeg dependency",
+                ));
+            }
+        };
+        let archive_name = format!("{}-{}{extension}", self.name, self.version);
+        let path = configured_archive_path(root, variable, &archive_name);
+        source_archive::ensure_cached_archive(
+            &path,
+            std::slice::from_ref(&self.source_url),
+            self.sha256.as_deref(),
+            SOURCE_POLICY,
+            &format!("Android {} source archive", self.name),
+        )
+        .map_err(map_source_error)
+    }
+
+    fn record_source_digest(mut self, root: &Path) -> Result<Self, FfmpegError> {
+        let archive = self.ensure_archive(root)?;
+        // Every selected patch records its actual archive digest, including a
+        // new upstream patch without a checked-in digest. Changing the source
+        // bytes invalidates both the dependency and FFmpeg build receipts.
+        self.sha256 = Some(
+            source_archive::sha256_file(
+                &archive,
+                SOURCE_POLICY.maximum_archive_bytes,
+                &format!("Android {} source archive", self.name),
+            )
+            .map_err(map_source_error)?,
+        );
+        Ok(self)
+    }
+
+    fn installed_metadata(
+        &self,
+        install: &Path,
+        abi: &str,
+        api_level: u32,
+    ) -> Result<Option<String>, FfmpegError> {
+        let (pc, header, version_macro, libraries): (&str, &str, &str, &[&str]) = match self.name {
+            "openssl" => (
+                "lib/pkgconfig/openssl.pc",
+                "include/openssl/opensslv.h",
+                "# define OPENSSL_VERSION_STR",
+                &["lib/libssl.so", "lib/libcrypto.so"],
+            ),
+            "libxml2" => (
+                "lib/pkgconfig/libxml-2.0.pc",
+                "include/libxml2/libxml/xmlversion.h",
+                "#define LIBXML_DOTTED_VERSION",
+                &["lib/libxml2.so"],
+            ),
+            _ => {
+                return Err(FfmpegError::conformance(
+                    "unknown Android FFmpeg dependency",
+                ));
+            }
+        };
+        if pkg_config_version(&install.join(pc))?.as_deref() != Some(&self.version) {
+            return Ok(None);
+        }
+        if !regular_nonempty_file(&install.join(header))? {
+            return Ok(None);
+        }
+        let header_text = fs::read_to_string(install.join(header)).map_err(|error| {
+            FfmpegError::storage(format!(
+                "failed to read Android {} version header: {error}",
+                self.name
+            ))
+        })?;
+        let expected_version = format!("\"{}\"", self.version);
+        if !header_text.lines().any(|line| {
+            line.strip_prefix(version_macro)
+                .is_some_and(|value| value.trim() == expected_version)
+        }) {
+            return Ok(None);
+        }
+        let sha256 = self.sha256.as_deref().ok_or_else(|| {
+            FfmpegError::conformance(format!(
+                "Android {} source digest was not recorded",
+                self.name
+            ))
+        })?;
+        let mut metadata = format!(
+            "dependency={}\nversion={}\nsource_url={}\nsource_sha256={sha256}\nabi={abi}\nandroid_api_level={api_level}\n",
+            self.name, self.version, self.source_url,
+        );
+        for relative in [pc, header].into_iter().chain(libraries.iter().copied()) {
+            // Native installs may use the standard unversioned shared-library symlink.
+            let path = match fs::canonicalize(install.join(relative)) {
+                Ok(path) => path,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => {
+                    return Err(FfmpegError::storage(format!(
+                        "failed to resolve Android {} build input {relative}: {error}",
+                        self.name,
+                    )));
+                }
+            };
+            if !regular_nonempty_file(&path)? {
+                return Ok(None);
+            }
+            let sha256 = source_archive::sha256_file(
+                &path,
+                SOURCE_POLICY.maximum_archive_bytes,
+                "Android dependency build input",
+            )
+            .map_err(map_source_error)?;
+            metadata.push_str(&format!("file_sha256:{relative}={sha256}\n"));
+        }
+        Ok(Some(metadata))
+    }
+
+    fn is_current(&self, install: &Path, abi: &str, api_level: u32) -> Result<bool, FfmpegError> {
+        let Some(metadata) = self.installed_metadata(install, abi, api_level)? else {
+            return Ok(false);
+        };
+        regular_file_equals(&install.join(DEPENDENCY_METADATA_FILE), metadata.as_bytes())
+    }
+
+    fn write_metadata(&self, install: &Path, abi: &str, api_level: u32) -> Result<(), FfmpegError> {
+        let metadata = self
+            .installed_metadata(install, abi, api_level)?
+            .ok_or_else(|| {
+                FfmpegError::conformance(format!(
+                    "staged Android {} files do not match requested version {} or are incomplete",
+                    self.name, self.version,
+                ))
+            })?;
+        fs::write(install.join(DEPENDENCY_METADATA_FILE), metadata).map_err(|error| {
+            FfmpegError::storage(format!(
+                "failed to write Android {} build metadata: {error}",
+                self.name
+            ))
+        })
+    }
+}
+
+fn append_dependency_metadata(
+    metadata: &mut String,
+    install: &Path,
+    name: &str,
+) -> Result<(), FfmpegError> {
+    let path = install.join(DEPENDENCY_METADATA_FILE);
+    require_regular_file(&path, "Android dependency build metadata")?;
+    let receipt = fs::read_to_string(&path).map_err(|error| {
+        FfmpegError::storage(format!(
+            "failed to read Android {name} build metadata: {error}"
+        ))
+    })?;
+    for line in receipt.lines() {
+        metadata.push_str(&format!("{name}_{line}\n"));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn ensure_openssl(
     root: &Path,
     abi: &str,
-    version: &str,
+    dependency: &AndroidDependencySource,
     api_level: u32,
     toolchain: &AndroidToolchain,
     output: &Path,
     jobs: usize,
 ) -> Result<(), FfmpegError> {
     let install = output.join(abi);
-    let pc = install.join("lib/pkgconfig/openssl.pc");
-    if pkg_config_version(&pc)?.as_deref() == Some(version) {
+    if dependency.is_current(&install, abi, api_level)? {
         return Ok(());
     }
-    let archive_name = format!("openssl-{version}.tar.gz");
-    let series = version
-        .rsplit_once('.')
-        .map(|(series, _)| series)
-        .unwrap_or(version);
-    let source =
-        configured_archive_path(root, "VESPER_ANDROID_OPENSSL_SOURCE_ARCHIVE", &archive_name);
-    let primary = environment_text("VESPER_ANDROID_OPENSSL_SOURCE_URL")?
-        .unwrap_or_else(|| format!("https://www.openssl.org/source/{archive_name}"));
-    let urls = vec![
-        primary,
-        format!("https://www.openssl.org/source/old/{series}/{archive_name}"),
-        format!("https://www.openssl-library.org/source/{archive_name}"),
-        format!("https://www.openssl-library.org/source/old/{series}/{archive_name}"),
-    ];
-    let expected = environment_text("VESPER_ANDROID_OPENSSL_SOURCE_SHA256")?
-        .or(environment_text("VESPER_OPENSSL_SOURCE_SHA256")?);
-    let archive = source_archive::ensure_cached_archive(
-        &source,
-        &urls,
-        expected.as_deref(),
-        SOURCE_POLICY,
-        "Android OpenSSL source archive",
-    )
-    .map_err(map_source_error)?;
+    let version = &dependency.version;
+    let archive = dependency.ensure_archive(root)?;
     let extraction = tempfile::Builder::new()
         .prefix("vesper-android-openssl-source-")
         .tempdir()
@@ -449,10 +680,15 @@ fn ensure_openssl(
         .current_dir(&source_root)
         .arg("./Configure")
         .args(["android-arm64", "shared", "no-tests", "no-unit-test"])
+        .arg(format!("-D__ANDROID_API__={api_level}"))
         .arg(format!("--prefix={}", install.display()))
         .arg(format!("--openssldir={}", install.join("ssl").display()))
         .env("ANDROID_NDK_HOME", &toolchain.root)
         .env("ANDROID_NDK_ROOT", &toolchain.root)
+        .env(
+            "PATH",
+            joined_search_path(std::slice::from_ref(&toolchain.bin), env::var_os("PATH"))?,
+        )
         .env("CC", &cc)
         .env("CXX", &cxx)
         .env("AR", toolchain.bin.join("llvm-ar"))
@@ -493,11 +729,7 @@ fn ensure_openssl(
         "Android OpenSSL install",
     )?;
     let staged = staged_install_path(destdir.path(), &install)?;
-    if pkg_config_version(&staged.join("lib/pkgconfig/openssl.pc"))?.as_deref() != Some(version) {
-        return Err(FfmpegError::conformance(
-            "staged Android OpenSSL pkg-config version does not match the requested version",
-        ));
-    }
+    dependency.write_metadata(&staged, abi, api_level)?;
     publish_directory(&staged, &install, "Android OpenSSL prebuilt")
 }
 
@@ -505,36 +737,18 @@ fn ensure_openssl(
 fn ensure_libxml2(
     root: &Path,
     abi: &str,
-    version: &str,
+    dependency: &AndroidDependencySource,
     api_level: u32,
     toolchain: &AndroidToolchain,
     output: &Path,
     jobs: usize,
 ) -> Result<(), FfmpegError> {
     let install = output.join(abi);
-    let pc = install.join("lib/pkgconfig/libxml-2.0.pc");
-    if pkg_config_version(&pc)?.as_deref() == Some(version) {
+    if dependency.is_current(&install, abi, api_level)? {
         return Ok(());
     }
-    let archive_name = format!("libxml2-{version}.tar.xz");
-    let series = version
-        .rsplit_once('.')
-        .map(|(series, _)| series)
-        .unwrap_or(version);
-    let source =
-        configured_archive_path(root, "VESPER_ANDROID_LIBXML2_SOURCE_ARCHIVE", &archive_name);
-    let url = environment_text("VESPER_ANDROID_LIBXML2_SOURCE_URL")?.unwrap_or_else(|| {
-        format!("https://download.gnome.org/sources/libxml2/{series}/{archive_name}")
-    });
-    let expected = environment_text("VESPER_ANDROID_LIBXML2_SOURCE_SHA256")?;
-    let archive = source_archive::ensure_cached_archive(
-        &source,
-        &[url],
-        expected.as_deref(),
-        SOURCE_POLICY,
-        "Android libxml2 source archive",
-    )
-    .map_err(map_source_error)?;
+    let version = &dependency.version;
+    let archive = dependency.ensure_archive(root)?;
     let extraction = tempfile::Builder::new()
         .prefix("vesper-android-libxml2-source-")
         .tempdir()
@@ -564,17 +778,7 @@ fn ensure_libxml2(
         .current_dir(build.path())
         .arg(format!("--host={target}"))
         .arg(format!("--prefix={}", install.display()))
-        .args([
-            "--enable-shared",
-            "--disable-static",
-            "--without-iconv",
-            "--without-python",
-            "--without-lzma",
-            "--without-icu",
-            "--without-http",
-            "--without-legacy",
-            "--without-html",
-        ])
+        .args(libxml2_configure_arguments(version)?)
         .env("CC", &cc)
         .env("CXX", &cxx)
         .env("AR", toolchain.bin.join("llvm-ar"))
@@ -620,13 +824,29 @@ fn ensure_libxml2(
         "Android libxml2 install",
     )?;
     let staged = staged_install_path(destdir.path(), &install)?;
-    if pkg_config_version(&staged.join("lib/pkgconfig/libxml-2.0.pc"))?.as_deref() != Some(version)
-    {
-        return Err(FfmpegError::conformance(
-            "staged Android libxml2 pkg-config version does not match the requested version",
-        ));
-    }
+    dependency.write_metadata(&staged, abi, api_level)?;
     publish_directory(&staged, &install, "Android libxml2 prebuilt")
+}
+
+fn libxml2_configure_arguments(version: &str) -> Result<Vec<&'static str>, FfmpegError> {
+    let release = Version::parse(version).map_err(|error| {
+        FfmpegError::conformance(format!("invalid libxml2 version '{version}': {error}"))
+    })?;
+    let mut arguments = vec![
+        "--enable-shared",
+        "--disable-static",
+        "--without-iconv",
+        "--without-python",
+        "--without-icu",
+        "--without-http",
+        "--without-legacy",
+        "--without-html",
+    ];
+    // libxml2 2.15 removed LZMA support and its configure option.
+    if release < Version::new(2, 15, 0) {
+        arguments.push("--without-lzma");
+    }
+    Ok(arguments)
 }
 
 fn build_runtime_aar(
@@ -1151,45 +1371,126 @@ fn ensure_ffmpeg_source(root: &Path, source: &FfmpegBuildSource) -> Result<PathB
 }
 
 fn resolve_openssl_version(root: &Path) -> Result<String, FfmpegError> {
-    if let Some(exact) = environment_text("VESPER_ANDROID_OPENSSL_VERSION")?
-        .or(environment_text("VESPER_OPENSSL_VERSION")?)
-    {
-        validate_exact_version(&exact, "OpenSSL")?;
-        return Ok(exact);
-    }
-    let series = environment_text("VESPER_ANDROID_OPENSSL_SERIES")?
-        .or(environment_text("VESPER_OPENSSL_SERIES")?)
-        .or(environment_text("VESPER_OPENSSL_LTS_SERIES")?)
-        .unwrap_or_else(|| DEFAULT_OPENSSL_SERIES.to_owned());
-    validate_series(&series, "OpenSSL")?;
-    let cache = source_cache_directory(root);
-    let names = source_cache_names(&cache)?;
-    if let Some(version) =
-        latest_package_series_archive_version("openssl", &series, names.clone(), ".tar.gz")
-    {
-        return Ok(version);
-    }
-    let remote = source_archive::fetch_bounded_text(
-        "https://openssl-library.org/source/",
-        MAX_RELEASE_INDEX_BYTES,
-        "OpenSSL release index lookup",
+    let exact = environment_text("VESPER_ANDROID_OPENSSL_VERSION")?
+        .or(environment_text("VESPER_OPENSSL_VERSION")?);
+    let series = if exact.is_some() {
+        None
+    } else {
+        environment_text("VESPER_ANDROID_OPENSSL_SERIES")?
+            .or(environment_text("VESPER_OPENSSL_SERIES")?)
+            .or(environment_text("VESPER_OPENSSL_LTS_SERIES")?)
+    };
+    resolve_openssl_selection(
+        exact.as_deref(),
+        series.as_deref(),
+        || source_cache_names(&source_cache_directory(root)),
+        || {
+            source_archive::fetch_bounded_text(
+                "https://openssl-library.org/source/",
+                MAX_RELEASE_INDEX_BYTES,
+                "OpenSSL release index lookup",
+            )
+            .map_err(map_source_error)
+        },
     )
-    .ok();
-    if let Some(version) = remote.as_deref().and_then(|index| {
-        latest_package_series_archive_version_from_index("openssl", &series, index, ".tar.gz")
-    }) {
-        return Ok(version);
-    }
-    eprintln!(
-        "warning: could not resolve the latest OpenSSL patch for series {series}; falling back to {series}"
-    );
-    Ok(series)
 }
 
-fn libxml2_version() -> Result<String, FfmpegError> {
-    let version = environment_text("VESPER_ANDROID_LIBXML2_VERSION")?
-        .unwrap_or_else(|| DEFAULT_LIBXML2_VERSION.to_owned());
-    validate_exact_version(&version, "libxml2")?;
+fn resolve_openssl_selection(
+    exact: Option<&str>,
+    series: Option<&str>,
+    cache_names: impl FnOnce() -> Result<Vec<String>, FfmpegError>,
+    release_index: impl FnOnce() -> Result<String, FfmpegError>,
+) -> Result<String, FfmpegError> {
+    if let Some(exact) = exact {
+        validate_exact_version(exact, "OpenSSL")?;
+        return Ok(exact.to_owned());
+    }
+    resolve_dependency_series_selection(
+        "openssl",
+        series.unwrap_or(DEFAULT_OPENSSL_SERIES),
+        cache_names,
+        release_index,
+    )
+}
+
+fn libxml2_version(root: &Path) -> Result<String, FfmpegError> {
+    let exact = environment_text("VESPER_ANDROID_LIBXML2_VERSION")?;
+    let series = if exact.is_some() {
+        None
+    } else {
+        environment_text("VESPER_ANDROID_LIBXML2_SERIES")?
+    };
+    resolve_libxml2_selection(
+        exact.as_deref(),
+        series.as_deref(),
+        || source_cache_names(&source_cache_directory(root)),
+        || {
+            let series = series.as_deref().unwrap_or(DEFAULT_LIBXML2_SERIES);
+            source_archive::fetch_bounded_text(
+                &format!("https://download.gnome.org/sources/libxml2/{series}/"),
+                MAX_RELEASE_INDEX_BYTES,
+                "libxml2 release index lookup",
+            )
+            .map_err(map_source_error)
+        },
+    )
+}
+
+fn resolve_libxml2_selection(
+    exact: Option<&str>,
+    series: Option<&str>,
+    cache_names: impl FnOnce() -> Result<Vec<String>, FfmpegError>,
+    release_index: impl FnOnce() -> Result<String, FfmpegError>,
+) -> Result<String, FfmpegError> {
+    if let Some(exact) = exact {
+        validate_exact_version(exact, "libxml2")?;
+        return Ok(exact.to_owned());
+    }
+    resolve_dependency_series_selection(
+        "libxml2",
+        series.unwrap_or(DEFAULT_LIBXML2_SERIES),
+        cache_names,
+        release_index,
+    )
+}
+
+fn resolve_dependency_series_selection(
+    package: &str,
+    series: &str,
+    cache_names: impl FnOnce() -> Result<Vec<String>, FfmpegError>,
+    release_index: impl FnOnce() -> Result<String, FfmpegError>,
+) -> Result<String, FfmpegError> {
+    let (label, extension) = match package {
+        "openssl" => ("OpenSSL", ".tar.gz"),
+        "libxml2" => ("libxml2", ".tar.xz"),
+        _ => {
+            return Err(FfmpegError::conformance(
+                "unknown Android FFmpeg dependency",
+            ));
+        }
+    };
+    validate_series(series, label)?;
+    let cached = latest_package_series_archive_version(package, series, cache_names()?, extension);
+    let remote = match release_index() {
+        Ok(index) => {
+            latest_package_series_archive_version_from_index(package, series, &index, extension)
+        }
+        Err(error) => {
+            if let Some(version) = cached {
+                validate_exact_version(&version, label)?;
+                eprintln!("warning: {error}; using cached {label} {version}");
+                return Ok(version);
+            }
+            return Err(error);
+        }
+    };
+    let version = select_latest_series_version(cached, remote).ok_or_else(|| {
+        FfmpegError::conformance(format!(
+            "{label} release index contains no exact release for series {series}; set VESPER_ANDROID_{}_VERSION to an exact release or seed the source cache",
+            package.to_ascii_uppercase(),
+        ))
+    })?;
+    validate_exact_version(&version, label)?;
     Ok(version)
 }
 
@@ -1364,7 +1665,8 @@ fn run_openssl_make(
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
     if let Some(destdir) = destdir {
-        command.env("DESTDIR", destdir);
+        // OpenSSL's Makefile defines DESTDIR, so an environment value is overridden.
+        command.arg(format!("DESTDIR={}", destdir.display()));
     }
     run_build_command(&mut command, label)
 }
@@ -1652,6 +1954,517 @@ fn map_gradle_error(error: gradle::GradleError) -> FfmpegError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openssl_default_series_refreshes_an_older_cached_patch() {
+        assert_eq!(
+            resolve_openssl_selection(
+                None,
+                None,
+                || Ok(vec!["openssl-3.5.9.tar.gz".to_owned()]),
+                || Ok("openssl-3.5.10.tar.gz openssl-3.6.2.tar.gz".to_owned()),
+            )
+            .expect("latest release in the default LTS series"),
+            "3.5.10"
+        );
+    }
+
+    #[test]
+    fn libxml2_default_series_refreshes_cached_patches_and_keeps_exact_overrides() {
+        assert_eq!(
+            resolve_libxml2_selection(
+                None,
+                None,
+                || Ok(vec!["libxml2-2.15.4.tar.xz".to_owned()]),
+                || Ok("libxml2-2.15.5.tar.xz libxml2-2.16.1.tar.xz".to_owned()),
+            )
+            .expect("new patch in the current series"),
+            "2.15.5"
+        );
+        assert_eq!(
+            resolve_libxml2_selection(
+                Some("2.14.6"),
+                Some("invalid"),
+                || panic!("exact override must not inspect cache"),
+                || panic!("exact override must not query index"),
+            )
+            .expect("explicit exact override"),
+            "2.14.6"
+        );
+        assert_eq!(
+            resolve_libxml2_selection(
+                None,
+                None,
+                || Ok(vec!["libxml2-2.15.5.tar.xz".to_owned()]),
+                || Err(FfmpegError::worker("libxml2 release index lookup: offline")),
+            )
+            .expect("offline cache fallback"),
+            "2.15.5"
+        );
+    }
+
+    #[test]
+    fn openssl_series_lookup_preserves_failure_cause() {
+        let error = resolve_openssl_selection(
+            None,
+            Some("3.5"),
+            || Ok(Vec::new()),
+            || {
+                Err(FfmpegError::worker(
+                    "OpenSSL release index lookup: TLS certificate failure",
+                ))
+            },
+        )
+        .expect_err("failed lookup must not yield a series");
+        assert!(error.to_string().contains("TLS certificate failure"));
+    }
+
+    #[test]
+    fn openssl_exact_override_precedes_series_and_rejects_non_exact_versions() {
+        assert_eq!(
+            resolve_openssl_selection(
+                Some("3.6.2"),
+                Some("invalid"),
+                || panic!("exact override must not inspect cache"),
+                || panic!("exact override must not query index"),
+            )
+            .expect("exact override"),
+            "3.6.2"
+        );
+        for version in ["3.5", "3.5.9-beta", "3.5.9+local"] {
+            assert!(
+                resolve_openssl_selection(
+                    Some(version),
+                    None,
+                    || Ok(Vec::new()),
+                    || Ok(String::new()),
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn openssl_explicit_series_preserves_offline_cache_selection() {
+        assert_eq!(
+            resolve_openssl_selection(
+                None,
+                Some("3.5"),
+                || Ok(vec![
+                    "openssl-3.5.7.tar.gz".to_owned(),
+                    "openssl-3.6.2.tar.gz".to_owned()
+                ]),
+                || Err(FfmpegError::worker("OpenSSL release index lookup: offline")),
+            )
+            .expect("cached exact release"),
+            "3.5.7"
+        );
+    }
+
+    #[test]
+    fn openssl_series_lookup_requires_a_matching_exact_release() {
+        assert_eq!(
+            resolve_openssl_selection(
+                None,
+                Some("3.5"),
+                || Ok(Vec::new()),
+                || Ok("openssl-3.5.8.tar.gz openssl-3.5.9.tar.gz openssl-3.6.2.tar.gz".to_owned()),
+            )
+            .expect("remote exact release"),
+            "3.5.9"
+        );
+        let error = resolve_openssl_selection(
+            None,
+            Some("3.5"),
+            || Ok(Vec::new()),
+            || Ok("openssl-3.6.2.tar.gz".to_owned()),
+        )
+        .expect_err("missing release must not become 3.5");
+        assert!(
+            error
+                .to_string()
+                .contains("no exact release for series 3.5")
+        );
+    }
+
+    #[test]
+    fn android_dependency_known_versions_verify_official_sources_and_checksums() {
+        let xml = AndroidDependencySource::new("libxml2", KNOWN_LIBXML2_VERSION, None, None)
+            .expect("pinned libxml2");
+        assert_eq!(xml.version, "2.15.4");
+        assert_eq!(
+            xml.source_url,
+            "https://download.gnome.org/sources/libxml2/2.15/libxml2-2.15.4.tar.xz"
+        );
+        assert_eq!(
+            xml.sha256.as_deref(),
+            Some("98087fd181d9070724f3fbc65c7377db03038eb92bd882374daff44940138821")
+        );
+        let ssl = AndroidDependencySource::new("openssl", KNOWN_OPENSSL_VERSION, None, None)
+            .expect("pinned OpenSSL");
+        assert_eq!(ssl.version, "3.5.9");
+        assert_eq!(
+            ssl.source_url,
+            "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz"
+        );
+        assert_eq!(
+            ssl.sha256.as_deref(),
+            Some("603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a")
+        );
+    }
+
+    #[test]
+    fn libxml2_configure_omits_removed_lzma_option_only_for_new_releases() {
+        assert!(
+            !libxml2_configure_arguments("2.15.4")
+                .expect("new release")
+                .contains(&"--without-lzma")
+        );
+        assert!(
+            libxml2_configure_arguments("2.14.6")
+                .expect("old override")
+                .contains(&"--without-lzma")
+        );
+    }
+
+    #[test]
+    fn android_dependency_patches_accept_optional_checksum_overrides() {
+        let source = AndroidDependencySource::new("openssl", "3.5.10", None, None)
+            .expect("new patch without a checked-in digest");
+        assert!(source.sha256.is_none());
+        let source = AndroidDependencySource::new(
+            "openssl",
+            "3.5.7",
+            Some("https://mirror.example/openssl-3.5.7.tar.gz".to_owned()),
+            Some("a".repeat(64)),
+        )
+        .expect("explicit source identity");
+        assert_eq!(
+            source.source_url,
+            "https://mirror.example/openssl-3.5.7.tar.gz"
+        );
+        assert_eq!(source.sha256, Some("a".repeat(64)));
+        assert!(
+            AndroidDependencySource::new("libxml2", "2.15.4", None, Some("invalid".to_owned()),)
+                .is_err()
+        );
+    }
+
+    fn write_dependency_fixture(install: &Path, name: &str, version: &str) {
+        let files = match name {
+            "libxml2" => vec![
+                (
+                    "lib/pkgconfig/libxml-2.0.pc",
+                    format!("Version: {version}\n"),
+                ),
+                (
+                    "include/libxml2/libxml/xmlversion.h",
+                    format!("#define LIBXML_DOTTED_VERSION \"{version}\"\n"),
+                ),
+                ("lib/libxml2.so", "libxml2 fixture".to_owned()),
+            ],
+            "openssl" => vec![
+                ("lib/pkgconfig/openssl.pc", format!("Version: {version}\n")),
+                (
+                    "include/openssl/opensslv.h",
+                    format!("# define OPENSSL_VERSION_STR \"{version}\"\n"),
+                ),
+                ("lib/libssl.so", "libssl fixture".to_owned()),
+                ("lib/libcrypto.so", "libcrypto fixture".to_owned()),
+            ],
+            _ => panic!("unknown fixture"),
+        };
+        for (relative, contents) in files {
+            let path = install.join(relative);
+            fs::create_dir_all(path.parent().expect("file parent")).expect("fixture directory");
+            fs::write(path, contents).expect("fixture file");
+        }
+    }
+
+    #[test]
+    fn moving_dependency_patch_records_the_archive_digest_for_reuse() {
+        let directory = tempfile::tempdir().expect("source cache fixture");
+        let archive = directory
+            .path()
+            .join("third_party/_cache/openssl-3.5.10.tar.gz");
+        fs::create_dir_all(archive.parent().expect("cache parent")).expect("cache directory");
+        fs::write(&archive, "first archive bytes").expect("cached archive");
+        let source = AndroidDependencySource::new("openssl", "3.5.10", None, None)
+            .expect("moving patch")
+            .record_source_digest(directory.path())
+            .expect("record cached archive digest");
+        let install = directory.path().join("install");
+        write_dependency_fixture(&install, "openssl", "3.5.10");
+        source
+            .write_metadata(&install, "arm64-v8a", 26)
+            .expect("receipt");
+        assert!(source.is_current(&install, "arm64-v8a", 26).expect("reuse"));
+
+        fs::write(&archive, "changed archive bytes").expect("changed cached source");
+        let changed = AndroidDependencySource::new("openssl", "3.5.10", None, None)
+            .expect("same patch")
+            .record_source_digest(directory.path())
+            .expect("record changed source digest");
+        assert_ne!(source.sha256, changed.sha256);
+        assert!(
+            !changed
+                .is_current(&install, "arm64-v8a", 26)
+                .expect("rebuild")
+        );
+    }
+
+    #[test]
+    fn android_dependency_reuse_rejects_missing_old_and_unrecorded_installs() {
+        let stage = tempfile::tempdir().expect("install fixture");
+        for (name, version, old) in [
+            ("libxml2", "2.15.4", "2.14.6"),
+            ("openssl", "3.5.9", "3.5.7"),
+        ] {
+            let install = stage.path().join(name);
+            let source = AndroidDependencySource::new(name, version, None, None).expect("source");
+            assert!(
+                !source
+                    .is_current(&install, "arm64-v8a", 26)
+                    .expect("missing install")
+            );
+            write_dependency_fixture(&install, name, old);
+            assert!(
+                !source
+                    .is_current(&install, "arm64-v8a", 26)
+                    .expect("old install")
+            );
+            write_dependency_fixture(&install, name, version);
+            assert!(
+                !source
+                    .is_current(&install, "arm64-v8a", 26)
+                    .expect("missing provenance")
+            );
+            source
+                .write_metadata(&install, "arm64-v8a", 26)
+                .expect("record install");
+            assert!(
+                source
+                    .is_current(&install, "arm64-v8a", 26)
+                    .expect("current install")
+            );
+            assert!(
+                !source
+                    .is_current(&install, "arm64-v8a", 27)
+                    .expect("different API")
+            );
+        }
+    }
+
+    #[test]
+    fn android_dependency_reuse_checks_headers_libraries_and_source_identity() {
+        let stage = tempfile::tempdir().expect("install fixture");
+        let install = stage.path();
+        let source = AndroidDependencySource::new("libxml2", "2.15.4", None, None).expect("source");
+        write_dependency_fixture(install, "libxml2", "2.15.4");
+        source
+            .write_metadata(install, "arm64-v8a", 26)
+            .expect("record install");
+        fs::write(
+            install.join("include/libxml2/libxml/xmlversion.h"),
+            "#define LIBXML_DOTTED_VERSION \"2.14.6\"\n",
+        )
+        .expect("stale header");
+        assert!(
+            !source
+                .is_current(install, "arm64-v8a", 26)
+                .expect("stale header")
+        );
+        write_dependency_fixture(install, "libxml2", "2.15.4");
+        fs::write(install.join("lib/libxml2.so"), "different build").expect("changed binary");
+        assert!(
+            !source
+                .is_current(install, "arm64-v8a", 26)
+                .expect("changed binary")
+        );
+        write_dependency_fixture(install, "libxml2", "2.15.4");
+        let mirror = AndroidDependencySource::new(
+            "libxml2",
+            "2.15.4",
+            Some("https://mirror.example/libxml2-2.15.4.tar.xz".to_owned()),
+            None,
+        )
+        .expect("mirror");
+        assert!(
+            !mirror
+                .is_current(install, "arm64-v8a", 26)
+                .expect("changed source URL")
+        );
+        let patched = AndroidDependencySource::new("libxml2", "2.15.4", None, Some("b".repeat(64)))
+            .expect("patched source");
+        assert!(
+            !patched
+                .is_current(install, "arm64-v8a", 26)
+                .expect("changed source hash")
+        );
+        fs::remove_file(install.join("lib/libxml2.so")).expect("remove library");
+        assert!(
+            !source
+                .is_current(install, "arm64-v8a", 26)
+                .expect("missing library")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn android_dependency_reuse_follows_installed_shared_library_links() {
+        let stage = tempfile::tempdir().expect("install fixture");
+        let install = stage.path();
+        let source = AndroidDependencySource::new("libxml2", "2.15.4", None, None).expect("source");
+        write_dependency_fixture(install, "libxml2", "2.15.4");
+        fs::rename(
+            install.join("lib/libxml2.so"),
+            install.join("lib/libxml2.so.16"),
+        )
+        .expect("versioned library");
+        std::os::unix::fs::symlink("libxml2.so.16", install.join("lib/libxml2.so"))
+            .expect("library symlink");
+        source
+            .write_metadata(install, "arm64-v8a", 26)
+            .expect("record linked install");
+        assert!(
+            source
+                .is_current(install, "arm64-v8a", 26)
+                .expect("linked install")
+        );
+    }
+
+    #[test]
+    fn android_ffmpeg_reuse_includes_dependency_provenance() {
+        let stage = tempfile::tempdir().expect("FFmpeg fixture");
+        let dependency_install = stage.path().join("dependency");
+        let old = AndroidDependencySource::new("libxml2", "2.14.6", None, Some("c".repeat(64)))
+            .expect("old source");
+        write_dependency_fixture(&dependency_install, "libxml2", "2.14.6");
+        old.write_metadata(&dependency_install, "arm64-v8a", 26)
+            .expect("old receipt");
+        let base = "Vesper FFmpeg build metadata v2\nexternal_dependencies=libxml2\n";
+        let mut old_metadata = base.to_owned();
+        append_dependency_metadata(&mut old_metadata, &dependency_install, "libxml2")
+            .expect("old provenance");
+        let new =
+            AndroidDependencySource::new("libxml2", "2.15.4", None, None).expect("new source");
+        write_dependency_fixture(&dependency_install, "libxml2", "2.15.4");
+        new.write_metadata(&dependency_install, "arm64-v8a", 26)
+            .expect("new receipt");
+        let mut metadata = base.to_owned();
+        append_dependency_metadata(&mut metadata, &dependency_install, "libxml2")
+            .expect("new provenance");
+        assert!(metadata.contains("libxml2_version=2.15.4\n"));
+        assert!(metadata.contains(&format!("libxml2_source_sha256={KNOWN_LIBXML2_SHA256}\n")));
+        let install = stage.path().join("ffmpeg");
+        fs::create_dir_all(install.join("lib/pkgconfig")).expect("FFmpeg fixture directory");
+        fs::write(install.join("lib/libavcodec.so"), "avcodec fixture").expect("FFmpeg library");
+        fs::write(
+            install.join("lib/pkgconfig/libavcodec.pc"),
+            "avcodec fixture",
+        )
+        .expect("FFmpeg pc");
+        let mut plan = AndroidAbiPlan {
+            abi: "arm64-v8a".to_owned(),
+            install,
+            build: stage.path().join("build"),
+            configure_line: Vec::new(),
+            metadata,
+            pkg_config_paths: Vec::new(),
+        };
+        let libraries = vec!["avcodec".to_owned()];
+        for stale in [base, &old_metadata] {
+            fs::write(plan.install.join("vesper-ffmpeg-build-metadata.txt"), stale)
+                .expect("stale metadata");
+            assert!(
+                !plan
+                    .is_current(&libraries)
+                    .expect("stale provenance must rebuild")
+            );
+        }
+        fs::write(
+            plan.install.join("vesper-ffmpeg-build-metadata.txt"),
+            &plan.metadata,
+        )
+        .expect("current metadata");
+        assert!(
+            plan.is_current(&libraries)
+                .expect("same dependency provenance can reuse")
+        );
+        for changed_source in [
+            AndroidDependencySource::new(
+                "libxml2",
+                "2.15.4",
+                Some("https://mirror.example/libxml2-2.15.4.tar.xz".to_owned()),
+                None,
+            )
+            .expect("changed source URL"),
+            AndroidDependencySource::new("libxml2", "2.15.4", None, Some("d".repeat(64)))
+                .expect("changed source checksum"),
+        ] {
+            changed_source
+                .write_metadata(&dependency_install, "arm64-v8a", 26)
+                .expect("record changed source identity");
+            plan.metadata = base.to_owned();
+            append_dependency_metadata(&mut plan.metadata, &dependency_install, "libxml2")
+                .expect("updated source provenance");
+            assert!(
+                !plan
+                    .is_current(&libraries)
+                    .expect("source identity change must rebuild FFmpeg")
+            );
+        }
+        fs::write(
+            dependency_install.join("lib/libxml2.so"),
+            "new real library bytes",
+        )
+        .expect("changed dependency library");
+        new.write_metadata(&dependency_install, "arm64-v8a", 26)
+            .expect("record new dependency build");
+        plan.metadata = base.to_owned();
+        append_dependency_metadata(&mut plan.metadata, &dependency_install, "libxml2")
+            .expect("updated binary provenance");
+        assert!(
+            !plan
+                .is_current(&libraries)
+                .expect("changed dependency .so must rebuild FFmpeg")
+        );
+    }
+
+    #[test]
+    fn openssl_install_stages_files_without_overwriting_the_live_prefix() {
+        let directory = tempfile::tempdir().expect("create OpenSSL install fixture");
+        let install = directory.path().join("live-prefix");
+        fs::create_dir(&install).expect("create live prefix");
+        fs::write(install.join("receipt"), b"original").expect("preserve installed file");
+        fs::write(directory.path().join("Makefile"), format!(
+            "DESTDIR=\n.PHONY: install_sw\ninstall_sw:\n\tmkdir -p \"$(DESTDIR){}\"\n\tprintf staged > \"$(DESTDIR){}/receipt\"\n",
+            install.display(), install.display(),
+        )).expect("write OpenSSL-style Makefile");
+        let destination = directory.path().join("stage");
+        let toolchain = AndroidToolchain {
+            root: directory.path().to_path_buf(),
+            bin: directory.path().to_path_buf(),
+            sysroot: directory.path().to_path_buf(),
+        };
+        run_openssl_make(
+            directory.path(),
+            &["install_sw".to_owned()],
+            Some(&destination),
+            &toolchain,
+            "OpenSSL install fixture",
+        )
+        .expect("stage installation");
+        let staged = staged_install_path(&destination, &install).expect("resolve staging prefix");
+        assert_eq!(
+            fs::read(staged.join("receipt")).expect("read staged install"),
+            b"staged"
+        );
+        assert_eq!(
+            fs::read(install.join("receipt")).expect("read live install"),
+            b"original"
+        );
+    }
 
     #[test]
     fn staged_install_paths_preserve_absolute_prefixes() {

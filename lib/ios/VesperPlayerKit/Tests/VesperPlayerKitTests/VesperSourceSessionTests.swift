@@ -1,8 +1,46 @@
+import Combine
 import XCTest
 @testable import VesperPlayerKit
 
 @MainActor
 final class VesperSourceSessionTests: XCTestCase {
+    func testRunningSnapshotReentryRespectsConcurrencyAndMemoryReservations() async throws {
+        for concurrency in [1, 2] {
+            let loader = SourceSessionGateLoader()
+            let session = try VesperSourceSession(configuration: .init(maxConcurrentPreloads: concurrency,
+                maxPendingPreloads: 1, maxMemoryBytes: 64 * 1024), cache: .init(),
+                transport: VesperDashStartupHTTPTransport(), progressiveLoader: loader)
+            defer { session.close() }
+            let a = try session.register(.remoteUrl(URL(string: "https://fixture.test/a.mp4")!))
+            let b = try session.register(.remoteUrl(URL(string: "https://fixture.test/b.mp4")!))
+            let c = try session.register(.remoteUrl(URL(string: "https://fixture.test/c.mp4")!))
+            let first = try a.preload()
+            await loader.waitUntilStarted()
+            let second = try b.preload()
+            XCTAssertEqual(second.snapshot.status, .queued)
+            var third: VesperPreloadTask?
+            var reentryError: Error?
+            var nestedStatus: VesperPreloadStatus?
+            let observation = second.$snapshot.sink { value in
+                guard value.status == .running, third == nil, reentryError == nil else { return }
+                do {
+                    let task = try c.preload()
+                    third = task
+                    nestedStatus = task.snapshot.status
+                } catch { reentryError = error }
+            }
+            defer { observation.cancel() }
+            await loader.open()
+            _ = await first.result
+            _ = await second.result
+            XCTAssertNil(reentryError)
+            XCTAssertEqual(nestedStatus, .queued, "The published worker must already occupy its slot and memory budget")
+            let task = try XCTUnwrap(third)
+            let result = await task.result
+            XCTAssertEqual(result.status, .completed)
+        }
+    }
+
     private let manifestURL = URL(string: "https://fixture.test/manifest.mpd")!
 
     func testLocalPreloadSurvivesControllerCachePolicyAndManifestDeletion() async throws {

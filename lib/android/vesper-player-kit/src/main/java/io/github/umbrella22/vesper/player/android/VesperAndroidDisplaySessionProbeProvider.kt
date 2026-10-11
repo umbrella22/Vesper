@@ -108,7 +108,7 @@ private fun Context.probeCodecFormatSupport(
                 requiresTunnelingDecoder = false,
             )
         }.onFailure { error ->
-            Log.w(SESSION_PROBE_TAG, "failed to query hardware decoder format support for $sampleMimeType", error)
+            Log.w(SESSION_PROBE_TAG, "failed to query hardware decoder format support for $sampleMimeType failure=${diagnosticPlaybackFailure(error)}")
         }.getOrElse {
             return AndroidCodecFormatProbeResult(
                 sampleMimeType = sampleMimeType,
@@ -140,7 +140,7 @@ private fun Context.probeCodecFormatSupport(
             runCatching {
                 decoder.isFormatSupported(this, format)
             }.onFailure { error ->
-                Log.w(SESSION_PROBE_TAG, "failed to probe decoder ${decoder.name} for $sampleMimeType", error)
+                Log.w(SESSION_PROBE_TAG, "failed to probe decoder ${decoder.name} for $sampleMimeType failure=${diagnosticPlaybackFailure(error)}")
             }.getOrDefault(false)
         }
     return AndroidCodecFormatProbeResult(

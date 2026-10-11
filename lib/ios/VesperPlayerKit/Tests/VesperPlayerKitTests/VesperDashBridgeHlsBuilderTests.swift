@@ -100,8 +100,11 @@ final class VesperDashBridgeHlsBuilderTests: XCTestCase {
         XCTAssertEqual(segments[0].number, 1)
         XCTAssertEqual(segments[96].number, 97)
         XCTAssertNil(segments[0].time)
-        XCTAssertEqual(segments[0].duration, 2.0, accuracy: 0.000_001)
-        XCTAssertEqual(segments[96].duration, 1.68, accuracy: 0.000_001)
+        // The MPD declares 179704 ticks per segment, not 180000. Preserve
+        // that timing and clip only the final segment to the presentation end.
+        XCTAssertEqual(segments[0].duration, 179_704.0 / 90_000.0, accuracy: 0.000_001)
+        XCTAssertEqual(segments[96].duration, 179_616.0 / 90_000.0, accuracy: 0.000_001)
+        XCTAssertEqual(segments.reduce(0) { $0 + $1.duration }, 193.68, accuracy: 0.000_001)
 
         let media = try VesperDashHlsBuilder.buildMediaPlaylist(
             initializationURI: "vesper-dash://segment/session/v1_257/init.mp4",
@@ -109,8 +112,8 @@ final class VesperDashBridgeHlsBuilderTests: XCTestCase {
             segmentURI: { "vesper-dash://segment/session/v1_257/\($0).m4s" }
         )
         XCTAssertTrue(media.contains("#EXT-X-MAP:URI=\"vesper-dash://segment/session/v1_257/init.mp4\""))
-        XCTAssertTrue(media.contains("#EXTINF:2.000,"))
-        XCTAssertTrue(media.contains("#EXTINF:1.680,"))
+        XCTAssertTrue(media.contains("#EXTINF:1.997,"))
+        XCTAssertTrue(media.contains("#EXTINF:1.996,"))
         XCTAssertTrue(media.contains("vesper-dash://segment/session/v1_257/0.m4s"))
         XCTAssertTrue(media.hasSuffix("#EXT-X-ENDLIST\n"))
 

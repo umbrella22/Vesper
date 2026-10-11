@@ -1141,7 +1141,7 @@ fn pipeline_event_worker_isolates_failures_and_panics_from_download_state() {
 }
 
 #[test]
-fn pipeline_event_worker_rejects_host_owned_and_oversized_author_errors() {
+fn pipeline_event_worker_preserves_host_errors_and_bounds_only_report_projection() {
     struct HostOwnedErrorHook;
     struct OversizedErrorHook;
 
@@ -1203,12 +1203,22 @@ fn pipeline_event_worker_rejects_host_owned_and_oversized_author_errors() {
     let reports = manager.drain_pipeline_event_hook_reports();
     assert!(!reports.reports.is_empty());
     for report in reports.reports {
-        let Err(PipelineEventHookError::ProtocolViolation(message)) = report.result else {
-            panic!("invalid author error must become a protocol violation");
-        };
-        assert!(message.len() <= MAX_PLUGIN_ERROR_MESSAGE_BYTES);
-        assert!(!message.contains("host-owned-sentinel"));
-        assert!(!message.contains("author-sentinel"));
+        let error = report.result.expect_err("host diagnostic");
+        match &error {
+            PipelineEventHookError::AbiViolation(message) => {
+                assert_eq!(message, "host-owned-sentinel");
+                assert_eq!(error.report_projection(), error);
+            }
+            PipelineEventHookError::Failed(message) => {
+                assert!(message.len() > MAX_PLUGIN_ERROR_MESSAGE_BYTES);
+                let PipelineEventHookError::Failed(projected) = error.report_projection() else {
+                    panic!("report projection must preserve the code");
+                };
+                assert_eq!(projected.len(), MAX_PLUGIN_ERROR_MESSAGE_BYTES);
+                assert!(message.starts_with(&projected));
+            }
+            other => panic!("unexpected host classification: {other:?}"),
+        }
     }
 }
 
@@ -1718,6 +1728,240 @@ fn manager_exports_completed_segment_download_with_progress() {
     }));
 }
 
+fn completed_processed_single_file_fixture(
+    directory: &std::path::Path,
+    bytes: &[u8],
+    skip_processed: bool,
+) -> (
+    DownloadManager<InMemoryDownloadStore, InMemoryDownloadExecutor>,
+    DownloadTaskId,
+    PathBuf,
+) {
+    struct SingleFileRemuxProcessor {
+        skip_processed: bool,
+    }
+    impl PostDownloadProcessor for SingleFileRemuxProcessor {
+        fn name(&self) -> &str {
+            "single-file-remux-fixture"
+        }
+
+        fn supported_input_formats(&self) -> &[ContentFormatKind] {
+            &[ContentFormatKind::SingleFile]
+        }
+
+        fn capabilities(&self) -> ProcessorCapabilities {
+            ProcessorCapabilities {
+                supported_input_formats: vec![ContentFormatKind::SingleFile],
+                output_formats: vec![OutputFormat::Mp4],
+                supports_cancellation: true,
+                supports_assembly: false,
+                supported_assembly_modes: Vec::new(),
+            }
+        }
+
+        fn process(
+            &self,
+            input: &CompletedDownloadInfo,
+            output_path: &std::path::Path,
+            _progress: &dyn ProcessorProgress,
+        ) -> Result<ProcessorOutput, ProcessorError> {
+            let player_plugin::CompletedContentFormat::SingleFile { path } = &input.content_format
+            else {
+                return Err(ProcessorError::UnsupportedFormat(
+                    input.content_format.kind(),
+                ));
+            };
+            if path.extension().is_some_and(|extension| extension == "mp4") {
+                return if self.skip_processed {
+                    Ok(ProcessorOutput::Skipped)
+                } else {
+                    Ok(ProcessorOutput::MuxedFile {
+                        path: path.clone(),
+                        format: OutputFormat::Mp4,
+                    })
+                };
+            }
+            fs::copy(path, output_path)
+                .map_err(|error| ProcessorError::MuxFailed(error.to_string()))?;
+            Ok(ProcessorOutput::MuxedFile {
+                path: output_path.to_path_buf(),
+                format: OutputFormat::Mp4,
+            })
+        }
+    }
+
+    fs::create_dir_all(directory).expect("fixture directory should exist");
+    let source_path = directory.join("input.flv");
+    fs::write(&source_path, bytes).expect("source fixture should be written");
+    let mut manager = DownloadManager::new(
+        DownloadManagerConfig {
+            auto_start: false,
+            run_post_processors_on_completion: true,
+            post_processors: vec![built_in_processor(Arc::new(SingleFileRemuxProcessor {
+                skip_processed,
+            }))],
+            ..DownloadManagerConfig::default()
+        },
+        InMemoryDownloadStore::default(),
+        InMemoryDownloadExecutor::default(),
+    );
+    let now = Instant::now();
+    let task_id = manager
+        .create_task(
+            "processed-single-file",
+            DownloadSource::new(
+                MediaSource::new(format!("file://{}", source_path.display())),
+                DownloadContentFormat::SingleFile,
+            ),
+            DownloadProfile {
+                target_directory: Some(directory.to_path_buf()),
+                target_output_format: Some(OutputFormat::Mp4),
+                ..DownloadProfile::default()
+            },
+            DownloadAssetIndex::default(),
+            now,
+        )
+        .expect("task should be created");
+    let completed = manager
+        .complete_task(task_id, Some(source_path), now)
+        .expect("completion should succeed")
+        .expect("completed task should exist");
+    assert_eq!(completed.status, DownloadTaskStatus::Completed);
+    let processed_path = completed
+        .asset_index
+        .completed_path
+        .clone()
+        .expect("completed path");
+    assert_eq!(processed_path, directory.join("input.mp4"));
+    assert_eq!(fs::read(&processed_path).expect("processed source"), bytes);
+    (manager, task_id, processed_path)
+}
+
+#[test]
+fn manager_exports_processed_single_file_to_requested_path_with_progress() {
+    let bytes = (0..(2 * 1024 * 1024 + 257))
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    for skip_processed in [true, false] {
+        let directory = unique_test_dir("vesper-processed-export");
+        let (manager, task_id, source_path) =
+            completed_processed_single_file_fixture(&directory, &bytes, skip_processed);
+        let output_path = directory.join("exports/exported video 播放.mp4");
+        let progress = RecordingProgress::default();
+        let exported = manager
+            .export_task_output(task_id, Some(&output_path), &progress)
+            .expect("processed export should succeed");
+        assert_eq!(
+            exported, output_path,
+            "requested destination is the export result"
+        );
+        assert_eq!(fs::read(&exported).expect("export must exist"), bytes);
+        assert_eq!(fs::read(&source_path).expect("source survives"), bytes);
+        let ratios = progress.ratios();
+        assert!(ratios.len() >= 3, "multi-block copies report progress");
+        assert!(ratios.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert_eq!(ratios.last(), Some(&1.0));
+        fs::remove_dir_all(directory).expect("fixture should be removed");
+    }
+}
+
+#[test]
+fn manager_exports_processed_single_file_to_same_path_or_without_destination() {
+    for skip_processed in [true, false] {
+        let directory = unique_test_dir("vesper-processed-export-same-path");
+        let bytes = b"completed MP4 bytes";
+        let (manager, task_id, source_path) =
+            completed_processed_single_file_fixture(&directory, bytes, skip_processed);
+        for output_path in [Some(source_path.as_path()), None] {
+            let exported = manager
+                .export_task_output(task_id, output_path, &NoopProcessorProgress)
+                .expect("existing processed output should succeed");
+            assert_eq!(exported, source_path);
+            assert_eq!(fs::read(&exported).expect("source remains readable"), bytes);
+        }
+        fs::remove_dir_all(directory).expect("fixture should be removed");
+    }
+}
+
+#[test]
+fn manager_exports_processed_single_file_propagates_cancellation() {
+    struct CancelExport {
+        cancelled: std::sync::atomic::AtomicBool,
+        ratios: Mutex<Vec<f32>>,
+    }
+    impl ProcessorProgress for CancelExport {
+        fn on_progress(&self, ratio: f32) {
+            self.ratios.lock().expect("progress lock").push(ratio);
+            self.cancelled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        fn is_cancelled(&self) -> bool {
+            self.cancelled.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    let bytes = vec![0x35; 2 * 1024 * 1024 + 257];
+    for skip_processed in [true, false] {
+        for initially_cancelled in [true, false] {
+            let directory = unique_test_dir("vesper-processed-export-cancelled");
+            let (manager, task_id, source_path) =
+                completed_processed_single_file_fixture(&directory, &bytes, skip_processed);
+            let output_path = directory.join("exported.mp4");
+            fs::write(&output_path, b"previous export").expect("previous export exists");
+            let progress = CancelExport {
+                cancelled: std::sync::atomic::AtomicBool::new(initially_cancelled),
+                ratios: Mutex::new(Vec::new()),
+            };
+            let error = manager
+                .export_task_output(task_id, Some(&output_path), &progress)
+                .expect_err("cancelled processed export must fail");
+            assert_eq!(error.code(), PlayerErrorCode::BackendFailure);
+            assert_eq!(error.category(), PlayerErrorCategory::Platform);
+            assert!(error.to_string().contains("download export was cancelled"));
+            assert_eq!(
+                fs::read(&output_path).expect("previous export survives"),
+                b"previous export"
+            );
+            assert_eq!(fs::read(&source_path).expect("source survives"), bytes);
+            let ratios = progress.ratios.lock().expect("progress lock");
+            if initially_cancelled {
+                assert!(ratios.is_empty());
+            } else {
+                assert_eq!(ratios.len(), 1);
+                assert!(ratios[0] > 0.0 && ratios[0] < 1.0);
+            }
+            assert_eq!(
+                fs::read_dir(&directory).expect("fixture directory").count(),
+                3
+            );
+            fs::remove_dir_all(directory).expect("fixture should be removed");
+        }
+    }
+}
+
+#[test]
+fn manager_exports_processed_single_file_propagates_copy_failure() {
+    let directory = unique_test_dir("vesper-processed-export-io-error");
+    let bytes = b"completed MP4 bytes";
+    let (manager, task_id, source_path) =
+        completed_processed_single_file_fixture(&directory, bytes, true);
+    let blocked_parent = directory.join("file-not-directory");
+    fs::write(&blocked_parent, b"preserve blocker").expect("blocker exists");
+    let output_path = blocked_parent.join("exported.mp4");
+    let error = manager
+        .export_task_output(task_id, Some(&output_path), &NoopProcessorProgress)
+        .expect_err("unwritable processed export destination must fail");
+    assert_eq!(error.code(), PlayerErrorCode::BackendFailure);
+    assert_eq!(error.category(), PlayerErrorCategory::Platform);
+    assert!(error.to_string().contains("create export directory"));
+    assert_eq!(fs::read(&source_path).expect("source survives"), bytes);
+    assert_eq!(
+        fs::read(&blocked_parent).expect("blocker survives"),
+        b"preserve blocker"
+    );
+    fs::remove_dir_all(directory).expect("fixture should be removed");
+}
+
 #[test]
 fn manager_exports_completed_single_file_download_without_processor() {
     let config = DownloadManagerConfig {
@@ -1769,10 +2013,266 @@ fn manager_exports_completed_single_file_download_without_processor() {
     fs::remove_dir_all(temp_dir).expect("temp directory should be removed");
 }
 
+#[test]
+fn manager_exports_completed_file_on_small_worker_stack() {
+    const CHILD_DIRECTORY_ENV: &str = "VESPER_DOWNLOAD_EXPORT_SMALL_STACK_CHILD_DIRECTORY";
+
+    if let Some(directory) = std::env::var_os(CHILD_DIRECTORY_ENV) {
+        let directory = PathBuf::from(directory);
+        std::thread::Builder::new()
+            .name("download-export-small-stack".to_owned())
+            .stack_size(512 * 1024)
+            .spawn(move || {
+                let source_path = directory.join("input.mp4");
+                let output_path = directory.join("exported.mp4");
+                let source_bytes = fs::read(&source_path).expect("source should be readable");
+                let mut manager = DownloadManager::new(
+                    DownloadManagerConfig {
+                        auto_start: false,
+                        run_post_processors_on_completion: true,
+                        ..DownloadManagerConfig::default()
+                    },
+                    InMemoryDownloadStore::default(),
+                    InMemoryDownloadExecutor::default(),
+                );
+                let now = Instant::now();
+                let task_id = manager
+                    .create_task(
+                        "small-stack-export",
+                        DownloadSource::new(
+                            MediaSource::new(format!("file://{}", source_path.display())),
+                            DownloadContentFormat::SingleFile,
+                        ),
+                        DownloadProfile::default(),
+                        DownloadAssetIndex::default(),
+                        now,
+                    )
+                    .expect("create task should succeed");
+                manager
+                    .complete_task(task_id, Some(source_path.clone()), now)
+                    .expect("complete should succeed");
+
+                struct ExportProgress {
+                    output_path: PathBuf,
+                    ratios: Mutex<Vec<f32>>,
+                    cancel_after_progress: bool,
+                    cancelled: std::sync::atomic::AtomicBool,
+                }
+                impl ProcessorProgress for ExportProgress {
+                    fn on_progress(&self, ratio: f32) {
+                        if ratio < 1.0 {
+                            assert_eq!(
+                                fs::read(&self.output_path).expect("old output should be readable"),
+                                b"previous export",
+                                "partial copies must not be published"
+                            );
+                        }
+                        self.ratios.lock().expect("progress lock").push(ratio);
+                        if self.cancel_after_progress {
+                            self.cancelled
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+
+                    fn is_cancelled(&self) -> bool {
+                        self.cancelled.load(std::sync::atomic::Ordering::Relaxed)
+                    }
+                }
+
+                for cancel_after_progress in [false, true] {
+                    fs::write(&output_path, b"previous export").expect("old output should exist");
+                    let progress = ExportProgress {
+                        output_path: output_path.clone(),
+                        ratios: Mutex::new(Vec::new()),
+                        cancel_after_progress,
+                        cancelled: std::sync::atomic::AtomicBool::new(false),
+                    };
+                    let result = manager.export_task_output(task_id, Some(&output_path), &progress);
+                    let ratios = progress.ratios.lock().expect("progress lock");
+                    if cancel_after_progress {
+                        assert!(result.is_err(), "cancelled export must fail");
+                        assert_eq!(ratios.len(), 1, "cancel before copying the next block");
+                        assert_eq!(
+                            fs::read(&output_path).expect("old output"),
+                            b"previous export"
+                        );
+                    } else {
+                        assert_eq!(result.expect("export should succeed"), output_path);
+                        assert_eq!(
+                            fs::read(&output_path).expect("completed output"),
+                            source_bytes
+                        );
+                        assert!(ratios.len() >= 3, "multi-block export must report progress");
+                        assert!(ratios.windows(2).all(|pair| pair[0] <= pair[1]));
+                        assert_eq!(ratios.last(), Some(&1.0));
+                    }
+                    assert_eq!(
+                        fs::read(&source_path).expect("source survives"),
+                        source_bytes
+                    );
+                    assert_eq!(
+                        fs::read_dir(&directory).expect("export directory").count(),
+                        2
+                    );
+                }
+            })
+            .expect("small-stack worker should spawn")
+            .join()
+            .expect("small-stack worker should finish");
+        return;
+    }
+
+    // A stack overflow aborts the process, so isolate the constrained worker
+    // from the parent test harness and clean its fixture even after a crash.
+    let directory = unique_test_dir("vesper-small-stack-export");
+    fs::create_dir_all(&directory).expect("fixture directory should be created");
+    let bytes = (0..(2 * 1024 * 1024 + 257))
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    fs::write(directory.join("input.mp4"), bytes).expect("multi-block source should be written");
+    let child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "download::tests::manager_exports_completed_file_on_small_worker_stack",
+            "--nocapture",
+        ])
+        .env(CHILD_DIRECTORY_ENV, &directory)
+        .output()
+        .expect("isolated export test should run");
+    fs::remove_dir_all(&directory).expect("fixture directory should be removed");
+    assert!(
+        child.status.success(),
+        "small-stack export child failed: {}\nstdout: {}\nstderr: {}",
+        child.status,
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+}
+
+#[test]
+fn manager_export_to_hard_link_preserves_source_bytes() {
+    let config = DownloadManagerConfig {
+        auto_start: false,
+        run_post_processors_on_completion: true,
+        ..DownloadManagerConfig::default()
+    };
+    let store = InMemoryDownloadStore::default();
+    let executor = InMemoryDownloadExecutor::default();
+    let mut manager = DownloadManager::new(config, store, executor);
+    let now = Instant::now();
+    let temp_dir = unique_test_dir("vesper-hard-link-export");
+    fs::create_dir_all(&temp_dir).expect("temp directory should be created");
+    let source_path = temp_dir.join("input.mp4");
+    let output_path = temp_dir.join("exported.mp4");
+    fs::write(&source_path, b"vesper media bytes").expect("source file should be written");
+
+    fs::hard_link(&source_path, &output_path).expect("hard link should be created");
+
+    let task_id = manager
+        .create_task(
+            "asset-a",
+            DownloadSource::new(
+                MediaSource::new(format!("file://{}", source_path.display())),
+                DownloadContentFormat::SingleFile,
+            ),
+            DownloadProfile::default(),
+            DownloadAssetIndex::default(),
+            now,
+        )
+        .expect("create task should succeed");
+
+    let _ = manager
+        .complete_task(task_id, Some(source_path.clone()), now)
+        .expect("complete should succeed");
+
+    let exported = manager
+        .export_task_output(task_id, Some(output_path.as_path()), &NoopProcessorProgress)
+        .expect("single-file export should copy original file");
+
+    assert_eq!(exported, output_path);
+    assert_eq!(
+        fs::read(&source_path).expect("source file should remain readable"),
+        b"vesper media bytes"
+    );
+    assert_eq!(
+        fs::read(&exported).expect("export file should be readable"),
+        b"vesper media bytes"
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp directory should be removed");
+}
+
 fn unique_test_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+}
+
+#[test]
+fn manager_cancelled_export_preserves_existing_output() {
+    let config = DownloadManagerConfig {
+        auto_start: false,
+        run_post_processors_on_completion: true,
+        ..DownloadManagerConfig::default()
+    };
+    let store = InMemoryDownloadStore::default();
+    let executor = InMemoryDownloadExecutor::default();
+    let mut manager = DownloadManager::new(config, store, executor);
+    let now = Instant::now();
+    let temp_dir = unique_test_dir("vesper-cancelled-export");
+    fs::create_dir_all(&temp_dir).expect("temp directory should be created");
+    let source_path = temp_dir.join("input.mp4");
+    let output_path = temp_dir.join("exported.mp4");
+    fs::write(&source_path, b"vesper media bytes").expect("source file should be written");
+
+    fs::write(&output_path, b"previous export").expect("output should exist");
+
+    let task_id = manager
+        .create_task(
+            "asset-a",
+            DownloadSource::new(
+                MediaSource::new(format!("file://{}", source_path.display())),
+                DownloadContentFormat::SingleFile,
+            ),
+            DownloadProfile::default(),
+            DownloadAssetIndex::default(),
+            now,
+        )
+        .expect("create task should succeed");
+
+    let _ = manager
+        .complete_task(task_id, Some(source_path.clone()), now)
+        .expect("complete should succeed");
+
+    struct CancelAfterProgress(std::sync::atomic::AtomicBool);
+    impl ProcessorProgress for CancelAfterProgress {
+        fn on_progress(&self, _progress: f32) {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        fn is_cancelled(&self) -> bool {
+            self.0.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+    let progress = CancelAfterProgress(std::sync::atomic::AtomicBool::new(false));
+    assert!(
+        manager
+            .export_task_output(task_id, Some(&output_path), &progress)
+            .is_err()
+    );
+    assert_eq!(
+        fs::read(&source_path).expect("source survives"),
+        b"vesper media bytes"
+    );
+    assert_eq!(
+        fs::read(&output_path).expect("output survives"),
+        b"previous export"
+    );
+    assert_eq!(
+        fs::read_dir(&temp_dir).expect("directory survives").count(),
+        2
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp directory should be removed");
 }

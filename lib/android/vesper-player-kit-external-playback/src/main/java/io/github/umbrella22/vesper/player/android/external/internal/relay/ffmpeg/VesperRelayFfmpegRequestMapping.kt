@@ -9,6 +9,7 @@ import org.json.JSONObject
 
 internal fun VesperRelayFormatAdaptationRequest.toNativeJson(
     tracks: List<VesperRelayPreparedTrack>,
+    sessionHandle: Long? = null,
 ): String {
     val trackArray = JSONArray()
     tracks.forEach { track ->
@@ -28,6 +29,7 @@ internal fun VesperRelayFormatAdaptationRequest.toNativeJson(
     }
     return JSONObject()
         .put("sessionId", sessionId)
+        .put("sessionHandle", sessionHandle)
         .put("inputMode", HOST_PREPARED_DASH_INPUT_MODE)
         .put("tracks", trackArray)
         .put("sourceUriHash", hashForDiagnostic(source.uri))

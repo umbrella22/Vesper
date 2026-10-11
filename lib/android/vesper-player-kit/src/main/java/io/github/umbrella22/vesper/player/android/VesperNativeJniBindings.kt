@@ -71,6 +71,7 @@ internal class VesperNativeJniBindings(
         VesperResolvedMobilePluginArtifacts(),
     internal val pipelineEventHookRegistryHandle: Long = 0L,
     internal val pipelineEventHookReferencesJson: String = "[]",
+    preloadBindings: VesperNativePreloadCoordinator.PreloadBindings = VesperNativePreloadCoordinator.NativeJniPreloadBindings,
 ) : VesperNativeBindings {
     override val playbackDiagnosticsTracker = VesperPlaybackDiagnosticsTracker()
     internal val appContext = context.applicationContext
@@ -175,7 +176,7 @@ internal class VesperNativeJniBindings(
     }
     internal val preloadCoordinator =
         VesperNativePreloadCoordinator(
-            bindings = VesperNativePreloadCoordinator.NativeJniPreloadBindings,
+            bindings = preloadBindings,
             preloadBudgetPolicy = preloadBudgetPolicy,
         )
     internal val systemPlaybackCoordinator = VesperAndroidSystemPlaybackCoordinator(appContext)
@@ -251,7 +252,7 @@ internal class VesperNativeJniBindings(
         systemPlaybackVideoEnabled: Boolean,
         preparedSourceNormalizer: NativeSourceNormalizerResourcePreparedOpenOutcome,
     ): NativeBridgeStartup {
-        Log.i(NATIVE_JNI_BINDINGS_TAG, "initialize source=${source.uri} kind=${source.kind} protocol=${source.protocol}")
+        Log.i(NATIVE_JNI_BINDINGS_TAG, "initialize source=${diagnosticSourceDescription(source)}")
         val existingSubtitleCuesListener = subtitleCuesListener
         val existingTrackSelectionFailureListener = trackSelectionFailureListener
         dispose(stopSourceNormalizerLoopbackServer = preparedSourceNormalizer.resource == null)
@@ -406,7 +407,7 @@ internal class VesperNativeJniBindings(
                 }
             )
             attachedSurface?.takeIf { systemPlaybackVideoEnabled }?.let { surface ->
-                Log.i(NATIVE_JNI_BINDINGS_TAG, "reusing attached surface for source=${source.uri}")
+                Log.i(NATIVE_JNI_BINDINGS_TAG, "reusing attached surface for source=${diagnosticSourceDescription(source)}")
                 runPlayerSurfaceOperation(exoPlayer, "initial surface attach") {
                     it.setVideoSurface(surface)
                 }
@@ -440,7 +441,7 @@ internal class VesperNativeJniBindings(
                 runCatching {
                     disposePreparedSourceNormalizerResource(preparedSourceNormalizer)
                 }.onFailure { disposeError ->
-                    Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose unconsumed source normalizer resource", disposeError)
+                    Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose unconsumed source normalizer resource failure=${diagnosticPlaybackFailure(disposeError)}")
                 }
             }
             throw error
@@ -537,9 +538,7 @@ internal class VesperNativeJniBindings(
                     .onFailure { closeError ->
                         Log.w(
                             NATIVE_JNI_BINDINGS_TAG,
-                            "failed to roll back native-frame pipeline open",
-                            closeError,
-                        )
+                            "failed to roll back native-frame pipeline open failure=${diagnosticPlaybackFailure(closeError)}")
                     }
             }
             if (
@@ -667,14 +666,13 @@ internal class VesperNativeJniBindings(
                 }.onFailure { error ->
                     Log.w(
                         NATIVE_JNI_BINDINGS_TAG,
-                        "failed to release native-frame lease before close",
-                        error,
+                        "failed to release native-frame lease before close failure=${diagnosticPlaybackFailure(error)}",
                     )
                 }
             }
             val closed = runCatching { VesperNativeJni.closeNativeFramePipeline(handle) }
                 .onFailure { error ->
-                    Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to close native-frame pipeline session", error)
+                    Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to close native-frame pipeline session failure=${diagnosticPlaybackFailure(error)}")
                 }
             closeCurrentNativeFramePacketSource()
             if (closed.isSuccess) {
@@ -712,8 +710,7 @@ internal class VesperNativeJniBindings(
         }.onFailure { error ->
             Log.w(
                 NATIVE_JNI_BINDINGS_TAG,
-                "failed to restore Media3 surface after native-frame close",
-                error,
+                "failed to restore Media3 surface after native-frame close failure=${diagnosticPlaybackFailure(error)}",
             )
         }
 
@@ -789,7 +786,7 @@ internal class VesperNativeJniBindings(
         }
         try {
             runCatching { playerToRelease?.release() }
-                .onFailure { error -> Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to release ExoPlayer", error) }
+                .onFailure { error -> Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to release ExoPlayer failure=${diagnosticPlaybackFailure(error)}") }
         } finally {
             player = null
             if (handle != null) {
@@ -805,16 +802,14 @@ internal class VesperNativeJniBindings(
                 }.onFailure { error ->
                     Log.w(
                         NATIVE_JNI_BINDINGS_TAG,
-                        "failed to flush playback pipeline event hooks",
-                        error,
+                        "failed to flush playback pipeline event hooks failure=${diagnosticPlaybackFailure(error)}",
                     )
                 }
                 runCatching { VesperNativeJni.closePipelineEventHooks(handle) }
                     .onFailure { error ->
                         Log.w(
                             NATIVE_JNI_BINDINGS_TAG,
-                            "failed to close playback pipeline event hooks",
-                            error,
+                            "failed to close playback pipeline event hooks failure=${diagnosticPlaybackFailure(error)}",
                         )
                     }
                 runCatching {
@@ -832,12 +827,11 @@ internal class VesperNativeJniBindings(
                 }.onFailure { error ->
                     Log.w(
                         NATIVE_JNI_BINDINGS_TAG,
-                        "failed to drain final playback pipeline event-hook reports",
-                        error,
+                        "failed to drain final playback pipeline event-hook reports failure=${diagnosticPlaybackFailure(error)}",
                     )
                 }
                 runCatching { VesperNativeJni.disposeSession(handle) }
-                    .onFailure { error -> Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose native session", error) }
+                    .onFailure { error -> Log.w(NATIVE_JNI_BINDINGS_TAG, "failed to dispose native session failure=${diagnosticPlaybackFailure(error)}") }
             }
             closeCurrentSourceNormalizerResource()
             if (stopSourceNormalizerLoopbackServer) {

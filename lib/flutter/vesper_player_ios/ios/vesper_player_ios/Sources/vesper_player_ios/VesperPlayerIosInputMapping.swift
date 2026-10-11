@@ -1,7 +1,25 @@
 import Foundation
+import CoreFoundation
 import VesperPlayerKit
 
 extension Dictionary where Key == String, Value == Any {
+    func toPlaybackCapabilityProbeRequest() throws -> VesperPlaybackCapabilityProbeRequest {
+        VesperPlaybackCapabilityProbeRequest(
+            source: try nestedMap(self["source"])?.toRawVesperPlayerSource(),
+            codec: self["codec"] as? String,
+            width: (self["width"] as? NSNumber)?.intValue,
+            height: (self["height"] as? NSNumber)?.intValue,
+            frameRate: (self["frameRate"] as? NSNumber)?.doubleValue,
+            requiresNativeFrame: self["requiresNativeFrame"] as? Bool ?? false,
+            sourceNormalizerConfiguration: try nestedMap(self["sourceNormalizer"])?
+                .toSourceNormalizerConfiguration() ?? VesperSourceNormalizerConfiguration(),
+            frameProcessorConfiguration: try nestedMap(self["frameProcessor"])?
+                .toFrameProcessorConfiguration() ?? VesperFrameProcessorConfiguration(),
+            nativeFramePipelineConfiguration: try nestedMap(self["nativeFramePipeline"])?
+                .toNativeFramePipelineConfiguration() ?? VesperNativeFramePipelineConfiguration()
+        )
+    }
+
     func toVesperPlayerSource() throws -> VesperPlayerSource {
         guard let uri = self["uri"] as? String, !uri.isEmpty else {
             throw PluginError.invalidSource("Missing source uri.")
@@ -117,16 +135,20 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 
-    func toSystemPlaybackConfiguration() -> VesperSystemPlaybackConfiguration {
-        let backgroundMode: VesperBackgroundPlaybackMode =
-            (self["backgroundMode"] as? String) == "disabled" ? .disabled : .continueAudio
+    func toSystemPlaybackConfiguration() throws -> VesperSystemPlaybackConfiguration {
+        let backgroundMode: VesperBackgroundPlaybackMode
+        switch try optionalInputString(self["backgroundMode"], field: "backgroundMode") {
+        case "disabled": backgroundMode = .disabled
+        case nil, "continueAudio": backgroundMode = .continueAudio
+        default: throw PluginError.invalidSource("Unknown backgroundMode.")
+        }
         return VesperSystemPlaybackConfiguration(
             enabled: self["enabled"] as? Bool ?? true,
             backgroundMode: backgroundMode,
             showSystemControls: self["showSystemControls"] as? Bool ?? true,
             showSeekActions: self["showSeekActions"] as? Bool ?? true,
-            metadata: (try? nestedMap(self["metadata"]))?.toSystemPlaybackMetadata(),
-            controls: (try? nestedMap(self["controls"]))?.toSystemPlaybackControls()
+            metadata: try nestedMap(self["metadata"])?.toSystemPlaybackMetadata(),
+            controls: try nestedMap(self["controls"])?.toSystemPlaybackControls()
                 ?? .videoDefault()
         )
     }
@@ -143,21 +165,23 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 
-    func toSystemPlaybackControls() -> VesperSystemPlaybackControls {
-        let buttons = (self["compactButtons"] as? [Any])?
-            .compactMap { stringKeyedMap($0)?.toSystemPlaybackControlButton() } ?? []
+    func toSystemPlaybackControls() throws -> VesperSystemPlaybackControls {
+        let buttons = try inputRecordList(self["compactButtons"], field: "compactButtons")
+            .map { try $0.toSystemPlaybackControlButton() }
         return VesperSystemPlaybackControls(compactButtons: buttons)
     }
 
-    func toSystemPlaybackControlButton() -> VesperSystemPlaybackControlButton {
+    func toSystemPlaybackControlButton() throws -> VesperSystemPlaybackControlButton {
         let kind: VesperSystemPlaybackControlKind
-        switch self["kind"] as? String {
+        switch try optionalInputString(self["kind"], field: "kind") {
         case "seekBack":
             kind = .seekBack
         case "seekForward":
             kind = .seekForward
-        default:
+        case nil, "playPause":
             kind = .playPause
+        default:
+            throw PluginError.invalidSource("Unknown system playback control kind.")
         }
         return VesperSystemPlaybackControlButton(
             kind: kind,
@@ -166,6 +190,7 @@ extension Dictionary where Key == String, Value == Any {
     }
 
     func toTrackSelection(isSubtitle: Bool = false) throws -> VesperTrackSelection {
+        if !isSubtitle, self["mode"] == nil || self["mode"] is NSNull { return .auto() }
         let mode = self["mode"] as? String
         switch mode {
         case "auto":
@@ -196,12 +221,12 @@ extension Dictionary where Key == String, Value == Any {
                     message: "Unknown subtitle selection mode: \(modeDescription)."
                 )
             }
-            return .auto()
+            throw PluginError.invalidTrackSelection("Unknown track selection mode.")
         }
     }
 
     func toAbrPolicy() throws -> VesperAbrPolicy {
-        switch self["mode"] as? String {
+        switch try optionalInputString(self["mode"], field: "mode") {
         case "constrained":
             return .constrained(
                 maxBitRate: (self["maxBitRate"] as? NSNumber)?.int64Value,
@@ -213,8 +238,10 @@ extension Dictionary where Key == String, Value == Any {
                 throw PluginError.invalidAbrPolicy("Missing trackId for fixed track policy.")
             }
             return .fixedTrack(trackId)
-        default:
+        case nil, "auto":
             return .auto()
+        default:
+            throw PluginError.invalidAbrPolicy("Unknown ABR mode.")
         }
     }
 
@@ -222,17 +249,23 @@ extension Dictionary where Key == String, Value == Any {
         guard let rawValue = self["expectedCatalogRevision"], !(rawValue is NSNull) else {
             return nil
         }
-        guard !(rawValue is Bool), let number = rawValue as? NSNumber else {
+        guard let number = rawValue as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID() else {
             throw PluginError.invalidAbrPolicy(
                 "expectedCatalogRevision must be a non-negative integer."
             )
         }
-        let doubleValue = number.doubleValue
-        let revision = number.int64Value
-        guard doubleValue.isFinite,
-              doubleValue.rounded() == doubleValue,
-              revision >= 0
-        else {
+        let revision: Int64?
+        switch String(cString: number.objCType) {
+        case "c", "C", "s", "S", "i", "I", "l", "L", "q", "Q":
+            // Preserve integer-backed revisions above Double's exact-integer range.
+            revision = Int64(number.stringValue)
+        case "f", "d":
+            revision = Int64(exactly: number.doubleValue)
+        default:
+            revision = nil
+        }
+        guard let revision, revision >= 0 else {
             throw PluginError.invalidAbrPolicy(
                 "expectedCatalogRevision must be a non-negative integer."
             )
@@ -300,7 +333,7 @@ extension Dictionary where Key == String, Value == Any {
 
     func toSourceNormalizerConfiguration() throws -> VesperSourceNormalizerConfiguration {
         let mode: VesperSourceNormalizerMode
-        switch self["mode"] as? String {
+        switch try optionalInputString(self["mode"], field: "mode") {
         case "diagnosticsOnly":
             mode = .diagnosticsOnly
         case "preflightOnly":
@@ -309,8 +342,10 @@ extension Dictionary where Key == String, Value == Any {
             mode = .preferNormalized
         case "requireNormalized":
             mode = .requireNormalized
-        default:
+        case nil, "disabled":
             mode = .disabled
+        default:
+            throw PluginError.invalidSource("Unknown mode.")
         }
         return VesperSourceNormalizerConfiguration(
             mode: mode,
@@ -323,8 +358,12 @@ extension Dictionary where Key == String, Value == Any {
     }
 
     func toFrameProcessorConfiguration() throws -> VesperFrameProcessorConfiguration {
-        let mode: VesperFrameProcessorMode =
-            (self["mode"] as? String) == "diagnosticsOnly" ? .diagnosticsOnly : .disabled
+        let mode: VesperFrameProcessorMode
+        switch try optionalInputString(self["mode"], field: "mode") {
+        case "diagnosticsOnly": mode = .diagnosticsOnly
+        case nil, "disabled": mode = .disabled
+        default: throw PluginError.invalidSource("Unknown FrameProcessor mode.")
+        }
         return VesperFrameProcessorConfiguration(
             mode: mode,
             pluginReferences: try toVesperPluginReferences(
@@ -336,15 +375,17 @@ extension Dictionary where Key == String, Value == Any {
 
     func toNativeFramePipelineConfiguration() throws -> VesperNativeFramePipelineConfiguration {
         let mode: VesperNativeFramePipelineMode
-        switch self["mode"] as? String {
+        switch try optionalInputString(self["mode"], field: "mode") {
         case "diagnosticsOnly":
             mode = .diagnosticsOnly
         case "preferNativeFrame":
             mode = .preferNativeFrame
         case "requireNativeFrame":
             mode = .requireNativeFrame
-        default:
+        case nil, "disabled":
             mode = .disabled
+        default:
+            throw PluginError.invalidSource("Unknown mode.")
         }
         return VesperNativeFramePipelineConfiguration(
             mode: mode,
@@ -415,18 +456,14 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 
-    func toDownloadProfile() -> VesperDownloadProfile {
+    func toDownloadProfile() throws -> VesperDownloadProfile {
         VesperDownloadProfile(
             variantId: self["variantId"] as? String,
             preferredAudioLanguage: self["preferredAudioLanguage"] as? String,
             preferredSubtitleLanguage: self["preferredSubtitleLanguage"] as? String,
             selectedTrackIds:
-                (self["selectedTrackIds"] as? [Any])?.compactMap { value in
-                    value as? String
-                } ?? [],
-            targetOutputFormat: downloadOutputFormat(
-                from: self["targetOutputFormat"] as? String
-            ),
+                try inputIdentityList(self["selectedTrackIds"], field: "selectedTrackIds"),
+            targetOutputFormat: try inputDownloadOutputFormat(self["targetOutputFormat"]),
             targetDirectory: (self["targetDirectory"] as? String).map {
                 URL(fileURLWithPath: $0, isDirectory: true)
             },
@@ -434,7 +471,7 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 
-    func toDownloadAssetIndex() -> VesperDownloadAssetIndex {
+    func toDownloadAssetIndex() throws -> VesperDownloadAssetIndex {
         let contentFormat: VesperDownloadContentFormat
         switch self["contentFormat"] as? String {
         case "hlsSegments":
@@ -455,27 +492,24 @@ extension Dictionary where Key == String, Value == Any {
             checksum: self["checksum"] as? String,
             totalSizeBytes: (self["totalSizeBytes"] as? NSNumber)?.uint64Value,
             resources:
-                (self["resources"] as? [Any])?.compactMap { value in
-                    stringKeyedMap(value)?.toDownloadResourceRecord()
-                } ?? [],
+                try inputRecordList(self["resources"], field: "resources")
+                    .map { try $0.toDownloadResourceRecord() },
             segments:
-                (self["segments"] as? [Any])?.compactMap { value in
-                    stringKeyedMap(value)?.toDownloadSegmentRecord()
-                } ?? [],
+                try inputRecordList(self["segments"], field: "segments")
+                    .map { try $0.toDownloadSegmentRecord() },
             streams:
-                (self["streams"] as? [Any])?.compactMap { value in
-                    stringKeyedMap(value)?.toDownloadAssetStream()
-                } ?? [],
+                try inputRecordList(self["streams"], field: "streams")
+                    .map { try $0.toDownloadAssetStream() },
             completedPath: self["completedPath"] as? String
         )
     }
 
-    func toDownloadResourceRecord() -> VesperDownloadResourceRecord {
+    func toDownloadResourceRecord() throws -> VesperDownloadResourceRecord {
         VesperDownloadResourceRecord(
-            resourceId: self["resourceId"] as? String ?? "",
-            uri: self["uri"] as? String ?? "",
+            resourceId: try requiredInputString(self["resourceId"], field: "resourceId"),
+            uri: try requiredInputString(self["uri"], field: "uri"),
             relativePath: self["relativePath"] as? String,
-            byteRange: stringKeyedMap(self["byteRange"])?.toDownloadByteRange(),
+            byteRange: try nestedMap(self["byteRange"])?.toDownloadByteRange(),
             generatedText: self["generatedText"] as? String,
             sizeBytes: (self["sizeBytes"] as? NSNumber)?.uint64Value,
             etag: self["etag"] as? String,
@@ -483,36 +517,36 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 
-    func toDownloadSegmentRecord() -> VesperDownloadSegmentRecord {
+    func toDownloadSegmentRecord() throws -> VesperDownloadSegmentRecord {
         VesperDownloadSegmentRecord(
-            segmentId: self["segmentId"] as? String ?? "",
-            uri: self["uri"] as? String ?? "",
+            segmentId: try requiredInputString(self["segmentId"], field: "segmentId"),
+            uri: try requiredInputString(self["uri"], field: "uri"),
             relativePath: self["relativePath"] as? String,
             sequence: (self["sequence"] as? NSNumber)?.uint64Value,
-            byteRange: stringKeyedMap(self["byteRange"])?.toDownloadByteRange(),
+            byteRange: try nestedMap(self["byteRange"])?.toDownloadByteRange(),
             sizeBytes: (self["sizeBytes"] as? NSNumber)?.uint64Value,
             checksum: self["checksum"] as? String
         )
     }
 
-    func toDownloadAssetStream() -> VesperDownloadAssetStream {
+    func toDownloadAssetStream() throws -> VesperDownloadAssetStream {
         VesperDownloadAssetStream(
-            streamId: self["streamId"] as? String ?? "",
-            kind: downloadStreamKind(from: self["kind"] as? String),
+            streamId: try requiredInputString(self["streamId"], field: "streamId"),
+            kind: try inputDownloadStreamKind(self["kind"]),
             language: self["language"] as? String,
             codec: self["codec"] as? String,
             label: self["label"] as? String,
             qualityRank: (self["qualityRank"] as? NSNumber)?.uint32Value,
-            resourceIds: (self["resourceIds"] as? [String]) ?? [],
-            segmentIds: (self["segmentIds"] as? [String]) ?? [],
-            metadata: (self["metadata"] as? [String: String]) ?? [:]
+            resourceIds: try inputIdentityList(self["resourceIds"], field: "resourceIds"),
+            segmentIds: try inputIdentityList(self["segmentIds"], field: "segmentIds"),
+            metadata: try inputDownloadMetadata(self["metadata"])
         )
     }
 
-    func toDownloadByteRange() -> VesperDownloadByteRange {
+    func toDownloadByteRange() throws -> VesperDownloadByteRange {
         VesperDownloadByteRange(
-            offset: (self["offset"] as? NSNumber)?.uint64Value ?? 0,
-            length: (self["length"] as? NSNumber)?.uint64Value ?? 0
+            offset: try inputDownloadByteRangeInteger(self["offset"], field: "offset"),
+            length: try inputDownloadByteRangeInteger(self["length"], field: "length")
         )
     }
 
@@ -545,9 +579,9 @@ extension Dictionary where Key == String, Value == Any {
         return FlutterViewportHint(kind: kind, visibleFraction: visibleFraction)
     }
 
-    func toBufferingPolicy() -> VesperBufferingPolicy {
+    func toBufferingPolicy() throws -> VesperBufferingPolicy {
         let preset: VesperBufferingPreset
-        switch self["preset"] as? String {
+        switch try optionalInputString(self["preset"], field: "preset") {
         case "balanced":
             preset = .balanced
         case "streaming":
@@ -556,8 +590,10 @@ extension Dictionary where Key == String, Value == Any {
             preset = .resilient
         case "lowLatency":
             preset = .lowLatency
-        default:
+        case nil, "default", "defaultPreset":
             preset = .default
+        default:
+            throw PluginError.invalidSource("Unknown preset.")
         }
         return VesperBufferingPolicy(
             preset: preset,
@@ -569,24 +605,26 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 
-    func toRetryPolicy() -> VesperRetryPolicy {
+    func toRetryPolicy() throws -> VesperRetryPolicy {
         let backoff: VesperRetryBackoff?
-        switch self["backoff"] as? String {
+        switch try optionalInputString(self["backoff"], field: "backoff") {
         case "fixed":
             backoff = .fixed
         case "linear":
             backoff = .linear
         case "exponential":
             backoff = .exponential
-        default:
+        case nil:
             backoff = nil
+        default:
+            throw PluginError.invalidSource("Unknown retry backoff.")
         }
         let maxAttempts: Int?
         if keys.contains("maxAttempts") {
             if self["maxAttempts"] is NSNull {
                 maxAttempts = nil
             } else {
-                maxAttempts = (self["maxAttempts"] as? NSNumber)?.intValue
+                maxAttempts = try inputRetryMaxAttempts(self["maxAttempts"])
             }
         } else {
             maxAttempts = 3
@@ -599,17 +637,19 @@ extension Dictionary where Key == String, Value == Any {
         )
     }
 
-    func toCachePolicy() -> VesperCachePolicy {
+    func toCachePolicy() throws -> VesperCachePolicy {
         let preset: VesperCachePreset
-        switch self["preset"] as? String {
+        switch try optionalInputString(self["preset"], field: "preset") {
         case "disabled":
             preset = .disabled
         case "streaming":
             preset = .streaming
         case "resilient":
             preset = .resilient
-        default:
+        case nil, "default", "defaultPreset":
             preset = .default
+        default:
+            throw PluginError.invalidSource("Unknown preset.")
         }
         return VesperCachePolicy(
             preset: preset,
@@ -621,7 +661,7 @@ extension Dictionary where Key == String, Value == Any {
 
 
 private func externalSubtitleSources(_ value: Any?) throws -> [VesperExternalSubtitleSource] {
-    guard let value else { return [] }
+    guard let value, !(value is NSNull) else { return [] }
     guard let values = value as? [Any] else {
         throw PluginError.invalidSource("externalSubtitles must be a list.")
     }

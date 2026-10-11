@@ -1,6 +1,6 @@
-# Stage skins and migration to 0.6.4
+# Stage skins
 
-The Stage skin API introduced in 0.6.4 applies the same presentation contract to
+The Stage skin API applies the same presentation contract to
 Flutter `vesper_player_ui`, Android `vesper-player-kit-compose-ui`, and iOS
 `VesperPlayerKitUI`. Each UI module provides `VesperPlayerStageSkin`, native
 icon rendering, and reusable action buttons. A skin configures the controls
@@ -85,8 +85,8 @@ Each style has `size`, `iconSize`, `backgroundOpacity`, and `borderRadius`.
 Sizes use Flutter logical pixels, Android dp, or iOS points. Visual size and
 hit area are distinct. Icon buttons reserve at least 48 x 48 logical pixels /
 dp on Flutter and Android, and 44 x 44 points on iOS. Small custom styles retain
-these targets. Native rows can therefore occupy more space than their earlier
-visual frames; check narrow control rows when migrating.
+these targets. Native rows reserve the full hit area even when their visual frames are
+smaller; host layouts must account for that space in narrow control rows.
 
 The standard background opacity is 0.10, primary is 0.14, and built-in toolbar
 and transport variants are transparent. `borderRadius` defaults to 999 for
@@ -109,7 +109,7 @@ Palette fields are `foreground`, `secondaryForeground`, `background`, `scrim`,
 Timeline disabled opacity and HUD track opacity are derived from these colors.
 Host drawers and sheet content apply their own styling.
 
-## Flutter migration
+## Flutter controls
 
 Import `package:vesper_player_ui/vesper_player_ui.dart`. Stage construction
 remains valid without `skin`. Add this parameter alongside existing controller,
@@ -146,24 +146,14 @@ final imageSkin = VesperPlayerStageSkin(
 );
 ```
 
-### Breaking public button changes
+### Public action buttons
 
-`VesperStageIconButton.icon` now accepts `Widget`, replacing `IconData`.
-The `size`, `iconSize`, and `containerAlpha` constructor parameters are replaced
-by `variant` and optional `style`. The equivalent mechanical migration is:
+`VesperStageIconButton.icon` accepts a decorative `Widget`. Select a named
+`variant` to follow the active skin, or provide an explicit `style` for fixed
+button geometry:
 
 ```dart
-// Before 0.6.4.
-VesperStageIconButton(
-  icon: Icons.favorite,
-  label: 'Favorite',
-  size: 38,
-  iconSize: 23,
-  containerAlpha: 0,
-  onPressed: onFavorite,
-);
-
-// New API: preserve explicit geometry.
+// Explicit geometry.
 VesperStageIconButton(
   icon: const Icon(Icons.favorite),
   label: 'Favorite',
@@ -173,7 +163,7 @@ VesperStageIconButton(
   onPressed: onFavorite,
 );
 
-// New API: follow the active toolbar skin.
+// Active toolbar skin.
 VesperStageIconButton(
   icon: const Icon(Icons.favorite),
   label: 'Favorite',
@@ -187,10 +177,10 @@ Use `Icon`, an asset widget, or another decorative widget for a host-specific
 action. Avoid setting explicit size/color on a child `Icon` when it should
 inherit the button style.
 
-`VesperStagePrimaryPlayButton` replaces its `size` and `iconSize` arguments with
-`style`; use `VesperStageButtonStyle(size: 72, iconSize: 36,
-backgroundOpacity: 0.14)` to preserve an explicit primary appearance. It also
-accepts `strings`, so its play/pause accessibility labels can be localized.
+`VesperStagePrimaryPlayButton` accepts an optional `style`;
+`VesperStageButtonStyle(size: 72, iconSize: 36, backgroundOpacity: 0.14)`
+selects an explicit primary appearance. Its `strings` parameter supplies
+localized play/pause accessibility labels.
 
 Injected widgets in `topBarPrimaryAction`, `topBarSecondaryAction`, and
 `expandedControlBarLeading` read the Stage skin automatically. For controls
@@ -211,15 +201,14 @@ that scope. Explicit chip accents remain host-selected.
 
 Tests that locate a decorative icon should tap its containing button or its
 semantic label. Decorative icon content is excluded from hit testing and
-accessibility; an icon's presence alone no longer identifies a hit-test node.
+accessibility; an icon's presence alone does not identify a hit-test node.
 
-## Android Compose migration
+## Compose controls
 
 Use the types in `io.github.umbrella22.vesper.player.android.compose.ui`.
-The Stage adds `skin: VesperPlayerStageSkin? = null`; existing source calls can
-omit it. Recompile hosts against the new AAR: adding Kotlin default parameters
-changes generated JVM method signatures, so previously compiled consumers must
-not mix old and new UI artifacts.
+The Stage accepts `skin: VesperPlayerStageSkin? = null`. Omission selects the
+SDK default skin. Compile consumers against matching host-kit and UI AAR
+versions; Kotlin default-argument calls depend on generated JVM signatures.
 
 ```kotlin
 val brandSkin = VesperPlayerStageSkin(
@@ -266,12 +255,12 @@ For standalone controls, use `VesperPlayerStageTheme(skin = brandSkin) { ... }`.
 Host content can read `LocalVesperPlayerStageSkin.current`. UI configuration
 belongs in the Compose UI module, not in controller, source, or JNI DTOs.
 
-## iOS SwiftUI migration
+## SwiftUI controls
 
 Import `VesperPlayerKitUI`. Pass `skin: customSkinEnabled ? brandSkin : nil`
-alongside existing Stage arguments. Rebuild consumers with the matching UI
-framework / Swift package; the Stage initializer gained a parameter and binary
-compatibility with a UI consumer compiled against 0.6.3 or earlier is not promised.
+alongside the controller, layout, fullscreen, and callback arguments. Build
+consumers with matching host-kit and UI framework / Swift package versions;
+compiled Stage initializer calls depend on that package interface.
 
 ```swift
 let brandSkin = VesperPlayerStageSkin(

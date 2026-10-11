@@ -42,7 +42,7 @@ already proves them impossible.
   local Android/iOS resource loaders: use `$vesper-mobile-plugin-playback`.
 - Android host kit, iOS host kit, Flutter packages, Stage skins, custom icons,
   control styles, system playback, external routes, surfaces, or channel
-  lifecycle: use `$vesper-mobile-flutter-hosts`. For skins and UI migration,
+  lifecycle: use `$vesper-mobile-flutter-hosts`. For skins and current control usage,
   load `references/stage-skins.md`.
 - Refactors involving guards, `runCatching`, `catch`, lifecycle checks,
   `unwrap`, `expect`, FFI/JNI panic boundaries, or over-defensive code review:
@@ -68,7 +68,7 @@ already proves them impossible.
   `SAFETY` rationale.
 - Runtime is the source of shared defaults and cross-platform playback
   semantics. Platform layers may override only for explicit platform reasons.
-- The workspace MSRV is Rust 1.98. Treat the current checkout's toolchain and
+- The workspace MSRV is Rust 1.99.0. Treat the current checkout's toolchain and
   generated/artifact evidence as authoritative for validation claims.
 
 ## Streaming Model

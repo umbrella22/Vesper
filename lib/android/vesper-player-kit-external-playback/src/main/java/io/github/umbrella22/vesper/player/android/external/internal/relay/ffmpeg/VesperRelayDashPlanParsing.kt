@@ -1,6 +1,8 @@
 package io.github.umbrella22.vesper.player.android.external.internal.relay.ffmpeg
 
 import java.io.StringReader
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.util.Locale
 import javax.xml.parsers.DocumentBuilderFactory
 import org.w3c.dom.Document
@@ -19,16 +21,63 @@ internal fun parseXmlDocument(xmlText: String): Document {
         .parse(InputSource(StringReader(xmlText)))
 }
 
-internal fun dashTemplateFromElement(element: Element): DashTemplate? {
+internal fun dashTemplateFromElement(
+    element: Element,
+    baseDetails: Map<String, String> = emptyMap(),
+): DashTemplate? {
     val template = childElementsByTagName(element, "SegmentTemplate").firstOrNull() ?: return null
+    val timeline = childElementsByTagName(template, "SegmentTimeline")
+        .firstOrNull()
+        ?.let { timelineElement ->
+            val entries = childElementsByTagName(timelineElement, "S")
+            if (entries.isEmpty()) {
+                throw unsupportedDashLayout(baseDetails, "DASH SegmentTimeline requires at least one S entry.", emptyMap())
+            }
+            entries.map { entry ->
+                val repeatCount = if (entry.hasAttribute("r")) {
+                    entry.getAttribute("r").toIntOrNull()?.takeIf { it >= -1 }
+                        ?: throw invalidDashTemplateAttribute("SegmentTimeline S@r", baseDetails)
+                } else {
+                    0
+                }
+                DashTimelineEntry(
+                    startTime = entry.dashLongAttribute("t", "SegmentTimeline S@t", baseDetails),
+                    duration = entry.dashLongAttribute("d", "SegmentTimeline S@d", baseDetails, minimum = 1L)
+                        ?: throw invalidDashTemplateAttribute("SegmentTimeline S@d", baseDetails),
+                    repeatCount = repeatCount,
+                )
+            }
+        }
+        ?: emptyList()
     return DashTemplate(
-        media = template.getAttribute("media").takeIf(String::isNotBlank) ?: return null,
+        media = template.getAttribute("media").takeIf(String::isNotBlank)
+            ?: throw invalidDashTemplateAttribute("SegmentTemplate media", baseDetails),
         initialization = template.getAttribute("initialization").takeIf(String::isNotBlank),
-        startNumber = template.getAttribute("startNumber").toLongOrNull() ?: 1L,
-        timescale = template.getAttribute("timescale").toLongOrNull() ?: 1L,
-        duration = template.getAttribute("duration").toLongOrNull() ?: 0L,
+        startNumber = template.dashLongAttribute("startNumber", "SegmentTemplate startNumber", baseDetails) ?: 1L,
+        timescale = template.dashLongAttribute("timescale", "SegmentTemplate timescale", baseDetails, minimum = 1L) ?: 1L,
+        duration = template.dashLongAttribute("duration", "SegmentTemplate duration", baseDetails, minimum = 1L),
+        presentationTimeOffset = template.dashLongAttribute("presentationTimeOffset", "SegmentTemplate presentationTimeOffset", baseDetails) ?: 0L,
+        timeline = timeline,
     )
 }
+
+internal fun Element.dashLongAttribute(
+    attribute: String,
+    field: String,
+    baseDetails: Map<String, String>,
+    minimum: Long = 0L,
+): Long? {
+    if (!hasAttribute(attribute)) return null
+    return getAttribute(attribute).toLongOrNull()?.takeIf { it >= minimum }
+        ?: throw invalidDashTemplateAttribute(field, baseDetails)
+}
+
+private fun invalidDashTemplateAttribute(field: String, baseDetails: Map<String, String>): VesperRelayHostInputException =
+    unsupportedDashLayout(
+        baseDetails = baseDetails,
+        message = "$field is invalid for host-prepared relay remux.",
+        details = mapOf("field" to field),
+    )
 
 internal fun dashSegmentBaseFromElement(
     element: Element,
@@ -152,25 +201,17 @@ internal fun firstBaseUrl(element: Element): String? =
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
 
-internal fun parseIso8601DurationSeconds(value: String?): Double? {
-    if (value.isNullOrBlank() || !value.startsWith("PT")) {
-        return null
-    }
-    var number = ""
-    var total = 0.0
-    value.drop(2).forEach { character ->
-        if (character.isDigit() || character == '.') {
-            number += character
-            return@forEach
-        }
-        val parsed = number.toDoubleOrNull() ?: return null
-        number = ""
-        when (character) {
-            'H' -> total += parsed * 3600.0
-            'M' -> total += parsed * 60.0
-            'S' -> total += parsed
-            else -> return null
-        }
-    }
-    return total.takeIf { it > 0.0 }
+internal fun parseIso8601DurationMilliseconds(value: String?): Long? {
+    val match = DASH_DURATION_PATTERN.matchEntire(value ?: return null) ?: return null
+    val multipliers = listOf(86_400_000L, 3_600_000L, 60_000L, 1_000L)
+    val total = multipliers.mapIndexed { index, multiplier ->
+        (match.groupValues[index + 1].toBigDecimalOrNull() ?: BigDecimal.ZERO) * multiplier.toBigDecimal()
+    }.fold(BigDecimal.ZERO, BigDecimal::add)
+    return runCatching {
+        total.setScale(0, RoundingMode.HALF_UP).longValueExact()
+    }.getOrNull()?.takeIf { it > 0L }
 }
+
+private val DASH_DURATION_PATTERN = Regex(
+    """P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?""",
+)

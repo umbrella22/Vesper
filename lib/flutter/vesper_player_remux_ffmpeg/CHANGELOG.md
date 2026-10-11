@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-11
+
+- Align native remux dependencies with the 0.9.0 SDK.
+- Preserve terminal FFmpeg demux read errors as failures, clean failed staged
+  output without replacing an existing destination, and report completion only
+  after the output is published.
+
 ## 0.8.0 - 2026-09-29
 
 - Align mobile host and Flutter dependencies with the 0.8.0 source lifecycle contract.

@@ -93,6 +93,31 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _is_finite_number(value: Any) -> bool:
+    if not _is_number(value):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
+
+
+def _output_projection(value: Any) -> Any:
+    """Redact diagnostic output without changing the parsed input report."""
+    if isinstance(value, str):
+        return "<redacted>" if SENSITIVE_VALUE.search(value) else value
+    if isinstance(value, list):
+        return [_output_projection(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            _output_projection(str(key)): (
+                "<redacted>" if SENSITIVE_KEY.search(str(key)) else _output_projection(item)
+            )
+            for key, item in value.items()
+        }
+    return value
+
+
 def _nonnegative_int(
     obj: dict[str, Any], key: str, location: str, errors: list[str]
 ) -> int | None:
@@ -100,6 +125,9 @@ def _nonnegative_int(
     field = _path(location, key)
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         errors.append(f"{field} must be a nonnegative integer")
+        return None
+    if not _is_finite_number(value):
+        errors.append(f"{field} must fit a finite diagnostic number")
         return None
     return value
 
@@ -109,7 +137,7 @@ def _ratio(
 ) -> float | None:
     value = obj.get(key)
     field = _path(location, key)
-    if not _is_number(value) or not math.isfinite(float(value)):
+    if not _is_finite_number(value):
         errors.append(f"{field} must be a finite ratio")
         return None
     ratio = float(value)
@@ -209,7 +237,14 @@ def _validate_cohort(
             errors.append(f"{location} load percentiles must be monotonic")
         if sample_count == 0 and any(concrete):
             errors.append(f"{location} with no samples must have zero load values")
-    return value
+    return {
+        "sampleCount": sample_count,
+        "jankCount": jank_count,
+        "severeJankCount": severe_count,
+        "jankRatio": jank_ratio,
+        "severeJankRatio": severe_ratio,
+        **dict(zip(("minLoadNs", "p50LoadNs", "p95LoadNs", "maxLoadNs"), loads)),
+    }
 
 
 def _expected_diagnosis(report: dict[str, Any]) -> str | None:
@@ -234,7 +269,7 @@ def _expected_diagnosis(report: dict[str, Any]) -> str | None:
         playback.get("activeDurationNs"), playback.get("droppedVideoFrames"),
         playback.get("bufferingDurationNs"), playback.get("stallCount"),
     )
-    if not all(_is_number(item) and math.isfinite(float(item)) for item in numeric_fields):
+    if not all(_is_finite_number(item) for item in numeric_fields):
         return None
     if float(budget) <= 0:
         return None
@@ -295,11 +330,13 @@ def validate_report(report: dict[str, Any]) -> dict[str, Any]:
         errors.append("schemaVersion must be the integer 1")
     for key in ("runId", "sessionId", "platform", "probe"):
         _required_string(report, key, "", errors)
-    for key in (
-        "durationNs", "frameBudgetNs", "acceptedEvents", "droppedEvents",
-        "rawEventsDropped",
-    ):
-        _nonnegative_int(report, key, "", errors)
+    validated_metrics = {
+        key: _nonnegative_int(report, key, "", errors)
+        for key in (
+            "durationNs", "frameBudgetNs", "acceptedEvents", "droppedEvents",
+            "rawEventsDropped",
+        )
+    }
 
     probe = report.get("probe")
     if isinstance(probe, str):
@@ -322,12 +359,15 @@ def validate_report(report: dict[str, Any]) -> dict[str, Any]:
         )
 
     playback = report.get("playback")
+    validated_playback: dict[str, int | None] = {}
     if not isinstance(playback, dict):
         errors.append("playback must be an object")
     else:
         _record_unknown_fields(playback, PLAYBACK_FIELDS, "playback", unknown_fields)
-        for key in PLAYBACK_FIELDS:
-            _nonnegative_int(playback, key, "playback", errors)
+        validated_playback = {
+            key: _nonnegative_int(playback, key, "playback", errors)
+            for key in PLAYBACK_FIELDS
+        }
 
     diagnosis = report.get("diagnosis")
     diagnosis_kind: str | None = None
@@ -380,12 +420,17 @@ def validate_report(report: dict[str, Any]) -> dict[str, Any]:
         and isinstance(active_samples, int) and not isinstance(active_samples, bool)
         and inactive_samples >= 120 and active_samples >= 120
     )
-    expected = _expected_diagnosis(report)
+    expected = _expected_diagnosis({
+        "cohorts": validated_cohorts,
+        "playback": validated_playback,
+        "frameBudgetNs": validated_metrics["frameBudgetNs"],
+        "diagnosis": diagnosis,
+    })
     if diagnosis_kind in KNOWN_DIAGNOSES and expected is not None and diagnosis_kind != expected:
         errors.append(
             f"diagnosis.kind is {diagnosis_kind} but schema v1 metrics imply {expected}"
         )
-    minimum_samples = min(inactive_samples, active_samples)
+    minimum_samples = min(inactive_samples, active_samples) if sample_sufficient else 0
     if confidence in KNOWN_CONFIDENCE and sample_sufficient:
         if minimum_samples < 300 and confidence != "low":
             errors.append("diagnosis.confidence must be low below 300 steady samples")
@@ -404,13 +449,13 @@ def validate_report(report: dict[str, Any]) -> dict[str, Any]:
             "report contains suspected sensitive extensions or values; inspect and redact before sharing"
         )
 
-    return {
+    return _output_projection({
         "status": "valid" if not errors else "invalid",
         "schemaVersion": schema,
         "platform": report.get("platform"),
         "probe": probe,
-        "durationNs": report.get("durationNs"),
-        "frameBudgetNs": report.get("frameBudgetNs"),
+        "durationNs": validated_metrics["durationNs"],
+        "frameBudgetNs": validated_metrics["frameBudgetNs"],
         "sampleSufficient": sample_sufficient,
         "cohorts": {
             name: {
@@ -420,14 +465,14 @@ def validate_report(report: dict[str, Any]) -> dict[str, Any]:
             for name in COHORT_NAMES
         },
         "playback": {
-            key: playback.get(key) if isinstance(playback, dict) else None
+            key: validated_playback.get(key)
             for key in PLAYBACK_FIELDS
         },
         "diagnosis": diagnosis_kind,
         "confidence": confidence,
-        "acceptedEvents": report.get("acceptedEvents"),
-        "droppedEvents": report.get("droppedEvents"),
-        "rawEventsDropped": report.get("rawEventsDropped"),
+        "acceptedEvents": validated_metrics["acceptedEvents"],
+        "droppedEvents": validated_metrics["droppedEvents"],
+        "rawEventsDropped": validated_metrics["rawEventsDropped"],
         "validation": {
             "errors": sorted(set(errors)),
             "warnings": sorted(set(warnings)),
@@ -437,7 +482,7 @@ def validate_report(report: dict[str, Any]) -> dict[str, Any]:
             ),
             "sensitiveWarnings": sorted(set(sensitive_warnings)),
         },
-    }
+    })
 
 
 def compare_reports(current: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
@@ -454,9 +499,10 @@ def compare_reports(current: dict[str, Any], baseline: dict[str, Any]) -> dict[s
             if not isinstance(left, dict) or not isinstance(right, dict):
                 return None
             left, right = left.get(key), right.get(key)
-        if not _is_number(left) or not _is_number(right):
+        if not _is_finite_number(left) or not _is_finite_number(right):
             return None
-        return left - right
+        value = left - right
+        return value if _is_finite_number(value) else None
 
     return {
         "compatible": not reasons,
@@ -560,13 +606,13 @@ def main(argv: list[str] | None = None) -> int:
             if baseline_analysis["status"] != "valid":
                 analysis["status"] = "invalid"
     except ReportInputError as error:
-        failure = {"status": "invalid", "inputError": str(error)}
+        failure = _output_projection({"status": "invalid", "inputError": str(error)})
         if args.format == "json":
             print(json.dumps(failure, indent=2, sort_keys=True))
         else:
             print(
                 "# Vesper Performance Diagnostics Analysis\n\n"
-                f"- Status: `invalid`\n- Input error: {error}\n"
+                f"- Status: `invalid`\n- Input error: {failure['inputError']}\n"
             )
         return 2
 

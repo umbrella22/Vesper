@@ -499,7 +499,7 @@ private inline fun safely(
     runCatching {
         action()
     }.onFailure { error ->
-        Log.w(TAG, message, error)
+        Log.w(TAG, "$message failure=${diagnosticPlaybackFailure(error)}")
     }.isSuccess
 
 private const val ACTION_START_SYSTEM_PLAYBACK_SERVICE =

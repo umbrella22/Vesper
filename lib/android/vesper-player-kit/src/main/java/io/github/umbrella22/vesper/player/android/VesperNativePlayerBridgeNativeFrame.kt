@@ -91,7 +91,7 @@ internal fun VesperNativePlayerBridge.discardStaleNativeFramePipelineOpenResult(
         releasePendingTimedNativeFrameFromRuntime(presented = false)
         bindings.closeNativeFramePipeline()
     }.onFailure { error ->
-        Log.w(NATIVE_PLAYER_BRIDGE_TAG, "stale native-frame pipeline close failed", error)
+        Log.w(NATIVE_PLAYER_BRIDGE_TAG, "stale native-frame pipeline close failed failure=${diagnosticPlaybackFailure(error)}")
     }
 }
 
@@ -275,7 +275,7 @@ internal fun VesperNativePlayerBridge.closeNativeFramePipelineOnRuntime() {
                     bindings.closeNativeFramePipeline()
                 }.onFailure { error ->
                     runOnMainThread {
-                        Log.w(NATIVE_PLAYER_BRIDGE_TAG, "native-frame pipeline close failed", error)
+                        Log.w(NATIVE_PLAYER_BRIDGE_TAG, "native-frame pipeline close failed failure=${diagnosticPlaybackFailure(error)}")
                     }
                 }
             },
@@ -318,9 +318,9 @@ internal fun VesperNativePlayerBridge.handleNativeFramePipelineRuntimeFailure(op
             ?.takeUnless(String::isBlank)
             ?: "Android native-frame pipeline $operation failed."
     if (nativeFramePipelineConfiguration.mode == VesperNativeFramePipelineMode.RequireNativeFrame) {
-        Log.w(NATIVE_PLAYER_BRIDGE_TAG, "required native-frame pipeline $operation failed; stopping playback", error)
+        Log.w(NATIVE_PLAYER_BRIDGE_TAG, "required native-frame pipeline $operation failed; stopping playback failure=${diagnosticPlaybackFailure(error)}")
     } else {
-        Log.w(NATIVE_PLAYER_BRIDGE_TAG, "native-frame pipeline $operation failed; falling back to system playback", error)
+        Log.w(NATIVE_PLAYER_BRIDGE_TAG, "native-frame pipeline $operation failed; falling back to system playback failure=${diagnosticPlaybackFailure(error)}")
     }
     stopNativeFramePipelinePump()
     releasePendingTimedNativeFrameOnRuntime(presented = false)

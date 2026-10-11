@@ -32,7 +32,7 @@ final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate
         lastActivityNs = DispatchTime.now().uptimeNanoseconds
 
         var continuation: AsyncThrowingStream<Data, Error>.Continuation!
-        chunks = AsyncThrowingStream(Data.self, bufferingPolicy: .bufferingNewest(256)) { streamContinuation in
+        chunks = AsyncThrowingStream(Data.self, bufferingPolicy: .bufferingOldest(256)) { streamContinuation in
             continuation = streamContinuation
         }
         chunksContinuation = continuation
@@ -96,11 +96,9 @@ final class VesperURLSessionDataStreamDelegate: NSObject, URLSessionDataDelegate
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         guard !data.isEmpty else { return }
         markActivity()
-        // These chunks are a lossless byte payload that the consumer writes
-        // sequentially to the download file. `bufferingNewest(256)` drops the
-        // oldest pending chunk when the consumer falls behind, which would
-        // silently corrupt the downloaded file (a hole in the middle of the
-        // byte stream). Detect the drop and fail the download loudly instead.
+        // Keep the queued prefix contiguous when the consumer falls behind.
+        // Reject the newest chunk and fail, so pause/cancel can only retain a
+        // valid prefix for a later Range resume, never a file with an interior hole.
         if case .dropped = chunksContinuation.yield(data) {
             let error = VesperForegroundDownloadPreparationError.invalidSource(
                 "download stream buffer overflowed for \(diagnosticSourceDescription); consumer fell behind and a chunk would have been dropped"

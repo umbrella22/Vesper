@@ -5,13 +5,21 @@ import UIKit
 
 extension VesperNativePlayerBridge {
     func applyDefaultTrackPreferencesIfNeeded(for item: AVPlayerItem) async {
-        guard !hasAppliedDefaultTrackPreferences else {
+        guard player?.currentItem === item, !hasAppliedDefaultTrackPreferences else {
             return
         }
 
+        let sourceEpoch = subtitleSourceEpoch
+        let playbackEpoch = currentPlaybackEpoch()
         hasAppliedDefaultTrackPreferences = true
         applyDefaultAudioTrackPreferenceIfPossible(item: item)
         await applyDefaultSubtitleTrackPreferenceIfPossible(item: item)
+        // Subtitle readiness can suspend across a source switch or playback teardown.
+        guard player?.currentItem === item,
+              subtitleSourceEpoch == sourceEpoch,
+              currentPlaybackEpoch() == playbackEpoch else {
+            return
+        }
         try? applyAbrPolicy(
             resolvedTrackPreferencePolicy.abrPolicy,
             origin: .defaultPolicy,

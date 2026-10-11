@@ -25,30 +25,148 @@ pub enum WasmPluginRuntimeError {
     EpochTicker(#[source] std::io::Error),
 }
 
+/// A cloneable, typed Wasmtime cause. Equality denotes shared cause identity,
+/// not matching diagnostic text. Downcasting and the complete source chain remain available.
+#[derive(Debug, Clone)]
+pub struct WasmErrorCause(Arc<wasmtime::Error>);
+
+impl WasmErrorCause {
+    pub fn error(&self) -> &wasmtime::Error {
+        &self.0
+    }
+}
+
+impl From<wasmtime::Error> for WasmErrorCause {
+    fn from(error: wasmtime::Error) -> Self {
+        Self(Arc::new(error))
+    }
+}
+
+impl std::fmt::Display for WasmErrorCause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for WasmErrorCause {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref().as_ref())
+    }
+}
+
+impl PartialEq for WasmErrorCause {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for WasmErrorCause {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WasmExecutionFailureKind {
+    FuelExhausted,
+    DeadlineInterrupted,
+    GuestTrap,
+    HostCallFailed,
+    Unknown,
+}
+
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[error("{kind:?}: {cause}")]
+pub struct WasmExecutionFailure {
+    pub kind: WasmExecutionFailureKind,
+    #[source]
+    pub cause: WasmErrorCause,
+}
+
+impl WasmExecutionFailure {
+    pub(crate) fn from_error(error: wasmtime::Error) -> Self {
+        let kind = if error
+            .downcast_ref::<crate::host_state::WasmHostCallFailure>()
+            .is_some()
+        {
+            WasmExecutionFailureKind::HostCallFailed
+        } else {
+            match error.downcast_ref::<wasmtime::Trap>() {
+                Some(wasmtime::Trap::OutOfFuel) => WasmExecutionFailureKind::FuelExhausted,
+                Some(wasmtime::Trap::Interrupt) => WasmExecutionFailureKind::DeadlineInterrupted,
+                Some(_) => WasmExecutionFailureKind::GuestTrap,
+                None => WasmExecutionFailureKind::Unknown,
+            }
+        };
+        Self {
+            kind,
+            cause: error.into(),
+        }
+    }
+}
+
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum WasmQueueError {
+    #[error("queue is full")]
+    Full,
+    #[error("queue is not open")]
+    Closed,
+    #[error("flush is already pending")]
+    FlushPending,
+    #[error("invocation id space was exhausted")]
+    IdExhausted,
+    #[error("worker stopped before returning a result")]
+    WorkerStopped,
+    #[error("worker lifecycle invariant was violated")]
+    InvalidState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WasmWaitOperation {
+    EventResult,
+    BatchResult,
+    Flush,
+    Close,
+    WorkerJoin,
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum WasmPluginHostError {
     #[error("WASM component exceeds the {limit}-byte host limit")]
     ComponentTooLarge { limit: usize },
     #[error("failed to compile WASM component: {0}")]
-    Compilation(String),
+    Compilation(#[source] WasmErrorCause),
     #[error("failed to instantiate WASM component: {0}")]
-    Instantiation(String),
-    #[error("invalid WASM plugin input: {0}")]
-    InvalidInput(String),
+    Instantiation(#[source] WasmErrorCause),
+    #[error("invalid local WASM plugin input: {0}")]
+    LocalValidation(String),
+    #[error("WASM plugin reported invalid input: {0}")]
+    GuestInvalidInput(String),
     #[error("WASM plugin rejected the call: {0}")]
     Rejected(String),
     #[error("WASM plugin failed the call: {0}")]
     PluginFailed(String),
     #[error("WASM plugin protocol violation: {0}")]
     ProtocolViolation(String),
-    #[error("WASM plugin trapped or exceeded its execution budget: {0}")]
-    Execution(String),
-    #[error("WASM plugin instance is quarantined")]
-    Quarantined,
+    #[error("WASM plugin execution failure: {0}")]
+    Execution(#[source] WasmExecutionFailure),
+    #[error("WASM plugin worker panicked: {0}")]
+    WorkerPanic(String),
+    #[error("WASM plugin instance is quarantined: {reason}")]
+    Quarantined {
+        #[source]
+        reason: Arc<WasmPluginHostError>,
+    },
     #[error("WASM plugin host queue failure: {0}")]
-    Queue(String),
-    #[error("timed out waiting for the WASM plugin host queue: {0}")]
-    QueueTimeout(String),
+    Queue(WasmQueueError),
+    /// Work was accepted when `invocation_id` is present. Expiry does not cancel it.
+    #[error("caller wait expired for {operation:?} (invocation {invocation_id:?})")]
+    WaitExpired {
+        operation: WasmWaitOperation,
+        invocation_id: Option<u64>,
+    },
+}
+
+impl WasmPluginHostError {
+    pub(crate) fn execution(error: wasmtime::Error) -> Self {
+        Self::Execution(WasmExecutionFailure::from_error(error))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -103,7 +221,7 @@ impl WasmPluginRuntime {
             });
         }
         let component = Component::from_binary(self.engine(), bytes)
-            .map_err(|error| WasmPluginHostError::Compilation(error.to_string()))?;
+            .map_err(|error| WasmPluginHostError::Compilation(error.into()))?;
         let component_type = component.component_type();
         let unexpected_imports = component_type
             .imports(self.engine())
@@ -138,7 +256,7 @@ impl WasmPluginRuntime {
         store.set_hostcall_fuel(WASM_PLUGIN_HOSTCALL_FUEL);
         store
             .set_fuel(WASM_PLUGIN_INVOCATION_FUEL)
-            .map_err(|error| WasmPluginHostError::Execution(error.to_string()))?;
+            .map_err(WasmPluginHostError::execution)?;
         store.epoch_deadline_trap();
         store.set_epoch_deadline(epoch_ticks(timeout));
         Ok(())
@@ -183,7 +301,7 @@ mod tests {
     use wasmtime::component::{Component, Linker};
 
     use super::WasmPluginRuntime;
-    use crate::WASM_PLUGIN_TABLE_ELEMENT_LIMIT;
+    use crate::{WASM_PLUGIN_MEMORY_LIMIT_BYTES, WASM_PLUGIN_TABLE_ELEMENT_LIMIT};
 
     #[test]
     fn store_rejects_a_component_over_the_memory_budget() {
@@ -204,6 +322,54 @@ mod tests {
             .expect("bounded store");
 
         assert!(linker.instantiate(&mut store, &component).is_err());
+    }
+
+    #[test]
+    fn store_traps_when_memory_grows_over_budget() {
+        const WASM_PAGE_BYTES: usize = 64 * 1024;
+        let runtime = WasmPluginRuntime::new().expect("WASM runtime");
+        let host_limit_pages = WASM_PLUGIN_MEMORY_LIMIT_BYTES / WASM_PAGE_BYTES;
+
+        // The module starts with one page, so adding the full host limit exceeds it.
+        for requested_pages in [host_limit_pages, u32::MAX as usize] {
+            let bytes = wat::parse_str(format!(
+                r#"
+                    (component
+                        (core module $module
+                            (memory 1)
+                            (func (export "grow") (result i32)
+                                (memory.grow (i32.const {requested_pages}))))
+                        (core instance $instance (instantiate $module))
+                        (func (export "grow") (result s32)
+                            (canon lift (core func $instance "grow"))))
+                "#,
+            ))
+            .expect("memory-growth component");
+            let component = Component::from_binary(runtime.engine(), &bytes).expect("component");
+            let linker = Linker::new(runtime.engine());
+            let mut store = runtime
+                .new_store(Duration::from_secs(5))
+                .expect("bounded store");
+            // Memory limits apply independently of bulk-operation fuel charging.
+            store.set_fuel(u64::MAX).expect("ample test fuel");
+            let instance = linker
+                .instantiate(&mut store, &component)
+                .expect("component instance");
+            let grow = instance
+                .get_typed_func::<(), (i32,)>(&mut store, "grow")
+                .expect("typed memory growth export");
+
+            let error = grow
+                .call(&mut store, ())
+                .expect_err("memory growth beyond the host limit must trap");
+            assert!(
+                !matches!(
+                    error.downcast_ref::<wasmtime::Trap>(),
+                    Some(wasmtime::Trap::OutOfFuel | wasmtime::Trap::Interrupt)
+                ),
+                "memory growth must fail independently of fuel and epoch limits: {error:?}"
+            );
+        }
     }
 
     #[test]
@@ -340,6 +506,10 @@ mod tests {
             error.downcast_ref::<wasmtime::Trap>(),
             Some(&wasmtime::Trap::OutOfFuel)
         );
+        assert_eq!(
+            super::WasmExecutionFailure::from_error(error).kind,
+            super::WasmExecutionFailureKind::FuelExhausted
+        );
     }
 
     #[test]
@@ -360,7 +530,42 @@ mod tests {
             error.downcast_ref::<wasmtime::Trap>(),
             Some(&wasmtime::Trap::Interrupt)
         );
+        assert_eq!(
+            super::WasmExecutionFailure::from_error(error).kind,
+            super::WasmExecutionFailureKind::DeadlineInterrupted
+        );
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn execution_classification_uses_types_and_preserves_unknown_causes() {
+        use super::{WasmExecutionFailure, WasmExecutionFailureKind};
+        let message = wasmtime::Error::msg("OutOfFuel Interrupt host.log")
+            .context("outer invocation context");
+        let unknown = WasmExecutionFailure::from_error(message);
+        assert_eq!(unknown.kind, WasmExecutionFailureKind::Unknown);
+        assert!(unknown.cause.error().downcast_ref::<&str>().is_some());
+        assert_eq!(unknown.cause.error().chain().count(), 2);
+        assert_eq!(unknown.cause, unknown.cause.clone());
+
+        let host = WasmExecutionFailure::from_error(
+            wasmtime::Error::from(crate::host_state::WasmHostCallFailure(
+                "OutOfFuel".to_owned(),
+            ))
+            .context("guest called log"),
+        );
+        assert_eq!(host.kind, WasmExecutionFailureKind::HostCallFailed);
+        assert!(
+            host.cause
+                .error()
+                .downcast_ref::<crate::host_state::WasmHostCallFailure>()
+                .is_some()
+        );
+        let trap = WasmExecutionFailure::from_error(wasmtime::Error::from(
+            wasmtime::Trap::UnreachableCodeReached,
+        ));
+        assert_eq!(trap.kind, WasmExecutionFailureKind::GuestTrap);
+        assert!(std::error::Error::source(&trap).is_some());
     }
 
     fn spinning_component(

@@ -10,7 +10,7 @@ class VesperDashNetworkClient {
     }
 
     func manifestData(for url: URL) async throws -> (Data, URL) {
-        (try await data(for: url), url)
+        try await dataWithFinalURL(for: url)
     }
 
     func request(for url: URL) throws -> URLRequest {
@@ -29,6 +29,9 @@ class VesperDashNetworkClient {
             return (try readLocalFile(url: url, byteRange: byteRange), url)
         }
         var request = try request(for: url)
+        if byteRange != nil {
+            request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        }
         if let byteRange {
             request.setValue("bytes=\(byteRange.start)-\(byteRange.end)", forHTTPHeaderField: "Range")
         }
@@ -41,6 +44,7 @@ class VesperDashNetworkClient {
                 "HTTP \(httpResponse.statusCode) for \(diagnosticURLDescription(url.absoluteString))"
             )
         }
+        try validateRangeResponse(response, byteRange: byteRange, bodyLength: UInt64(data.count), sourceURL: url)
         return (data, response.url ?? url)
     }
 
@@ -63,6 +67,9 @@ class VesperDashNetworkClient {
         }
 
         var request = try request(for: url)
+        if byteRange != nil {
+            request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        }
         if let byteRange {
             request.setValue("bytes=\(byteRange.start)-\(byteRange.end)", forHTTPHeaderField: "Range")
         }
@@ -76,8 +83,40 @@ class VesperDashNetworkClient {
                 "HTTP \(httpResponse.statusCode) for \(diagnosticURLDescription(url.absoluteString))"
             )
         }
+        do {
+            try validateRangeResponse(response, byteRange: byteRange, bodyLength: fileSize(at: temporaryURL) ?? 0, sourceURL: url)
+        } catch {
+            removeFileIfPresent(temporaryURL, context: "invalid DASH range temporary file")
+            throw error
+        }
         try FileManager.default.moveItem(at: temporaryURL, to: destinationURL)
         return fileSize(at: destinationURL) ?? 0
+    }
+
+    func validateRangeResponse(_ response: URLResponse, byteRange: VesperDashByteRange?, bodyLength: UInt64, sourceURL: URL) throws {
+        guard let range = byteRange else { return }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 206,
+              range.end >= range.start, range.end - range.start < UInt64.max,
+              http.value(forHTTPHeaderField: "Content-Encoding").map({ $0.lowercased() == "identity" }) ?? true else {
+            throw VesperDashBridgeError.network("remote server did not return the requested byte range")
+        }
+        let expectedLength = range.end - range.start + 1
+        guard bodyLength == expectedLength else {
+            throw VesperDashBridgeError.network("remote byte range body length did not match the request")
+        }
+        do {
+            let parsed = try validateHTTPPartialContentRange(
+                contentRangeHeader: http.value(forHTTPHeaderField: "Content-Range"),
+                contentLengthHeader: http.value(forHTTPHeaderField: "Content-Length"),
+                requestedStart: range.start, requestedEndInclusive: range.end,
+                expectedBodyLength: expectedLength, expectedTotalSizeBytes: nil, sourceURL: sourceURL
+            )
+            guard parsed.total.map({ $0 > range.end }) ?? true else {
+                throw VesperDashBridgeError.network("remote byte range total did not contain the requested end")
+            }
+        } catch {
+            throw VesperDashBridgeError.network("remote server returned invalid byte range metadata")
+        }
     }
 
     func makeSession() -> URLSession {

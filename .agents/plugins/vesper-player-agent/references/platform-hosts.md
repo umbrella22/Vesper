@@ -76,7 +76,7 @@ Changing skins preserves the controller, surface, source, and playback state.
 Icons express semantic actions; SDK controls retain input and accessibility.
 System PiP, notifications, lock-screen controls, and AirPlay route pickers have
 separate platform presentation rules. Read `stage-skins.md` for the API,
-platform-native resources, migration, and verification requirements.
+platform-native resources, current control usage, and verification requirements.
 
 ## Timeline Sampling
 

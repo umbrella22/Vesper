@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-11
+
+- Align the Android host-kit dependency with the 0.9.0 SDK.
+- Reject malformed channel inputs and preserve structured native failures.
+
 ## 0.8.0 - 2026-09-29
 
 - Implement source-session lifecycle and activation over the Android host kit.

@@ -1451,7 +1451,7 @@ pub(crate) fn decrement_macos_native_frame_buffered_count(
     buffered_frame_count: &AtomicUsize,
     wakeup: &MacosNativeFramePrefetchWakeup,
 ) {
-    let _ = buffered_frame_count.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+    let _ = buffered_frame_count.try_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
         Some(count.saturating_sub(1))
     });
     wakeup.notify();

@@ -348,6 +348,199 @@ class VesperNativeJniBindingsTrackCatalogIdTest {
     }
 
     @Test
+    fun mergedExternalSubtitleCatalog_prefersIndexedIdentityOverAnotherRawId() {
+        val externalIds = listOf("2:captions", "captions")
+        // Media3 prefixes Format.id by child index: main=0, sidecars=1,2.
+        val tracks = separateTextTracks("1:2:captions" to false, "2:captions" to false)
+
+        val catalog = collectTrackCatalog(tracks, externalSubtitleIds = externalIds)
+
+        assertEquals(externalIds, catalog.tracks.map { it.id })
+        assertNull(catalog.subtitleIdentityFailure)
+        assertEquals(2, catalog.advertisedSubtitleTrackCount)
+    }
+
+    @Test
+    fun mergedExternalSubtitleSelection_confirmsEachIndexedIdentityWithoutEchoingPendingOverride() {
+        val externalIds = listOf("2:captions", "captions")
+        val pending = separateTextTracks("1:2:captions" to false, "2:captions" to false)
+        externalIds.forEachIndexed { index, externalId ->
+            val parameters =
+                TrackSelectionParameters.Builder()
+                    .setOverrideForType(TrackSelectionOverride(pending.groups[index].mediaTrackGroup, 0))
+                    .build()
+            val confirmed =
+                separateTextTracks("1:2:captions" to (index == 0), "2:captions" to (index == 1))
+
+            assertEquals(
+                externalId,
+                collectTrackSelection(
+                    confirmed,
+                    parameters,
+                    externalSubtitleIds = externalIds,
+                    subtitleModeOrdinal = NativeTrackSelectionMode.Track.ordinal,
+                ).subtitle.trackId,
+            )
+            assertTrue(
+                isSubtitleTrackSelectable(pending, externalId, externalSubtitleIds = externalIds),
+            )
+            assertEquals(
+                VesperTrackSelection.track(externalId),
+                collectAppliedSubtitleSelection(
+                    pending,
+                    parameters,
+                    externalSubtitleIds = externalIds,
+                    requestedModeOrdinal = NativeTrackSelectionMode.Track.ordinal,
+                ),
+            )
+            assertNull(
+                collectTrackSelection(
+                    pending,
+                    parameters,
+                    externalSubtitleIds = externalIds,
+                    subtitleModeOrdinal = NativeTrackSelectionMode.Track.ordinal,
+                ).subtitle.trackId,
+            )
+        }
+    }
+
+    @Test
+    fun mergedPrimarySubtitleCatalog_keepsEmbeddedIdDistinctFromOpaqueExternalId() {
+        val catalog =
+            collectTrackCatalog(
+                primaryAndOpaqueExternalTracks(),
+                VesperPlayerSourceProtocol.Dash,
+                listOf("0:captions"),
+            )
+
+        assertNull(catalog.subtitleIdentityFailure)
+        assertEquals(listOf("subtitle:dash:captions", "0:captions"), catalog.tracks.map { it.id })
+        assertEquals(2, catalog.advertisedSubtitleTrackCount)
+    }
+
+    @Test
+    fun mergedPrimarySubtitleSelection_confirmsEachDistinctIdentity() {
+        val pending = primaryAndOpaqueExternalTracks()
+        listOf("subtitle:dash:captions", "0:captions").forEachIndexed { index, trackId ->
+            val parameters =
+                TrackSelectionParameters.Builder()
+                    .setOverrideForType(TrackSelectionOverride(pending.groups[index].mediaTrackGroup, 0))
+                    .build()
+            val confirmed = primaryAndOpaqueExternalTracks(index == 0, index == 1)
+
+            assertEquals(
+                trackId,
+                collectTrackSelection(
+                    confirmed,
+                    parameters,
+                    VesperPlayerSourceProtocol.Dash,
+                    listOf("0:captions"),
+                    subtitleModeOrdinal = NativeTrackSelectionMode.Track.ordinal,
+                ).subtitle.trackId,
+            )
+        }
+    }
+
+    @Test
+    fun mergedPrimarySubtitleSelection_preservesPendingOverrideWithoutConfirmingIt() {
+        val pending = primaryAndOpaqueExternalTracks()
+        listOf("subtitle:dash:captions", "0:captions").forEachIndexed { index, trackId ->
+            val parameters =
+                TrackSelectionParameters.Builder()
+                    .setOverrideForType(TrackSelectionOverride(pending.groups[index].mediaTrackGroup, 0))
+                    .build()
+
+            assertEquals(
+                VesperTrackSelection.track(trackId),
+                collectAppliedSubtitleSelection(
+                    pending,
+                    parameters,
+                    VesperPlayerSourceProtocol.Dash,
+                    listOf("0:captions"),
+                    requestedModeOrdinal = NativeTrackSelectionMode.Track.ordinal,
+                ),
+            )
+            assertNull(
+                collectTrackSelection(
+                    pending,
+                    parameters,
+                    VesperPlayerSourceProtocol.Dash,
+                    listOf("0:captions"),
+                    subtitleModeOrdinal = NativeTrackSelectionMode.Track.ordinal,
+                ).subtitle.trackId,
+            )
+        }
+    }
+
+    @Test
+    fun mergedPrimarySubtitleTargets_resolveEachIdentityToItsOwnGroup() {
+        val tracks = primaryAndOpaqueExternalTracks()
+        listOf("subtitle:dash:captions", "0:captions").forEachIndexed { index, trackId ->
+            assertTrue(
+                isSubtitleTrackSelectable(
+                    tracks,
+                    trackId,
+                    VesperPlayerSourceProtocol.Dash,
+                    listOf("0:captions"),
+                ),
+            )
+            val location =
+                findTrackLocation(
+                    tracks,
+                    C.TRACK_TYPE_TEXT,
+                    trackId,
+                    VesperPlayerSourceProtocol.Dash,
+                    listOf("0:captions"),
+                )
+            assertEquals(tracks.groups[index], location?.group)
+            assertEquals(0, location?.trackIndex)
+        }
+    }
+
+    @Test
+    fun mergedPrimaryAutomaticSubtitleOverride_doesNotRejectDistinctIdentities() {
+        val result =
+            findAutomaticSubtitleOverride(
+                primaryAndOpaqueExternalTracks(),
+                TrackSelectionParameters.Builder().build(),
+                VesperPlayerSourceProtocol.Dash,
+                listOf("0:captions"),
+            )
+
+        assertNull(result.failure)
+        assertNotNull(result.override)
+    }
+
+    @Test
+    fun unmergedOpaquePrimaryPrefixExternalId_remainsLossless() {
+        val externalIds = listOf("0:captions")
+        assertEquals("0:captions", subtitleTrackId(Format.Builder().setId("0:captions").build(), true, externalIds))
+        assertEquals("0:captions", subtitleTrackId(Format.Builder().setId("1:0:captions").build(), true, externalIds))
+        assertEquals(
+            "subtitle:dash:7:0:captions",
+            subtitleTrackId(Format.Builder().setId("7:0:captions").build(), true, externalIds),
+        )
+        val catalog = collectTrackCatalog(textTracks("0:captions" to false), VesperPlayerSourceProtocol.Dash, externalIds)
+        assertNull(catalog.subtitleIdentityFailure)
+        assertEquals(externalIds, catalog.tracks.map { it.id })
+    }
+
+    @Test
+    fun externalSubtitleIdentity_preservesOpaqueRawIdAndOnlyItsDeclaredMergedPrefix() {
+        val externalIds = listOf("2:captions")
+        assertEquals("2:captions", subtitleTrackId(Format.Builder().setId("2:captions").build(), true, externalIds))
+        assertEquals("2:captions", subtitleTrackId(Format.Builder().setId("1:2:captions").build(), true, externalIds))
+        assertEquals(
+            "subtitle:dash:7:2:captions",
+            subtitleTrackId(Format.Builder().setId("7:2:captions").build(), true, externalIds),
+        )
+        assertEquals(
+            "subtitle:dash:embedded:en",
+            subtitleTrackId(Format.Builder().setId("0:embedded:en").build(), true, externalIds),
+        )
+    }
+
+    @Test
     fun subtitleTargetReadinessUsesStableExternalIdentityAndRequiresSupport() {
         val externalId = "caller-sub-en"
         val format =
@@ -667,6 +860,47 @@ class VesperNativeJniBindingsTrackCatalogIdTest {
         assertEquals(2, catalog.advertisedSubtitleTrackCount)
         assertEquals(listOf("subtitle:dash:sub-low"), catalog.tracks.filter { it.isDefault }.map { it.id })
     }
+
+    private fun primaryAndOpaqueExternalTracks(
+        mainSelected: Boolean = false,
+        externalSelected: Boolean = false,
+    ): Tracks =
+        Tracks(
+            listOf("0:dash-text" to "0:captions", "1:" to "1:0:captions").mapIndexed { index, (groupId, formatId) ->
+                // Media3 1.11.1 prefixes both group and format by child index.
+                // These DTOs model its main=0 / SingleSample sidecar=1 output.
+                val format =
+                    Format.Builder()
+                        .setId(formatId)
+                        .setSampleMimeType(MimeTypes.TEXT_VTT)
+                        .setLanguage("en")
+                        .build()
+                Tracks.Group(
+                    TrackGroup(groupId, format),
+                    false,
+                    intArrayOf(C.FORMAT_HANDLED),
+                    booleanArrayOf(if (index == 0) mainSelected else externalSelected),
+                )
+            },
+        )
+
+    private fun separateTextTracks(vararg tracks: Pair<String, Boolean>): Tracks =
+        Tracks(
+            tracks.mapIndexed { index, (id, selected) ->
+                val format =
+                    Format.Builder()
+                        .setId(id)
+                        .setSampleMimeType(MimeTypes.TEXT_VTT)
+                        .setLanguage("en")
+                        .build()
+                Tracks.Group(
+                    TrackGroup("sidecar-$index", format),
+                    false,
+                    intArrayOf(C.FORMAT_HANDLED),
+                    booleanArrayOf(selected),
+                )
+            },
+        )
 
     private fun textTracks(vararg tracks: Pair<String?, Boolean>): Tracks {
         val formats =

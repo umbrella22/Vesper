@@ -33,9 +33,9 @@ slots.
 - Favor explicit unsupported errors over silent fallbacks.
 - Favor host-kit public APIs over raw JNI, C ABI, or platform object exposure.
 - Keep Stage skins in the optional UI modules. Use the bundled skin contract
-  and the checkout's migration guide for icon, style, accessibility, and
-  runtime-switching changes; verify the consumer's version before proposing
-  APIs introduced in 0.6.4.
+  and the checkout's Stage skin contract for icon, style, accessibility, and
+  runtime-switching changes; verify the consumer's resolved UI package and
+  current API before integrating controls.
 - Favor shared FFmpeg profiles and one runtime payload over per-feature bundles.
 - Favor clear validation records over broad unproven assurances.
 - Validate performance reports before interpreting them, keep UI-frame and

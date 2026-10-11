@@ -25,5 +25,5 @@ func parseIso8601DurationSeconds(_ value: String?) -> Double? {
             return nil
         }
     }
-    return total > 0 ? total : nil
+    return number.isEmpty && total.isFinite && total > 0 ? total : nil
 }

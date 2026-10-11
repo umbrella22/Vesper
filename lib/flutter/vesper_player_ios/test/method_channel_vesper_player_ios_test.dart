@@ -104,6 +104,167 @@ void main() {
     expect(Map<Object?, Object?>.from(recovered as Map), recoveredPlan.toMap());
   });
 
+  test('recovery rejects malformed graph references and unknown caller formats',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      return {'downloadId': 'boundary-recovery'};
+    });
+    final platform = MethodChannelVesperPlayerIos();
+    final source = VesperDownloadSource.fromSource(
+      source: VesperPlayerSource.remote(
+          uri: 'https://example.com/video.mp4', label: 'Video'),
+    );
+    final profile =
+        VesperDownloadProfile.fromMap({'targetOutputFormat': 'futureFormat'});
+    final task = VesperDownloadTaskSnapshot(
+      taskId: 7,
+      assetId: 'asset:001',
+      source: source,
+      profile: profile,
+      state: VesperDownloadState.failed,
+      progress: const VesperDownloadProgressSnapshot(),
+      assetIndex: const VesperDownloadAssetIndex(),
+    );
+    var recoveryCalls = 0;
+    await platform.createDownloadManager(
+        staleResourceRecovery: (received, stale) {
+      recoveryCalls += 1;
+      expect(received.profile.targetOutputFormatRawValue, 'futureFormat');
+      return VesperDownloadRecoveredTaskPlan(
+          source: source, profile: profile, assetIndex: task.assetIndex);
+    });
+    final malformed = task.toMap()
+      ..['assetIndex'] = {
+        'streams': [
+          {
+            'streamId': 'video:001',
+            'resourceIds': ['init:001', 7]
+          }
+        ],
+      };
+    await expectLater(
+      _invokeNativeMethodCall(MethodCall('recoverDownloadTaskPlan', {
+        'downloadId': 'boundary-recovery',
+        'task': malformed,
+        'staleResource': {'taskId': 7, 'message': 'expired'},
+      })),
+      throwsA(isA<PlatformException>().having((error) => error.message,
+          'message', contains('resourceIds[1] must be a string'))),
+    );
+    expect(recoveryCalls, 0);
+    await expectLater(
+      _invokeNativeMethodCall(MethodCall('recoverDownloadTaskPlan', {
+        'downloadId': 'boundary-recovery',
+        'task': task.toMap(),
+        'staleResource': {'taskId': 7, 'message': 'expired'},
+      })),
+      throwsA(isA<PlatformException>().having((error) => error.message,
+          'message', contains('Unknown caller targetOutputFormat'))),
+    );
+    expect(recoveryCalls, 1);
+  });
+
+  test(
+      'future download output format remains observable but cannot become a caller command',
+      () async {
+    final platform = MethodChannelVesperPlayerIos();
+    final profile =
+        VesperDownloadProfile.fromMap({'targetOutputFormat': 'futureFormat'});
+    expect(profile.toMap()['targetOutputFormat'], 'futureFormat');
+    await expectLater(
+      platform.createDownloadTask(
+        'downloads',
+        assetId: 'asset:001',
+        source: VesperDownloadSource.fromSource(
+            source: VesperPlayerSource.remote(
+          uri: 'https://example.com/video.mp4',
+          label: 'Video',
+        )),
+        profile: profile,
+      ),
+      throwsFormatException,
+    );
+    expect(calls, isEmpty);
+  });
+
+  test('download graph caller round-trip preserves byte ranges and references',
+      () async {
+    final platform = MethodChannelVesperPlayerIos();
+    final graph = VesperDownloadAssetIndex.fromMap({
+      'resources': [
+        {
+          'resourceId': 'init:001',
+          'uri': 'https://example.com/init.mp4',
+          'byteRange': {'offset': 128, 'length': 1024}
+        }
+      ],
+      'segments': [
+        {'segmentId': 'seg:001', 'uri': 'https://example.com/1.m4s'}
+      ],
+      'streams': [
+        {
+          'streamId': 'video:001',
+          'resourceIds': ['init:001'],
+          'segmentIds': ['seg:001']
+        }
+      ],
+    });
+    final profile = VesperDownloadProfile.fromMap({
+      'selectedTrackIds': ['video:001'],
+      'targetOutputFormat': 'mp4'
+    });
+    await platform.createDownloadTask(
+      'downloads',
+      assetId: 'asset:001',
+      source: VesperDownloadSource.fromSource(
+          source: VesperPlayerSource.remote(
+        uri: 'https://example.com/video.mp4',
+        label: 'Video',
+      )),
+      profile: profile,
+      assetIndex: graph,
+    );
+    expect(calls.single.method, 'createDownloadTask');
+    final arguments = Map<Object?, Object?>.from(calls.single.arguments as Map);
+    expect(arguments['assetIndex'], graph.toMap());
+    expect(arguments['profile'], profile.toMap());
+    expect(
+        VesperDownloadAssetIndex.fromMap(
+                arguments['assetIndex']! as Map<Object?, Object?>)
+            .toMap(),
+        graph.toMap());
+  });
+
+  test('caller-decoded policy round-trips into the command payload', () async {
+    final platform = MethodChannelVesperPlayerIos();
+    final policy = VesperPlaybackResiliencePolicy.fromMap({
+      'buffering': {'preset': 'resilient'},
+      'retry': {'maxAttempts': 6, 'backoff': 'exponential'},
+      'cache': {'preset': 'streaming'},
+    });
+    await platform.setResiliencePolicy('boundary-player', policy);
+    expect(calls.single.method, 'setResiliencePolicy');
+    final arguments = Map<Object?, Object?>.from(calls.single.arguments as Map);
+    final wire = Map<Object?, Object?>.from(arguments['policy'] as Map);
+    expect(
+        VesperPlaybackResiliencePolicy.fromMap(wire).toMap(), policy.toMap());
+  });
+
+  test('wrongly typed retry attempts fail before a command reaches the host',
+      () async {
+    final platform = MethodChannelVesperPlayerIos();
+    const policy = VesperPlaybackResiliencePolicy(
+      retry: VesperRetryPolicy(maxAttempts: 'unlimited'),
+    );
+    await expectLater(
+      Future<void>.sync(
+          () => platform.setResiliencePolicy('boundary-player', policy)),
+      throwsArgumentError,
+    );
+    expect(calls, isEmpty);
+  });
+
   test('createPlayer forwards sparse defaults payloads', () async {
     final platform = MethodChannelVesperPlayerIos();
     final source = VesperPlayerSource.hls(
@@ -784,7 +945,8 @@ void main() {
   });
 
   test('snapshot decodes native HDR failure evidence details', () async {
-    const eventChannel = EventChannel('io.github.umbrella22.vesper_player/events');
+    const eventChannel =
+        EventChannel('io.github.umbrella22.vesper_player/events');
     final platform = MethodChannelVesperPlayerIos();
     final events = <VesperPlayerEvent>[];
 
@@ -899,7 +1061,8 @@ void main() {
 
   test('event stream decodes FairPlay terminal error and snapshot details',
       () async {
-    const eventChannel = EventChannel('io.github.umbrella22.vesper_player/events');
+    const eventChannel =
+        EventChannel('io.github.umbrella22.vesper_player/events');
     final platform = MethodChannelVesperPlayerIos();
     final events = <VesperPlayerEvent>[];
     final terminalError = <String, Object?>{

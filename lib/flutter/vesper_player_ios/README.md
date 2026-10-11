@@ -32,7 +32,7 @@ Swift package, products, and `VesperPlayerKit` module name are unchanged.
 | External text subtitles            | ✅ bounded UTF-8 SRT / WebVTT / SSA native overlay                                                  |
 | Subtitle visibility / font scale    | ✅ AVPlayer text style rules plus native overlay                                                     |
 | Track selection (video)             | ⚠️ Not exact AVPlayer track switching; use ABR variant pinning and the track catalog               |
-| Adaptive bitrate (ABR)              | ✅ `constrained`; `fixedTrack` is best-effort variant pinning on iOS 15+                           |
+| Adaptive bitrate (ABR)              | ✅ `constrained`; `fixedTrack` is best-effort variant pinning on iOS 17+                           |
 | Buffering / retry / cache policy    | ✅                                                                                                 |
 | Download management                 | ✅                                                                                                 |
 | Preload                             | ✅                                                                                                 |

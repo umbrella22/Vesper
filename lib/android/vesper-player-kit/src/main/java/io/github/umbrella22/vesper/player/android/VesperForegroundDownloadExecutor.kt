@@ -5,6 +5,7 @@ import androidx.media3.datasource.DefaultDataSource
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -38,17 +39,19 @@ internal class VesperForegroundDownloadExecutor(
         task: VesperDownloadTaskSnapshot,
         reporter: VesperDownloadExecutionReporter,
     ) {
-        scope.launch {
+        launchExecution(task.taskId) {
             try {
-                reporter.completePreparation(task.taskId, prepareAssetIndexWithRecovery(task, reporter))
+                val assetIndex = prepareAssetIndexWithRecovery(task, reporter)
+                currentCoroutineContext().ensureActive()
+                reporter.completePreparation(task.taskId, assetIndex)
             } catch (_: CancellationException) {
-                return@launch
+                return@launchExecution
             } catch (error: Exception) {
                 reporter.fail(
                     task.taskId,
                     VesperDownloadError(
-                        code = VesperPlayerErrorCode.BackendFailure,
-                        category = VesperPlayerErrorCategory.Network,
+                        code = if (error is VesperPlayerUnsupportedOperation) VesperPlayerErrorCode.Unsupported else VesperPlayerErrorCode.BackendFailure,
+                        category = if (error is VesperPlayerUnsupportedOperation) VesperPlayerErrorCategory.Capability else VesperPlayerErrorCategory.Network,
                         retriable = false,
                         message = error.message ?: "android download preparation failed",
                     ),
@@ -107,137 +110,147 @@ internal class VesperForegroundDownloadExecutor(
         task: VesperDownloadTaskSnapshot,
         reporter: VesperDownloadExecutionReporter,
     ) {
-        pause(task.taskId)
-        val job =
-            scope.launch {
-                var receivedBytes = 0L
-                var receivedSegments = 0
-                var activeEntry: ForegroundDownloadEntry? = null
-                try {
-                    val downloadContext = currentCoroutineContext()
+        launchExecution(task.taskId, clearsRecoveredSource = true) {
+            var receivedBytes = 0L
+            var receivedSegments = 0
+            var activeEntry: ForegroundDownloadEntry? = null
+            try {
+                val downloadContext = currentCoroutineContext()
+                downloadContext.ensureActive()
+                val materializedTask =
+                    task.copy(
+                        assetIndex =
+                            materializeGeneratedResources(
+                                assetId = task.assetId,
+                                taskId = task.taskId,
+                                profile = task.profile,
+                                assetIndex = task.assetIndex,
+                            ),
+                    )
+                val plan = buildExecutionPlan(materializedTask)
+                val requestHeaders = materializedTask.source.source.headers
+                val trackSegments = materializedTask.assetIndex.segments.isNotEmpty()
+                val progressThrottle = DownloadProgressThrottle(minProgressBytes, minProgressIntervalMs)
+
+                for ((index, entry) in plan.withIndex()) {
                     downloadContext.ensureActive()
-                    val materializedTask =
-                        task.copy(
-                            assetIndex =
-                                materializeGeneratedResources(
-                                    assetId = task.assetId,
-                                    taskId = task.taskId,
-                                    profile = task.profile,
-                                    assetIndex = task.assetIndex,
-                                ),
-                        )
-                    val plan = buildExecutionPlan(materializedTask)
-                    val requestHeaders = materializedTask.source.source.headers
-                    val trackSegments = materializedTask.assetIndex.segments.isNotEmpty()
-                    val progressThrottle = DownloadProgressThrottle(minProgressBytes, minProgressIntervalMs)
+                    activeEntry = entry
+                    val outputFile = resolveOutputFile(materializedTask, entry, index)
+                    outputFile.parentFile?.mkdirs()
 
-                    for ((index, entry) in plan.withIndex()) {
-                        downloadContext.ensureActive()
-                        activeEntry = entry
-                        val outputFile = resolveOutputFile(materializedTask, entry, index)
-                        outputFile.parentFile?.mkdirs()
-
-                        val bytesWritten =
-                            if (entry.generatedText != null) {
-                                runInterruptible {
-                                    outputFile.writeText(entry.generatedText)
-                                }
-                                0L
-                            } else {
-                                val resumeFromBytes =
-                                    resumableExistingBytes(
-                                        destination = outputFile,
-                                        expectedSizeBytes = entry.expectedSizeBytes,
-                                    )
-                                copyUriToFile(
-                                    sourceUri = entry.uri,
-                                    byteRange = entry.byteRange,
-                                    requestHeaders = requestHeaders,
+                    val bytesWritten =
+                        if (entry.generatedText != null) {
+                            runInterruptible {
+                                outputFile.writeText(entry.generatedText)
+                            }
+                            0L
+                        } else {
+                            val resumeFromBytes =
+                                resumableExistingBytes(
                                     destination = outputFile,
                                     expectedSizeBytes = entry.expectedSizeBytes,
-                                    resumeFromBytes = resumeFromBytes,
-                                ) { writtenBytes ->
-                                    downloadContext.ensureActive()
-                                    val nextBytes = receivedBytes + writtenBytes
-                                    if (progressThrottle.shouldReport(nextBytes)) {
-                                        reporter.updateProgress(task.taskId, nextBytes, receivedSegments)
-                                    }
+                                )
+                            copyUriToFile(
+                                sourceUri = entry.uri,
+                                byteRange = entry.byteRange,
+                                requestHeaders = requestHeaders,
+                                destination = outputFile,
+                                expectedSizeBytes = entry.expectedSizeBytes,
+                                resumeFromBytes = resumeFromBytes,
+                            ) { writtenBytes ->
+                                downloadContext.ensureActive()
+                                val nextBytes = receivedBytes + writtenBytes
+                                if (progressThrottle.shouldReport(nextBytes)) {
+                                    reporter.updateProgress(task.taskId, nextBytes, receivedSegments)
                                 }
                             }
-
-                        downloadContext.ensureActive()
-                        receivedBytes += bytesWritten
-                        if (trackSegments && entry.isSegment) {
-                            receivedSegments += 1
                         }
-                        progressThrottle.markReported(receivedBytes)
-                        reporter.updateProgress(task.taskId, receivedBytes, receivedSegments)
-                    }
 
                     downloadContext.ensureActive()
-                    synchronized(recoveredSourcesLock) {
-                        recoveredSources.remove(task.taskId)
+                    receivedBytes += bytesWritten
+                    if (trackSegments && entry.isSegment) {
+                        receivedSegments += 1
                     }
-                    reporter.complete(task.taskId, resolveCompletedPath(materializedTask, plan))
-                } catch (_: CancellationException) {
-                    return@launch
-                } catch (error: VesperStaleDownloadResourceException) {
-                    try {
-                        if (
-                            recoverStaleDownload(
-                                task = task,
-                                staleError = error,
-                                activeEntry = activeEntry,
-                                receivedBytes = receivedBytes,
-                                reporter = reporter,
-                            )
-                        ) {
-                            return@launch
-                        }
-                    } catch (_: CancellationException) {
-                        return@launch
-                    } catch (recoveryError: Exception) {
-                        reporter.fail(
-                            task.taskId,
-                            VesperDownloadError(
-                                code = VesperPlayerErrorCode.BackendFailure,
-                                category = VesperPlayerErrorCategory.Network,
-                                retriable = false,
-                                message = recoveryError.message ?: "android download recovery failed",
-                            ),
-                        )
-                        return@launch
-                    }
-                    reporter.fail(
-                        task.taskId,
-                        VesperDownloadError(
-                            code = VesperPlayerErrorCode.BackendFailure,
-                            category = VesperPlayerErrorCategory.Network,
-                            retriable = false,
-                            message = error.message ?: "android foreground download failed",
-                        ),
-                    )
-                } catch (error: Exception) {
-                    reporter.fail(
-                        task.taskId,
-                        VesperDownloadError(
-                            code = VesperPlayerErrorCode.BackendFailure,
-                            category = VesperPlayerErrorCategory.Network,
-                            retriable = false,
-                            message = error.message ?: "android foreground download failed",
-                        ),
-                    )
-                } finally {
-                    synchronized(jobsLock) {
-                        jobs.remove(task.taskId)
-                    }
+                    progressThrottle.markReported(receivedBytes)
+                    reporter.updateProgress(task.taskId, receivedBytes, receivedSegments)
                 }
-            }
 
-        synchronized(jobsLock) {
-            jobs[task.taskId] = job
+                downloadContext.ensureActive()
+                reporter.complete(task.taskId, resolveCompletedPath(materializedTask, plan))
+            } catch (_: CancellationException) {
+                return@launchExecution
+            } catch (error: VesperStaleDownloadResourceException) {
+                try {
+                    if (
+                        recoverStaleDownload(
+                            task = task,
+                            staleError = error,
+                            activeEntry = activeEntry,
+                            receivedBytes = receivedBytes,
+                            reporter = reporter,
+                        )
+                    ) {
+                        return@launchExecution
+                    }
+                } catch (_: CancellationException) {
+                    return@launchExecution
+                } catch (recoveryError: Exception) {
+                    reporter.fail(
+                        task.taskId,
+                        VesperDownloadError(
+                            code = VesperPlayerErrorCode.BackendFailure,
+                            category = VesperPlayerErrorCategory.Network,
+                            retriable = false,
+                            message = recoveryError.message ?: "android download recovery failed",
+                        ),
+                    )
+                    return@launchExecution
+                }
+                reporter.fail(
+                    task.taskId,
+                    VesperDownloadError(
+                        code = VesperPlayerErrorCode.BackendFailure,
+                        category = VesperPlayerErrorCategory.Network,
+                        retriable = false,
+                        message = error.message ?: "android foreground download failed",
+                    ),
+                )
+            } catch (error: Exception) {
+                reporter.fail(
+                    task.taskId,
+                    VesperDownloadError(
+                        code = VesperPlayerErrorCode.BackendFailure,
+                        category = VesperPlayerErrorCategory.Network,
+                        retriable = false,
+                        message = error.message ?: "android foreground download failed",
+                    ),
+                )
+            }
         }
     }
 
-
+    // A replaced execution may still be unwinding after pause or recovery.
+    // Only the job that owns the current registration may remove it.
+    internal fun launchExecution(
+        taskId: VesperDownloadTaskId,
+        clearsRecoveredSource: Boolean = false,
+        operation: suspend () -> Unit,
+    ): Job {
+        val job = scope.launch(start = CoroutineStart.LAZY) { operation() }
+        val previous = synchronized(jobsLock) { jobs.put(taskId, job) }
+        // Completion handlers also run when a lazy job is cancelled before start.
+        job.invokeOnCompletion {
+            synchronized(jobsLock) {
+                if (jobs[taskId] === job) {
+                    jobs.remove(taskId)
+                    if (clearsRecoveredSource) {
+                        synchronized(recoveredSourcesLock) { recoveredSources.remove(taskId) }
+                    }
+                }
+            }
+        }
+        previous?.cancel()
+        job.start()
+        return job
+    }
 }

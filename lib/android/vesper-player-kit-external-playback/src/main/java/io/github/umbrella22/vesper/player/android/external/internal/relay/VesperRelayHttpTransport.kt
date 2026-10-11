@@ -26,6 +26,8 @@ internal fun interface VesperRelayHostResolver {
 internal class VesperRelayHttpExchange(
     private val call: Call,
     private val response: Response,
+    private val lifetime: VesperRelayLifetime? = null,
+    private val cancellation: Closeable? = null,
 ) : Closeable {
     val responseCode: Int
         get() = response.code
@@ -45,7 +47,10 @@ internal class VesperRelayHttpExchange(
     }
 
     override fun close() {
-        response.close()
+        try { response.close() } finally {
+            call.cancel()
+            cancellation?.let { lifetime?.detach(it) }
+        }
     }
 }
 
@@ -62,6 +67,7 @@ internal class VesperRelayHttpTransport(
         method: String,
         headers: Map<String, String> = emptyMap(),
         rangeHeader: String? = null,
+        lifetime: VesperRelayLifetime? = null,
     ): VesperRelayHttpExchange {
         val normalizedMethod = method.uppercase(Locale.US)
         if (normalizedMethod != "GET" && normalizedMethod != "HEAD") {
@@ -72,7 +78,9 @@ internal class VesperRelayHttpTransport(
         var redirectsRemaining = MAX_RELAY_HTTP_REDIRECTS
 
         while (true) {
+            lifetime?.checkActive()
             val addresses = resolveValidatedAddresses(currentUrl.host)
+            lifetime?.checkActive()
             val client = baseClient.newBuilder()
                 .followRedirects(false)
                 .followSslRedirects(false)
@@ -89,20 +97,30 @@ internal class VesperRelayHttpTransport(
             }
             val request = requestBuilder.method(normalizedMethod, null).build()
             val call = client.newCall(request)
+            val cancellation = VesperRelayCloseOnce { call.cancel() }
+            if (lifetime?.attach(cancellation) == false) throw java.io.InterruptedIOException("Relay session was cancelled.")
             val response = try {
                 call.execute()
             } catch (error: IOException) {
-                call.cancel()
+                cancellation.close()
+                lifetime?.detach(cancellation)
                 throw error
             }
 
             if (response.code !in RELAY_HTTP_REDIRECT_STATUSES) {
-                return VesperRelayHttpExchange(call, response)
+                if (lifetime?.isActive == false) {
+                    response.close()
+                    cancellation.close()
+                    lifetime.detach(cancellation)
+                    throw java.io.InterruptedIOException("Relay session was cancelled.")
+                }
+                return VesperRelayHttpExchange(call, response, lifetime, cancellation)
             }
 
             val location = response.header("Location")
             response.close()
-            call.cancel()
+            cancellation.close()
+            lifetime?.detach(cancellation)
             if (location.isNullOrBlank()) {
                 throw IOException("Relay HTTP redirect did not include a Location header")
             }

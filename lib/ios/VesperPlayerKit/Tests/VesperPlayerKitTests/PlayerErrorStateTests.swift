@@ -400,7 +400,7 @@ final class PlayerErrorStateTests: XCTestCase {
 
         let bridge = VesperNativePlayerBridge(initialSource: .localFile(url: firstUrl, label: "First"))
         bridge.initialize()
-        let staleEpoch = bridge.playbackEpochSnapshot()
+        let staleEpoch = bridge.currentPlaybackEpoch()
 
         bridge.selectSource(.localFile(url: secondUrl, label: "Second"))
         bridge.stop()
@@ -437,10 +437,10 @@ final class PlayerErrorStateTests: XCTestCase {
 
         let bridge = VesperNativePlayerBridge(initialSource: .localFile(url: tempUrl, label: "Local"))
         bridge.initialize()
-        let staleEpoch = bridge.playbackEpochSnapshot()
+        let staleEpoch = bridge.currentPlaybackEpoch()
 
         bridge.setResiliencePolicy(.resilient())
-        let currentEpoch = bridge.playbackEpochSnapshot()
+        let currentEpoch = bridge.currentPlaybackEpoch()
 
         bridge.handleScheduledRetryFire(
             expectedUri: tempUrl.absoluteString,
@@ -449,7 +449,7 @@ final class PlayerErrorStateTests: XCTestCase {
             delayMs: 500
         )
 
-        XCTAssertEqual(bridge.playbackEpochSnapshot(), currentEpoch)
+        XCTAssertEqual(bridge.currentPlaybackEpoch(), currentEpoch)
         XCTAssertEqual(bridge.uiState.sourceLabel, "Local")
         XCTAssertNil(bridge.lastError)
     }
@@ -463,10 +463,10 @@ final class PlayerErrorStateTests: XCTestCase {
 
         let bridge = VesperNativePlayerBridge(initialSource: .localFile(url: tempUrl, label: "Local"))
         bridge.initialize()
-        let staleEpoch = bridge.playbackEpochSnapshot()
+        let staleEpoch = bridge.currentPlaybackEpoch()
 
         bridge.dispose()
-        let disposedEpoch = bridge.playbackEpochSnapshot()
+        let disposedEpoch = bridge.currentPlaybackEpoch()
 
         bridge.handleScheduledRetryFire(
             expectedUri: tempUrl.absoluteString,
@@ -475,7 +475,7 @@ final class PlayerErrorStateTests: XCTestCase {
             delayMs: 500
         )
 
-        XCTAssertEqual(bridge.playbackEpochSnapshot(), disposedEpoch)
+        XCTAssertEqual(bridge.currentPlaybackEpoch(), disposedEpoch)
         XCTAssertEqual(bridge.uiState.sourceLabel, "Local")
         XCTAssertNil(bridge.lastError)
     }

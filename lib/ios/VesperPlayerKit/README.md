@@ -15,7 +15,7 @@ players. Optional `handle.preload()` retains an observable task and completion;
 `try await controller.activate(handle, options:)` awaits native readiness and
 initial playback intent. Sequence items use those same handles, and list updates
 never select playback. Use `.local` plus `.dash` for a local MPD whose media
-BaseURLs are HTTPS. See the [source lifecycle and migration guide](../../doc/source-lifecycle.md)
+BaseURLs are HTTPS. See the [source lifecycle contract](../../doc/source-lifecycle.md)
 and [DASH startup cache contract](../../doc/dash-startup-cache.md).
 
 ## Delivery
@@ -153,8 +153,9 @@ builds, or any other working directory.
 ### Swift Package Publishing
 
 The `publish-swift-package` release job runs after the GitHub Release. It
-downloads the core XCFramework plus the three FFmpeg components and the remux
-and SourceNormalizer plugin XCFrameworks, computes their SwiftPM checksums,
+downloads the core XCFramework plus the three FFmpeg components and the remux,
+SourceNormalizer and performance-diagnostics plugin XCFrameworks, computes
+their SwiftPM checksums,
 validates the generated capability-level manifest, and atomically pushes the
 package branch and matching stable or prerelease tag.
 Publishing requires:
@@ -209,9 +210,8 @@ The package does not embed demo URLs or preset sources. Construct
 ## Stage skins
 
 `VesperPlayerKitUI` exposes `VesperPlayerStageSkin`, SF Symbols and custom image
-builders, and public skinned action buttons. See the [skin contract and migration
-guide](../../doc/stage-skins.md) for SwiftUI scopes, runtime switching, and rebuild
-requirements.
+builders, and public skinned action buttons. See the [Stage skin contract](../../doc/stage-skins.md)
+for SwiftUI scopes, runtime switching, and matching UI package requirements.
 
 ## Minimal SwiftUI Usage
 
@@ -261,7 +261,7 @@ VideoToolbox support. Unknown codec names return `false`.
 
 iOS-specific semantics:
 
-- `fixedTrack` is best-effort HLS / DASH variant pinning on iOS 15+, not exact
+- `fixedTrack` is best-effort HLS / DASH variant pinning on iOS 17+, not exact
   AVPlayer video-track switching. `supportsVideoTrackSelection` reports
   unsupported on iOS while `supportsAbrFixedTrack` reports supported as
   best-effort pinning.
@@ -614,7 +614,7 @@ evidence. Hosts managing system PiP call `invalidateHdrOutput()` at each handoff
 
 Native display dimensions and per-view content rectangles are separate APIs.
 The mobile renderer preserves aspect ratio with centered letterboxing.
-See the [video presentation contract and 0.6.0 migration guide](../../flutter/vesper_player_platform_interface/doc/video-presentation.md)
+See the [video presentation contract](../../flutter/vesper_player_platform_interface/doc/video-presentation.md)
 for control layout, fullscreen state, geometry lifecycle, and PiP.
 
 ### DASH sequence startup cache

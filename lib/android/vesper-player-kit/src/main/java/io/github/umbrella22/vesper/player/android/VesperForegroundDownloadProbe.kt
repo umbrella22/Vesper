@@ -41,7 +41,7 @@ internal suspend fun VesperForegroundDownloadExecutor.fetchText(
         }
         output.toString(Charsets.UTF_8.name())
     } finally {
-        closeDataSourceQuietly(dataSource, "fetch text $sourceUri")
+        closeDataSourceQuietly(dataSource, "fetch text", sourceUri)
     }
 }
 
@@ -87,7 +87,7 @@ internal suspend fun VesperForegroundDownloadExecutor.probeContentLength(
         }
         length
     } finally {
-        closeDataSourceQuietly(dataSource, "probe content length $sourceUri")
+        closeDataSourceQuietly(dataSource, "probe content length", sourceUri)
     }
 }
 
@@ -141,10 +141,10 @@ internal suspend fun VesperForegroundDownloadExecutor.probeHttpContentLength(
             Thread.currentThread().interrupt()
             throw error
         } catch (error: Exception) {
-            Log.w(DOWNLOAD_TAG, "failed to close HEAD probe stream for $sourceUri", error)
+            Log.w(DOWNLOAD_TAG, "failed to close HEAD probe stream for sourceId=${diagnosticResourceId(sourceUri)} failure=${diagnosticPlaybackFailure(error)}")
             runCatching { head.errorStream?.close() }
                 .onFailure { closeError ->
-                    Log.w(DOWNLOAD_TAG, "failed to close HEAD probe error stream for $sourceUri", closeError)
+                    Log.w(DOWNLOAD_TAG, "failed to close HEAD probe error stream for sourceId=${diagnosticResourceId(sourceUri)} failure=${diagnosticPlaybackFailure(closeError)}")
                 }
         }
         if (isExpiredHttpStatus(headStatus)) {
@@ -175,10 +175,10 @@ internal suspend fun VesperForegroundDownloadExecutor.probeHttpContentLength(
             Thread.currentThread().interrupt()
             throw error
         } catch (error: Exception) {
-            Log.w(DOWNLOAD_TAG, "failed to close range probe stream for $sourceUri", error)
+            Log.w(DOWNLOAD_TAG, "failed to close range probe stream for sourceId=${diagnosticResourceId(sourceUri)} failure=${diagnosticPlaybackFailure(error)}")
             runCatching { range.errorStream?.close() }
                 .onFailure { closeError ->
-                    Log.w(DOWNLOAD_TAG, "failed to close range probe error stream for $sourceUri", closeError)
+                    Log.w(DOWNLOAD_TAG, "failed to close range probe error stream for sourceId=${diagnosticResourceId(sourceUri)} failure=${diagnosticPlaybackFailure(closeError)}")
                 }
         }
         if (isExpiredHttpStatus(rangeStatus)) {

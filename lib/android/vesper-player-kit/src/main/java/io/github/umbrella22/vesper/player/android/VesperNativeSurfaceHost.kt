@@ -123,8 +123,12 @@ internal class VesperNativeSurfaceHost(
             return
         }
 
-        hostView?.removeOnLayoutChangeListener(hostLayoutListener)
-        (hostView as? VesperPlayerSurfaceView)?.updateGeometry(null)
+        val previousHost = hostView
+        val releasePreviousHostScreenRequest = keepScreenOn
+        // Surface callbacks can synchronously resync playback while the views move.
+        hostView = null
+        previousHost?.removeOnLayoutChangeListener(hostLayoutListener)
+        (previousHost as? VesperPlayerSurfaceView)?.updateGeometry(null)
         stopObservingDisplay()
         onOutputPathChanged(null)
 
@@ -133,7 +137,12 @@ internal class VesperNativeSurfaceHost(
             Log.d(TAG, "surfaceHost moving existing $surfaceKind render view to new host")
             (existingView.parent as? ViewGroup)?.removeView(existingView)
             attachRenderAndSubtitleViews(host, existingView)
+            // Both children have left the old host, so detach callbacks cannot restore its request.
+            if (releasePreviousHostScreenRequest) {
+                previousHost?.keepScreenOn = false
+            }
             hostView = host
+            applyKeepScreenOn()
             observeDisplay(host)
             outputPathChanged()
             host.addOnLayoutChangeListener(hostLayoutListener)
@@ -237,6 +246,9 @@ internal class VesperNativeSurfaceHost(
             "surfaceHost detach kind=$surfaceKind notifyNative=$notifyNative " +
                 "hasSurface=${surface != null}",
         )
+        val previousHost = hostView
+        // Teardown callbacks can synchronously resync still-playing state.
+        hostView = null
         setKeepScreenOn(false)
         stopObservingDisplay()
         renderView?.removeOnAttachStateChangeListener(outputWindowListener)
@@ -260,12 +272,14 @@ internal class VesperNativeSurfaceHost(
             }
         }
         surface = null
-        hostView?.removeOnLayoutChangeListener(hostLayoutListener)
-        hostView?.removeAllViews()
-        (hostView as? VesperPlayerSurfaceView)?.updateGeometry(null)
+        previousHost?.removeOnLayoutChangeListener(hostLayoutListener)
+        previousHost?.removeAllViews()
+        (previousHost as? VesperPlayerSurfaceView)?.updateGeometry(null)
+        // All children have detached, so callbacks can no longer restore their requests.
+        setKeepScreenOn(false)
+        previousHost?.keepScreenOn = false
         subtitleView = null
         renderView = null
-        hostView = null
         publishVideoPresentation()
     }
 

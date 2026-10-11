@@ -3236,7 +3236,7 @@ mod tests {
         fn release_native_frame(&mut self, frame: DecoderNativeFrame) -> Result<(), DecoderError> {
             if self
                 .release_failures_remaining
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                     if remaining > 0 {
                         Some(remaining - 1)
                     } else {

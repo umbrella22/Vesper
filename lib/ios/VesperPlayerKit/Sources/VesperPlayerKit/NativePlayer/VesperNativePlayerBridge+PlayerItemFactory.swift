@@ -89,6 +89,7 @@ extension VesperNativePlayerBridge {
         )
         let loaderDelegate = VesperDashResourceLoaderDelegate(
             session: session,
+            sourceLoadEpoch: self.sourceLoadEpoch,
             subtitleResourceFailureHandler: { [weak self, session] renditionId in
                 self?.reportDashSubtitleResourceFailure(
                     session: session,
@@ -117,6 +118,17 @@ extension VesperNativePlayerBridge {
         )
         recordBenchmark("dash_bridge_configured")
         return AVPlayerItem(asset: asset)
+    }
+
+    func currentDashResourceFailure(item: AVPlayerItem) -> VesperDashResourceFailure? {
+        guard let source = currentSource, source.protocol == .dash,
+              let session = currentDashSession,
+              session.sourceURL == URL(string: source.uri),
+              player?.currentItem === item,
+              let asset = item.asset as? AVURLAsset else { return nil }
+        return dashResourceLoaderDelegate?.playbackFailures.failure(
+            sessionID: session.id, sourceLoadEpoch: sourceLoadEpoch, itemURL: asset.url
+        )
     }
 
     func reportDashSubtitleResourceFailure(

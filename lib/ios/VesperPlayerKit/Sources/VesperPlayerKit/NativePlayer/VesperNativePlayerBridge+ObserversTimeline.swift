@@ -245,7 +245,9 @@ extension VesperNativePlayerBridge {
     }
 
     func playbackEpochSnapshot() -> UInt64 {
-        playbackEpoch
+        // Public activation and first-frame/audio diagnostics share the attempt
+        // identity. The observer lifetime counter remains an independent fence.
+        diagnosticsTracker.snapshot.playbackEpoch
     }
 
     func readyForDisplayEpochCountSnapshot() -> Int {

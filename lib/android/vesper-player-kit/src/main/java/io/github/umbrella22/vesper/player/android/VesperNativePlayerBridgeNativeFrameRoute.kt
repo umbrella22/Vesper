@@ -24,7 +24,7 @@ internal fun VesperNativePlayerBridge.probeMobilePluginsForSource(
             frameProcessorConfiguration = frameProcessorConfiguration,
         )
     }.onFailure { error ->
-            Log.w(NATIVE_PLAYER_BRIDGE_TAG, "mobile plugin diagnostics failed for source=${source.uri}", error)
+            Log.w(NATIVE_PLAYER_BRIDGE_TAG, "mobile plugin diagnostics failed for source=${diagnosticSourceDescription(source)} failure=${diagnosticPlaybackFailure(error)}")
     }.getOrDefault(emptyList())
 }
 

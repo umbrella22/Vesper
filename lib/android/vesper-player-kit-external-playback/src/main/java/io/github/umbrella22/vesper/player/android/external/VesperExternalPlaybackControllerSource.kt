@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 internal fun VesperExternalPlaybackController.loadCast(
@@ -48,7 +49,10 @@ internal fun VesperExternalPlaybackController.loadCast(
             VesperExternalPlaybackResult.Failed(error.message ?: "Cast load failed.")
         }
     if (castResult is VesperExternalPlaybackResult.Success) {
-        activateRelayForLoadedSource(prepared)
+        if (!activateRelayForLoadedSource(prepared)) {
+            prepared.releaseRelayIfLoadFailed(relayServer, loadSucceeded = false)
+            return VesperExternalPlaybackResult.Failed("The prepared relay token expired before activation.")
+        }
         emitEvent(VesperExternalPlaybackEventKind.Loaded, VesperExternalPlaybackController.CAST_ROUTE_ID, activeCastRouteName)
     } else {
         prepared.releaseRelayIfLoadFailed(relayServer, loadSucceeded = false)
@@ -91,7 +95,10 @@ internal suspend fun VesperExternalPlaybackController.loadCastAsync(
             VesperExternalPlaybackResult.Failed(error.message ?: "Cast load failed.")
         }
     if (castResult is VesperExternalPlaybackResult.Success) {
-        activateRelayForLoadedSource(prepared)
+        if (!activateRelayForLoadedSource(prepared)) {
+            prepared.releaseRelayIfLoadFailed(relayServer, loadSucceeded = false)
+            return VesperExternalPlaybackResult.Failed("The prepared relay token expired before activation.")
+        }
         emitEvent(VesperExternalPlaybackEventKind.Loaded, VesperExternalPlaybackController.CAST_ROUTE_ID, activeCastRouteName)
     } else {
         prepared.releaseRelayIfLoadFailed(relayServer, loadSucceeded = false)
@@ -119,8 +126,7 @@ internal fun VesperExternalPlaybackController.loadDlna(
         } catch (error: Exception) {
             VesperExternalPlaybackResult.Failed(error.message ?: "DLNA load failed.")
         }
-    handleDlnaLoadedResult(session, prepared, dlnaResult)
-    return dlnaResult
+    return handleDlnaLoadedResult(session, prepared, dlnaResult)
 }
 
 internal suspend fun VesperExternalPlaybackController.loadDlnaAsync(
@@ -130,8 +136,9 @@ internal suspend fun VesperExternalPlaybackController.loadDlnaAsync(
 ): VesperExternalPlaybackResult {
     val session = dlnaSession
         ?: return VesperExternalPlaybackResult.Unavailable("No active DLNA session.")
-    val protocolInfo = runCatching { session.protocolInfoAsync() }.getOrDefault("")
-    val prepared = prepareDlnaSourceAsync(item, session, protocolInfo) ?: return lastPrepareFailure
+    val prepared = prepareDlnaSourceWithProtocolInfoAsync(session::protocolInfoAsync) { protocolInfo ->
+        prepareDlnaSourceAsync(item, session, protocolInfo)
+    } ?: return lastPrepareFailure
     val dlnaResult =
         try {
             withPreparedRelayLoadCancellationCleanup(
@@ -152,8 +159,22 @@ internal suspend fun VesperExternalPlaybackController.loadDlnaAsync(
         } catch (error: Exception) {
             VesperExternalPlaybackResult.Failed(error.message ?: "DLNA load failed.")
         }
-    handleDlnaLoadedResult(session, prepared, dlnaResult)
-    return dlnaResult
+    return handleDlnaLoadedResult(session, prepared, dlnaResult)
+}
+
+internal suspend fun prepareDlnaSourceWithProtocolInfoAsync(
+    queryProtocolInfo: suspend () -> String,
+    prepare: suspend (String) -> VesperExternalSourcePreparationResult.Prepared?,
+): VesperExternalSourcePreparationResult.Prepared? {
+    val protocolInfo = try {
+        queryProtocolInfo()
+    } catch (error: CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        ""
+    }
+    currentCoroutineContext().ensureActive()
+    return prepare(protocolInfo)
 }
 
 internal fun VesperExternalPlaybackController.prepareDlnaSource(
@@ -200,13 +221,17 @@ internal fun VesperExternalPlaybackController.handleDlnaLoadedResult(
     session: VesperDlnaSession,
     prepared: VesperExternalSourcePreparationResult.Prepared,
     dlnaResult: VesperExternalPlaybackResult,
-) {
+): VesperExternalPlaybackResult {
     if (dlnaResult is VesperExternalPlaybackResult.Success) {
-        activateRelayForLoadedSource(prepared)
+        if (!activateRelayForLoadedSource(prepared)) {
+            prepared.releaseRelayIfLoadFailed(relayServer, loadSucceeded = false)
+            return VesperExternalPlaybackResult.Failed("The prepared relay token expired before activation.")
+        }
         emitEvent(VesperExternalPlaybackEventKind.Loaded, session.device.routeId, session.device.friendlyName)
     } else {
         prepared.releaseRelayIfLoadFailed(relayServer, loadSucceeded = false)
     }
+    return dlnaResult
 }
 
 internal var VesperExternalPlaybackController.lastPrepareFailure: VesperExternalPlaybackResult
@@ -249,7 +274,7 @@ internal fun VesperExternalPlaybackController.prepareSource(
                     details = prepared.details + mapOf("severity" to "warning"),
                 )
             }
-            lastPrepareFailure = VesperExternalPlaybackResult.Unsupported(prepared.message)
+            lastPrepareFailure = prepared.toExternalUnsupportedResult()
             null
         }
     }
@@ -283,17 +308,28 @@ internal suspend fun prepareExternalSourceOnIo(
     isCancelled: (() -> Boolean)? = null,
     prepare: () -> VesperExternalSourcePreparationResult.Prepared?,
 ): VesperExternalSourcePreparationResult.Prepared? {
+    currentCoroutineContext().ensureActive()
     val callerJob = currentCoroutineContext()[Job]
-    val prepared = withContext(Dispatchers.IO + NonCancellable) {
-        prepare()
-    }
-    if (isCancelled?.invoke() == true || callerJob?.isCancelled == true) {
-        withContext(Dispatchers.IO + NonCancellable) {
-            prepared?.let(cleanup)
+    var owned: VesperExternalSourcePreparationResult.Prepared? = null
+    try {
+        // Store the prepared resource before crossing the cancellable dispatcher boundary.
+        withContext<Unit>(Dispatchers.IO + NonCancellable) {
+            owned = prepare()
         }
-        throw CancellationException("External source preparation was cancelled.")
+        if (isCancelled?.invoke() == true || callerJob?.isCancelled == true) {
+            throw CancellationException("External source preparation was cancelled.")
+        }
+        val prepared = owned
+        owned = null
+        return prepared
+    } finally {
+        val abandoned = owned
+        if (abandoned != null) {
+            withContext(Dispatchers.IO + NonCancellable) {
+                cleanup(abandoned)
+            }
+        }
     }
-    return prepared
 }
 
 internal suspend fun <T> withPreparedRelayLoadCancellationCleanup(
@@ -310,3 +346,6 @@ internal suspend fun <T> withPreparedRelayLoadCancellationCleanup(
         throw error
     }
 }
+
+internal fun VesperExternalSourcePreparationResult.Unsupported.toExternalUnsupportedResult(): VesperExternalPlaybackResult.Unsupported =
+    VesperExternalPlaybackResult.Unsupported(message = message, code = code ?: "unsupported", details = details)

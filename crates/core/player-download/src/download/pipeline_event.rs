@@ -455,10 +455,9 @@ fn run_worker(
                                 outcome.validate()?;
                                 Ok(outcome)
                             }
-                            Err(error) => match error.validate_author_failure() {
-                                Ok(()) => Err(error),
-                                Err(protocol_error) => Err(protocol_error),
-                            },
+                            // This is a host capability, not an untrusted author payload.
+                            // Artifact adapters own author validation and poisoning.
+                            Err(error) => Err(error),
                         }
                     }))
                     .unwrap_or_else(|_| {
