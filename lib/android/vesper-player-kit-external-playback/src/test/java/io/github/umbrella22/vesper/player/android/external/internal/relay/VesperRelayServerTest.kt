@@ -854,7 +854,11 @@ class VesperRelayServerTest {
             assertEquals(200, response.status)
             assertEquals("", response.body)
             assertTrue(adapter.openRequests.single().headOnly)
-            assertTrue(adapter.closed.get())
+            // The client can read the response before the request executor finishes cleanup.
+            assertTrue(
+                "Adapted session should close after the HEAD response",
+                adapter.closeCompleted.await(5, TimeUnit.SECONDS),
+            )
         } finally {
             adaptedRelay.stop()
         }
@@ -885,7 +889,10 @@ class VesperRelayServerTest {
             assertEquals(200, response.status)
             assertEquals("ok", response.body)
             assertFalse(adapter.openRequests.single().headOnly)
-            assertTrue(adapter.closed.get())
+            assertTrue(
+                "Adapted session should close after the GET response",
+                adapter.closeCompleted.await(5, TimeUnit.SECONDS),
+            )
         } finally {
             adaptedRelay.stop()
         }
@@ -1094,7 +1101,7 @@ private class RecordingFormatAdapter : VesperRelayFormatAdapter {
 
 private class CloseableHeadFormatAdapter : VesperRelayFormatAdapter {
     val openRequests = Collections.synchronizedList(mutableListOf<VesperRelayFormatAdaptationRequest>())
-    val closed = AtomicBoolean(false)
+    val closeCompleted = CountDownLatch(1)
 
     override fun open(
         request: VesperRelayFormatAdaptationRequest,
@@ -1105,7 +1112,7 @@ private class CloseableHeadFormatAdapter : VesperRelayFormatAdapter {
                 input = ByteArrayInputStream(if (request.headOnly) ByteArray(0) else "ok".toByteArray()),
                 contentType = request.fallbackFormat.contentType(),
                 contentLength = if (request.headOnly) 0L else 2L,
-                closeable = Closeable { closed.set(true) },
+                closeable = Closeable { closeCompleted.countDown() },
             ),
         )
     }
