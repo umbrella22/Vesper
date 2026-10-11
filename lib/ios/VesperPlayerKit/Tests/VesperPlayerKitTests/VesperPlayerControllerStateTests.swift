@@ -765,11 +765,13 @@ final class VesperPlayerControllerStateTests: XCTestCase {
                 decoderPluginReferences: [VesperBundledPluginReferences.decoderVideoToolbox]
             )
         )
+        defer { bridge.dispose() }
         let surface = PlayerSurfaceView()
         bridge.attachSurfaceHost(surface)
 
         bridge.initialize()
-        _ = await waitForLastError(in: bridge)
+        let didFail = await waitForLastError(in: bridge)
+        XCTAssertTrue(didFail, "The required route must publish its packet-plugin failure.")
 
         XCTAssertEqual(bridge.lastError?.code, .unsupported)
         XCTAssertTrue(
@@ -3176,7 +3178,8 @@ final class VesperPlayerControllerStateTests: XCTestCase {
 
     private func waitForLastError(
         in bridge: VesperNativePlayerBridge,
-        timeout: TimeInterval = 1.0
+        // Error assertions use the same bounded route scheduling allowance as diagnostics.
+        timeout: TimeInterval = 10.0
     ) async -> Bool {
         await waitForNativeFrameSmoke(timeout: timeout) {
             bridge.lastError != nil
